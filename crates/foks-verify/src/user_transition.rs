@@ -5,43 +5,136 @@ use foks_proto::{ChangeMetadata, EntityId, Hepk, Role, UserMemberKeys, LINK_OUTE
 
 use crate::{find_hepk, Error, Result, UserTransitionRule, VerifiedDevice, VerifiedSharedKey};
 
-pub(super) fn replay_user_transition(
-    link: &foks_proto::UserLink,
-    change: &foks_proto::UserGroupChange,
-    hepks: &[Hepk],
-    expected_host: &EntityId,
-    devices: &mut BTreeMap<Vec<u8>, VerifiedDevice>,
-    shared_keys: &mut BTreeMap<Role, VerifiedSharedKey>,
-) -> Result<()> {
-    if change.changes.len() > 1 {
-        return Err(invalid_transition(
-            change,
-            UserTransitionRule::MultipleMemberChanges,
-        ));
+pub(super) struct UserReplayState {
+    devices: BTreeMap<Vec<u8>, VerifiedDevice>,
+    shared_keys: BTreeMap<Role, VerifiedSharedKey>,
+}
+
+impl UserReplayState {
+    pub(super) fn from_eldest(device: VerifiedDevice, shared_key: VerifiedSharedKey) -> Self {
+        Self {
+            devices: BTreeMap::from([(device.id.as_bytes().to_vec(), device)]),
+            shared_keys: BTreeMap::from([(shared_key.role, shared_key)]),
+        }
     }
-    let signer = devices
-        .get(change.signer.as_bytes())
-        .cloned()
-        .ok_or_else(|| invalid_transition(change, UserTransitionRule::UnknownSigner))?;
-    let rotated = validate_shared_key_rotations(change, hepks, shared_keys)?;
-    let (added_device, provisioning_subkey) =
-        validate_provisioning(change, hepks, &signer, devices, shared_keys, &rotated)?;
-    verify_transition_signatures(
-        link,
-        &signer,
-        &rotated,
-        added_device.as_ref(),
-        provisioning_subkey.as_ref(),
-    )?;
-    apply_transition(
-        change,
-        expected_host,
-        &signer,
-        &rotated,
-        added_device,
-        devices,
-        shared_keys,
-    )
+
+    pub(super) fn replay(
+        &mut self,
+        link: &foks_proto::UserLink,
+        change: &foks_proto::UserGroupChange,
+        hepks: &[Hepk],
+        expected_host: &EntityId,
+    ) -> Result<()> {
+        if change.changes.len() > 1 {
+            return Err(invalid_transition(
+                change,
+                UserTransitionRule::MultipleMemberChanges,
+            ));
+        }
+        let signer = self
+            .devices
+            .get(change.signer.as_bytes())
+            .cloned()
+            .ok_or_else(|| invalid_transition(change, UserTransitionRule::UnknownSigner))?;
+        let rotated = validate_shared_key_rotations(change, hepks, &self.shared_keys)?;
+        let (added_device, provisioning_subkey) = validate_provisioning(
+            change,
+            hepks,
+            &signer,
+            &self.devices,
+            &self.shared_keys,
+            &rotated,
+        )?;
+        verify_transition_signatures(
+            link,
+            &signer,
+            &rotated,
+            added_device.as_ref(),
+            provisioning_subkey.as_ref(),
+        )?;
+        self.apply_transition(change, expected_host, &signer, &rotated, added_device)
+    }
+
+    pub(super) fn is_complete(&self) -> bool {
+        !self.devices.is_empty() && self.shared_keys.contains_key(&Role::OWNER)
+    }
+
+    pub(super) fn into_parts(self) -> (Vec<VerifiedDevice>, Vec<VerifiedSharedKey>) {
+        (
+            self.devices.into_values().collect(),
+            self.shared_keys.into_values().collect(),
+        )
+    }
+
+    fn apply_transition(
+        &mut self,
+        change: &foks_proto::UserGroupChange,
+        expected_host: &EntityId,
+        signer: &VerifiedDevice,
+        rotated: &[VerifiedSharedKey],
+        added_device: Option<VerifiedDevice>,
+    ) -> Result<()> {
+        match change.changes.first() {
+            Some(member) if member.role == Role::NONE => {
+                self.apply_revocation(change, member, expected_host, signer, rotated)?;
+            }
+            Some(_) => {
+                let device = added_device
+                    .ok_or_else(|| invalid_transition(change, UserTransitionRule::Provisioning))?;
+                self.devices.insert(device.id.as_bytes().to_vec(), device);
+            }
+            None => validate_standalone_change(change, signer, rotated, &self.shared_keys)?,
+        }
+        for key in rotated {
+            self.shared_keys.insert(key.role, key.clone());
+        }
+        Ok(())
+    }
+
+    fn apply_revocation(
+        &mut self,
+        change: &foks_proto::UserGroupChange,
+        member: &foks_proto::UserMemberChange,
+        expected_host: &EntityId,
+        signer: &VerifiedDevice,
+        rotated: &[VerifiedSharedKey],
+    ) -> Result<()> {
+        if !matches!(member.keys, UserMemberKeys::None)
+            || !change.metadata.is_empty()
+            || member
+                .scoped_host
+                .as_ref()
+                .is_some_and(|host| host != expected_host)
+        {
+            return Err(invalid_transition(change, UserTransitionRule::Revocation));
+        }
+        let target = self
+            .devices
+            .get(member.entity.as_bytes())
+            .ok_or_else(|| invalid_transition(change, UserTransitionRule::Revocation))?;
+        let self_revoke = target.id == signer.id;
+        if self_revoke != rotated.is_empty()
+            || (!self_revoke && signer.role != Role::OWNER)
+            || (!self_revoke
+                && self.shared_keys.keys().any(|role| {
+                    *role <= target.role && !rotated.iter().any(|key| key.role == *role)
+                }))
+        {
+            return Err(invalid_transition(change, UserTransitionRule::Revocation));
+        }
+        if target.role == Role::OWNER
+            && self
+                .devices
+                .values()
+                .filter(|device| device.role == Role::OWNER)
+                .count()
+                == 1
+        {
+            return Err(invalid_transition(change, UserTransitionRule::LastOwner));
+        }
+        self.devices.remove(member.entity.as_bytes());
+        Ok(())
+    }
 }
 
 fn validate_shared_key_rotations(
@@ -159,85 +252,6 @@ fn verify_transition_signatures(
             &link.signing_bytes(index)?,
         )?;
     }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn apply_transition(
-    change: &foks_proto::UserGroupChange,
-    expected_host: &EntityId,
-    signer: &VerifiedDevice,
-    rotated: &[VerifiedSharedKey],
-    added_device: Option<VerifiedDevice>,
-    devices: &mut BTreeMap<Vec<u8>, VerifiedDevice>,
-    shared_keys: &mut BTreeMap<Role, VerifiedSharedKey>,
-) -> Result<()> {
-    match change.changes.first() {
-        Some(member) if member.role == Role::NONE => {
-            apply_revocation(
-                change,
-                member,
-                expected_host,
-                signer,
-                rotated,
-                devices,
-                shared_keys,
-            )?;
-        }
-        Some(_) => {
-            let device = added_device
-                .ok_or_else(|| invalid_transition(change, UserTransitionRule::Provisioning))?;
-            devices.insert(device.id.as_bytes().to_vec(), device);
-        }
-        None => validate_standalone_change(change, signer, rotated, shared_keys)?,
-    }
-    for key in rotated {
-        shared_keys.insert(key.role, key.clone());
-    }
-    Ok(())
-}
-
-fn apply_revocation(
-    change: &foks_proto::UserGroupChange,
-    member: &foks_proto::UserMemberChange,
-    expected_host: &EntityId,
-    signer: &VerifiedDevice,
-    rotated: &[VerifiedSharedKey],
-    devices: &mut BTreeMap<Vec<u8>, VerifiedDevice>,
-    shared_keys: &BTreeMap<Role, VerifiedSharedKey>,
-) -> Result<()> {
-    if !matches!(member.keys, UserMemberKeys::None)
-        || !change.metadata.is_empty()
-        || member
-            .scoped_host
-            .as_ref()
-            .is_some_and(|host| host != expected_host)
-    {
-        return Err(invalid_transition(change, UserTransitionRule::Revocation));
-    }
-    let target = devices
-        .get(member.entity.as_bytes())
-        .ok_or_else(|| invalid_transition(change, UserTransitionRule::Revocation))?;
-    let self_revoke = target.id == signer.id;
-    if self_revoke != rotated.is_empty()
-        || (!self_revoke && signer.role != Role::OWNER)
-        || (!self_revoke
-            && shared_keys
-                .keys()
-                .any(|role| *role <= target.role && !rotated.iter().any(|key| key.role == *role)))
-    {
-        return Err(invalid_transition(change, UserTransitionRule::Revocation));
-    }
-    if target.role == Role::OWNER
-        && devices
-            .values()
-            .filter(|device| device.role == Role::OWNER)
-            .count()
-            == 1
-    {
-        return Err(invalid_transition(change, UserTransitionRule::LastOwner));
-    }
-    devices.remove(member.entity.as_bytes());
     Ok(())
 }
 

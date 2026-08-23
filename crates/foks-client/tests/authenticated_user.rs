@@ -4,11 +4,13 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use super::{DeviceCredential, PinnedHost, ProbeTarget, PublicClient};
+use super::{DeviceCredential, FoksClient, PinnedHost, ProbeTarget};
 use foks_client_db::{Acceptance, HardStateStore};
 use foks_crypto::device_signing_key_pkcs8;
 use foks_proto::{EntityId, SecretSeed};
-use foks_rpc::{encode_probe_success_response, read_frame, DEFAULT_MAX_FRAME_LENGTH};
+use foks_rpc::{
+    encode_probe_success_response, encode_success_response_at, read_frame, DEFAULT_MAX_FRAME_LENGTH,
+};
 use foks_snowpack::{decode, encode, Value};
 use foks_verify::verify_public_host;
 use rcgen::{
@@ -40,7 +42,7 @@ fn entity(name: &str) -> EntityId {
 
 struct TestPki {
     seed: SecretSeed,
-    client_roots: rustls::RootCertStore,
+    server_ca: Vec<u8>,
     unauthenticated_server: Arc<rustls::ServerConfig>,
     authenticated_server: Arc<rustls::ServerConfig>,
     certificate_result: Vec<u8>,
@@ -74,8 +76,6 @@ fn test_pki() -> TestPki {
     client_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     let client_cert = client_params.signed_by(&client_key, &ca).unwrap();
 
-    let mut client_roots = rustls::RootCertStore::empty();
-    client_roots.add(ca.der().clone()).unwrap();
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let unauthenticated_server = Arc::new(
         rustls::ServerConfig::builder_with_provider(Arc::clone(&provider))
@@ -112,10 +112,11 @@ fn test_pki() -> TestPki {
         Value::Binary(ca.der().to_vec()),
     ]))
     .unwrap();
+    let server_ca = ca.der().to_vec();
 
     TestPki {
         seed,
-        client_roots,
+        server_ca,
         unauthenticated_server,
         authenticated_server,
         certificate_result,
@@ -125,20 +126,22 @@ fn test_pki() -> TestPki {
 fn spawn_server(
     listener: TcpListener,
     config: Arc<rustls::ServerConfig>,
-    responses: Vec<Vec<u8>>,
+    connections: Vec<Vec<Vec<u8>>>,
     require_client_certificate: bool,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        for response in responses {
+        for responses in connections {
             let (tcp, _) = listener.accept().unwrap();
             let connection = rustls::ServerConnection::new(Arc::clone(&config)).unwrap();
             let mut tls = rustls::StreamOwned::new(connection, tcp);
-            read_frame(&mut tls, DEFAULT_MAX_FRAME_LENGTH).unwrap();
-            if require_client_certificate {
-                assert!(tls.conn.peer_certificates().is_some());
+            for response in responses {
+                read_frame(&mut tls, DEFAULT_MAX_FRAME_LENGTH).unwrap();
+                if require_client_certificate {
+                    assert!(tls.conn.peer_certificates().is_some());
+                }
+                tls.write_all(&response).unwrap();
+                tls.flush().unwrap();
             }
-            tls.write_all(&response).unwrap();
-            tls.flush().unwrap();
         }
     })
 }
@@ -153,33 +156,38 @@ fn registration_then_mtls_user_chain_and_puk_complete_without_interactivity() {
     let user_port = user.local_addr().unwrap().port();
     let merkle = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let merkle_port = merkle.local_addr().unwrap().port();
-    let cert_response = encode_probe_success_response(&pki.certificate_result).unwrap();
+    let cert_response = encode_success_response_at(&pki.certificate_result, 1).unwrap();
     let chain_response = encode_probe_success_response(&fixture("user-chain.snowp")).unwrap();
     let puk_response = encode_probe_success_response(&fixture("puk-parcel.snowp")).unwrap();
-    let root_response = encode_probe_success_response(&fixture("merkle-root-998.snowp")).unwrap();
+    let root_response = encode_success_response_at(&fixture("merkle-root-998.snowp"), 1).unwrap();
     let history_response =
-        encode_probe_success_response(&fixture("merkle-historical-response.snowp")).unwrap();
+        encode_success_response_at(&fixture("merkle-historical-response.snowp"), 1).unwrap();
+    let select_response = fixture("kv-select-vhost-response.frame");
 
     let reg_thread = spawn_server(
         registration,
         Arc::clone(&pki.unauthenticated_server),
-        vec![cert_response],
+        vec![vec![select_response.clone(), cert_response]],
         false,
     );
     let user_thread = spawn_server(
         user,
         pki.authenticated_server,
-        vec![chain_response, puk_response],
+        vec![vec![chain_response], vec![puk_response]],
         true,
     );
     let merkle_thread = spawn_server(
         merkle,
         pki.unauthenticated_server,
-        vec![root_response, history_response],
+        vec![
+            vec![select_response.clone(), root_response],
+            vec![select_response, history_response],
+        ],
         false,
     );
 
-    let mut client = PublicClient::with_roots(pki.client_roots);
+    // Delegated services must use the hostchain CA, not bootstrap roots.
+    let mut client = FoksClient::with_roots(rustls::RootCertStore::empty());
     client.set_timeout(Duration::from_secs(5));
     let registration_target =
         ProbeTarget::parse(&format!("localhost:{registration_port}")).unwrap();
@@ -200,8 +208,10 @@ fn registration_then_mtls_user_chain_and_puk_complete_without_interactivity() {
             .host,
         database_path: database.clone(),
         registration: registration_target,
-        user: user_target,
+        user: user_target.clone(),
         merkle_query: merkle_target,
+        kv_store: user_target,
+        tls_ca_certificates: vec![pki.server_ca.clone()],
     };
     let uid = entity("uid.snowp");
     let certificates = client
@@ -216,7 +226,12 @@ fn registration_then_mtls_user_chain_and_puk_complete_without_interactivity() {
     let result = client.authenticate_and_pin(&pinned, &credential).unwrap();
     assert_eq!(result.merkle_acceptance, Acceptance::Advanced);
     assert_eq!(result.acceptance, Acceptance::Inserted);
-    assert_eq!(result.puk_seed.as_slice(), fixture("puk-seed.bin"));
+    assert_eq!(result.puks.len(), 2);
+    assert_eq!(
+        result.puks[0].seed.as_slice(),
+        fixture("initial-puk-seed.bin")
+    );
+    assert_eq!(result.puks[1].seed.as_slice(), fixture("puk-seed.bin"));
     assert_eq!(
         client
             .pinned_user(&pinned, &uid)

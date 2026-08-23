@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use foks_client::{ProbeTarget, PublicClient};
+use foks_client::{FoksClient, ProbeTarget};
 use foks_client_db::Acceptance;
 use foks_rpc::{
     encode_probe_request, encode_probe_success_response, read_frame, DEFAULT_MAX_FRAME_LENGTH,
@@ -53,7 +53,7 @@ fn local_tls_probe_verifies_and_atomically_pins() {
 
     let mut roots = rustls::RootCertStore::empty();
     roots.add(certificate).unwrap();
-    let mut client = PublicClient::with_roots(roots);
+    let mut client = FoksClient::with_roots(roots);
     client.set_timeout(Duration::from_secs(5));
     let target = ProbeTarget::parse(&format!("localhost:{port}")).unwrap();
     let directory = tempfile::tempdir().unwrap();

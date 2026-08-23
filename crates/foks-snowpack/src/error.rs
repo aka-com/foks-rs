@@ -20,7 +20,6 @@ pub enum ErrorKind {
     EmptyArray,
     NonMinimal(&'static str),
     NonNegativeSignedInteger,
-    ArrayLengthGap(usize),
     LengthOverflow,
     DepthLimit,
 }
@@ -73,10 +72,6 @@ impl fmt::Display for Error {
             ErrorKind::NonNegativeSignedInteger => {
                 write!(formatter, "signed integer encoding is not negative")
             }
-            ErrorKind::ArrayLengthGap(length) => write!(
-                formatter,
-                "array length {length} is not canonical in FOKS v0.1.9"
-            ),
             ErrorKind::LengthOverflow => write!(formatter, "length exceeds u32"),
             ErrorKind::DepthLimit => write!(formatter, "maximum nesting depth exceeded"),
         }
@@ -114,10 +109,6 @@ mod tests {
             (
                 ErrorKind::NonNegativeSignedInteger,
                 "signed integer encoding is not negative",
-            ),
-            (
-                ErrorKind::ArrayLengthGap(16),
-                "array length 16 is not canonical in FOKS v0.1.9",
             ),
             (ErrorKind::LengthOverflow, "length exceeds u32"),
             (ErrorKind::DepthLimit, "maximum nesting depth exceeded"),

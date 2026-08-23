@@ -3,7 +3,7 @@ name = "foks-verify"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Native verification of FOKS v0.1.9 public host state"
+description = "Native verification of FOKS v0.1.9 host, identity, and team state"
 
 [dependencies]
 foks-crypto = { workspace = true }

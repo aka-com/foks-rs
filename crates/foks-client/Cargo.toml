@@ -3,7 +3,7 @@ name = "foks-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Native FOKS v0.1.9 public host discovery client"
+description = "Native FOKS v0.1.9 identity, team, and KV client"
 autotests = false
 
 [dependencies]
@@ -13,6 +13,7 @@ foks-proto = { workspace = true }
 foks-rpc = { workspace = true }
 foks-snowpack = { workspace = true }
 foks-verify = { workspace = true }
+getrandom = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 thiserror = { workspace = true }
@@ -21,6 +22,7 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 rcgen = { workspace = true }
+rusqlite = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

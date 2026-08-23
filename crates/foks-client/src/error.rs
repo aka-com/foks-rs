@@ -1,0 +1,59 @@
+//! Client orchestration, transport, and binding errors.
+
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("invalid probe target: {0}")]
+    Target(&'static str),
+    #[error("DNS lookup returned no addresses for {0}")]
+    NoAddress(String),
+    #[error("TCP connection to every resolved address failed: {0}")]
+    Connect(std::io::Error),
+    #[error("TLS configuration failed: {0}")]
+    Tls(#[from] rustls::Error),
+    #[error("invalid TLS server name")]
+    ServerName,
+    #[error("FOKS RPC failed: {0}")]
+    Rpc(#[from] foks_rpc::Error),
+    #[error("FOKS public state verification failed: {0}")]
+    Verify(#[from] foks_verify::Error),
+    #[error("FOKS hard-state update failed: {0}")]
+    Database(#[from] foks_client_db::Error),
+    #[error("invalid FOKS protocol value: {0}")]
+    Protocol(#[from] foks_proto::Error),
+    #[error("invalid canonical Snowpack: {0}")]
+    Snowpack(#[from] foks_snowpack::Error),
+    #[error("FOKS device cryptography failed: {0}")]
+    Crypto(#[from] foks_crypto::Error),
+    #[error("registration returned an invalid certificate chain")]
+    CertificateChain,
+    #[error("authenticated hostchain contains no usable TLS CA certificates")]
+    HostTlsRoots,
+    #[error("invalid FOKS user identifier")]
+    InvalidUserId,
+    #[error("FOKS credential binding failed: {0}")]
+    CredentialBinding(&'static str),
+    #[error("FOKS pinned-host binding failed: {0}")]
+    HostBinding(&'static str),
+    #[error("FOKS user-state binding failed: {0}")]
+    UserBinding(&'static str),
+    #[error("FOKS team-state binding failed: {0}")]
+    TeamBinding(&'static str),
+    #[error("FOKS private-key binding failed: {0}")]
+    KeyBinding(&'static str),
+    #[error("FOKS mutation-journal binding failed: {0}")]
+    OperationBinding(&'static str),
+    #[error("FOKS transition was not observed: {0}")]
+    TransitionNotObserved(&'static str),
+    #[error("pinned host is missing or has a malformed {0} service endpoint")]
+    PinnedService(&'static str),
+    #[error("invalid or excessive FOKS KV response: {0}")]
+    KvResponse(&'static str),
+    #[error("invalid FOKS software-account request: {0}")]
+    AccountRequest(&'static str),
+    #[error("invalid FOKS team request: {0}")]
+    TeamRequest(&'static str),
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;

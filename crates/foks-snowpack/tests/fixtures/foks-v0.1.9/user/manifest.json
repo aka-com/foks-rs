@@ -24,7 +24,7 @@
     {
       "file": "hybrid-payload.snowp",
       "bytes": 1346,
-      "sha256": "af21ff3451b0b16edd93e1702b4c3b9ae3bdd265e2aeb19292998a480714b9de"
+      "sha256": "36d2702cdc6a8e7c7e7437fe0573e830afecbf8b50b796ba2be4cab09fb18f92"
     },
     {
       "file": "merkle-back-pointers-996.snowp",
@@ -68,8 +68,8 @@
     },
     {
       "file": "puk-parcel.snowp",
-      "bytes": 1358,
-      "sha256": "ecdd5dfe635ae872154c81908ada4b15f7be14a3ca1cc2b0bac3221048fc4cf6"
+      "bytes": 1515,
+      "sha256": "0ea6885108e875215c46ba7dff2043b01248cb2930f059385b370e32c949eeb8"
     },
     {
       "file": "uid.snowp",
@@ -116,12 +116,12 @@
     {
       "file": "hybrid-kem-shared.bin",
       "bytes": 32,
-      "sha256": "7fd4ae52acff86285cd760b838e81047f6e1407d4630d9243bbd865079d4f113"
+      "sha256": "f24ac9d53b3ed466d82d6857b5561b56d533f2f93fea19e63be770d97001c5ef"
     },
     {
       "file": "hybrid-secretbox-key.bin",
       "bytes": 32,
-      "sha256": "5ce7e238090a3f6698a0330faf89e213ff67e8d3ddd72408d1e9761b6948c60a"
+      "sha256": "e21b8905925a747b2d6f84f273d34b89bf6e40e5dd6875a66903804e64f8c42b"
     },
     {
       "file": "initial-puk-seed.bin",
@@ -130,13 +130,23 @@
     },
     {
       "file": "merkle-current-root-request.frame",
-      "bytes": 32,
-      "sha256": "734d0c3122385a6d3e73d02c4306e5cc056aa44991a54e55757cf195408b6437"
+      "bytes": 72,
+      "sha256": "13fe5b0f0548d47fbd18a0552c1af33061f3ea4a5ea457acb98d8bb6a9f316f2"
     },
     {
       "file": "merkle-historical-roots-request.frame",
-      "bytes": 56,
-      "sha256": "a7c69e786c198fefabb28b05d28bc6998f0272cb737862272a67b973f8c657e1"
+      "bytes": 90,
+      "sha256": "d92a06d1bd6bedc21f33557d598222316b33a8d7a262e496ee830fb138c0ea23"
+    },
+    {
+      "file": "merkle-select-vhost-request.frame",
+      "bytes": 73,
+      "sha256": "5ee890819e0ca7039b7519d79f305264ee5197525c51c92a0635e4da61508a2d"
+    },
+    {
+      "file": "merkle-select-vhost-response.frame",
+      "bytes": 27,
+      "sha256": "1423dc5c79a82ba2b4d8ace4a57a703e1df297b76e4bdad142210edbbd11b30e"
     },
     {
       "file": "puk-seed.bin",
@@ -146,7 +156,17 @@
     {
       "file": "reg-cert-request.frame",
       "bytes": 108,
-      "sha256": "470f76cef9a6b2a7253ad6ba97c19aa102558d7b341fde7ee58842441564cdae"
+      "sha256": "35b095fa3d66306f262cd053ee78af75b41958ad48a823d530a202c1a28e64a1"
+    },
+    {
+      "file": "reg-select-vhost-request.frame",
+      "bytes": 73,
+      "sha256": "f0318ceb6e02349a2a499537c3f4c4d2f848c7db24448c0cbb547ecd4c34fd20"
+    },
+    {
+      "file": "reg-select-vhost-response.frame",
+      "bytes": 27,
+      "sha256": "1423dc5c79a82ba2b4d8ace4a57a703e1df297b76e4bdad142210edbbd11b30e"
     },
     {
       "file": "second-device-seed.bin",
@@ -157,6 +177,11 @@
       "file": "user-load-request.frame",
       "bytes": 79,
       "sha256": "edf41aabca44f9fbcdf66dbd872add2a9d38fd03f9ffa4d5875bcc1224c855e8"
+    },
+    {
+      "file": "user-member-puk-request.frame",
+      "bytes": 79,
+      "sha256": "4948369b2acb26c23f854ee01a8d749136cfc972585c1348277716363b2791cd"
     },
     {
       "file": "user-puk-request.frame",

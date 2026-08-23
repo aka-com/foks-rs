@@ -1,4 +1,4 @@
-use foks_snowpack::{decode, encode, Value};
+use foks_snowpack::{decode, decode_prefix, encode, Value};
 use quickcheck::{Arbitrary, Gen, QuickCheck, TestResult};
 
 #[derive(Clone, Debug)]
@@ -75,7 +75,12 @@ fn value(generator: &mut Gen, depth: usize) -> Value {
     match usize::arbitrary(generator) % 9 {
         0..=5 => scalar(generator),
         6 => {
-            let length = 1 + usize::arbitrary(generator) % 8;
+            let length = if depth == 0 {
+                let boundaries = [1, 2, 7, 15, 16, 17, 31, 32, 33];
+                boundaries[usize::arbitrary(generator) % boundaries.len()]
+            } else {
+                1 + usize::arbitrary(generator) % 3
+            };
             Value::Array((0..length).map(|_| value(generator, depth + 1)).collect())
         }
         7 => Value::Variant(None),
@@ -170,9 +175,25 @@ fn appending_any_complete_value_is_trailing_junk() {
 }
 
 #[test]
+fn prefix_decode_returns_exact_consumed_length_with_arbitrary_suffixes() {
+    fn property(value: CanonicalValue, suffix: Vec<u8>) -> bool {
+        let encoded = encode(&value.0).unwrap();
+        let expected = encoded.len();
+        let mut padded = encoded;
+        padded.extend_from_slice(&suffix);
+        decode_prefix(&padded)
+            .is_ok_and(|(decoded, consumed)| decoded == value.0 && consumed == expected)
+    }
+    QuickCheck::new()
+        .tests(2_000)
+        .quickcheck(property as fn(CanonicalValue, Vec<u8>) -> bool);
+}
+
+#[test]
 fn arbitrary_input_never_panics() {
     fn property(bytes: Vec<u8>) -> bool {
         let _ = decode(&bytes);
+        let _ = decode_prefix(&bytes);
         true
     }
     QuickCheck::new()

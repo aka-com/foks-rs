@@ -172,11 +172,17 @@ func run() error {
 	var host string
 	var output string
 	var userOutput string
+	var signupOutput string
+	var mutationOutput string
+	var mutationUserDir string
 	var probeFile string
 	var timeout time.Duration
 	flag.StringVar(&host, "host", "foks.app:4430", "FOKS probe host and port")
 	flag.StringVar(&output, "out", "", "fixture output directory")
 	flag.StringVar(&userOutput, "user-out", "", "optional self-contained user/device fixture output directory")
+	flag.StringVar(&signupOutput, "signup-out", "", "optional software-eldest signup fixture output directory")
+	flag.StringVar(&mutationOutput, "mutation-out", "", "optional user-mutation fixture output directory")
+	flag.StringVar(&mutationUserDir, "mutation-user-dir", "", "verified user fixture input directory")
 	flag.StringVar(&probeFile, "probe-file", "", "use an existing canonical ProbeRes instead of the network")
 	flag.DurationVar(&timeout, "timeout", 15*time.Second, "probe timeout")
 	flag.Parse()
@@ -220,6 +226,19 @@ func run() error {
 	if userOutput != "" {
 		if err := writeUserFixtures(userOutput, address, chain.HostID(), root); err != nil {
 			return fmt.Errorf("write user fixtures: %w", err)
+		}
+	}
+	if signupOutput != "" {
+		if err := writeSignupFixtures(signupOutput, chain.HostID(), root); err != nil {
+			return fmt.Errorf("write signup fixtures: %w", err)
+		}
+	}
+	if mutationOutput != "" {
+		if mutationUserDir == "" {
+			return errors.New("--mutation-user-dir is required with --mutation-out")
+		}
+		if err := writeMutationFixtures(mutationOutput, mutationUserDir); err != nil {
+			return fmt.Errorf("write mutation fixtures: %w", err)
 		}
 	}
 	rootVersion, err := root.GetV()

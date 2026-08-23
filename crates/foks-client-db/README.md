@@ -23,3 +23,11 @@ or Merkle verification.
 Wire-level identifiers and signed values remain opaque byte strings here.
 Private device and PUK seeds are expressly excluded and belong in an encrypted
 key store, not ordinary hard-state rows.
+
+The separate soft-state schema stores complete verified KV roots,
+directories, dirent versions, and content projections. It reconstructs durable
+FOKS path-version vectors for cache checks, atomically replaces and prunes
+stale directory subtrees, and stages large-file plaintext in bounded chunk
+rows. Incomplete stages are invisible and normally reclaimed by the store that
+created them; an explicit exclusive-maintenance call reclaims stages left by a
+process crash. Completed files are read through a streaming writer API.

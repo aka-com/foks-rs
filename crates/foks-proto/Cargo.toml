@@ -3,7 +3,7 @@ name = "foks-proto"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Exact FOKS v0.1.9 public-host protocol types"
+description = "Exact FOKS v0.1.9 protocol types"
 
 [dependencies]
 foks-snowpack = { workspace = true }

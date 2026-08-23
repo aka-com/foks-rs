@@ -1,6 +1,6 @@
 use foks_proto::{
     decode_merkle_back_pointers, ChangeMetadata, EntityId, Hepk, HistoricalMerkleRoots, PukParcel,
-    Role, SharedKeySeed, UserChain, UserLink,
+    Role, SharedKeySeed, SoftwareEldestPublic, TeamChain, UnsignedUserLink, UserChain, UserLink,
 };
 
 const DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user";
@@ -63,6 +63,15 @@ fn official_transition_links_and_merkle_history_decode() {
         [ChangeMetadata::DeviceName(_)]
     ));
     assert_eq!(provision.signatures().len(), 2);
+    assert_eq!(
+        UnsignedUserLink::user_group_change(&provision_change)
+            .unwrap()
+            .finish(provision.signatures().to_vec())
+            .unwrap()
+            .encoded()
+            .unwrap(),
+        fixture("user-provision-link.snowp")
+    );
 
     let revoke = UserLink::decode(&fixture("user-revoke-link.snowp")).unwrap();
     let revoke_change = revoke.decode_group_change().unwrap();
@@ -71,6 +80,15 @@ fn official_transition_links_and_merkle_history_decode() {
     assert_eq!(revoke_change.shared_keys[0].generation, 2);
     assert!(revoke_change.metadata.is_empty());
     assert_eq!(revoke.signatures().len(), 2);
+    assert_eq!(
+        UnsignedUserLink::user_group_change(&revoke_change)
+            .unwrap()
+            .finish(revoke.signatures().to_vec())
+            .unwrap()
+            .encoded()
+            .unwrap(),
+        fixture("user-revoke-link.snowp")
+    );
 
     let pointers = decode_merkle_back_pointers(&fixture("merkle-back-pointers-996.snowp")).unwrap();
     assert_eq!(
@@ -92,6 +110,62 @@ fn exact_user_link_round_trips() {
     let link = UserLink::decode(&bytes).unwrap();
     assert_eq!(link.signatures().len(), 2);
     assert_eq!(link.encoded().unwrap(), bytes);
+}
+
+#[test]
+fn software_eldest_builder_matches_the_official_go_link() {
+    let bytes = fixture("user-eldest-link.snowp");
+    let expected = UserLink::decode(&bytes).unwrap();
+    let eldest = expected.decode_eldest().unwrap();
+    let subchain_location_commitment = eldest
+        .metadata
+        .iter()
+        .find_map(|metadata| match metadata {
+            ChangeMetadata::Eldest {
+                subchain_location_commitment,
+            } => Some(*subchain_location_commitment),
+            _ => None,
+        })
+        .unwrap();
+    let username_commitment = eldest
+        .metadata
+        .iter()
+        .find_map(|metadata| match metadata {
+            ChangeMetadata::Username(commitment) => Some(*commitment),
+            _ => None,
+        })
+        .unwrap();
+    let device_name_commitment = eldest
+        .metadata
+        .iter()
+        .find_map(|metadata| match metadata {
+            ChangeMetadata::DeviceName(commitment) => Some(*commitment),
+            _ => None,
+        })
+        .unwrap();
+    let unsigned = UnsignedUserLink::software_eldest(&SoftwareEldestPublic {
+        host: &eldest.host,
+        uid: &eldest.uid,
+        device: &eldest.member,
+        device_hepk_fingerprint: eldest.member_hepk_fingerprint,
+        puk_verify_key: &eldest.puk_verify_key,
+        puk_hepk_fingerprint: eldest.puk_hepk_fingerprint,
+        root: &eldest.root,
+        time: eldest.time,
+        next_location_commitment: eldest.next_tree_location,
+        username_commitment,
+        device_name_commitment,
+        subchain_location_commitment,
+    })
+    .unwrap();
+    assert_eq!(
+        unsigned
+            .finish(expected.signatures().to_vec())
+            .unwrap()
+            .encoded()
+            .unwrap(),
+        bytes
+    );
 }
 
 #[test]
@@ -131,6 +205,9 @@ fn official_puk_parcel_and_cleartext_decode() {
     assert_eq!(parcel.hybrid.dh_type, 1);
     assert!(parcel.hybrid.sender_dh.is_none());
     assert_eq!(parcel.hybrid.ciphertext.len(), 126);
+    assert_eq!(parcel.seed_chain.len(), 1);
+    assert_eq!(parcel.seed_chain[0].generation, 1);
+    assert_eq!(parcel.seed_chain[0].role, Role::OWNER);
 
     let cleartext = SharedKeySeed::decode(&fixture("puk-cleartext.snowp")).unwrap();
     assert_eq!(cleartext.generation, 2);
@@ -139,4 +216,16 @@ fn official_puk_parcel_and_cleartext_decode() {
     assert_eq!(cleartext.seed.as_bytes(), &expected_seed);
     assert_eq!(format!("{:?}", cleartext.seed), "SecretSeed([REDACTED])");
     assert!(!format!("{cleartext:?}").contains(&format!("{expected_seed:?}")));
+}
+
+#[test]
+fn official_named_team_chain_and_ptk_parcels_decode() {
+    let chain = TeamChain::decode(&fixture("team-chain.snowp")).unwrap();
+    assert_eq!(chain.links.len(), 1);
+    assert_eq!(chain.boxes.len(), 4);
+    assert_eq!(chain.hepks.len(), 4);
+    assert_eq!(chain.team_name_utf8, b"fixtureteam");
+    let change = chain.links[0].decode_team_group_change().unwrap();
+    assert_eq!(change.shared_keys.len(), 4);
+    assert_eq!(change.changes.len(), 1);
 }

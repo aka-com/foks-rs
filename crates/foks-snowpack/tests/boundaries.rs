@@ -57,17 +57,9 @@ fn text_length_boundaries_round_trip() {
 
 #[test]
 fn array_header_boundaries_match_foks_v019() {
-    for length in [1, 15, 32, 33, 255] {
+    for length in [1, 15, 16, 17, 31, 32, 33, 255] {
         let value = Value::Array(vec![Value::Null; length]);
         assert_eq!(decode(&encode(&value).unwrap()).unwrap(), value);
-    }
-    for length in 16..=31 {
-        assert_eq!(
-            encode(&Value::Array(vec![Value::Null; length]))
-                .unwrap_err()
-                .kind,
-            ErrorKind::ArrayLengthGap(length)
-        );
     }
 }
 

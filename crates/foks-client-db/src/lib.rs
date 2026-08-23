@@ -1,4 +1,4 @@
-//! Durable SQLite hard state for a native FOKS client.
+//! Durable SQLite hard state and isolated soft projections for a native FOKS client.
 //!
 //! This crate is intentionally below the protocol verifier. It preserves the
 //! exact signed bytes supplied by that verifier and enforces monotonic pins,
@@ -7,16 +7,22 @@
 #![forbid(unsafe_code)]
 
 mod schema;
+mod soft;
+mod soft_schema;
+
+pub use soft::{KvDirectoryProjection, KvLargeFileStage, KvProjectedEntry, SoftStateStore};
 
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::time::Duration;
 
+use foks_proto::ServiceType;
 use foks_snowpack::{decode, encode, Value};
 use foks_verify::{
     AuthenticatedMerkleRoot, HostService, MerkleRootEvidence, VerifiedHostSnapshot,
-    VerifiedHostSnapshotParts, VerifiedMerkleRoot, VerifiedMerkleRootParts, VerifiedUserSnapshot,
+    VerifiedHostSnapshotParts, VerifiedMerkleRoot, VerifiedMerkleRootParts, VerifiedTeamMember,
+    VerifiedTeamSnapshot, VerifiedTeamSnapshotParts, VerifiedUserSnapshot,
     VerifiedUserSnapshotParts,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension as _, TransactionBehavior};
@@ -108,12 +114,115 @@ impl StoredUserSnapshot {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredTeamSnapshot {
+    pub host_id: Vec<u8>,
+    pub team_id: Vec<u8>,
+    pub chain_seqno: u64,
+    pub chain_tail_hash: [u8; 32],
+    pub chain_bytes: Vec<u8>,
+    pub evidence_bytes: Vec<u8>,
+    pub team_name: Vec<u8>,
+    pub team_name_utf8: Vec<u8>,
+    pub team_name_sequence: u64,
+    pub merkle_epoch: u64,
+    pub merkle_root_hash: [u8; 32],
+    pub merkle_root_bytes: Vec<u8>,
+    pub members: Vec<VerifiedTeamMember>,
+    pub shared_keys: Vec<foks_verify::VerifiedUserSharedKey>,
+}
+
+impl StoredTeamSnapshot {
+    pub fn parts(&self) -> VerifiedTeamSnapshotParts<'_> {
+        VerifiedTeamSnapshotParts {
+            host_id: &self.host_id,
+            team_id: &self.team_id,
+            chain_seqno: self.chain_seqno,
+            chain_tail_hash: self.chain_tail_hash,
+            chain_bytes: &self.chain_bytes,
+            evidence_bytes: &self.evidence_bytes,
+            team_name: &self.team_name,
+            team_name_utf8: &self.team_name_utf8,
+            team_name_sequence: self.team_name_sequence,
+            merkle_epoch: self.merkle_epoch,
+            merkle_root_hash: self.merkle_root_hash,
+            merkle_root_bytes: &self.merkle_root_bytes,
+            members: &self.members,
+            shared_keys: &self.shared_keys,
+        }
+    }
+}
+
 /// The durable result of accepting a verified snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Acceptance {
     Inserted,
     Advanced,
     Unchanged,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum SignupOperationState {
+    Prepared = 1,
+    Submitted = 2,
+    Verified = 3,
+}
+
+impl SignupOperationState {
+    fn from_sql(value: i64) -> Result<Self> {
+        match value {
+            1 => Ok(Self::Prepared),
+            2 => Ok(Self::Submitted),
+            3 => Ok(Self::Verified),
+            _ => Err(Error::InvalidSignupOperation("unknown operation state")),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SignupOperation {
+    pub operation_id: [u8; 16],
+    pub host_id: Vec<u8>,
+    pub normalized_username: Vec<u8>,
+    pub uid: Vec<u8>,
+    pub device_id: Vec<u8>,
+    pub request_hash: [u8; 32],
+    pub state: SignupOperationState,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AdHocTeamOperationState {
+    Prepared = 1,
+    Submitted = 2,
+    Verified = 3,
+}
+
+impl AdHocTeamOperationState {
+    fn from_sql(value: i64) -> Result<Self> {
+        match value {
+            1 => Ok(Self::Prepared),
+            2 => Ok(Self::Submitted),
+            3 => Ok(Self::Verified),
+            _ => Err(Error::InvalidAdHocTeamOperation("unknown operation state")),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdHocTeamOperation {
+    pub operation_id: [u8; 16],
+    pub host_id: Vec<u8>,
+    pub uid: Vec<u8>,
+    pub device_id: Vec<u8>,
+    pub team_id: Vec<u8>,
+    pub request_hash: [u8; 32],
+    pub state: AdHocTeamOperationState,
+    pub created_at: u64,
+    pub updated_at: u64,
 }
 
 #[derive(Debug, Error)]
@@ -156,10 +265,36 @@ pub enum Error {
     UserFork { seqno: u64 },
     #[error("user projection changed without a chain advance at sequence {seqno}")]
     UserProjectionChanged { seqno: u64 },
+    #[error("invalid verified team snapshot: {0}")]
+    InvalidTeam(&'static str),
+    #[error("team chain rolled back from sequence {stored} to {received}")]
+    TeamRollback { stored: u64, received: u64 },
+    #[error("team chain forked at sequence {seqno}")]
+    TeamFork { seqno: u64 },
+    #[error("team projection changed without a chain advance at sequence {seqno}")]
+    TeamProjectionChanged { seqno: u64 },
     #[error("{field} value {value} cannot be represented by SQLite")]
     IntegerOutOfRange { field: &'static str, value: u64 },
     #[error("stored {field} value {value} cannot be represented by the protocol")]
     StoredIntegerOutOfRange { field: &'static str, value: i64 },
+    #[error("soft-state database has application id {found:#x}, expected {expected:#x}")]
+    WrongSoftApplicationId { found: i64, expected: i64 },
+    #[error("soft-state database permissions {0:#o} allow group or other access")]
+    InsecureSoftPermissions(u32),
+    #[error("soft-state schema version {found} is unsupported; this build supports {supported}")]
+    UnsupportedSoftSchema { found: u32, supported: u32 },
+    #[error("invalid verified KV projection")]
+    InvalidKvProjection,
+    #[error("KV root rolled back from version {stored} to {received}")]
+    KvRootRollback { stored: u64, received: u64 },
+    #[error("KV directory rolled back from version {stored} to {received}")]
+    KvDirectoryRollback { stored: u64, received: u64 },
+    #[error("KV projection conflict: {0}")]
+    KvProjectionConflict(&'static str),
+    #[error("invalid signup operation: {0}")]
+    InvalidSignupOperation(&'static str),
+    #[error("invalid ad-hoc team operation: {0}")]
+    InvalidAdHocTeamOperation(&'static str),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -205,6 +340,264 @@ impl HardStateStore {
         Ok(Self { connection })
     }
 
+    /// Records only the public fingerprint of a prepared signup. The caller's
+    /// encrypted credential store remains authoritative for retry material.
+    pub fn record_signup_operation(&mut self, operation: &SignupOperation) -> Result<()> {
+        validate_signup_operation(operation)?;
+        if operation.state != SignupOperationState::Prepared
+            || operation.created_at != operation.updated_at
+        {
+            return Err(Error::InvalidSignupOperation(
+                "new operation must be in the prepared state",
+            ));
+        }
+        let host_exists = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM hosts WHERE host_id = ?1)",
+            [&operation.host_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !host_exists {
+            return Err(Error::UnknownHost);
+        }
+        self.connection.execute(
+            "INSERT INTO signup_operations (
+                operation_id, host_id, normalized_username, uid, device_id,
+                request_hash, state, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                operation.operation_id.as_slice(),
+                operation.host_id,
+                operation.normalized_username,
+                operation.uid,
+                operation.device_id,
+                operation.request_hash.as_slice(),
+                operation.state as u8,
+                sqlite_integer("signup created time", operation.created_at)?,
+                sqlite_integer("signup updated time", operation.updated_at)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn advance_signup_operation(
+        &mut self,
+        operation_id: &[u8; 16],
+        state: SignupOperationState,
+        updated_at: u64,
+    ) -> Result<()> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = transaction
+            .query_row(
+                "SELECT state, created_at, updated_at
+                 FROM signup_operations WHERE operation_id = ?1",
+                [operation_id.as_slice()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(Error::InvalidSignupOperation("operation is not recorded"))?;
+        let current_state = SignupOperationState::from_sql(current.0)?;
+        let created_at = stored_unsigned("signup created time", current.1)?;
+        let previous_updated_at = stored_unsigned("signup updated time", current.2)?;
+        if updated_at < created_at
+            || updated_at < previous_updated_at
+            || (state as u8) < current_state as u8
+            || (state as u8) > (current_state as u8).saturating_add(1)
+        {
+            return Err(Error::InvalidSignupOperation(
+                "operation state transition is not monotonic",
+            ));
+        }
+        transaction.execute(
+            "UPDATE signup_operations SET state = ?2, updated_at = ?3 WHERE operation_id = ?1",
+            params![
+                operation_id.as_slice(),
+                state as u8,
+                sqlite_integer("signup updated time", updated_at)?,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn signup_operation(&self, operation_id: &[u8; 16]) -> Result<Option<SignupOperation>> {
+        self.connection
+            .query_row(
+                "SELECT host_id, normalized_username, uid, device_id, request_hash,
+                        state, created_at, updated_at
+                 FROM signup_operations WHERE operation_id = ?1",
+                [operation_id.as_slice()],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                        row.get::<_, Vec<u8>>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
+                    ))
+                },
+            )
+            .optional()?
+            .map(|row| {
+                Ok(SignupOperation {
+                    operation_id: *operation_id,
+                    host_id: row.0,
+                    normalized_username: row.1,
+                    uid: row.2,
+                    device_id: row.3,
+                    request_hash: row.4.try_into().map_err(|_| {
+                        Error::InvalidSignupOperation("stored request hash has the wrong length")
+                    })?,
+                    state: SignupOperationState::from_sql(row.5)?,
+                    created_at: stored_unsigned("signup created time", row.6)?,
+                    updated_at: stored_unsigned("signup updated time", row.7)?,
+                })
+            })
+            .transpose()
+    }
+
+    /// Records the public identity and request fingerprint for a prepared
+    /// ad-hoc team creation. PTK seeds are deliberately caller-owned.
+    pub fn record_adhoc_team_operation(&mut self, operation: &AdHocTeamOperation) -> Result<()> {
+        validate_adhoc_team_operation(operation)?;
+        if operation.state != AdHocTeamOperationState::Prepared
+            || operation.created_at != operation.updated_at
+        {
+            return Err(Error::InvalidAdHocTeamOperation(
+                "new operation must be in the prepared state",
+            ));
+        }
+        let host_exists = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM hosts WHERE host_id = ?1)",
+            [&operation.host_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !host_exists {
+            return Err(Error::UnknownHost);
+        }
+        self.connection.execute(
+            "INSERT INTO adhoc_team_operations (
+                operation_id, host_id, uid, device_id, team_id, request_hash,
+                state, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                operation.operation_id.as_slice(),
+                operation.host_id,
+                operation.uid,
+                operation.device_id,
+                operation.team_id,
+                operation.request_hash.as_slice(),
+                operation.state as u8,
+                sqlite_integer("ad-hoc team created time", operation.created_at)?,
+                sqlite_integer("ad-hoc team updated time", operation.updated_at)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn advance_adhoc_team_operation(
+        &mut self,
+        operation_id: &[u8; 16],
+        state: AdHocTeamOperationState,
+        updated_at: u64,
+    ) -> Result<()> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = transaction
+            .query_row(
+                "SELECT state, created_at, updated_at
+                 FROM adhoc_team_operations WHERE operation_id = ?1",
+                [operation_id.as_slice()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(Error::InvalidAdHocTeamOperation(
+                "operation is not recorded",
+            ))?;
+        let current_state = AdHocTeamOperationState::from_sql(current.0)?;
+        let created_at = stored_unsigned("ad-hoc team created time", current.1)?;
+        let previous_updated_at = stored_unsigned("ad-hoc team updated time", current.2)?;
+        if updated_at < created_at
+            || updated_at < previous_updated_at
+            || (state as u8) < current_state as u8
+            || (state as u8) > (current_state as u8).saturating_add(1)
+        {
+            return Err(Error::InvalidAdHocTeamOperation(
+                "operation state transition is not monotonic",
+            ));
+        }
+        transaction.execute(
+            "UPDATE adhoc_team_operations SET state = ?2, updated_at = ?3
+             WHERE operation_id = ?1",
+            params![
+                operation_id.as_slice(),
+                state as u8,
+                sqlite_integer("ad-hoc team updated time", updated_at)?,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn adhoc_team_operation(
+        &self,
+        operation_id: &[u8; 16],
+    ) -> Result<Option<AdHocTeamOperation>> {
+        self.connection
+            .query_row(
+                "SELECT host_id, uid, device_id, team_id, request_hash,
+                        state, created_at, updated_at
+                 FROM adhoc_team_operations WHERE operation_id = ?1",
+                [operation_id.as_slice()],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                        row.get::<_, Vec<u8>>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
+                    ))
+                },
+            )
+            .optional()?
+            .map(|row| {
+                Ok(AdHocTeamOperation {
+                    operation_id: *operation_id,
+                    host_id: row.0,
+                    uid: row.1,
+                    device_id: row.2,
+                    team_id: row.3,
+                    request_hash: row.4.try_into().map_err(|_| {
+                        Error::InvalidAdHocTeamOperation("stored request hash has the wrong length")
+                    })?,
+                    state: AdHocTeamOperationState::from_sql(row.5)?,
+                    created_at: stored_unsigned("ad-hoc team created time", row.6)?,
+                    updated_at: stored_unsigned("ad-hoc team updated time", row.7)?,
+                })
+            })
+            .transpose()
+    }
+
     /// Atomically accepts a complete, already-verified host snapshot.
     ///
     /// A failed monotonicity check rolls back every part of the update,
@@ -221,7 +614,7 @@ impl HardStateStore {
         let mut service_types = snapshot
             .services
             .iter()
-            .map(|service| sqlite_integer("service type", service.service_type))
+            .map(|service| sqlite_integer("service type", service.service_type.protocol_value()))
             .collect::<Result<Vec<_>>>()?;
         service_types.sort_unstable();
         if service_types.windows(2).any(|pair| pair[0] == pair[1]) {
@@ -341,7 +734,7 @@ impl HardStateStore {
                      VALUES (?1, ?2, ?3, ?4)",
                     params![
                         snapshot.host_id,
-                        sqlite_integer("service type", service.service_type)?,
+                        sqlite_integer("service type", service.service_type.protocol_value())?,
                         service.endpoint_bytes,
                         chain_seqno,
                     ],
@@ -591,6 +984,198 @@ impl HardStateStore {
         Ok(acceptance)
     }
 
+    /// Atomically pins a verified team chain and its public roster/PTK
+    /// projection. PTK seeds and other private material are never stored.
+    pub fn accept_verified_team(&mut self, snapshot: &VerifiedTeamSnapshot) -> Result<Acceptance> {
+        self.accept_team_parts(snapshot.parts())
+    }
+
+    fn accept_team_parts(&mut self, snapshot: VerifiedTeamSnapshotParts<'_>) -> Result<Acceptance> {
+        validate_team_snapshot(snapshot)?;
+        let chain_seqno = sqlite_integer("team chain sequence", snapshot.chain_seqno)?;
+        let merkle_epoch = sqlite_integer("team Merkle epoch", snapshot.merkle_epoch)?;
+        let mut members = snapshot.members.to_vec();
+        members.sort();
+        let mut shared_keys = snapshot.shared_keys.to_vec();
+        shared_keys.sort();
+        if members.windows(2).any(|pair| {
+            pair[0].party_id == pair[1].party_id
+                && pair[0].scoped_host_id == pair[1].scoped_host_id
+                && pair[0].source_role == pair[1].source_role
+        }) || shared_keys
+            .windows(2)
+            .any(|pair| pair[0].role == pair[1].role)
+        {
+            return Err(Error::InvalidTeam(
+                "member identities and current PTK roles must be unique",
+            ));
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let host_exists = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM hosts WHERE host_id = ?1)",
+            [snapshot.host_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !host_exists {
+            return Err(Error::UnknownHost);
+        }
+        let accepted_root = transaction
+            .query_row(
+                "SELECT root_hash FROM merkle_roots WHERE host_id = ?1 AND epoch = ?2",
+                params![snapshot.host_id, merkle_epoch],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()?;
+        if accepted_root.as_deref() != Some(snapshot.merkle_root_hash.as_slice()) {
+            return Err(Error::InvalidTeam(
+                "team projection is not bound to an accepted Merkle root",
+            ));
+        }
+        let stored = load_team_snapshot(&transaction, snapshot.host_id, snapshot.team_id)?;
+        let acceptance = match &stored {
+            None => Acceptance::Inserted,
+            Some(stored) if snapshot.chain_seqno < stored.chain_seqno => {
+                return Err(Error::TeamRollback {
+                    stored: stored.chain_seqno,
+                    received: snapshot.chain_seqno,
+                });
+            }
+            Some(stored) if snapshot.chain_seqno == stored.chain_seqno => {
+                if stored.chain_tail_hash != snapshot.chain_tail_hash
+                    || stored.chain_bytes != snapshot.chain_bytes
+                {
+                    return Err(Error::TeamFork {
+                        seqno: snapshot.chain_seqno,
+                    });
+                }
+                if stored.evidence_bytes != snapshot.evidence_bytes
+                    || stored.team_name != snapshot.team_name
+                    || stored.team_name_utf8 != snapshot.team_name_utf8
+                    || stored.team_name_sequence != snapshot.team_name_sequence
+                    || stored.members != members
+                    || stored.shared_keys != shared_keys
+                {
+                    return Err(Error::TeamProjectionChanged {
+                        seqno: snapshot.chain_seqno,
+                    });
+                }
+                match snapshot.merkle_epoch.cmp(&stored.merkle_epoch) {
+                    std::cmp::Ordering::Less => {
+                        return Err(Error::MerkleRollback {
+                            stored: stored.merkle_epoch,
+                            received: snapshot.merkle_epoch,
+                        });
+                    }
+                    std::cmp::Ordering::Equal => {
+                        if stored.merkle_root_hash != snapshot.merkle_root_hash
+                            || stored.merkle_root_bytes != snapshot.merkle_root_bytes
+                        {
+                            return Err(Error::MerkleFork {
+                                epoch: snapshot.merkle_epoch,
+                            });
+                        }
+                        Acceptance::Unchanged
+                    }
+                    std::cmp::Ordering::Greater => Acceptance::Advanced,
+                }
+            }
+            Some(stored) => {
+                if !encoded_array_is_prefix(&stored.chain_bytes, snapshot.chain_bytes)? {
+                    return Err(Error::TeamFork {
+                        seqno: stored.chain_seqno.saturating_add(1),
+                    });
+                }
+                if snapshot.merkle_epoch < stored.merkle_epoch {
+                    return Err(Error::MerkleRollback {
+                        stored: stored.merkle_epoch,
+                        received: snapshot.merkle_epoch,
+                    });
+                }
+                Acceptance::Advanced
+            }
+        };
+        if acceptance != Acceptance::Unchanged {
+            transaction.execute(
+                "INSERT INTO teams (host_id, team_id, chain_seqno, chain_tail_hash, chain_bytes, \
+                 evidence_bytes, team_name, team_name_utf8, team_name_sequence, merkle_epoch, \
+                 merkle_root_hash, merkle_root_bytes) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
+                 ON CONFLICT(host_id, team_id) DO UPDATE SET chain_seqno = excluded.chain_seqno, \
+                 chain_tail_hash = excluded.chain_tail_hash, chain_bytes = excluded.chain_bytes, \
+                 evidence_bytes = excluded.evidence_bytes, team_name = excluded.team_name, \
+                 team_name_utf8 = excluded.team_name_utf8, \
+                 team_name_sequence = excluded.team_name_sequence, \
+                 merkle_epoch = excluded.merkle_epoch, merkle_root_hash = excluded.merkle_root_hash, \
+                 merkle_root_bytes = excluded.merkle_root_bytes",
+                params![
+                    snapshot.host_id,
+                    snapshot.team_id,
+                    chain_seqno,
+                    snapshot.chain_tail_hash.as_slice(),
+                    snapshot.chain_bytes,
+                    snapshot.evidence_bytes,
+                    snapshot.team_name,
+                    snapshot.team_name_utf8,
+                    sqlite_integer("team-name sequence", snapshot.team_name_sequence)?,
+                    merkle_epoch,
+                    snapshot.merkle_root_hash.as_slice(),
+                    snapshot.merkle_root_bytes,
+                ],
+            )?;
+            transaction.execute(
+                "DELETE FROM team_members WHERE host_id = ?1 AND team_id = ?2",
+                params![snapshot.host_id, snapshot.team_id],
+            )?;
+            transaction.execute(
+                "DELETE FROM team_shared_keys WHERE host_id = ?1 AND team_id = ?2",
+                params![snapshot.host_id, snapshot.team_id],
+            )?;
+            for member in &members {
+                transaction.execute(
+                    "INSERT INTO team_members (host_id, team_id, party_id, scoped_host_id, \
+                     source_role_type, source_role_visibility, role_type, role_visibility, \
+                     generation, verify_key, hepk_fingerprint) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    params![
+                        snapshot.host_id,
+                        snapshot.team_id,
+                        member.party_id,
+                        member.scoped_host_id.as_deref().unwrap_or_default(),
+                        sqlite_integer(
+                            "team member source role",
+                            member.source_role.protocol_value()
+                        )?,
+                        i64::from(member.source_role.visibility().unwrap_or(0)),
+                        sqlite_integer("team member role", member.role.protocol_value())?,
+                        i64::from(member.role.visibility().unwrap_or(0)),
+                        sqlite_integer("team member generation", member.generation)?,
+                        member.verify_key,
+                        member.hepk_fingerprint.as_slice(),
+                    ],
+                )?;
+            }
+            for key in &shared_keys {
+                transaction.execute(
+                    "INSERT INTO team_shared_keys (host_id, team_id, role_type, role_visibility, \
+                     generation, verify_key, hepk_bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        snapshot.host_id,
+                        snapshot.team_id,
+                        sqlite_integer("PTK role", key.role.protocol_value())?,
+                        i64::from(key.role.visibility().unwrap_or(0)),
+                        sqlite_integer("PTK generation", key.generation)?,
+                        key.verify_key,
+                        key.hepk_bytes,
+                    ],
+                )?;
+            }
+        }
+        transaction.commit()?;
+        Ok(acceptance)
+    }
+
     /// Advances only the already-verified Merkle head for a pinned host.
     pub fn accept_verified_merkle_root(
         &mut self,
@@ -638,6 +1223,16 @@ impl HardStateStore {
     /// `parts()` through `foks_verify::restore_verified_user` before use.
     pub fn user_for_host(&self, host_id: &[u8], uid: &[u8]) -> Result<Option<StoredUserSnapshot>> {
         load_user_snapshot(&self.connection, host_id, uid)
+    }
+
+    /// Loads an untrusted persisted team projection. Re-authenticate it with
+    /// `foks_verify::restore_verified_team` before use.
+    pub fn team_for_host(
+        &self,
+        host_id: &[u8],
+        team_id: &[u8],
+    ) -> Result<Option<StoredTeamSnapshot>> {
+        load_team_snapshot(&self.connection, host_id, team_id)
     }
 }
 
@@ -726,6 +1321,34 @@ fn validate_snapshot(snapshot: VerifiedHostSnapshotParts<'_>) -> Result<()> {
     Ok(())
 }
 
+fn validate_signup_operation(operation: &SignupOperation) -> Result<()> {
+    if operation.host_id.len() != 33
+        || !(3..=25).contains(&operation.normalized_username.len())
+        || operation.uid.len() != 33
+        || operation.device_id.len() != 33
+        || operation.created_at > operation.updated_at
+    {
+        return Err(Error::InvalidSignupOperation(
+            "public operation fields are malformed",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_adhoc_team_operation(operation: &AdHocTeamOperation) -> Result<()> {
+    if operation.host_id.len() != 33
+        || operation.uid.len() != 33
+        || operation.device_id.len() != 33
+        || operation.team_id.len() != 33
+        || operation.created_at > operation.updated_at
+    {
+        return Err(Error::InvalidAdHocTeamOperation(
+            "public operation fields are malformed",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_user_snapshot(snapshot: VerifiedUserSnapshotParts<'_>) -> Result<()> {
     if snapshot.host_id.is_empty()
         || snapshot.uid.len() != 33
@@ -755,6 +1378,40 @@ fn validate_user_snapshot(snapshot: VerifiedUserSnapshotParts<'_>) -> Result<()>
         })
     {
         return Err(Error::InvalidUser("required field is missing or malformed"));
+    }
+    Ok(())
+}
+
+fn validate_team_snapshot(snapshot: VerifiedTeamSnapshotParts<'_>) -> Result<()> {
+    if snapshot.host_id.is_empty()
+        || snapshot.team_id.len() != 33
+        || snapshot.chain_seqno == 0
+        || snapshot.chain_bytes.is_empty()
+        || snapshot.evidence_bytes.is_empty()
+        || snapshot.team_name.is_empty()
+        || snapshot.team_name_utf8.is_empty()
+        || snapshot.merkle_root_bytes.is_empty()
+        || snapshot.members.is_empty()
+        || snapshot.shared_keys.is_empty()
+        || snapshot.members.iter().any(|member| {
+            member.party_id.len() != 33
+                || member
+                    .scoped_host_id
+                    .as_ref()
+                    .is_some_and(|host| host.len() != 33)
+                || !valid_stored_role(stored_role(member.source_role))
+                || !valid_stored_role(stored_role(member.role))
+                || member.generation == 0
+                || member.verify_key.len() != 33
+        })
+        || snapshot.shared_keys.iter().any(|key| {
+            !valid_stored_role(stored_role(key.role))
+                || key.generation == 0
+                || key.verify_key.len() != 33
+                || key.hepk_bytes.is_empty()
+        })
+    {
+        return Err(Error::InvalidTeam("required field is missing or malformed"));
     }
     Ok(())
 }
@@ -928,6 +1585,158 @@ fn load_user_shared_keys(
     .collect()
 }
 
+fn load_team_snapshot(
+    connection: &Connection,
+    host_id: &[u8],
+    team_id: &[u8],
+) -> Result<Option<StoredTeamSnapshot>> {
+    let row = connection
+        .query_row(
+            "SELECT chain_seqno, chain_tail_hash, chain_bytes, evidence_bytes, team_name, \
+             team_name_utf8, team_name_sequence, merkle_epoch, merkle_root_hash, \
+             merkle_root_bytes FROM teams WHERE host_id = ?1 AND team_id = ?2",
+            params![host_id, team_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, Vec<u8>>(8)?,
+                    row.get::<_, Vec<u8>>(9)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((
+        seqno,
+        tail,
+        chain_bytes,
+        evidence_bytes,
+        team_name,
+        team_name_utf8,
+        team_name_sequence,
+        merkle_epoch,
+        root_hash,
+        root_bytes,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    Ok(Some(StoredTeamSnapshot {
+        host_id: host_id.to_vec(),
+        team_id: team_id.to_vec(),
+        chain_seqno: stored_unsigned("team chain sequence", seqno)?,
+        chain_tail_hash: fixed_hash(tail, "stored team-chain tail has an invalid length")?,
+        chain_bytes,
+        evidence_bytes,
+        team_name,
+        team_name_utf8,
+        team_name_sequence: stored_unsigned("team-name sequence", team_name_sequence)?,
+        merkle_epoch: stored_unsigned("team Merkle epoch", merkle_epoch)?,
+        merkle_root_hash: fixed_hash(root_hash, "stored team Merkle hash has an invalid length")?,
+        merkle_root_bytes: root_bytes,
+        members: load_team_members(connection, host_id, team_id)?,
+        shared_keys: load_team_shared_keys(connection, host_id, team_id)?,
+    }))
+}
+
+fn load_team_members(
+    connection: &Connection,
+    host_id: &[u8],
+    team_id: &[u8],
+) -> Result<Vec<VerifiedTeamMember>> {
+    let mut statement = connection.prepare(
+        "SELECT party_id, scoped_host_id, source_role_type, source_role_visibility, role_type, \
+         role_visibility, generation, verify_key, hepk_fingerprint FROM team_members \
+         WHERE host_id = ?1 AND team_id = ?2 ORDER BY party_id, scoped_host_id, \
+         source_role_type, source_role_visibility",
+    )?;
+    let rows = statement.query_map(params![host_id, team_id], |row| {
+        Ok((
+            row.get::<_, Vec<u8>>(0)?,
+            row.get::<_, Vec<u8>>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, i64>(6)?,
+            row.get::<_, Vec<u8>>(7)?,
+            row.get::<_, Vec<u8>>(8)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (
+            party,
+            scope,
+            source_type,
+            source_visibility,
+            role_type,
+            role_visibility,
+            generation,
+            verify_key,
+            fingerprint,
+        ) = row?;
+        Ok(VerifiedTeamMember {
+            party_id: party,
+            scoped_host_id: (!scope.is_empty()).then_some(scope),
+            source_role: protocol_role(StoredRole {
+                role_type: stored_unsigned("team source role type", source_type)?,
+                visibility: source_visibility,
+            })?,
+            role: protocol_role(StoredRole {
+                role_type: stored_unsigned("team role type", role_type)?,
+                visibility: role_visibility,
+            })?,
+            generation: stored_unsigned("team member generation", generation)?,
+            verify_key,
+            hepk_fingerprint: fixed_hash(
+                fingerprint,
+                "stored team member HEPK fingerprint has an invalid length",
+            )?,
+        })
+    })
+    .collect()
+}
+
+fn load_team_shared_keys(
+    connection: &Connection,
+    host_id: &[u8],
+    team_id: &[u8],
+) -> Result<Vec<foks_verify::VerifiedUserSharedKey>> {
+    let mut statement = connection.prepare(
+        "SELECT role_type, role_visibility, generation, verify_key, hepk_bytes \
+         FROM team_shared_keys WHERE host_id = ?1 AND team_id = ?2 \
+         ORDER BY role_type, role_visibility",
+    )?;
+    let rows = statement.query_map(params![host_id, team_id], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, Vec<u8>>(3)?,
+            row.get::<_, Vec<u8>>(4)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (role_type, visibility, generation, verify_key, hepk_bytes) = row?;
+        Ok(foks_verify::VerifiedUserSharedKey {
+            role: protocol_role(StoredRole {
+                role_type: stored_unsigned("PTK role type", role_type)?,
+                visibility,
+            })?,
+            generation: stored_unsigned("PTK generation", generation)?,
+            verify_key,
+            hepk_bytes,
+        })
+    })
+    .collect()
+}
+
 fn sqlite_integer(field: &'static str, value: u64) -> Result<i64> {
     i64::try_from(value).map_err(|_| Error::IntegerOutOfRange { field, value })
 }
@@ -1022,7 +1831,8 @@ fn load_services(connection: &Connection, host_id: &[u8]) -> Result<Vec<HostServ
     rows.map(|row| {
         let (service_type, endpoint_bytes) = row?;
         Ok(HostService {
-            service_type: stored_unsigned("service type", service_type)?,
+            service_type: ServiceType::try_from(stored_unsigned("service type", service_type)?)
+                .map_err(|_| Error::InvalidSnapshot("stored service type is unknown"))?,
             endpoint_bytes,
         })
     })
@@ -1454,6 +2264,45 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct TestTeamSnapshot {
+        host_id: Vec<u8>,
+        team_id: Vec<u8>,
+        chain_seqno: u64,
+        chain_tail_hash: [u8; 32],
+        chain_bytes: Vec<u8>,
+        evidence_bytes: Vec<u8>,
+        team_name: Vec<u8>,
+        team_name_utf8: Vec<u8>,
+        team_name_sequence: u64,
+        merkle_epoch: u64,
+        merkle_root_hash: [u8; 32],
+        merkle_root_bytes: Vec<u8>,
+        members: Vec<VerifiedTeamMember>,
+        shared_keys: Vec<foks_verify::VerifiedUserSharedKey>,
+    }
+
+    impl TestTeamSnapshot {
+        fn parts(&self) -> VerifiedTeamSnapshotParts<'_> {
+            VerifiedTeamSnapshotParts {
+                host_id: &self.host_id,
+                team_id: &self.team_id,
+                chain_seqno: self.chain_seqno,
+                chain_tail_hash: self.chain_tail_hash,
+                chain_bytes: &self.chain_bytes,
+                evidence_bytes: &self.evidence_bytes,
+                team_name: &self.team_name,
+                team_name_utf8: &self.team_name_utf8,
+                team_name_sequence: self.team_name_sequence,
+                merkle_epoch: self.merkle_epoch,
+                merkle_root_hash: self.merkle_root_hash,
+                merkle_root_bytes: &self.merkle_root_bytes,
+                members: &self.members,
+                shared_keys: &self.shared_keys,
+            }
+        }
+    }
+
     impl TestHostSnapshot {
         fn parts(&self) -> VerifiedHostSnapshotParts<'_> {
             VerifiedHostSnapshotParts {
@@ -1482,6 +2331,87 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn signup_operation_journal_is_public_and_monotonic() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hard.db");
+        let mut store = HardStateStore::open(&path).unwrap();
+        let host = snapshot();
+        store.accept_host_parts(host.parts()).unwrap();
+        let operation = SignupOperation {
+            operation_id: [9; 16],
+            host_id: host.host_id,
+            normalized_username: b"newuser".to_vec(),
+            uid: vec![1; 33],
+            device_id: vec![4; 33],
+            request_hash: [8; 32],
+            state: SignupOperationState::Prepared,
+            created_at: 100,
+            updated_at: 100,
+        };
+        store.record_signup_operation(&operation).unwrap();
+        assert_eq!(store.signup_operation(&[9; 16]).unwrap(), Some(operation));
+        store
+            .advance_signup_operation(&[9; 16], SignupOperationState::Submitted, 101)
+            .unwrap();
+        assert_eq!(
+            store.signup_operation(&[9; 16]).unwrap().unwrap().state,
+            SignupOperationState::Submitted
+        );
+        assert!(store
+            .advance_signup_operation(&[9; 16], SignupOperationState::Prepared, 102)
+            .is_err());
+        assert!(store
+            .advance_signup_operation(&[9; 16], SignupOperationState::Submitted, 100)
+            .is_err());
+        assert!(store
+            .advance_signup_operation(&[9; 16], SignupOperationState::Verified, 99)
+            .is_err());
+    }
+
+    #[test]
+    fn adhoc_team_operation_journal_is_public_unique_and_monotonic() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hard.db");
+        let mut store = HardStateStore::open(&path).unwrap();
+        let host = snapshot();
+        store.accept_host_parts(host.parts()).unwrap();
+        let operation = AdHocTeamOperation {
+            operation_id: [7; 16],
+            host_id: host.host_id,
+            uid: vec![1; 33],
+            device_id: vec![4; 33],
+            team_id: vec![20; 33],
+            request_hash: [8; 32],
+            state: AdHocTeamOperationState::Prepared,
+            created_at: 200,
+            updated_at: 200,
+        };
+        store.record_adhoc_team_operation(&operation).unwrap();
+        assert_eq!(
+            store.adhoc_team_operation(&[7; 16]).unwrap(),
+            Some(operation.clone())
+        );
+        store
+            .advance_adhoc_team_operation(&[7; 16], AdHocTeamOperationState::Submitted, 201)
+            .unwrap();
+        store
+            .advance_adhoc_team_operation(&[7; 16], AdHocTeamOperationState::Verified, 202)
+            .unwrap();
+        assert_eq!(
+            store.adhoc_team_operation(&[7; 16]).unwrap().unwrap().state,
+            AdHocTeamOperationState::Verified
+        );
+        assert!(store
+            .advance_adhoc_team_operation(&[7; 16], AdHocTeamOperationState::Submitted, 203)
+            .is_err());
+        let duplicate = AdHocTeamOperation {
+            operation_id: [6; 16],
+            ..operation
+        };
+        assert!(store.record_adhoc_team_operation(&duplicate).is_err());
+    }
+
     fn snapshot() -> TestHostSnapshot {
         TestHostSnapshot {
             lookup_name: "foks.example".into(),
@@ -1494,12 +2424,12 @@ mod tests {
             public_zone_bytes: vec![4; 96],
             services: vec![
                 HostService {
-                    service_type: 2,
-                    endpoint_bytes: vec![6; 24],
+                    service_type: ServiceType::Registration,
+                    endpoint_bytes: vec![5; 20],
                 },
                 HostService {
-                    service_type: 7,
-                    endpoint_bytes: vec![5; 20],
+                    service_type: ServiceType::User,
+                    endpoint_bytes: vec![6; 24],
                 },
             ],
             merkle_root: TestMerkleRoot {
@@ -1570,6 +2500,38 @@ mod tests {
                 generation: 1,
                 verify_key: vec![14; 33],
                 hepk_bytes: vec![26; 1280],
+            }],
+        }
+    }
+
+    fn team_snapshot() -> TestTeamSnapshot {
+        TestTeamSnapshot {
+            host_id: vec![1; 33],
+            team_id: vec![3; 33],
+            chain_seqno: 1,
+            chain_tail_hash: [31; 32],
+            chain_bytes: chain(&[31]),
+            evidence_bytes: vec![32; 80],
+            team_name: b"fixtureteam".to_vec(),
+            team_name_utf8: b"FixtureTeam".to_vec(),
+            team_name_sequence: 1,
+            merkle_epoch: 11,
+            merkle_root_hash: [7; 32],
+            merkle_root_bytes: vec![9; 80],
+            members: vec![VerifiedTeamMember {
+                party_id: vec![1; 33],
+                scoped_host_id: None,
+                source_role: foks_proto::Role::OWNER,
+                role: foks_proto::Role::OWNER,
+                generation: 2,
+                verify_key: vec![14; 33],
+                hepk_fingerprint: [33; 32],
+            }],
+            shared_keys: vec![foks_verify::VerifiedUserSharedKey {
+                role: foks_proto::Role::OWNER,
+                generation: 1,
+                verify_key: vec![15; 33],
+                hepk_bytes: vec![34; 1280],
             }],
         }
     }
@@ -1781,6 +2743,43 @@ mod tests {
         assert!(matches!(
             store.accept_user_parts(changed_device.parts()),
             Err(Error::UserProjectionChanged { seqno: 1 })
+        ));
+    }
+
+    #[test]
+    fn team_projection_is_atomic_monotonic_and_round_trips() {
+        let (_directory, mut store) = store();
+        store.accept_host_parts(snapshot().parts()).unwrap();
+        let team = team_snapshot();
+        assert_eq!(
+            store.accept_team_parts(team.parts()).unwrap(),
+            Acceptance::Inserted
+        );
+        assert_eq!(
+            store.accept_team_parts(team.parts()).unwrap(),
+            Acceptance::Unchanged
+        );
+        let loaded = store
+            .team_for_host(&team.host_id, &team.team_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.chain_bytes, team.chain_bytes);
+        assert_eq!(loaded.evidence_bytes, team.evidence_bytes);
+        assert_eq!(loaded.members, team.members);
+        assert_eq!(loaded.shared_keys, team.shared_keys);
+
+        let mut changed = team.clone();
+        changed.members[0].hepk_fingerprint[0] ^= 1;
+        assert!(matches!(
+            store.accept_team_parts(changed.parts()),
+            Err(Error::TeamProjectionChanged { seqno: 1 })
+        ));
+
+        let mut fork = team;
+        fork.chain_tail_hash[0] ^= 1;
+        assert!(matches!(
+            store.accept_team_parts(fork.parts()),
+            Err(Error::TeamFork { seqno: 1 })
         ));
     }
 
