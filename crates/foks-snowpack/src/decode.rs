@@ -1,16 +1,24 @@
 use crate::{Error, ErrorKind, PathSegment, Value, MAX_DEPTH};
 
 pub fn decode(input: &[u8]) -> Result<Value, Error> {
+    let (value, consumed) = decode_prefix(input)?;
+    if consumed != input.len() {
+        return Err(Error::new(ErrorKind::TrailingBytes, consumed, &[]));
+    }
+    Ok(value)
+}
+
+/// Decodes one canonical value at the start of `input` and returns the number
+/// of bytes consumed. FOKS uses this for authenticated plaintexts whose
+/// canonical Snowpack value is followed by zero padding.
+pub fn decode_prefix(input: &[u8]) -> Result<(Value, usize), Error> {
     let mut decoder = Decoder {
         input,
         offset: 0,
         path: Vec::new(),
     };
     let value = decoder.value()?;
-    if decoder.offset != input.len() {
-        return Err(decoder.error(ErrorKind::TrailingBytes));
-    }
-    Ok(value)
+    Ok((value, decoder.offset))
 }
 
 pub fn validate(input: &[u8]) -> Result<(), Error> {
@@ -180,11 +188,9 @@ impl Decoder<'_> {
             }
             0xdc => {
                 let length = usize::from(self.u16()?);
-                if length <= 31 {
+                if length <= 15 {
                     return Err(self.error(if length == 0 {
                         ErrorKind::EmptyArray
-                    } else if length >= 16 {
-                        ErrorKind::ArrayLengthGap(length)
                     } else {
                         ErrorKind::NonMinimal("array")
                     }));

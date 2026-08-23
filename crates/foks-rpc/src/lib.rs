@@ -1,29 +1,64 @@
-//! Strict framing for the FOKS v0.1.9 Snowpack RPC public probe.
+//! Strict framing and request encoding for FOKS v0.1.9 client RPCs.
 //!
 //! Snowpack RPC uses a standard MessagePack envelope (including named maps)
-//! around canonical Snowpack protocol values. This crate parses only the
-//! envelope needed for the unauthenticated public probe and returns the exact
-//! `ProbeRes` bytes for signature verification by `foks-verify`.
+//! around canonical Snowpack protocol values. This crate keeps the envelope
+//! separate from exact public and authenticated protocol payloads and returns
+//! response bytes unchanged for protocol verification.
 
 #![forbid(unsafe_code)]
 
 use std::io::{Read, Write};
 
+use foks_proto::{
+    AdHocTeamCreateArgument, EntityId, KvDirectory, KvDirent, KvLargeFileMetadata, KvNodeId,
+    KvPathVersionVector, KvSmallFileBox, KvUploadChunk, ProvisionDeviceArgument,
+    RevokeDeviceArgument, Role, Signature, SoftwareSignupArgument, TeamViewChallenge,
+    TeamViewRequest,
+};
 use foks_snowpack::{decode, encode, Value};
 use thiserror::Error;
 
 pub const PROBE_PROTOCOL_ID: u64 = 0xc588_4ff6;
 pub const PROBE_METHOD_POSITION: u64 = 1;
 pub const REG_PROTOCOL_ID: u64 = 0xf7ab_85f3;
+pub const REG_RESERVE_USERNAME_METHOD_POSITION: u64 = 0;
 pub const REG_GET_CLIENT_CERT_CHAIN_METHOD_POSITION: u64 = 1;
+pub const REG_SIGNUP_METHOD_POSITION: u64 = 2;
+pub const REG_SELECT_VHOST_METHOD_POSITION: u64 = 15;
 pub const USER_PROTOCOL_ID: u64 = 0x823f_0899;
+pub const USER_PROVISION_DEVICE_METHOD_POSITION: u64 = 6;
+pub const USER_REVOKE_DEVICE_METHOD_POSITION: u64 = 7;
 pub const USER_LOAD_USER_CHAIN_METHOD_POSITION: u64 = 9;
 pub const USER_GET_PUK_FOR_ROLE_METHOD_POSITION: u64 = 14;
+pub const USER_GET_HOST_CONFIG_METHOD_POSITION: u64 = 24;
 pub const MERKLE_QUERY_PROTOCOL_ID: u64 = 0xc041_2aa6;
 pub const MERKLE_GET_HISTORICAL_ROOTS_METHOD_POSITION: u64 = 1;
 pub const MERKLE_GET_CURRENT_ROOT_METHOD_POSITION: u64 = 2;
+pub const MERKLE_SELECT_VHOST_METHOD_POSITION: u64 = 8;
+pub const TEAM_LOADER_PROTOCOL_ID: u64 = 0xf912_8579;
+pub const TEAM_ADMIN_PROTOCOL_ID: u64 = 0xdbe1_ddbe;
+pub const TEAM_GET_VIEW_CHALLENGE_METHOD_POSITION: u64 = 0;
+pub const TEAM_ACTIVATE_VIEW_METHOD_POSITION: u64 = 1;
+pub const TEAM_LOAD_CHAIN_METHOD_POSITION: u64 = 3;
+pub const KV_STORE_PROTOCOL_ID: u64 = 0x8ee3_7b6b;
+pub const KV_MKDIR_METHOD_POSITION: u64 = 0;
+pub const KV_PUT_METHOD_POSITION: u64 = 1;
+pub const KV_PUT_ROOT_METHOD_POSITION: u64 = 2;
+pub const KV_FILE_UPLOAD_INIT_METHOD_POSITION: u64 = 3;
+pub const KV_FILE_UPLOAD_CHUNK_METHOD_POSITION: u64 = 4;
+pub const KV_PUT_SMALL_FILE_OR_SYMLINK_METHOD_POSITION: u64 = 7;
+pub const KV_GET_ROOT_METHOD_POSITION: u64 = 8;
+pub const KV_GET_NODE_METHOD_POSITION: u64 = 10;
+pub const KV_GET_ENCRYPTED_CHUNK_METHOD_POSITION: u64 = 11;
+pub const KV_GET_DIR_METHOD_POSITION: u64 = 12;
+pub const KV_CACHE_CHECK_METHOD_POSITION: u64 = 13;
+pub const KV_LIST_METHOD_POSITION: u64 = 14;
+pub const KV_LOCK_ACQUIRE_METHOD_POSITION: u64 = 15;
+pub const KV_LOCK_RELEASE_METHOD_POSITION: u64 = 16;
+pub const KV_SELECT_VHOST_METHOD_POSITION: u64 = 18;
 pub const CURRENT_COMPATIBILITY_VERSION: u64 = 1;
 pub const DEFAULT_MAX_FRAME_LENGTH: usize = 16 * 1024 * 1024;
+pub const STATUS_TX_RETRY_ERROR: u64 = 1014;
 
 const METHOD_CALL_V2: u64 = 5;
 const METHOD_RESPONSE: u64 = 1;
@@ -37,6 +72,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("invalid canonical Snowpack in RPC payload: {0}")]
     Snowpack(#[from] foks_snowpack::Error),
+    #[error("invalid FOKS protocol value: {0}")]
+    Protocol(#[from] foks_proto::Error),
     #[error("RPC frame length {received} exceeds limit {maximum}")]
     FrameTooLarge { received: usize, maximum: usize },
     #[error("invalid or noncanonical RPC frame length marker {0:#04x}")]
@@ -56,6 +93,8 @@ pub enum Error {
     Sequence { expected: u64, received: u64 },
     #[error("FOKS server returned status {code}{detail}")]
     RemoteStatus { code: u64, detail: StatusDetail },
+    #[error("FOKS KV cache is stale")]
+    KvStaleCache(KvPathVersionVector),
     #[error("unsupported FOKS compatibility header")]
     Compatibility,
     #[error("invalid probe hostname")]
@@ -76,6 +115,57 @@ impl std::fmt::Display for StatusDetail {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KvAuth<'a> {
+    User,
+    Team(&'a [u8; 16]),
+}
+
+impl KvAuth<'_> {
+    fn to_value(self) -> Value {
+        match self {
+            Self::User => Value::Array(vec![Value::Unsigned(0), Value::Variant(None)]),
+            Self::Team(token) => Value::Array(vec![
+                Value::Unsigned(1),
+                Value::Variant(Some((
+                    b"1".to_vec(),
+                    Box::new(Value::Binary(token.to_vec())),
+                ))),
+            ]),
+        }
+    }
+}
+
+fn kv_request_header(auth: KvAuth<'_>, precondition: Option<&KvPathVersionVector>) -> Value {
+    Value::Array(vec![
+        auth.to_value(),
+        precondition.map_or(Value::Null, KvPathVersionVector::to_value),
+    ])
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KvListCursor {
+    None,
+    Mac([u8; 32]),
+    Time(u64),
+}
+
+impl KvListCursor {
+    fn to_value(self) -> Value {
+        match self {
+            Self::None => Value::Array(vec![Value::Unsigned(0), Value::Variant(None)]),
+            Self::Mac(mac) => Value::Array(vec![
+                Value::Unsigned(1),
+                Value::Variant(Some((b"1".to_vec(), Box::new(Value::Binary(mac.to_vec()))))),
+            ]),
+            Self::Time(time) => Value::Array(vec![
+                Value::Unsigned(2),
+                Value::Variant(Some((b"2".to_vec(), Box::new(Value::Unsigned(time))))),
+            ]),
+        }
+    }
+}
 
 /// Encodes one complete, length-prefixed v0.1.9 `Probe.probe` call.
 pub fn encode_probe_request(
@@ -105,6 +195,15 @@ pub fn encode_call(
     sequence: u64,
 ) -> Result<Vec<u8>> {
     foks_snowpack::validate(argument)?;
+    encode_call_with_validated_argument(protocol_id, method_position, argument, sequence)
+}
+
+fn encode_call_with_validated_argument(
+    protocol_id: u64,
+    method_position: u64,
+    argument: &[u8],
+    sequence: u64,
+) -> Result<Vec<u8>> {
     let mut content = Vec::with_capacity(argument.len() + 40);
     content.push(0x95); // five-element RPC call
     encode_unsigned(METHOD_CALL_V2, &mut content);
@@ -123,6 +222,36 @@ pub fn encode_call(
 /// Encodes the unauthenticated registration call that obtains an X.509 client
 /// certificate chain for an already enrolled device key.
 pub fn encode_get_client_cert_chain_request(uid: &[u8], device_id: &[u8]) -> Result<Vec<u8>> {
+    encode_get_client_cert_chain_request_at(uid, device_id, 0)
+}
+
+pub fn encode_reserve_username_request_at(name: &[u8], sequence: u64) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![Value::Text(name.to_vec())]))?;
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_RESERVE_USERNAME_METHOD_POSITION,
+        &argument,
+        sequence,
+    )
+}
+
+pub fn encode_signup_request_at(
+    argument: &SoftwareSignupArgument<'_>,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_SIGNUP_METHOD_POSITION,
+        &argument.encoded()?,
+        sequence,
+    )
+}
+
+pub fn encode_get_client_cert_chain_request_at(
+    uid: &[u8],
+    device_id: &[u8],
+    sequence: u64,
+) -> Result<Vec<u8>> {
     let argument = encode(&Value::Array(vec![
         Value::Binary(uid.to_vec()),
         Value::Binary(device_id.to_vec()),
@@ -131,8 +260,12 @@ pub fn encode_get_client_cert_chain_request(uid: &[u8], device_id: &[u8]) -> Res
         REG_PROTOCOL_ID,
         REG_GET_CLIENT_CERT_CHAIN_METHOD_POSITION,
         &argument,
-        0,
+        sequence,
     )
+}
+
+pub fn encode_registration_select_vhost_request(host: &EntityId) -> Result<Vec<u8>> {
+    encode_select_vhost(REG_PROTOCOL_ID, REG_SELECT_VHOST_METHOD_POSITION, host)
 }
 
 /// Encodes an authenticated request for a user's chain, starting at `start`.
@@ -155,9 +288,14 @@ pub fn encode_load_user_chain_request(uid: &[u8], start: u64) -> Result<Vec<u8>>
 /// Encodes an authenticated request for the owner-role PUK parcel addressed
 /// to `device_id`.
 pub fn encode_get_owner_puk_request(device_id: &[u8]) -> Result<Vec<u8>> {
-    let owner = Value::Array(vec![Value::Unsigned(3), Value::Variant(None)]);
+    encode_get_puk_for_role_request(Role::OWNER, device_id)
+}
+
+/// Encodes an authenticated request for the current PUK and its historical
+/// seed chain at the enrolled device's exact role.
+pub fn encode_get_puk_for_role_request(role: Role, device_id: &[u8]) -> Result<Vec<u8>> {
     let argument = encode(&Value::Array(vec![
-        owner,
+        role.to_value(),
         Value::Binary(device_id.to_vec()),
     ]))?;
     encode_call(
@@ -168,22 +306,54 @@ pub fn encode_get_owner_puk_request(device_id: &[u8]) -> Result<Vec<u8>> {
     )
 }
 
-pub fn encode_get_current_merkle_root_request() -> Result<Vec<u8>> {
-    let mut content = Vec::with_capacity(40);
-    content.push(0x95);
-    encode_unsigned(METHOD_CALL_V2, &mut content);
-    encode_unsigned(0, &mut content);
-    encode_unsigned(MERKLE_QUERY_PROTOCOL_ID, &mut content);
-    encode_unsigned(MERKLE_GET_CURRENT_ROOT_METHOD_POSITION, &mut content);
-    content.push(0x81); // nil pointer data is omitted by the Go RPC wrapper
-    encode_text(b"Header", &mut content);
-    content.extend_from_slice(RESPONSE_HEADER);
-    frame(&content, DEFAULT_MAX_FRAME_LENGTH)
+pub fn encode_provision_device_request(argument: &ProvisionDeviceArgument<'_>) -> Result<Vec<u8>> {
+    encode_call(
+        USER_PROTOCOL_ID,
+        USER_PROVISION_DEVICE_METHOD_POSITION,
+        &argument.encoded()?,
+        0,
+    )
+}
+
+pub fn encode_revoke_device_request(argument: &RevokeDeviceArgument<'_>) -> Result<Vec<u8>> {
+    encode_call(
+        USER_PROTOCOL_ID,
+        USER_REVOKE_DEVICE_METHOD_POSITION,
+        &argument.encoded()?,
+        0,
+    )
+}
+
+pub fn encode_create_adhoc_team_request(argument: &AdHocTeamCreateArgument<'_>) -> Result<Vec<u8>> {
+    encode_call(TEAM_ADMIN_PROTOCOL_ID, 15, &argument.encoded()?, 0)
+}
+
+pub fn encode_get_host_config_request() -> Result<Vec<u8>> {
+    // A generated zero-field Snowpack struct is the one sanctioned empty
+    // array in the v0.1.9 RPC schema. It is not a general Snowpack Value.
+    encode_call_with_validated_argument(
+        USER_PROTOCOL_ID,
+        USER_GET_HOST_CONFIG_METHOD_POSITION,
+        &[0x90],
+        0,
+    )
+}
+
+pub fn encode_get_current_merkle_root_request(host: &EntityId, sequence: u64) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Binary(host.as_bytes().to_vec()))?;
+    encode_call(
+        MERKLE_QUERY_PROTOCOL_ID,
+        MERKLE_GET_CURRENT_ROOT_METHOD_POSITION,
+        &argument,
+        sequence,
+    )
 }
 
 pub fn encode_get_historical_merkle_roots_request(
+    host: &EntityId,
     full_epochs: &[u64],
     hash_epochs: &[u64],
+    sequence: u64,
 ) -> Result<Vec<u8>> {
     let list = |epochs: &[u64]| {
         if epochs.is_empty() {
@@ -193,7 +363,7 @@ pub fn encode_get_historical_merkle_roots_request(
         }
     };
     let argument = encode(&Value::Array(vec![
-        Value::Null,
+        Value::Binary(host.as_bytes().to_vec()),
         list(full_epochs),
         list(hash_epochs),
     ]))?;
@@ -201,8 +371,367 @@ pub fn encode_get_historical_merkle_roots_request(
         MERKLE_QUERY_PROTOCOL_ID,
         MERKLE_GET_HISTORICAL_ROOTS_METHOD_POSITION,
         &argument,
+        sequence,
+    )
+}
+
+pub fn encode_merkle_select_vhost_request(host: &EntityId) -> Result<Vec<u8>> {
+    encode_select_vhost(
+        MERKLE_QUERY_PROTOCOL_ID,
+        MERKLE_SELECT_VHOST_METHOD_POSITION,
+        host,
+    )
+}
+
+pub fn encode_team_view_challenge_request(request: &TeamViewRequest) -> Result<Vec<u8>> {
+    encode_call(
+        TEAM_LOADER_PROTOCOL_ID,
+        TEAM_GET_VIEW_CHALLENGE_METHOD_POSITION,
+        &request.encoded()?,
         0,
     )
+}
+
+pub fn encode_activate_team_view_request(
+    challenge: &TeamViewChallenge,
+    signature: &Signature,
+) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![
+        decode(&challenge.encoded()?)?,
+        signature.to_value(),
+    ]))?;
+    encode_call(
+        TEAM_LOADER_PROTOCOL_ID,
+        TEAM_ACTIVATE_VIEW_METHOD_POSITION,
+        &argument,
+        0,
+    )
+}
+
+pub fn encode_load_team_chain_request(
+    team: &EntityId,
+    host: &EntityId,
+    token: &[u8; 16],
+    start: u64,
+) -> Result<Vec<u8>> {
+    let token = Value::Array(vec![
+        Value::Unsigned(1),
+        Value::Variant(Some((
+            b"0".to_vec(),
+            Box::new(Value::Binary(token.to_vec())),
+        ))),
+    ]);
+    let argument = encode(&Value::Array(vec![
+        Value::Array(vec![
+            Value::Binary(team.as_bytes().to_vec()),
+            Value::Binary(host.as_bytes().to_vec()),
+        ]),
+        token,
+        Value::Unsigned(start),
+        Value::Null,
+        Value::Null,
+        Value::Bool(false),
+        Value::Bool(false),
+    ]))?;
+    encode_call(
+        TEAM_LOADER_PROTOCOL_ID,
+        TEAM_LOAD_CHAIN_METHOD_POSITION,
+        &argument,
+        0,
+    )
+}
+
+/// Starts a KV connection by selecting the host committed by the pinned host
+/// chain. Subsequent calls on the same connection use sequence number 1.
+pub fn encode_kv_select_vhost_request(host: &EntityId) -> Result<Vec<u8>> {
+    encode_select_vhost(KV_STORE_PROTOCOL_ID, KV_SELECT_VHOST_METHOD_POSITION, host)
+}
+
+fn encode_select_vhost(protocol: u64, method: u64, host: &EntityId) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![Value::Binary(host.as_bytes().to_vec())]))?;
+    encode_call(protocol, method, &argument, 0)
+}
+
+pub fn encode_kv_get_root_request(auth: KvAuth<'_>) -> Result<Vec<u8>> {
+    encode_kv_get_root_request_at(auth, 1)
+}
+
+pub fn encode_kv_mkdir_request_at(
+    auth: KvAuth<'_>,
+    precondition: Option<&KvPathVersionVector>,
+    directory: &KvDirectory,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_kv_call_at(
+        KV_MKDIR_METHOD_POSITION,
+        Value::Array(vec![
+            kv_request_header(auth, precondition),
+            directory.to_value(),
+        ]),
+        sequence,
+    )
+}
+
+pub fn encode_kv_put_request_at(
+    auth: KvAuth<'_>,
+    precondition: Option<&KvPathVersionVector>,
+    dirents: &[KvDirent],
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_kv_call_at(
+        KV_PUT_METHOD_POSITION,
+        Value::Array(vec![
+            kv_request_header(auth, precondition),
+            Value::Array(dirents.iter().map(KvDirent::to_value).collect()),
+        ]),
+        sequence,
+    )
+}
+
+pub fn encode_kv_put_root_request_at(
+    auth: KvAuth<'_>,
+    root: &foks_proto::KvRoot,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_kv_call_at(
+        KV_PUT_ROOT_METHOD_POSITION,
+        Value::Array(vec![auth.to_value(), root.to_value()]),
+        sequence,
+    )
+}
+
+pub fn encode_kv_file_upload_init_request_at(
+    auth: KvAuth<'_>,
+    file_id: [u8; 16],
+    metadata: &KvLargeFileMetadata,
+    chunk: &KvUploadChunk,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_kv_call_at(
+        KV_FILE_UPLOAD_INIT_METHOD_POSITION,
+        Value::Array(vec![
+            auth.to_value(),
+            Value::Binary(file_id.to_vec()),
+            metadata.to_value(),
+            chunk.to_value(),
+        ]),
+        sequence,
+    )
+}
+
+pub fn encode_kv_file_upload_chunk_request_at(
+    auth: KvAuth<'_>,
+    file_id: [u8; 16],
+    chunk: &KvUploadChunk,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_kv_call_at(
+        KV_FILE_UPLOAD_CHUNK_METHOD_POSITION,
+        Value::Array(vec![
+            auth.to_value(),
+            Value::Binary(file_id.to_vec()),
+            chunk.to_value(),
+        ]),
+        sequence,
+    )
+}
+
+pub fn encode_kv_put_small_file_or_symlink_request_at(
+    auth: KvAuth<'_>,
+    id: KvNodeId,
+    boxed: &KvSmallFileBox,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_kv_call_at(
+        KV_PUT_SMALL_FILE_OR_SYMLINK_METHOD_POSITION,
+        Value::Array(vec![auth.to_value(), id.to_value(), boxed.to_value()]),
+        sequence,
+    )
+}
+
+pub fn encode_kv_lock_acquire_request_at(
+    auth: KvAuth<'_>,
+    parent: [u8; 16],
+    dirent: [u8; 16],
+    lock_id: [u8; 16],
+    timeout_millis: u64,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_kv_lock_request_at(
+        KV_LOCK_ACQUIRE_METHOD_POSITION,
+        auth,
+        parent,
+        dirent,
+        lock_id,
+        Some(timeout_millis),
+        sequence,
+    )
+}
+
+pub fn encode_kv_lock_release_request_at(
+    auth: KvAuth<'_>,
+    parent: [u8; 16],
+    dirent: [u8; 16],
+    lock_id: [u8; 16],
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_kv_lock_request_at(
+        KV_LOCK_RELEASE_METHOD_POSITION,
+        auth,
+        parent,
+        dirent,
+        lock_id,
+        None,
+        sequence,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_kv_lock_request_at(
+    method: u64,
+    auth: KvAuth<'_>,
+    parent: [u8; 16],
+    dirent: [u8; 16],
+    lock_id: [u8; 16],
+    timeout_millis: Option<u64>,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    let lock = Value::Array(vec![
+        Value::Array(vec![
+            Value::Binary(parent.to_vec()),
+            Value::Binary(dirent.to_vec()),
+        ]),
+        Value::Binary(lock_id.to_vec()),
+    ]);
+    let mut fields = vec![auth.to_value(), lock];
+    if let Some(timeout) = timeout_millis {
+        fields.push(Value::Unsigned(timeout));
+    }
+    encode_kv_call_at(method, Value::Array(fields), sequence)
+}
+
+pub fn encode_kv_get_root_request_at(auth: KvAuth<'_>, sequence: u64) -> Result<Vec<u8>> {
+    encode_kv_call_at(
+        KV_GET_ROOT_METHOD_POSITION,
+        Value::Array(vec![auth.to_value()]),
+        sequence,
+    )
+}
+
+pub fn encode_kv_get_dir_request(auth: KvAuth<'_>, directory: &[u8; 16]) -> Result<Vec<u8>> {
+    encode_kv_get_dir_request_at(auth, directory, 1)
+}
+
+pub fn encode_kv_get_dir_request_at(
+    auth: KvAuth<'_>,
+    directory: &[u8; 16],
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_kv_call_at(
+        KV_GET_DIR_METHOD_POSITION,
+        Value::Array(vec![auth.to_value(), Value::Binary(directory.to_vec())]),
+        sequence,
+    )
+}
+
+pub fn encode_kv_list_request(
+    auth: KvAuth<'_>,
+    directory: &[u8; 16],
+    cursor: KvListCursor,
+    number: u64,
+    load_small_files: bool,
+) -> Result<Vec<u8>> {
+    encode_kv_list_request_at(auth, directory, cursor, number, load_small_files, 1)
+}
+
+pub fn encode_kv_list_request_at(
+    auth: KvAuth<'_>,
+    directory: &[u8; 16],
+    cursor: KvListCursor,
+    number: u64,
+    load_small_files: bool,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_kv_call_at(
+        KV_LIST_METHOD_POSITION,
+        Value::Array(vec![
+            auth.to_value(),
+            Value::Binary(directory.to_vec()),
+            Value::Array(vec![
+                cursor.to_value(),
+                Value::Unsigned(number),
+                Value::Bool(load_small_files),
+            ]),
+        ]),
+        sequence,
+    )
+}
+
+pub fn encode_kv_get_node_request(auth: KvAuth<'_>, node: KvNodeId) -> Result<Vec<u8>> {
+    encode_kv_get_node_request_at(auth, node, 1)
+}
+
+pub fn encode_kv_get_node_request_at(
+    auth: KvAuth<'_>,
+    node: KvNodeId,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_kv_call_at(
+        KV_GET_NODE_METHOD_POSITION,
+        Value::Array(vec![auth.to_value(), node.to_value()]),
+        sequence,
+    )
+}
+
+pub fn encode_kv_get_encrypted_chunk_request(
+    auth: KvAuth<'_>,
+    file: KvNodeId,
+    offset: u64,
+) -> Result<Vec<u8>> {
+    encode_kv_get_encrypted_chunk_request_at(auth, file, offset, 1)
+}
+
+pub fn encode_kv_get_encrypted_chunk_request_at(
+    auth: KvAuth<'_>,
+    file: KvNodeId,
+    offset: u64,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_kv_call_at(
+        KV_GET_ENCRYPTED_CHUNK_METHOD_POSITION,
+        Value::Array(vec![
+            auth.to_value(),
+            Value::Binary(file.object_id().to_vec()),
+            Value::Unsigned(offset),
+        ]),
+        sequence,
+    )
+}
+
+pub fn encode_kv_cache_check_request(
+    auth: KvAuth<'_>,
+    versions: &KvPathVersionVector,
+) -> Result<Vec<u8>> {
+    encode_kv_cache_check_request_at(auth, versions, 1)
+}
+
+pub fn encode_kv_cache_check_request_at(
+    auth: KvAuth<'_>,
+    versions: &KvPathVersionVector,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_kv_call_at(
+        KV_CACHE_CHECK_METHOD_POSITION,
+        Value::Array(vec![Value::Array(vec![
+            auth.to_value(),
+            versions.to_value(),
+        ])]),
+        sequence,
+    )
+}
+
+fn encode_kv_call_at(method: u64, argument: Value, sequence: u64) -> Result<Vec<u8>> {
+    encode_call(KV_STORE_PROTOCOL_ID, method, &encode(&argument)?, sequence)
 }
 
 /// Writes one probe call and flushes it before waiting for the response.
@@ -234,6 +763,16 @@ pub fn read_response<R: Read>(
 ) -> Result<Vec<u8>> {
     let content = read_frame(reader, maximum)?;
     decode_response(&content, expected_sequence)
+}
+
+/// Reads a successful RPC response for a method with no return value.
+pub fn read_void_response<R: Read>(
+    reader: &mut R,
+    maximum: usize,
+    expected_sequence: u64,
+) -> Result<()> {
+    let content = read_frame(reader, maximum)?;
+    decode_void_response(&content, expected_sequence)
 }
 
 /// Reads one MessagePack-length-prefixed RPC frame.
@@ -289,21 +828,85 @@ pub fn decode_response(content: &[u8], expected_sequence: u64) -> Result<Vec<u8>
     decode_data_wrap(wrapped)
 }
 
+pub fn decode_void_response(content: &[u8], expected_sequence: u64) -> Result<()> {
+    let mut cursor = Cursor::new(content);
+    if cursor.byte()? != 0x94 {
+        return Err(Error::Envelope {
+            expected: "four-element RPC response array",
+            found: "another MessagePack value",
+        });
+    }
+    if unsigned(cursor.value()?)? != METHOD_RESPONSE {
+        return Err(Error::Envelope {
+            expected: "RPC response method",
+            found: "another RPC method",
+        });
+    }
+    let sequence = unsigned(cursor.value()?)?;
+    if sequence != expected_sequence {
+        return Err(Error::Sequence {
+            expected: expected_sequence,
+            received: sequence,
+        });
+    }
+    check_status(cursor.value()?)?;
+    let wrapped = cursor.value()?;
+    if !cursor.done() {
+        return Err(Error::Envelope {
+            expected: "end of RPC response",
+            found: "trailing data",
+        });
+    }
+    let mut wrapped = Cursor::new(wrapped);
+    match wrapped.byte()? {
+        0x81 => {}
+        0x82 => {
+            if text(wrapped.value()?)? != b"Data" || decode(wrapped.value()?)? != Value::Null {
+                return Err(Error::Envelope {
+                    expected: "nil void response data",
+                    found: "another response value",
+                });
+            }
+        }
+        _ => {
+            return Err(Error::Envelope {
+                expected: "void RPC data wrapper",
+                found: "another MessagePack value",
+            });
+        }
+    }
+    if text(wrapped.value()?)? != b"Header" || wrapped.value()? != RESPONSE_HEADER {
+        return Err(Error::Compatibility);
+    }
+    if !wrapped.done() {
+        return Err(Error::Envelope {
+            expected: "end of void RPC data wrapper",
+            found: "trailing data",
+        });
+    }
+    Ok(())
+}
+
 /// Encodes a successful response for protocol fixtures and local test servers.
 #[doc(hidden)]
 pub fn encode_probe_success_response(probe_response: &[u8]) -> Result<Vec<u8>> {
-    foks_snowpack::validate(probe_response)?;
-    let mut content = Vec::with_capacity(probe_response.len() + 32);
+    encode_success_response_at(probe_response, 0)
+}
+
+#[doc(hidden)]
+pub fn encode_success_response_at(response: &[u8], sequence: u64) -> Result<Vec<u8>> {
+    foks_snowpack::validate(response)?;
+    let mut content = Vec::with_capacity(response.len() + 32);
     content.push(0x94);
     encode_unsigned(METHOD_RESPONSE, &mut content);
-    encode_unsigned(0, &mut content);
+    encode_unsigned(sequence, &mut content);
     // The RPC layer encodes a nil error pointer on success. A concrete FOKS
     // Status value is present only when the server returns an application
     // error.
     content.push(0xc0);
     content.push(0x82);
     encode_text(b"Data", &mut content);
-    content.extend_from_slice(probe_response);
+    content.extend_from_slice(response);
     encode_text(b"Header", &mut content);
     content.extend_from_slice(RESPONSE_HEADER);
     frame(&content, DEFAULT_MAX_FRAME_LENGTH)
@@ -347,13 +950,95 @@ fn decode_data_wrap(bytes: &[u8]) -> Result<Vec<u8>> {
 }
 
 fn check_status(bytes: &[u8]) -> Result<()> {
-    let value = decode(bytes)?;
-    if value == Value::Null {
+    if bytes == [0xc0] {
         return Ok(());
     }
+    if matches!(bytes.first(), Some(0x92)) {
+        return check_positional_status(bytes);
+    }
+    // RPC status values are encoded by the Go RPC codec as named MessagePack
+    // structs, not as canonical positional Snowpack values. For example a
+    // stale-cache status is `{Sc: 8012, f11: {Root, Path}}`.
+    let mut cursor = Cursor::new(bytes);
+    let fields = map_length(&mut cursor)?;
+    if !(1..=2).contains(&fields) {
+        return Err(Error::Envelope {
+            expected: "one- or two-field FOKS status",
+            found: "another map length",
+        });
+    }
+    let mut code = None;
+    let mut payload = None;
+    for _ in 0..fields {
+        let key = text(cursor.value()?)?;
+        let value = cursor.value()?;
+        if key == b"Sc" {
+            if code.replace(unsigned(value)?).is_some() {
+                return Err(Error::Envelope {
+                    expected: "one FOKS status code",
+                    found: "duplicate status code",
+                });
+            }
+        } else if payload.replace((key, value)).is_some() {
+            return Err(Error::Envelope {
+                expected: "one FOKS status payload",
+                found: "duplicate status payload",
+            });
+        }
+    }
+    if !cursor.done() {
+        return Err(Error::Envelope {
+            expected: "end of FOKS status",
+            found: "trailing data",
+        });
+    }
+    let code = code.ok_or(Error::Envelope {
+        expected: "FOKS status code",
+        found: "status without Sc",
+    })?;
+    if code == 0 && payload.is_none() {
+        return Ok(());
+    }
+    if code == 0 {
+        return Err(Error::Envelope {
+            expected: "payload-free successful FOKS status",
+            found: "successful status with a payload",
+        });
+    }
+    if code == 8012 {
+        let Some((tag, value)) = payload else {
+            return Err(Error::Envelope {
+                expected: "KV stale-cache status payload",
+                found: "missing status payload",
+            });
+        };
+        if tag != b"f11" {
+            return Err(Error::Envelope {
+                expected: "KV stale-cache status field f11",
+                found: "another status variant",
+            });
+        }
+        return Err(Error::KvStaleCache(named_path_version_vector(value)?));
+    }
+    let detail = match payload {
+        Some((_, value)) => match decode(value) {
+            Ok(Value::Text(bytes)) => String::from_utf8(bytes).ok(),
+            Ok(other) => Some(format!("{other:?}")),
+            Err(_) => None,
+        },
+        None => None,
+    };
+    Err(Error::RemoteStatus {
+        code,
+        detail: StatusDetail(detail),
+    })
+}
+
+fn check_positional_status(bytes: &[u8]) -> Result<()> {
+    let value = decode(bytes)?;
     let Value::Array(fields) = value else {
         return Err(Error::Envelope {
-            expected: "FOKS Status array",
+            expected: "two-field FOKS Status",
             found: value.kind(),
         });
     };
@@ -383,6 +1068,203 @@ fn check_status(bytes: &[u8]) -> Result<()> {
         code,
         detail: StatusDetail(detail),
     })
+}
+
+fn named_path_version_vector(bytes: &[u8]) -> Result<KvPathVersionVector> {
+    let mut cursor = Cursor::new(bytes);
+    let fields = map_length(&mut cursor)?;
+    if fields != 2 {
+        return Err(Error::Envelope {
+            expected: "two-field PathVersionVector",
+            found: "another map length",
+        });
+    }
+    let mut root_version = None;
+    let mut directories = None;
+    for _ in 0..fields {
+        match text(cursor.value()?)?.as_slice() {
+            b"Root" if root_version.is_none() => root_version = Some(unsigned(cursor.value()?)?),
+            b"Path" if directories.is_none() => {
+                directories = Some(named_directory_versions(cursor.value()?)?)
+            }
+            _ => {
+                return Err(Error::Envelope {
+                    expected: "PathVersionVector field",
+                    found: "unknown field",
+                });
+            }
+        }
+    }
+    if !cursor.done() {
+        return Err(Error::Envelope {
+            expected: "end of PathVersionVector",
+            found: "trailing data",
+        });
+    }
+    Ok(KvPathVersionVector {
+        root_version: root_version.ok_or(Error::Envelope {
+            expected: "PathVersionVector Root",
+            found: "missing field",
+        })?,
+        directories: directories.ok_or(Error::Envelope {
+            expected: "PathVersionVector Path",
+            found: "missing field",
+        })?,
+    })
+}
+
+fn named_directory_versions(bytes: &[u8]) -> Result<Vec<foks_proto::KvDirectoryVersion>> {
+    let mut cursor = Cursor::new(bytes);
+    let length = array_length(&mut cursor)?;
+    let mut output = Vec::with_capacity(length);
+    for _ in 0..length {
+        let value = cursor.value()?;
+        let mut fields = Cursor::new(value);
+        let count = map_length(&mut fields)?;
+        if count != 3 {
+            return Err(Error::Envelope {
+                expected: "three-field DirVersion",
+                found: "another map length",
+            });
+        }
+        let mut id = None;
+        let mut version = None;
+        let mut entries = None;
+        for _ in 0..count {
+            match text(fields.value()?)?.as_slice() {
+                b"Id" if id.is_none() => id = Some(fixed_16(fields.value()?)?),
+                b"Vers" if version.is_none() => version = Some(unsigned(fields.value()?)?),
+                b"De" if entries.is_none() => {
+                    entries = Some(named_dirent_versions(fields.value()?)?)
+                }
+                _ => {
+                    return Err(Error::Envelope {
+                        expected: "DirVersion field",
+                        found: "unknown field",
+                    });
+                }
+            }
+        }
+        if !fields.done() {
+            return Err(Error::Envelope {
+                expected: "end of DirVersion",
+                found: "trailing data",
+            });
+        }
+        output.push(foks_proto::KvDirectoryVersion {
+            id: id.ok_or(Error::Envelope {
+                expected: "DirVersion Id",
+                found: "missing field",
+            })?,
+            version: version.ok_or(Error::Envelope {
+                expected: "DirVersion Vers",
+                found: "missing field",
+            })?,
+            entries: entries.ok_or(Error::Envelope {
+                expected: "DirVersion De",
+                found: "missing field",
+            })?,
+        });
+    }
+    if !cursor.done() {
+        return Err(Error::Envelope {
+            expected: "end of DirVersion list",
+            found: "trailing data",
+        });
+    }
+    Ok(output)
+}
+
+fn named_dirent_versions(bytes: &[u8]) -> Result<Vec<foks_proto::KvDirentVersion>> {
+    let mut cursor = Cursor::new(bytes);
+    let length = array_length(&mut cursor)?;
+    let mut output = Vec::with_capacity(length);
+    for _ in 0..length {
+        let value = cursor.value()?;
+        let mut fields = Cursor::new(value);
+        let count = map_length(&mut fields)?;
+        if count != 2 {
+            return Err(Error::Envelope {
+                expected: "two-field DirentVersion",
+                found: "another map length",
+            });
+        }
+        let mut id = None;
+        let mut version = None;
+        for _ in 0..count {
+            match text(fields.value()?)?.as_slice() {
+                b"Id" if id.is_none() => id = Some(fixed_16(fields.value()?)?),
+                b"Vers" if version.is_none() => version = Some(unsigned(fields.value()?)?),
+                _ => {
+                    return Err(Error::Envelope {
+                        expected: "DirentVersion field",
+                        found: "unknown field",
+                    });
+                }
+            }
+        }
+        if !fields.done() {
+            return Err(Error::Envelope {
+                expected: "end of DirentVersion",
+                found: "trailing data",
+            });
+        }
+        output.push(foks_proto::KvDirentVersion {
+            id: id.ok_or(Error::Envelope {
+                expected: "DirentVersion Id",
+                found: "missing field",
+            })?,
+            version: version.ok_or(Error::Envelope {
+                expected: "DirentVersion Vers",
+                found: "missing field",
+            })?,
+        });
+    }
+    if !cursor.done() {
+        return Err(Error::Envelope {
+            expected: "end of DirentVersion list",
+            found: "trailing data",
+        });
+    }
+    Ok(output)
+}
+
+fn fixed_16(bytes: &[u8]) -> Result<[u8; 16]> {
+    match decode(bytes)? {
+        Value::Binary(bytes) => bytes.try_into().map_err(|_| Error::Envelope {
+            expected: "16-byte identifier",
+            found: "another binary length",
+        }),
+        other => Err(Error::Envelope {
+            expected: "binary identifier",
+            found: other.kind(),
+        }),
+    }
+}
+
+fn map_length(cursor: &mut Cursor<'_>) -> Result<usize> {
+    match cursor.byte()? {
+        marker @ 0x80..=0x8f => Ok(usize::from(marker & 0x0f)),
+        0xde => Ok(usize::from(cursor.number_u16()?)),
+        0xdf => usize::try_from(cursor.number_u32()?).map_err(|_| Error::Truncated),
+        _ => Err(Error::Envelope {
+            expected: "MessagePack map",
+            found: "another MessagePack value",
+        }),
+    }
+}
+
+fn array_length(cursor: &mut Cursor<'_>) -> Result<usize> {
+    match cursor.byte()? {
+        0xc0 => Ok(0),
+        marker @ 0x90..=0x9f => Ok(usize::from(marker & 0x0f)),
+        0xdc => Ok(usize::from(cursor.number_u16()?)),
+        0xdd => usize::try_from(cursor.number_u32()?).map_err(|_| Error::Truncated),
+        _ => Err(Error::Envelope {
+            expected: "MessagePack array",
+            found: "another MessagePack value",
+        }),
+    }
 }
 
 fn unsigned(bytes: &[u8]) -> Result<u64> {
@@ -660,5 +1542,25 @@ impl ValueKind for Value {
             Self::Array(_) => "array",
             Self::Variant(_) => "map",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_status, Error};
+
+    #[test]
+    fn successful_named_status_must_not_hide_a_payload() {
+        // {"Sc": 0, "f11": nil}
+        let malformed = [0x82, 0xa2, b'S', b'c', 0x00, 0xa3, b'f', b'1', b'1', 0xc0];
+        assert!(matches!(
+            check_status(&malformed),
+            Err(Error::Envelope { .. })
+        ));
+
+        // A concrete zero status without a union payload remains accepted,
+        // though the canonical RPC success representation is nil.
+        let zero = [0x81, 0xa2, b'S', b'c', 0x00];
+        check_status(&zero).unwrap();
     }
 }

@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/foks-proj/go-foks v0.1.9
 	github.com/foks-proj/go-snowpack-rpc v0.0.2
+	github.com/keybase/go-codec v0.0.0-20180928230036-164397562123
 	go.uber.org/zap v1.27.0
 )
 
@@ -29,7 +30,6 @@ require (
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
 	github.com/keybase/backoff v1.0.1-0.20160517061000-726b63b835ec // indirect
 	github.com/keybase/clockwork v0.1.0 // indirect
-	github.com/keybase/go-codec v0.0.0-20180928230036-164397562123 // indirect
 	github.com/keybase/msgpackzip v0.0.0-20250106200500-93bf3a4c34cf // indirect
 	github.com/keybase/saltpack v0.0.0-20221220231257-f6cce11cfd0f // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
@@ -42,6 +42,7 @@ require (
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
+	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect

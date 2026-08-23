@@ -1,702 +1,140 @@
-//! Native FOKS v0.1.9 public-host discovery.
+//! Native FOKS v0.1.9 host, identity, team, and KV client.
 //!
 //! This is deliberately the smallest useful client slice: WebPKI TLS, the
-//! public probe RPC, full host/Merkle verification, and one atomic SQLite
-//! hard-state advancement. It does not create an account or handle secrets.
+//! public and authenticated RPC, full host/Merkle/chain verification, atomic
+//! SQLite hard-state advancement, and verified read/write KV soft projections.
 
 #![forbid(unsafe_code)]
 
-use std::io::Write as _;
-use std::net::{TcpStream, ToSocketAddrs};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use foks_client_db::{Acceptance, HardStateStore, StoredHostSnapshot};
+use foks_client_db::{
+    Acceptance, HardStateStore, KvDirectoryProjection, SignupOperation, SignupOperationState,
+    StoredHostSnapshot,
+};
 use foks_crypto::{
-    derive_device_public, derive_subkey_id, device_signing_key_pkcs8, open_puk_parcel,
-    open_puk_parcel_with, HybridSecretDecapsulator,
+    derive_device_public, derive_shared_verify_key, derive_subkey_id, make_software_eldest_link,
+    make_software_provision_link, make_software_puk_rotation_link, make_software_revoke_link,
+    open_puk_parcel_for_role, open_puk_parcel_with_for_role, open_puk_seed_chain, prefixed_hash,
+    seal_initial_puk_box, seal_puk_seed_chain_box, seal_software_puk_boxes, DevicePublicMaterial,
+    InitialPukBoxRandomness, PukBoxRandomness, PukRotation, SoftwareEldestInput,
+    SoftwareEldestMaterial, SoftwareProvisionInput, SoftwarePukBoxInput, UserMutationBase,
+    YubiDevice,
 };
 use foks_proto::{
-    EntityId, HostchainTail, PukParcel, Role, SecretSeed, ENTITY_USER, SERVICE_MERKLE_QUERY,
-    SERVICE_REG, SERVICE_USER,
+    DeviceLabel, DeviceLabelNameAndCommitmentKey, EntityId, HostchainTail, InviteCode,
+    ProvisionDeviceArgument, PukParcel, RevokeDeviceArgument, Role, SecretSeed, ServiceType,
+    SharedKeyBoxSet, SoftwareSignupArgument, TreeRoot, UsernameReservation, ENTITY_PUK_VERIFY,
+    ENTITY_USER,
 };
 use foks_rpc::{
-    encode_get_client_cert_chain_request, encode_get_current_merkle_root_request,
-    encode_get_historical_merkle_roots_request, encode_get_owner_puk_request,
-    encode_load_user_chain_request, read_probe_response, read_response, write_probe_request,
-    DEFAULT_MAX_FRAME_LENGTH,
+    encode_get_client_cert_chain_request_at, encode_get_current_merkle_root_request,
+    encode_get_historical_merkle_roots_request, encode_get_puk_for_role_request,
+    encode_load_user_chain_request, encode_merkle_select_vhost_request,
+    encode_provision_device_request, encode_registration_select_vhost_request,
+    encode_reserve_username_request_at, encode_revoke_device_request, encode_signup_request_at,
 };
 use foks_snowpack::{decode, Value};
 use foks_verify::{
-    merkle_history_requirements, restore_merkle_anchor, restore_public_host_identity,
-    restore_verified_user, verify_merkle_advance, verify_public_host, verify_user_chain,
-    HostService, VerifiedMerkleAdvance, VerifiedPublicHost, VerifiedUserState,
+    merkle_history_requirements, normalize_device_name, normalize_username, restore_merkle_anchor,
+    restore_public_host_identity, restore_verified_team, restore_verified_user,
+    verify_merkle_advance, verify_public_host, verify_user_chain, HostService,
+    VerifiedMerkleAdvance, VerifiedPublicHost, VerifiedTeamState, VerifiedUserState,
 };
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
+use rustls::pki_types::CertificateDer;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 pub const DEFAULT_PROBE_PORT: u16 = 4430;
+const ADHOC_TEAM_OPERATION_ID_TYPE_ID: u64 = 0x556b_51c0_b659_d1c2;
+const ADHOC_TEAM_REQUEST_HASH_TYPE_ID: u64 = 0xc041_ba64_4d2a_161f;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProbeTarget {
-    hostname: String,
-    port: u16,
+mod account;
+mod auth;
+mod device;
+mod error;
+mod host;
+mod kv;
+mod team;
+mod transport;
+
+pub use account::*;
+pub use auth::*;
+pub use device::*;
+pub use error::*;
+pub use host::*;
+pub use kv::*;
+pub use team::*;
+pub use transport::*;
+
+fn fix_device_name(name: &str) -> String {
+    name.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace(['—', '–'], "-")
+        .replace(['‘', '’'], "'")
 }
 
-impl ProbeTarget {
-    pub fn parse(input: &str) -> Result<Self> {
-        let input = input.trim();
-        if input.is_empty() {
-            return Err(Error::Target("hostname is empty"));
-        }
-        let (hostname, port) = match input.rsplit_once(':') {
-            Some((hostname, port)) if !hostname.contains(':') => {
-                let port = port
-                    .parse::<u16>()
-                    .map_err(|_| Error::Target("port must be an integer from 1 through 65535"))?;
-                (hostname, port)
-            }
-            Some(_) if input.contains(':') => {
-                return Err(Error::Target("IPv6 literals are not FOKS hostnames"));
-            }
-            _ => (input, DEFAULT_PROBE_PORT),
-        };
-        let hostname = hostname.trim_end_matches('.').to_ascii_lowercase();
-        if hostname.is_empty()
-            || !hostname.is_ascii()
-            || hostname.len() > 253
-            || hostname.split('.').any(|label| {
-                label.is_empty()
-                    || label.len() > 63
-                    || label.starts_with('-')
-                    || label.ends_with('-')
-                    || !label
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-            })
-        {
-            return Err(Error::Target("invalid DNS hostname"));
-        }
-        if port == 0 {
-            return Err(Error::Target("port must not be zero"));
-        }
-        Ok(Self { hostname, port })
-    }
-
-    pub fn hostname(&self) -> &str {
-        &self.hostname
-    }
-
-    pub fn port(&self) -> u16 {
-        self.port
-    }
-
-    pub fn address(&self) -> String {
-        format!("{}:{}", self.hostname, self.port)
-    }
+fn random_bytes<const N: usize>() -> Result<[u8; N]> {
+    let mut bytes = [0; N];
+    getrandom::fill(&mut bytes).map_err(|_| Error::KvResponse("OS randomness unavailable"))?;
+    Ok(bytes)
 }
 
-#[derive(Debug)]
-pub struct ProbeOutcome {
-    pub acceptance: Acceptance,
-    pub verified: VerifiedPublicHost,
-    pub pinned: PinnedHost,
+fn now_microseconds() -> Result<u64> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| Error::KvResponse("system clock precedes Unix epoch"))?;
+    u64::try_from(elapsed.as_micros())
+        .map_err(|_| Error::KvResponse("system clock timestamp overflow"))
 }
 
-/// An authenticated host identity and its delegated service endpoints.
-///
-/// Values can only be loaded from durable hard state. Keeping the database
-/// path inside this capability prevents an endpoint projection from one trust
-/// store from being used to advance another.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PinnedHost {
-    lookup_name: String,
-    host_id: EntityId,
-    database_path: PathBuf,
-    registration: ProbeTarget,
-    user: ProbeTarget,
-    merkle_query: ProbeTarget,
-}
-
-impl PinnedHost {
-    pub fn lookup_name(&self) -> &str {
-        &self.lookup_name
-    }
-
-    pub fn host_id(&self) -> &EntityId {
-        &self.host_id
-    }
-}
-
-/// Device credential material used for mTLS. The master seed is never written
-/// by this crate; callers should source it from the encrypted local key store.
-pub struct DeviceCredential {
-    pub uid: EntityId,
-    pub seed: SecretSeed,
-    pub certificate_chain: Vec<Vec<u8>>,
-}
-
-/// Yubi parent operations plus the software Ed25519 subkey used for mTLS.
-pub struct YubiCredential<'a> {
-    pub uid: EntityId,
-    pub parent: &'a dyn HybridSecretDecapsulator,
-    pub subkey_seed: SecretSeed,
-    pub certificate_chain: Vec<Vec<u8>>,
-}
-
-#[derive(Debug)]
-pub struct AuthenticatedUserOutcome {
-    pub merkle_acceptance: Acceptance,
-    pub acceptance: Acceptance,
-    pub verified: VerifiedUserState,
-    pub puk_seed: SecretSeed,
-}
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("invalid probe target: {0}")]
-    Target(&'static str),
-    #[error("DNS lookup returned no addresses for {0}")]
-    NoAddress(String),
-    #[error("TCP connection to every resolved address failed: {0}")]
-    Connect(std::io::Error),
-    #[error("TLS configuration failed: {0}")]
-    Tls(#[from] rustls::Error),
-    #[error("invalid TLS server name")]
-    ServerName,
-    #[error("FOKS RPC failed: {0}")]
-    Rpc(#[from] foks_rpc::Error),
-    #[error("FOKS public state verification failed: {0}")]
-    Verify(#[from] foks_verify::Error),
-    #[error("FOKS hard-state update failed: {0}")]
-    Database(#[from] foks_client_db::Error),
-    #[error("invalid FOKS protocol value: {0}")]
-    Protocol(#[from] foks_proto::Error),
-    #[error("invalid canonical Snowpack: {0}")]
-    Snowpack(#[from] foks_snowpack::Error),
-    #[error("FOKS device cryptography failed: {0}")]
-    Crypto(#[from] foks_crypto::Error),
-    #[error("registration returned an invalid certificate chain")]
-    CertificateChain,
-    #[error("the supplied UID or device seed does not match the verified chain")]
-    DeviceBinding,
-    #[error("pinned host is missing or has a malformed {0} service endpoint")]
-    PinnedService(&'static str),
-}
-
-pub type Result<T, E = Error> = std::result::Result<T, E>;
-
-pub struct PublicClient {
-    roots: rustls::RootCertStore,
-    timeout: Duration,
-    maximum_frame_length: usize,
-}
-
-impl Default for PublicClient {
-    fn default() -> Self {
-        Self::webpki()
-    }
-}
-
-impl PublicClient {
-    pub fn webpki() -> Self {
-        Self {
-            roots: rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned()),
-            timeout: Duration::from_secs(15),
-            maximum_frame_length: DEFAULT_MAX_FRAME_LENGTH,
-        }
-    }
-
-    pub fn with_roots(roots: rustls::RootCertStore) -> Self {
-        Self {
-            roots,
-            timeout: Duration::from_secs(15),
-            maximum_frame_length: DEFAULT_MAX_FRAME_LENGTH,
-        }
-    }
-
-    pub fn set_timeout(&mut self, timeout: Duration) {
-        self.timeout = timeout;
-    }
-
-    pub fn probe(&self, target: &ProbeTarget) -> Result<Vec<u8>> {
-        self.probe_with_stream(target)
-    }
-
-    fn probe_with_stream(&self, target: &ProbeTarget) -> Result<Vec<u8>> {
-        let tcp = self.connect_tcp(target)?;
-        let config = self.tls_config(None)?;
-        let mut tls = self.connect_tls(target, tcp, config)?;
-        write_probe_request(&mut tls, &target.hostname, 0, None)?;
-        read_probe_response(&mut tls, self.maximum_frame_length).map_err(Into::into)
-    }
-
-    fn connect_tcp(&self, target: &ProbeTarget) -> Result<TcpStream> {
-        let socket_addresses = (target.hostname.as_str(), target.port)
-            .to_socket_addrs()
-            .map_err(Error::Connect)?
-            .collect::<Vec<_>>();
-        if socket_addresses.is_empty() {
-            return Err(Error::NoAddress(target.address()));
-        }
-        let mut last_error = None;
-        let mut tcp = None;
-        for address in socket_addresses {
-            match TcpStream::connect_timeout(&address, self.timeout) {
-                Ok(stream) => {
-                    tcp = Some(stream);
-                    break;
-                }
-                Err(error) => last_error = Some(error),
-            }
-        }
-        let tcp = tcp.ok_or_else(|| {
-            Error::Connect(last_error.unwrap_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::NotFound, "no resolved address")
-            }))
-        })?;
-        tcp.set_read_timeout(Some(self.timeout))
-            .map_err(Error::Connect)?;
-        tcp.set_write_timeout(Some(self.timeout))
-            .map_err(Error::Connect)?;
-        Ok(tcp)
-    }
-
-    fn tls_config(&self, credential: Option<&DeviceCredential>) -> Result<rustls::ClientConfig> {
-        self.tls_config_material(
-            credential
-                .map(|credential| (&credential.seed, credential.certificate_chain.as_slice())),
-        )
-    }
-
-    fn tls_config_material(
-        &self,
-        credential: Option<(&SecretSeed, &[Vec<u8>])>,
-    ) -> Result<rustls::ClientConfig> {
-        // Both ring and aws-lc can enter the workspace graph. Name the
-        // provider so rustls never has to guess which process default to use.
-        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-        let builder = rustls::ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()?
-            .with_root_certificates(self.roots.clone());
-        match credential {
-            None => Ok(builder.with_no_client_auth()),
-            Some((seed, certificate_chain)) => {
-                if certificate_chain.is_empty() {
-                    return Err(Error::CertificateChain);
-                }
-                let certificates = certificate_chain
-                    .iter()
-                    .cloned()
-                    .map(CertificateDer::from)
-                    .collect();
-                let mut key = device_signing_key_pkcs8(seed)?;
-                let key_bytes = std::mem::take(&mut *key);
-                let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_bytes));
-                Ok(builder.with_client_auth_cert(certificates, key)?)
-            }
-        }
-    }
-
-    fn connect_tls(
-        &self,
-        target: &ProbeTarget,
-        tcp: TcpStream,
-        config: rustls::ClientConfig,
-    ) -> Result<rustls::StreamOwned<rustls::ClientConnection, TcpStream>> {
-        let server_name =
-            ServerName::try_from(target.hostname.clone()).map_err(|_| Error::ServerName)?;
-        let connection = rustls::ClientConnection::new(Arc::new(config), server_name)?;
-        Ok(rustls::StreamOwned::new(connection, tcp))
-    }
-
-    fn call(
-        &self,
-        target: &ProbeTarget,
-        request: &[u8],
-        credential: Option<&DeviceCredential>,
-    ) -> Result<Vec<u8>> {
-        let tcp = self.connect_tcp(target)?;
-        let config = self.tls_config(credential)?;
-        let mut tls = self.connect_tls(target, tcp, config)?;
-        tls.write_all(request).map_err(foks_rpc::Error::Io)?;
-        tls.flush().map_err(foks_rpc::Error::Io)?;
-        read_response(&mut tls, self.maximum_frame_length, 0).map_err(Into::into)
-    }
-
-    fn call_with_material(
-        &self,
-        target: &ProbeTarget,
-        request: &[u8],
-        seed: &SecretSeed,
-        certificate_chain: &[Vec<u8>],
-    ) -> Result<Vec<u8>> {
-        let tcp = self.connect_tcp(target)?;
-        let config = self.tls_config_material(Some((seed, certificate_chain)))?;
-        let mut tls = self.connect_tls(target, tcp, config)?;
-        tls.write_all(request).map_err(foks_rpc::Error::Io)?;
-        tls.flush().map_err(foks_rpc::Error::Io)?;
-        read_response(&mut tls, self.maximum_frame_length, 0).map_err(Into::into)
-    }
-
-    /// Requests the X.509 certificate chain for an already enrolled device.
-    /// This registration call is intentionally unauthenticated; possession of
-    /// the matching Ed25519 private key is proved by the subsequent mTLS
-    /// handshake.
-    pub fn fetch_device_certificate_chain(
-        &self,
-        host: &PinnedHost,
-        uid: &EntityId,
-        seed: &SecretSeed,
-    ) -> Result<Vec<Vec<u8>>> {
-        if uid.entity_type() != ENTITY_USER {
-            return Err(Error::DeviceBinding);
-        }
-        let device = derive_device_public(seed)?;
-        let request = encode_get_client_cert_chain_request(uid.as_bytes(), device.id.as_bytes())?;
-        let response = self.call(&host.registration, &request, None)?;
-        let Value::Array(certificates) = decode(&response)? else {
-            return Err(Error::CertificateChain);
-        };
-        let certificates = certificates
-            .into_iter()
-            .map(|certificate| match certificate {
-                Value::Binary(bytes) if !bytes.is_empty() => Ok(bytes),
-                _ => Err(Error::CertificateChain),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        if certificates.is_empty() {
-            return Err(Error::CertificateChain);
-        }
-        Ok(certificates)
-    }
-
-    pub fn fetch_subkey_certificate_chain(
-        &self,
-        host: &PinnedHost,
-        uid: &EntityId,
-        subkey_seed: &SecretSeed,
-    ) -> Result<Vec<Vec<u8>>> {
-        if uid.entity_type() != ENTITY_USER {
-            return Err(Error::DeviceBinding);
-        }
-        let subkey = derive_subkey_id(subkey_seed)?;
-        let request = encode_get_client_cert_chain_request(uid.as_bytes(), subkey.as_bytes())?;
-        let response = self.call(&host.registration, &request, None)?;
-        let Value::Array(certificates) = decode(&response)? else {
-            return Err(Error::CertificateChain);
-        };
-        let certificates = certificates
-            .into_iter()
-            .map(|certificate| match certificate {
-                Value::Binary(bytes) if !bytes.is_empty() => Ok(bytes),
-                _ => Err(Error::CertificateChain),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        if certificates.is_empty() {
-            return Err(Error::CertificateChain);
-        }
-        Ok(certificates)
-    }
-
-    fn load_user_chain(&self, host: &PinnedHost, credential: &DeviceCredential) -> Result<Vec<u8>> {
-        let request = encode_load_user_chain_request(credential.uid.as_bytes(), 1)?;
-        self.call(&host.user, &request, Some(credential))
-    }
-
-    fn fetch_owner_puk_parcel(
-        &self,
-        host: &PinnedHost,
-        credential: &DeviceCredential,
-    ) -> Result<Vec<u8>> {
-        let device = derive_device_public(&credential.seed)?;
-        let request = encode_get_owner_puk_request(device.id.as_bytes())?;
-        self.call(&host.user, &request, Some(credential))
-    }
-
-    pub fn advance_merkle_root(
-        &self,
-        pinned: &PinnedHost,
-    ) -> Result<(Acceptance, VerifiedMerkleAdvance)> {
-        let mut store = HardStateStore::open(&pinned.database_path)?;
-        let host = store
-            .host_for_lookup(&pinned.lookup_name)?
-            .ok_or(Error::DeviceBinding)?;
-        if host.host_id.as_slice() != pinned.host_id.as_bytes() {
-            return Err(Error::DeviceBinding);
-        }
-        let latest_bytes = self.call(
-            &pinned.merkle_query,
-            &encode_get_current_merkle_root_request()?,
-            None,
-        )?;
-        let latest = foks_proto::MerkleRoot::decode(&latest_bytes)?;
-        let (full_epochs, hash_epochs) =
-            merkle_history_requirements(latest.epoch, host.merkle_root.epoch)?;
-        let historical_bytes = if full_epochs.is_empty() && hash_epochs.is_empty() {
-            foks_snowpack::encode(&Value::Array(vec![Value::Null, Value::Null]))?
-        } else {
-            self.call(
-                &pinned.merkle_query,
-                &encode_get_historical_merkle_roots_request(&full_epochs, &hash_epochs)?,
-                None,
-            )?
-        };
-        let anchor = restore_merkle_anchor(
-            host.merkle_root.epoch,
-            host.merkle_root.root_hash,
-            &host.merkle_root.root_bytes,
-            &host.merkle_root.evidence,
-            &host.merkle_root.authenticated_roots,
-            &host.chain_bytes,
-        )?;
-        let verified = verify_merkle_advance(
-            &anchor,
-            &latest_bytes,
-            &historical_bytes,
-            &HostchainTail {
-                seqno: host.chain_seqno,
-                hash: host.chain_tail_hash,
-            },
-        )?;
-        let acceptance = store.accept_verified_merkle_root(&host.host_id, verified.snapshot())?;
-        Ok((acceptance, verified))
-    }
-
-    /// Advances the host's Merkle pin, authenticates with device mTLS, replays
-    /// the user chain, unboxes the current owner PUK, and atomically advances
-    /// public user hard state in SQLite.
-    pub fn authenticate_and_pin(
-        &self,
-        host: &PinnedHost,
-        credential: &DeviceCredential,
-    ) -> Result<AuthenticatedUserOutcome> {
-        let derived = derive_device_public(&credential.seed)?;
-        let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
-        let chain_bytes = self.load_user_chain(host, credential)?;
-        let verified = verify_user_chain(
-            &chain_bytes,
-            &credential.uid,
-            &host.host_id,
-            merkle.authenticated_roots(),
-            &merkle.root().hostchain,
-        )?;
-        if !verified
-            .devices()
-            .iter()
-            .any(|device| device.id == derived.id && device.hepk == derived.hepk)
-        {
-            return Err(Error::DeviceBinding);
-        }
-        let parcel_bytes = self.fetch_owner_puk_parcel(host, credential)?;
-        let parcel = PukParcel::decode(&parcel_bytes)?;
-        let sender = verified
-            .devices()
-            .iter()
-            .find(|device| device.id == parcel.sender)
-            .ok_or(Error::DeviceBinding)?;
-        let owner_key = verified
-            .shared_key(Role::OWNER)
-            .ok_or(Error::DeviceBinding)?;
-        let clear = open_puk_parcel(
-            &parcel,
-            &credential.seed,
-            &sender.hepk,
-            &owner_key.verify_key,
-            &host.host_id,
-        )?;
-        let puk_seed = clear.into_seed();
-        let mut store = HardStateStore::open(&host.database_path)?;
-        let acceptance = store.accept_verified_user(&verified.hard_state_snapshot()?)?;
-        Ok(AuthenticatedUserOutcome {
-            merkle_acceptance,
-            acceptance,
-            verified,
-            puk_seed,
-        })
-    }
-
-    /// Authenticates a Yubi-backed device using its software subkey for mTLS
-    /// and the hardware parent for PUK decapsulation.
-    pub fn authenticate_yubi_and_pin(
-        &self,
-        host: &PinnedHost,
-        credential: &YubiCredential<'_>,
-    ) -> Result<AuthenticatedUserOutcome> {
-        let subkey = derive_subkey_id(&credential.subkey_seed)?;
-        let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
-        let request = encode_load_user_chain_request(credential.uid.as_bytes(), 1)?;
-        let chain_bytes = self.call_with_material(
-            &host.user,
-            &request,
-            &credential.subkey_seed,
-            &credential.certificate_chain,
-        )?;
-        let verified = verify_user_chain(
-            &chain_bytes,
-            &credential.uid,
-            &host.host_id,
-            merkle.authenticated_roots(),
-            &merkle.root().hostchain,
-        )?;
-        let parent = verified
-            .devices()
-            .iter()
-            .find(|device| {
-                device.id == *credential.parent.entity_id()
-                    && device.hepk == *credential.parent.hepk()
-                    && device.subkey.as_ref() == Some(&subkey)
-            })
-            .ok_or(Error::DeviceBinding)?;
-        let request = encode_get_owner_puk_request(parent.id.as_bytes())?;
-        let parcel_bytes = self.call_with_material(
-            &host.user,
-            &request,
-            &credential.subkey_seed,
-            &credential.certificate_chain,
-        )?;
-        let parcel = PukParcel::decode(&parcel_bytes)?;
-        let sender = verified
-            .devices()
-            .iter()
-            .find(|device| device.id == parcel.sender)
-            .ok_or(Error::DeviceBinding)?;
-        let owner_key = verified
-            .shared_key(Role::OWNER)
-            .ok_or(Error::DeviceBinding)?;
-        let clear = open_puk_parcel_with(
-            &parcel,
-            credential.parent,
-            &sender.hepk,
-            &owner_key.verify_key,
-            &host.host_id,
-        )?;
-        let puk_seed = clear.into_seed();
-        let mut store = HardStateStore::open(&host.database_path)?;
-        let acceptance = store.accept_verified_user(&verified.hard_state_snapshot()?)?;
-        Ok(AuthenticatedUserOutcome {
-            merkle_acceptance,
-            acceptance,
-            verified,
-            puk_seed,
-        })
-    }
-
-    pub fn probe_and_pin(
-        &self,
-        target: &ProbeTarget,
-        database_path: &Path,
-    ) -> Result<ProbeOutcome> {
-        let response = self.probe(target)?;
-        let verified = verify_public_host(&target.hostname, &response)?;
-        let mut store = HardStateStore::open(database_path)?;
-        let acceptance = store.accept_verified_host(&verified.snapshot)?;
-        drop(store);
-        let pinned = self.pinned_host(&target.hostname, database_path)?;
-        Ok(ProbeOutcome {
-            acceptance,
-            verified,
-            pinned,
-        })
-    }
-
-    /// Loads an authenticated host capability from durable hard state.
-    pub fn pinned_host(&self, lookup_name: &str, database_path: &Path) -> Result<PinnedHost> {
-        let store = HardStateStore::open(database_path)?;
-        let snapshot = store
-            .host_for_lookup(lookup_name)?
-            .ok_or(Error::DeviceBinding)?;
-        pinned_host_from_snapshot(snapshot, database_path)
-    }
-
-    /// Replays the exact persisted user transcript before returning durable
-    /// user state to the caller.
-    pub fn pinned_user(
-        &self,
-        host: &PinnedHost,
-        uid: &EntityId,
-    ) -> Result<Option<VerifiedUserState>> {
-        let store = HardStateStore::open(&host.database_path)?;
-        let host_snapshot = store
-            .host_for_lookup(&host.lookup_name)?
-            .ok_or(Error::DeviceBinding)?;
-        let Some(user) = store.user_for_host(host.host_id.as_bytes(), uid.as_bytes())? else {
-            return Ok(None);
-        };
-        let anchor = restore_merkle_anchor(
-            host_snapshot.merkle_root.epoch,
-            host_snapshot.merkle_root.root_hash,
-            &host_snapshot.merkle_root.root_bytes,
-            &host_snapshot.merkle_root.evidence,
-            &host_snapshot.merkle_root.authenticated_roots,
-            &host_snapshot.chain_bytes,
-        )?;
-        let authenticated_roots = anchor.authenticated_root_set();
-        let verified = restore_verified_user(
-            user.parts(),
-            &authenticated_roots,
-            &host_snapshot.chain_bytes,
-        )?;
-        Ok(Some(verified))
-    }
-}
-
-fn pinned_host_from_snapshot(snapshot: StoredHostSnapshot, path: &Path) -> Result<PinnedHost> {
-    let identity = restore_public_host_identity(
-        &snapshot.host_id,
-        &snapshot.genesis_key,
-        snapshot.chain_seqno,
-        snapshot.chain_tail_hash,
-        &snapshot.chain_bytes,
-        &snapshot.public_zone_bytes,
-    )?;
-    restore_merkle_anchor(
-        snapshot.merkle_root.epoch,
-        snapshot.merkle_root.root_hash,
-        &snapshot.merkle_root.root_bytes,
-        &snapshot.merkle_root.evidence,
-        &snapshot.merkle_root.authenticated_roots,
-        &snapshot.chain_bytes,
-    )?;
-    if identity.canonical_name() != snapshot.canonical_name
-        || identity.services() != snapshot.services
-    {
-        return Err(Error::DeviceBinding);
-    }
-    let registration = service_target(identity.services(), SERVICE_REG, "registration")?;
-    let user = service_target(identity.services(), SERVICE_USER, "user")?;
-    let merkle_query = service_target(identity.services(), SERVICE_MERKLE_QUERY, "Merkle query")?;
-    let host_id = identity.host_id().clone();
-    Ok(PinnedHost {
-        lookup_name: snapshot.lookup_name,
-        host_id,
-        database_path: path.to_owned(),
-        registration,
-        user,
-        merkle_query,
-    })
-}
-
-fn service_target(
-    services: &[HostService],
-    service_type: u64,
-    label: &'static str,
-) -> Result<ProbeTarget> {
-    let service = services
+fn user_key_for_seed<'a>(
+    user: &'a VerifiedUserState,
+    seed: &SecretSeed,
+) -> Result<&'a foks_verify::VerifiedSharedKey> {
+    let verify_key = derive_shared_verify_key(seed, ENTITY_PUK_VERIFY)?;
+    let mut matches = user
+        .shared_keys()
         .iter()
-        .find(|service| service.service_type == service_type)
-        .ok_or(Error::PinnedService(label))?;
-    let Value::Text(endpoint) = decode(&service.endpoint_bytes)? else {
-        return Err(Error::PinnedService(label));
+        .filter(|key| key.verify_key == verify_key);
+    let key = matches
+        .next()
+        .ok_or(Error::KeyBinding("seed has no matching verified PUK"))?;
+    if matches.next().is_some() {
+        return Err(Error::KeyBinding("seed matches more than one verified PUK"));
+    }
+    Ok(key)
+}
+
+fn current_owner_puk(user: &AuthenticatedUserOutcome) -> Result<&UserPrivateKey> {
+    let matching = user
+        .puks
+        .iter()
+        .filter(|key| key.role == Role::OWNER)
+        .filter(|key| {
+            user_key_for_seed(&user.verified, &key.seed)
+                .is_ok_and(|public| public.role == key.role && public.generation == key.generation)
+        })
+        .collect::<Vec<_>>();
+    let [owner] = matching.as_slice() else {
+        return Err(Error::KeyBinding("expected exactly one current owner PUK"));
     };
-    let endpoint = std::str::from_utf8(&endpoint).map_err(|_| Error::PinnedService(label))?;
-    ProbeTarget::parse(endpoint).map_err(|_| Error::PinnedService(label))
+    Ok(owner)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+
+    use crate::kv::{read_kv_upload_chunk, read_kv_upload_chunk_with_carry, KvRequest};
+    use foks_client_db::SoftStateStore;
+    use foks_proto::{KvListResponse, KvParty, KvPathVersionVector, TeamChain};
+    use foks_rpc::KvAuth;
+    use foks_verify::verify_team_chain;
 
     const PROBE: &[u8] = include_bytes!(
         "../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp"
@@ -708,6 +146,106 @@ mod tests {
     );
     const USER_CHAIN: &[u8] =
         include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/user-chain.snowp");
+    const TEAM_CHAIN: &[u8] =
+        include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/team-chain.snowp");
+    const TEAM_ROOT: &[u8] = include_bytes!(
+        "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/team-merkle-root-996.snowp"
+    );
+    const TEAM_HISTORY: &[u8] = include_bytes!(
+        "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/team-merkle-historical-response.snowp"
+    );
+    const SIGNUP_DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/signup";
+    const MUTATION_DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user-mutations";
+
+    fn signup_fixture(name: &str) -> Vec<u8> {
+        std::fs::read(format!("{SIGNUP_DIR}/{name}")).unwrap()
+    }
+
+    fn mutation_fixture(name: &str) -> Vec<u8> {
+        std::fs::read(format!("{MUTATION_DIR}/{name}")).unwrap()
+    }
+
+    #[test]
+    fn adhoc_team_id_is_predictable_before_submission() {
+        let secrets = AdHocTeamSecrets {
+            member_min: SecretSeed::new(
+                mutation_fixture("adhoc-ptk-member-min-seed.bin")
+                    .try_into()
+                    .unwrap(),
+            ),
+            member: SecretSeed::new(
+                mutation_fixture("adhoc-ptk-member-seed.bin")
+                    .try_into()
+                    .unwrap(),
+            ),
+            admin: SecretSeed::new(
+                mutation_fixture("adhoc-ptk-admin-seed.bin")
+                    .try_into()
+                    .unwrap(),
+            ),
+            owner: SecretSeed::new(
+                mutation_fixture("adhoc-ptk-owner-seed.bin")
+                    .try_into()
+                    .unwrap(),
+            ),
+        };
+        let expected = match decode(&mutation_fixture("adhoc-team-id.snowp")).unwrap() {
+            Value::Binary(bytes) => EntityId::from_bytes(bytes).unwrap(),
+            other => panic!("expected TeamID, got {other:?}"),
+        };
+        assert_eq!(secrets.team_id().unwrap(), expected);
+        assert_ne!(secrets.operation_id().unwrap(), [0; 16]);
+    }
+
+    #[test]
+    fn software_account_preparation_uses_verified_root_and_exact_name_rules() {
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let advance = verify_merkle_advance(
+            public.snapshot.merkle_root(),
+            USER_ROOT,
+            USER_HISTORY,
+            &HostchainTail {
+                seqno: public.snapshot.chain_seqno(),
+                hash: public.snapshot.chain_tail_hash(),
+            },
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("hard.sqlite3");
+        HardStateStore::open(&database)
+            .unwrap()
+            .accept_verified_host(&public.snapshot)
+            .unwrap();
+        let client = FoksClient::webpki();
+        let host = client.pinned_host("foks.app", &database).unwrap();
+        let secrets = SoftwareAccountSecrets::new(
+            SecretSeed::new(signup_fixture("device-seed.bin").try_into().unwrap()),
+            SecretSeed::new(signup_fixture("puk-seed.bin").try_into().unwrap()),
+            signup_fixture("self-token.bin").try_into().unwrap(),
+        );
+        let prepared = client
+            .prepare_software_account(
+                &host,
+                &advance,
+                &SoftwareAccountRequest {
+                    username_utf8: "SignupFixture".to_owned(),
+                    device_name: "  Signup  Device—One  ".to_owned(),
+                    invite_code: InviteCode::Empty,
+                    email: "fixture@example.com".to_owned(),
+                },
+                UsernameReservation::decode(&signup_fixture("reservation.snowp")).unwrap(),
+                &secrets,
+            )
+            .unwrap();
+        assert_eq!(prepared.normalized_username, b"signupfixture");
+        assert_eq!(prepared.device_name.display_name, b"Signup Device-One");
+        assert_eq!(
+            prepared.device_name.label.normalized_name,
+            b"signup device-one"
+        );
+        assert_eq!(prepared.eldest.link.signatures().len(), 2);
+        assert_eq!(prepared.eldest.uid.entity_type(), ENTITY_USER);
+    }
 
     #[test]
     fn target_normalizes_name_and_defaults_port() {
@@ -741,7 +279,7 @@ mod tests {
             .accept_verified_host(&verified.snapshot)
             .unwrap();
 
-        let client = PublicClient::webpki();
+        let client = FoksClient::webpki();
         let pinned = client.pinned_host("foks.app", &database).unwrap();
         assert_eq!(pinned.host_id.as_bytes(), verified.snapshot.host_id());
         assert_eq!(
@@ -753,6 +291,69 @@ mod tests {
             pinned.merkle_query.address(),
             verified.public_zone.services.merkle_query
         );
+        assert_eq!(
+            pinned.kv_store.address(),
+            verified.public_zone.services.kv_store
+        );
+        assert!(!pinned.tls_ca_certificates.is_empty());
+        assert_eq!(
+            authenticated_tls_roots(&pinned).unwrap().len(),
+            pinned.tls_ca_certificates.len()
+        );
+    }
+
+    #[test]
+    fn modified_service_projection_cannot_create_a_pinned_capability() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("hard.sqlite3");
+        let verified = verify_public_host("foks.app", PROBE).unwrap();
+        HardStateStore::open(&database)
+            .unwrap()
+            .accept_verified_host(&verified.snapshot)
+            .unwrap();
+
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        let endpoint =
+            foks_snowpack::encode(&Value::Text(b"attacker.example:4430".to_vec())).unwrap();
+        connection
+            .execute(
+                "UPDATE host_services SET endpoint_bytes = ?1 WHERE service_type = ?2",
+                rusqlite::params![
+                    endpoint,
+                    i64::try_from(ServiceType::User.protocol_value()).unwrap()
+                ],
+            )
+            .unwrap();
+        drop(connection);
+
+        assert!(matches!(
+            FoksClient::webpki().pinned_host("foks.app", &database),
+            Err(Error::HostBinding(
+                "stored host projection does not match authenticated evidence"
+            ))
+        ));
+    }
+
+    #[test]
+    fn modified_merkle_pin_is_reauthenticated_before_reuse() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("hard.sqlite3");
+        let verified = verify_public_host("foks.app", PROBE).unwrap();
+        HardStateStore::open(&database)
+            .unwrap()
+            .accept_verified_host(&verified.snapshot)
+            .unwrap();
+
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection
+            .execute("UPDATE merkle_heads SET root_hash = zeroblob(32)", [])
+            .unwrap();
+        drop(connection);
+
+        assert!(matches!(
+            FoksClient::webpki().pinned_host("foks.app", &database),
+            Err(Error::Verify(foks_verify::Error::PersistedMerkleEvidence))
+        ));
     }
 
     #[test]
@@ -818,6 +419,242 @@ mod tests {
             &retry.root().hostchain,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn pinned_team_replays_sqlite_evidence_before_use() {
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let advance = verify_merkle_advance(
+            public.snapshot.merkle_root(),
+            TEAM_ROOT,
+            TEAM_HISTORY,
+            &HostchainTail {
+                seqno: public.snapshot.chain_seqno(),
+                hash: public.snapshot.chain_tail_hash(),
+            },
+        )
+        .unwrap();
+        let chain = TeamChain::decode(TEAM_CHAIN).unwrap();
+        let Value::Binary(team) = decode(include_bytes!(
+            "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/team-id.snowp"
+        ))
+        .unwrap() else {
+            panic!("team fixture is not binary");
+        };
+        let team = EntityId::from_bytes(team).unwrap();
+        let host_id = chain.links[0].decode_team_group_change().unwrap().host;
+        let verified = verify_team_chain(
+            TEAM_CHAIN,
+            &team,
+            &host_id,
+            advance.authenticated_roots(),
+            &chain.merkle.root().hostchain,
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("hard.sqlite3");
+        let mut database = HardStateStore::open(&database_path).unwrap();
+        database.accept_verified_host(&public.snapshot).unwrap();
+        database
+            .accept_verified_merkle_root(public.snapshot.host_id(), advance.snapshot())
+            .unwrap();
+        database
+            .accept_verified_team(&verified.hard_state_snapshot().unwrap())
+            .unwrap();
+        drop(database);
+
+        let client = FoksClient::webpki();
+        let host = client.pinned_host("foks.app", &database_path).unwrap();
+        assert_eq!(client.pinned_team(&host, &team).unwrap(), Some(verified));
+    }
+
+    #[test]
+    fn official_kv_transcript_projects_without_network_or_interactivity() {
+        let fixture = |name: &str| {
+            std::fs::read(format!(
+                "../foks-snowpack/tests/fixtures/foks-v0.1.9/user/{name}"
+            ))
+            .unwrap()
+        };
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let hard_path = directory.path().join("hard.sqlite3");
+        HardStateStore::open(&hard_path)
+            .unwrap()
+            .accept_verified_host(&public.snapshot)
+            .unwrap();
+        let client = FoksClient::webpki();
+        let host = client.pinned_host("foks.app", &hard_path).unwrap();
+        let Value::Binary(team) = decode(&fixture("team-id.snowp")).unwrap() else {
+            panic!("team fixture is not binary");
+        };
+        let party = EntityId::from_bytes(team).unwrap();
+        let seed = SecretSeed::new(fixture("team-ptk-member-min-seed.bin").try_into().unwrap());
+        let private_keys = [KvPrivateKeyRef {
+            role: Role::member(-16_384),
+            generation: 1,
+            seed: &seed,
+        }];
+        let token: [u8; 16] = std::array::from_fn(|index| 0x40 + index as u8);
+        let listing = KvListResponse::decode(&fixture("kv-list.snowp")).unwrap();
+        let symlink_request =
+            foks_rpc::encode_kv_get_node_request(KvAuth::Team(&token), listing.entries[1].value)
+                .unwrap();
+        let transcript = VecDeque::from([
+            (
+                fixture("kv-get-root-request.frame"),
+                fixture("kv-root.snowp"),
+            ),
+            (
+                fixture("kv-get-dir-request.frame"),
+                fixture("kv-root-dir.snowp"),
+            ),
+            (fixture("kv-list-request.frame"), fixture("kv-list.snowp")),
+            (symlink_request, fixture("kv-symlink-node.snowp")),
+            (
+                fixture("kv-get-large-node-request.frame"),
+                fixture("kv-large-node.snowp"),
+            ),
+            (
+                fixture("kv-get-large-chunk-request.frame"),
+                fixture("kv-large-chunk.snowp"),
+            ),
+        ]);
+        let mut transcript = transcript;
+        let soft_path = directory.path().join("soft.sqlite3");
+        let projections = client
+            .sync_kv_with_fetch(
+                &host,
+                KvParty {
+                    party: party.clone(),
+                    host: host.host_id.clone(),
+                },
+                KvAuth::Team(&token),
+                &private_keys,
+                &soft_path,
+                |auth, request| {
+                    if matches!(request, KvRequest::CacheCheck(_)) {
+                        return Ok(Vec::new());
+                    }
+                    let request = request.encode(auth, 1)?;
+                    let (expected, response) = transcript
+                        .pop_front()
+                        .ok_or(Error::KvResponse("unexpected fixture request"))?;
+                    if request != expected {
+                        return Err(Error::KvResponse("fixture request mismatch"));
+                    }
+                    Ok(response)
+                },
+            )
+            .unwrap();
+        assert!(transcript.is_empty());
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].entries.len(), 3);
+        assert_eq!(
+            projections[0].entries[0].large_file_size,
+            Some(fixture("kv-large-plaintext.bin").len() as u64)
+        );
+        assert!(projections[0].entries[0].content.is_none());
+        assert_eq!(
+            projections[0].entries[2].content.as_deref(),
+            Some(fixture("kv-small-plaintext.bin").as_slice())
+        );
+        let large_node = projections[0].entries[0].node_id;
+        let store = SoftStateStore::open(&soft_path).unwrap();
+        let stored = store
+            .directory(
+                host.host_id.as_bytes(),
+                party.as_bytes(),
+                &projections[0].directory_id,
+            )
+            .unwrap();
+        assert_eq!(stored, Some(projections.into_iter().next().unwrap()));
+        let mut streamed = Vec::new();
+        let size = store
+            .write_large_file(
+                host.host_id.as_bytes(),
+                party.as_bytes(),
+                &large_node,
+                &mut streamed,
+            )
+            .unwrap();
+        assert_eq!(size, Some(streamed.len() as u64));
+        assert_eq!(streamed, fixture("kv-large-plaintext.bin"));
+
+        let mut cache_checks = 0;
+        let cached = client
+            .sync_kv_with_fetch(
+                &host,
+                KvParty {
+                    party: party.clone(),
+                    host: host.host_id.clone(),
+                },
+                KvAuth::Team(&token),
+                &private_keys,
+                &soft_path,
+                |_, request| {
+                    assert!(matches!(request, KvRequest::CacheCheck(_)));
+                    cache_checks += 1;
+                    Ok(Vec::new())
+                },
+            )
+            .unwrap();
+        assert_eq!(cache_checks, 1);
+        assert_eq!(cached, stored.into_iter().collect::<Vec<_>>());
+
+        let stale = KvPathVersionVector::decode(&fixture("kv-path-version-vector.snowp")).unwrap();
+        let mut saw_targeted_directory = false;
+        let error = client
+            .sync_kv_with_fetch(
+                &host,
+                KvParty {
+                    party,
+                    host: host.host_id.clone(),
+                },
+                KvAuth::Team(&token),
+                &private_keys,
+                &soft_path,
+                |_, request| match request {
+                    KvRequest::CacheCheck(_) => {
+                        Err(Error::Rpc(foks_rpc::Error::KvStaleCache(stale.clone())))
+                    }
+                    KvRequest::Directory(directory) => {
+                        saw_targeted_directory = true;
+                        assert_eq!(*directory, stale.directories[0].id);
+                        Err(Error::KvResponse("stop after targeted invalidation"))
+                    }
+                    KvRequest::Root => panic!("same-root staleness must not reload the root"),
+                    _ => panic!("directory metadata is loaded before stale directory contents"),
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::KvResponse("stop after targeted invalidation")
+        ));
+        assert!(saw_targeted_directory);
+    }
+
+    #[test]
+    fn upload_reader_keeps_only_one_chunk_and_one_byte_of_lookahead() {
+        let exact_small_bytes = vec![7; KvWriteSession::SMALL_FILE_BYTES];
+        let mut exact_small = exact_small_bytes.as_slice();
+        let (small, carry, final_chunk) = read_kv_upload_chunk(&mut exact_small).unwrap();
+        assert_eq!(small.len(), KvWriteSession::SMALL_FILE_BYTES);
+        assert!(carry.is_empty());
+        assert!(final_chunk);
+
+        let input = vec![9; KvWriteSession::MAX_UPLOAD_CHUNK + 1];
+        let mut reader = input.as_slice();
+        let (first, carry, final_chunk) = read_kv_upload_chunk(&mut reader).unwrap();
+        assert_eq!(first.len(), KvWriteSession::MAX_UPLOAD_CHUNK);
+        assert_eq!(carry, [9]);
+        assert!(!final_chunk);
+        let (last, carry, final_chunk) =
+            read_kv_upload_chunk_with_carry(&mut reader, carry).unwrap();
+        assert_eq!(last, [9]);
+        assert!(carry.is_empty());
+        assert!(final_chunk);
     }
 }
 

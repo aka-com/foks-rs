@@ -54,9 +54,33 @@ owner device, revoke that device, and rotate the owner PUK. It constructs and
 officially verifies multi-level presence/absence paths, emits a real 995→998
 Merkle skip-pointer transcript, boxes and officially unboxes PUK generation 2,
 and records exact registration, Merkle-query, user-chain, and PUK RPC request
-frames. Randomized commitments, nonces, and timestamps mean regeneration
+frames. Registration and Merkle fixtures include the official virtual-host
+selection exchange and explicit HostID arguments. The PUK parcel carries an
+officially sealed generation-1 seed-chain box beneath generation 2, and both
+owner and member-role request encodings are recorded. Randomized commitments,
+nonces, and timestamps mean regeneration
 produces a new valid transcript; checked-in bytes remain the stable
 differential oracle.
+
+The user fixture command also creates a named-team eldest chain with the four
+v0.1.9 PTK roles, authenticates it in a separate 995→996 Merkle transcript,
+and boxes every PTK to the rotated owner PUK. It emits byte-exact view-token
+challenge, activation, and team-load request frames; the challenge fields and
+MAC are deterministic fixture values, and the official PUK implementation
+produces the activation signature.
+
+It also builds a deterministic team KV tree under the member-min PTK. The
+tree contains a small file, symlink, and chunked file, and emits exact root,
+directory, list, node, chunk, host-selection, and authenticated request
+fixtures. It also emits an exact path-version vector, `kvCacheCheck` request,
+and structured `KV_STALE_CACHE_ERROR` RPC response. All keys, MACs, boxes,
+padding, and chunk nonces are produced by the official v0.1.9 implementation;
+no browser, account, or running KV server is required.
+
+The same fixture set covers every v0.1.9 KV mutation method used by the Rust
+client: root/directory creation, dirent puts, small-object puts, large-file
+upload initialization and continuation, and lock acquire/release. Mutation
+objects use fixed fixture nonces so their byte-exact frames are reproducible.
 
 The YubiKey/subkey matrix is also command-line-only and uses FOKS's mock PIV
 bus; it never searches for or prompts a physical token:
@@ -70,3 +94,48 @@ It emits a mock YubiKey EntityID and hybrid HEPK, a delegated Ed25519 subkey
 and its self-box, the three-signature PUK/subkey/Yubi eldest stack, and
 software→Yubi plus Yubi→software PUK parcels. The official Go implementation
 verifies both signature and unboxing directions before any fixture is written.
+
+The software-eldest registration substrate has its own fixture set so it can
+be regenerated without replacing the randomized user/team transcript:
+
+```sh
+go run . \
+  --host foks.app:4430 \
+  --probe-file ../../crates/foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp \
+  --out /tmp/foks-v019-verified \
+  --signup-out ../../crates/foks-snowpack/tests/fixtures/foks-v0.1.9/signup
+```
+
+This creates an exact two-signature eldest link, initial PUK box set,
+reservation, hidden-location and commitment-key inputs, HEPK set, and byte
+exact `reserveUsername`/`signup` RPC frames. It uses only the checked probe
+fixture and the official Go crypto/protocol packages; it does not contact the
+registration service or consume an invite code.
+
+Exact device-provision, device-revoke, standalone PUK-rotation, and
+single-owner ad-hoc-team request frames can likewise be derived from the
+authenticated user fixture without a server:
+
+```sh
+go run . \
+  --probe-file ../../crates/foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp \
+  --out /tmp/foks-v019-verified \
+  --mutation-user-dir ../../crates/foks-snowpack/tests/fixtures/foks-v0.1.9/user \
+  --mutation-out ../../crates/foks-snowpack/tests/fixtures/foks-v0.1.9/user-mutations
+```
+
+The fixture reuses officially constructed provision/revoke links and a valid
+PUK parcel, then constructs an official membership-preserving PUK rotation and
+a complete ad-hoc eldest/membership/box-set request. Mutation randomness and
+link times are deterministic, and the Go test suite generates the full corpus
+twice to require byte-identical output. The generator opens the team eldest and
+creator membership through the official server-shared validators, then checks
+their team, host, owner, roles, PTK/box counts, and hidden-location bindings
+against the RPC argument before setting `server_semantics_verified`.
+
+This exercises canonical signed bytes, arguments, RPC framing, and the
+stateless validation used by `CreateTeamAdHoc`, including v0.1.9's retained
+deprecated provision fields. It is not a live handler transaction: the reused
+parcel makes the user-mutation request frames encoding oracles rather than one
+coherent mutation against a Postgres-backed server. A full handler test still
+requires the official integration environment, but never a browser.

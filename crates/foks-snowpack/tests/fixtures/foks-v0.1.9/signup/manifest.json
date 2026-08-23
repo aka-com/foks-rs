@@ -1,0 +1,80 @@
+{
+  "format": "foks-v0.1.9-signup-fixtures-v1",
+  "foks_version": "v0.1.9",
+  "generated_at": "2026-08-23T23:38:11Z",
+  "official_built": true,
+  "files": [
+    {
+      "file": "eldest-link.snowp",
+      "bytes": 634,
+      "sha256": "1de369bea8932a4f82a9dd6e8f95a730363c009d225c4b22f6adb7b5129a3a71"
+    },
+    {
+      "file": "hepk-set.snowp",
+      "bytes": 2476,
+      "sha256": "9cde4193acf1299a668740524614c842b7e3787041f3e04c60862e01b3dc1276"
+    },
+    {
+      "file": "puk-box-set.snowp",
+      "bytes": 1323,
+      "sha256": "e4027ac3aa6699174b63e3dd528c44d0e57d9f72361ee25def7e92e618522e16"
+    },
+    {
+      "file": "reservation.snowp",
+      "bytes": 30,
+      "sha256": "831f911a38d0d7ebd086c3eed502fcb4464dc426f2174abdb22970f1f9532ffe"
+    },
+    {
+      "file": "uid.snowp",
+      "bytes": 35,
+      "sha256": "e66915220e693001291f1eaa9d04f7234fbfc85d4f5edd6e68df70313b82b505"
+    }
+  ],
+  "raw_files": [
+    {
+      "file": "device-commitment-key.bin",
+      "bytes": 16,
+      "sha256": "03218a62030e64be27f715045e8c5491b3a9ecda97b2abfee4d40f0b28b5905f"
+    },
+    {
+      "file": "device-seed.bin",
+      "bytes": 32,
+      "sha256": "c591c90fef0f1746bcdbfd3504a7fbf02c63c312ffaf8b93368137278afc81b1"
+    },
+    {
+      "file": "next-tree-location.bin",
+      "bytes": 32,
+      "sha256": "ce425df7d18d41d38b3eb0aa35f140847a55743ddde01a3ea563c5f25335cf46"
+    },
+    {
+      "file": "puk-seed.bin",
+      "bytes": 32,
+      "sha256": "1edf1a9e9637ae2cbc26062bdc653f77b3fdf39e4d46dd00ffcdaa9e5e8cf7b8"
+    },
+    {
+      "file": "reserve-request.frame",
+      "bytes": 52,
+      "sha256": "983baca6a98ebea8efddfe65b67315181737a701e7153ae4f9eafdb082272e13"
+    },
+    {
+      "file": "self-token.bin",
+      "bytes": 17,
+      "sha256": "04150dbd8baca3da42cf218ec06417751c55fbf5b530eb985f655504e786a3e4"
+    },
+    {
+      "file": "signup-request.frame",
+      "bytes": 4705,
+      "sha256": "955f5c9dea8c15ec98aedd3ad80ec6aa22eb3204ce045174d5a65f96a605c013"
+    },
+    {
+      "file": "subchain-tree-location.bin",
+      "bytes": 32,
+      "sha256": "441ca67647954ec4a668aca68eceb7090189484fa603e0527cf15c7be823d624"
+    },
+    {
+      "file": "username-commitment-key.bin",
+      "bytes": 16,
+      "sha256": "2bc3adc3015ee5633beb02400f440708f677f0126597aa959ca7754a6980f2c6"
+    }
+  ]
+}

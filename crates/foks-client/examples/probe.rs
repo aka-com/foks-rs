@@ -1,7 +1,7 @@
 use std::env;
 use std::path::Path;
 
-use foks_client::{ProbeTarget, PublicClient};
+use foks_client::{FoksClient, ProbeTarget};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = env::args_os().skip(1);
@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let target = ProbeTarget::parse(&target)?;
-    let outcome = PublicClient::webpki().probe_and_pin(&target, Path::new(&database))?;
+    let outcome = FoksClient::webpki().probe_and_pin(&target, Path::new(&database))?;
     let host_id = outcome
         .verified
         .snapshot

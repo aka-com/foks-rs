@@ -3,7 +3,7 @@ name = "foks-client-db"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Durable SQLite hard state for a native FOKS client"
+description = "Durable hard and soft SQLite state for a native FOKS client"
 
 [dependencies]
 foks-verify = { workspace = true }

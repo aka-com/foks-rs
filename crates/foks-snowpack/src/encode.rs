@@ -108,8 +108,7 @@ impl Encoder {
         match values.len() {
             0 => return Err(self.error(ErrorKind::EmptyArray)),
             length @ 1..=15 => self.output.push(0x90 | length as u8),
-            length @ 16..=31 => return Err(self.error(ErrorKind::ArrayLengthGap(length))),
-            length @ 32..=65_535 => {
+            length @ 16..=65_535 => {
                 self.output.push(0xdc);
                 self.output.extend((length as u16).to_be_bytes());
             }
@@ -205,17 +204,15 @@ mod tests {
     }
 
     #[test]
-    fn empty_and_gap_arrays_are_rejected() {
+    fn empty_arrays_are_rejected_and_array16_is_minimal() {
         assert!(matches!(
             encode(&Value::Array(vec![])).unwrap_err().kind,
             ErrorKind::EmptyArray
         ));
         for length in 16..=31 {
             let values = vec![Value::Null; length];
-            assert_eq!(
-                encode(&Value::Array(values)).unwrap_err().kind,
-                ErrorKind::ArrayLengthGap(length)
-            );
+            let encoded = encode(&Value::Array(values)).unwrap();
+            assert_eq!(&encoded[..3], &[0xdc, 0, length as u8]);
         }
     }
 }

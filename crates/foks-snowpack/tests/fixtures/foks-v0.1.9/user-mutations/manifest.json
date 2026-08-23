@@ -1,0 +1,121 @@
+{
+  "format": "foks-v0.1.9-user-mutation-fixtures-v2",
+  "foks_version": "v0.1.9",
+  "generator": "sha256-counter-v1",
+  "official_built": true,
+  "server_semantics_verified": true,
+  "files": [
+    {
+      "file": "adhoc-box-set.snowp",
+      "bytes": 5245,
+      "sha256": "af6bf23ec3caf8238e9b54baee882df1c6cb248dd01e315a51b87543611fce4f"
+    },
+    {
+      "file": "adhoc-membership-link.snowp",
+      "bytes": 362,
+      "sha256": "3fb1ae710b80f89c0504d89c79032cc617c299b3d8fdc037a5aa4096f9afe9ad"
+    },
+    {
+      "file": "adhoc-team-id.snowp",
+      "bytes": 35,
+      "sha256": "a3f0967db7a93d881e39607a54825723c0004f63f9d47fc8bf5f3d063a32cbb6"
+    },
+    {
+      "file": "adhoc-team-link.snowp",
+      "bytes": 1101,
+      "sha256": "1e617072b20939d24c047ad42d3343393f022e67a7b7f4908aa881ad469e0e4a"
+    },
+    {
+      "file": "box-set.snowp",
+      "bytes": 1323,
+      "sha256": "987d121dd71a1e1467f4ea7b0044feeb6477a18c6c3b41b0fee03b2476d32cb7"
+    },
+    {
+      "file": "host-config-open.snowp",
+      "bytes": 10,
+      "sha256": "be3eacf1904099593378fb70b0dcd29192a19c1fc77edc8d1e73daece3426b45"
+    },
+    {
+      "file": "rotation-link.snowp",
+      "bytes": 463,
+      "sha256": "a804edf59f073b5cf629f1d0053338e4c135f86fe053beb320b0fd00272a2dad"
+    }
+  ],
+  "raw_files": [
+    {
+      "file": "adhoc-create-request.frame",
+      "bytes": 11811,
+      "sha256": "2fe15f352c90cf4c26884a3b5de2f8783b585a96c0294d8964d946cd755dbfc0"
+    },
+    {
+      "file": "adhoc-membership-next-tree-location.bin",
+      "bytes": 32,
+      "sha256": "3044238792e74568f7eb92a98be22d5b719e12b07d99e132a337b86ab7a3691a"
+    },
+    {
+      "file": "adhoc-next-tree-location.bin",
+      "bytes": 32,
+      "sha256": "2939f680c411e2f2fa30e9894d5211dce5826b7bfd52345f5088dcd1ec171159"
+    },
+    {
+      "file": "adhoc-ptk-admin-seed.bin",
+      "bytes": 32,
+      "sha256": "a35bc57d924d992a273a19785545a01753781a7e2579083a88ff11c71534e83f"
+    },
+    {
+      "file": "adhoc-ptk-member-min-seed.bin",
+      "bytes": 32,
+      "sha256": "00c1599d38973fee5a680ea93eba60736b1b1522a1e3488cfcd48f86ab87f4a9"
+    },
+    {
+      "file": "adhoc-ptk-member-seed.bin",
+      "bytes": 32,
+      "sha256": "2cd2326e402d778f0d4ce126bab88163f3379c47a8dec3de97f818c8fd60c9bd"
+    },
+    {
+      "file": "adhoc-ptk-owner-seed.bin",
+      "bytes": 32,
+      "sha256": "517a7812f560d2e8ddbf11851c93a5d25b36768fc25849e3e9c6d72d3bf0c67f"
+    },
+    {
+      "file": "adhoc-subchain-tree-location.bin",
+      "bytes": 32,
+      "sha256": "5d9dac7425d4f2127d539d0d90c750cbec43bc10d4a129939f5653746c6fa0ef"
+    },
+    {
+      "file": "host-config-request.frame",
+      "bytes": 38,
+      "sha256": "682cfe410620c44107ff1b2587be107ddb57ff5d2b975c135e98b46e31d60a47"
+    },
+    {
+      "file": "provision-request.frame",
+      "bytes": 6951,
+      "sha256": "044608ccfae602034a0f1e04831ec909aeb0b25f2a119a39222d1113863c12f4"
+    },
+    {
+      "file": "revoke-request.frame",
+      "bytes": 7017,
+      "sha256": "8898b5daa9328cf0c12c7c7494b22738bc8de5198675f9ed0db5767c4022fa91"
+    },
+    {
+      "file": "rotation-next-tree-location.bin",
+      "bytes": 32,
+      "sha256": "d211ababa0d2d9c4ca82ccf6828412f338486e4a74da1e1805deeb41b1295809"
+    },
+    {
+      "file": "rotation-puk-seed.bin",
+      "bytes": 32,
+      "sha256": "ac9eb8996085a92b85fac9cdbaca592cc50bc4c49f918306bd742b9fb1cc775e"
+    },
+    {
+      "file": "rotation-request.frame",
+      "bytes": 3258,
+      "sha256": "fc091b7d9fb5d3d7110e042725918f318e302f914b705ca0949cd155862f636a"
+    },
+    {
+      "file": "self-token.bin",
+      "bytes": 17,
+      "sha256": "b9a101ec418c2d7be1e720c900d9139adf02c5bd8f26513ead527b7298f99c90"
+    }
+  ]
+}
