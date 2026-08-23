@@ -1,0 +1,167 @@
+{
+  "format": "foks-v0.1.9-user-fixtures-v1",
+  "foks_version": "v0.1.9",
+  "generated_at": "2026-08-23T20:36:24Z",
+  "host_id": ".2odx9o0uGZpOZRvH2CyD1qRmhZUR7FCGRZZo0uTYNc2X",
+  "uid": ".1BEa7txbe8ABeVPrkliQN63eKJ3Wlz9qh3Xo7cmalWMa",
+  "device_id": ".4On6YN0O0btH2uZYvv2PM14fMMKSUTiTy6FRYVmlKqvZ",
+  "user_root_hash": "593ca002b17f1e2086008bcb502ee13bf1ecaafd2ef6016249839794e5b3b5d9",
+  "user_merkle_key": "a4307a355bfb2162a3bf768407eb6ebee2f3d5c2906da3830f9e289c6f80a503",
+  "user_link_hash": "nK0qO6yIbdZgggyNxgYmTpIrp6paqdbBeUpyYmcBdsa",
+  "puk_generation": 2,
+  "official_unboxed": true,
+  "files": [
+    {
+      "file": "device-id.snowp",
+      "bytes": 35,
+      "sha256": "9841a13059684d782448ed64abad2aec1d18a99f2fea6fbbdec37e1eba6a93e1"
+    },
+    {
+      "file": "hepk-set.snowp",
+      "bytes": 4950,
+      "sha256": "58dca11057838d61d7a7732c7dc896aa73ceef7f7d88ecfc0a2b93e72b84ee0a"
+    },
+    {
+      "file": "hybrid-payload.snowp",
+      "bytes": 1346,
+      "sha256": "af21ff3451b0b16edd93e1702b4c3b9ae3bdd265e2aeb19292998a480714b9de"
+    },
+    {
+      "file": "merkle-back-pointers-996.snowp",
+      "bytes": 115,
+      "sha256": "39ed92ff2d3e330b87f02683f7fbddb803b886cf7cab9f8c5bc05154ccd2dd4d"
+    },
+    {
+      "file": "merkle-back-pointers-997.snowp",
+      "bytes": 39,
+      "sha256": "77aaa67543c787ff920da22052ddc7b5087ea0345b9f9c8aa5979ca81adba938"
+    },
+    {
+      "file": "merkle-back-pointers-998.snowp",
+      "bytes": 77,
+      "sha256": "785b46ff57002b431dfdc3fe2785a4ea97d2487926159a412b53985f8bb9f0cd"
+    },
+    {
+      "file": "merkle-historical-response.snowp",
+      "bytes": 261,
+      "sha256": "3eac6a2fdaa049f78e700c112d1ce97a43b9779088db3ef2f9b223ff80122895"
+    },
+    {
+      "file": "merkle-root-996.snowp",
+      "bytes": 122,
+      "sha256": "e3124ed525dcb23ed0c5d183accc491d2324c44fa88b6a23936ac6342d5c2917"
+    },
+    {
+      "file": "merkle-root-997.snowp",
+      "bytes": 122,
+      "sha256": "1b0a68799c04bb503316ed448ecb584e27cba63502e7baa0c8800d4b6399c84e"
+    },
+    {
+      "file": "merkle-root-998.snowp",
+      "bytes": 122,
+      "sha256": "1a61e36611e449a442e5051284a5a8a6b487999c0b1cb9f62410511c880d35d6"
+    },
+    {
+      "file": "puk-cleartext.snowp",
+      "bytes": 110,
+      "sha256": "9e51a6e7efe65ab84c4a9d6d01d7ecd0be01404d4891f6ff0e55b83903b4a9c3"
+    },
+    {
+      "file": "puk-parcel.snowp",
+      "bytes": 1358,
+      "sha256": "ecdd5dfe635ae872154c81908ada4b15f7be14a3ca1cc2b0bac3221048fc4cf6"
+    },
+    {
+      "file": "uid.snowp",
+      "bytes": 35,
+      "sha256": "6819dddc131b9d4c64c37b9fb9f0f473f387c517a6e8be9368a6b3be89fff047"
+    },
+    {
+      "file": "user-chain.snowp",
+      "bytes": 7695,
+      "sha256": "55aa44f23d5f77c9b4527b6fa472d2b36fe228217d5df6993460cff05f690d1e"
+    },
+    {
+      "file": "user-eldest-link.snowp",
+      "bytes": 634,
+      "sha256": "956b7dc52a3c3c0b9961fc514863509556d3c612e22da75ecb5fe5acbbbadbe5"
+    },
+    {
+      "file": "user-merkle-paths.snowp",
+      "bytes": 817,
+      "sha256": "0fce53fd638000b89d5d81ae3c80cfa44c3272cf77e1b4acd57013126316a7dd"
+    },
+    {
+      "file": "user-provision-link.snowp",
+      "bytes": 514,
+      "sha256": "9fc3d523a208e63ea981b2ebc443ace8058903452e78c891b24a9d7d31b9a44b"
+    },
+    {
+      "file": "user-revoke-link.snowp",
+      "bytes": 511,
+      "sha256": "dd53d18a888349db03d32a4b5aaff139abbf816105c79b8f9d2d6ba0b93c6339"
+    }
+  ],
+  "raw_files": [
+    {
+      "file": "device-seed.bin",
+      "bytes": 32,
+      "sha256": "ae216c2ef5247a3782c135efa279a3e4cdc61094270f5d2be58c6204b7a612c9"
+    },
+    {
+      "file": "hybrid-dh-shared.bin",
+      "bytes": 32,
+      "sha256": "a812019ce68a170750647aeb3b80a18837e02feced10d51783f552d9a8a8db5a"
+    },
+    {
+      "file": "hybrid-kem-shared.bin",
+      "bytes": 32,
+      "sha256": "7fd4ae52acff86285cd760b838e81047f6e1407d4630d9243bbd865079d4f113"
+    },
+    {
+      "file": "hybrid-secretbox-key.bin",
+      "bytes": 32,
+      "sha256": "5ce7e238090a3f6698a0330faf89e213ff67e8d3ddd72408d1e9761b6948c60a"
+    },
+    {
+      "file": "initial-puk-seed.bin",
+      "bytes": 32,
+      "sha256": "ff228850579520476c511a6cc0acc6c0784c2aea3ae260fca667c9f47ad7bdc3"
+    },
+    {
+      "file": "merkle-current-root-request.frame",
+      "bytes": 32,
+      "sha256": "734d0c3122385a6d3e73d02c4306e5cc056aa44991a54e55757cf195408b6437"
+    },
+    {
+      "file": "merkle-historical-roots-request.frame",
+      "bytes": 56,
+      "sha256": "a7c69e786c198fefabb28b05d28bc6998f0272cb737862272a67b973f8c657e1"
+    },
+    {
+      "file": "puk-seed.bin",
+      "bytes": 32,
+      "sha256": "5ce68d68accec166c7f7f6f06af696e89f9152c5d599308bd257ba90734f9dcf"
+    },
+    {
+      "file": "reg-cert-request.frame",
+      "bytes": 108,
+      "sha256": "470f76cef9a6b2a7253ad6ba97c19aa102558d7b341fde7ee58842441564cdae"
+    },
+    {
+      "file": "second-device-seed.bin",
+      "bytes": 32,
+      "sha256": "7eee5800ddcd3b3cc9fd047831cd8536e3c3f57f44d746f515da93f048ee9e91"
+    },
+    {
+      "file": "user-load-request.frame",
+      "bytes": 79,
+      "sha256": "edf41aabca44f9fbcdf66dbd872add2a9d38fd03f9ffa4d5875bcc1224c855e8"
+    },
+    {
+      "file": "user-puk-request.frame",
+      "bytes": 76,
+      "sha256": "0e24eab870a0314e96991e8189326f0cb3ed67e0fd0b9dc4f05f3cd0a7d790dd"
+    }
+  ]
+}

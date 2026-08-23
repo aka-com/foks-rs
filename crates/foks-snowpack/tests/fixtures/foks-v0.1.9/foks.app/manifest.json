@@ -1,0 +1,64 @@
+{
+  "format": "foks-v0.1.9-probe-fixtures-v1",
+  "foks_version": "v0.1.9",
+  "captured_at": "2026-08-23T17:49:04Z",
+  "probe_address": "foks.app:4430",
+  "host_id": ".2odx9o0uGZpOZRvH2CyD1qRmhZUR7FCGRZZo0uTYNc2X",
+  "hostchain_seqno": 1,
+  "hostchain_tail": "HqTzJpOqYNRiSV8p3wIRc6EwFN4jux554EofZUoa9ZE",
+  "merkle_epoch": 995,
+  "merkle_root_node": "a19f5831becd39dc9426086d794d09dc473e63ef82fb2c80962ef8e7ba9f58f1",
+  "merkle_root_hash": "020cb90618f61aaff8ab9aaad97edf05692d100d96a9674e41e43361a520f667",
+  "merkle_hostchain_tail": "HqTzJpOqYNRiSV8p3wIRc6EwFN4jux554EofZUoa9ZE",
+  "canonical_verified": true,
+  "signatures_verified": true,
+  "files": [
+    {
+      "file": "host-id.snowp",
+      "bytes": 35,
+      "sha256": "2966edcd7990dd838e66c089a9e6df34d38f403f3df90cf0cca76ee1cdb87e31"
+    },
+    {
+      "file": "hostchain-link-0001.snowp",
+      "bytes": 831,
+      "sha256": "8cfe985407e74639197364eea0857e04f3b887e5762d4ff723e8d2dd3e2518e3"
+    },
+    {
+      "file": "hostchain-state.snowp",
+      "bytes": 536,
+      "sha256": "001a344adde0020db03730335731e513eab1a213cd153efa72d82d8fb17ffca0"
+    },
+    {
+      "file": "merkle-root-inner.snowp",
+      "bytes": 122,
+      "sha256": "460b6d48553b6169038931ba293ad576d34025c92488ae6d7dde42d2bd6cca4a"
+    },
+    {
+      "file": "probe-response.snowp",
+      "bytes": 1190,
+      "sha256": "5da8c555f9bac0a72ffe4ae1e5862a4fd75bb2ae9c8acdea5811170d1bd0aa50"
+    },
+    {
+      "file": "public-zone-inner.snowp",
+      "bytes": 87,
+      "sha256": "ba7174267734de85efd689ab8033cbb6b198b9206882b69b3e00e65b7a2e068c"
+    },
+    {
+      "file": "signed-merkle-root.snowp",
+      "bytes": 196,
+      "sha256": "ad7320c442a0845f14de0eff8733b7c78ccbbf6a9d624d9a069b9bdec02ca883"
+    },
+    {
+      "file": "signed-public-zone.snowp",
+      "bytes": 161,
+      "sha256": "783377bc7d67cc1b9d7ddd7d637877cbd13e8dca8839e3818a8d86dcdb46c8e2"
+    }
+  ],
+  "rpc_files": [
+    {
+      "file": "probe-request.frame",
+      "bytes": 49,
+      "sha256": "8c45ad99ef1a03ad6989485d4e73e204d62c5e847c097419eaec53f478499b48"
+    }
+  ]
+}

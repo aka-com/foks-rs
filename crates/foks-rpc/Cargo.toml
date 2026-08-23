@@ -1,0 +1,16 @@
+[package]
+name = "foks-rpc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Strict FOKS v0.1.9 Snowpack RPC framing and public probe calls"
+
+[dependencies]
+foks-snowpack = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+quickcheck = { version = "1", default-features = false }
+
+[lints]
+workspace = true
