@@ -1,0 +1,53 @@
+{
+  "format": "foks-v0.1.9-yubi-subkey-fixtures-v1",
+  "foks_version": "v0.1.9",
+  "files": [
+    {
+      "file": "software-to-yubi-puk-parcel.snowp",
+      "bytes": 1481,
+      "sha256": "a31ad1ca83c40a58b20d03f6f23deeaf6eac2cfaf4ddbedc5c1d27e2104ca8e4"
+    },
+    {
+      "file": "subkey-box.snowp",
+      "bytes": 1252,
+      "sha256": "e03f5790b00c88272ee0ec1f70b220060229934431f146e8f7544598dc75c5cf"
+    },
+    {
+      "file": "subkey-id.snowp",
+      "bytes": 35,
+      "sha256": "1c77a222a9506ca98a4936b4e2f9f3a156349e4bb4f615a31b6b11312da380f1"
+    },
+    {
+      "file": "yubi-eldest-link.snowp",
+      "bytes": 745,
+      "sha256": "126f8367ff61e20a31597132851086f6cd370b6549cabe69640e4e17cd5c9648"
+    },
+    {
+      "file": "yubi-hepk.snowp",
+      "bytes": 1238,
+      "sha256": "04481a2c93646753fad62571ba06543e3e39c54bba74ee8d640f0c09869c4967"
+    },
+    {
+      "file": "yubi-id.snowp",
+      "bytes": 36,
+      "sha256": "5ad2adbb14c60037cb77f3bc1bcf1bb0d2a14830107ca2cd5f619ae9c87baafd"
+    },
+    {
+      "file": "yubi-to-software-puk-parcel.snowp",
+      "bytes": 1486,
+      "sha256": "5f6d430666d31db02f76b23eed132f8d9dafbb3fec0719c99821929ef48b018c"
+    }
+  ],
+  "raw_files": [
+    {
+      "file": "puk-seed.bin",
+      "bytes": 32,
+      "sha256": "c60ee4abc220547b7b1415b75f5e63fb06464b0355ed44c225e006fb4d4f66b3"
+    },
+    {
+      "file": "software-device-seed.bin",
+      "bytes": 32,
+      "sha256": "0477fd8e15bc68a8d1ce22781fdb90deddd7cdf657e527f95fc98bbe6918337e"
+    }
+  ]
+}

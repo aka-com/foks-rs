@@ -1,0 +1,16 @@
+[package]
+name = "foks-snowpack"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Canonical Snowpack codec compatible with FOKS v0.1.9"
+
+[dev-dependencies]
+quickcheck = { version = "1", default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Oracle tests intentionally stay on the digest-0.10 API used by FOKS v0.1.9.
+sha2 = "0.10"
+
+[lints]
+workspace = true
