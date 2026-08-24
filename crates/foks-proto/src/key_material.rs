@@ -3,7 +3,9 @@
 use crate::{
     array, binary, decode, dh_public, encode, entity, expect_unsigned, fixed_blob, list,
     list_values, option, role, secret_box, signature, unsigned, variant, DhPublicKey, EntityId,
-    Error, Result, Role, Signature, Value, ENTITY_DEVICE, ENTITY_HOST, ENTITY_SUBKEY,
+    Error, Result, Role, Signature, Value, ENTITY_AD_HOC_TEAM, ENTITY_BACKUP_KEY,
+    ENTITY_BOT_TOKEN_KEY, ENTITY_DEVICE, ENTITY_HOST, ENTITY_NAMED_TEAM, ENTITY_SUBKEY,
+    ENTITY_USER, ENTITY_YUBI,
 };
 use zeroize::Zeroizing;
 
@@ -26,7 +28,7 @@ impl HybridBox {
         Ok(encode(&self.to_value())?)
     }
 
-    fn to_value(&self) -> Value {
+    pub(crate) fn to_value(&self) -> Value {
         let sender = self.sender_dh.as_ref().map_or(Value::Null, dh_public_value);
         Value::Array(vec![
             Value::Unsigned(2),
@@ -54,6 +56,51 @@ impl HybridBox {
                     ))),
                 ])),
             ))),
+        ])
+    }
+}
+
+/// A hybrid box encrypted for one generation of a team role key.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TeamRemovalKeyBox {
+    pub hybrid: HybridBox,
+    pub role: Role,
+    pub generation: u64,
+}
+
+impl TeamRemovalKeyBox {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        Self::from_value(&decode(bytes)?)
+    }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        self.validate()?;
+        Ok(encode(&self.to_value())?)
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.role == Role::NONE || self.generation == 0 {
+            return Err(Error::IntegerRange("team removal-key encryption key"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn from_value(value: &Value) -> Result<Self> {
+        let fields = array(value, 2)?;
+        let key = array(&fields[1], 2)?;
+        let result = Self {
+            hybrid: hybrid_box(&fields[0])?,
+            role: role(&key[0])?,
+            generation: unsigned(&key[1])?,
+        };
+        result.validate()?;
+        Ok(result)
+    }
+
+    pub(crate) fn to_value(&self) -> Value {
+        Value::Array(vec![
+            self.hybrid.to_value(),
+            Value::Array(vec![self.role.to_value(), Value::Unsigned(self.generation)]),
         ])
     }
 }
@@ -226,6 +273,9 @@ pub struct PukParcel {
     pub role: Role,
     pub hybrid: HybridBox,
     pub target: EntityId,
+    pub target_host: Option<EntityId>,
+    pub target_role: Role,
+    pub target_generation: u64,
     pub sender: EntityId,
     pub box_id: [u8; 16],
     pub temp_dh_key: Option<TempDhKeySigned>,
@@ -239,28 +289,63 @@ pub struct SeedChainBox {
     pub secret_box: SecretBox,
 }
 
+impl SeedChainBox {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        seed_chain_box(&decode(bytes)?)
+    }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&Value::Array(vec![
+            Value::Unsigned(self.generation),
+            self.role.to_value(),
+            self.secret_box.to_value(),
+        ]))?)
+    }
+}
+
 impl PukParcel {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
         puk_parcel(&wire)
+    }
+
+    fn validate_target(&self) -> Result<()> {
+        let valid = match self.target.entity_type() {
+            ENTITY_DEVICE | ENTITY_YUBI | ENTITY_BACKUP_KEY | ENTITY_BOT_TOKEN_KEY => {
+                self.target_role == Role::NONE && self.target_generation == 0
+            }
+            ENTITY_USER | ENTITY_NAMED_TEAM | ENTITY_AD_HOC_TEAM => {
+                self.target_role != Role::NONE && self.target_generation > 0
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(Error::IntegerRange("shared-key parcel target"));
+        }
+        Ok(())
     }
 }
 
 pub(crate) fn puk_parcel(value: &Value) -> Result<PukParcel> {
     let fields = array(value, 5)?;
     let shared_box = array(&fields[0], 4)?;
-    let role = role(&shared_box[1])?;
+    let shared_role = role(&shared_box[1])?;
     let target = array(&shared_box[3], 4)?;
-    Ok(PukParcel {
+    let parcel = PukParcel {
         generation: unsigned(&shared_box[0])?,
-        role,
+        role: shared_role,
         hybrid: hybrid_box(&shared_box[2])?,
         target: entity(&target[0])?,
+        target_host: option(&target[1], |value| entity(value)?.require_type(ENTITY_HOST))?,
+        target_role: role(&target[2])?,
+        target_generation: unsigned(&target[3])?,
         sender: entity(&fields[1])?,
         box_id: fixed_blob(&fields[2], "box set ID")?,
         temp_dh_key: option(&fields[3], temp_dh_key_signed)?,
         seed_chain: list(&fields[4], seed_chain_box)?,
-    })
+    };
+    parcel.validate_target()?;
+    Ok(parcel)
 }
 
 fn seed_chain_box(value: &Value) -> Result<SeedChainBox> {
@@ -335,7 +420,9 @@ impl SecretSeed {
         self.0.as_slice()
     }
 
-    fn from_slice(bytes: &[u8]) -> Result<Self> {
+    /// Copies exactly 32 bytes into zeroizing storage without an intermediate
+    /// ordinary array.
+    pub fn from_slice(bytes: &[u8]) -> Result<Self> {
         let mut seed = Zeroizing::new([0u8; 32]);
         if bytes.len() != seed.len() {
             return Err(Error::Length {
@@ -414,12 +501,21 @@ pub struct SubkeySeed {
 
 impl SubkeySeed {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let wire = decode(bytes)?;
+        let (wire, seed) = decode_with_redacted_trailing_seed(bytes)?;
         let fields = array(&wire, 3)?;
         Ok(Self {
             parent: entity(&fields[0])?,
             subkey: entity(&fields[1])?.require_type(ENTITY_SUBKEY)?,
-            seed: SecretSeed::from_slice(binary(&fields[2])?)?,
+            seed: {
+                let redacted = binary(&fields[2])?;
+                if redacted != [0; 32] {
+                    return Err(Error::Type {
+                        expected: "redacted subkey seed",
+                        found: "nonzero binary",
+                    });
+                }
+                seed
+            },
         })
     }
 
@@ -430,7 +526,7 @@ impl SubkeySeed {
 
 impl SharedKeySeed {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let wire = decode(bytes)?;
+        let (wire, seed) = decode_with_redacted_trailing_seed(bytes)?;
         let fields = array(&wire, 4)?;
         let fqe = array(&fields[0], 2)?;
         Ok(Self {
@@ -438,11 +534,38 @@ impl SharedKeySeed {
             host: entity(&fqe[1])?.require_type(ENTITY_HOST)?,
             generation: unsigned(&fields[1])?,
             role: role(&fields[2])?,
-            seed: SecretSeed::from_slice(binary(&fields[3])?)?,
+            seed: {
+                let redacted = binary(&fields[3])?;
+                if redacted != [0; 32] {
+                    return Err(Error::Type {
+                        expected: "redacted shared-key seed",
+                        found: "nonzero binary",
+                    });
+                }
+                seed
+            },
         })
     }
 
     pub fn into_seed(self) -> SecretSeed {
         self.seed
     }
+}
+
+fn decode_with_redacted_trailing_seed(bytes: &[u8]) -> Result<(Value, SecretSeed)> {
+    const ENCODED_SEED_LENGTH: usize = 34;
+    if bytes.len() < ENCODED_SEED_LENGTH
+        || bytes[bytes.len() - ENCODED_SEED_LENGTH..bytes.len() - 32] != [0xc4, 32]
+    {
+        return Err(Error::Length {
+            kind: "trailing secret seed",
+            expected: ENCODED_SEED_LENGTH,
+            found: bytes.len(),
+        });
+    }
+    let seed_offset = bytes.len() - 32;
+    let mut redacted = Zeroizing::new(bytes.to_vec());
+    let seed = SecretSeed::from_slice(&redacted[seed_offset..])?;
+    redacted[seed_offset..].fill(0);
+    Ok((decode(&redacted)?, seed))
 }

@@ -5,6 +5,17 @@ initial probe uses configured WebPKI roots; delegated services use the active
 TLS CAs authenticated by the hostchain and select the pinned virtual host when
 the upstream protocol requires it.
 
+Delegated RPC connections are pooled by endpoint, authenticated HostID/TLS
+roots, client certificate identity, and virtual-host selection state. RPC
+sequence numbers advance on reuse without rewriting signed protocol arguments;
+any incomplete or invalid exchange evicts its connection and is never
+automatically replayed. The idle pool defaults to two connections per key and
+16 total and can be bounded or disabled with `set_connection_pool_limits`.
+`set_timeout` is an overall connect/TLS/request deadline rather than a fresh
+timeout for every socket read, and `CancellationToken` interrupts stalled I/O
+at bounded polling intervals. Response allocation is controlled by
+`set_maximum_frame_length`, capped at 1 GiB.
+
 The client can obtain an enrolled device certificate without interaction,
 derive its exact Ed25519 mTLS key, advance the signed Merkle pin through the
 official historical-root protocol, replay device and PUK transitions, unbox
@@ -14,14 +25,43 @@ credentials, verified team chains and PTKs, and complete authenticated KV
 projections in an isolated soft SQLite database. Persistent
 path-version-vector checks avoid unchanged downloads and target stale
 directories without discarding the rest of the verified cache. KV RPCs reuse
-one selected mTLS connection, and large-file plaintext streams through bounded
-SQLite chunks rather than a whole-file memory buffer. `KvWriteSession` adds
+selected pooled mTLS connections, and large-file plaintext streams through
+bounded SQLite chunks rather than a whole-file memory buffer. `KvWriteSession` adds
 fresh-root initialization, streamed file and symlink puts, mkdir, unlink,
 atomic move, and server lock operations. Namespace writes carry the persisted
 version vector as an optimistic precondition and converge SQLite through the
 same targeted incremental synchronization path after success. Merkle
 advancement always starts from SQLite hard state, so an untrusted response can
 never bless its own root.
+
+User and team refreshes also start at the last authenticated chain sequence
+and send the v0.1.9 current-name cursor. Only the returned suffix is replayed:
+its first `previous` hash and hidden tree location must extend the stored tail,
+every link and terminal absence must verify under an independently
+authenticated Merkle root, and name proofs follow the upstream reassignment
+rules. Exact response segments are retained so restart restoration replays the
+same initial chain plus each authenticated suffix rather than trusting the
+materialized SQLite projection. Consecutive no-link refresh evidence is
+compacted to the latest root, so storage grows with chain changes rather than
+with refresh frequency.
+
+Signup, software-device provisioning and revocation, PUK rotation, and KV
+namespace/root mutations use a generic hard-state write-ahead journal. Exact
+retry material is committed first through the caller's `ProtectedMutationStore`
+and is fingerprint-bound to the public SQLite row. `Prepared` is the only state
+that may submit; once an operation becomes `Submitting`, recovery only compares
+authenticated server state and never blindly replays an ambiguous request.
+`EncryptedFileMutationStore` is the production local adapter: AKA supplies its
+32-byte master key from the platform vault, while the adapter atomically stores
+individually authenticated XChaCha20-Poly1305 records in a private directory.
+The master key is never written alongside those records.
+
+`FoksScheduler` persists due times, bounded leases, failures, and retry state in
+the public hard-state database for user refresh and ambiguous-mutation
+reconciliation. It deliberately owns neither an async runtime nor credentials:
+the application timer invokes `run_due` on its blocking storage worker and
+dispatches each public job identity to its protected account context. Jobs must
+be idempotent because an expired lease is retried after a process crash.
 
 That hard state detects inconsistent modification, rollback relative to the
 database's retained pins, and same-sequence forks. It cannot detect replacement
@@ -33,20 +73,22 @@ protected backup—and compare it when opening the database.
 `create_software_account` implements the narrow non-interactive registration
 slice: one software owner device, its generation-1 owner PUK, verified
 post-signup user loading, public mutation journaling, and initial personal KV
-root creation. The caller must durably store the supplied seeds and self token
-in an encrypted credential store before calling it; those secrets are never
-written to the hard-state database.
+root creation. The supplied `ProtectedMutationStore` must be a durable encrypted
+credential store in production; the client records the exact signup request,
+seeds, and self token there before journaling or submission. Those secrets are
+never written to the hard-state database.
 
-`provision_software_device` and `revoke_software_device` implement the
-non-interactive software-credential mutations. Provisioning constructs the
-new-device countersignature and delivers the accessible PUK to the new
-credential; introducing a new role also distributes its generation-1 PUK to
-all eligible existing software devices. Revocation rotates every PUK visible
-to the removed credential, preserves the encrypted historical seed chain, and
-waits for the exact user-chain transition before reporting success. Callers
-must durably retain every supplied seed before submission. Physically
-separated countersigning/KEX, passphrase annex updates, Yubi/P-256 mutation
-recipients, and self-revocation are not yet exposed by these convenience APIs.
+`provision_software_device` and
+`revoke_user_credential_with_software_device` implement the non-interactive
+software-signer mutations. Provisioning constructs the new-device
+countersignature and delivers the accessible PUK to the new credential;
+introducing a new role also distributes its generation-1 PUK to all eligible
+existing software devices. Revocation rotates every PUK visible to the removed
+credential, preserves the encrypted historical seed chain, and waits for the
+exact user-chain transition before reporting success. Callers must durably
+retain every supplied seed before submission. Physically separated
+countersigning/KEX, passphrase annex updates, Yubi/P-256 mutation recipients,
+and self-revocation are not yet exposed by these convenience APIs.
 Any operation that reaches the owner PUK requires an explicit
 `NoPassphraseConfigured` assertion, so omission of the passphrase annex cannot
 be accidental.
@@ -57,6 +99,28 @@ highest PUK being rotated; it rejects skipped roles, stale previous seeds,
 unchanged or duplicated replacements, and non-owner signers before posting.
 Like revocation, it distributes the new generations, retains encrypted history,
 and returns only after the exact public-key transition is authenticated.
+
+`enroll_backup_key`, `load_backup_key`, and `recover_software_device` implement
+FOKS v0.1.9's account-recovery path. A backup key is the official 17-token
+HESP encoding of a 203-bit seed and is enrolled as its own Curve25519/ML-KEM
+user credential. The caller must record the phrase before enrollment; neither
+SQLite nor this client retains it. Loading signs the host-bound registration
+challenge, locates the owning user, verifies the pinned Merkle/user chain, and
+unboxes the backup role's PUK. The loaded value contains only derived
+zeroizing key material, is intentionally non-serializable, and is consumed
+when it provisions a permanent software device. Recovery is idempotent for a
+caller-retained device seed and role, so a retry can reconcile a committed
+provision whose response or certificate fetch was lost. Backup enrollment is
+likewise idempotent for the same key and role. The complete workflow is ordinary
+probe/registration/user RPC and requires no browser or interactive KEX.
+Passphrase-based device recovery is a separate upstream protocol and is not
+part of this slice.
+
+The first word/number pair becomes the public backup-device name, leaving 179
+bits secret after enrollment. Use `BackupKey::generate`; `from_seed` exists for
+import and deterministic fixtures, not as an entropy source. An enrolled
+backup key can be removed with
+`revoke_user_credential_with_software_device`.
 
 `create_single_owner_adhoc_team` and its Yubi variant create the narrow
 non-interactive team slice: one local owner, generation-1
@@ -76,8 +140,44 @@ user viewership for ad-hoc creation; the client now checks the authenticated
 host configuration before preparing or journaling a request. Explicit server
 rejection returns immediately, while transport ambiguity enters verified
 reconciliation. The official transaction-retry status is retried once with
-byte-identical signed input. Named teams, additional founding members, later
-membership edits, and PTK rotation remain outside this slice.
+byte-identical signed input.
+
+`create_single_owner_named_team` and its Yubi variant add exact normalized-name
+reservation and commitment, the same four generation-1 PTKs, an owner removal
+key committed in the eldest link and independently boxed to the admin PTK and
+creator PUK, and the creator's `Approved` membership link. The caller must
+durably retain the PTKs, removal key, and name-commitment key before the call.
+The public journal stores only the actor, team, expected sequence, and exact
+request fingerprint.
+
+`add_local_user_to_named_team` and its Yubi variant implement the exact local
+open-viewership addition path. The target must be a verified same-host user;
+the signed team link binds its current owner PUK, destination role, and a
+caller-retained removal-key commitment. Existing PTKs visible to that role are
+boxed to the target PUK without rotating them, and the removal key is boxed
+independently to the team admin PTK and target PUK. The caller must persist the
+removal key before submission. The public mutation journal supports
+reconciliation without replay, and reconciliation authenticates the exact
+expected chain position even if later team links have already landed.
+
+`remove_local_user_and_rotate_ptks` and its Yubi variant cover the matching
+local-user removal path. The caller supplies the member's retained removal key,
+every newly generated PTK required by the authenticated FOKS gameplan, and
+verified public user states for the remaining roster. The client rotates every
+PTK visible to the removed role, boxes each new generation only to eligible
+remaining members, chains the old generations under the new keys, constructs
+the committed removal MAC, and reconciles the exact signed transition.
+
+`remove_team_member_and_rotate_ptks` retrieves that same committed key through
+an exact, short-lived TeamAdmin bearer token, so callers do not need to retain
+it. `change_team_member_and_rotate_ptks` generalizes the authenticated rotation
+path to role demotions, PUK/PTK generation advances, nested-team members, and
+federated users or teams. Callers supply sealed verified user/team states for
+the complete post-transition recipient roster; remote host scope and source
+role are part of every lookup, encrypted PTK parcel, removal MAC, operation ID,
+and reconciliation check. The resume API locates the unique public journal row
+by team and expected sequence, so an interrupted server-loaded removal does not
+need the removal key or a returned secret-derived operation ID.
 
 See [SECURITY.md](SECURITY.md) for the trust boundaries, invariant ownership,
 secret lifecycle, review order, and explicitly unimplemented surfaces.

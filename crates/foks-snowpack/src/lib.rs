@@ -12,7 +12,7 @@ mod encode;
 mod error;
 
 pub use decode::{decode, decode_prefix, validate};
-pub use encode::encode;
+pub use encode::{encode, encode_ref};
 pub use error::{Error, ErrorKind, PathSegment};
 
 /// Maximum number of positional or variant steps below the root value.
@@ -35,4 +35,29 @@ pub enum Value {
     /// Snowpack variant representation. `None` is an empty fixed map; `Some`
     /// is a one-entry fixed map with a short-string tag.
     Variant(Option<(Vec<u8>, Box<Value>)>),
+}
+
+/// A borrowed canonical Snowpack value.
+///
+/// This form is useful for sensitive plaintexts: binary and text fields can
+/// be encoded directly from zeroizing or caller-owned storage without first
+/// cloning them into an ordinary [`Vec`].
+#[derive(Debug, Eq, PartialEq)]
+pub enum ValueRef<'a> {
+    /// An already-owned subtree that can be embedded without cloning it.
+    Value(&'a Value),
+    Null,
+    Bool(bool),
+    Unsigned(u64),
+    Negative(i64),
+    Binary(&'a [u8]),
+    Text(&'a [u8]),
+    Array(Vec<ValueRef<'a>>),
+    Variant(Option<(&'a [u8], Box<ValueRef<'a>>)>),
+}
+
+impl<'a> From<&'a Value> for ValueRef<'a> {
+    fn from(value: &'a Value) -> Self {
+        Self::Value(value)
+    }
 }

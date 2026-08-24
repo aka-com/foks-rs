@@ -523,6 +523,48 @@ impl SoftStateStore {
             .collect()
     }
 
+    /// Invalidates only directories affected by a locally accepted namespace
+    /// mutation and marks the party projection incomplete. The next sync must
+    /// re-fetch authenticated server state instead of accepting a cache check
+    /// that cannot discover newly created dirents absent from its vector.
+    pub fn invalidate_directories(
+        &mut self,
+        host_id: &[u8],
+        party_id: &[u8],
+        directory_ids: &[[u8; 16]],
+    ) -> Result<()> {
+        if host_id.len() != 33 || party_id.len() != 33 || directory_ids.is_empty() {
+            return Err(Error::InvalidKvProjection);
+        }
+        let unique = directory_ids
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for directory_id in unique {
+            transaction.execute(
+                "DELETE FROM kv_directories WHERE host_id = ?1 AND party_id = ?2 AND dir_id = ?3",
+                params![host_id, party_id, directory_id.as_slice()],
+            )?;
+        }
+        let changed = transaction.execute(
+            "UPDATE kv_parties SET cache_complete = 0 WHERE host_id = ?1 AND party_id = ?2",
+            params![host_id, party_id],
+        )?;
+        if changed != 1 {
+            return Err(Error::InvalidKvProjection);
+        }
+        transaction.execute(
+            "DELETE FROM kv_large_files WHERE host_id = ?1 AND party_id = ?2 AND NOT EXISTS (\
+             SELECT 1 FROM kv_entries WHERE kv_entries.large_file_id = kv_large_files.id)",
+            params![host_id, party_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// Reconstructs the exact cache precondition from durable projected
     /// versions. Returning `None` means this party has no complete cache.
     pub fn version_vector(
@@ -1107,6 +1149,56 @@ mod tests {
                 )
                 .unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn local_namespace_mutation_invalidates_only_affected_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("soft.sqlite3");
+        let mut store = SoftStateStore::open(&path).unwrap();
+        let mut root = snapshot();
+        let mut child = root.clone();
+        child.directory_id = [8; 16];
+        child.directory_bytes = vec![8];
+        let mut child_node_id = [8; 17];
+        child_node_id[0] = 1;
+        root.entries = vec![KvProjectedEntry {
+            dirent_id: [9; 16],
+            node_id: child_node_id,
+            version: 1,
+            directory_version: 1,
+            name: b"child".to_vec(),
+            write_role_type: 2,
+            write_role_visibility: 0,
+            creation_time: 9,
+            dirent_bytes: vec![9],
+            node_bytes: None,
+            content: None,
+            symlink: None,
+            large_file_size: None,
+        }];
+        store
+            .project_reachable_tree_with_large_files(&[root.clone(), child.clone()], &[])
+            .unwrap();
+
+        store
+            .invalidate_directories(&root.host_id, &root.party_id, &[root.directory_id])
+            .unwrap();
+
+        assert!(store
+            .version_vector(&root.host_id, &root.party_id)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .directory(&root.host_id, &root.party_id, &root.directory_id)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .directory(&child.host_id, &child.party_id, &child.directory_id)
+                .unwrap(),
+            Some(child)
         );
     }
 

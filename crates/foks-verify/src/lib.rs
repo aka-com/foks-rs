@@ -39,7 +39,7 @@ const ED25519_OID: &str = "1.3.101.112";
 pub use error::*;
 pub use host::*;
 pub use merkle::*;
-pub(crate) use proof::verify_merkle_path;
+pub(crate) use proof::{verify_merkle_path, verify_merkle_path_present};
 pub use team::*;
 pub use user::*;
 
@@ -82,6 +82,42 @@ mod tests {
             seqno: public.snapshot.chain_seqno,
             hash: public.snapshot.chain_tail_hash,
         }
+    }
+
+    fn incremental_noop_response(
+        full_response: &[u8],
+        name_path_count: usize,
+        team: bool,
+    ) -> Vec<u8> {
+        let Value::Array(mut fields) = foks_snowpack::decode(full_response).unwrap() else {
+            panic!("chain fixture is not an array");
+        };
+        let Value::Array(mut merkle) = fields[3].clone() else {
+            panic!("chain Merkle evidence is not an array");
+        };
+        let Value::Array(paths) = merkle[1].clone() else {
+            panic!("chain Merkle paths are not an array");
+        };
+        merkle[1] = Value::Array(vec![
+            paths[name_path_count - 1].clone(),
+            paths.last().unwrap().clone(),
+        ]);
+        fields[0] = Value::Null;
+        let Value::Array(locations) = fields[1].clone() else {
+            panic!("chain locations are not an array");
+        };
+        fields[1] = Value::Array(vec![locations.last().unwrap().clone()]);
+        fields[2] = Value::Null;
+        fields[3] = Value::Array(merkle);
+        if team {
+            fields[5] = Value::Unsigned(1);
+            fields[9] = Value::Array(vec![Value::Null]);
+        } else {
+            fields[4] = Value::Null;
+            fields[6] = Value::Unsigned(1);
+            fields[7] = Value::Array(vec![Value::Null]);
+        }
+        encode(&Value::Array(fields)).unwrap()
     }
 
     #[test]
@@ -230,6 +266,66 @@ mod tests {
     }
 
     #[test]
+    fn incremental_user_refresh_accepts_noop_and_rejects_overlap() {
+        let chain = UserChain::decode(USER_CHAIN).unwrap();
+        let uid = binary_entity(include_bytes!(
+            "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/uid.snowp"
+        ));
+        let host = chain.links[0].decode_eldest().unwrap().host;
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let advance = verify_merkle_advance(
+            public.snapshot.merkle_root(),
+            USER_ROOT,
+            USER_HISTORY,
+            &trusted_tail(&public),
+        )
+        .unwrap();
+        let verified = verify_user_chain(
+            USER_CHAIN,
+            &uid,
+            &host,
+            advance.authenticated_roots(),
+            &chain.merkle.root().hostchain,
+        )
+        .unwrap();
+        let no_op = incremental_noop_response(
+            USER_CHAIN,
+            usize::try_from(chain.num_username_links).unwrap(),
+            false,
+        );
+        let refreshed = verify_user_chain_increment(
+            &no_op,
+            &verified,
+            &uid,
+            &host,
+            advance.authenticated_roots(),
+            &chain.merkle.root().hostchain,
+        )
+        .unwrap();
+        assert_eq!(refreshed, verified);
+
+        let snapshot = refreshed.hard_state_snapshot().unwrap();
+        assert_eq!(
+            restore_verified_user(
+                snapshot.parts(),
+                advance.authenticated_roots(),
+                public.snapshot.chain_bytes(),
+            )
+            .unwrap(),
+            verified
+        );
+        assert!(verify_user_chain_increment(
+            USER_CHAIN,
+            &verified,
+            &uid,
+            &host,
+            advance.authenticated_roots(),
+            &chain.merkle.root().hostchain,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn official_named_team_chain_replays_and_restores_from_exact_evidence() {
         let chain = TeamChain::decode(TEAM_CHAIN).unwrap();
         let team = binary_entity(include_bytes!(
@@ -280,6 +376,70 @@ mod tests {
             ),
             Err(Error::PersistedTeamEvidence)
         ));
+    }
+
+    #[test]
+    fn incremental_team_refresh_accepts_noop_and_rejects_overlap() {
+        let chain = TeamChain::decode(TEAM_CHAIN).unwrap();
+        let team = binary_entity(include_bytes!(
+            "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/team-id.snowp"
+        ));
+        let host = chain.links[0].decode_team_group_change().unwrap().host;
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let advance = verify_merkle_advance(
+            public.snapshot.merkle_root(),
+            TEAM_ROOT,
+            TEAM_HISTORY,
+            &trusted_tail(&public),
+        )
+        .unwrap();
+        let verified = verify_team_chain(
+            TEAM_CHAIN,
+            &team,
+            &host,
+            advance.authenticated_roots(),
+            &chain.merkle.root().hostchain,
+        )
+        .unwrap();
+        let no_op = incremental_noop_response(
+            TEAM_CHAIN,
+            usize::try_from(chain.num_team_name_links).unwrap(),
+            true,
+        );
+        let refreshed = verify_team_chain_increment(
+            &no_op,
+            &verified,
+            &team,
+            &host,
+            advance.authenticated_roots(),
+            &chain.merkle.root().hostchain,
+        )
+        .unwrap();
+        assert_eq!(refreshed, verified);
+        assert_eq!(
+            refreshed.group_change_at(1).unwrap(),
+            chain.links[0].decode_team_group_change().unwrap()
+        );
+
+        let snapshot = refreshed.hard_state_snapshot().unwrap();
+        assert_eq!(
+            restore_verified_team(
+                snapshot.parts(),
+                advance.authenticated_roots(),
+                public.snapshot.chain_bytes(),
+            )
+            .unwrap(),
+            verified
+        );
+        assert!(verify_team_chain_increment(
+            TEAM_CHAIN,
+            &verified,
+            &team,
+            &host,
+            advance.authenticated_roots(),
+            &chain.merkle.root().hostchain,
+        )
+        .is_err());
     }
 
     #[test]

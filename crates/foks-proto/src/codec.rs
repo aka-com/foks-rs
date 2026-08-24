@@ -1,6 +1,9 @@
 //! Private, schema-oriented Snowpack decoding primitives.
 
-use crate::{EntityId, Error, Result, Value, ENTITY_DEVICE, ENTITY_YUBI};
+use crate::{
+    EntityId, Error, Result, Value, ENTITY_BACKUP_KEY, ENTITY_BOT_TOKEN_KEY, ENTITY_DEVICE,
+    ENTITY_YUBI,
+};
 
 pub(crate) fn array(value: &Value, expected: usize) -> Result<&[Value]> {
     let Value::Array(values) = value else {
@@ -105,6 +108,14 @@ pub(crate) fn device_entity(value: &Value) -> Result<EntityId> {
             expected: ENTITY_DEVICE,
             found,
         }),
+    }
+}
+
+pub(crate) fn user_member_entity(value: &Value) -> Result<EntityId> {
+    let entity = entity(value)?;
+    match entity.entity_type() {
+        ENTITY_DEVICE | ENTITY_YUBI | ENTITY_BACKUP_KEY | ENTITY_BOT_TOKEN_KEY => Ok(entity),
+        found => Err(Error::EntityType(found)),
     }
 }
 

@@ -2,9 +2,9 @@ use std::io::Write as _;
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use super::{DeviceCredential, FoksClient, PinnedHost, ProbeTarget};
+use super::{CancellationToken, DeviceCredential, Error, FoksClient, PinnedHost, ProbeTarget};
 use foks_client_db::{Acceptance, HardStateStore};
 use foks_crypto::device_signing_key_pkcs8;
 use foks_proto::{EntityId, SecretSeed};
@@ -158,10 +158,10 @@ fn registration_then_mtls_user_chain_and_puk_complete_without_interactivity() {
     let merkle_port = merkle.local_addr().unwrap().port();
     let cert_response = encode_success_response_at(&pki.certificate_result, 1).unwrap();
     let chain_response = encode_probe_success_response(&fixture("user-chain.snowp")).unwrap();
-    let puk_response = encode_probe_success_response(&fixture("puk-parcel.snowp")).unwrap();
+    let puk_response = encode_success_response_at(&fixture("puk-parcel.snowp"), 1).unwrap();
     let root_response = encode_success_response_at(&fixture("merkle-root-998.snowp"), 1).unwrap();
     let history_response =
-        encode_success_response_at(&fixture("merkle-historical-response.snowp"), 1).unwrap();
+        encode_success_response_at(&fixture("merkle-historical-response.snowp"), 2).unwrap();
     let select_response = fixture("kv-select-vhost-response.frame");
 
     let reg_thread = spawn_server(
@@ -173,16 +173,13 @@ fn registration_then_mtls_user_chain_and_puk_complete_without_interactivity() {
     let user_thread = spawn_server(
         user,
         pki.authenticated_server,
-        vec![vec![chain_response], vec![puk_response]],
+        vec![vec![chain_response, puk_response]],
         true,
     );
     let merkle_thread = spawn_server(
         merkle,
         pki.unauthenticated_server,
-        vec![
-            vec![select_response.clone(), root_response],
-            vec![select_response, history_response],
-        ],
+        vec![vec![select_response, root_response, history_response]],
         false,
     );
 
@@ -244,4 +241,40 @@ fn registration_then_mtls_user_chain_and_puk_complete_without_interactivity() {
     reg_thread.join().unwrap();
     user_thread.join().unwrap();
     merkle_thread.join().unwrap();
+}
+
+#[test]
+fn stalled_tls_is_cancelled_before_the_socket_timeout() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let cancellation = CancellationToken::new();
+    let mut client = FoksClient::with_roots(rustls::RootCertStore::empty())
+        .with_cancellation_token(cancellation.clone());
+    client.set_timeout(Duration::from_secs(5));
+    let target = ProbeTarget::parse(&format!("127.0.0.1:{port}")).unwrap();
+    let started = Instant::now();
+    let request = thread::spawn(move || client.probe(&target));
+    let (stalled_peer, _) = listener.accept().unwrap();
+    thread::sleep(Duration::from_millis(50));
+    cancellation.cancel();
+    let error = request.join().unwrap().unwrap_err();
+    assert!(matches!(error, Error::Cancelled));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    drop(stalled_peer);
+}
+
+#[test]
+fn stalled_tls_obeys_the_overall_deadline() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut client = FoksClient::with_roots(rustls::RootCertStore::empty());
+    client.set_timeout(Duration::from_millis(100));
+    let target = ProbeTarget::parse(&format!("127.0.0.1:{port}")).unwrap();
+    let started = Instant::now();
+    let request = thread::spawn(move || client.probe(&target));
+    let (stalled_peer, _) = listener.accept().unwrap();
+    let error = request.join().unwrap().unwrap_err();
+    assert!(matches!(error, Error::DeadlineExceeded));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    drop(stalled_peer);
 }

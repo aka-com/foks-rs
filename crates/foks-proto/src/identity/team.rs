@@ -55,7 +55,12 @@ impl TeamChain {
                 expected: usize::MAX,
                 found: merkle.paths().len(),
             })?;
-        if links.len() != locations.len() || merkle.paths().len() != expected_paths {
+        let valid_location_count = locations.len() == links.len()
+            || links
+                .len()
+                .checked_add(1)
+                .is_some_and(|count| locations.len() == count);
+        if !valid_location_count || merkle.paths().len() != expected_paths {
             return Err(Error::FieldCount {
                 expected: expected_paths,
                 found: merkle.paths().len(),

@@ -6,18 +6,22 @@ use super::{
     make_software_puk_rotation_link, make_software_revoke_link, normalize_device_name,
     now_microseconds, random_bytes, seal_puk_seed_chain_box, seal_software_puk_boxes,
     AuthenticatedUserOutcome, BTreeSet, DeviceCredential, DeviceLabel,
-    DeviceLabelNameAndCommitmentKey, DevicePublicMaterial, Duration, EntityId, Error, FoksClient,
-    PinnedHost, ProvisionDeviceArgument, PukBoxRandomness, PukRotation, Result,
-    RevokeDeviceArgument, Role, SecretSeed, SoftwareProvisionInput, SoftwarePukBoxInput,
-    UserMutationBase, VerifiedUserState, Zeroizing, ENTITY_PUK_VERIFY,
+    DeviceLabelNameAndCommitmentKey, DevicePublicMaterial, DeviceType, Duration, EntityId, Error,
+    FoksClient, HardStateStore, MutationCoordinator, MutationDraft, MutationKind,
+    MutationOperation, MutationState, PinnedHost, ProtectedMutationStore, ProvisionDeviceArgument,
+    PukBoxRandomness, PukRotation, Result, RevokeDeviceArgument, Role, SecretSeed,
+    SoftwareProvisionInput, SoftwarePukBoxInput, UserMutationBase, VerifiedUserState, Zeroizing,
+    ENTITY_PUK_VERIFY,
 };
+
+const USER_MUTATION_REQUEST_HASH_TYPE_ID: u64 = 0xc530_72ae_e24c_91d4;
 
 /// Secrets for a software device being provisioned. They must be committed to
 /// the encrypted credential store before the mutation is posted.
 pub struct NewSoftwareDeviceSecrets {
     pub device_seed: SecretSeed,
     pub introduced_puk_seed: Option<SecretSeed>,
-    self_token: Zeroizing<[u8; 17]>,
+    pub(crate) self_token: Zeroizing<[u8; 17]>,
 }
 
 impl NewSoftwareDeviceSecrets {
@@ -68,6 +72,7 @@ impl FoksClient {
         existing: &DeviceCredential,
         request: SoftwareDeviceProvisionRequest,
         secrets: NewSoftwareDeviceSecrets,
+        protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<ProvisionedSoftwareDevice> {
         if request.role == Role::NONE || request.serial == 0 {
             return Err(Error::AccountRequest(
@@ -117,7 +122,7 @@ impl FoksClient {
             .ok_or(Error::AccountRequest("invalid provisioned device name"))?;
         let device_name = DeviceLabelNameAndCommitmentKey {
             label: DeviceLabel {
-                device_type: 0,
+                device_type: DeviceType::Computer,
                 normalized_name,
                 serial: request.serial,
             },
@@ -200,15 +205,25 @@ impl FoksClient {
         if let Some(puk) = material.introduced_puk.as_ref() {
             hepks.push(puk.hepk.clone());
         }
-        let encoded = encode_provision_device_request(&ProvisionDeviceArgument {
+        let encoded = Zeroizing::new(encode_provision_device_request(&ProvisionDeviceArgument {
             link: &material.link,
             puk_boxes: &puk_boxes,
             device_name: &device_name,
             next_tree_location,
             self_token: *secrets.self_token,
             hepks: &hepks,
-        })?;
-        let post_error = self.call_void(host, &host.user, &encoded, existing).err();
+        })?);
+        let operation_id = self.prepare_user_mutation(
+            host,
+            MutationKind::DeviceProvision,
+            authenticated.verified.uid(),
+            &new_device.id,
+            authenticated.verified.chain_seqno() + 1,
+            &encoded,
+            protected_store,
+        )?;
+        let post_error =
+            self.submit_user_mutation(host, existing, operation_id, &encoded, protected_store)?;
         let certificate_chain =
             match self.fetch_device_certificate_chain(host, &existing.uid, &secrets.device_seed) {
                 Ok(chain) => chain,
@@ -225,21 +240,24 @@ impl FoksClient {
                 .iter()
                 .any(|device| device.id == new_device.id && device.role == request.role)
         })?;
+        MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
         Ok(ProvisionedSoftwareDevice {
             credential,
             authenticated,
         })
     }
 
-    /// Revokes a different enrolled device and rotates exactly every PUK role
-    /// the target could read. Rotation seeds must already be caller-durable.
-    pub fn revoke_software_device(
+    /// Revokes a different enrolled user credential with a software signer and
+    /// rotates exactly every PUK role the target could read. Rotation seeds
+    /// must already be caller-durable.
+    pub fn revoke_user_credential_with_software_device(
         &self,
         host: &PinnedHost,
         signer_credential: &DeviceCredential,
         target: &EntityId,
         rotations: &[UserPukRotation],
         no_passphrase: Option<NoPassphraseConfigured>,
+        protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<AuthenticatedUserOutcome> {
         let authenticated = self.authenticate_and_pin(host, signer_credential)?;
         let signer = derive_device_public(&signer_credential.seed)?;
@@ -407,16 +425,29 @@ impl FoksClient {
                     .map(|public| public.hepk)
             })
             .collect::<std::result::Result<Vec<_>, foks_crypto::Error>>()?;
-        let encoded = encode_revoke_device_request(&RevokeDeviceArgument {
+        let encoded = Zeroizing::new(encode_revoke_device_request(&RevokeDeviceArgument {
             link: &link,
             puk_boxes: &puk_boxes,
             seed_chain: &seed_chain,
             next_tree_location,
             hepks: &hepks,
-        })?;
-        let post_error = self
-            .call_void(host, &host.user, &encoded, signer_credential)
-            .err();
+        })?);
+        let operation_id = self.prepare_user_mutation(
+            host,
+            MutationKind::DeviceRevoke,
+            authenticated.verified.uid(),
+            target,
+            authenticated.verified.chain_seqno() + 1,
+            &encoded,
+            protected_store,
+        )?;
+        let post_error = self.submit_user_mutation(
+            host,
+            signer_credential,
+            operation_id,
+            &encoded,
+            protected_store,
+        )?;
         let updated = match self.wait_for_user_transition(host, signer_credential, |user| {
             !user.devices().iter().any(|device| &device.id == target)
         }) {
@@ -438,6 +469,7 @@ impl FoksClient {
                 ));
             }
         }
+        MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
         Ok(updated)
     }
 
@@ -449,6 +481,7 @@ impl FoksClient {
         signer_credential: &DeviceCredential,
         rotations: &[UserPukRotation],
         no_passphrase: Option<NoPassphraseConfigured>,
+        protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<AuthenticatedUserOutcome> {
         let authenticated = self.authenticate_and_pin(host, signer_credential)?;
         let signer = derive_device_public(&signer_credential.seed)?;
@@ -608,16 +641,29 @@ impl FoksClient {
                     .map(|public| public.hepk)
             })
             .collect::<std::result::Result<Vec<_>, foks_crypto::Error>>()?;
-        let encoded = encode_revoke_device_request(&RevokeDeviceArgument {
+        let encoded = Zeroizing::new(encode_revoke_device_request(&RevokeDeviceArgument {
             link: &link,
             puk_boxes: &puk_boxes,
             seed_chain: &seed_chain,
             next_tree_location,
             hepks: &hepks,
-        })?;
-        let post_error = self
-            .call_void(host, &host.user, &encoded, signer_credential)
-            .err();
+        })?);
+        let operation_id = self.prepare_user_mutation(
+            host,
+            MutationKind::PukRotation,
+            authenticated.verified.uid(),
+            authenticated.verified.uid(),
+            authenticated.verified.chain_seqno() + 1,
+            &encoded,
+            protected_store,
+        )?;
+        let post_error = self.submit_user_mutation(
+            host,
+            signer_credential,
+            operation_id,
+            &encoded,
+            protected_store,
+        )?;
         let updated = match self.wait_for_user_transition(host, signer_credential, |user| {
             rotations.iter().all(|rotation| {
                 let Some(expected_generation) = rotation.previous_generation.checked_add(1) else {
@@ -637,10 +683,258 @@ impl FoksClient {
             Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
             Err(error) => return Err(error),
         };
+        MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
         Ok(updated)
     }
 
-    fn wait_for_user_transition(
+    /// Reconciles an interrupted software-device provision. A request is sent
+    /// only while the WAL is still `Prepared`; ambiguous submissions are
+    /// resolved exclusively from the authenticated user chain.
+    pub fn resume_software_device_provision(
+        &self,
+        host: &PinnedHost,
+        existing: &DeviceCredential,
+        operation_id: [u8; 16],
+        new_device_seed: SecretSeed,
+        role: Role,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<ProvisionedSoftwareDevice> {
+        let operation = self.bound_user_mutation(
+            host,
+            operation_id,
+            MutationKind::DeviceProvision,
+            &existing.uid,
+            protected_store,
+        )?;
+        let new_device = derive_device_public(&new_device_seed)?;
+        if operation.subject_id != new_device.id.as_bytes() {
+            return Err(Error::OperationBinding(
+                "device-provision journal targets another credential",
+            ));
+        }
+        let post_error =
+            self.resume_user_mutation_submission(host, existing, &operation, protected_store)?;
+        let certificate_chain =
+            match self.fetch_device_certificate_chain(host, &existing.uid, &new_device_seed) {
+                Ok(chain) => chain,
+                Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
+                Err(error) => return Err(error),
+            };
+        let credential = DeviceCredential {
+            uid: existing.uid.clone(),
+            seed: new_device_seed,
+            certificate_chain,
+        };
+        let authenticated = self.wait_for_user_transition(host, &credential, |user| {
+            user.devices()
+                .iter()
+                .any(|device| device.id == new_device.id && device.role == role)
+        })?;
+        MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
+        Ok(ProvisionedSoftwareDevice {
+            credential,
+            authenticated,
+        })
+    }
+
+    pub fn resume_user_credential_revocation(
+        &self,
+        host: &PinnedHost,
+        signer: &DeviceCredential,
+        operation_id: [u8; 16],
+        target: &EntityId,
+        rotations: &[UserPukRotation],
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<AuthenticatedUserOutcome> {
+        let operation = self.bound_user_mutation(
+            host,
+            operation_id,
+            MutationKind::DeviceRevoke,
+            &signer.uid,
+            protected_store,
+        )?;
+        if operation.subject_id != target.as_bytes() {
+            return Err(Error::OperationBinding(
+                "device-revocation journal targets another credential",
+            ));
+        }
+        let post_error =
+            self.resume_user_mutation_submission(host, signer, &operation, protected_store)?;
+        let updated = match self.wait_for_user_transition(host, signer, |user| {
+            !user.devices().iter().any(|device| &device.id == target)
+                && rotations.iter().all(|rotation| {
+                    let Some(generation) = rotation.previous_generation.checked_add(1) else {
+                        return false;
+                    };
+                    let Ok(verify) =
+                        derive_shared_verify_key(&rotation.new_seed, ENTITY_PUK_VERIFY)
+                    else {
+                        return false;
+                    };
+                    user.shared_key(rotation.role)
+                        .is_some_and(|key| key.generation == generation && key.verify_key == verify)
+                })
+        }) {
+            Ok(updated) => updated,
+            Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
+            Err(error) => return Err(error),
+        };
+        MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
+        Ok(updated)
+    }
+
+    pub fn resume_software_puk_rotation(
+        &self,
+        host: &PinnedHost,
+        signer: &DeviceCredential,
+        operation_id: [u8; 16],
+        rotations: &[UserPukRotation],
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<AuthenticatedUserOutcome> {
+        let operation = self.bound_user_mutation(
+            host,
+            operation_id,
+            MutationKind::PukRotation,
+            &signer.uid,
+            protected_store,
+        )?;
+        let post_error =
+            self.resume_user_mutation_submission(host, signer, &operation, protected_store)?;
+        let updated = match self.wait_for_user_transition(host, signer, |user| {
+            rotations.iter().all(|rotation| {
+                let Some(generation) = rotation.previous_generation.checked_add(1) else {
+                    return false;
+                };
+                let Ok(verify) = derive_shared_verify_key(&rotation.new_seed, ENTITY_PUK_VERIFY)
+                else {
+                    return false;
+                };
+                user.shared_key(rotation.role)
+                    .is_some_and(|key| key.generation == generation && key.verify_key == verify)
+            })
+        }) {
+            Ok(updated) => updated,
+            Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
+            Err(error) => return Err(error),
+        };
+        MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
+        Ok(updated)
+    }
+
+    fn bound_user_mutation(
+        &self,
+        host: &PinnedHost,
+        operation_id: [u8; 16],
+        kind: MutationKind,
+        uid: &EntityId,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<MutationOperation> {
+        let operation = HardStateStore::open(&host.database_path)?
+            .mutation(&operation_id)?
+            .ok_or(Error::OperationBinding("user mutation is not recorded"))?;
+        if operation.kind != kind
+            || operation.host_id != host.host_id().as_bytes()
+            || operation.scope_id != uid.as_bytes()
+            || operation.expected_version.is_none()
+        {
+            return Err(Error::OperationBinding(
+                "user mutation journal binding changed",
+            ));
+        }
+        let request = MutationCoordinator::new(&host.database_path, protected_store)
+            .load_bound_material(&operation)?;
+        if foks_crypto::prefixed_hash(USER_MUTATION_REQUEST_HASH_TYPE_ID, &request)
+            != operation.request_hash
+        {
+            return Err(Error::OperationBinding(
+                "user mutation request fingerprint changed",
+            ));
+        }
+        Ok(operation)
+    }
+
+    fn resume_user_mutation_submission(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        operation: &MutationOperation,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<Option<Error>> {
+        match operation.state {
+            MutationState::Prepared => {
+                let request = MutationCoordinator::new(&host.database_path, protected_store)
+                    .load_bound_material(operation)?;
+                self.submit_user_mutation(
+                    host,
+                    credential,
+                    operation.operation_id,
+                    &request,
+                    protected_store,
+                )
+            }
+            MutationState::Submitting | MutationState::SubmissionUnknown => Ok(None),
+            MutationState::Verified | MutationState::Rejected => {
+                Err(Error::OperationBinding("user mutation is terminal"))
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_user_mutation(
+        &self,
+        host: &PinnedHost,
+        kind: MutationKind,
+        uid: &EntityId,
+        subject: &EntityId,
+        expected_seqno: u64,
+        encoded: &[u8],
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<[u8; 16]> {
+        let operation_id = random_bytes()?;
+        MutationCoordinator::new(&host.database_path, protected_store).prepare(
+            MutationDraft {
+                operation_id,
+                kind,
+                host_id: host.host_id().as_bytes().to_vec(),
+                scope_id: uid.as_bytes().to_vec(),
+                subject_id: subject.as_bytes().to_vec(),
+                expected_version: Some(expected_seqno),
+                request_hash: foks_crypto::prefixed_hash(
+                    USER_MUTATION_REQUEST_HASH_TYPE_ID,
+                    encoded,
+                ),
+            },
+            Zeroizing::new(encoded.to_vec()),
+        )?;
+        Ok(operation_id)
+    }
+
+    fn submit_user_mutation(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        operation_id: [u8; 16],
+        encoded: &[u8],
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<Option<Error>> {
+        MutationCoordinator::new(&host.database_path, protected_store)
+            .begin_submission(&operation_id)?;
+        match self.call_void(host, &host.user, encoded, credential) {
+            Ok(()) => Ok(None),
+            Err(error @ Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) => {
+                MutationCoordinator::new(&host.database_path, protected_store)
+                    .rejected(&operation_id)?;
+                Err(error)
+            }
+            Err(error) => {
+                MutationCoordinator::new(&host.database_path, protected_store)
+                    .submission_unknown(&operation_id)?;
+                Ok(Some(error))
+            }
+        }
+    }
+
+    pub(crate) fn wait_for_user_transition(
         &self,
         host: &PinnedHost,
         credential: &DeviceCredential,

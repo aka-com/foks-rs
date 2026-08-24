@@ -11,6 +11,31 @@ pub(crate) fn verify_merkle_path(
     expected_leaf: Option<&[u8; 32]>,
     expected_root_node: &[u8; 32],
 ) -> Result<()> {
+    let expected = expected_leaf.map_or(ExpectedLeaf::Absent, ExpectedLeaf::Exact);
+    verify_merkle_path_with(path, query_key, expected, expected_root_node)
+}
+
+pub(crate) fn verify_merkle_path_present(
+    path: &MerklePathCompressed,
+    query_key: &[u8; 32],
+    expected_root_node: &[u8; 32],
+) -> Result<()> {
+    verify_merkle_path_with(path, query_key, ExpectedLeaf::Present, expected_root_node)
+}
+
+#[derive(Clone, Copy)]
+enum ExpectedLeaf<'a> {
+    Absent,
+    Exact(&'a [u8; 32]),
+    Present,
+}
+
+fn verify_merkle_path_with(
+    path: &MerklePathCompressed,
+    query_key: &[u8; 32],
+    expected_leaf: ExpectedLeaf<'_>,
+    expected_root_node: &[u8; 32],
+) -> Result<()> {
     let mut bit_cursor = 0usize;
     let mut interiors = Vec::with_capacity(path.edges.len());
     for edge in &path.edges {
@@ -34,8 +59,9 @@ pub(crate) fn verify_merkle_path(
     let mut current = match &path.terminal {
         MerkleTerminal::Leaf { leaf, found_key } => {
             match expected_leaf {
-                Some(expected) if found_key.is_none() && leaf == expected => {}
-                None if found_key.is_some_and(|found| found != *query_key) => {}
+                ExpectedLeaf::Exact(expected) if found_key.is_none() && leaf == expected => {}
+                ExpectedLeaf::Present if found_key.is_none() => {}
+                ExpectedLeaf::Absent if found_key.is_some_and(|found| found != *query_key) => {}
                 _ => return Err(Error::UserMerkleProof),
             }
             if let Some(found) = found_key.as_ref() {
@@ -65,7 +91,7 @@ pub(crate) fn verify_merkle_path(
         } => {
             let prefix_bit_count_usize =
                 usize::try_from(*prefix_bit_count).map_err(|_| Error::UserMerkleProof)?;
-            if expected_leaf.is_some()
+            if !matches!(expected_leaf, ExpectedLeaf::Absent)
                 || usize::try_from(*prefix_bit_start).ok() != Some(bit_cursor)
                 || prefix_matches(query_key, prefix, bit_cursor, prefix_bit_count_usize)
             {

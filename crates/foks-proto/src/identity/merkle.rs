@@ -40,9 +40,43 @@ pub struct NameCommitmentAndKey {
     pub commitment_key: [u8; 16],
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(u64)]
+pub enum DeviceType {
+    Computer = 0,
+    Mobile = 1,
+    YubiKey = 2,
+    Backup = 3,
+    BotToken = 4,
+}
+
+impl DeviceType {
+    pub const fn protocol_value(self) -> u64 {
+        self as u64
+    }
+}
+
+impl TryFrom<u64> for DeviceType {
+    type Error = Error;
+
+    fn try_from(value: u64) -> Result<Self> {
+        match value {
+            0 => Ok(Self::Computer),
+            1 => Ok(Self::Mobile),
+            2 => Ok(Self::YubiKey),
+            3 => Ok(Self::Backup),
+            4 => Ok(Self::BotToken),
+            _ => Err(Error::UnknownEnum {
+                kind: "device type",
+                value,
+            }),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceLabel {
-    pub device_type: u64,
+    pub device_type: DeviceType,
     pub normalized_name: Vec<u8>,
     pub serial: u64,
 }
@@ -73,7 +107,7 @@ pub(crate) fn device_label_name_and_commitment_key(
     let label = array(&disclosed[0], 3)?;
     Ok(DeviceLabelNameAndCommitmentKey {
         label: DeviceLabel {
-            device_type: unsigned(&label[0])?,
+            device_type: DeviceType::try_from(unsigned(&label[0])?)?,
             normalized_name: text(&label[1])?.into_bytes(),
             serial: unsigned(&label[2])?,
         },

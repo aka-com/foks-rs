@@ -1,4 +1,4 @@
-use foks_snowpack::{decode, encode, ErrorKind, Value};
+use foks_snowpack::{decode, encode, encode_ref, ErrorKind, Value, ValueRef};
 
 #[test]
 fn unsigned_integer_boundaries_round_trip() {
@@ -76,6 +76,12 @@ fn variants_have_only_zero_or_one_short_tagged_entry() {
     let long = Value::Variant(Some((vec![b'x'; 32], Box::new(Value::Null))));
     assert_eq!(
         encode(&long).unwrap_err().kind,
+        ErrorKind::InvalidVariantTag
+    );
+    let long_tag = [b'x'; 32];
+    let borrowed = ValueRef::Variant(Some((&long_tag, Box::new(ValueRef::Null))));
+    assert_eq!(
+        encode_ref(&borrowed).unwrap_err().kind,
         ErrorKind::InvalidVariantTag
     );
 }

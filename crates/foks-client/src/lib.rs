@@ -1,8 +1,9 @@
-//! Native FOKS v0.1.9 host, identity, team, and KV client.
+//! Native FOKS v0.1.9 host, identity, recovery, team, and KV client.
 //!
 //! This is deliberately the smallest useful client slice: WebPKI TLS, the
 //! public and authenticated RPC, full host/Merkle/chain verification, atomic
-//! SQLite hard-state advancement, and verified read/write KV soft projections.
+//! SQLite hard-state advancement, backup-key account recovery, and verified
+//! read/write KV soft projections.
 
 #![forbid(unsafe_code)]
 
@@ -11,8 +12,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use foks_client_db::{
-    Acceptance, HardStateStore, KvDirectoryProjection, SignupOperation, SignupOperationState,
-    StoredHostSnapshot,
+    Acceptance, HardStateStore, KvDirectoryProjection, MutationKind, MutationOperation,
+    MutationState, StoredHostSnapshot,
 };
 use foks_crypto::{
     derive_device_public, derive_shared_verify_key, derive_subkey_id, make_software_eldest_link,
@@ -24,7 +25,7 @@ use foks_crypto::{
     YubiDevice,
 };
 use foks_proto::{
-    DeviceLabel, DeviceLabelNameAndCommitmentKey, EntityId, HostchainTail, InviteCode,
+    DeviceLabel, DeviceLabelNameAndCommitmentKey, DeviceType, EntityId, HostchainTail, InviteCode,
     ProvisionDeviceArgument, PukParcel, RevokeDeviceArgument, Role, SecretSeed, ServiceType,
     SharedKeyBoxSet, SoftwareSignupArgument, TreeRoot, UsernameReservation, ENTITY_PUK_VERIFY,
     ENTITY_USER,
@@ -32,7 +33,7 @@ use foks_proto::{
 use foks_rpc::{
     encode_get_client_cert_chain_request_at, encode_get_current_merkle_root_request,
     encode_get_historical_merkle_roots_request, encode_get_puk_for_role_request,
-    encode_load_user_chain_request, encode_merkle_select_vhost_request,
+    encode_load_user_chain_request_from, encode_merkle_select_vhost_request,
     encode_provision_device_request, encode_registration_select_vhost_request,
     encode_reserve_username_request_at, encode_revoke_device_request, encode_signup_request_at,
 };
@@ -40,8 +41,8 @@ use foks_snowpack::{decode, Value};
 use foks_verify::{
     merkle_history_requirements, normalize_device_name, normalize_username, restore_merkle_anchor,
     restore_public_host_identity, restore_verified_team, restore_verified_user,
-    verify_merkle_advance, verify_public_host, verify_user_chain, HostService,
-    VerifiedMerkleAdvance, VerifiedPublicHost, VerifiedTeamState, VerifiedUserState,
+    verify_merkle_advance, verify_public_host, verify_user_chain, verify_user_chain_increment,
+    HostService, VerifiedMerkleAdvance, VerifiedPublicHost, VerifiedTeamState, VerifiedUserState,
 };
 use rustls::pki_types::CertificateDer;
 use thiserror::Error;
@@ -50,6 +51,8 @@ use zeroize::Zeroizing;
 pub const DEFAULT_PROBE_PORT: u16 = 4430;
 const ADHOC_TEAM_OPERATION_ID_TYPE_ID: u64 = 0x556b_51c0_b659_d1c2;
 const ADHOC_TEAM_REQUEST_HASH_TYPE_ID: u64 = 0xc041_ba64_4d2a_161f;
+pub(crate) const TEAM_MUTATION_OPERATION_ID_TYPE_ID: u64 = 0x11ad_72e6_d590_82f1;
+pub(crate) const TEAM_MUTATION_REQUEST_HASH_TYPE_ID: u64 = 0x4d1f_b849_724a_f9c4;
 
 mod account;
 mod auth;
@@ -57,6 +60,10 @@ mod device;
 mod error;
 mod host;
 mod kv;
+mod mutation;
+mod protected_store;
+mod recovery;
+mod scheduler;
 mod team;
 mod transport;
 
@@ -66,6 +73,10 @@ pub use device::*;
 pub use error::*;
 pub use host::*;
 pub use kv::*;
+pub use mutation::*;
+pub use protected_store::*;
+pub use recovery::*;
+pub use scheduler::*;
 pub use team::*;
 pub use transport::*;
 

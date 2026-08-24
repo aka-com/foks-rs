@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 9;
+pub(crate) const VERSION: u32 = 13;
 
 pub(crate) const INITIAL: &str = r#"
 CREATE TABLE hosts (
@@ -125,6 +125,7 @@ CREATE TABLE team_members (
     generation INTEGER NOT NULL CHECK (generation > 0),
     verify_key BLOB NOT NULL CHECK (length(verify_key) = 33),
     hepk_fingerprint BLOB NOT NULL CHECK (length(hepk_fingerprint) = 32),
+    removal_key_commitment BLOB NOT NULL CHECK (length(removal_key_commitment) IN (0, 32)),
     PRIMARY KEY (
         host_id, team_id, party_id, scoped_host_id,
         source_role_type, source_role_visibility
@@ -175,4 +176,71 @@ CREATE TABLE adhoc_team_operations (
     updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
     UNIQUE (host_id, team_id)
 ) STRICT, WITHOUT ROWID;
+
+-- Public crash-recovery journal for named-team creation and later edits.
+-- Names, reservation tokens, PTK seeds, removal keys, and hidden locations
+-- remain exclusively in the caller's encrypted store.
+CREATE TABLE team_mutation_operations (
+    operation_id BLOB PRIMARY KEY CHECK (length(operation_id) = 16),
+    operation_kind INTEGER NOT NULL CHECK (operation_kind BETWEEN 1 AND 3),
+    host_id BLOB NOT NULL REFERENCES hosts(host_id) ON DELETE RESTRICT,
+    actor_id BLOB NOT NULL CHECK (length(actor_id) = 33),
+    device_id BLOB NOT NULL CHECK (length(device_id) IN (33, 34)),
+    team_id BLOB NOT NULL CHECK (length(team_id) = 33),
+    expected_seqno INTEGER NOT NULL CHECK (expected_seqno > 0),
+    request_hash BLOB NOT NULL CHECK (length(request_hash) = 32),
+    state INTEGER NOT NULL CHECK (state BETWEEN 1 AND 5),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    updated_at INTEGER NOT NULL CHECK (updated_at >= created_at)
+) STRICT, WITHOUT ROWID;
+
+-- A live or verified operation reserves a team-chain position. A definitively
+-- rejected or superseded operation remains available for audit without
+-- preventing a corrected mutation against the still-current head.
+CREATE UNIQUE INDEX team_mutation_reserved_position
+ON team_mutation_operations (host_id, team_id, expected_seqno)
+WHERE state IN (1, 2, 3);
+
+-- Generic public write-ahead journal shared by all client mutations. Exact
+-- retry material is referenced by an opaque key and must live in a separate
+-- protected material store; it is never written to this hard-state database.
+CREATE TABLE mutation_operations (
+    operation_id BLOB PRIMARY KEY CHECK (length(operation_id) = 16),
+    operation_kind INTEGER NOT NULL CHECK (operation_kind BETWEEN 1 AND 7),
+    host_id BLOB NOT NULL REFERENCES hosts(host_id) ON DELETE RESTRICT,
+    scope_id BLOB NOT NULL CHECK (length(scope_id) IN (0, 16, 33)),
+    subject_id BLOB NOT NULL CHECK (length(subject_id) IN (0, 16, 33, 34)),
+    expected_version INTEGER CHECK (expected_version IS NULL OR expected_version >= 0),
+    request_hash BLOB NOT NULL CHECK (length(request_hash) = 32),
+    material_ref BLOB NOT NULL CHECK (length(material_ref) BETWEEN 1 AND 255),
+    material_hash BLOB NOT NULL CHECK (length(material_hash) = 32),
+    state INTEGER NOT NULL CHECK (state BETWEEN 1 AND 5),
+    attempt_count INTEGER NOT NULL CHECK (attempt_count >= 0),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    updated_at INTEGER NOT NULL CHECK (updated_at >= created_at)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX mutation_operations_pending
+ON mutation_operations (host_id, state, updated_at)
+WHERE state IN (1, 2, 3);
+
+-- Durable application scheduling metadata. Credentials and job payloads stay
+-- outside this public hard-state database; the scope only identifies the
+-- application-owned account or reconciliation target.
+CREATE TABLE scheduled_jobs (
+    job_id BLOB PRIMARY KEY CHECK (length(job_id) = 16),
+    job_kind INTEGER NOT NULL CHECK (job_kind IN (1, 2)),
+    host_id BLOB NOT NULL REFERENCES hosts(host_id) ON DELETE CASCADE,
+    scope_id BLOB NOT NULL CHECK (length(scope_id) IN (0, 16, 33, 34)),
+    interval_micros INTEGER NOT NULL CHECK (interval_micros > 0),
+    next_run_at INTEGER NOT NULL CHECK (next_run_at >= 0),
+    failure_count INTEGER NOT NULL CHECK (failure_count >= 0),
+    lease_until INTEGER CHECK (lease_until IS NULL OR lease_until >= 0),
+    last_completed_at INTEGER CHECK (last_completed_at IS NULL OR last_completed_at >= 0),
+    last_error TEXT,
+    updated_at INTEGER NOT NULL CHECK (updated_at >= 0)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX scheduled_jobs_due
+ON scheduled_jobs (next_run_at, job_id);
 "#;

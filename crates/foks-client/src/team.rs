@@ -1,14 +1,22 @@
 //! Team loading, PTK recovery, ad-hoc creation, and reconciliation.
 
+mod bearer;
+mod membership;
+mod named;
+mod rotation;
+
+pub use membership::*;
+pub use named::*;
+pub use rotation::*;
+
 use std::time::Duration;
 
 use foks_client_db::{Acceptance, AdHocTeamOperation, AdHocTeamOperationState, HardStateStore};
 use foks_crypto::{
-    adhoc_team_id_from_admin_seed, derive_device_public, derive_subkey_id,
+    adhoc_team_id_from_admin_seed, derive_device_public, derive_subkey_id, hepk_fingerprint,
     make_single_owner_adhoc_team, make_single_owner_adhoc_team_yubi, open_shared_key_parcel_with,
     open_shared_key_seed_chain, prefixed_hash, seal_shared_key_boxes, sign_shared_key_typed,
-    AdHocTeamInput, AdHocTeamMaterial, HybridSecretDecapsulator, PukBoxRandomness,
-    SharedKeyBoxInput, SharedKeyDecapsulator,
+    AdHocTeamInput, AdHocTeamMaterial, PukBoxRandomness, SharedKeyBoxInput, SharedKeyDecapsulator,
 };
 use foks_proto::{
     ActivatedTeamView, AdHocTeamCreateArgument, EntityId, HostConfig, Role, SecretSeed, TeamChain,
@@ -17,10 +25,12 @@ use foks_proto::{
 };
 use foks_rpc::{
     encode_activate_team_view_request, encode_create_adhoc_team_request,
-    encode_get_host_config_request, encode_load_team_chain_request,
+    encode_get_host_config_request, encode_load_team_chain_request_from,
     encode_team_view_challenge_request, STATUS_TX_RETRY_ERROR,
 };
-use foks_verify::{verify_team_chain, VerifiedTeamState, VerifiedUserState};
+use foks_verify::{
+    verify_team_chain, verify_team_chain_increment, VerifiedTeamState, VerifiedUserState,
+};
 
 use crate::{
     current_owner_puk, now_microseconds, random_bytes, user_key_for_seed, AuthenticatedUserOutcome,
@@ -151,7 +161,7 @@ impl FoksClient {
         secrets: &AdHocTeamSecrets,
     ) -> Result<CreatedAdHocTeam> {
         let authenticated_user = self.authenticate_and_pin(host, credential)?;
-        self.require_adhoc_team_policy(host, &credential.seed, &credential.certificate_chain)?;
+        self.require_open_user_viewership(host, &credential.seed, &credential.certificate_chain)?;
         let owner = current_owner_puk(&authenticated_user)?;
         let device_id = derive_device_public(&credential.seed)?.id;
         let device = authenticated_user
@@ -207,7 +217,7 @@ impl FoksClient {
         secrets: &AdHocTeamSecrets,
     ) -> Result<CreatedAdHocTeam> {
         let authenticated_user = self.authenticate_yubi_and_pin(host, credential)?;
-        self.require_adhoc_team_policy(
+        self.require_open_user_viewership(
             host,
             &credential.subkey_seed,
             &credential.certificate_chain,
@@ -260,7 +270,7 @@ impl FoksClient {
         )
     }
 
-    fn require_adhoc_team_policy(
+    fn require_open_user_viewership(
         &self,
         host: &PinnedHost,
         auth_seed: &SecretSeed,
@@ -275,7 +285,7 @@ impl FoksClient {
         )?)?;
         if host_config.user_viewership != ViewershipMode::Open {
             return Err(Error::TeamRequest(
-                "host does not allow open user viewership for ad-hoc teams",
+                "host does not allow open user viewership",
             ));
         }
         Ok(())
@@ -309,7 +319,10 @@ impl FoksClient {
                 generation: 1,
                 role,
                 receiver_id: uid,
+                receiver_host: None,
                 receiver_hepk: &owner_public.hepk,
+                receiver_role: Role::OWNER,
+                receiver_generation: owner.generation,
             })
             .collect::<Vec<_>>();
         let randomness = (0..box_inputs.len())
@@ -664,20 +677,53 @@ impl FoksClient {
         }
 
         let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
+        let prior = self.pinned_team(host, team)?;
+        let (start, name) = match prior.as_ref() {
+            Some(prior) => (
+                prior
+                    .chain_seqno()
+                    .checked_add(1)
+                    .ok_or(Error::TeamBinding("team chain sequence overflow"))?,
+                Some((
+                    prior.team_name(),
+                    prior
+                        .team_name_sequence()
+                        .checked_add(1)
+                        .ok_or(Error::TeamBinding("team name sequence overflow"))?,
+                )),
+            ),
+            None => (1, None),
+        };
         let chain_bytes = self.call_with_material(
             host,
             &host.user,
-            &encode_load_team_chain_request(team, host.host_id(), &activated.token, 1)?,
+            &encode_load_team_chain_request_from(
+                team,
+                host.host_id(),
+                &activated.token,
+                start,
+                name,
+            )?,
             auth_seed,
             certificate_chain,
         )?;
-        let verified = verify_team_chain(
-            &chain_bytes,
-            team,
-            host.host_id(),
-            merkle.authenticated_roots(),
-            &merkle.root().hostchain,
-        )?;
+        let verified = match prior.as_ref() {
+            Some(prior) => verify_team_chain_increment(
+                &chain_bytes,
+                prior,
+                team,
+                host.host_id(),
+                merkle.authenticated_roots(),
+                &merkle.root().hostchain,
+            )?,
+            None => verify_team_chain(
+                &chain_bytes,
+                team,
+                host.host_id(),
+                merkle.authenticated_roots(),
+                &merkle.root().hostchain,
+            )?,
+        };
         let member = verified
             .members()
             .iter()
@@ -723,22 +769,21 @@ impl FoksClient {
                     "team PTK role has a missing or duplicate parcel",
                 ));
             };
-            if parcel.sender.as_bytes()[1..] != source.verify_key.as_bytes()[1..] {
-                return Err(Error::TeamBinding(
-                    "team PTK parcel sender does not match the requesting PUK",
-                ));
-            }
+            let sender_hepk =
+                team_parcel_sender_hepk(parcel, source, verified.members(), &chain.hepks)?;
             let clear = open_shared_key_parcel_with(
                 parcel,
                 &receiver,
-                receiver.hepk(),
+                sender_hepk,
                 &key.verify_key,
                 host.host_id(),
+                source.role,
+                source.generation,
                 key.role,
                 ENTITY_PTK_VERIFY,
             )?;
             ptks.extend(
-                open_shared_key_seed_chain(clear, parcel, verified.team(), host.host_id())?
+                open_shared_key_seed_chain(clear, parcel, uid, host.host_id())?
                     .into_iter()
                     .map(|key| TeamPrivateKey {
                         role: key.role,
@@ -756,5 +801,125 @@ impl FoksClient {
             ptks,
             view_token: activated.token,
         })
+    }
+}
+
+fn team_parcel_sender_hepk<'a>(
+    parcel: &foks_proto::PukParcel,
+    receiver: &'a foks_verify::VerifiedSharedKey,
+    members: &'a [foks_verify::VerifiedTeamMemberState],
+    hepks: &'a [foks_proto::Hepk],
+) -> Result<&'a foks_proto::Hepk> {
+    if parcel.sender == receiver.verify_key {
+        return Ok(&receiver.hepk);
+    }
+    let mut senders = members
+        .iter()
+        .filter(|member| member.verify_key == parcel.sender);
+    let sender = senders.next().ok_or(Error::TeamBinding(
+        "team PTK parcel sender is not in the verified roster",
+    ))?;
+    if senders.next().is_some() {
+        return Err(Error::TeamBinding(
+            "team PTK parcel sender is ambiguous in the verified roster",
+        ));
+    }
+    let mut matched = None;
+    for candidate in hepks {
+        if hepk_fingerprint(candidate)? != sender.hepk_fingerprint {
+            continue;
+        }
+        if matched.replace(candidate).is_some() {
+            return Err(Error::TeamBinding(
+                "team PTK parcel sender HEPK is ambiguous",
+            ));
+        }
+    }
+    matched.ok_or(Error::TeamBinding(
+        "team PTK parcel sender HEPK is unavailable",
+    ))
+}
+
+#[cfg(test)]
+mod parcel_sender_tests {
+    use foks_crypto::{derive_shared_public, hepk_fingerprint};
+    use foks_proto::{EntityId, PukParcel, Role, SecretSeed, SharedKeyBoxSet, UserLink};
+    use foks_snowpack::{decode, Value};
+    use foks_verify::{VerifiedSharedKey, VerifiedTeamMemberState};
+
+    use super::team_parcel_sender_hepk;
+
+    const MUTATION_DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user-mutations";
+    const USER_DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user";
+
+    fn fixture(directory: &str, name: &str) -> Vec<u8> {
+        std::fs::read(format!("{directory}/{name}")).unwrap()
+    }
+
+    fn entity_fixture(name: &str) -> EntityId {
+        match decode(&fixture(MUTATION_DIR, name)).unwrap() {
+            Value::Binary(bytes) => EntityId::from_bytes(bytes).unwrap(),
+            other => panic!("expected entity fixture, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cross_user_ptk_sender_is_resolved_from_authenticated_roster() {
+        let eldest = UserLink::decode(&fixture(MUTATION_DIR, "named-team-link.snowp")).unwrap();
+        let owner_change = eldest.decode_team_group_change().unwrap().changes.remove(0);
+        let actor_seed = SecretSeed::new(fixture(USER_DIR, "puk-seed.bin").try_into().unwrap());
+        let actor = derive_shared_public(&actor_seed, foks_proto::ENTITY_PUK_VERIFY).unwrap();
+        let target_seed = SecretSeed::new(
+            fixture(MUTATION_DIR, "add-member-target-puk-seed.bin")
+                .try_into()
+                .unwrap(),
+        );
+        let target = derive_shared_public(&target_seed, foks_proto::ENTITY_PUK_VERIFY).unwrap();
+        let member = VerifiedTeamMemberState {
+            party: owner_change.party,
+            scoped_host: None,
+            source_role: Role::OWNER,
+            role: Role::OWNER,
+            generation: owner_change.keys.as_ref().unwrap().generation,
+            verify_key: actor.verify_key.clone(),
+            hepk_fingerprint: hepk_fingerprint(&actor.hepk).unwrap(),
+            removal_key_commitment: owner_change.keys.as_ref().unwrap().removal_key_commitment,
+        };
+        let receiver = VerifiedSharedKey {
+            role: Role::OWNER,
+            generation: 3,
+            verify_key: target.verify_key,
+            hepk: target.hepk,
+        };
+        let boxes =
+            SharedKeyBoxSet::decode(&fixture(MUTATION_DIR, "add-member-ptk-boxes.snowp")).unwrap();
+        let boxed = boxes.boxes.first().unwrap();
+        let parcel = PukParcel {
+            generation: boxed.generation,
+            role: boxed.role,
+            hybrid: boxed.hybrid.clone(),
+            target: entity_fixture("add-member-target-uid.snowp"),
+            target_host: None,
+            target_role: boxed.target.role,
+            target_generation: boxed.target.generation,
+            sender: actor.verify_key,
+            box_id: boxes.box_id,
+            temp_dh_key: boxes.temp_dh_key,
+            seed_chain: Vec::new(),
+        };
+        assert_eq!(
+            team_parcel_sender_hepk(
+                &parcel,
+                &receiver,
+                std::slice::from_ref(&member),
+                std::slice::from_ref(&actor.hepk),
+            )
+            .unwrap(),
+            &actor.hepk
+        );
+        assert!(
+            team_parcel_sender_hepk(&parcel, &receiver, std::slice::from_ref(&member), &[],)
+                .is_err()
+        );
     }
 }

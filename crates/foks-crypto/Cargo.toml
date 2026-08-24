@@ -3,24 +3,30 @@ name = "foks-crypto"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "FOKS v0.1.9 hashing and signature verification"
+description = "FOKS v0.1.9 cryptographic protocol primitives"
 
 [dependencies]
+bip39 = { workspace = true }
 crypto_secretbox = { workspace = true }
 ed25519-dalek = { workspace = true }
 foks-proto = { workspace = true }
 foks-snowpack = { workspace = true }
 # FOKS v0.1.9 uses the digest-0.10 RustCrypto API. Keep these independent
 # from AKA's current digest-0.11 workspace line.
+getrandom = { workspace = true }
 hmac = "0.12"
 ml-kem = { workspace = true }
-p256 = { workspace = true }
+p256 = { version = "0.13", features = ["ecdh", "ecdsa"] }
 salsa20 = { workspace = true }
 sha2 = "0.10"
 sha3 = { workspace = true }
 thiserror = { workspace = true }
 x25519-dalek = { workspace = true }
 zeroize = { workspace = true }
+
+[dev-dependencies]
+quickcheck = { version = "1", default-features = false }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

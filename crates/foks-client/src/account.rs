@@ -5,12 +5,16 @@ use super::{
     encode_reserve_username_request_at, encode_signup_request_at, fix_device_name,
     make_software_eldest_link, normalize_device_name, normalize_username, now_microseconds,
     prefixed_hash, random_bytes, seal_initial_puk_box, AuthenticatedUserOutcome, DeviceCredential,
-    DeviceLabel, DeviceLabelNameAndCommitmentKey, Duration, EntityId, Error, FoksClient,
-    HardStateStore, InitialPukBoxRandomness, InviteCode, KvDirectoryProjection, Path, PinnedHost,
-    Result, Role, SecretSeed, SharedKeyBoxSet, SignupOperation, SignupOperationState,
+    DeviceLabel, DeviceLabelNameAndCommitmentKey, DeviceType, Duration, EntityId, Error,
+    FoksClient, HardStateStore, InitialPukBoxRandomness, InviteCode, KvDirectoryProjection,
+    MutationCoordinator, MutationDraft, MutationKind, MutationOperation, MutationState, Path,
+    PinnedHost, ProtectedMutationStore, Result, Role, SecretSeed, SharedKeyBoxSet,
     SoftwareEldestInput, SoftwareEldestMaterial, SoftwareSignupArgument, TreeRoot,
     UsernameReservation, VerifiedMerkleAdvance, Zeroizing, ENTITY_PUK_VERIFY, ENTITY_USER,
 };
+
+const SIGNUP_REQUEST_HASH_TYPE_ID: u64 = 0x8f4b_8ab7_464f_4b53;
+const SIGNUP_MATERIAL_VERSION: u8 = 1;
 
 /// Secret account-creation material. Callers must persist this in their
 /// encrypted credential store before calling `create_software_account`; the
@@ -109,7 +113,7 @@ impl FoksClient {
         let subchain_tree_location = random_bytes()?;
         let device_name = DeviceLabelNameAndCommitmentKey {
             label: DeviceLabel {
-                device_type: 0,
+                device_type: DeviceType::Computer,
                 normalized_name: normalized_device_name,
                 serial: 1,
             },
@@ -193,6 +197,7 @@ impl FoksClient {
         request: SoftwareAccountRequest,
         secrets: SoftwareAccountSecrets,
         soft_database_path: &Path,
+        protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<CreatedSoftwareAccount> {
         let reservation = self.reserve_username(host, &request.username_utf8)?;
         let (_, merkle) = self.advance_merkle_root(host)?;
@@ -200,49 +205,94 @@ impl FoksClient {
             self.prepare_software_account(host, &merkle, &request, reservation, &secrets)?;
         let signup_request =
             self.software_signup_request(&prepared, &request, *secrets.self_token)?;
-        let created_at = now_microseconds()?;
-        let request_hash = prefixed_hash(0x8f4b_8ab7_464f_4b53, &signup_request);
-        let operation = SignupOperation {
-            operation_id: prepared.operation_id,
-            host_id: host.host_id().as_bytes().to_vec(),
-            normalized_username: prepared.normalized_username.clone(),
-            uid: prepared.eldest.uid.as_bytes().to_vec(),
-            device_id: prepared.eldest.device.id.as_bytes().to_vec(),
-            request_hash,
-            state: SignupOperationState::Prepared,
-            created_at,
-            updated_at: created_at,
-        };
-        let mut hard_store = HardStateStore::open(&host.database_path)?;
-        hard_store.record_signup_operation(&operation)?;
-        self.call_void_after_vhost_selection(
+        let request_hash = prefixed_hash(SIGNUP_REQUEST_HASH_TYPE_ID, &signup_request);
+        let material =
+            encode_signup_material(&secrets, &prepared.normalized_username, &signup_request)?;
+        let operation = MutationCoordinator::new(&host.database_path, protected_store).prepare(
+            MutationDraft {
+                operation_id: prepared.operation_id,
+                kind: MutationKind::Signup,
+                host_id: host.host_id().as_bytes().to_vec(),
+                scope_id: prepared.eldest.device.id.as_bytes().to_vec(),
+                subject_id: prepared.eldest.uid.as_bytes().to_vec(),
+                expected_version: None,
+                request_hash,
+            },
+            material,
+        )?;
+        self.submit_or_reconcile_software_account(
             host,
-            &host.registration,
-            &encode_registration_select_vhost_request(host.host_id())?,
-            &signup_request,
-        )?;
-        hard_store.advance_signup_operation(
-            &prepared.operation_id,
-            SignupOperationState::Submitted,
-            now_microseconds()?,
-        )?;
+            operation,
+            Some(signup_request),
+            prepared.normalized_username,
+            secrets,
+            soft_database_path,
+            protected_store,
+        )
+    }
 
+    #[allow(clippy::too_many_arguments)]
+    fn submit_or_reconcile_software_account(
+        &self,
+        host: &PinnedHost,
+        operation: MutationOperation,
+        prepared_request: Option<Zeroizing<Vec<u8>>>,
+        expected_username: Vec<u8>,
+        secrets: SoftwareAccountSecrets,
+        soft_database_path: &Path,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<CreatedSoftwareAccount> {
+        validate_signup_operation_binding(host, &operation, &secrets)?;
+        if operation.state == MutationState::Prepared {
+            let request = prepared_request.ok_or(Error::OperationBinding(
+                "prepared signup is missing its exact request",
+            ))?;
+            if prefixed_hash(SIGNUP_REQUEST_HASH_TYPE_ID, &request) != operation.request_hash {
+                return Err(Error::OperationBinding(
+                    "signup request fingerprint changed",
+                ));
+            }
+            MutationCoordinator::new(&host.database_path, protected_store)
+                .begin_submission(&operation.operation_id)?;
+            if let Err(error) = self.call_void_after_vhost_selection(
+                host,
+                &host.registration,
+                &encode_registration_select_vhost_request(host.host_id())?,
+                &request,
+            ) {
+                let mut coordinator =
+                    MutationCoordinator::new(&host.database_path, protected_store);
+                if matches!(error, Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) {
+                    coordinator.rejected(&operation.operation_id)?;
+                } else {
+                    coordinator.submission_unknown(&operation.operation_id)?;
+                }
+                return Err(error);
+            }
+        } else if !matches!(
+            operation.state,
+            MutationState::Submitting | MutationState::SubmissionUnknown
+        ) {
+            return Err(Error::OperationBinding("signup operation is terminal"));
+        }
+
+        let uid = EntityId::from_bytes(operation.subject_id.clone())?;
         let certificate_chain =
-            self.fetch_device_certificate_chain(host, &prepared.eldest.uid, &secrets.device_seed)?;
+            self.fetch_device_certificate_chain(host, &uid, &secrets.device_seed)?;
         let credential = DeviceCredential {
-            uid: prepared.eldest.uid.clone(),
+            uid,
             seed: secrets.device_seed,
             certificate_chain,
         };
         let authenticated = self.authenticate_new_account(host, &credential)?;
         let supplied_puk = secrets.puk_seed;
-        if authenticated.verified.username() != prepared.normalized_username.as_slice()
+        if authenticated.verified.username() != expected_username
             || authenticated
                 .current_puk()
                 .is_none_or(|key| key.seed != supplied_puk)
         {
             return Err(Error::CredentialBinding(
-                "created account does not match the requested username and PUK",
+                "created account does not match the protected PUK",
             ));
         }
         let kv_projection = {
@@ -252,16 +302,14 @@ impl FoksClient {
                 &authenticated.verified,
                 &authenticated.puks,
                 soft_database_path,
+                protected_store,
             )?;
             session.ensure_root(Role::OWNER, Role::OWNER)?
         };
-        hard_store.advance_signup_operation(
-            &prepared.operation_id,
-            SignupOperationState::Verified,
-            now_microseconds()?,
-        )?;
+        MutationCoordinator::new(&host.database_path, protected_store)
+            .verified(&operation.operation_id)?;
         Ok(CreatedSoftwareAccount {
-            operation_id: prepared.operation_id,
+            operation_id: operation.operation_id,
             credential,
             authenticated,
             kv_projection,
@@ -276,75 +324,55 @@ impl FoksClient {
         &self,
         host: &PinnedHost,
         operation_id: [u8; 16],
-        secrets: SoftwareAccountSecrets,
         soft_database_path: &Path,
+        protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<CreatedSoftwareAccount> {
-        let mut hard_store = HardStateStore::open(&host.database_path)?;
-        let operation = hard_store
-            .signup_operation(&operation_id)?
+        let operation = HardStateStore::open(&host.database_path)?
+            .mutation(&operation_id)?
             .ok_or(Error::AccountRequest("signup operation is not recorded"))?;
-        if operation.host_id != host.host_id().as_bytes() {
-            return Err(Error::OperationBinding(
-                "signup operation belongs to another host",
-            ));
-        }
-        let device = derive_device_public(&secrets.device_seed)?;
-        let puk_verify = derive_shared_verify_key(&secrets.puk_seed, ENTITY_PUK_VERIFY)?;
-        let mut uid_bytes = puk_verify.as_bytes().to_vec();
-        uid_bytes[0] = ENTITY_USER;
-        let uid = EntityId::from_bytes(uid_bytes)?;
-        if operation.uid != uid.as_bytes() || operation.device_id != device.id.as_bytes() {
-            return Err(Error::OperationBinding(
-                "signup operation does not match the supplied credential",
-            ));
-        }
-        let certificate_chain =
-            self.fetch_device_certificate_chain(host, &uid, &secrets.device_seed)?;
-        let credential = DeviceCredential {
-            uid,
-            seed: secrets.device_seed,
-            certificate_chain,
-        };
-        let authenticated = self.authenticate_new_account(host, &credential)?;
-        if authenticated.verified.username() != operation.normalized_username.as_slice()
-            || authenticated
-                .current_puk()
-                .is_none_or(|key| key.seed != secrets.puk_seed)
-        {
-            return Err(Error::CredentialBinding(
-                "resumed account does not match the journaled username and PUK",
-            ));
-        }
-        let kv_projection = {
-            let mut session = self.user_kv_write_session(
-                host,
-                &credential,
-                &authenticated.verified,
-                &authenticated.puks,
-                soft_database_path,
-            )?;
-            session.ensure_root(Role::OWNER, Role::OWNER)?
-        };
-        if operation.state == SignupOperationState::Prepared {
-            hard_store.advance_signup_operation(
-                &operation_id,
-                SignupOperationState::Submitted,
-                now_microseconds()?,
-            )?;
-        }
-        if operation.state != SignupOperationState::Verified {
-            hard_store.advance_signup_operation(
-                &operation_id,
-                SignupOperationState::Verified,
-                now_microseconds()?,
-            )?;
-        }
-        Ok(CreatedSoftwareAccount {
-            operation_id,
-            credential,
-            authenticated,
-            kv_projection,
-        })
+        let material = MutationCoordinator::new(&host.database_path, protected_store)
+            .load_bound_material(&operation)?;
+        let (secrets, expected_username, request) = decode_signup_material(material)?;
+        self.submit_or_reconcile_software_account(
+            host,
+            operation,
+            Some(request),
+            expected_username,
+            secrets,
+            soft_database_path,
+            protected_store,
+        )
+    }
+
+    /// Recovers an interrupted signup when the process died before returning
+    /// its randomly generated operation ID. The retained seeds derive the
+    /// exact public UID and device ID used to locate the journal row; normal
+    /// resume verification then binds the username and current PUK.
+    pub fn resume_software_account_for_credential(
+        &self,
+        host: &PinnedHost,
+        uid: &EntityId,
+        device_id: &EntityId,
+        soft_database_path: &Path,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<CreatedSoftwareAccount> {
+        let operation = HardStateStore::open(&host.database_path)?
+            .pending_mutations(host.host_id().as_bytes())?
+            .into_iter()
+            .find(|operation| {
+                operation.kind == MutationKind::Signup
+                    && operation.subject_id == uid.as_bytes()
+                    && operation.scope_id == device_id.as_bytes()
+            })
+            .ok_or(Error::AccountRequest(
+                "pending signup operation for credential is not recorded",
+            ))?;
+        self.resume_software_account(
+            host,
+            operation.operation_id,
+            soft_database_path,
+            protected_store,
+        )
     }
 
     fn authenticate_new_account(
@@ -363,5 +391,119 @@ impl FoksClient {
             }
         }
         Err(last_error.expect("account authentication loop executes at least once"))
+    }
+}
+
+fn encode_signup_material(
+    secrets: &SoftwareAccountSecrets,
+    normalized_username: &[u8],
+    request: &[u8],
+) -> Result<Zeroizing<Vec<u8>>> {
+    let username_len = u8::try_from(normalized_username.len())
+        .ok()
+        .filter(|length| (3..=25).contains(length))
+        .ok_or(Error::AccountRequest(
+            "normalized signup username is malformed",
+        ))?;
+    let request_len = u32::try_from(request.len())
+        .map_err(|_| Error::AccountRequest("signup request is too large to protect"))?;
+    let mut material = Zeroizing::new(Vec::with_capacity(
+        87 + normalized_username.len() + request.len(),
+    ));
+    material.push(SIGNUP_MATERIAL_VERSION);
+    material.extend_from_slice(secrets.device_seed.as_slice());
+    material.extend_from_slice(secrets.puk_seed.as_slice());
+    material.extend_from_slice(secrets.self_token.as_slice());
+    material.push(username_len);
+    material.extend_from_slice(normalized_username);
+    material.extend_from_slice(&request_len.to_be_bytes());
+    material.extend_from_slice(request);
+    Ok(material)
+}
+
+fn decode_signup_material(
+    material: Zeroizing<Vec<u8>>,
+) -> Result<(SoftwareAccountSecrets, Vec<u8>, Zeroizing<Vec<u8>>)> {
+    const PREFIX: usize = 1 + 32 + 32 + 17 + 1;
+    if material.len() < PREFIX + 4 || material[0] != SIGNUP_MATERIAL_VERSION {
+        return Err(Error::OperationBinding(
+            "protected signup material is malformed",
+        ));
+    }
+    let username_len = usize::from(material[82]);
+    if !(3..=25).contains(&username_len) || material.len() < PREFIX + username_len + 4 {
+        return Err(Error::OperationBinding(
+            "protected signup username is malformed",
+        ));
+    }
+    let request_length_offset = PREFIX + username_len;
+    let request_len = u32::from_be_bytes(
+        material[request_length_offset..request_length_offset + 4]
+            .try_into()
+            .map_err(|_| Error::OperationBinding("protected signup request length is malformed"))?,
+    ) as usize;
+    let request_offset = request_length_offset + 4;
+    if material.len() != request_offset + request_len {
+        return Err(Error::OperationBinding(
+            "protected signup request is truncated",
+        ));
+    }
+    let device_seed = SecretSeed::from_slice(&material[1..33])?;
+    let puk_seed = SecretSeed::from_slice(&material[33..65])?;
+    let self_token: [u8; 17] = material[65..82]
+        .try_into()
+        .map_err(|_| Error::OperationBinding("protected signup token is malformed"))?;
+    let expected_username = material[PREFIX..request_length_offset].to_vec();
+    let request = Zeroizing::new(material[request_offset..].to_vec());
+    Ok((
+        SoftwareAccountSecrets::new(device_seed, puk_seed, self_token),
+        expected_username,
+        request,
+    ))
+}
+
+fn validate_signup_operation_binding(
+    host: &PinnedHost,
+    operation: &MutationOperation,
+    secrets: &SoftwareAccountSecrets,
+) -> Result<()> {
+    if operation.kind != MutationKind::Signup || operation.host_id != host.host_id().as_bytes() {
+        return Err(Error::OperationBinding(
+            "signup operation belongs to another kind or host",
+        ));
+    }
+    let device = derive_device_public(&secrets.device_seed)?;
+    let puk_verify = derive_shared_verify_key(&secrets.puk_seed, ENTITY_PUK_VERIFY)?;
+    let mut uid_bytes = puk_verify.as_bytes().to_vec();
+    uid_bytes[0] = ENTITY_USER;
+    let uid = EntityId::from_bytes(uid_bytes)?;
+    if operation.subject_id != uid.as_bytes() || operation.scope_id != device.id.as_bytes() {
+        return Err(Error::OperationBinding(
+            "signup operation does not match its protected credential",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod material_tests {
+    use super::*;
+
+    #[test]
+    fn signup_material_round_trips_and_rejects_truncation() {
+        let secrets = SoftwareAccountSecrets::new(
+            SecretSeed::new([1; 32]),
+            SecretSeed::new([2; 32]),
+            [3; 17],
+        );
+        let encoded = encode_signup_material(&secrets, b"alice", b"exact signed request").unwrap();
+        let (decoded, username, request) = decode_signup_material(encoded).unwrap();
+        assert_eq!(decoded.device_seed.as_slice(), &[1; 32]);
+        assert_eq!(decoded.puk_seed.as_slice(), &[2; 32]);
+        assert_eq!(decoded.self_token.as_slice(), &[3; 17]);
+        assert_eq!(username, b"alice");
+        assert_eq!(request.as_slice(), b"exact signed request");
+
+        assert!(decode_signup_material(Zeroizing::new(vec![1; 85])).is_err());
     }
 }

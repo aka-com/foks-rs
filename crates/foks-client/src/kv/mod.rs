@@ -7,12 +7,18 @@ use foks_proto::{KvNodeId, KvParty, Role, SecretSeed};
 use foks_rpc::KvAuth;
 
 use self::rpc::KvConnection;
-use crate::{FoksClient, PinnedHost};
+use crate::{FoksClient, PinnedHost, ProtectedMutationStore};
 
 mod rpc;
 mod support;
 mod sync;
 mod write;
+
+// FOKS v0.1.9 applies the same limits to both sides of the large-file
+// protocol. Keep them in one place so a file accepted by the writer can
+// always be reconstructed by a fresh synchronization.
+pub(crate) const MAX_KV_FILE_BYTES: u64 = 1024 * 1024 * 1024;
+pub(crate) const MAX_KV_UPLOAD_CHUNK: usize = 4 * 1024 * 1024;
 
 #[cfg(test)]
 pub(crate) use rpc::KvRequest;
@@ -56,6 +62,7 @@ pub struct KvWriteSession<'a> {
     party: KvParty,
     auth: OwnedKvAuth,
     private_keys: Vec<KvPrivateKeyRef<'a>>,
+    protected_store: &'a mut dyn ProtectedMutationStore,
     soft_database_path: PathBuf,
     connection: KvConnection,
 }

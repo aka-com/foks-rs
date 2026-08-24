@@ -130,8 +130,8 @@
     },
     {
       "file": "merkle-current-root-request.frame",
-      "bytes": 72,
-      "sha256": "13fe5b0f0548d47fbd18a0552c1af33061f3ea4a5ea457acb98d8bb6a9f316f2"
+      "bytes": 73,
+      "sha256": "8652a1897ad4d6465ac3cd92a42c0278d2286b71ee39ef68eaa8e222d315a8f4"
     },
     {
       "file": "merkle-historical-roots-request.frame",

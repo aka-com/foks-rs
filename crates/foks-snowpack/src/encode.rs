@@ -1,4 +1,4 @@
-use crate::{Error, ErrorKind, PathSegment, Value, MAX_DEPTH};
+use crate::{Error, ErrorKind, PathSegment, Value, ValueRef, MAX_DEPTH};
 
 pub fn encode(value: &Value) -> Result<Vec<u8>, Error> {
     let mut encoder = Encoder {
@@ -6,6 +6,19 @@ pub fn encode(value: &Value) -> Result<Vec<u8>, Error> {
         path: Vec::new(),
     };
     encoder.value(value)?;
+    Ok(encoder.output)
+}
+
+/// Encodes a borrowed canonical value.
+///
+/// The returned buffer is not zeroized automatically. Callers encoding
+/// sensitive fields should immediately move it into zeroizing storage.
+pub fn encode_ref(value: &ValueRef<'_>) -> Result<Vec<u8>, Error> {
+    let mut encoder = Encoder {
+        output: Vec::new(),
+        path: Vec::new(),
+    };
+    encoder.value_ref(value)?;
     Ok(encoder.output)
 }
 
@@ -33,6 +46,25 @@ impl Encoder {
             Value::Text(bytes) => self.text(bytes)?,
             Value::Array(values) => self.array(values)?,
             Value::Variant(value) => self.variant(value.as_ref())?,
+        }
+        Ok(())
+    }
+
+    fn value_ref(&mut self, value: &ValueRef<'_>) -> Result<(), Error> {
+        if self.path.len() > MAX_DEPTH {
+            return Err(self.error(ErrorKind::DepthLimit));
+        }
+        match value {
+            ValueRef::Value(value) => self.value(value)?,
+            ValueRef::Null => self.output.push(0xc0),
+            ValueRef::Bool(false) => self.output.push(0xc2),
+            ValueRef::Bool(true) => self.output.push(0xc3),
+            ValueRef::Unsigned(value) => self.unsigned(*value),
+            ValueRef::Negative(value) => self.negative(*value)?,
+            ValueRef::Binary(bytes) => self.binary(bytes)?,
+            ValueRef::Text(bytes) => self.text(bytes)?,
+            ValueRef::Array(values) => self.array_ref(values)?,
+            ValueRef::Variant(value) => self.variant_ref(value.as_ref())?,
         }
         Ok(())
     }
@@ -105,7 +137,29 @@ impl Encoder {
     }
 
     fn array(&mut self, values: &[Value]) -> Result<(), Error> {
-        match values.len() {
+        self.array_header(values.len())?;
+        for (index, value) in values.iter().enumerate() {
+            self.path.push(PathSegment::Index(index));
+            let result = self.value(value);
+            self.path.pop();
+            result?;
+        }
+        Ok(())
+    }
+
+    fn array_ref(&mut self, values: &[ValueRef<'_>]) -> Result<(), Error> {
+        self.array_header(values.len())?;
+        for (index, value) in values.iter().enumerate() {
+            self.path.push(PathSegment::Index(index));
+            let result = self.value_ref(value);
+            self.path.pop();
+            result?;
+        }
+        Ok(())
+    }
+
+    fn array_header(&mut self, length: usize) -> Result<(), Error> {
+        match length {
             0 => return Err(self.error(ErrorKind::EmptyArray)),
             length @ 1..=15 => self.output.push(0x90 | length as u8),
             length @ 16..=65_535 => {
@@ -118,12 +172,6 @@ impl Encoder {
                 self.output.push(0xdd);
                 self.output.extend(length.to_be_bytes());
             }
-        }
-        for (index, value) in values.iter().enumerate() {
-            self.path.push(PathSegment::Index(index));
-            let result = self.value(value);
-            self.path.pop();
-            result?;
         }
         Ok(())
     }
@@ -140,6 +188,22 @@ impl Encoder {
         self.output.extend(tag);
         self.path.push(PathSegment::Variant(tag.clone()));
         let result = self.value(value);
+        self.path.pop();
+        result
+    }
+
+    fn variant_ref(&mut self, value: Option<&(&[u8], Box<ValueRef<'_>>)>) -> Result<(), Error> {
+        let Some((tag, value)) = value else {
+            self.output.push(0x80);
+            return Ok(());
+        };
+        if tag.len() > 31 {
+            return Err(self.error(ErrorKind::InvalidVariantTag));
+        }
+        self.output.extend([0x81, 0xa0 | tag.len() as u8]);
+        self.output.extend(*tag);
+        self.path.push(PathSegment::Variant(tag.to_vec()));
+        let result = self.value_ref(value);
         self.path.pop();
         result
     }
@@ -214,5 +278,25 @@ mod tests {
             let encoded = encode(&Value::Array(values)).unwrap();
             assert_eq!(&encoded[..3], &[0xdc, 0, length as u8]);
         }
+    }
+
+    #[test]
+    fn borrowed_values_match_owned_encoding() {
+        let owned = Value::Array(vec![
+            Value::Unsigned(7),
+            Value::Binary(vec![1, 2, 3]),
+            Value::Variant(Some((
+                b"x".to_vec(),
+                Box::new(Value::Text(b"sensitive".to_vec())),
+            ))),
+        ]);
+        let borrowed = ValueRef::from(&owned);
+        assert_eq!(encode_ref(&borrowed).unwrap(), encode(&owned).unwrap());
+
+        let secret = [9_u8; 32];
+        assert_eq!(
+            encode_ref(&ValueRef::Binary(&secret)).unwrap(),
+            encode(&Value::Binary(secret.to_vec())).unwrap()
+        );
     }
 }

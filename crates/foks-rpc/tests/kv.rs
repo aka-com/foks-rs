@@ -1,6 +1,6 @@
 use foks_proto::{
-    KvDirectoryPair, KvDirent, KvLargeFileMetadata, KvListResponse, KvNodeId, KvPathVersionVector,
-    KvRoot, KvSmallFileBox, KvUploadChunk,
+    KvDirectoryPair, KvDirectoryVersion, KvDirent, KvLargeFileMetadata, KvListResponse, KvNodeId,
+    KvPathVersionVector, KvRoot, KvSmallFileBox, KvUploadChunk,
 };
 use foks_rpc::{
     encode_kv_cache_check_request, encode_kv_file_upload_chunk_request_at,
@@ -79,6 +79,46 @@ fn personal_auth_and_pagination_are_canonical() {
     .unwrap();
     assert!(!frame.is_empty());
     assert!(encode_kv_get_node_request(KvAuth::User, KvNodeId([3u8; 17])).is_ok());
+}
+
+#[test]
+fn empty_cache_version_lists_use_canonical_nulls() {
+    let no_directories = KvPathVersionVector {
+        root_version: 1,
+        directories: Vec::new(),
+    };
+    assert!(encode_kv_cache_check_request(KvAuth::User, &no_directories).is_ok());
+
+    let empty_directory = KvPathVersionVector {
+        root_version: 1,
+        directories: vec![KvDirectoryVersion {
+            id: [7; 16],
+            version: 1,
+            entries: Vec::new(),
+        }],
+    };
+    assert!(encode_kv_cache_check_request(KvAuth::User, &empty_directory).is_ok());
+    assert_eq!(
+        KvPathVersionVector::decode(&empty_directory.encode().unwrap()).unwrap(),
+        empty_directory
+    );
+}
+
+#[test]
+fn listed_dirents_bind_the_request_parent() {
+    let listing = KvListResponse::decode(&fixture("kv-list.snowp")).unwrap();
+    let expected_parent = [0xabu8; 16];
+    let mut entry = listing.entries[0].clone();
+    entry.parent = [0; 16];
+    entry.bind_list_parent(expected_parent).unwrap();
+    assert_eq!(entry.parent, expected_parent);
+    assert_eq!(
+        KvDirent::decode(entry.encoded()).unwrap().parent,
+        expected_parent
+    );
+
+    entry.parent = [0x42; 16];
+    assert!(entry.bind_list_parent(expected_parent).is_err());
 }
 
 #[test]

@@ -1108,7 +1108,12 @@ func writeUserFixtures(output string, address proto.TCPAddr, hostID proto.HostID
 	if err != nil {
 		return err
 	}
-	currentRootFrame, err := rpcRequestFrameAt(rem.MerkleQueryProtocolID, 2, hostID.Export(), 1)
+	currentRootFrame, err := rpcRequestFrameAt(
+		rem.MerkleQueryProtocolID,
+		2,
+		(&rem.GetCurrentRootArg{HostID: &hostID}).Export(),
+		1,
+	)
 	if err != nil {
 		return err
 	}
