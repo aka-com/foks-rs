@@ -1,17 +1,25 @@
 use foks_proto::{
-    AdHocTeamCreateArgument, DeviceLabel, DeviceLabelNameAndCommitmentKey, EntityId, HostConfig,
-    InviteCode, ProvisionDeviceArgument, PukParcel, RevokeDeviceArgument, Role, SecretSeed,
-    SharedKeyBoxSet, SoftwareSignupArgument, TeamChain, TeamViewChallenge, TeamViewRequest,
+    AdHocTeamCreateArgument, AddTeamMemberArgument, DeviceLabel, DeviceLabelNameAndCommitmentKey,
+    DeviceType, EntityId, HostConfig, InviteCode, NamedTeamCreateArgument, ProvisionDeviceArgument,
+    PukParcel, RegistrationChallenge, RemoveTeamMemberArgument, RevokeDeviceArgument, Role,
+    SecretSeed, SeedChainBox, SharedKeyBoxSet, SoftwareSignupArgument, TeamBearerTokenChallenge,
+    TeamChain, TeamRemovalAndCommitment, TeamRemovalBoxData, TeamViewChallenge, TeamViewRequest,
     UserChain, UserLink, UsernameReservation, ViewershipMode, TEAM_VIEW_CHALLENGE_TYPE_ID,
 };
 use foks_rpc::{
-    encode_activate_team_view_request, encode_create_adhoc_team_request,
-    encode_get_client_cert_chain_request, encode_get_client_cert_chain_request_at,
-    encode_get_current_merkle_root_request, encode_get_historical_merkle_roots_request,
-    encode_get_host_config_request, encode_get_owner_puk_request, encode_get_puk_for_role_request,
-    encode_load_team_chain_request, encode_load_user_chain_request,
+    decode_team_bearer_token, decode_team_edit_result, decode_team_removal_key_box,
+    encode_activate_team_bearer_token_request, encode_activate_team_view_request,
+    encode_add_team_member_request, encode_create_adhoc_team_request,
+    encode_create_named_team_request, encode_get_client_cert_chain_request,
+    encode_get_client_cert_chain_request_at, encode_get_current_merkle_root_request,
+    encode_get_historical_merkle_roots_request, encode_get_host_config_request,
+    encode_get_owner_puk_request, encode_get_puk_for_role_request,
+    encode_get_uid_lookup_challenge_request, encode_load_team_chain_request,
+    encode_load_team_removal_key_box_request, encode_load_user_chain_request,
+    encode_lookup_uid_by_device_request, encode_make_team_bearer_token_request,
     encode_merkle_select_vhost_request, encode_provision_device_request,
-    encode_registration_select_vhost_request, encode_reserve_username_request_at,
+    encode_registration_select_vhost_request, encode_remove_team_member_request,
+    encode_reserve_team_name_request, encode_reserve_username_request_at,
     encode_revoke_device_request, encode_signup_request_at, encode_team_view_challenge_request,
 };
 use foks_snowpack::{decode, encode, Value};
@@ -142,6 +150,230 @@ fn host_config_request_matches_go_v019() {
 }
 
 #[test]
+fn named_team_requests_match_go_v019() {
+    assert_eq!(
+        encode_reserve_team_name_request(b"auditteam").unwrap(),
+        mutation_fixture("named-reserve-request.frame")
+    );
+    let reservation =
+        UsernameReservation::decode(&mutation_fixture("named-reservation.snowp")).unwrap();
+    let link = UserLink::decode(&mutation_fixture("named-team-link.snowp")).unwrap();
+    let membership = UserLink::decode(&mutation_fixture("named-membership-link.snowp")).unwrap();
+    let boxes = SharedKeyBoxSet::decode(&mutation_fixture("adhoc-box-set.snowp")).unwrap();
+    let removal =
+        TeamRemovalBoxData::decode(&mutation_fixture("named-removal-boxes.snowp")).unwrap();
+    let hepks = [
+        "adhoc-ptk-member-min-seed.bin",
+        "adhoc-ptk-member-seed.bin",
+        "adhoc-ptk-admin-seed.bin",
+        "adhoc-ptk-owner-seed.bin",
+    ]
+    .map(|name| {
+        let seed = SecretSeed::new(mutation_fixture(name).try_into().unwrap());
+        foks_crypto::derive_shared_public(&seed, foks_proto::ENTITY_PTK_VERIFY)
+            .unwrap()
+            .hepk
+    });
+    let actual = encode_create_named_team_request(&NamedTeamCreateArgument {
+        name_utf8: b"AuditTeam",
+        team_name_commitment_key: mutation_fixture("named-team-name-commitment-key.bin")
+            .try_into()
+            .unwrap(),
+        subchain_tree_location: mutation_fixture("named-subchain-tree-location.bin")
+            .try_into()
+            .unwrap(),
+        reservation: &reservation,
+        link: &link,
+        next_tree_location: mutation_fixture("named-next-tree-location.bin")
+            .try_into()
+            .unwrap(),
+        ptk_boxes: &boxes,
+        removal_keys: &[removal],
+        hepks: &hepks,
+        membership_link: &membership,
+        membership_next_tree_location: mutation_fixture("named-membership-next-tree-location.bin")
+            .try_into()
+            .unwrap(),
+    })
+    .unwrap();
+    assert_eq!(actual, mutation_fixture("named-create-request.frame"));
+}
+
+#[test]
+fn additive_team_edit_matches_go_v019() {
+    let link = UserLink::decode(&mutation_fixture("add-member-link.snowp")).unwrap();
+    let boxes = SharedKeyBoxSet::decode(&mutation_fixture("add-member-ptk-boxes.snowp")).unwrap();
+    let removal =
+        TeamRemovalBoxData::decode(&mutation_fixture("add-member-removal-boxes.snowp")).unwrap();
+    let target_seed = SecretSeed::new(
+        mutation_fixture("add-member-target-puk-seed.bin")
+            .try_into()
+            .unwrap(),
+    );
+    let target =
+        foks_crypto::derive_shared_public(&target_seed, foks_proto::ENTITY_PUK_VERIFY).unwrap();
+    let target_id = match decode(&mutation_fixture("add-member-target-uid.snowp")).unwrap() {
+        Value::Binary(bytes) => EntityId::from_bytes(bytes).unwrap(),
+        other => panic!("expected target UID fixture, got {other:?}"),
+    };
+    let actual = encode_add_team_member_request(&AddTeamMemberArgument {
+        link: &link,
+        next_tree_location: mutation_fixture("add-member-next-tree-location.bin")
+            .try_into()
+            .unwrap(),
+        ptk_boxes: &boxes,
+        removal_keys: &[removal],
+        hepks: std::slice::from_ref(&target.hepk),
+        local_permissions_for: std::slice::from_ref(&target_id),
+    })
+    .unwrap();
+    assert_eq!(actual, mutation_fixture("add-member-request.frame"));
+    assert!(AddTeamMemberArgument {
+        link: &link,
+        next_tree_location: [0; 32],
+        ptk_boxes: &boxes,
+        removal_keys: &[],
+        hepks: std::slice::from_ref(&target.hepk),
+        local_permissions_for: std::slice::from_ref(&target_id),
+    }
+    .encoded()
+    .is_err());
+    assert!(
+        decode_team_edit_result(&mutation_fixture("add-member-edit-result.snowp"))
+            .unwrap()
+            .local_invitees
+            .is_empty()
+    );
+}
+
+#[test]
+fn removal_and_ptk_rotation_edit_matches_go_v019() {
+    let link = UserLink::decode(&mutation_fixture("remove-member-link.snowp")).unwrap();
+    let boxes =
+        SharedKeyBoxSet::decode(&mutation_fixture("remove-member-ptk-boxes.snowp")).unwrap();
+    let seed_chain = [
+        SeedChainBox::decode(&mutation_fixture(
+            "remove-member-seed-chain-member-min.snowp",
+        ))
+        .unwrap(),
+        SeedChainBox::decode(&mutation_fixture("remove-member-seed-chain-member.snowp")).unwrap(),
+    ];
+    let removal =
+        TeamRemovalAndCommitment::decode(&mutation_fixture("remove-member-proof.snowp")).unwrap();
+    assert_eq!(
+        TeamRemovalAndCommitment::decode(&removal.encoded().unwrap()).unwrap(),
+        removal
+    );
+    for boxed in &seed_chain {
+        assert_eq!(
+            SeedChainBox::decode(&boxed.encoded().unwrap()).unwrap(),
+            boxed.clone()
+        );
+    }
+    let hepks = [
+        "remove-member-ptk-member-min-seed.bin",
+        "remove-member-ptk-member-seed.bin",
+    ]
+    .map(|name| {
+        let seed = SecretSeed::new(mutation_fixture(name).try_into().unwrap());
+        foks_crypto::derive_shared_public(&seed, foks_proto::ENTITY_PTK_VERIFY)
+            .unwrap()
+            .hepk
+    });
+    let argument = RemoveTeamMemberArgument {
+        link: &link,
+        next_tree_location: mutation_fixture("remove-member-next-tree-location.bin")
+            .try_into()
+            .unwrap(),
+        ptk_boxes: &boxes,
+        seed_chain: &seed_chain,
+        removals: &[removal],
+        hepks: &hepks,
+    };
+    assert_eq!(
+        encode_remove_team_member_request(&argument).unwrap(),
+        mutation_fixture("remove-member-request.frame")
+    );
+    assert!(RemoveTeamMemberArgument {
+        link: &link,
+        next_tree_location: [0; 32],
+        ptk_boxes: &boxes,
+        seed_chain: &[],
+        removals: &[],
+        hepks: &hepks,
+    }
+    .encoded()
+    .is_err());
+}
+
+#[test]
+fn team_admin_bearer_and_removal_key_requests_match_go_v019() {
+    let team = match decode(&mutation_fixture("named-team-id.snowp")).unwrap() {
+        Value::Binary(bytes) => EntityId::from_bytes(bytes).unwrap(),
+        other => panic!("expected team ID fixture, got {other:?}"),
+    };
+    let user = match decode(&fixture("uid.snowp")).unwrap() {
+        Value::Binary(bytes) => EntityId::from_bytes(bytes).unwrap(),
+        other => panic!("expected user ID fixture, got {other:?}"),
+    };
+    let target = match decode(&mutation_fixture("add-member-target-uid.snowp")).unwrap() {
+        Value::Binary(bytes) => EntityId::from_bytes(bytes).unwrap(),
+        other => panic!("expected target user fixture, got {other:?}"),
+    };
+    let host = UserLink::decode(&mutation_fixture("named-team-link.snowp"))
+        .unwrap()
+        .decode_team_group_change()
+        .unwrap()
+        .host;
+    assert_eq!(
+        encode_make_team_bearer_token_request(&team, Role::OWNER, 1).unwrap(),
+        mutation_fixture("team-bearer-make-request.frame")
+    );
+    let token = decode_team_bearer_token(&mutation_fixture("team-bearer-token.snowp")).unwrap();
+    let challenge = TeamBearerTokenChallenge {
+        user,
+        user_host: host.clone(),
+        team,
+        role: Role::OWNER,
+        generation: 1,
+        token,
+        time: 1_700_000_000_019,
+    };
+    assert_eq!(
+        challenge.encoded_payload().unwrap(),
+        mutation_fixture("team-bearer-challenge-payload.snowp")
+    );
+    assert_eq!(
+        challenge.encoded_blob().unwrap(),
+        mutation_fixture("team-bearer-challenge-blob.snowp")
+    );
+    let seed = SecretSeed::new(
+        mutation_fixture("adhoc-ptk-owner-seed.bin")
+            .try_into()
+            .unwrap(),
+    );
+    let signature = foks_crypto::sign_team_bearer_token_challenge(&seed, &challenge).unwrap();
+    assert_eq!(
+        encode(&signature.to_value()).unwrap(),
+        mutation_fixture("team-bearer-signature.snowp")
+    );
+    assert_eq!(
+        encode_activate_team_bearer_token_request(&challenge, &signature).unwrap(),
+        mutation_fixture("team-bearer-activate-request.frame")
+    );
+    assert_eq!(
+        encode_load_team_removal_key_box_request(&token, &target, &host, Role::OWNER).unwrap(),
+        mutation_fixture("team-removal-key-load-request.frame")
+    );
+    let boxed =
+        decode_team_removal_key_box(&mutation_fixture("team-removal-admin-box.snowp")).unwrap();
+    assert_eq!(
+        boxed.encoded().unwrap(),
+        mutation_fixture("team-removal-admin-box.snowp")
+    );
+}
+
+#[test]
 fn host_config_rejects_unknown_policy_enums() {
     let config = |user_viewership, host_type, invite_code_regime| {
         encode(&Value::Array(vec![
@@ -184,7 +416,7 @@ fn software_signup_requests_match_go_v019() {
             .unwrap(),
         device_name: &DeviceLabelNameAndCommitmentKey {
             label: DeviceLabel {
-                device_type: 0,
+                device_type: DeviceType::Computer,
                 normalized_name: b"signup device".to_vec(),
                 serial: 1,
             },
@@ -270,11 +502,182 @@ fn registration_certificate_request_matches_go_v019() {
 }
 
 #[test]
+fn backup_lookup_requests_match_go_v019() {
+    let backup_id = match decode(&mutation_fixture("backup-entity-id.snowp")).unwrap() {
+        Value::Binary(bytes) => EntityId::from_bytes(bytes).unwrap(),
+        _ => panic!("backup ID fixture is not a blob"),
+    };
+    assert_eq!(
+        encode_get_uid_lookup_challenge_request(&backup_id).unwrap(),
+        mutation_fixture("backup-lookup-challenge-request.frame")
+    );
+    let seed = mutation_fixture("backup-seed.bin").try_into().unwrap();
+    let backup = foks_crypto::BackupKey::from_seed(seed).unwrap();
+    let challenge =
+        RegistrationChallenge::decode(&mutation_fixture("backup-lookup-challenge.snowp")).unwrap();
+    let signature = backup.sign_registration_challenge(&challenge).unwrap();
+    assert_eq!(
+        encode_lookup_uid_by_device_request(&backup_id, &challenge, &signature).unwrap(),
+        mutation_fixture("backup-lookup-request.frame")
+    );
+    let uid = binary_fixture("uid.snowp");
+    assert_eq!(
+        encode_get_client_cert_chain_request_at(&uid, backup_id.as_bytes(), 1).unwrap(),
+        mutation_fixture("backup-cert-request.frame")
+    );
+}
+
+#[test]
+fn backup_provision_requests_match_go_v019() {
+    let backup =
+        foks_crypto::BackupKey::from_seed(mutation_fixture("backup-seed.bin").try_into().unwrap())
+            .unwrap();
+    let backup_name = backup.device_name();
+    let enroll_link = UserLink::decode(&mutation_fixture("backup-enroll-link.snowp")).unwrap();
+    let enroll_boxes =
+        SharedKeyBoxSet::decode(&mutation_fixture("backup-enroll-boxes.snowp")).unwrap();
+    let backup_hepk = foks_proto::Hepk::decode(&mutation_fixture("backup-hepk.snowp")).unwrap();
+    assert_eq!(
+        encode_provision_device_request(&ProvisionDeviceArgument {
+            link: &enroll_link,
+            puk_boxes: &enroll_boxes,
+            device_name: &DeviceLabelNameAndCommitmentKey {
+                label: DeviceLabel {
+                    device_type: DeviceType::Backup,
+                    normalized_name: backup_name.as_bytes().to_vec(),
+                    serial: 1,
+                },
+                normalization_version: 0,
+                display_name: backup_name.into_bytes(),
+                commitment_key: mutation_fixture("backup-enroll-device-name-commitment-key.bin")
+                    .try_into()
+                    .unwrap(),
+            },
+            next_tree_location: mutation_fixture("backup-enroll-next-tree-location.bin")
+                .try_into()
+                .unwrap(),
+            self_token: mutation_fixture("backup-enroll-self-token.bin")
+                .try_into()
+                .unwrap(),
+            hepks: &[backup_hepk],
+        })
+        .unwrap(),
+        mutation_fixture("backup-enroll-request.frame")
+    );
+
+    let recover_link = UserLink::decode(&mutation_fixture("backup-recover-link.snowp")).unwrap();
+    let recover_boxes =
+        SharedKeyBoxSet::decode(&mutation_fixture("backup-recover-boxes.snowp")).unwrap();
+    let replacement_seed = SecretSeed::new(
+        mutation_fixture("backup-recover-device-seed.bin")
+            .try_into()
+            .unwrap(),
+    );
+    let replacement = foks_crypto::derive_device_public(&replacement_seed).unwrap();
+    assert_eq!(
+        encode_provision_device_request(&ProvisionDeviceArgument {
+            link: &recover_link,
+            puk_boxes: &recover_boxes,
+            device_name: &DeviceLabelNameAndCommitmentKey {
+                label: DeviceLabel {
+                    device_type: DeviceType::Computer,
+                    normalized_name: b"recovered fixture device".to_vec(),
+                    serial: 1,
+                },
+                normalization_version: 0,
+                display_name: b"Recovered Fixture Device".to_vec(),
+                commitment_key: mutation_fixture("backup-recover-device-name-commitment-key.bin")
+                    .try_into()
+                    .unwrap(),
+            },
+            next_tree_location: mutation_fixture("backup-recover-next-tree-location.bin")
+                .try_into()
+                .unwrap(),
+            self_token: mutation_fixture("backup-recover-self-token.bin")
+                .try_into()
+                .unwrap(),
+            hepks: &[replacement.hepk],
+        })
+        .unwrap(),
+        mutation_fixture("backup-recover-request.frame")
+    );
+}
+
+#[test]
 fn user_chain_request_matches_go_v019() {
     let uid = binary_fixture("uid.snowp");
     assert_eq!(
         encode_load_user_chain_request(&uid, 1).unwrap(),
         fixture("user-load-request.frame")
+    );
+}
+
+#[test]
+fn incremental_chain_requests_carry_go_v019_name_cursors() {
+    let uid = binary_fixture("uid.snowp");
+    let user_argument = encode(&Value::Array(vec![Value::Array(vec![
+        Value::Binary(uid.clone()),
+        Value::Unsigned(4),
+        Value::Array(vec![
+            Value::Text(b"fixtureuser".to_vec()),
+            Value::Unsigned(2),
+        ]),
+        Value::Array(vec![Value::Unsigned(0), Value::Variant(None)]),
+    ])]))
+    .unwrap();
+    assert_eq!(
+        foks_rpc::encode_load_user_chain_request_from(&uid, 4, Some((b"fixtureuser", 2))).unwrap(),
+        foks_rpc::encode_call(
+            foks_rpc::USER_PROTOCOL_ID,
+            foks_rpc::USER_LOAD_USER_CHAIN_METHOD_POSITION,
+            &user_argument,
+            0,
+        )
+        .unwrap()
+    );
+
+    let team = EntityId::from_bytes(binary_fixture("team-id.snowp")).unwrap();
+    let chain = TeamChain::decode(&fixture("team-chain.snowp")).unwrap();
+    let host = chain.links[0].decode_team_group_change().unwrap().host;
+    let token = [0x5a; 16];
+    let team_argument = encode(&Value::Array(vec![
+        Value::Array(vec![
+            Value::Binary(team.as_bytes().to_vec()),
+            Value::Binary(host.as_bytes().to_vec()),
+        ]),
+        Value::Array(vec![
+            Value::Unsigned(1),
+            Value::Variant(Some((
+                b"0".to_vec(),
+                Box::new(Value::Binary(token.to_vec())),
+            ))),
+        ]),
+        Value::Unsigned(2),
+        Value::Array(vec![
+            Value::Text(b"fixtureteam".to_vec()),
+            Value::Unsigned(2),
+        ]),
+        Value::Null,
+        Value::Bool(false),
+        Value::Bool(false),
+    ]))
+    .unwrap();
+    assert_eq!(
+        foks_rpc::encode_load_team_chain_request_from(
+            &team,
+            &host,
+            &token,
+            2,
+            Some((b"fixtureteam", 2)),
+        )
+        .unwrap(),
+        foks_rpc::encode_call(
+            foks_rpc::TEAM_LOADER_PROTOCOL_ID,
+            foks_rpc::TEAM_LOAD_CHAIN_METHOD_POSITION,
+            &team_argument,
+            0,
+        )
+        .unwrap()
     );
 }
 

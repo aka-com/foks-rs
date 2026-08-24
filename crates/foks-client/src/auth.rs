@@ -3,13 +3,13 @@
 use super::{
     decode, derive_device_public, derive_subkey_id, encode_get_client_cert_chain_request_at,
     encode_get_current_merkle_root_request, encode_get_historical_merkle_roots_request,
-    encode_get_puk_for_role_request, encode_load_user_chain_request,
+    encode_get_puk_for_role_request, encode_load_user_chain_request_from,
     encode_merkle_select_vhost_request, encode_registration_select_vhost_request,
     merkle_history_requirements, open_puk_parcel_for_role, open_puk_parcel_with_for_role,
     open_puk_seed_chain, restore_merkle_anchor, verify_merkle_advance, verify_user_chain,
-    Acceptance, EntityId, Error, FoksClient, HardStateStore, HostchainTail, PinnedHost, PukParcel,
-    Result, Role, SecretSeed, Value, VerifiedMerkleAdvance, VerifiedUserState, YubiDevice,
-    ENTITY_USER,
+    verify_user_chain_increment, Acceptance, EntityId, Error, FoksClient, HardStateStore,
+    HostchainTail, PinnedHost, PukParcel, Result, Role, SecretSeed, Value, VerifiedMerkleAdvance,
+    VerifiedUserState, YubiDevice, ENTITY_USER,
 };
 
 /// Device credential material used for mTLS. The master seed is never written
@@ -47,6 +47,27 @@ pub struct UserPrivateKey {
 impl AuthenticatedUserOutcome {
     pub fn current_puk(&self) -> Option<&UserPrivateKey> {
         self.puks.last()
+    }
+}
+
+type UserChainCursor<'a> = (u64, Option<(&'a [u8], u64)>);
+
+fn user_chain_cursor(prior: Option<&VerifiedUserState>) -> Result<UserChainCursor<'_>> {
+    match prior {
+        Some(prior) => Ok((
+            prior
+                .chain_seqno()
+                .checked_add(1)
+                .ok_or(Error::UserBinding("user chain sequence overflow"))?,
+            Some((
+                prior.username(),
+                prior
+                    .username_sequence()
+                    .checked_add(1)
+                    .ok_or(Error::UserBinding("username sequence overflow"))?,
+            )),
+        )),
+        None => Ok((1, None)),
     }
 }
 
@@ -123,8 +144,14 @@ impl FoksClient {
         Ok(certificates)
     }
 
-    fn load_user_chain(&self, host: &PinnedHost, credential: &DeviceCredential) -> Result<Vec<u8>> {
-        let request = encode_load_user_chain_request(credential.uid.as_bytes(), 1)?;
+    fn load_user_chain(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        prior: Option<&VerifiedUserState>,
+    ) -> Result<Vec<u8>> {
+        let (start, name) = user_chain_cursor(prior)?;
+        let request = encode_load_user_chain_request_from(credential.uid.as_bytes(), start, name)?;
         self.call(host, &host.user, &request, Some(credential))
     }
 
@@ -240,14 +267,25 @@ impl FoksClient {
     ) -> Result<AuthenticatedUserOutcome> {
         let derived = derive_device_public(&credential.seed)?;
         let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
-        let chain_bytes = self.load_user_chain(host, credential)?;
-        let verified = verify_user_chain(
-            &chain_bytes,
-            &credential.uid,
-            &host.host_id,
-            merkle.authenticated_roots(),
-            &merkle.root().hostchain,
-        )?;
+        let prior = self.pinned_user(host, &credential.uid)?;
+        let chain_bytes = self.load_user_chain(host, credential, prior.as_ref())?;
+        let verified = match prior.as_ref() {
+            Some(prior) => verify_user_chain_increment(
+                &chain_bytes,
+                prior,
+                &credential.uid,
+                &host.host_id,
+                merkle.authenticated_roots(),
+                &merkle.root().hostchain,
+            )?,
+            None => verify_user_chain(
+                &chain_bytes,
+                &credential.uid,
+                &host.host_id,
+                merkle.authenticated_roots(),
+                &merkle.root().hostchain,
+            )?,
+        };
         let enrolled = verified
             .devices()
             .iter()
@@ -301,7 +339,9 @@ impl FoksClient {
     ) -> Result<AuthenticatedUserOutcome> {
         let subkey = derive_subkey_id(&credential.subkey_seed)?;
         let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
-        let request = encode_load_user_chain_request(credential.uid.as_bytes(), 1)?;
+        let prior = self.pinned_user(host, &credential.uid)?;
+        let (start, name) = user_chain_cursor(prior.as_ref())?;
+        let request = encode_load_user_chain_request_from(credential.uid.as_bytes(), start, name)?;
         let chain_bytes = self.call_with_material(
             host,
             &host.user,
@@ -309,13 +349,23 @@ impl FoksClient {
             &credential.subkey_seed,
             &credential.certificate_chain,
         )?;
-        let verified = verify_user_chain(
-            &chain_bytes,
-            &credential.uid,
-            &host.host_id,
-            merkle.authenticated_roots(),
-            &merkle.root().hostchain,
-        )?;
+        let verified = match prior.as_ref() {
+            Some(prior) => verify_user_chain_increment(
+                &chain_bytes,
+                prior,
+                &credential.uid,
+                &host.host_id,
+                merkle.authenticated_roots(),
+                &merkle.root().hostchain,
+            )?,
+            None => verify_user_chain(
+                &chain_bytes,
+                &credential.uid,
+                &host.host_id,
+                merkle.authenticated_roots(),
+                &merkle.root().hostchain,
+            )?,
+        };
         let parent = verified
             .devices()
             .iter()

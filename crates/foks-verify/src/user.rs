@@ -3,7 +3,8 @@
 use unicode_normalization::{char::is_combining_mark, UnicodeNormalization as _};
 
 use crate::{
-    commitment, encode, prefixed_hash, verify_hostchain_at_tail, verify_merkle_path, verify_typed,
+    commitment, encode, prefixed_hash, user_transition::user_member_hepk_matches,
+    verify_hostchain_at_tail, verify_merkle_path, verify_merkle_path_present, verify_typed,
     AuthenticatedMerkleRoots, ChangeMetadata, EntityId, Error, Hepk, HostchainTail, Result, Role,
     TreeRoot, UserChain, UserEldest, UserReplayState, UserTransitionRule, Value,
     DEVICE_LABEL_TYPE_ID, ENTITY_ID_MERKLE_VALUE_TYPE_ID, HEPK_TYPE_ID, LINK_OUTER_TYPE_ID,
@@ -398,6 +399,11 @@ pub fn verify_user_chain(
             )?;
             let device_hepk = find_hepk(&chain.hepks, eldest.member_hepk_fingerprint)?;
             let puk_hepk = find_hepk(&chain.hepks, eldest.puk_hepk_fingerprint)?;
+            if !user_member_hepk_matches(&eldest.member, &device_hepk)
+                || puk_hepk.curve25519().is_none()
+            {
+                return Err(Error::UserBinding);
+            }
             replay_state = Some(UserReplayState::from_eldest(
                 VerifiedDevice {
                     id: eldest.member,
@@ -461,6 +467,128 @@ pub fn verify_user_chain(
     })
 }
 
+/// Verifies a server response beginning immediately after an already verified
+/// user-chain tail. Only the returned suffix is replayed, while the resulting
+/// evidence retains every independently authenticated response needed to
+/// reconstruct the state after restart.
+pub fn verify_user_chain_increment(
+    chain_bytes: &[u8],
+    prior: &VerifiedUserState,
+    expected_uid: &EntityId,
+    expected_host: &EntityId,
+    authenticated_roots: &AuthenticatedMerkleRoots,
+    trusted_hostchain: &HostchainTail,
+) -> Result<VerifiedUserState> {
+    if prior.uid != *expected_uid || prior.host != *expected_host {
+        return Err(Error::UserChainContinuity);
+    }
+    let chain = UserChain::decode(chain_bytes)?;
+    if chain.locations.len() != chain.links.len().saturating_add(1)
+        || chain.locations.first() != Some(&prior.next_tree_location)
+    {
+        return Err(Error::UserChainContinuity);
+    }
+    let root_bytes = chain.merkle.encoded_root()?;
+    let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes);
+    if authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
+        || &chain.merkle.root().hostchain != trusted_hostchain
+    {
+        return Err(Error::UntrustedUserRoot);
+    }
+    let (username, username_utf8, username_sequence) =
+        verify_incremental_user_disclosures(&chain, prior, expected_uid, expected_host)?;
+    let path_offset =
+        usize::try_from(chain.num_username_links).map_err(|_| Error::UserMerkleProof)?;
+    let mut replay_state = UserReplayState::from_verified(&prior.devices, &prior.shared_keys);
+    let mut previous_hash = prior.chain_tail_hash;
+    let start_sequence = prior
+        .chain_seqno
+        .checked_add(1)
+        .ok_or(Error::UserChainContinuity)?;
+
+    for (index, ((link, locations), path)) in chain
+        .links
+        .iter()
+        .zip(chain.locations.windows(2))
+        .zip(&chain.merkle.paths()[path_offset..path_offset + chain.links.len()])
+        .enumerate()
+    {
+        let sequence = start_sequence
+            .checked_add(u64::try_from(index).map_err(|_| Error::UserChainContinuity)?)
+            .ok_or(Error::UserChainContinuity)?;
+        let change = link.decode_group_change()?;
+        if change.seqno != sequence
+            || change.previous != Some(previous_hash)
+            || &change.uid != expected_uid
+            || &change.host != expected_host
+            || authenticated_roots.get(&change.root.epoch) != Some(&change.root.hash)
+        {
+            return Err(Error::UserChainContinuity);
+        }
+        let location_wire = encode(&Value::Binary(locations[1].to_vec()))?;
+        if prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire) != change.next_location_commitment {
+            return Err(Error::UserChainContinuity);
+        }
+        let merkle_key = user_merkle_key(expected_uid, sequence, Some(&locations[0]))?;
+        let link_hash = prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?);
+        verify_merkle_path(
+            path,
+            &merkle_key,
+            Some(&link_hash),
+            &chain.merkle.root().root_node,
+        )?;
+        replay_state.replay(link, &change, &chain.hepks, expected_host)?;
+        previous_hash = link_hash;
+    }
+
+    let chain_seqno = prior
+        .chain_seqno
+        .checked_add(u64::try_from(chain.links.len()).map_err(|_| Error::UserChainContinuity)?)
+        .ok_or(Error::UserChainContinuity)?;
+    let next_location = *chain.locations.last().ok_or(Error::UserChainContinuity)?;
+    let next_key = user_merkle_key(
+        expected_uid,
+        chain_seqno
+            .checked_add(1)
+            .ok_or(Error::UserChainContinuity)?,
+        Some(&next_location),
+    )?;
+    verify_merkle_path(
+        chain.merkle.paths().last().ok_or(Error::UserMerkleProof)?,
+        &next_key,
+        None,
+        &chain.merkle.root().root_node,
+    )?;
+    if chain.links.is_empty()
+        && root_hash == prior.merkle_root_hash
+        && username == prior.username
+        && username_sequence == prior.username_sequence
+    {
+        return Ok(prior.clone());
+    }
+    let (devices, shared_keys) = replay_state.into_parts();
+    Ok(VerifiedUserState {
+        uid: expected_uid.clone(),
+        host: expected_host.clone(),
+        chain_tail_hash: previous_hash,
+        merkle_root_hash: root_hash,
+        merkle_epoch: chain.merkle.root().epoch,
+        merkle_root_bytes: root_bytes,
+        authenticated_chain_bytes: append_authenticated_user_chain_bytes(
+            &prior.authenticated_chain_bytes,
+            &chain.links,
+        )?,
+        evidence_bytes: append_user_evidence(&prior.evidence_bytes, chain_bytes)?,
+        chain_seqno,
+        next_tree_location: next_location,
+        username,
+        username_utf8,
+        username_sequence,
+        devices,
+        shared_keys,
+    })
+}
+
 /// Replays persisted user-chain evidence and refuses any projection that is
 /// not reproduced byte-for-byte. This is the only supported path from
 /// untrusted SQLite rows back to a sealed user state.
@@ -471,16 +599,31 @@ pub fn restore_verified_user(
 ) -> Result<VerifiedUserState> {
     let uid = EntityId::from_bytes(persisted.uid.to_vec())?;
     let host = EntityId::from_bytes(persisted.host_id.to_vec())?;
-    let evidence = UserChain::decode(persisted.evidence_bytes)?;
     let hostchain = foks_proto::decode_hostchain(trusted_hostchain_bytes)?;
-    verify_hostchain_at_tail(&hostchain, &evidence.merkle.root().hostchain)?;
-    let verified = verify_user_chain(
-        persisted.evidence_bytes,
+    let segments = user_evidence_segments(persisted.evidence_bytes)?;
+    let mut segments = segments.into_iter();
+    let first = segments.next().ok_or(Error::PersistedUserEvidence)?;
+    let first_chain = UserChain::decode(&first)?;
+    verify_hostchain_at_tail(&hostchain, &first_chain.merkle.root().hostchain)?;
+    let mut verified = verify_user_chain(
+        &first,
         &uid,
         &host,
         authenticated_roots,
-        &evidence.merkle.root().hostchain,
+        &first_chain.merkle.root().hostchain,
     )?;
+    for segment in segments {
+        let chain = UserChain::decode(&segment)?;
+        verify_hostchain_at_tail(&hostchain, &chain.merkle.root().hostchain)?;
+        verified = verify_user_chain_increment(
+            &segment,
+            &verified,
+            &uid,
+            &host,
+            authenticated_roots,
+            &chain.merkle.root().hostchain,
+        )?;
+    }
     let reproduced = verified.hard_state_snapshot()?;
     let reproduced = reproduced.parts();
     if reproduced.host_id != persisted.host_id
@@ -509,6 +652,173 @@ pub(crate) fn authenticated_user_chain_bytes(links: &[foks_proto::UserLink]) -> 
         .map(|link| Ok(foks_snowpack::decode(&link.encoded()?)?))
         .collect::<Result<Vec<_>>>()?;
     Ok(encode(&Value::Array(links))?)
+}
+
+pub(crate) fn append_authenticated_user_chain_bytes(
+    prior: &[u8],
+    links: &[foks_proto::UserLink],
+) -> Result<Vec<u8>> {
+    let Value::Array(mut values) = foks_snowpack::decode(prior)? else {
+        return Err(Error::UserChainContinuity);
+    };
+    values.extend(
+        links
+            .iter()
+            .map(|link| Ok(foks_snowpack::decode(&link.encoded()?)?))
+            .collect::<Result<Vec<_>>>()?,
+    );
+    Ok(encode(&Value::Array(values))?)
+}
+
+pub(crate) fn authenticated_user_chain_link_at(
+    chain: &[u8],
+    index: usize,
+) -> Result<foks_proto::UserLink> {
+    let Value::Array(values) = foks_snowpack::decode(chain)? else {
+        return Err(Error::UserChainContinuity);
+    };
+    let value = values.get(index).ok_or(Error::UserChainContinuity)?;
+    Ok(foks_proto::UserLink::decode(&encode(value)?)?)
+}
+
+fn user_evidence_segments(evidence: &[u8]) -> Result<Vec<Vec<u8>>> {
+    match foks_snowpack::decode(evidence)? {
+        Value::Variant(Some((tag, value))) if tag == b"1" => {
+            let Value::Array(values) = *value else {
+                return Err(Error::UserChainContinuity);
+            };
+            values
+                .into_iter()
+                .map(|value| match value {
+                    Value::Binary(bytes) if !bytes.is_empty() => Ok(bytes),
+                    _ => Err(Error::UserChainContinuity),
+                })
+                .collect()
+        }
+        _ => Ok(vec![evidence.to_vec()]),
+    }
+}
+
+fn append_user_evidence(prior: &[u8], suffix: &[u8]) -> Result<Vec<u8>> {
+    let mut segments = user_evidence_segments(prior)?;
+    while segments.len() > 1
+        && segments
+            .last()
+            .map(|segment| UserChain::decode(segment).map(|chain| chain.links.is_empty()))
+            .transpose()?
+            .unwrap_or(false)
+    {
+        segments.pop();
+    }
+    segments.push(suffix.to_vec());
+    Ok(encode(&Value::Variant(Some((
+        b"1".to_vec(),
+        Box::new(Value::Array(
+            segments.into_iter().map(Value::Binary).collect(),
+        )),
+    ))))?)
+}
+
+fn verify_incremental_user_disclosures(
+    chain: &UserChain,
+    prior: &VerifiedUserState,
+    expected_uid: &EntityId,
+    expected_host: &EntityId,
+) -> Result<(Vec<u8>, Vec<u8>, u64)> {
+    let mut username_commitments = Vec::new();
+    let mut device_name_commitments = Vec::new();
+    for link in &chain.links {
+        for metadata in link.decode_group_change()?.metadata {
+            match metadata {
+                ChangeMetadata::Username(value) => username_commitments.push(value),
+                ChangeMetadata::DeviceName(value) => device_name_commitments.push(value),
+                _ => {}
+            }
+        }
+    }
+    if username_commitments.len() != chain.usernames.len()
+        || device_name_commitments.len() != chain.device_names.len()
+    {
+        return Err(Error::UserDisclosure);
+    }
+    for (disclosed, expected) in chain.usernames.iter().zip(username_commitments) {
+        let wire = encode(&Value::Array(vec![
+            Value::Text(disclosed.name.clone()),
+            Value::Unsigned(disclosed.sequence),
+        ]))?;
+        if commitment(NAME_COMMITMENT_TYPE_ID, &wire, &disclosed.commitment_key) != expected {
+            return Err(Error::UserDisclosure);
+        }
+    }
+    for (disclosed, expected) in chain.device_names.iter().zip(device_name_commitments) {
+        if disclosed.normalization_version != 0
+            || normalize_device_name(&disclosed.display_name).as_deref()
+                != Some(disclosed.label.normalized_name.as_slice())
+        {
+            return Err(Error::UserDisclosure);
+        }
+        let wire = encode(&Value::Array(vec![
+            Value::Unsigned(disclosed.label.device_type.protocol_value()),
+            Value::Text(disclosed.label.normalized_name.clone()),
+            Value::Unsigned(disclosed.label.serial),
+        ]))?;
+        if commitment(DEVICE_LABEL_TYPE_ID, &wire, &disclosed.commitment_key) != expected {
+            return Err(Error::UserDisclosure);
+        }
+    }
+
+    let normalized = normalize_username(&chain.username_utf8).ok_or(Error::UserDisclosure)?;
+    let (username, username_sequence, name_start) = match chain.usernames.last() {
+        Some(last) if last.name == normalized => {
+            let start = if normalized == prior.username {
+                prior
+                    .username_sequence
+                    .checked_add(1)
+                    .ok_or(Error::UserDisclosure)?
+            } else {
+                1
+            };
+            (normalized, last.sequence, start)
+        }
+        None if normalized == prior.username => (
+            prior.username.clone(),
+            prior.username_sequence,
+            prior
+                .username_sequence
+                .checked_add(1)
+                .ok_or(Error::UserDisclosure)?,
+        ),
+        _ => return Err(Error::UserDisclosure),
+    };
+    let path_count =
+        usize::try_from(chain.num_username_links).map_err(|_| Error::UserDisclosure)?;
+    let expected_count = username_sequence
+        .checked_add(2)
+        .and_then(|end| end.checked_sub(name_start))
+        .and_then(|count| usize::try_from(count).ok())
+        .ok_or(Error::UserDisclosure)?;
+    if path_count != expected_count || path_count == 0 {
+        return Err(Error::UserDisclosure);
+    }
+    for (index, path) in chain.merkle.paths()[..path_count].iter().enumerate() {
+        let sequence = name_start
+            .checked_add(u64::try_from(index).map_err(|_| Error::UserDisclosure)?)
+            .ok_or(Error::UserDisclosure)?;
+        let key = username_merkle_key(&username, expected_host, sequence)?;
+        if index + 1 == path_count {
+            verify_merkle_path(path, &key, None, &chain.merkle.root().root_node)?;
+        } else if index + 2 == path_count {
+            verify_merkle_path(
+                path,
+                &key,
+                Some(&username_merkle_leaf(expected_uid)?),
+                &chain.merkle.root().root_node,
+            )?;
+        } else {
+            verify_merkle_path_present(path, &key, &chain.merkle.root().root_node)?;
+        }
+    }
+    Ok((username, chain.username_utf8.clone(), username_sequence))
 }
 
 fn verify_user_disclosures(
@@ -550,7 +860,7 @@ fn verify_user_disclosures(
             return Err(Error::UserDisclosure);
         }
         let wire = encode(&Value::Array(vec![
-            Value::Unsigned(disclosed.label.device_type),
+            Value::Unsigned(disclosed.label.device_type.protocol_value()),
             Value::Text(disclosed.label.normalized_name.clone()),
             Value::Unsigned(disclosed.label.serial),
         ]))?;
@@ -579,17 +889,18 @@ fn verify_user_disclosures(
             .and_then(|index| index.checked_add(1))
             .ok_or(Error::UserDisclosure)?;
         let key = username_merkle_key(&normalized, expected_host, sequence)?;
-        let expected_leaf = if index + 1 == path_count {
-            None
+        if index + 1 == path_count {
+            verify_merkle_path(path, &key, None, &chain.merkle.root().root_node)?;
+        } else if index + 2 == path_count {
+            verify_merkle_path(
+                path,
+                &key,
+                Some(&username_merkle_leaf(expected_uid)?),
+                &chain.merkle.root().root_node,
+            )?;
         } else {
-            Some(username_merkle_leaf(expected_uid)?)
-        };
-        verify_merkle_path(
-            path,
-            &key,
-            expected_leaf.as_ref(),
-            &chain.merkle.root().root_node,
-        )?;
+            verify_merkle_path_present(path, &key, &chain.merkle.root().root_node)?;
+        }
     }
     Ok((normalized, chain.username_utf8.clone(), last_sequence))
 }
@@ -767,4 +1078,151 @@ pub(crate) fn chain_merkle_key(
         location.map_or(Value::Null, |value| Value::Binary(value.to_vec())),
     ]))?;
     Ok(prefixed_hash(MERKLE_TREE_RF_INPUT_TYPE_ID, &encoded))
+}
+
+#[cfg(test)]
+mod incremental_tests {
+    use super::*;
+    use crate::{verify_merkle_advance, verify_public_host};
+
+    const PROBE: &[u8] = include_bytes!(
+        "../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp"
+    );
+    const USER_CHAIN: &[u8] =
+        include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/user-chain.snowp");
+    const USER_ROOT: &[u8] =
+        include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/merkle-root-998.snowp");
+    const USER_HISTORY: &[u8] = include_bytes!(
+        "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/merkle-historical-response.snowp"
+    );
+
+    fn entity_fixture(bytes: &[u8]) -> EntityId {
+        let Value::Binary(bytes) = foks_snowpack::decode(bytes).unwrap() else {
+            panic!("entity fixture is not binary");
+        };
+        EntityId::from_bytes(bytes).unwrap()
+    }
+
+    fn suffix_after_eldest(chain: &UserChain) -> Vec<u8> {
+        let Value::Array(mut fields) = foks_snowpack::decode(USER_CHAIN).unwrap() else {
+            panic!("user chain is not an array");
+        };
+        let Value::Array(links) = fields[0].clone() else {
+            panic!("user links are not an array");
+        };
+        let Value::Array(locations) = fields[1].clone() else {
+            panic!("user locations are not an array");
+        };
+        let Value::Array(device_names) = fields[4].clone() else {
+            panic!("device names are not an array");
+        };
+        let Value::Array(mut merkle) = fields[3].clone() else {
+            panic!("user Merkle evidence is not an array");
+        };
+        let Value::Array(paths) = merkle[1].clone() else {
+            panic!("user Merkle paths are not an array");
+        };
+        let name_paths = usize::try_from(chain.num_username_links).unwrap();
+        let mut suffix_paths = vec![paths[name_paths - 1].clone()];
+        suffix_paths.extend_from_slice(&paths[name_paths + 1..]);
+        merkle[1] = Value::Array(suffix_paths);
+        fields[0] = Value::Array(links[1..].to_vec());
+        fields[1] = Value::Array(locations);
+        fields[2] = Value::Null;
+        fields[3] = Value::Array(merkle);
+        fields[4] = Value::Array(device_names[1..].to_vec());
+        fields[6] = Value::Unsigned(1);
+        encode(&Value::Array(fields)).unwrap()
+    }
+
+    #[test]
+    fn multi_link_suffix_replays_from_trusted_tail_and_rejects_fork() {
+        let chain = UserChain::decode(USER_CHAIN).unwrap();
+        let uid = entity_fixture(include_bytes!(
+            "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/uid.snowp"
+        ));
+        let eldest = chain.links[0].decode_eldest().unwrap();
+        let host = eldest.host.clone();
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let advance = verify_merkle_advance(
+            public.snapshot.merkle_root(),
+            USER_ROOT,
+            USER_HISTORY,
+            &HostchainTail {
+                seqno: public.snapshot.chain_seqno,
+                hash: public.snapshot.chain_tail_hash,
+            },
+        )
+        .unwrap();
+        let final_state = verify_user_chain(
+            USER_CHAIN,
+            &uid,
+            &host,
+            advance.authenticated_roots(),
+            &chain.merkle.root().hostchain,
+        )
+        .unwrap();
+        let replay = UserReplayState::from_eldest(
+            VerifiedDevice {
+                id: eldest.member,
+                role: Role::OWNER,
+                hepk: find_hepk(&chain.hepks, eldest.member_hepk_fingerprint).unwrap(),
+                subkey: eldest.member_subkey,
+            },
+            VerifiedSharedKey {
+                role: Role::OWNER,
+                generation: 1,
+                verify_key: eldest.puk_verify_key,
+                hepk: find_hepk(&chain.hepks, eldest.puk_hepk_fingerprint).unwrap(),
+            },
+        );
+        let (devices, shared_keys) = replay.into_parts();
+        let first_hash = prefixed_hash(LINK_OUTER_TYPE_ID, &chain.links[0].encoded().unwrap());
+        let prior = VerifiedUserState {
+            uid: uid.clone(),
+            host: host.clone(),
+            chain_tail_hash: first_hash,
+            merkle_root_hash: final_state.merkle_root_hash,
+            merkle_epoch: final_state.merkle_epoch,
+            merkle_root_bytes: final_state.merkle_root_bytes.clone(),
+            authenticated_chain_bytes: authenticated_user_chain_bytes(&chain.links[..1]).unwrap(),
+            evidence_bytes: USER_CHAIN.to_vec(),
+            chain_seqno: 1,
+            next_tree_location: chain.locations[0],
+            username: final_state.username.clone(),
+            username_utf8: final_state.username_utf8.clone(),
+            username_sequence: final_state.username_sequence,
+            devices,
+            shared_keys,
+        };
+        let suffix = suffix_after_eldest(&chain);
+        assert_eq!(UserChain::decode(&suffix).unwrap().links.len(), 2);
+        let incremented = verify_user_chain_increment(
+            &suffix,
+            &prior,
+            &uid,
+            &host,
+            advance.authenticated_roots(),
+            &chain.merkle.root().hostchain,
+        )
+        .unwrap();
+        assert_eq!(incremented.chain_seqno, final_state.chain_seqno);
+        assert_eq!(incremented.chain_tail_hash, final_state.chain_tail_hash);
+        assert_eq!(incremented.devices, final_state.devices);
+        assert_eq!(incremented.shared_keys, final_state.shared_keys);
+
+        let mut forked = prior;
+        forked.chain_tail_hash[0] ^= 1;
+        assert!(matches!(
+            verify_user_chain_increment(
+                &suffix,
+                &forked,
+                &uid,
+                &host,
+                advance.authenticated_roots(),
+                &chain.merkle.root().hostchain,
+            ),
+            Err(Error::UserChainContinuity)
+        ));
+    }
 }

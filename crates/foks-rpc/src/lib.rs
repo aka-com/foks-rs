@@ -10,10 +10,12 @@
 use std::io::{Read, Write};
 
 use foks_proto::{
-    AdHocTeamCreateArgument, EntityId, KvDirectory, KvDirent, KvLargeFileMetadata, KvNodeId,
-    KvPathVersionVector, KvSmallFileBox, KvUploadChunk, ProvisionDeviceArgument,
-    RevokeDeviceArgument, Role, Signature, SoftwareSignupArgument, TeamViewChallenge,
-    TeamViewRequest,
+    AdHocTeamCreateArgument, AddTeamMemberArgument, EntityId, KvDirectory, KvDirent,
+    KvLargeFileMetadata, KvNodeId, KvPathVersionVector, KvSmallFileBox, KvUploadChunk,
+    NamedTeamCreateArgument, ProvisionDeviceArgument, RegistrationChallenge,
+    RemoveTeamMemberArgument, RevokeDeviceArgument, Role, Signature, SoftwareSignupArgument,
+    TeamBearerToken, TeamBearerTokenChallenge, TeamEditResult, TeamNameReservation,
+    TeamRemovalKeyBox, TeamViewChallenge, TeamViewRequest,
 };
 use foks_snowpack::{decode, encode, Value};
 use thiserror::Error;
@@ -24,6 +26,8 @@ pub const REG_PROTOCOL_ID: u64 = 0xf7ab_85f3;
 pub const REG_RESERVE_USERNAME_METHOD_POSITION: u64 = 0;
 pub const REG_GET_CLIENT_CERT_CHAIN_METHOD_POSITION: u64 = 1;
 pub const REG_SIGNUP_METHOD_POSITION: u64 = 2;
+pub const REG_GET_UID_LOOKUP_CHALLENGE_METHOD_POSITION: u64 = 6;
+pub const REG_LOOKUP_UID_BY_DEVICE_METHOD_POSITION: u64 = 7;
 pub const REG_SELECT_VHOST_METHOD_POSITION: u64 = 15;
 pub const USER_PROTOCOL_ID: u64 = 0x823f_0899;
 pub const USER_PROVISION_DEVICE_METHOD_POSITION: u64 = 6;
@@ -40,6 +44,12 @@ pub const TEAM_ADMIN_PROTOCOL_ID: u64 = 0xdbe1_ddbe;
 pub const TEAM_GET_VIEW_CHALLENGE_METHOD_POSITION: u64 = 0;
 pub const TEAM_ACTIVATE_VIEW_METHOD_POSITION: u64 = 1;
 pub const TEAM_LOAD_CHAIN_METHOD_POSITION: u64 = 3;
+pub const TEAM_RESERVE_NAME_METHOD_POSITION: u64 = 0;
+pub const TEAM_CREATE_NAMED_METHOD_POSITION: u64 = 1;
+pub const TEAM_EDIT_METHOD_POSITION: u64 = 2;
+pub const TEAM_MAKE_INERT_BEARER_TOKEN_METHOD_POSITION: u64 = 3;
+pub const TEAM_ACTIVATE_BEARER_TOKEN_METHOD_POSITION: u64 = 4;
+pub const TEAM_LOAD_REMOVAL_KEY_BOX_METHOD_POSITION: u64 = 10;
 pub const KV_STORE_PROTOCOL_ID: u64 = 0x8ee3_7b6b;
 pub const KV_MKDIR_METHOD_POSITION: u64 = 0;
 pub const KV_PUT_METHOD_POSITION: u64 = 1;
@@ -72,6 +82,14 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("invalid canonical Snowpack in RPC payload: {0}")]
     Snowpack(#[from] foks_snowpack::Error),
+    #[error(
+        "invalid canonical Snowpack argument for protocol {protocol_id:#010x} method {method_position}: {source}"
+    )]
+    ArgumentSnowpack {
+        protocol_id: u64,
+        method_position: u64,
+        source: foks_snowpack::Error,
+    },
     #[error("invalid FOKS protocol value: {0}")]
     Protocol(#[from] foks_proto::Error),
     #[error("RPC frame length {received} exceeds limit {maximum}")]
@@ -194,8 +212,59 @@ pub fn encode_call(
     argument: &[u8],
     sequence: u64,
 ) -> Result<Vec<u8>> {
-    foks_snowpack::validate(argument)?;
+    foks_snowpack::validate(argument).map_err(|source| Error::ArgumentSnowpack {
+        protocol_id,
+        method_position,
+        source,
+    })?;
     encode_call_with_validated_argument(protocol_id, method_position, argument, sequence)
+}
+
+/// Rewrites only the outer RPC sequence number of a framed call.
+///
+/// The protocol argument bytes are copied verbatim, which preserves signed
+/// payloads while allowing an authenticated connection to serve more than one
+/// request. The complete input envelope is validated before it is rewritten.
+pub fn resequence_call(request: &[u8], sequence: u64, maximum: usize) -> Result<Vec<u8>> {
+    let mut framed = std::io::Cursor::new(request);
+    let content = read_frame(&mut framed, maximum)?;
+    if usize::try_from(framed.position()).ok() != Some(request.len()) {
+        return Err(Error::Envelope {
+            expected: "one complete RPC call frame",
+            found: "trailing data",
+        });
+    }
+    let mut cursor = Cursor::new(&content);
+    if cursor.byte()? != 0x95 {
+        return Err(Error::Envelope {
+            expected: "five-element RPC call array",
+            found: "another MessagePack value",
+        });
+    }
+    if unsigned(cursor.value()?)? != METHOD_CALL_V2 {
+        return Err(Error::Envelope {
+            expected: "RPC call method",
+            found: "another RPC method",
+        });
+    }
+    let _old_sequence = unsigned(cursor.value()?)?;
+    let suffix_start = cursor.position;
+    for _ in 0..3 {
+        cursor.value()?;
+    }
+    if !cursor.done() {
+        return Err(Error::Envelope {
+            expected: "end of RPC call",
+            found: "trailing data",
+        });
+    }
+
+    let mut rewritten = Vec::with_capacity(content.len() + 9);
+    rewritten.push(0x95);
+    encode_unsigned(METHOD_CALL_V2, &mut rewritten);
+    encode_unsigned(sequence, &mut rewritten);
+    rewritten.extend_from_slice(&content[suffix_start..]);
+    frame(&rewritten, maximum)
 }
 
 fn encode_call_with_validated_argument(
@@ -270,11 +339,25 @@ pub fn encode_registration_select_vhost_request(host: &EntityId) -> Result<Vec<u
 
 /// Encodes an authenticated request for a user's chain, starting at `start`.
 pub fn encode_load_user_chain_request(uid: &[u8], start: u64) -> Result<Vec<u8>> {
+    encode_load_user_chain_request_from(uid, start, None)
+}
+
+pub fn encode_load_user_chain_request_from(
+    uid: &[u8],
+    start: u64,
+    current_name: Option<(&[u8], u64)>,
+) -> Result<Vec<u8>> {
     let as_local_user = Value::Array(vec![Value::Unsigned(0), Value::Variant(None)]);
+    let name = current_name.map_or(Value::Null, |(name, next_sequence)| {
+        Value::Array(vec![
+            Value::Text(name.to_vec()),
+            Value::Unsigned(next_sequence),
+        ])
+    });
     let argument = encode(&Value::Array(vec![Value::Array(vec![
         Value::Binary(uid.to_vec()),
         Value::Unsigned(start),
-        Value::Null,
+        name,
         as_local_user,
     ])]))?;
     encode_call(
@@ -315,6 +398,34 @@ pub fn encode_provision_device_request(argument: &ProvisionDeviceArgument<'_>) -
     )
 }
 
+pub fn encode_get_uid_lookup_challenge_request(entity: &EntityId) -> Result<Vec<u8>> {
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_GET_UID_LOOKUP_CHALLENGE_METHOD_POSITION,
+        &encode(&Value::Array(vec![Value::Binary(
+            entity.as_bytes().to_vec(),
+        )]))?,
+        0,
+    )
+}
+
+pub fn encode_lookup_uid_by_device_request(
+    entity: &EntityId,
+    challenge: &RegistrationChallenge,
+    signature: &Signature,
+) -> Result<Vec<u8>> {
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_LOOKUP_UID_BY_DEVICE_METHOD_POSITION,
+        &encode(&Value::Array(vec![
+            Value::Binary(entity.as_bytes().to_vec()),
+            decode(&challenge.encoded()?)?,
+            signature.to_value(),
+        ]))?,
+        0,
+    )
+}
+
 pub fn encode_revoke_device_request(argument: &RevokeDeviceArgument<'_>) -> Result<Vec<u8>> {
     encode_call(
         USER_PROTOCOL_ID,
@@ -326,6 +437,131 @@ pub fn encode_revoke_device_request(argument: &RevokeDeviceArgument<'_>) -> Resu
 
 pub fn encode_create_adhoc_team_request(argument: &AdHocTeamCreateArgument<'_>) -> Result<Vec<u8>> {
     encode_call(TEAM_ADMIN_PROTOCOL_ID, 15, &argument.encoded()?, 0)
+}
+
+pub fn encode_reserve_team_name_request(name: &[u8]) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![Value::Text(name.to_vec())]))?;
+    encode_call(
+        TEAM_ADMIN_PROTOCOL_ID,
+        TEAM_RESERVE_NAME_METHOD_POSITION,
+        &argument,
+        0,
+    )
+}
+
+pub fn decode_team_name_reservation(response: &[u8]) -> Result<TeamNameReservation> {
+    TeamNameReservation::decode(response).map_err(Into::into)
+}
+
+pub fn encode_create_named_team_request(argument: &NamedTeamCreateArgument<'_>) -> Result<Vec<u8>> {
+    encode_call(
+        TEAM_ADMIN_PROTOCOL_ID,
+        TEAM_CREATE_NAMED_METHOD_POSITION,
+        &argument.encoded()?,
+        0,
+    )
+}
+
+pub fn encode_add_team_member_request(argument: &AddTeamMemberArgument<'_>) -> Result<Vec<u8>> {
+    encode_call(
+        TEAM_ADMIN_PROTOCOL_ID,
+        TEAM_EDIT_METHOD_POSITION,
+        &argument.encoded()?,
+        0,
+    )
+}
+
+pub fn encode_remove_team_member_request(
+    argument: &RemoveTeamMemberArgument<'_>,
+) -> Result<Vec<u8>> {
+    encode_call(
+        TEAM_ADMIN_PROTOCOL_ID,
+        TEAM_EDIT_METHOD_POSITION,
+        &argument.encoded()?,
+        0,
+    )
+}
+
+pub fn decode_team_edit_result(response: &[u8]) -> Result<TeamEditResult> {
+    TeamEditResult::decode(response).map_err(Into::into)
+}
+
+pub fn encode_make_team_bearer_token_request(
+    team: &EntityId,
+    role: Role,
+    generation: u64,
+) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![
+        Value::Binary(team.as_bytes().to_vec()),
+        role.to_value(),
+        Value::Unsigned(generation),
+    ]))?;
+    encode_call(
+        TEAM_ADMIN_PROTOCOL_ID,
+        TEAM_MAKE_INERT_BEARER_TOKEN_METHOD_POSITION,
+        &argument,
+        0,
+    )
+}
+
+pub fn decode_team_bearer_token(response: &[u8]) -> Result<TeamBearerToken> {
+    match decode(response)? {
+        Value::Binary(bytes) => bytes.try_into().map_err(|bytes: Vec<u8>| {
+            foks_proto::Error::Length {
+                kind: "team bearer token",
+                expected: 16,
+                found: bytes.len(),
+            }
+            .into()
+        }),
+        other => Err(foks_proto::Error::Type {
+            expected: "binary",
+            found: other.kind(),
+        }
+        .into()),
+    }
+}
+
+pub fn encode_activate_team_bearer_token_request(
+    challenge: &TeamBearerTokenChallenge,
+    signature: &Signature,
+) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![
+        Value::Binary(challenge.encoded_payload()?),
+        signature.to_value(),
+    ]))?;
+    encode_call(
+        TEAM_ADMIN_PROTOCOL_ID,
+        TEAM_ACTIVATE_BEARER_TOKEN_METHOD_POSITION,
+        &argument,
+        0,
+    )
+}
+
+pub fn encode_load_team_removal_key_box_request(
+    token: &TeamBearerToken,
+    member: &EntityId,
+    member_host: &EntityId,
+    source_role: Role,
+) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![
+        Value::Binary(token.to_vec()),
+        Value::Array(vec![
+            Value::Binary(member.as_bytes().to_vec()),
+            Value::Binary(member_host.as_bytes().to_vec()),
+        ]),
+        source_role.to_value(),
+    ]))?;
+    encode_call(
+        TEAM_ADMIN_PROTOCOL_ID,
+        TEAM_LOAD_REMOVAL_KEY_BOX_METHOD_POSITION,
+        &argument,
+        0,
+    )
+}
+
+pub fn decode_team_removal_key_box(response: &[u8]) -> Result<TeamRemovalKeyBox> {
+    TeamRemovalKeyBox::decode(response).map_err(Into::into)
 }
 
 pub fn encode_get_host_config_request() -> Result<Vec<u8>> {
@@ -340,7 +576,7 @@ pub fn encode_get_host_config_request() -> Result<Vec<u8>> {
 }
 
 pub fn encode_get_current_merkle_root_request(host: &EntityId, sequence: u64) -> Result<Vec<u8>> {
-    let argument = encode(&Value::Binary(host.as_bytes().to_vec()))?;
+    let argument = encode(&Value::Array(vec![Value::Binary(host.as_bytes().to_vec())]))?;
     encode_call(
         MERKLE_QUERY_PROTOCOL_ID,
         MERKLE_GET_CURRENT_ROOT_METHOD_POSITION,
@@ -414,6 +650,16 @@ pub fn encode_load_team_chain_request(
     token: &[u8; 16],
     start: u64,
 ) -> Result<Vec<u8>> {
+    encode_load_team_chain_request_from(team, host, token, start, None)
+}
+
+pub fn encode_load_team_chain_request_from(
+    team: &EntityId,
+    host: &EntityId,
+    token: &[u8; 16],
+    start: u64,
+    current_name: Option<(&[u8], u64)>,
+) -> Result<Vec<u8>> {
     let token = Value::Array(vec![
         Value::Unsigned(1),
         Value::Variant(Some((
@@ -428,7 +674,12 @@ pub fn encode_load_team_chain_request(
         ]),
         token,
         Value::Unsigned(start),
-        Value::Null,
+        current_name.map_or(Value::Null, |(name, next_sequence)| {
+            Value::Array(vec![
+                Value::Text(name.to_vec()),
+                Value::Unsigned(next_sequence),
+            ])
+        }),
         Value::Null,
         Value::Bool(false),
         Value::Bool(false),
@@ -945,7 +1196,10 @@ fn decode_data_wrap(bytes: &[u8]) -> Result<Vec<u8>> {
             found: "trailing data",
         });
     }
-    foks_snowpack::validate(&data)?;
+    // RPC results are generated MessagePack structs, not authenticated
+    // Snowpack values as a whole. In particular, v0.1.9 can emit sanctioned
+    // zero-field structs as empty arrays. Type-specific decoders and
+    // verifiers still canonicalize every signed or MACed inner object.
     Ok(data)
 }
 
@@ -1547,7 +1801,10 @@ impl ValueKind for Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_status, Error};
+    use super::{
+        check_status, encode_call, read_frame, resequence_call, unsigned, Cursor, Error,
+        METHOD_CALL_V2,
+    };
 
     #[test]
     fn successful_named_status_must_not_hide_a_payload() {
@@ -1562,5 +1819,30 @@ mod tests {
         // though the canonical RPC success representation is nil.
         let zero = [0x81, 0xa2, b'S', b'c', 0x00];
         check_status(&zero).unwrap();
+    }
+
+    #[test]
+    fn resequencing_preserves_the_exact_protocol_argument() {
+        let argument = foks_snowpack::encode(&foks_snowpack::Value::Binary(
+            b"signed protocol payload".to_vec(),
+        ))
+        .unwrap();
+        let request = encode_call(17, 23, &argument, 0).unwrap();
+        let rewritten = resequence_call(&request, 300, 1024).unwrap();
+        let content = read_frame(&mut std::io::Cursor::new(&rewritten), 1024).unwrap();
+        let mut cursor = Cursor::new(&content);
+        assert_eq!(cursor.byte().unwrap(), 0x95);
+        assert_eq!(unsigned(cursor.value().unwrap()).unwrap(), METHOD_CALL_V2);
+        assert_eq!(unsigned(cursor.value().unwrap()).unwrap(), 300);
+        assert!(content
+            .windows(argument.len())
+            .any(|window| window == argument.as_slice()));
+
+        let mut trailing = request;
+        trailing.push(0);
+        assert!(matches!(
+            resequence_call(&trailing, 1, 1024),
+            Err(Error::Envelope { .. })
+        ));
     }
 }

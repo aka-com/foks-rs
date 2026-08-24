@@ -31,6 +31,13 @@ pub const DEVICE_LABEL_TYPE_ID: u64 = 0x9650_2272_0548_6122;
 pub const NAME_HASH_PREIMAGE_TYPE_ID: u64 = 0xf855_6f05_4c4e_036b;
 pub const ENTITY_ID_MERKLE_VALUE_TYPE_ID: u64 = 0xd3d2_1c7d_c1d6_4ea1;
 pub const TEAM_VIEW_CHALLENGE_TYPE_ID: u64 = 0x9686_1830_ffa9_6bff;
+pub const TEAM_REMOVAL_KEY_TYPE_ID: u64 = 0xb058_740f_e7e9_fdb5;
+pub const TEAM_REMOVAL_KEY_BOX_PAYLOAD_TYPE_ID: u64 = 0xeeae_1230_be48_267f;
+pub const TEAM_REMOVAL_MAC_PAYLOAD_TYPE_ID: u64 = 0x8d00_6be4_2c05_ec34;
+pub const TEAM_BEARER_TOKEN_CHALLENGE_PAYLOAD_TYPE_ID: u64 = 0xa85d_e1ca_0ab0_c9a5;
+pub const TEAM_BEARER_TOKEN_CHALLENGE_BLOB_TYPE_ID: u64 = 0xcd0d_4cba_dda5_0eef;
+pub const REG_CHALLENGE_PAYLOAD_TYPE_ID: u64 = 0x92bb_9122_e9d5_ae59;
+pub const BACKUP_SEED_TYPE_ID: u64 = 0xf4c4_fe8d_ff61_a6dc;
 pub const APP_KEY_DERIVATION_TYPE_ID: u64 = 0x9431_8317_830b_409b;
 pub const KV_KEY_DERIVATION_TYPE_ID: u64 = 0xdbdf_2ba2_9c0d_e2cb;
 pub const KV_DIRENT_NAME_PAYLOAD_TYPE_ID: u64 = 0xb9c1_587f_a732_c2c9;
@@ -50,6 +57,9 @@ pub const ENTITY_YUBI: u8 = 8;
 pub const ENTITY_SUBKEY: u8 = 13;
 pub const ENTITY_PUK_VERIFY: u8 = 14;
 pub const ENTITY_PTK_VERIFY: u8 = 15;
+pub const ENTITY_BACKUP_KEY: u8 = 16;
+pub const ENTITY_PASSPHRASE_KEY: u8 = 17;
+pub const ENTITY_BOT_TOKEN_KEY: u8 = 19;
 pub const ENTITY_AD_HOC_TEAM: u8 = 20;
 
 mod codec;
@@ -73,7 +83,7 @@ pub use service::*;
 
 pub(crate) use codec::{
     array, binary, boolean, device_entity, entity, expect_unsigned, fixed_blob, integer, list,
-    option, text, text_bytes, type_error, unsigned, variant,
+    option, text, type_error, unsigned, user_member_entity, variant,
 };
 
 #[cfg(test)]
@@ -147,6 +157,28 @@ mod tests {
     }
 
     #[test]
+    fn user_chain_members_exclude_passphrase_keys() {
+        for entity_type in [
+            ENTITY_DEVICE,
+            ENTITY_YUBI,
+            ENTITY_BACKUP_KEY,
+            ENTITY_BOT_TOKEN_KEY,
+        ] {
+            let key_bytes = if entity_type == ENTITY_YUBI { 33 } else { 32 };
+            let value = Value::Binary([vec![entity_type], vec![7; key_bytes]].concat());
+            assert_eq!(
+                user_member_entity(&value).unwrap().entity_type(),
+                entity_type
+            );
+        }
+        let passphrase = Value::Binary([vec![ENTITY_PASSPHRASE_KEY], vec![7; 32]].concat());
+        assert!(matches!(
+            user_member_entity(&passphrase),
+            Err(Error::EntityType(ENTITY_PASSPHRASE_KEY))
+        ));
+    }
+
+    #[test]
     fn service_types_are_exact_and_reject_unknown_values() {
         for service in [
             ServiceType::Registration,
@@ -169,6 +201,29 @@ mod tests {
             })
         ));
         assert!(ServiceType::try_from(u64::MAX).is_err());
+    }
+
+    #[test]
+    fn device_types_are_exact_and_reject_unknown_values() {
+        for device_type in [
+            DeviceType::Computer,
+            DeviceType::Mobile,
+            DeviceType::YubiKey,
+            DeviceType::Backup,
+            DeviceType::BotToken,
+        ] {
+            assert_eq!(
+                DeviceType::try_from(device_type.protocol_value()).unwrap(),
+                device_type
+            );
+        }
+        assert!(matches!(
+            DeviceType::try_from(5),
+            Err(Error::UnknownEnum {
+                kind: "device type",
+                value: 5
+            })
+        ));
     }
 
     #[test]

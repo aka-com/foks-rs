@@ -16,10 +16,10 @@ use super::rpc::KvRequest;
 use super::support::{
     kv_key, kv_version_vector, reachable_kv_tree, user_kv_keys, validate_kv_symlink,
 };
-use super::{KvPrivateKeyRef, KvWriteSession, OwnedKvAuth};
+use super::{KvPrivateKeyRef, KvWriteSession, OwnedKvAuth, MAX_KV_FILE_BYTES};
 use crate::{
-    AuthenticatedTeamOutcome, DeviceCredential, Error, FoksClient, PinnedHost, Result,
-    UserPrivateKey, YubiCredential,
+    AuthenticatedTeamOutcome, DeviceCredential, Error, FoksClient, PinnedHost,
+    ProtectedMutationStore, Result, UserPrivateKey, YubiCredential,
 };
 
 impl FoksClient {
@@ -183,6 +183,7 @@ impl FoksClient {
         user: &VerifiedUserState,
         puks: &'a [UserPrivateKey],
         soft_database_path: &Path,
+        protected_store: &'a mut impl ProtectedMutationStore,
     ) -> Result<KvWriteSession<'a>> {
         if user.uid() != &credential.uid || user.host() != host.host_id() {
             return Err(Error::UserBinding(
@@ -204,6 +205,7 @@ impl FoksClient {
             },
             auth: OwnedKvAuth::User,
             private_keys: keys,
+            protected_store,
             soft_database_path: soft_database_path.to_owned(),
             connection,
         })
@@ -216,6 +218,7 @@ impl FoksClient {
         user: &VerifiedUserState,
         puks: &'a [UserPrivateKey],
         soft_database_path: &Path,
+        protected_store: &'a mut impl ProtectedMutationStore,
     ) -> Result<KvWriteSession<'a>> {
         let subkey = derive_subkey_id(&credential.subkey_seed)?;
         if user.uid() != &credential.uid
@@ -245,6 +248,7 @@ impl FoksClient {
             },
             auth: OwnedKvAuth::User,
             private_keys: keys,
+            protected_store,
             soft_database_path: soft_database_path.to_owned(),
             connection,
         })
@@ -256,6 +260,7 @@ impl FoksClient {
         credential: &DeviceCredential,
         team: &'a AuthenticatedTeamOutcome,
         soft_database_path: &Path,
+        protected_store: &'a mut impl ProtectedMutationStore,
     ) -> Result<KvWriteSession<'a>> {
         self.team_kv_write_session_with_material(
             host,
@@ -263,6 +268,7 @@ impl FoksClient {
             &credential.certificate_chain,
             team,
             soft_database_path,
+            protected_store,
         )
     }
 
@@ -272,6 +278,7 @@ impl FoksClient {
         credential: &YubiCredential<'_>,
         team: &'a AuthenticatedTeamOutcome,
         soft_database_path: &Path,
+        protected_store: &'a mut impl ProtectedMutationStore,
     ) -> Result<KvWriteSession<'a>> {
         self.team_kv_write_session_with_material(
             host,
@@ -279,6 +286,7 @@ impl FoksClient {
             &credential.certificate_chain,
             team,
             soft_database_path,
+            protected_store,
         )
     }
 
@@ -289,6 +297,7 @@ impl FoksClient {
         certificate_chain: &[Vec<u8>],
         team: &'a AuthenticatedTeamOutcome,
         soft_database_path: &Path,
+        protected_store: &'a mut impl ProtectedMutationStore,
     ) -> Result<KvWriteSession<'a>> {
         if team.verified.host() != host.host_id() {
             return Err(Error::TeamBinding("KV team state belongs to another host"));
@@ -311,6 +320,7 @@ impl FoksClient {
                     seed: &key.seed,
                 })
                 .collect(),
+            protected_store,
             soft_database_path: soft_database_path.to_owned(),
             connection,
         })
@@ -332,7 +342,6 @@ impl FoksClient {
         const PAGE_SIZE: u64 = 100;
         const MAX_DIRECTORIES: usize = 4096;
         const MAX_PAGES_PER_DIRECTORY: usize = 4096;
-        const MAX_FILE_BYTES: usize = 128 * 1024 * 1024;
         const MAX_FILE_CHUNKS: usize = 4096;
         const MAX_ENTRIES: usize = 100_000;
         const MAX_TOTAL_CONTENT_BYTES: usize = 512 * 1024 * 1024;
@@ -403,7 +412,9 @@ impl FoksClient {
                 let mut visited = BTreeSet::new();
                 let mut projections = Vec::new();
                 let mut total_entries = 0usize;
-                let mut total_content_bytes = 0usize;
+                // Large files stream directly into SQLite and therefore do
+                // not consume this in-memory plaintext budget.
+                let mut total_inline_content_bytes = 0usize;
                 while let Some(directory_id) = queue.pop_front() {
                     if !visited.insert(directory_id) {
                         continue;
@@ -467,20 +478,16 @@ impl FoksClient {
                             }
                         }
                         let last_mac = listing.entries.last().map(|entry| entry.name_mac);
-                        for (position, entry) in listing.entries.into_iter().enumerate() {
+                        for (position, mut entry) in listing.entries.into_iter().enumerate() {
                             total_entries = total_entries
                                 .checked_add(1)
                                 .ok_or(Error::KvResponse("entry count overflow"))?;
                             if total_entries > MAX_ENTRIES {
                                 return Err(Error::KvResponse("entry traversal limit exceeded"));
                             }
-                            if entry.parent != directory_id
-                                || !entry_ids.insert(entry.id)
-                                || entry.value.node_type()? == KvNodeType::None
-                            {
-                                return Err(Error::KvResponse(
-                                    "invalid or duplicate directory entry",
-                                ));
+                            entry.bind_list_parent(directory_id)?;
+                            if !entry_ids.insert(entry.id) {
+                                return Err(Error::KvResponse("duplicate directory entry ID"));
                             }
                             let seed = directory_seeds.get(&entry.directory_version).ok_or(
                                 Error::KvResponse("dirent uses an unavailable directory key"),
@@ -496,6 +503,14 @@ impl FoksClient {
                                 return Err(Error::KvResponse(
                                     "invalid or duplicate plaintext name",
                                 ));
+                            }
+                            if entry.value.node_type()? == KvNodeType::None {
+                                if extended.remove(&position).is_some() {
+                                    return Err(Error::KvResponse(
+                                        "tombstone has extended file data",
+                                    ));
+                                }
+                                continue;
                             }
                             let mut projected = KvProjectedEntry {
                                 dirent_id: entry.id,
@@ -545,7 +560,7 @@ impl FoksClient {
                                         ));
                                     };
                                     projected.node_bytes = exact;
-                                    total_content_bytes = total_content_bytes
+                                    total_inline_content_bytes = total_inline_content_bytes
                                         .checked_add(content.len())
                                         .ok_or(Error::KvResponse("content size overflow"))?;
                                     projected.content = Some(content);
@@ -568,7 +583,7 @@ impl FoksClient {
                                     };
                                     validate_kv_symlink(&target)?;
                                     projected.node_bytes = Some(bytes);
-                                    total_content_bytes = total_content_bytes
+                                    total_inline_content_bytes = total_inline_content_bytes
                                         .checked_add(target.len())
                                         .ok_or(Error::KvResponse("content size overflow"))?;
                                     projected.symlink = Some(target);
@@ -620,12 +635,8 @@ impl FoksClient {
                                                     "empty non-final file chunk",
                                                 ));
                                             }
+                                            validate_large_file_append(stage.size, clear.len())?;
                                             store.append_large_file(&mut stage, &clear)?;
-                                            if stage.size > MAX_FILE_BYTES as u64 {
-                                                return Err(Error::KvResponse(
-                                                    "file size limit exceeded",
-                                                ));
-                                            }
                                             offset = stage.size;
                                             if chunk.final_chunk {
                                                 complete = true;
@@ -643,19 +654,12 @@ impl FoksClient {
                                         size
                                     };
                                     projected.node_bytes = Some(bytes);
-                                    total_content_bytes = total_content_bytes
-                                        .checked_add(usize::try_from(size).map_err(|_| {
-                                            Error::KvResponse(
-                                                "file size does not fit in memory size",
-                                            )
-                                        })?)
-                                        .ok_or(Error::KvResponse("content size overflow"))?;
                                     projected.large_file_size = Some(size);
                                 }
                                 KvNodeType::None => unreachable!("rejected above"),
                             }
                             entries.push(projected);
-                            if total_content_bytes > MAX_TOTAL_CONTENT_BYTES {
+                            if total_inline_content_bytes > MAX_TOTAL_CONTENT_BYTES {
                                 return Err(Error::KvResponse("total content limit exceeded"));
                             }
                         }
@@ -708,5 +712,47 @@ impl FoksClient {
         Err(Error::KvResponse(
             "KV cache changed during three synchronization attempts",
         ))
+    }
+}
+
+fn validate_large_file_append(current_size: u64, chunk_size: usize) -> Result<u64> {
+    let chunk_size =
+        u64::try_from(chunk_size).map_err(|_| Error::KvResponse("file chunk size overflow"))?;
+    let next_size = current_size
+        .checked_add(chunk_size)
+        .ok_or(Error::KvResponse("file size overflow"))?;
+    if next_size > MAX_KV_FILE_BYTES {
+        return Err(Error::KvResponse("file size limit exceeded"));
+    }
+    Ok(next_size)
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+
+    #[test]
+    fn synchronization_accepts_the_complete_upstream_file_range() {
+        let former_limit = 128 * 1024 * 1024;
+        assert_eq!(
+            validate_large_file_append(former_limit, 1).unwrap(),
+            former_limit + 1
+        );
+        assert_eq!(
+            validate_large_file_append(MAX_KV_FILE_BYTES - 1, 1).unwrap(),
+            MAX_KV_FILE_BYTES
+        );
+    }
+
+    #[test]
+    fn synchronization_rejects_only_above_the_upstream_file_limit() {
+        assert!(matches!(
+            validate_large_file_append(MAX_KV_FILE_BYTES, 1),
+            Err(Error::KvResponse("file size limit exceeded"))
+        ));
+        assert!(matches!(
+            validate_large_file_append(u64::MAX, 1),
+            Err(Error::KvResponse("file size overflow"))
+        ));
     }
 }

@@ -1,9 +1,9 @@
 //! KV namespace, content, version-vector, and ciphertext wire objects.
 
+use crate::codec::value_name;
 use crate::{
     array, binary, boolean, decode, encode, expect_unsigned, fixed_blob, list, option, role,
-    text_bytes, unsigned, variant, EntityId, Error, Result, Role, RoleAndGeneration, SecretBox,
-    Value,
+    unsigned, variant, EntityId, Error, Result, Role, RoleAndGeneration, SecretBox, Value,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,31 +102,38 @@ impl KvPathVersionVector {
     }
 
     pub fn to_value(&self) -> Value {
-        Value::Array(vec![
-            Value::Unsigned(self.root_version),
-            Value::Array(
-                self.directories
+        let directories = self
+            .directories
+            .iter()
+            .map(|directory| {
+                let entries = directory
+                    .entries
                     .iter()
-                    .map(|directory| {
+                    .map(|entry| {
                         Value::Array(vec![
-                            Value::Binary(directory.id.to_vec()),
-                            Value::Unsigned(directory.version),
-                            Value::Array(
-                                directory
-                                    .entries
-                                    .iter()
-                                    .map(|entry| {
-                                        Value::Array(vec![
-                                            Value::Binary(entry.id.to_vec()),
-                                            Value::Unsigned(entry.version),
-                                        ])
-                                    })
-                                    .collect(),
-                            ),
+                            Value::Binary(entry.id.to_vec()),
+                            Value::Unsigned(entry.version),
                         ])
                     })
-                    .collect(),
-            ),
+                    .collect::<Vec<_>>();
+                Value::Array(vec![
+                    Value::Binary(directory.id.to_vec()),
+                    Value::Unsigned(directory.version),
+                    if entries.is_empty() {
+                        Value::Null
+                    } else {
+                        Value::Array(entries)
+                    },
+                ])
+            })
+            .collect::<Vec<_>>();
+        Value::Array(vec![
+            Value::Unsigned(self.root_version),
+            if directories.is_empty() {
+                Value::Null
+            } else {
+                Value::Array(directories)
+            },
         ])
     }
 
@@ -322,6 +329,18 @@ impl KvDirent {
 
     pub fn encoded(&self) -> &[u8] {
         &self.exact
+    }
+
+    /// `kvList` omits the parent directory and relies on the request context.
+    /// Reconstruct it before verifying the name and binding MAC, matching the
+    /// v0.1.9 Go client. A nonzero conflicting parent is never accepted.
+    pub fn bind_list_parent(&mut self, parent: [u8; 16]) -> Result<()> {
+        if self.parent != [0; 16] && self.parent != parent {
+            return Err(Error::IntegerRange("KV dirent parent"));
+        }
+        self.parent = parent;
+        self.exact = encode(&self.to_value())?;
+        Ok(())
     }
 
     pub fn binding_payload(&self) -> Result<Vec<u8>> {
@@ -560,12 +579,36 @@ impl KvDirentName {
         ])
     }
 
-    pub fn decode_value(value: &Value) -> Result<Self> {
-        let fields = array(value, 3)?;
+    pub fn decode_value(value: Value) -> Result<Self> {
+        let fields = match value {
+            Value::Array(fields) => fields,
+            value => {
+                return Err(Error::Type {
+                    expected: "array",
+                    found: value_name(&value),
+                })
+            }
+        };
+        let [parent, directory_version, name]: [Value; 3] =
+            fields
+                .try_into()
+                .map_err(|fields: Vec<Value>| Error::FieldCount {
+                    expected: 3,
+                    found: fields.len(),
+                })?;
+        let name = match name {
+            Value::Text(name) => name,
+            value => {
+                return Err(Error::Type {
+                    expected: "text",
+                    found: value_name(&value),
+                })
+            }
+        };
         Ok(Self {
-            parent: fixed_blob(&fields[0], "KV name parent directory")?,
-            directory_version: unsigned(&fields[1])?,
-            name: text_bytes(&fields[2])?.to_vec(),
+            parent: fixed_blob(&parent, "KV name parent directory")?,
+            directory_version: unsigned(&directory_version)?,
+            name,
         })
     }
 }
@@ -593,13 +636,57 @@ impl KvSmallFilePlaintext {
         }
     }
 
-    pub fn decode_value(value: &Value) -> Result<Self> {
-        let fields = array(value, 2)?;
-        match unsigned(&fields[0])? {
-            3 => Ok(Self::File(binary(variant(&fields[1], "0")?)?.to_vec())),
-            4 => Ok(Self::Symlink(
-                text_bytes(variant(&fields[1], "1")?)?.to_vec(),
-            )),
+    pub fn decode_value(value: Value) -> Result<Self> {
+        let fields = match value {
+            Value::Array(fields) => fields,
+            value => {
+                return Err(Error::Type {
+                    expected: "array",
+                    found: value_name(&value),
+                })
+            }
+        };
+        let [kind, payload]: [Value; 2] =
+            fields
+                .try_into()
+                .map_err(|fields: Vec<Value>| Error::FieldCount {
+                    expected: 2,
+                    found: fields.len(),
+                })?;
+        let kind = unsigned(&kind)?;
+        let (tag, payload) = match payload {
+            Value::Variant(Some(payload)) => payload,
+            value => {
+                return Err(Error::Type {
+                    expected: "populated variant",
+                    found: value_name(&value),
+                })
+            }
+        };
+        let payload = *payload;
+        match kind {
+            3 if tag.as_slice() != b"0" => Err(Error::VariantTag {
+                expected: "0".to_owned(),
+                found: tag,
+            }),
+            3 => match payload {
+                Value::Binary(bytes) => Ok(Self::File(bytes)),
+                value => Err(Error::Type {
+                    expected: "binary",
+                    found: value_name(&value),
+                }),
+            },
+            4 if tag.as_slice() != b"1" => Err(Error::VariantTag {
+                expected: "1".to_owned(),
+                found: tag,
+            }),
+            4 => match payload {
+                Value::Text(path) => Ok(Self::Symlink(path)),
+                value => Err(Error::Type {
+                    expected: "text",
+                    found: value_name(&value),
+                }),
+            },
             value => Err(Error::UnknownEnum {
                 kind: "small-file plaintext type",
                 value,

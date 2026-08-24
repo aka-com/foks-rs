@@ -132,6 +132,39 @@ pub struct StoredTeamSnapshot {
     pub shared_keys: Vec<foks_verify::VerifiedUserSharedKey>,
 }
 
+/// Application-level work that can be safely resumed after a process crash.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum ScheduledJobKind {
+    UserRefresh = 1,
+    MutationReconcile = 2,
+}
+
+impl ScheduledJobKind {
+    fn from_sql(value: i64) -> Result<Self> {
+        match value {
+            1 => Ok(Self::UserRefresh),
+            2 => Ok(Self::MutationReconcile),
+            _ => Err(Error::InvalidScheduledJob("unknown scheduled job kind")),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScheduledJob {
+    pub job_id: [u8; 16],
+    pub kind: ScheduledJobKind,
+    pub host_id: Vec<u8>,
+    pub scope_id: Vec<u8>,
+    pub interval_micros: u64,
+    pub next_run_at: u64,
+    pub failure_count: u64,
+    pub lease_until: Option<u64>,
+    pub last_completed_at: Option<u64>,
+    pub last_error: Option<String>,
+    pub updated_at: u64,
+}
+
 impl StoredTeamSnapshot {
     pub fn parts(&self) -> VerifiedTeamSnapshotParts<'_> {
         VerifiedTeamSnapshotParts {
@@ -159,6 +192,96 @@ pub enum Acceptance {
     Inserted,
     Advanced,
     Unchanged,
+}
+
+/// Public mutation classes recorded by the generic write-ahead journal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum MutationKind {
+    Signup = 1,
+    DeviceProvision = 2,
+    DeviceRevoke = 3,
+    PukRotation = 4,
+    KvNamespace = 5,
+    KvContent = 6,
+    KvRoot = 7,
+}
+
+impl MutationKind {
+    fn from_sql(value: i64) -> Result<Self> {
+        match value {
+            1 => Ok(Self::Signup),
+            2 => Ok(Self::DeviceProvision),
+            3 => Ok(Self::DeviceRevoke),
+            4 => Ok(Self::PukRotation),
+            5 => Ok(Self::KvNamespace),
+            6 => Ok(Self::KvContent),
+            7 => Ok(Self::KvRoot),
+            _ => Err(Error::InvalidMutationOperation("unknown operation kind")),
+        }
+    }
+}
+
+/// Crash-recovery state. `SubmissionUnknown` means the request crossed the
+/// process boundary but no definitive response was durably observed; callers
+/// must reconcile authenticated server state and must not blindly replay it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum MutationState {
+    Prepared = 1,
+    Submitting = 2,
+    SubmissionUnknown = 3,
+    Verified = 4,
+    Rejected = 5,
+}
+
+impl MutationState {
+    fn from_sql(value: i64) -> Result<Self> {
+        match value {
+            1 => Ok(Self::Prepared),
+            2 => Ok(Self::Submitting),
+            3 => Ok(Self::SubmissionUnknown),
+            4 => Ok(Self::Verified),
+            5 => Ok(Self::Rejected),
+            _ => Err(Error::InvalidMutationOperation("unknown operation state")),
+        }
+    }
+
+    fn can_transition_to(self, next: Self) -> bool {
+        self == next
+            || matches!(
+                (self, next),
+                (Self::Prepared, Self::Submitting | Self::Rejected)
+                    | (
+                        Self::Submitting,
+                        Self::SubmissionUnknown | Self::Verified | Self::Rejected
+                    )
+                    | (Self::SubmissionUnknown, Self::Verified | Self::Rejected)
+            )
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Verified | Self::Rejected)
+    }
+}
+
+/// A public write-ahead record. `material_ref` is an opaque lookup key for a
+/// separately protected store and is not secret material itself.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MutationOperation {
+    pub operation_id: [u8; 16],
+    pub kind: MutationKind,
+    pub host_id: Vec<u8>,
+    pub scope_id: Vec<u8>,
+    pub subject_id: Vec<u8>,
+    pub expected_version: Option<u64>,
+    pub request_hash: [u8; 32],
+    pub material_ref: Vec<u8>,
+    pub material_hash: [u8; 32],
+    pub state: MutationState,
+    pub attempt_count: u64,
+    pub created_at: u64,
+    pub updated_at: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -221,6 +344,77 @@ pub struct AdHocTeamOperation {
     pub team_id: Vec<u8>,
     pub request_hash: [u8; 32],
     pub state: AdHocTeamOperationState,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum TeamMutationKind {
+    NamedCreation = 1,
+    MembershipChange = 2,
+    PtkRotation = 3,
+}
+
+impl TeamMutationKind {
+    fn from_sql(value: i64) -> Result<Self> {
+        match value {
+            1 => Ok(Self::NamedCreation),
+            2 => Ok(Self::MembershipChange),
+            3 => Ok(Self::PtkRotation),
+            _ => Err(Error::InvalidTeamMutation("unknown operation kind")),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum TeamMutationState {
+    Prepared = 1,
+    Submitted = 2,
+    Verified = 3,
+    Rejected = 4,
+    Superseded = 5,
+}
+
+impl TeamMutationState {
+    fn from_sql(value: i64) -> Result<Self> {
+        match value {
+            1 => Ok(Self::Prepared),
+            2 => Ok(Self::Submitted),
+            3 => Ok(Self::Verified),
+            4 => Ok(Self::Rejected),
+            5 => Ok(Self::Superseded),
+            _ => Err(Error::InvalidTeamMutation("unknown operation state")),
+        }
+    }
+
+    fn can_transition_to(self, next: Self) -> bool {
+        self == next
+            || matches!(
+                (self, next),
+                (
+                    Self::Prepared,
+                    Self::Submitted | Self::Rejected | Self::Superseded
+                ) | (
+                    Self::Submitted,
+                    Self::Verified | Self::Rejected | Self::Superseded
+                )
+            )
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TeamMutationOperation {
+    pub operation_id: [u8; 16],
+    pub kind: TeamMutationKind,
+    pub host_id: Vec<u8>,
+    pub actor_id: Vec<u8>,
+    pub device_id: Vec<u8>,
+    pub team_id: Vec<u8>,
+    pub expected_seqno: u64,
+    pub request_hash: [u8; 32],
+    pub state: TeamMutationState,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -295,6 +489,12 @@ pub enum Error {
     InvalidSignupOperation(&'static str),
     #[error("invalid ad-hoc team operation: {0}")]
     InvalidAdHocTeamOperation(&'static str),
+    #[error("invalid named-team mutation operation: {0}")]
+    InvalidTeamMutation(&'static str),
+    #[error("invalid generic mutation operation: {0}")]
+    InvalidMutationOperation(&'static str),
+    #[error("invalid scheduled job: {0}")]
+    InvalidScheduledJob(&'static str),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -338,6 +538,392 @@ impl HardStateStore {
         connection.pragma_update(None, "synchronous", "FULL")?;
         initialize_or_verify(&mut connection)?;
         Ok(Self { connection })
+    }
+
+    /// Durably records a mutation before any network submission. Protected
+    /// material identified by `material_ref` must already be committed by the
+    /// caller; an orphaned material record is safe, while a journal row with
+    /// missing material is not recoverable.
+    pub fn record_mutation(&mut self, operation: &MutationOperation) -> Result<()> {
+        validate_mutation_operation(operation)?;
+        if operation.state != MutationState::Prepared
+            || operation.attempt_count != 0
+            || operation.created_at != operation.updated_at
+        {
+            return Err(Error::InvalidMutationOperation(
+                "new operation must be unattempted and prepared",
+            ));
+        }
+        let host_exists = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM hosts WHERE host_id = ?1)",
+            [&operation.host_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !host_exists {
+            return Err(Error::UnknownHost);
+        }
+        self.connection.execute(
+            "INSERT INTO mutation_operations (
+                operation_id, operation_kind, host_id, scope_id, subject_id,
+                expected_version, request_hash, material_ref, material_hash,
+                state, attempt_count, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                operation.operation_id.as_slice(),
+                operation.kind as u8,
+                operation.host_id,
+                operation.scope_id,
+                operation.subject_id,
+                operation
+                    .expected_version
+                    .map(|value| sqlite_integer("mutation expected version", value))
+                    .transpose()?,
+                operation.request_hash.as_slice(),
+                operation.material_ref,
+                operation.material_hash.as_slice(),
+                operation.state as u8,
+                sqlite_integer("mutation attempt count", operation.attempt_count)?,
+                sqlite_integer("mutation created time", operation.created_at)?,
+                sqlite_integer("mutation updated time", operation.updated_at)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Atomically marks the one and only initial submission attempt. Once this
+    /// commits, a crash is treated as an ambiguous response and recovery must
+    /// inspect authenticated server state rather than reposting the request.
+    pub fn begin_mutation_submission(
+        &mut self,
+        operation_id: &[u8; 16],
+        updated_at: u64,
+    ) -> Result<()> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (state, created_at, previous_updated_at, attempts) = transaction
+            .query_row(
+                "SELECT state, created_at, updated_at, attempt_count
+                 FROM mutation_operations WHERE operation_id = ?1",
+                [operation_id.as_slice()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(Error::InvalidMutationOperation("operation is not recorded"))?;
+        if MutationState::from_sql(state)? != MutationState::Prepared
+            || attempts != 0
+            || updated_at < stored_unsigned("mutation created time", created_at)?
+            || updated_at < stored_unsigned("mutation updated time", previous_updated_at)?
+        {
+            return Err(Error::InvalidMutationOperation(
+                "mutation cannot be submitted more than once",
+            ));
+        }
+        transaction.execute(
+            "UPDATE mutation_operations
+             SET state = ?2, attempt_count = 1, updated_at = ?3
+             WHERE operation_id = ?1",
+            params![
+                operation_id.as_slice(),
+                MutationState::Submitting as u8,
+                sqlite_integer("mutation updated time", updated_at)?,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn advance_mutation(
+        &mut self,
+        operation_id: &[u8; 16],
+        state: MutationState,
+        updated_at: u64,
+    ) -> Result<()> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current, created_at, previous_updated_at) = transaction
+            .query_row(
+                "SELECT state, created_at, updated_at
+                 FROM mutation_operations WHERE operation_id = ?1",
+                [operation_id.as_slice()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(Error::InvalidMutationOperation("operation is not recorded"))?;
+        let current = MutationState::from_sql(current)?;
+        if !current.can_transition_to(state)
+            || updated_at < stored_unsigned("mutation created time", created_at)?
+            || updated_at < stored_unsigned("mutation updated time", previous_updated_at)?
+        {
+            return Err(Error::InvalidMutationOperation(
+                "operation state transition is invalid",
+            ));
+        }
+        transaction.execute(
+            "UPDATE mutation_operations SET state = ?2, updated_at = ?3
+             WHERE operation_id = ?1",
+            params![
+                operation_id.as_slice(),
+                state as u8,
+                sqlite_integer("mutation updated time", updated_at)?,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn mutation(&self, operation_id: &[u8; 16]) -> Result<Option<MutationOperation>> {
+        self.connection
+            .query_row(
+                "SELECT operation_kind, host_id, scope_id, subject_id,
+                        expected_version, request_hash, material_ref, material_hash, state,
+                        attempt_count, created_at, updated_at
+                 FROM mutation_operations WHERE operation_id = ?1",
+                [operation_id.as_slice()],
+                |row| mutation_operation_from_row(*operation_id, row),
+            )
+            .optional()?
+            .map(Ok)
+            .transpose()
+    }
+
+    /// Returns all nonterminal operations in deterministic creation order for
+    /// startup reconciliation.
+    pub fn pending_mutations(&self, host_id: &[u8]) -> Result<Vec<MutationOperation>> {
+        let mut statement = self.connection.prepare(
+            "SELECT operation_id, operation_kind, host_id, scope_id, subject_id,
+                    expected_version, request_hash, material_ref, material_hash, state,
+                    attempt_count, created_at, updated_at
+             FROM mutation_operations
+             WHERE host_id = ?1 AND state IN (1, 2, 3)
+             ORDER BY created_at, operation_id",
+        )?;
+        let rows = statement.query_map([host_id], |row| {
+            let operation_id = row.get::<_, Vec<u8>>(0)?;
+            let operation_id: [u8; 16] = operation_id.try_into().map_err(|_| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    16,
+                    rusqlite::types::Type::Blob,
+                    "invalid mutation operation ID".into(),
+                )
+            })?;
+            mutation_operation_from_offset(operation_id, row, 1)
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::from)
+    }
+
+    /// Registers a resumable job, or refreshes its interval without delaying
+    /// work that was already due. A job ID can never be rebound to another
+    /// host, scope, or kind.
+    pub fn register_scheduled_job(&mut self, job: &ScheduledJob) -> Result<()> {
+        validate_scheduled_job(job)?;
+        if job.failure_count != 0
+            || job.lease_until.is_some()
+            || job.last_completed_at.is_some()
+            || job.last_error.is_some()
+        {
+            return Err(Error::InvalidScheduledJob(
+                "new jobs cannot contain execution state",
+            ));
+        }
+        let host_exists = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM hosts WHERE host_id = ?1)",
+            [&job.host_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !host_exists {
+            return Err(Error::UnknownHost);
+        }
+        let existing = self
+            .connection
+            .query_row(
+                "SELECT job_kind, host_id, scope_id FROM scheduled_jobs WHERE job_id = ?1",
+                [job.job_id.as_slice()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if existing.is_some_and(|(kind, host_id, scope_id)| {
+            kind != job.kind as i64 || host_id != job.host_id || scope_id != job.scope_id
+        }) {
+            return Err(Error::InvalidScheduledJob("job ID binding changed"));
+        }
+        self.connection.execute(
+            "INSERT INTO scheduled_jobs (
+                job_id, job_kind, host_id, scope_id, interval_micros,
+                next_run_at, failure_count, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7)
+             ON CONFLICT(job_id) DO UPDATE SET
+                interval_micros = excluded.interval_micros,
+                next_run_at = MIN(scheduled_jobs.next_run_at, excluded.next_run_at),
+                updated_at = MAX(scheduled_jobs.updated_at, excluded.updated_at)",
+            params![
+                job.job_id.as_slice(),
+                job.kind as u8,
+                job.host_id,
+                job.scope_id,
+                sqlite_integer("scheduled interval", job.interval_micros)?,
+                sqlite_integer("scheduled next run", job.next_run_at)?,
+                sqlite_integer("scheduled update time", job.updated_at)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Claims due jobs under an expiring lease. An abandoned claim becomes
+    /// runnable again after `lease_until`, so only idempotent work belongs in
+    /// this scheduler.
+    pub fn claim_due_scheduled_jobs(
+        &mut self,
+        now: u64,
+        lease_until: u64,
+        limit: u64,
+    ) -> Result<Vec<ScheduledJob>> {
+        if limit == 0 || lease_until <= now {
+            return Err(Error::InvalidScheduledJob("invalid claim bounds"));
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now_sql = sqlite_integer("scheduled claim time", now)?;
+        let lease_sql = sqlite_integer("scheduled lease time", lease_until)?;
+        let limit_sql = sqlite_integer("scheduled claim limit", limit)?;
+        let ids = {
+            let mut statement = transaction.prepare(
+                "SELECT job_id FROM scheduled_jobs
+                 WHERE next_run_at <= ?1 AND (lease_until IS NULL OR lease_until <= ?1)
+                 ORDER BY next_run_at, job_id LIMIT ?2",
+            )?;
+            let ids = statement
+                .query_map(params![now_sql, limit_sql], |row| row.get::<_, Vec<u8>>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            ids
+        };
+        for id in &ids {
+            transaction.execute(
+                "UPDATE scheduled_jobs SET lease_until = ?2, updated_at = ?3 WHERE job_id = ?1",
+                params![id, lease_sql, now_sql],
+            )?;
+        }
+        let mut jobs = Vec::with_capacity(ids.len());
+        for id in ids {
+            jobs.push(transaction.query_row(
+                "SELECT job_kind, host_id, scope_id, interval_micros, next_run_at,
+                        failure_count, lease_until, last_completed_at, last_error, updated_at
+                 FROM scheduled_jobs WHERE job_id = ?1",
+                [id.as_slice()],
+                |row| scheduled_job_from_row(&id, row),
+            )?);
+        }
+        transaction.commit()?;
+        Ok(jobs)
+    }
+
+    pub fn complete_scheduled_job(
+        &mut self,
+        job_id: &[u8; 16],
+        claimed_until: u64,
+        next_run_at: u64,
+        completed_at: u64,
+    ) -> Result<()> {
+        let changed = self.connection.execute(
+            "UPDATE scheduled_jobs SET
+                next_run_at = ?3, failure_count = 0, lease_until = NULL,
+                last_completed_at = ?4, last_error = NULL, updated_at = ?4
+             WHERE job_id = ?1 AND lease_until = ?2",
+            params![
+                job_id.as_slice(),
+                sqlite_integer("scheduled claimed lease", claimed_until)?,
+                sqlite_integer("scheduled next run", next_run_at)?,
+                sqlite_integer("scheduled completion time", completed_at)?,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(Error::InvalidScheduledJob("scheduled job lease was lost"));
+        }
+        Ok(())
+    }
+
+    pub fn fail_scheduled_job(
+        &mut self,
+        job_id: &[u8; 16],
+        claimed_until: u64,
+        next_run_at: u64,
+        failed_at: u64,
+        error: &str,
+    ) -> Result<()> {
+        if error.is_empty() || error.len() > 1024 {
+            return Err(Error::InvalidScheduledJob("invalid scheduled job error"));
+        }
+        let changed = self.connection.execute(
+            "UPDATE scheduled_jobs SET
+                next_run_at = ?3, failure_count = failure_count + 1,
+                lease_until = NULL, last_error = ?5, updated_at = ?4
+             WHERE job_id = ?1 AND lease_until = ?2",
+            params![
+                job_id.as_slice(),
+                sqlite_integer("scheduled claimed lease", claimed_until)?,
+                sqlite_integer("scheduled next run", next_run_at)?,
+                sqlite_integer("scheduled failure time", failed_at)?,
+                error,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(Error::InvalidScheduledJob("scheduled job lease was lost"));
+        }
+        Ok(())
+    }
+
+    pub fn scheduled_job(&self, job_id: &[u8; 16]) -> Result<Option<ScheduledJob>> {
+        self.connection
+            .query_row(
+                "SELECT job_kind, host_id, scope_id, interval_micros, next_run_at,
+                        failure_count, lease_until, last_completed_at, last_error, updated_at
+                 FROM scheduled_jobs WHERE job_id = ?1",
+                [job_id.as_slice()],
+                |row| scheduled_job_from_row(job_id, row),
+            )
+            .optional()
+            .map_err(Error::from)
+    }
+
+    pub fn next_scheduled_run(&self) -> Result<Option<u64>> {
+        let value = self.connection.query_row(
+            "SELECT MIN(MAX(next_run_at, COALESCE(lease_until, next_run_at)))
+             FROM scheduled_jobs",
+            [],
+            |row| row.get::<_, Option<i64>>(0),
+        )?;
+        value
+            .map(|value| stored_unsigned("next scheduled run", value))
+            .transpose()
+    }
+
+    pub fn remove_scheduled_job(&mut self, job_id: &[u8; 16]) -> Result<bool> {
+        Ok(self.connection.execute(
+            "DELETE FROM scheduled_jobs WHERE job_id = ?1",
+            [job_id.as_slice()],
+        )? == 1)
     }
 
     /// Records only the public fingerprint of a prepared signup. The caller's
@@ -464,6 +1050,41 @@ impl HardStateStore {
                 })
             })
             .transpose()
+    }
+
+    /// Locates an interrupted signup from public identities that can be
+    /// re-derived from caller-retained device and PUK seeds. Nonterminal rows
+    /// are preferred so a process can recover even when its randomly generated
+    /// operation ID was never returned to the caller.
+    pub fn signup_operation_for_credential(
+        &self,
+        host_id: &[u8],
+        uid: &[u8],
+        device_id: &[u8],
+    ) -> Result<Option<SignupOperation>> {
+        let operation_id = self
+            .connection
+            .query_row(
+                "SELECT operation_id FROM signup_operations
+                 WHERE host_id = ?1 AND uid = ?2 AND device_id = ?3
+                 ORDER BY CASE WHEN state = 3 THEN 1 ELSE 0 END,
+                          updated_at DESC, operation_id DESC
+                 LIMIT 1",
+                rusqlite::params![host_id, uid, device_id],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()?
+            .map(|bytes| {
+                bytes.try_into().map_err(|_| {
+                    Error::InvalidSignupOperation("stored operation ID has the wrong length")
+                })
+            })
+            .transpose()?;
+        operation_id
+            .as_ref()
+            .map(|operation_id| self.signup_operation(operation_id))
+            .transpose()
+            .map(Option::flatten)
     }
 
     /// Records the public identity and request fingerprint for a prepared
@@ -596,6 +1217,175 @@ impl HardStateStore {
                 })
             })
             .transpose()
+    }
+
+    pub fn record_team_mutation(&mut self, operation: &TeamMutationOperation) -> Result<()> {
+        validate_team_mutation(operation)?;
+        if operation.state != TeamMutationState::Prepared
+            || operation.created_at != operation.updated_at
+        {
+            return Err(Error::InvalidTeamMutation(
+                "new operation must be in the prepared state",
+            ));
+        }
+        let host_exists = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM hosts WHERE host_id = ?1)",
+            [&operation.host_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !host_exists {
+            return Err(Error::UnknownHost);
+        }
+        self.connection.execute(
+            "INSERT INTO team_mutation_operations (
+                operation_id, operation_kind, host_id, actor_id, device_id,
+                team_id, expected_seqno, request_hash, state, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                operation.operation_id.as_slice(),
+                operation.kind as u8,
+                operation.host_id,
+                operation.actor_id,
+                operation.device_id,
+                operation.team_id,
+                sqlite_integer("team mutation sequence", operation.expected_seqno)?,
+                operation.request_hash.as_slice(),
+                operation.state as u8,
+                sqlite_integer("team mutation created time", operation.created_at)?,
+                sqlite_integer("team mutation updated time", operation.updated_at)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn advance_team_mutation(
+        &mut self,
+        operation_id: &[u8; 16],
+        state: TeamMutationState,
+        updated_at: u64,
+    ) -> Result<()> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = transaction
+            .query_row(
+                "SELECT state, created_at, updated_at FROM team_mutation_operations
+                 WHERE operation_id = ?1",
+                [operation_id.as_slice()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(Error::InvalidTeamMutation("operation is not recorded"))?;
+        let current_state = TeamMutationState::from_sql(current.0)?;
+        let created_at = stored_unsigned("team mutation created time", current.1)?;
+        let previous_updated_at = stored_unsigned("team mutation updated time", current.2)?;
+        if updated_at < created_at
+            || updated_at < previous_updated_at
+            || !current_state.can_transition_to(state)
+        {
+            return Err(Error::InvalidTeamMutation(
+                "operation state transition is invalid",
+            ));
+        }
+        transaction.execute(
+            "UPDATE team_mutation_operations SET state = ?2, updated_at = ?3
+             WHERE operation_id = ?1",
+            params![
+                operation_id.as_slice(),
+                state as u8,
+                sqlite_integer("team mutation updated time", updated_at)?,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn team_mutation(&self, operation_id: &[u8; 16]) -> Result<Option<TeamMutationOperation>> {
+        self.connection
+            .query_row(
+                "SELECT operation_kind, host_id, actor_id, device_id, team_id,
+                        expected_seqno, request_hash, state, created_at, updated_at
+                 FROM team_mutation_operations WHERE operation_id = ?1",
+                [operation_id.as_slice()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                        row.get::<_, Vec<u8>>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, Vec<u8>>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, i64>(9)?,
+                    ))
+                },
+            )
+            .optional()?
+            .map(|row| {
+                Ok(TeamMutationOperation {
+                    operation_id: *operation_id,
+                    kind: TeamMutationKind::from_sql(row.0)?,
+                    host_id: row.1,
+                    actor_id: row.2,
+                    device_id: row.3,
+                    team_id: row.4,
+                    expected_seqno: stored_unsigned("team mutation sequence", row.5)?,
+                    request_hash: row.6.try_into().map_err(|_| {
+                        Error::InvalidTeamMutation("stored request hash has the wrong length")
+                    })?,
+                    state: TeamMutationState::from_sql(row.7)?,
+                    created_at: stored_unsigned("team mutation created time", row.8)?,
+                    updated_at: stored_unsigned("team mutation updated time", row.9)?,
+                })
+            })
+            .transpose()
+    }
+
+    /// Finds the unique journal row occupying one authenticated team-chain
+    /// position. This supports crash recovery when the secret-derived
+    /// operation ID was not returned to the caller before interruption.
+    pub fn team_mutation_at(
+        &self,
+        host_id: &[u8],
+        team_id: &[u8],
+        expected_seqno: u64,
+    ) -> Result<Option<TeamMutationOperation>> {
+        let sequence = sqlite_integer("team mutation sequence", expected_seqno)?;
+        let operation_id = self
+            .connection
+            .query_row(
+                "SELECT operation_id FROM team_mutation_operations
+                 WHERE host_id = ?1 AND team_id = ?2 AND expected_seqno = ?3
+                 ORDER BY CASE
+                              WHEN state IN (1, 2) THEN 0
+                              WHEN state = 3 THEN 1
+                              ELSE 2
+                          END,
+                          updated_at DESC, operation_id DESC
+                 LIMIT 1",
+                rusqlite::params![host_id, team_id, sequence],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()?
+            .map(|bytes| {
+                bytes.try_into().map_err(|_| {
+                    Error::InvalidTeamMutation("stored operation ID has the wrong length")
+                })
+            })
+            .transpose()?;
+        operation_id
+            .as_ref()
+            .map(|operation_id| self.team_mutation(operation_id))
+            .transpose()
+            .map(Option::flatten)
     }
 
     /// Atomically accepts a complete, already-verified host snapshot.
@@ -1136,8 +1926,8 @@ impl HardStateStore {
                 transaction.execute(
                     "INSERT INTO team_members (host_id, team_id, party_id, scoped_host_id, \
                      source_role_type, source_role_visibility, role_type, role_visibility, \
-                     generation, verify_key, hepk_fingerprint) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                     generation, verify_key, hepk_fingerprint, removal_key_commitment) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                     params![
                         snapshot.host_id,
                         snapshot.team_id,
@@ -1153,6 +1943,10 @@ impl HardStateStore {
                         sqlite_integer("team member generation", member.generation)?,
                         member.verify_key,
                         member.hepk_fingerprint.as_slice(),
+                        member
+                            .removal_key_commitment
+                            .as_ref()
+                            .map_or(&[][..], |commitment| commitment.as_slice()),
                     ],
                 )?;
             }
@@ -1335,6 +2129,132 @@ fn validate_signup_operation(operation: &SignupOperation) -> Result<()> {
     Ok(())
 }
 
+fn validate_mutation_operation(operation: &MutationOperation) -> Result<()> {
+    if operation.host_id.len() != 33
+        || !matches!(operation.scope_id.len(), 0 | 16 | 33)
+        || !matches!(operation.subject_id.len(), 0 | 16 | 33 | 34)
+        || operation.material_ref.is_empty()
+        || operation.material_ref.len() > 255
+        || operation.updated_at < operation.created_at
+    {
+        return Err(Error::InvalidMutationOperation(
+            "operation fields are malformed",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_scheduled_job(job: &ScheduledJob) -> Result<()> {
+    if job.host_id.len() != 33
+        || !matches!(job.scope_id.len(), 0 | 16 | 33 | 34)
+        || job.interval_micros == 0
+    {
+        return Err(Error::InvalidScheduledJob(
+            "scheduled job fields are malformed",
+        ));
+    }
+    Ok(())
+}
+
+fn scheduled_job_from_row(
+    job_id: &[u8],
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<ScheduledJob> {
+    fn invalid(index: usize, message: &'static str) -> rusqlite::Error {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Integer,
+            std::io::Error::new(std::io::ErrorKind::InvalidData, message).into(),
+        )
+    }
+    let job_id: [u8; 16] = job_id
+        .try_into()
+        .map_err(|_| invalid(0, "scheduled job ID"))?;
+    let kind_value = row.get::<_, i64>(0)?;
+    let kind =
+        ScheduledJobKind::from_sql(kind_value).map_err(|_| invalid(0, "scheduled job kind"))?;
+    let unsigned = |index: usize, field| {
+        u64::try_from(row.get::<_, i64>(index)?).map_err(|_| invalid(index, field))
+    };
+    let optional_unsigned = |index: usize, field| {
+        row.get::<_, Option<i64>>(index)?
+            .map(|value| u64::try_from(value).map_err(|_| invalid(index, field)))
+            .transpose()
+    };
+    Ok(ScheduledJob {
+        job_id,
+        kind,
+        host_id: row.get(1)?,
+        scope_id: row.get(2)?,
+        interval_micros: unsigned(3, "scheduled interval")?,
+        next_run_at: unsigned(4, "scheduled next run")?,
+        failure_count: unsigned(5, "scheduled failure count")?,
+        lease_until: optional_unsigned(6, "scheduled lease")?,
+        last_completed_at: optional_unsigned(7, "scheduled completion time")?,
+        last_error: row.get(8)?,
+        updated_at: unsigned(9, "scheduled update time")?,
+    })
+}
+
+fn mutation_operation_from_row(
+    operation_id: [u8; 16],
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<MutationOperation> {
+    mutation_operation_from_offset(operation_id, row, 0)
+}
+
+fn mutation_operation_from_offset(
+    operation_id: [u8; 16],
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<MutationOperation> {
+    fn invalid(index: usize, message: &'static str) -> rusqlite::Error {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Integer,
+            std::io::Error::new(std::io::ErrorKind::InvalidData, message).into(),
+        )
+    }
+    let kind_value = row.get::<_, i64>(offset)?;
+    let kind = MutationKind::from_sql(kind_value).map_err(|_| invalid(offset, "mutation kind"))?;
+    let expected_value = row.get::<_, Option<i64>>(offset + 4)?;
+    let expected_version = expected_value
+        .map(|value| u64::try_from(value).map_err(|_| invalid(offset + 4, "expected version")))
+        .transpose()?;
+    let request_hash = row
+        .get::<_, Vec<u8>>(offset + 5)?
+        .try_into()
+        .map_err(|_| invalid(offset + 5, "request hash"))?;
+    let material_hash = row
+        .get::<_, Vec<u8>>(offset + 7)?
+        .try_into()
+        .map_err(|_| invalid(offset + 7, "material hash"))?;
+    let state_value = row.get::<_, i64>(offset + 8)?;
+    let state =
+        MutationState::from_sql(state_value).map_err(|_| invalid(offset + 8, "mutation state"))?;
+    let attempt_count = u64::try_from(row.get::<_, i64>(offset + 9)?)
+        .map_err(|_| invalid(offset + 9, "attempt count"))?;
+    let created_at = u64::try_from(row.get::<_, i64>(offset + 10)?)
+        .map_err(|_| invalid(offset + 10, "created time"))?;
+    let updated_at = u64::try_from(row.get::<_, i64>(offset + 11)?)
+        .map_err(|_| invalid(offset + 11, "updated time"))?;
+    Ok(MutationOperation {
+        operation_id,
+        kind,
+        host_id: row.get(offset + 1)?,
+        scope_id: row.get(offset + 2)?,
+        subject_id: row.get(offset + 3)?,
+        expected_version,
+        request_hash,
+        material_ref: row.get(offset + 6)?,
+        material_hash,
+        state,
+        attempt_count,
+        created_at,
+        updated_at,
+    })
+}
+
 fn validate_adhoc_team_operation(operation: &AdHocTeamOperation) -> Result<()> {
     if operation.host_id.len() != 33
         || operation.uid.len() != 33
@@ -1343,6 +2263,21 @@ fn validate_adhoc_team_operation(operation: &AdHocTeamOperation) -> Result<()> {
         || operation.created_at > operation.updated_at
     {
         return Err(Error::InvalidAdHocTeamOperation(
+            "public operation fields are malformed",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_team_mutation(operation: &TeamMutationOperation) -> Result<()> {
+    if operation.host_id.len() != 33
+        || operation.actor_id.len() != 33
+        || !matches!(operation.device_id.len(), 33 | 34)
+        || operation.team_id.len() != 33
+        || operation.expected_seqno == 0
+        || operation.created_at > operation.updated_at
+    {
+        return Err(Error::InvalidTeamMutation(
             "public operation fields are malformed",
         ));
     }
@@ -1652,7 +2587,8 @@ fn load_team_members(
 ) -> Result<Vec<VerifiedTeamMember>> {
     let mut statement = connection.prepare(
         "SELECT party_id, scoped_host_id, source_role_type, source_role_visibility, role_type, \
-         role_visibility, generation, verify_key, hepk_fingerprint FROM team_members \
+         role_visibility, generation, verify_key, hepk_fingerprint, \
+         removal_key_commitment FROM team_members \
          WHERE host_id = ?1 AND team_id = ?2 ORDER BY party_id, scoped_host_id, \
          source_role_type, source_role_visibility",
     )?;
@@ -1667,6 +2603,7 @@ fn load_team_members(
             row.get::<_, i64>(6)?,
             row.get::<_, Vec<u8>>(7)?,
             row.get::<_, Vec<u8>>(8)?,
+            row.get::<_, Vec<u8>>(9)?,
         ))
     })?;
     rows.map(|row| {
@@ -1680,6 +2617,7 @@ fn load_team_members(
             generation,
             verify_key,
             fingerprint,
+            removal_key_commitment,
         ) = row?;
         Ok(VerifiedTeamMember {
             party_id: party,
@@ -1698,6 +2636,14 @@ fn load_team_members(
                 fingerprint,
                 "stored team member HEPK fingerprint has an invalid length",
             )?,
+            removal_key_commitment: if removal_key_commitment.is_empty() {
+                None
+            } else {
+                Some(fixed_hash(
+                    removal_key_commitment,
+                    "stored team removal-key commitment has an invalid length",
+                )?)
+            },
         })
     })
     .collect()
@@ -2332,6 +3278,55 @@ mod tests {
     }
 
     #[test]
+    fn generic_mutation_wal_never_replays_an_ambiguous_submission() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hard.db");
+        let mut store = HardStateStore::open(&path).unwrap();
+        let host = snapshot();
+        store.accept_host_parts(host.parts()).unwrap();
+        let operation = MutationOperation {
+            operation_id: [6; 16],
+            kind: MutationKind::DeviceProvision,
+            host_id: host.host_id,
+            scope_id: vec![1; 33],
+            subject_id: vec![2; 33],
+            expected_version: Some(2),
+            request_hash: [3; 32],
+            material_ref: b"credential/device/6".to_vec(),
+            material_hash: [4; 32],
+            state: MutationState::Prepared,
+            attempt_count: 0,
+            created_at: 100,
+            updated_at: 100,
+        };
+        store.record_mutation(&operation).unwrap();
+        store.begin_mutation_submission(&[6; 16], 101).unwrap();
+        assert!(store.begin_mutation_submission(&[6; 16], 102).is_err());
+
+        drop(store);
+        let mut reopened = HardStateStore::open(&path).unwrap();
+        assert_eq!(
+            reopened.pending_mutations(&operation.host_id).unwrap()[0].state,
+            MutationState::Submitting
+        );
+        reopened
+            .advance_mutation(&[6; 16], MutationState::SubmissionUnknown, 102)
+            .unwrap();
+        assert!(reopened.begin_mutation_submission(&[6; 16], 103).is_err());
+        reopened
+            .advance_mutation(&[6; 16], MutationState::Verified, 104)
+            .unwrap();
+        assert!(reopened
+            .pending_mutations(&operation.host_id)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            reopened.mutation(&[6; 16]).unwrap().unwrap().attempt_count,
+            1
+        );
+    }
+
+    #[test]
     fn signup_operation_journal_is_public_and_monotonic() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("hard.db");
@@ -2350,7 +3345,24 @@ mod tests {
             updated_at: 100,
         };
         store.record_signup_operation(&operation).unwrap();
-        assert_eq!(store.signup_operation(&[9; 16]).unwrap(), Some(operation));
+        assert_eq!(
+            store.signup_operation(&[9; 16]).unwrap(),
+            Some(operation.clone())
+        );
+        assert_eq!(
+            store
+                .signup_operation_for_credential(
+                    &operation.host_id,
+                    &operation.uid,
+                    &operation.device_id,
+                )
+                .unwrap(),
+            Some(operation.clone())
+        );
+        assert!(store
+            .signup_operation_for_credential(&operation.host_id, &operation.uid, &[5; 33])
+            .unwrap()
+            .is_none());
         store
             .advance_signup_operation(&[9; 16], SignupOperationState::Submitted, 101)
             .unwrap();
@@ -2367,6 +3379,28 @@ mod tests {
         assert!(store
             .advance_signup_operation(&[9; 16], SignupOperationState::Verified, 99)
             .is_err());
+        store
+            .advance_signup_operation(&[9; 16], SignupOperationState::Verified, 102)
+            .unwrap();
+
+        let replacement = SignupOperation {
+            operation_id: [8; 16],
+            state: SignupOperationState::Prepared,
+            created_at: 200,
+            updated_at: 200,
+            ..operation
+        };
+        store.record_signup_operation(&replacement).unwrap();
+        assert_eq!(
+            store
+                .signup_operation_for_credential(
+                    &replacement.host_id,
+                    &replacement.uid,
+                    &replacement.device_id,
+                )
+                .unwrap(),
+            Some(replacement)
+        );
     }
 
     #[test]
@@ -2410,6 +3444,110 @@ mod tests {
             ..operation
         };
         assert!(store.record_adhoc_team_operation(&duplicate).is_err());
+    }
+
+    #[test]
+    fn team_mutation_rejection_releases_only_the_rejected_chain_position() {
+        let (_directory, mut store) = store();
+        let host = snapshot();
+        store.accept_host_parts(host.parts()).unwrap();
+        let operation = TeamMutationOperation {
+            operation_id: [5; 16],
+            kind: TeamMutationKind::NamedCreation,
+            host_id: host.host_id,
+            actor_id: vec![1; 33],
+            device_id: vec![4; 33],
+            team_id: vec![3; 33],
+            expected_seqno: 1,
+            request_hash: [6; 32],
+            state: TeamMutationState::Prepared,
+            created_at: 300,
+            updated_at: 300,
+        };
+        store.record_team_mutation(&operation).unwrap();
+        assert_eq!(
+            store.team_mutation(&operation.operation_id).unwrap(),
+            Some(operation.clone())
+        );
+        assert_eq!(
+            store
+                .team_mutation_at(
+                    &operation.host_id,
+                    &operation.team_id,
+                    operation.expected_seqno
+                )
+                .unwrap(),
+            Some(operation.clone())
+        );
+        let duplicate_transition = TeamMutationOperation {
+            operation_id: [4; 16],
+            kind: TeamMutationKind::MembershipChange,
+            ..operation.clone()
+        };
+        assert!(store.record_team_mutation(&duplicate_transition).is_err());
+        store
+            .advance_team_mutation(&operation.operation_id, TeamMutationState::Rejected, 301)
+            .unwrap();
+        assert!(store
+            .advance_team_mutation(&operation.operation_id, TeamMutationState::Submitted, 303)
+            .is_err());
+        store.record_team_mutation(&duplicate_transition).unwrap();
+        assert_eq!(
+            store
+                .team_mutation_at(
+                    &duplicate_transition.host_id,
+                    &duplicate_transition.team_id,
+                    duplicate_transition.expected_seqno,
+                )
+                .unwrap()
+                .unwrap()
+                .operation_id,
+            duplicate_transition.operation_id
+        );
+        store
+            .advance_team_mutation(
+                &duplicate_transition.operation_id,
+                TeamMutationState::Submitted,
+                302,
+            )
+            .unwrap();
+        store
+            .advance_team_mutation(
+                &duplicate_transition.operation_id,
+                TeamMutationState::Verified,
+                303,
+            )
+            .unwrap();
+        let stale_third = TeamMutationOperation {
+            operation_id: [3; 16],
+            state: TeamMutationState::Prepared,
+            ..duplicate_transition
+        };
+        assert!(store.record_team_mutation(&stale_third).is_err());
+
+        let superseded = TeamMutationOperation {
+            operation_id: [2; 16],
+            expected_seqno: 2,
+            created_at: 400,
+            updated_at: 400,
+            ..stale_third
+        };
+        store.record_team_mutation(&superseded).unwrap();
+        store
+            .advance_team_mutation(&superseded.operation_id, TeamMutationState::Submitted, 401)
+            .unwrap();
+        store
+            .advance_team_mutation(&superseded.operation_id, TeamMutationState::Superseded, 402)
+            .unwrap();
+        assert!(store
+            .advance_team_mutation(&superseded.operation_id, TeamMutationState::Verified, 403,)
+            .is_err());
+        let replacement = TeamMutationOperation {
+            operation_id: [1; 16],
+            state: TeamMutationState::Prepared,
+            ..superseded
+        };
+        store.record_team_mutation(&replacement).unwrap();
     }
 
     fn snapshot() -> TestHostSnapshot {
@@ -2526,6 +3664,7 @@ mod tests {
                 generation: 2,
                 verify_key: vec![14; 33],
                 hepk_fingerprint: [33; 32],
+                removal_key_commitment: Some([36; 32]),
             }],
             shared_keys: vec![foks_verify::VerifiedUserSharedKey {
                 role: foks_proto::Role::OWNER,
@@ -2772,6 +3911,16 @@ mod tests {
         changed.members[0].hepk_fingerprint[0] ^= 1;
         assert!(matches!(
             store.accept_team_parts(changed.parts()),
+            Err(Error::TeamProjectionChanged { seqno: 1 })
+        ));
+
+        let mut changed_commitment = team.clone();
+        changed_commitment.members[0]
+            .removal_key_commitment
+            .as_mut()
+            .unwrap()[0] ^= 1;
+        assert!(matches!(
+            store.accept_team_parts(changed_commitment.parts()),
             Err(Error::TeamProjectionChanged { seqno: 1 })
         ));
 

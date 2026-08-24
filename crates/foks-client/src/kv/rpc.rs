@@ -1,8 +1,5 @@
 //! Connection-reusing KV request encoding and response sequencing.
 
-use std::io::Write as _;
-use std::net::TcpStream;
-
 use foks_proto::{
     KvDirectory, KvDirent, KvLargeFileMetadata, KvNodeId, KvPathVersionVector, KvRoot,
     KvSmallFileBox, KvUploadChunk, SecretSeed,
@@ -14,10 +11,10 @@ use foks_rpc::{
     encode_kv_get_root_request_at, encode_kv_list_request_at, encode_kv_lock_acquire_request_at,
     encode_kv_lock_release_request_at, encode_kv_mkdir_request_at, encode_kv_put_request_at,
     encode_kv_put_root_request_at, encode_kv_put_small_file_or_symlink_request_at,
-    encode_kv_select_vhost_request, read_response, read_void_response, KvAuth, KvListCursor,
+    encode_kv_select_vhost_request, KvAuth, KvListCursor,
 };
 
-use crate::{authenticated_tls_roots, Error, FoksClient, PinnedHost, Result};
+use crate::{FoksClient, PinnedHost, PooledConnection, Result};
 
 #[derive(Clone, Debug)]
 pub(crate) enum KvRequest {
@@ -169,29 +166,13 @@ impl KvRequest {
 }
 
 pub(crate) struct KvConnection {
-    stream: rustls::StreamOwned<rustls::ClientConnection, TcpStream>,
-    next_sequence: u64,
-    maximum_frame_length: usize,
+    pooled: PooledConnection,
 }
 
 impl KvConnection {
     pub(crate) fn call(&mut self, auth: KvAuth<'_>, request: &KvRequest) -> Result<Vec<u8>> {
-        let sequence = self.next_sequence;
-        let encoded = request.encode(auth, sequence)?;
-        self.stream
-            .write_all(&encoded)
-            .map_err(foks_rpc::Error::Io)?;
-        self.stream.flush().map_err(foks_rpc::Error::Io)?;
-        let result = if request.is_void() {
-            read_void_response(&mut self.stream, self.maximum_frame_length, sequence)
-                .map(|()| Vec::new())
-        } else {
-            read_response(&mut self.stream, self.maximum_frame_length, sequence)
-        };
-        self.next_sequence = sequence
-            .checked_add(1)
-            .ok_or(Error::KvResponse("RPC sequence overflow"))?;
-        result.map_err(Into::into)
+        let encoded = request.encode(auth, 0)?;
+        self.pooled.call(&encoded, request.is_void())
     }
 }
 
@@ -202,18 +183,15 @@ impl FoksClient {
         seed: &SecretSeed,
         certificate_chain: &[Vec<u8>],
     ) -> Result<KvConnection> {
-        let tcp = self.connect_tcp(&host.kv_store)?;
-        let roots = authenticated_tls_roots(host)?;
-        let config = self.tls_config_material(&roots, Some((seed, certificate_chain)))?;
-        let mut tls = self.connect_tls(&host.kv_store, tcp, config)?;
-        tls.write_all(&encode_kv_select_vhost_request(&host.host_id)?)
-            .map_err(foks_rpc::Error::Io)?;
-        tls.flush().map_err(foks_rpc::Error::Io)?;
-        read_void_response(&mut tls, self.maximum_frame_length, 0)?;
+        let select = encode_kv_select_vhost_request(&host.host_id)?;
         Ok(KvConnection {
-            stream: tls,
-            next_sequence: 1,
-            maximum_frame_length: self.maximum_frame_length,
+            pooled: self.pooled_connection_with_material(
+                host,
+                &host.kv_store,
+                seed,
+                certificate_chain,
+                &select,
+            )?,
         })
     }
 }

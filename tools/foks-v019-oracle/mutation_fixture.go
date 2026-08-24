@@ -502,6 +502,530 @@ func writeMutationFixtures(output, userDir string) error {
 	if err != nil {
 		return err
 	}
+
+	// Build the equivalent single-owner named-team mutation. Named creation
+	// adds a reservation/name commitment, one removal-key commitment and dual
+	// boxes, and an Approved (rather than ApprovedAdHoc) membership link.
+	namedNameUtf8 := proto.NameUtf8("AuditTeam")
+	namedName := proto.Name("auditteam")
+	var reserveToken proto.ReservationToken
+	for i := range reserveToken {
+		reserveToken[i] = byte(101 + i)
+	}
+	namedReservation := rem.ReserveNameRes{
+		Tok:   reserveToken,
+		Seq:   7,
+		Etime: deterministicFixtureTime + 1_000_000,
+	}
+	removalKey, err := teamlib.NewTeamRemovalKey()
+	if err != nil {
+		return err
+	}
+	removalCommitment, err := core.ComputeKeyCommitment(removalKey)
+	if err != nil {
+		return err
+	}
+	namedEldest, err := teamlib.MakeEldestLink(
+		revokeChange.Entity.Host,
+		&rem.NameCommitment{Name: namedName, Seq: namedReservation.Seq},
+		ownerKey,
+		ownerPuk,
+		teamKeys,
+		*treeRoot,
+		removalCommitment,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	namedEldest.Link, err = retimeTeamEldestLink(
+		namedEldest.Link,
+		teamHepks,
+		revokeChange.Entity.Host,
+		teamSigners,
+	)
+	if err != nil {
+		return err
+	}
+	namedTeamID, err := namedEldest.TeamID.ToTeamID()
+	if err != nil {
+		return err
+	}
+	adminPublic, err := core.PublicizeToSPSBoxer(
+		teamKeys[2],
+		proto.FQTeam{Team: namedTeamID, Host: revokeChange.Entity.Host}.FQParty(),
+	)
+	if err != nil {
+		return err
+	}
+	removalMetadata := rem.TeamRemovalKeyMetadata{
+		Tm: proto.FQTeam{Team: namedTeamID, Host: revokeChange.Entity.Host},
+		Member: proto.FQUser{
+			Uid:    uid,
+			HostID: revokeChange.Entity.Host,
+		}.FQParty(),
+		SrcRole: ownerRole,
+		Dst:     proto.RoleAndSeqno{Role: ownerRole, Seqno: proto.ChainEldestSeqno},
+	}
+	removalBoxes, err := teamlib.BoxTeamRemovalKey(
+		ownerPuk,
+		adminPublic,
+		ownerPublic,
+		removalMetadata,
+		removalKey,
+	)
+	if err != nil {
+		return err
+	}
+	namedMembershipPayload := proto.NewGenericLinkPayloadWithTeammembership(proto.TeamMembershipLink{
+		Team:    proto.FQTeam{Team: namedTeamID, Host: revokeChange.Entity.Host},
+		SrcRole: ownerRole,
+		State: proto.NewTeamMembershipDetailsWithApproved(proto.TeamMembershipApprovedDetails{
+			Dst:     proto.RoleAndSeqno{Role: ownerRole, Seqno: proto.ChainEldestSeqno},
+			KeyComm: removalBoxes.Comm,
+		}),
+	})
+	namedMembership, err := core.MakeGenericLink(
+		uid.EntityID(),
+		revokeChange.Entity.Host,
+		device,
+		namedMembershipPayload,
+		proto.ChainEldestSeqno,
+		nil,
+		*treeRoot,
+	)
+	if err != nil {
+		return err
+	}
+	namedCreateArg := rem.CreateTeamArg{
+		NameUtf8:                 namedNameUtf8,
+		TeamnameCommitmentKey:    *namedEldest.TeamnameCommitmentKey,
+		SubchainTreeLocationSeed: *namedEldest.SubchainTreeLocationSeed,
+		Rnr:                      namedReservation,
+		Eta: rem.EditTeamArg{
+			Link:             *namedEldest.Link,
+			NextTreeLocation: *namedEldest.NextTreeLocation,
+			Obd: rem.OffchainBoxData{
+				PtkBoxes:    *teamBoxes,
+				RemovalKeys: []rem.TeamRemovalBoxData{*removalBoxes},
+				Hepks:       teamHepks,
+			},
+		},
+		TeamMembershipLink: rem.PostGenericLinkArg{
+			Link:             *namedMembership.Link,
+			NextTreeLocation: *namedMembership.NextTreeLocation,
+		},
+	}
+	namedCreateFrame, err := rpcRequestFrame(rem.TeamAdminProtocolID, 1, namedCreateArg.Export())
+	if err != nil {
+		return err
+	}
+
+	// Add one local user at the default member role. This is the exact
+	// open-viewership TeamAdmin.editTeam path: existing visible PTKs are boxed
+	// to the target PUK, while the signed link introduces no new PTK.
+	var targetPukSeed proto.SecretSeed32
+	for i := range targetPukSeed {
+		targetPukSeed[i] = byte(0xa5 ^ i)
+	}
+	targetPuk, err := core.NewSharedPrivateSuite25519(
+		proto.EntityType_User,
+		ownerRole,
+		targetPukSeed,
+		proto.FirstGeneration+2,
+		revokeChange.Entity.Host,
+	)
+	if err != nil {
+		return err
+	}
+	targetRolling, err := targetPuk.RollingEntityID()
+	if err != nil {
+		return err
+	}
+	targetEntity, err := targetRolling.Persistent(proto.PartyType_User)
+	if err != nil {
+		return err
+	}
+	targetUID, err := targetEntity.ToUID()
+	if err != nil {
+		return err
+	}
+	targetPublic, err := core.PublicizeToSPSBoxer(
+		targetPuk,
+		proto.FQUser{Uid: targetUID, HostID: revokeChange.Entity.Host}.FQParty(),
+	)
+	if err != nil {
+		return err
+	}
+	targetMember, targetHepk, err := targetPublic.ExportToMember(revokeChange.Entity.Host)
+	if err != nil {
+		return err
+	}
+	targetMember.SrcRole = ownerRole
+	memberRole := proto.MemberRole{DstRole: proto.DefaultRole, Member: *targetMember}
+	addRemovalKey, err := teamlib.NewTeamRemovalKey()
+	if err != nil {
+		return err
+	}
+	addRemovalCommitment, err := core.ComputeKeyCommitment(addRemovalKey)
+	if err != nil {
+		return err
+	}
+	if err := memberRole.Member.AddRemovalKeyCommitment(addRemovalCommitment); err != nil {
+		return err
+	}
+	namedHash, err := core.LinkHash(namedEldest.Link)
+	if err != nil {
+		return err
+	}
+	addLink, err := teamlib.MakeTeamLink(
+		revokeChange.Entity.Host,
+		namedTeamID,
+		ownerKey,
+		ownerPuk,
+		[]proto.MemberRole{memberRole},
+		nil,
+		proto.ChainEldestSeqno+1,
+		*namedHash,
+		*treeRoot,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	addLink.Link, err = retimeUserGroupLink(addLink.Link, []core.Signer{ownerPuk})
+	if err != nil {
+		return err
+	}
+	addBoxBuilder, err := core.NewSharedKeyBoxer(revokeChange.Entity.Host, ownerPuk)
+	if err != nil {
+		return err
+	}
+	for index := range teamRoles {
+		if index < 2 {
+			if err := addBoxBuilder.Box(teamKeys[index], targetPublic); err != nil {
+				return err
+			}
+		}
+	}
+	addPtkBoxes, err := addBoxBuilder.Finish()
+	if err != nil {
+		return err
+	}
+	addRemovalMetadata := rem.TeamRemovalKeyMetadata{
+		Tm:      proto.FQTeam{Team: namedTeamID, Host: revokeChange.Entity.Host},
+		Member:  proto.FQUser{Uid: targetUID, HostID: revokeChange.Entity.Host}.FQParty(),
+		SrcRole: ownerRole,
+		Dst: proto.RoleAndSeqno{
+			Role:  proto.DefaultRole,
+			Seqno: proto.ChainEldestSeqno + 1,
+		},
+	}
+	addRemovalBoxes, err := teamlib.BoxTeamRemovalKey(
+		ownerPuk,
+		adminPublic,
+		targetPublic,
+		addRemovalMetadata,
+		addRemovalKey,
+	)
+	if err != nil {
+		return err
+	}
+	if addRemovalBoxes.Comm != *addRemovalCommitment {
+		return fmt.Errorf("addition removal box commitment differs from signed member commitment")
+	}
+	additionHepks := proto.HEPKSet{V: []proto.HEPK{*targetHepk}}
+	allAdditionHepks := proto.HEPKSet{V: append(append([]proto.HEPK{}, teamHepks.V...), *targetHepk)}
+	eldestSet, err := core.ImportHEPKSet(&teamHepks)
+	if err != nil {
+		return err
+	}
+	openedEldest, err := teamlib.OpenEldestLink(
+		namedEldest.Link,
+		eldestSet,
+		revokeChange.Entity.Host,
+	)
+	if err != nil {
+		return err
+	}
+	additionSet, err := core.ImportHEPKSet(&allAdditionHepks)
+	if err != nil {
+		return err
+	}
+	openedAddition, err := teamlib.OpenTeamLink(
+		addLink.Link,
+		additionSet,
+		&namedTeamID,
+		revokeChange.Entity.Host,
+		openedEldest.RosterPost,
+	)
+	if err != nil {
+		return fmt.Errorf("official addition link verification: %w", err)
+	}
+	if len(openedAddition.Sched.Additions) != 1 || len(openedAddition.SharedKeys) != 0 {
+		return fmt.Errorf("addition produced the wrong roster or PTK schedule")
+	}
+	addArgument := rem.EditTeamArg{
+		Link:             *addLink.Link,
+		NextTreeLocation: *addLink.NextTreeLocation,
+		Obd: rem.OffchainBoxData{
+			PtkBoxes:    *addPtkBoxes,
+			RemovalKeys: []rem.TeamRemovalBoxData{*addRemovalBoxes},
+			Hepks:       additionHepks,
+		},
+		InsLocalPermsFor: []proto.PartyID{targetUID.ToPartyID()},
+	}
+	addFrame, err := rpcRequestFrame(rem.TeamAdminProtocolID, 2, addArgument.Export())
+	if err != nil {
+		return err
+	}
+	addResult := rem.EditTeamRes{}
+	addHash, err := core.LinkHash(addLink.Link)
+	if err != nil {
+		return err
+	}
+
+	// Build an alternative post-addition demotion. Moving the member from the
+	// default member role to member-min rotates only the old role's PTK.
+	mutationRandom := cryptorand.Reader
+	cryptorand.Reader = &deterministicFixtureReader{counter: 10_000}
+	memberMinRole := teamRoles[0]
+	demotedMember := *targetMember
+	demoteRole := proto.MemberRole{DstRole: memberMinRole, Member: demotedMember}
+	var demoteSeed proto.SecretSeed32
+	for i := range demoteSeed {
+		demoteSeed[i] = byte(0x91 - i)
+	}
+	demotePtk, err := core.NewSharedPrivateSuite25519(
+		proto.EntityType_NamedTeam,
+		teamRoles[1],
+		demoteSeed,
+		proto.FirstGeneration+1,
+		revokeChange.Entity.Host,
+	)
+	if err != nil {
+		return err
+	}
+	demoteLink, err := teamlib.MakeTeamLink(
+		revokeChange.Entity.Host,
+		namedTeamID,
+		ownerKey,
+		ownerPuk,
+		[]proto.MemberRole{demoteRole},
+		[]core.SharedPrivateSuiter{demotePtk},
+		proto.ChainEldestSeqno+2,
+		*addHash,
+		*treeRoot,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	demoteLink.Link, err = retimeUserGroupLink(demoteLink.Link, []core.Signer{demotePtk, ownerPuk})
+	if err != nil {
+		return err
+	}
+	demoteHepk, err := demotePtk.ExportHEPK()
+	if err != nil {
+		return err
+	}
+	demoteSet, err := core.ImportHEPKSet(&proto.HEPKSet{V: append(
+		append([]proto.HEPK{}, allAdditionHepks.V...), *demoteHepk,
+	)})
+	if err != nil {
+		return err
+	}
+	openedDemotion, err := teamlib.OpenTeamLink(
+		demoteLink.Link,
+		demoteSet,
+		&namedTeamID,
+		revokeChange.Entity.Host,
+		openedAddition.RosterPost,
+	)
+	if err != nil {
+		return fmt.Errorf("official demotion link verification: %w", err)
+	}
+	if len(openedDemotion.Sched.Items) == 0 || len(openedDemotion.SharedKeys) != 1 {
+		return fmt.Errorf("demotion produced the wrong roster or PTK schedule")
+	}
+	cryptorand.Reader = mutationRandom
+
+	// Remove the member just added. A removal from the default member role
+	// rotates the member-min and member PTKs, boxes their new generations only
+	// to the remaining owner, and chains each old generation under the new one.
+	noneRole := proto.NewRoleDefault(proto.RoleType_NONE)
+	removedMember := *targetMember
+	removedMember.Keys = proto.NewMemberKeysWithNone()
+	removeRole := proto.MemberRole{DstRole: noneRole, Member: removedMember}
+	rotatedKeys := make([]core.SharedPrivateSuiter, 0, 2)
+	rotatedSeeds := make([]proto.SecretSeed32, 0, 2)
+	rotationHepks := proto.HEPKSet{}
+	seedChain := make([]proto.SeedChainBox, 0, 2)
+	rotateBoxBuilder, err := core.NewSharedKeyBoxer(revokeChange.Entity.Host, ownerPuk)
+	if err != nil {
+		return err
+	}
+	for index := 0; index < 2; index++ {
+		var seed proto.SecretSeed32
+		for i := range seed {
+			seed[i] = byte(0xd3 - 17*index - i)
+		}
+		rotated, err := core.NewSharedPrivateSuite25519(
+			proto.EntityType_NamedTeam,
+			teamRoles[index],
+			seed,
+			proto.FirstGeneration+1,
+			revokeChange.Entity.Host,
+		)
+		if err != nil {
+			return err
+		}
+		hepk, err := rotated.ExportHEPK()
+		if err != nil {
+			return err
+		}
+		oldSeed := teamKeys[index].ExportToBoxCleartext(
+			proto.FQUser{Uid: uid, HostID: revokeChange.Entity.Host}.FQParty().FQEntity(),
+		)
+		secretBoxKey := rotated.SecretBoxKey()
+		oldBox, err := core.SealIntoSecretBox(&oldSeed, &secretBoxKey)
+		if err != nil {
+			return err
+		}
+		seedChain = append(seedChain, proto.SeedChainBox{
+			Box:  *oldBox,
+			Gen:  proto.FirstGeneration,
+			Role: teamRoles[index],
+		})
+		if err := rotateBoxBuilder.Box(rotated, ownerPublic); err != nil {
+			return err
+		}
+		rotatedKeys = append(rotatedKeys, rotated)
+		rotatedSeeds = append(rotatedSeeds, seed)
+		rotationHepks.V = append(rotationHepks.V, *hepk)
+	}
+	rotatedBoxes, err := rotateBoxBuilder.Finish()
+	if err != nil {
+		return err
+	}
+	removeLink, err := teamlib.MakeTeamLink(
+		revokeChange.Entity.Host,
+		namedTeamID,
+		ownerKey,
+		ownerPuk,
+		[]proto.MemberRole{removeRole},
+		rotatedKeys,
+		proto.ChainEldestSeqno+2,
+		*addHash,
+		*treeRoot,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	rotationSigners := []core.Signer{rotatedKeys[0], rotatedKeys[1], ownerPuk}
+	removeLink.Link, err = retimeUserGroupLink(removeLink.Link, rotationSigners)
+	if err != nil {
+		return err
+	}
+	removePayload := rem.TeamRemovalMACPayload{
+		Team:    proto.FQTeam{Team: namedTeamID, Host: revokeChange.Entity.Host},
+		Member:  proto.FQUser{Uid: targetUID, HostID: revokeChange.Entity.Host}.FQParty(),
+		SrcRole: ownerRole,
+		Admin:   proto.FQUser{Uid: uid, HostID: revokeChange.Entity.Host}.FQParty(),
+		Root:    *treeRoot,
+		Tm:      deterministicFixtureTime,
+	}
+	removalHmacKey := proto.HMACKey(*addRemovalKey)
+	removeMAC, err := core.Hmac(&removePayload, &removalHmacKey)
+	if err != nil {
+		return err
+	}
+	removeProof := rem.TeamRemovalAndComm{
+		Rm:   rem.TeamRemoval{Mac: *removeMAC, Payload: removePayload},
+		Comm: *addRemovalCommitment,
+	}
+	allRotationHepks := proto.HEPKSet{V: append(append([]proto.HEPK{}, allAdditionHepks.V...), rotationHepks.V...)}
+	rotationSet, err := core.ImportHEPKSet(&allRotationHepks)
+	if err != nil {
+		return err
+	}
+	openedRemoval, err := teamlib.OpenTeamLink(
+		removeLink.Link,
+		rotationSet,
+		&namedTeamID,
+		revokeChange.Entity.Host,
+		openedAddition.RosterPost,
+	)
+	if err != nil {
+		return fmt.Errorf("official removal link verification: %w", err)
+	}
+	if len(openedRemoval.Sched.Removals) != 1 || len(openedRemoval.SharedKeys) != 2 {
+		return fmt.Errorf("removal produced the wrong roster or PTK schedule")
+	}
+	removeArgument := rem.EditTeamArg{
+		Link:             *removeLink.Link,
+		NextTreeLocation: *removeLink.NextTreeLocation,
+		Obd: rem.OffchainBoxData{
+			PtkBoxes:  *rotatedBoxes,
+			SeedChain: seedChain,
+			Removals:  []rem.TeamRemovalAndComm{removeProof},
+			Hepks:     rotationHepks,
+		},
+	}
+	removeFrame, err := rpcRequestFrame(rem.TeamAdminProtocolID, 2, removeArgument.Export())
+	if err != nil {
+		return err
+	}
+	var adminBearer rem.TeamBearerToken
+	for i := range adminBearer {
+		adminBearer[i] = byte(0x70 + i)
+	}
+	bearerMakeArg := rem.MakeInertTeamBearerTokenArg{
+		Team: namedTeamID,
+		Role: proto.OwnerRole,
+		Gen:  proto.FirstGeneration,
+	}
+	bearerMakeFrame, err := rpcRequestFrame(rem.TeamAdminProtocolID, 3, bearerMakeArg.Export())
+	if err != nil {
+		return err
+	}
+	bearerPayload := rem.TeamBearerTokenChallengePayload{
+		User: proto.FQUser{Uid: uid, HostID: revokeChange.Entity.Host},
+		Team: namedTeamID,
+		Role: proto.OwnerRole,
+		Gen:  proto.FirstGeneration,
+		Tok:  adminBearer,
+		Tm:   deterministicFixtureTime,
+	}
+	bearerSig, bearerBlob, err := core.Sign2(teamKeys[3], &bearerPayload)
+	if err != nil {
+		return err
+	}
+	bearerActivateArg := rem.ActivateTeamBearerTokenArg{Bl: *bearerBlob, Sig: *bearerSig}
+	bearerActivateFrame, err := rpcRequestFrame(rem.TeamAdminProtocolID, 4, bearerActivateArg.Export())
+	if err != nil {
+		return err
+	}
+	loadRemovalArg := rem.LoadRemovalKeyBoxForTeamAdminArg{
+		Tok: adminBearer,
+		Member: proto.FQUser{
+			Uid: targetUID, HostID: revokeChange.Entity.Host,
+		}.FQParty(),
+		SrcRole: ownerRole,
+	}
+	loadRemovalFrame, err := rpcRequestFrame(rem.TeamAdminProtocolID, 10, loadRemovalArg.Export())
+	if err != nil {
+		return err
+	}
+	namedReserveFrame, err := rpcRequestFrame(
+		rem.TeamAdminProtocolID,
+		0,
+		(rem.ReserveTeamnameArg{N: namedName}).Export(),
+	)
+	if err != nil {
+		return err
+	}
 	hostConfigFrame, err := rpcRequestFrame(
 		rem.UserProtocolID,
 		24,
@@ -511,6 +1035,9 @@ func writeMutationFixtures(output, userDir string) error {
 		return err
 	}
 	w := writer{dir: output}
+	if err := writeBackupFixtures(&w, userDir, &chain); err != nil {
+		return err
+	}
 	hostConfig := proto.HostConfig{
 		Metering: proto.Metering{Users: true, VHosts: false, PerVHostDisk: true},
 		Viewership: proto.HostViewership{
@@ -541,6 +1068,74 @@ func writeMutationFixtures(output, userDir string) error {
 	if err := w.object("adhoc-box-set.snowp", teamBoxes); err != nil {
 		return err
 	}
+	if err := w.object("named-team-link.snowp", namedEldest.Link); err != nil {
+		return err
+	}
+	if err := w.object("named-membership-link.snowp", namedMembership.Link); err != nil {
+		return err
+	}
+	if err := w.object("named-team-id.snowp", &namedTeamID); err != nil {
+		return err
+	}
+	if err := w.object("named-reservation.snowp", &namedReservation); err != nil {
+		return err
+	}
+	if err := w.object("named-removal-boxes.snowp", removalBoxes); err != nil {
+		return err
+	}
+	if err := w.object("add-member-link.snowp", addLink.Link); err != nil {
+		return err
+	}
+	if err := w.object("add-member-ptk-boxes.snowp", addPtkBoxes); err != nil {
+		return err
+	}
+	if err := w.object("add-member-removal-boxes.snowp", addRemovalBoxes); err != nil {
+		return err
+	}
+	if err := w.object("add-member-edit-result.snowp", &addResult); err != nil {
+		return err
+	}
+	if err := w.object("demote-member-link.snowp", demoteLink.Link); err != nil {
+		return err
+	}
+	if err := w.object("add-member-target-uid.snowp", &targetUID); err != nil {
+		return err
+	}
+	if err := w.object("remove-member-link.snowp", removeLink.Link); err != nil {
+		return err
+	}
+	if err := w.object("remove-member-ptk-boxes.snowp", rotatedBoxes); err != nil {
+		return err
+	}
+	if err := w.object("remove-member-offchain.snowp", &removeArgument.Obd); err != nil {
+		return err
+	}
+	for index := range seedChain {
+		if err := w.object(
+			[]string{"remove-member-seed-chain-member-min.snowp", "remove-member-seed-chain-member.snowp"}[index],
+			&seedChain[index],
+		); err != nil {
+			return err
+		}
+	}
+	if err := w.object("remove-member-proof.snowp", &removeProof); err != nil {
+		return err
+	}
+	if err := w.object("team-bearer-token.snowp", &adminBearer); err != nil {
+		return err
+	}
+	if err := w.object("team-bearer-challenge-payload.snowp", &bearerPayload); err != nil {
+		return err
+	}
+	if err := w.object("team-bearer-challenge-blob.snowp", bearerBlob); err != nil {
+		return err
+	}
+	if err := w.object("team-bearer-signature.snowp", bearerSig); err != nil {
+		return err
+	}
+	if err := w.object("team-removal-admin-box.snowp", &addRemovalBoxes.Team); err != nil {
+		return err
+	}
 	for _, raw := range []struct {
 		name string
 		data []byte
@@ -556,8 +1151,34 @@ func writeMutationFixtures(output, userDir string) error {
 		{"adhoc-subchain-tree-location.bin", teamEldest.SubchainTreeLocationSeed[:]},
 		{"adhoc-membership-next-tree-location.bin", membership.NextTreeLocation[:]},
 		{"host-config-request.frame", hostConfigFrame},
+		{"named-create-request.frame", namedCreateFrame},
+		{"named-reserve-request.frame", namedReserveFrame},
+		{"named-next-tree-location.bin", namedEldest.NextTreeLocation[:]},
+		{"named-subchain-tree-location.bin", namedEldest.SubchainTreeLocationSeed[:]},
+		{"named-membership-next-tree-location.bin", namedMembership.NextTreeLocation[:]},
+		{"named-team-name-commitment-key.bin", namedEldest.TeamnameCommitmentKey[:]},
+		{"named-removal-key.bin", removalKey[:]},
+		{"add-member-next-tree-location.bin", addLink.NextTreeLocation[:]},
+		{"add-member-removal-key.bin", addRemovalKey[:]},
+		{"add-member-target-puk-seed.bin", targetPukSeed[:]},
+		{"add-member-request.frame", addFrame},
+		{"demote-member-ptk-seed.bin", demoteSeed[:]},
+		{"demote-member-next-tree-location.bin", demoteLink.NextTreeLocation[:]},
+		{"remove-member-next-tree-location.bin", removeLink.NextTreeLocation[:]},
+		{"remove-member-request.frame", removeFrame},
+		{"team-bearer-make-request.frame", bearerMakeFrame},
+		{"team-bearer-activate-request.frame", bearerActivateFrame},
+		{"team-removal-key-load-request.frame", loadRemovalFrame},
 	} {
 		if err := w.raw(raw.name, raw.data); err != nil {
+			return err
+		}
+	}
+	for i, seed := range rotatedSeeds {
+		if err := w.raw(
+			[]string{"remove-member-ptk-member-min-seed.bin", "remove-member-ptk-member-seed.bin"}[i],
+			seed[:],
+		); err != nil {
 			return err
 		}
 	}

@@ -6,24 +6,31 @@
 
 #![forbid(unsafe_code)]
 
+mod backup;
+
+pub use backup::*;
+
 use crypto_secretbox::{aead::Aead, KeyInit, XSalsa20Poly1305};
 use ed25519_dalek::{Signature as DalekSignature, Signer as _, SigningKey, VerifyingKey};
 use foks_proto::{
-    AdHocMembershipLinkPublic, ChangeMetadata, DeviceLabelNameAndCommitmentKey, DhPublicKey,
-    EntityId, Hepk, HybridBox, KvDirectory, KvDirent, KvDirentName, KvEncryptedChunk,
-    KvLargeFileMetadata, KvNodeId, KvParty, KvRoot, KvSmallFileBox, KvSmallFilePlaintext,
-    KvUploadChunk, KvUploadFinal, PukParcel, Role, RoleAndGeneration, SecretBox, SecretSeed,
-    SharedKeyBox, SharedKeyBoxSet, SharedKeyBoxTarget, SharedKeySeed, Signature,
-    SoftwareEldestPublic, SubkeySeed, TeamGroupChange, TeamKeyOwner, TeamMemberChange,
-    TeamMemberKeys, TreeRoot, UnsignedUserLink, UserGroupChange, UserLink, UserMemberChange,
-    UserMemberKeys, UserSharedKey, APP_KEY_DERIVATION_TYPE_ID, DEVICE_LABEL_TYPE_ID, HEPK_TYPE_ID,
+    AdHocMembershipLinkPublic, ApprovedMembershipLinkPublic, ChangeMetadata,
+    DeviceLabelNameAndCommitmentKey, DhPublicKey, EntityId, Hepk, HybridBox, KvDirectory, KvDirent,
+    KvDirentName, KvEncryptedChunk, KvLargeFileMetadata, KvNodeId, KvParty, KvRoot, KvSmallFileBox,
+    KvSmallFilePlaintext, KvUploadChunk, KvUploadFinal, PukParcel, Role, RoleAndGeneration,
+    SecretBox, SecretSeed, SharedKeyBox, SharedKeyBoxSet, SharedKeyBoxTarget, SharedKeySeed,
+    Signature, SoftwareEldestPublic, SubkeySeed, TeamGroupChange, TeamKeyOwner, TeamMemberChange,
+    TeamMemberKeys, TeamRemovalAndCommitment, TeamRemovalBoxData, TeamRemovalKeyBox,
+    TeamRemovalKeyMetadata, TeamRemovalKeyPayload, TeamRemovalMacPayload, TeamRemovalProof,
+    TreeRoot, UnsignedUserLink, UserGroupChange, UserLink, UserMemberChange, UserMemberKeys,
+    UserSharedKey, APP_KEY_DERIVATION_TYPE_ID, DEVICE_LABEL_TYPE_ID, HEPK_TYPE_ID,
     HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID, KV_CHUNK_NONCE_PAYLOAD_TYPE_ID,
     KV_DIRENT_BINDING_PAYLOAD_TYPE_ID, KV_DIRENT_NAME_PAYLOAD_TYPE_ID, KV_FILE_KEY_PAYLOAD_TYPE_ID,
     KV_KEY_DERIVATION_TYPE_ID, KV_ROOT_BINDING_PAYLOAD_TYPE_ID, LINK_OUTER_V1_TYPE_ID,
     NAME_COMMITMENT_TYPE_ID, SHARED_KEY_SEED_TYPE_ID, SUBKEY_SEED_TYPE_ID,
-    TEMP_DH_KEY_SIG_TEMPLATE_TYPE_ID, TREE_LOCATION_TYPE_ID,
+    TEAM_REMOVAL_KEY_BOX_PAYLOAD_TYPE_ID, TEAM_REMOVAL_KEY_TYPE_ID,
+    TEAM_REMOVAL_MAC_PAYLOAD_TYPE_ID, TEMP_DH_KEY_SIG_TEMPLATE_TYPE_ID, TREE_LOCATION_TYPE_ID,
 };
-use foks_snowpack::{decode, decode_prefix, encode, Value};
+use foks_snowpack::{decode, decode_prefix, encode, encode_ref, Value, ValueRef};
 use hmac::{Hmac, Mac};
 use ml_kem::{ml_kem_768, Decapsulate as _, KeyExport as _, TryKeyInit as _};
 use p256::ecdsa::{
@@ -63,6 +70,8 @@ pub enum Error {
     PukBinding,
     #[error("invalid ad-hoc team key or hidden-location material")]
     AdHocTeamMaterial,
+    #[error("invalid named-team key, name, removal-key, or hidden-location material")]
+    NamedTeamMaterial,
     #[error("Yubi signing operation failed")]
     YubiSigning,
     #[error("KV authenticated binding failed")]
@@ -154,13 +163,11 @@ impl KvKeySet {
             &directory.id,
             &directory.seed_ciphertext,
         )?;
-        let (value, consumed) = decode_prefix(&plaintext)?;
-        require_zero_padding(&plaintext, consumed)?;
-        let Value::Binary(seed) = value else {
+        if plaintext.len() < 34 || plaintext[..2] != [0xc4, 32] {
             return Err(Error::KvBinding);
-        };
-        let seed: [u8; 32] = seed.try_into().map_err(|_| Error::KvBinding)?;
-        Ok(SecretSeed::new(seed))
+        }
+        require_zero_padding(&plaintext, 34)?;
+        Ok(SecretSeed::from_slice(&plaintext[2..34])?)
     }
 
     pub fn open_small_file(
@@ -180,7 +187,7 @@ impl KvKeySet {
         )?;
         let (value, consumed) = decode_prefix(&plaintext)?;
         require_zero_padding(&plaintext, consumed)?;
-        KvSmallFilePlaintext::decode_value(&value).map_err(Into::into)
+        KvSmallFilePlaintext::decode_value(value).map_err(Into::into)
     }
 
     pub fn open_file_seed(
@@ -194,8 +201,7 @@ impl KvKeySet {
             &metadata.key_seed.nonce,
             &metadata.key_seed.ciphertext,
         )?;
-        let (value, consumed) = decode_prefix(&plaintext)?;
-        require_zero_padding(&plaintext, consumed)?;
+        let (value, seed) = decode_with_redacted_trailing_seed(&plaintext)?;
         let fields = match value {
             Value::Array(fields) if fields.len() == 3 => fields,
             _ => return Err(Error::KvBinding),
@@ -205,11 +211,13 @@ impl KvKeySet {
         {
             return Err(Error::KvBinding);
         }
-        let Value::Binary(seed) = &fields[2] else {
+        let Value::Binary(redacted) = &fields[2] else {
             return Err(Error::KvBinding);
         };
-        let seed: [u8; 32] = seed.as_slice().try_into().map_err(|_| Error::KvBinding)?;
-        Ok(SecretSeed::new(seed))
+        if redacted.as_slice() != [0; 32] {
+            return Err(Error::KvBinding);
+        }
+        Ok(seed)
     }
 
     pub fn seal_directory_seed(
@@ -217,11 +225,12 @@ impl KvKeySet {
         directory_id: [u8; 16],
         seed: &SecretSeed,
     ) -> Result<Vec<u8>> {
+        let plaintext = Zeroizing::new(encode_ref(&ValueRef::Binary(seed.as_slice()))?);
         seal_typed_secretbox(
             &self.box_key,
             DIR_KEY_SEED_TYPE_ID,
             &directory_id,
-            &encode(&Value::Binary(seed.as_bytes().to_vec()))?,
+            &plaintext,
             false,
         )
     }
@@ -232,13 +241,24 @@ impl KvKeySet {
         key: RoleAndGeneration,
         plaintext: KvSmallFilePlaintext,
     ) -> Result<KvSmallFileBox> {
+        let plaintext = match &plaintext {
+            KvSmallFilePlaintext::File(bytes) => ValueRef::Array(vec![
+                ValueRef::Unsigned(3),
+                ValueRef::Variant(Some((b"0", Box::new(ValueRef::Binary(bytes))))),
+            ]),
+            KvSmallFilePlaintext::Symlink(path) => ValueRef::Array(vec![
+                ValueRef::Unsigned(4),
+                ValueRef::Variant(Some((b"1", Box::new(ValueRef::Text(path))))),
+            ]),
+        };
+        let plaintext = Zeroizing::new(encode_ref(&plaintext)?);
         Ok(KvSmallFileBox {
             key,
             ciphertext: seal_typed_secretbox(
                 &self.box_key,
                 SMALL_FILE_PAYLOAD_TYPE_ID,
                 &id.object_id(),
-                &encode(&plaintext.to_value())?,
+                &plaintext,
                 true,
             )?,
         })
@@ -252,11 +272,12 @@ impl KvKeySet {
         file_seed: &SecretSeed,
         nonce: [u8; 16],
     ) -> Result<KvLargeFileMetadata> {
-        let plaintext = encode(&Value::Array(vec![
-            Value::Binary(id.object_id().to_vec()),
-            Value::Unsigned(version),
-            Value::Binary(file_seed.as_bytes().to_vec()),
-        ]))?;
+        let object_id = id.object_id();
+        let plaintext = Zeroizing::new(encode_ref(&ValueRef::Array(vec![
+            ValueRef::Binary(&object_id),
+            ValueRef::Unsigned(version),
+            ValueRef::Binary(file_seed.as_slice()),
+        ]))?);
         Ok(KvLargeFileMetadata {
             key,
             key_seed: SecretBox {
@@ -283,14 +304,11 @@ pub fn seal_kv_dirent_name(
     nonce: [u8; 16],
 ) -> Result<([u8; 32], SecretBox)> {
     let keys = derive_seed_kv_keys(directory_seed)?;
-    let payload = encode(
-        &KvDirentName {
-            parent,
-            directory_version,
-            name,
-        }
-        .to_value(),
-    )?;
+    let payload = Zeroizing::new(encode_ref(&ValueRef::Array(vec![
+        ValueRef::Binary(&parent),
+        ValueRef::Unsigned(directory_version),
+        ValueRef::Text(&name),
+    ]))?);
     let mac = typed_hmac(
         keys.mac.as_slice(),
         KV_DIRENT_NAME_PAYLOAD_TYPE_ID,
@@ -323,7 +341,7 @@ pub fn seal_kv_chunk(
     cleartext: &[u8],
     encrypted_size_before: u64,
 ) -> Result<KvUploadChunk> {
-    let encoded = encode(&Value::Binary(cleartext.to_vec()))?;
+    let encoded = Zeroizing::new(encode_ref(&ValueRef::Binary(cleartext))?);
     let padded_length = kv_chunk_padded_length(encoded.len())?;
     let mut padded = Zeroizing::new(vec![0; padded_length]);
     padded[..encoded.len()].copy_from_slice(&encoded);
@@ -375,7 +393,7 @@ pub fn open_kv_dirent_name(directory_seed: &SecretSeed, dirent: &KvDirent) -> Re
         &dirent.binding_payload()?,
         &dirent.binding_mac,
     )?;
-    let name = KvDirentName::decode_value(&value)?;
+    let name = KvDirentName::decode_value(value)?;
     if name.parent != dirent.parent || name.directory_version != dirent.directory_version {
         return Err(Error::KvBinding);
     }
@@ -401,9 +419,11 @@ pub fn open_kv_chunk(
     let hash = prefixed_hash(KV_CHUNK_NONCE_PAYLOAD_TYPE_ID, &nonce_value);
     let nonce: [u8; 24] = hash[..24].try_into().expect("slice length is fixed");
     let cipher = XSalsa20Poly1305::new(file_seed.as_bytes().into());
-    let plaintext = cipher
-        .decrypt((&nonce).into(), chunk.ciphertext.as_ref())
-        .map_err(|_| Error::Decryption)?;
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt((&nonce).into(), chunk.ciphertext.as_ref())
+            .map_err(|_| Error::Decryption)?,
+    );
     let (value, consumed) = decode_prefix(&plaintext)?;
     require_zero_padding(&plaintext, consumed)?;
     let Value::Binary(bytes) = value else {
@@ -513,12 +533,39 @@ fn require_zero_padding(plaintext: &[u8], consumed: usize) -> Result<()> {
     Ok(())
 }
 
+fn decode_with_redacted_trailing_seed(plaintext: &[u8]) -> Result<(Value, SecretSeed)> {
+    const ENCODED_SEED_LENGTH: usize = 34;
+    if plaintext.len() < ENCODED_SEED_LENGTH
+        || plaintext[plaintext.len() - ENCODED_SEED_LENGTH..plaintext.len() - 32] != [0xc4, 32]
+    {
+        return Err(Error::KvBinding);
+    }
+    let seed_offset = plaintext.len() - 32;
+    let mut redacted = Zeroizing::new(plaintext.to_vec());
+    let seed = SecretSeed::from_slice(&redacted[seed_offset..])?;
+    redacted[seed_offset..].fill(0);
+    Ok((decode(&redacted)?, seed))
+}
+
 /// SHA-512/256 over the 8-byte big-endian type ID and canonical object bytes.
 pub fn prefixed_hash(type_id: u64, canonical_object: &[u8]) -> [u8; 32] {
     let mut hash = Sha512_256::new();
     hash.update(type_id.to_be_bytes());
     hash.update(canonical_object);
     hash.finalize().into()
+}
+
+/// Computes the exact v0.1.9 commitment authenticated by named-team member
+/// links and removal-key boxes.
+pub fn team_removal_key_commitment(removal_key: &SecretSeed) -> Result<[u8; 32]> {
+    // Canonical Snowpack encodes a 32-byte blob as bin8(32). Construct it in
+    // zeroizing fixed storage so commitment calculation makes no ordinary
+    // heap copy of the removal key.
+    let mut encoded = Zeroizing::new([0_u8; 34]);
+    encoded[0] = 0xc4;
+    encoded[1] = 32;
+    encoded[2..].copy_from_slice(removal_key.as_bytes());
+    Ok(prefixed_hash(TEAM_REMOVAL_KEY_TYPE_ID, encoded.as_slice()))
 }
 
 /// HMAC-SHA-512/256 commitment used by FOKS for disclosed chain metadata.
@@ -544,6 +591,19 @@ pub fn sign_shared_key_typed(
     message.extend_from_slice(&type_id.to_be_bytes());
     message.extend_from_slice(canonical_object);
     Ok(Signature::Ed25519(signing.sign(&message).to_bytes()))
+}
+
+/// Signs the exact `Future(TeamBearerTokenChallengePayload)` blob expected by
+/// TeamAdmin.activateTeamBearerToken.
+pub fn sign_team_bearer_token_challenge(
+    seed: &SecretSeed,
+    challenge: &foks_proto::TeamBearerTokenChallenge,
+) -> Result<Signature> {
+    sign_shared_key_typed(
+        seed,
+        foks_proto::TEAM_BEARER_TOKEN_CHALLENGE_BLOB_TYPE_ID,
+        &challenge.encoded_blob()?,
+    )
 }
 
 fn sign_seed_typed(seed: &SecretSeed, type_id: u64, canonical_object: &[u8]) -> Result<Signature> {
@@ -586,11 +646,111 @@ pub struct AdHocTeamMaterial {
     pub membership_next_tree_location: [u8; 32],
 }
 
+pub struct NamedTeamInput<'a> {
+    pub user: &'a EntityId,
+    pub host: &'a EntityId,
+    pub root: &'a TreeRoot,
+    pub time: u64,
+    pub owner_puk_generation: u64,
+    pub normalized_name: &'a [u8],
+    pub name_sequence: u64,
+    pub team_name_commitment_key: [u8; 16],
+    pub next_tree_location: [u8; 32],
+    pub subchain_tree_location: [u8; 32],
+    pub membership_next_tree_location: [u8; 32],
+}
+
+pub struct NamedTeamMaterial {
+    pub team: EntityId,
+    pub link: UserLink,
+    pub membership_link: UserLink,
+    pub ptks: Vec<SharedPublicMaterial>,
+    pub removal_key_commitment: [u8; 32],
+    pub next_tree_location: [u8; 32],
+    pub subchain_tree_location: [u8; 32],
+    pub membership_next_tree_location: [u8; 32],
+}
+
+pub struct AddLocalTeamMemberInput<'a> {
+    pub actor: &'a EntityId,
+    pub actor_source_role: Role,
+    pub team: &'a EntityId,
+    pub host: &'a EntityId,
+    pub sequence: u64,
+    pub previous: [u8; 32],
+    pub root: &'a TreeRoot,
+    pub time: u64,
+    pub next_tree_location: [u8; 32],
+    pub member: &'a EntityId,
+    pub member_source_role: Role,
+    pub member_destination_role: Role,
+    pub member_generation: u64,
+    pub member_public: &'a SharedPublicMaterial,
+}
+
+pub struct AddLocalTeamMemberMaterial {
+    pub link: UserLink,
+    pub removal_key_commitment: [u8; 32],
+    pub next_tree_location: [u8; 32],
+}
+
+pub struct TeamPtkRotation<'a> {
+    pub role: Role,
+    pub generation: u64,
+    pub seed: &'a SecretSeed,
+}
+
+pub struct RemoveLocalTeamMemberInput<'a> {
+    pub actor: &'a EntityId,
+    pub actor_source_role: Role,
+    pub team: &'a EntityId,
+    pub host: &'a EntityId,
+    pub sequence: u64,
+    pub previous: [u8; 32],
+    pub root: &'a TreeRoot,
+    pub time: u64,
+    pub next_tree_location: [u8; 32],
+    pub member: &'a EntityId,
+    pub member_source_role: Role,
+}
+
+pub struct ChangeTeamMemberInput<'a> {
+    pub actor: &'a EntityId,
+    pub actor_source_role: Role,
+    pub team: &'a EntityId,
+    pub host: &'a EntityId,
+    pub sequence: u64,
+    pub previous: [u8; 32],
+    pub root: &'a TreeRoot,
+    pub time: u64,
+    pub next_tree_location: [u8; 32],
+    pub member: &'a EntityId,
+    pub member_host: Option<&'a EntityId>,
+    pub member_source_role: Role,
+    pub destination_role: Role,
+    pub member_generation: Option<u64>,
+    pub member_public: Option<&'a SharedPublicMaterial>,
+}
+
+pub struct RemoveLocalTeamMemberMaterial {
+    pub link: UserLink,
+    pub ptks: Vec<SharedPublicMaterial>,
+    pub next_tree_location: [u8; 32],
+}
+
 /// Derives the permanent ad-hoc TeamID selected by FOKS from its admin PTK.
 pub fn adhoc_team_id_from_admin_seed(seed: &SecretSeed) -> Result<EntityId> {
     let admin = derive_shared_public(seed, foks_proto::ENTITY_PTK_VERIFY)?;
     let mut team_bytes = admin.verify_key.as_bytes().to_vec();
     team_bytes[0] = foks_proto::ENTITY_AD_HOC_TEAM;
+    Ok(EntityId::from_bytes(team_bytes)?)
+}
+
+/// Derives the permanent named TeamID selected by FOKS from its admin PTK.
+pub fn named_team_id_from_admin_seed(seed: &SecretSeed) -> Result<EntityId> {
+    let admin = derive_shared_public(seed, foks_proto::ENTITY_PTK_VERIFY)?;
+    let mut team_bytes = admin.verify_key.as_bytes().to_vec();
+    team_bytes[0] = foks_proto::ENTITY_NAMED_TEAM;
     Ok(EntityId::from_bytes(team_bytes)?)
 }
 
@@ -780,6 +940,445 @@ fn make_single_owner_adhoc_team_with_signer(
     })
 }
 
+/// Constructs a named team's eldest link and its creator's approved
+/// membership link. PTK seeds are ordered member-min, member, admin, owner.
+pub fn make_single_owner_named_team(
+    input: &NamedTeamInput<'_>,
+    device_seed: &SecretSeed,
+    owner_puk_seed: &SecretSeed,
+    ptk_seeds: [&SecretSeed; 4],
+    removal_key: &SecretSeed,
+) -> Result<NamedTeamMaterial> {
+    let device = derive_device_public(device_seed)?;
+    make_single_owner_named_team_with_signer(
+        input,
+        &device.id,
+        owner_puk_seed,
+        ptk_seeds,
+        removal_key,
+        |canonical_object| sign_seed_typed(device_seed, LINK_OUTER_V1_TYPE_ID, canonical_object),
+    )
+}
+
+/// Hardware-backed variant of [`make_single_owner_named_team`].
+pub fn make_single_owner_named_team_yubi(
+    input: &NamedTeamInput<'_>,
+    device: &dyn YubiDevice,
+    owner_puk_seed: &SecretSeed,
+    ptk_seeds: [&SecretSeed; 4],
+    removal_key: &SecretSeed,
+) -> Result<NamedTeamMaterial> {
+    if device.entity_id().entity_type() != foks_proto::ENTITY_YUBI {
+        return Err(Error::SignatureType);
+    }
+    make_single_owner_named_team_with_signer(
+        input,
+        device.entity_id(),
+        owner_puk_seed,
+        ptk_seeds,
+        removal_key,
+        |canonical_object| sign_yubi_typed(device, LINK_OUTER_V1_TYPE_ID, canonical_object),
+    )
+}
+
+fn make_single_owner_named_team_with_signer(
+    input: &NamedTeamInput<'_>,
+    device_id: &EntityId,
+    owner_puk_seed: &SecretSeed,
+    ptk_seeds: [&SecretSeed; 4],
+    removal_key: &SecretSeed,
+    sign_membership: impl FnOnce(&[u8]) -> Result<Signature>,
+) -> Result<NamedTeamMaterial> {
+    if input.owner_puk_generation == 0
+        || input.normalized_name.is_empty()
+        || input.name_sequence == 0
+        || input.next_tree_location == input.subchain_tree_location
+        || input.next_tree_location == input.membership_next_tree_location
+        || input.subchain_tree_location == input.membership_next_tree_location
+    {
+        return Err(Error::NamedTeamMaterial);
+    }
+    let owner_puk = derive_shared_public(owner_puk_seed, foks_proto::ENTITY_PUK_VERIFY)?;
+    let mut signer_bytes = owner_puk.verify_key.as_bytes().to_vec();
+    signer_bytes[0] = foks_proto::ENTITY_USER;
+    let signer = EntityId::from_bytes(signer_bytes)?;
+    let roles = [
+        Role::member(-0x4000),
+        Role::member(0),
+        Role::ADMIN,
+        Role::OWNER,
+    ];
+    let ptks = ptk_seeds
+        .iter()
+        .map(|seed| derive_shared_public(seed, foks_proto::ENTITY_PTK_VERIFY))
+        .collect::<Result<Vec<_>>>()?;
+    if ptks.iter().enumerate().any(|(index, ptk)| {
+        ptks[index + 1..]
+            .iter()
+            .any(|other| other.verify_key == ptk.verify_key)
+    }) {
+        return Err(Error::NamedTeamMaterial);
+    }
+    let team = named_team_id_from_admin_seed(ptk_seeds[2])?;
+    let removal_key_commitment = team_removal_key_commitment(removal_key)?;
+    let name_commitment = commitment(
+        NAME_COMMITMENT_TYPE_ID,
+        &encode(&Value::Array(vec![
+            Value::Text(input.normalized_name.to_vec()),
+            Value::Unsigned(input.name_sequence),
+        ]))?,
+        &input.team_name_commitment_key,
+    );
+    let shared_keys = roles
+        .iter()
+        .zip(&ptks)
+        .map(|(role, ptk)| {
+            Ok(UserSharedKey {
+                generation: 1,
+                role: *role,
+                verify_key: ptk.verify_key.clone(),
+                hepk_fingerprint: hepk_fingerprint(&ptk.hepk)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let change = TeamGroupChange {
+        seqno: 1,
+        previous: None,
+        root: input.root.clone(),
+        time: input.time,
+        next_location_commitment: prefixed_hash(
+            TREE_LOCATION_TYPE_ID,
+            &encode(&Value::Binary(input.next_tree_location.to_vec()))?,
+        ),
+        team: team.clone(),
+        host: input.host.clone(),
+        signer,
+        signer_owner: TeamKeyOwner {
+            party: input.user.clone(),
+            source_role: Role::OWNER,
+        },
+        changes: vec![TeamMemberChange {
+            role: Role::OWNER,
+            party: input.user.clone(),
+            scoped_host: None,
+            source_role: Role::OWNER,
+            keys: Some(TeamMemberKeys {
+                verify_key: owner_puk.verify_key.clone(),
+                hepk_fingerprint: hepk_fingerprint(&owner_puk.hepk)?,
+                generation: input.owner_puk_generation,
+                removal_key_commitment: Some(removal_key_commitment),
+                index_range: None,
+            }),
+        }],
+        shared_keys,
+        metadata: vec![
+            ChangeMetadata::TeamName(name_commitment),
+            ChangeMetadata::Eldest {
+                subchain_location_commitment: prefixed_hash(
+                    TREE_LOCATION_TYPE_ID,
+                    &encode(&Value::Binary(input.subchain_tree_location.to_vec()))?,
+                ),
+            },
+            ChangeMetadata::TeamIndexRange(foks_proto::RationalRange {
+                low: foks_proto::Rational {
+                    infinity: false,
+                    base: vec![1],
+                    exponent: 0,
+                },
+                high: foks_proto::Rational {
+                    infinity: true,
+                    base: Vec::new(),
+                    exponent: 0,
+                },
+            }),
+            ChangeMetadata::MemberLoadFloor(Role::member(0)),
+        ],
+    };
+    let unsigned = UnsignedUserLink::team_group_change(&change)?;
+    let mut signatures = Vec::with_capacity(5);
+    for seed in ptk_seeds {
+        signatures.push(sign_seed_typed(
+            seed,
+            LINK_OUTER_V1_TYPE_ID,
+            &unsigned.signing_bytes(&signatures)?,
+        )?);
+    }
+    signatures.push(sign_seed_typed(
+        owner_puk_seed,
+        LINK_OUTER_V1_TYPE_ID,
+        &unsigned.signing_bytes(&signatures)?,
+    )?);
+    let link = unsigned.finish(signatures)?;
+    let membership_unsigned =
+        UnsignedUserLink::approved_membership(&ApprovedMembershipLinkPublic {
+            user: input.user,
+            host: input.host,
+            signer: device_id,
+            sequence: 1,
+            previous: None,
+            root: input.root,
+            time: 0,
+            next_location_commitment: prefixed_hash(
+                TREE_LOCATION_TYPE_ID,
+                &encode(&Value::Binary(input.membership_next_tree_location.to_vec()))?,
+            ),
+            team: &team,
+            source_role: Role::OWNER,
+            destination_role: Role::OWNER,
+            team_sequence: 1,
+            removal_key_commitment,
+        })?;
+    let membership_signature = sign_membership(&membership_unsigned.signing_bytes(&[])?)?;
+    let membership_link = membership_unsigned.finish(vec![membership_signature])?;
+    Ok(NamedTeamMaterial {
+        team,
+        link,
+        membership_link,
+        ptks,
+        removal_key_commitment,
+        next_tree_location: input.next_tree_location,
+        subchain_tree_location: input.subchain_tree_location,
+        membership_next_tree_location: input.membership_next_tree_location,
+    })
+}
+
+/// Constructs one additive local-user named-team transition. Pure additions
+/// reuse existing PTK generations; the caller separately boxes those keys and
+/// the new member's removal key.
+pub fn make_add_local_team_member_link(
+    input: &AddLocalTeamMemberInput<'_>,
+    actor_puk_seed: &SecretSeed,
+    removal_key: &SecretSeed,
+) -> Result<AddLocalTeamMemberMaterial> {
+    input.actor.clone().require_type(foks_proto::ENTITY_USER)?;
+    input.member.clone().require_type(foks_proto::ENTITY_USER)?;
+    input
+        .team
+        .clone()
+        .require_type(foks_proto::ENTITY_NAMED_TEAM)?;
+    input.host.clone().require_type(foks_proto::ENTITY_HOST)?;
+    if input.sequence < 2
+        || input.actor_source_role == Role::NONE
+        || input.member_source_role == Role::NONE
+        || input.member_destination_role == Role::NONE
+        || input.member_generation == 0
+        || input.actor == input.member
+    {
+        return Err(Error::NamedTeamMaterial);
+    }
+    let actor_public = derive_shared_public(actor_puk_seed, foks_proto::ENTITY_PUK_VERIFY)?;
+    let signer = actor_public.verify_key;
+    let removal_key_commitment = team_removal_key_commitment(removal_key)?;
+    let change = TeamGroupChange {
+        seqno: input.sequence,
+        previous: Some(input.previous),
+        root: input.root.clone(),
+        time: input.time,
+        next_location_commitment: prefixed_hash(
+            TREE_LOCATION_TYPE_ID,
+            &encode(&Value::Binary(input.next_tree_location.to_vec()))?,
+        ),
+        team: input.team.clone(),
+        host: input.host.clone(),
+        signer,
+        signer_owner: TeamKeyOwner {
+            party: input.actor.clone(),
+            source_role: input.actor_source_role,
+        },
+        changes: vec![TeamMemberChange {
+            role: input.member_destination_role,
+            party: input.member.clone(),
+            scoped_host: None,
+            source_role: input.member_source_role,
+            keys: Some(TeamMemberKeys {
+                verify_key: input.member_public.verify_key.clone(),
+                hepk_fingerprint: hepk_fingerprint(&input.member_public.hepk)?,
+                generation: input.member_generation,
+                removal_key_commitment: Some(removal_key_commitment),
+                index_range: None,
+            }),
+        }],
+        shared_keys: Vec::new(),
+        metadata: Vec::new(),
+    };
+    let unsigned = UnsignedUserLink::team_group_change(&change)?;
+    let signature = sign_seed_typed(
+        actor_puk_seed,
+        LINK_OUTER_V1_TYPE_ID,
+        &unsigned.signing_bytes(&[])?,
+    )?;
+    Ok(AddLocalTeamMemberMaterial {
+        link: unsigned.finish(vec![signature])?,
+        removal_key_commitment,
+        next_tree_location: input.next_tree_location,
+    })
+}
+
+/// Constructs and stacked-signs one local-user removal and its exact PTK
+/// generation advances. The caller derives the required role set from the
+/// authenticated pre-transition roster and key schedule.
+pub fn make_remove_local_team_member_link(
+    input: &RemoveLocalTeamMemberInput<'_>,
+    actor_puk_seed: &SecretSeed,
+    rotations: &[TeamPtkRotation<'_>],
+) -> Result<RemoveLocalTeamMemberMaterial> {
+    make_change_team_member_link(
+        &ChangeTeamMemberInput {
+            actor: input.actor,
+            actor_source_role: input.actor_source_role,
+            team: input.team,
+            host: input.host,
+            sequence: input.sequence,
+            previous: input.previous,
+            root: input.root,
+            time: input.time,
+            next_tree_location: input.next_tree_location,
+            member: input.member,
+            member_host: None,
+            member_source_role: input.member_source_role,
+            destination_role: Role::NONE,
+            member_generation: None,
+            member_public: None,
+        },
+        actor_puk_seed,
+        rotations,
+    )
+}
+
+/// Constructs and stacked-signs a removal, demotion, or member credential
+/// generation advance together with its exact PTK rotations.
+pub fn make_change_team_member_link(
+    input: &ChangeTeamMemberInput<'_>,
+    actor_puk_seed: &SecretSeed,
+    rotations: &[TeamPtkRotation<'_>],
+) -> Result<RemoveLocalTeamMemberMaterial> {
+    input.actor.clone().require_type(foks_proto::ENTITY_USER)?;
+    if !matches!(
+        input.member.entity_type(),
+        foks_proto::ENTITY_USER | foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+    ) {
+        return Err(Error::NamedTeamMaterial);
+    }
+    input
+        .team
+        .clone()
+        .require_type(foks_proto::ENTITY_NAMED_TEAM)?;
+    input.host.clone().require_type(foks_proto::ENTITY_HOST)?;
+    if input.sequence < 2
+        || input.actor_source_role == Role::NONE
+        || input.member_source_role == Role::NONE
+        || (input.actor == input.member && input.member_host.is_none())
+        || rotations.is_empty()
+        || (input.destination_role == Role::NONE)
+            != (input.member_generation.is_none() && input.member_public.is_none())
+        || input
+            .member_host
+            .is_some_and(|host| host.entity_type() != foks_proto::ENTITY_HOST)
+    {
+        return Err(Error::NamedTeamMaterial);
+    }
+    let actor = derive_shared_public(actor_puk_seed, foks_proto::ENTITY_PUK_VERIFY)?;
+    let mut prior_role = None;
+    let mut verify_keys = std::collections::BTreeSet::new();
+    let mut ptks = Vec::with_capacity(rotations.len());
+    let mut shared_keys = Vec::with_capacity(rotations.len());
+    for rotation in rotations {
+        if rotation.role == Role::NONE
+            || rotation.generation < 2
+            || prior_role.is_some_and(|role| role >= rotation.role)
+        {
+            return Err(Error::NamedTeamMaterial);
+        }
+        let public = derive_shared_public(rotation.seed, foks_proto::ENTITY_PTK_VERIFY)?;
+        if !verify_keys.insert(public.verify_key.as_bytes().to_vec()) {
+            return Err(Error::NamedTeamMaterial);
+        }
+        shared_keys.push(UserSharedKey {
+            generation: rotation.generation,
+            role: rotation.role,
+            verify_key: public.verify_key.clone(),
+            hepk_fingerprint: hepk_fingerprint(&public.hepk)?,
+        });
+        ptks.push(public);
+        prior_role = Some(rotation.role);
+    }
+    let change = TeamGroupChange {
+        seqno: input.sequence,
+        previous: Some(input.previous),
+        root: input.root.clone(),
+        time: input.time,
+        next_location_commitment: prefixed_hash(
+            TREE_LOCATION_TYPE_ID,
+            &encode(&Value::Binary(input.next_tree_location.to_vec()))?,
+        ),
+        team: input.team.clone(),
+        host: input.host.clone(),
+        signer: actor.verify_key,
+        signer_owner: TeamKeyOwner {
+            party: input.actor.clone(),
+            source_role: input.actor_source_role,
+        },
+        changes: vec![TeamMemberChange {
+            role: input.destination_role,
+            party: input.member.clone(),
+            scoped_host: input.member_host.cloned(),
+            source_role: input.member_source_role,
+            keys: match (input.member_generation, input.member_public) {
+                (Some(generation), Some(public)) if generation > 0 => Some(TeamMemberKeys {
+                    verify_key: public.verify_key.clone(),
+                    hepk_fingerprint: hepk_fingerprint(&public.hepk)?,
+                    generation,
+                    removal_key_commitment: None,
+                    index_range: None,
+                }),
+                (None, None) => None,
+                _ => return Err(Error::NamedTeamMaterial),
+            },
+        }],
+        shared_keys,
+        metadata: Vec::new(),
+    };
+    let unsigned = UnsignedUserLink::team_group_change(&change)?;
+    let mut signatures = Vec::with_capacity(rotations.len() + 1);
+    for rotation in rotations {
+        signatures.push(sign_seed_typed(
+            rotation.seed,
+            LINK_OUTER_V1_TYPE_ID,
+            &unsigned.signing_bytes(&signatures)?,
+        )?);
+    }
+    signatures.push(sign_seed_typed(
+        actor_puk_seed,
+        LINK_OUTER_V1_TYPE_ID,
+        &unsigned.signing_bytes(&signatures)?,
+    )?);
+    Ok(RemoveLocalTeamMemberMaterial {
+        link: unsigned.finish(signatures)?,
+        ptks,
+        next_tree_location: input.next_tree_location,
+    })
+}
+
+/// Authenticates a removal against the member's committed removal key and
+/// the exact Merkle root used by the edit.
+pub fn make_team_removal_proof(
+    removal_key: &SecretSeed,
+    payload: TeamRemovalMacPayload,
+) -> Result<TeamRemovalAndCommitment> {
+    let encoded = Zeroizing::new(payload.encoded()?);
+    let mut mac = <Hmac<Sha512_256> as Mac>::new_from_slice(removal_key.as_slice())
+        .map_err(|_| Error::NamedTeamMaterial)?;
+    mac.update(&TEAM_REMOVAL_MAC_PAYLOAD_TYPE_ID.to_be_bytes());
+    mac.update(encoded.as_slice());
+    Ok(TeamRemovalAndCommitment {
+        removal: TeamRemovalProof {
+            mac: mac.finalize().into_bytes().into(),
+            payload,
+        },
+        commitment: team_removal_key_commitment(removal_key)?,
+    })
+}
+
 pub struct UserMutationBase<'a> {
     pub uid: &'a EntityId,
     pub host: &'a EntityId,
@@ -814,14 +1413,99 @@ pub fn make_software_provision_link(
     new_device_seed: &SecretSeed,
     introduced_puk: Option<&SecretSeed>,
 ) -> Result<SoftwareProvisionMaterial> {
-    let existing = derive_device_public(existing_device_seed)?;
-    let device = derive_device_public(new_device_seed)?;
+    make_provision_link(
+        input,
+        existing_device_seed,
+        foks_proto::ENTITY_DEVICE,
+        foks_proto::ENTITY_DEVICE,
+        new_device_seed,
+        introduced_puk,
+    )
+}
+
+/// Constructs the same provision link with a FOKS backup key as the new
+/// member. Backup keys have a distinct EntityID type but otherwise use the
+/// exact Curve25519/ML-KEM software suite.
+pub fn make_backup_provision_link(
+    input: &SoftwareProvisionInput<'_>,
+    existing_device_seed: &SecretSeed,
+    backup: &BackupKey,
+    introduced_puk: Option<&SecretSeed>,
+) -> Result<SoftwareProvisionMaterial> {
+    let backup_seed = backup.derived_seed();
+    make_provision_link(
+        input,
+        existing_device_seed,
+        foks_proto::ENTITY_DEVICE,
+        foks_proto::ENTITY_BACKUP_KEY,
+        &backup_seed,
+        introduced_puk,
+    )
+}
+
+/// Provisions a permanent software device while an ephemeral backup key is
+/// the authenticated existing member and final countersigner.
+pub fn make_software_provision_link_from_backup(
+    input: &SoftwareProvisionInput<'_>,
+    backup: &BackupKey,
+    new_device_seed: &SecretSeed,
+    introduced_puk: Option<&SecretSeed>,
+) -> Result<SoftwareProvisionMaterial> {
+    let backup_seed = backup.derived_seed();
+    make_software_provision_link_from_backup_seed(
+        input,
+        &backup_seed,
+        new_device_seed,
+        introduced_puk,
+    )
+}
+
+fn make_software_provision_link_from_backup_seed(
+    input: &SoftwareProvisionInput<'_>,
+    backup_seed: &SecretSeed,
+    new_device_seed: &SecretSeed,
+    introduced_puk: Option<&SecretSeed>,
+) -> Result<SoftwareProvisionMaterial> {
+    make_provision_link(
+        input,
+        backup_seed,
+        foks_proto::ENTITY_BACKUP_KEY,
+        foks_proto::ENTITY_DEVICE,
+        new_device_seed,
+        introduced_puk,
+    )
+}
+
+pub fn make_software_provision_link_from_backup_credential(
+    input: &SoftwareProvisionInput<'_>,
+    backup: &BackupKeyMaterial,
+    new_device_seed: &SecretSeed,
+    introduced_puk: Option<&SecretSeed>,
+) -> Result<SoftwareProvisionMaterial> {
+    make_software_provision_link_from_backup_seed(
+        input,
+        &backup.seed,
+        new_device_seed,
+        introduced_puk,
+    )
+}
+
+fn make_provision_link(
+    input: &SoftwareProvisionInput<'_>,
+    existing_device_seed: &SecretSeed,
+    existing_entity_type: u8,
+    new_entity_type: u8,
+    new_device_seed: &SecretSeed,
+    introduced_puk: Option<&SecretSeed>,
+) -> Result<SoftwareProvisionMaterial> {
+    let existing = derive_public_material(existing_device_seed, existing_entity_type)?;
+    let device = derive_public_material(new_device_seed, new_entity_type)?;
     let introduced = introduced_puk
         .map(|seed| derive_shared_public(seed, foks_proto::ENTITY_PUK_VERIFY))
         .transpose()?;
     let label = input.device_label;
     let label_bytes = encode(&Value::Array(vec![
-        Value::Unsigned(label.device_type),
+        Value::Unsigned(label.device_type.protocol_value()),
         Value::Text(label.normalized_name.clone()),
         Value::Unsigned(label.serial),
     ]))?;
@@ -899,6 +1583,42 @@ pub struct PukRotation<'a> {
     pub seed: &'a SecretSeed,
 }
 
+fn hybrid_key_derivation_payload(
+    kem_shared: &[u8],
+    dh_shared: &[u8],
+    receiver_hepk: &Hepk,
+    sender_dh: &DhPublicKey,
+) -> Result<Zeroizing<Vec<u8>>> {
+    let receiver = decode(&receiver_hepk.encoded()?)?;
+    let sender = dh_public_value(sender_dh);
+    Ok(Zeroizing::new(encode_ref(&ValueRef::Array(vec![
+        ValueRef::Unsigned(1),
+        ValueRef::Binary(kem_shared),
+        ValueRef::Binary(dh_shared),
+        ValueRef::from(&receiver),
+        ValueRef::from(&sender),
+    ]))?))
+}
+
+fn shared_key_seed_plaintext(
+    receiver: &EntityId,
+    host: &EntityId,
+    generation: u64,
+    role: Role,
+    seed: &SecretSeed,
+) -> Result<Zeroizing<Vec<u8>>> {
+    let role = role.to_value();
+    Ok(Zeroizing::new(encode_ref(&ValueRef::Array(vec![
+        ValueRef::Array(vec![
+            ValueRef::Binary(receiver.as_bytes()),
+            ValueRef::Binary(host.as_bytes()),
+        ]),
+        ValueRef::Unsigned(generation),
+        ValueRef::from(&role),
+        ValueRef::Binary(seed.as_slice()),
+    ]))?))
+}
+
 pub fn seal_puk_seed_chain_box(
     new_seed: &SecretSeed,
     previous_seed: &SecretSeed,
@@ -908,15 +1628,7 @@ pub fn seal_puk_seed_chain_box(
     role: Role,
     nonce: [u8; 16],
 ) -> Result<foks_proto::SeedChainBox> {
-    let cleartext = Zeroizing::new(encode(&Value::Array(vec![
-        Value::Array(vec![
-            Value::Binary(party.as_bytes().to_vec()),
-            Value::Binary(host.as_bytes().to_vec()),
-        ]),
-        Value::Unsigned(generation),
-        role.to_value(),
-        Value::Binary(previous_seed.as_slice().to_vec()),
-    ]))?);
+    let cleartext = shared_key_seed_plaintext(party, host, generation, role, previous_seed)?;
     let key = derive_key(new_seed, 2, None)?;
     Ok(foks_proto::SeedChainBox {
         generation,
@@ -1042,7 +1754,12 @@ pub struct SharedKeyBoxInput<'a> {
     pub generation: u64,
     pub role: Role,
     pub receiver_id: &'a EntityId,
+    /// Remote host scope for a federated recipient; local recipients are
+    /// represented by `None` on the wire.
+    pub receiver_host: Option<&'a EntityId>,
     pub receiver_hepk: &'a Hepk,
+    pub receiver_role: Role,
+    pub receiver_generation: u64,
 }
 
 /// Boxes one or more PUK generations from a software sender to software
@@ -1063,10 +1780,13 @@ pub fn seal_software_puk_boxes(
             generation: input.generation,
             role: input.role,
             receiver_id: &input.receiver.id,
+            receiver_host: None,
             receiver_hepk: &input.receiver.hepk,
+            receiver_role: Role::NONE,
+            receiver_generation: 0,
         })
         .collect::<Vec<_>>();
-    seal_shared_key_boxes(
+    seal_shared_key_boxes_with_sender(
         host,
         sender_seed,
         &sender.hepk,
@@ -1074,6 +1794,60 @@ pub fn seal_software_puk_boxes(
         &generic,
         randomness,
     )
+}
+
+/// Boxes PUKs from an ephemeral backup key to newly provisioned software
+/// devices during recovery.
+pub fn seal_backup_puk_boxes(
+    host: &EntityId,
+    backup: &BackupKey,
+    box_id: [u8; 16],
+    inputs: &[SoftwarePukBoxInput<'_>],
+    randomness: &[PukBoxRandomness],
+) -> Result<SharedKeyBoxSet> {
+    let sender_seed = backup.derived_seed();
+    seal_backup_puk_boxes_from_seed(host, &sender_seed, box_id, inputs, randomness)
+}
+
+fn seal_backup_puk_boxes_from_seed(
+    host: &EntityId,
+    sender_seed: &SecretSeed,
+    box_id: [u8; 16],
+    inputs: &[SoftwarePukBoxInput<'_>],
+    randomness: &[PukBoxRandomness],
+) -> Result<SharedKeyBoxSet> {
+    let sender = derive_public_material(sender_seed, foks_proto::ENTITY_BACKUP_KEY)?;
+    let generic = inputs
+        .iter()
+        .map(|input| SharedKeyBoxInput {
+            seed: input.seed,
+            generation: input.generation,
+            role: input.role,
+            receiver_id: &input.receiver.id,
+            receiver_host: None,
+            receiver_hepk: &input.receiver.hepk,
+            receiver_role: Role::NONE,
+            receiver_generation: 0,
+        })
+        .collect::<Vec<_>>();
+    seal_shared_key_boxes_with_sender(
+        host,
+        sender_seed,
+        &sender.hepk,
+        box_id,
+        &generic,
+        randomness,
+    )
+}
+
+pub fn seal_backup_puk_boxes_from_credential(
+    host: &EntityId,
+    backup: &BackupKeyMaterial,
+    box_id: [u8; 16],
+    inputs: &[SoftwarePukBoxInput<'_>],
+    randomness: &[PukBoxRandomness],
+) -> Result<SharedKeyBoxSet> {
+    seal_backup_puk_boxes_from_seed(host, &backup.seed, box_id, inputs, randomness)
 }
 
 /// Boxes shared keys from a software PUK/PTK sender to Curve25519 PUK/PTK
@@ -1087,11 +1861,43 @@ pub fn seal_shared_key_boxes(
     inputs: &[SharedKeyBoxInput<'_>],
     randomness: &[PukBoxRandomness],
 ) -> Result<SharedKeyBoxSet> {
+    if derive_device_public(sender_seed)?.hepk != *sender_hepk {
+        return Err(Error::HybridBox);
+    }
+    seal_shared_key_boxes_with_sender(host, sender_seed, sender_hepk, box_id, inputs, randomness)
+}
+
+fn seal_shared_key_boxes_with_sender(
+    host: &EntityId,
+    sender_seed: &SecretSeed,
+    sender_hepk: &Hepk,
+    box_id: [u8; 16],
+    inputs: &[SharedKeyBoxInput<'_>],
+    randomness: &[PukBoxRandomness],
+) -> Result<SharedKeyBoxSet> {
     if inputs.is_empty() || inputs.len() != randomness.len() {
         return Err(Error::HybridBox);
     }
-    if derive_device_public(sender_seed)?.hepk != *sender_hepk {
-        return Err(Error::HybridBox);
+    if inputs.iter().any(|input| {
+        input
+            .receiver_host
+            .is_some_and(|host| host.entity_type() != foks_proto::ENTITY_HOST)
+            || !match input.receiver_id.entity_type() {
+                foks_proto::ENTITY_DEVICE
+                | foks_proto::ENTITY_YUBI
+                | foks_proto::ENTITY_BACKUP_KEY
+                | foks_proto::ENTITY_BOT_TOKEN_KEY => {
+                    input.receiver_role == Role::NONE && input.receiver_generation == 0
+                }
+                foks_proto::ENTITY_USER
+                | foks_proto::ENTITY_NAMED_TEAM
+                | foks_proto::ENTITY_AD_HOC_TEAM => {
+                    input.receiver_role != Role::NONE && input.receiver_generation > 0
+                }
+                _ => false,
+            }
+    }) {
+        return Err(Error::WrongReceiver);
     }
     let sender_dh = sender_hepk.curve25519().copied().ok_or(Error::HybridBox)?;
     let mut boxes = Vec::with_capacity(inputs.len());
@@ -1107,27 +1913,24 @@ pub fn seal_shared_key_boxes(
             .copied()
             .ok_or(Error::HybridBox)?;
         let dh_shared = software_dh_shared(sender_seed, &DhPublicKey::Curve25519(receiver_dh))?;
-        let receiver_hepk = decode(&input.receiver_hepk.encoded()?)?;
-        let payload = Zeroizing::new(encode(&Value::Array(vec![
-            Value::Unsigned(1),
-            Value::Binary(kem_shared.as_slice().to_vec()),
-            Value::Binary(dh_shared.as_slice().to_vec()),
-            receiver_hepk,
-            dh_public_value(&DhPublicKey::Curve25519(sender_dh)),
-        ]))?);
+        let payload = hybrid_key_derivation_payload(
+            kem_shared.as_slice(),
+            dh_shared.as_slice(),
+            input.receiver_hepk,
+            &DhPublicKey::Curve25519(sender_dh),
+        )?;
         let mut hash = <Sha3_256 as Sha3Digest>::new();
         hash.update(HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID.to_be_bytes());
         hash.update(payload.as_slice());
         let key = Zeroizing::new(<[u8; 32]>::from(hash.finalize()));
-        let cleartext = Zeroizing::new(encode(&Value::Array(vec![
-            Value::Array(vec![
-                Value::Binary(input.receiver_id.as_bytes().to_vec()),
-                Value::Binary(host.as_bytes().to_vec()),
-            ]),
-            Value::Unsigned(input.generation),
-            input.role.to_value(),
-            Value::Binary(input.seed.as_slice().to_vec()),
-        ]))?);
+        let receiver_host = input.receiver_host.unwrap_or(host);
+        let cleartext = shared_key_seed_plaintext(
+            input.receiver_id,
+            receiver_host,
+            input.generation,
+            input.role,
+            input.seed,
+        )?;
         let mut nonce = [0u8; 24];
         nonce[..8].copy_from_slice(&SHARED_KEY_SEED_TYPE_ID.to_be_bytes());
         nonce[8..].copy_from_slice(&random.nonce);
@@ -1146,13 +1949,194 @@ pub fn seal_shared_key_boxes(
             },
             target: SharedKeyBoxTarget {
                 entity: input.receiver_id.clone(),
-                host: None,
-                role: Role::NONE,
-                generation: 0,
+                host: input.receiver_host.cloned(),
+                role: input.receiver_role,
+                generation: input.receiver_generation,
             },
         });
     }
     SharedKeyBoxSet::new(box_id, boxes, None).map_err(Into::into)
+}
+
+/// Boxes one team-removal key both to the team's admin PTK and to the member's
+/// PUK/PTK. The same authenticated metadata is included in each independent
+/// hybrid box.
+#[allow(clippy::too_many_arguments)]
+pub fn seal_team_removal_key(
+    sender_seed: &SecretSeed,
+    sender_hepk: &Hepk,
+    team_receiver_hepk: &Hepk,
+    team_receiver_role: Role,
+    team_receiver_generation: u64,
+    member_receiver_hepk: &Hepk,
+    member_receiver_role: Role,
+    member_receiver_generation: u64,
+    removal_key: &SecretSeed,
+    metadata: TeamRemovalKeyMetadata,
+    randomness: [PukBoxRandomness; 2],
+) -> Result<TeamRemovalBoxData> {
+    if team_receiver_generation == 0 || member_receiver_generation == 0 {
+        return Err(Error::NamedTeamMaterial);
+    }
+    let metadata_bytes = metadata.encoded()?;
+    let mut payload = Zeroizing::new(Vec::with_capacity(35 + metadata_bytes.len()));
+    payload.extend_from_slice(&[0x92, 0xc4, 32]);
+    payload.extend_from_slice(removal_key.as_bytes());
+    payload.extend_from_slice(&metadata_bytes);
+    let team_box = TeamRemovalKeyBox {
+        hybrid: seal_hybrid_payload(
+            sender_seed,
+            sender_hepk,
+            team_receiver_hepk,
+            TEAM_REMOVAL_KEY_BOX_PAYLOAD_TYPE_ID,
+            payload.as_slice(),
+            &randomness[0],
+            true,
+        )?,
+        role: team_receiver_role,
+        generation: team_receiver_generation,
+    };
+    let member_box = TeamRemovalKeyBox {
+        hybrid: seal_hybrid_payload(
+            sender_seed,
+            sender_hepk,
+            member_receiver_hepk,
+            TEAM_REMOVAL_KEY_BOX_PAYLOAD_TYPE_ID,
+            payload.as_slice(),
+            &randomness[1],
+            true,
+        )?,
+        role: member_receiver_role,
+        generation: member_receiver_generation,
+    };
+    let commitment = team_removal_key_commitment(removal_key)?;
+    Ok(TeamRemovalBoxData {
+        commitment,
+        team_box,
+        member_box,
+        metadata,
+    })
+}
+
+/// Opens either side of a team-removal key box and binds the plaintext to its
+/// authenticated chain commitment and exact metadata.
+pub fn open_team_removal_key(
+    boxed: &TeamRemovalKeyBox,
+    receiver: &dyn HybridSecretDecapsulator,
+    expected_role: Role,
+    expected_generation: u64,
+    expected_commitment: &[u8; 32],
+    expected_metadata: &TeamRemovalKeyMetadata,
+) -> Result<SecretSeed> {
+    if boxed.role != expected_role || boxed.generation != expected_generation {
+        return Err(Error::PukBinding);
+    }
+    let sender_dh = boxed.hybrid.sender_dh.as_ref().ok_or(Error::HybridBox)?;
+    let cleartext = open_hybrid_box(
+        &boxed.hybrid,
+        receiver,
+        sender_dh,
+        TEAM_REMOVAL_KEY_BOX_PAYLOAD_TYPE_ID,
+    )?;
+    let payload = TeamRemovalKeyPayload::decode(&cleartext)?;
+    if payload.metadata != *expected_metadata {
+        return Err(Error::PukBinding);
+    }
+    let key = payload.into_key();
+    let commitment = team_removal_key_commitment(&key)?;
+    if &commitment != expected_commitment {
+        return Err(Error::PukBinding);
+    }
+    Ok(key)
+}
+
+/// Opens an administrator copy of a member removal key when the original
+/// destination role and addition sequence are known only inside the box.
+/// The stable member identity fields and the chain commitment remain exact,
+/// while authenticated destination metadata is returned to the caller.
+pub struct TeamRemovalKeyExpectation<'a> {
+    pub commitment: &'a [u8; 32],
+    pub team: &'a EntityId,
+    pub host: &'a EntityId,
+    pub member: &'a EntityId,
+    pub member_host: &'a EntityId,
+    pub source_role: Role,
+}
+
+pub fn open_team_removal_key_for_member(
+    boxed: &TeamRemovalKeyBox,
+    receiver: &dyn HybridSecretDecapsulator,
+    expected: &TeamRemovalKeyExpectation<'_>,
+) -> Result<(SecretSeed, TeamRemovalKeyMetadata)> {
+    let sender_dh = boxed.hybrid.sender_dh.as_ref().ok_or(Error::HybridBox)?;
+    let cleartext = open_hybrid_box(
+        &boxed.hybrid,
+        receiver,
+        sender_dh,
+        TEAM_REMOVAL_KEY_BOX_PAYLOAD_TYPE_ID,
+    )?;
+    let payload = TeamRemovalKeyPayload::decode(&cleartext)?;
+    if payload.metadata.team != *expected.team
+        || payload.metadata.host != *expected.host
+        || payload.metadata.member != *expected.member
+        || payload.metadata.member_host != *expected.member_host
+        || payload.metadata.source_role != expected.source_role
+    {
+        return Err(Error::PukBinding);
+    }
+    let metadata = payload.metadata.clone();
+    let key = payload.into_key();
+    if &team_removal_key_commitment(&key)? != expected.commitment {
+        return Err(Error::PukBinding);
+    }
+    Ok((key, metadata))
+}
+
+fn seal_hybrid_payload(
+    sender_seed: &SecretSeed,
+    sender_hepk: &Hepk,
+    receiver_hepk: &Hepk,
+    payload_type_id: u64,
+    cleartext: &[u8],
+    randomness: &PukBoxRandomness,
+    include_sender: bool,
+) -> Result<HybridBox> {
+    if derive_device_public(sender_seed)?.hepk != *sender_hepk {
+        return Err(Error::HybridBox);
+    }
+    let sender_dh = sender_hepk.curve25519().copied().ok_or(Error::HybridBox)?;
+    let receiver_mlkem = ml_kem_768::EncapsulationKey::new_from_slice(receiver_hepk.mlkem768())
+        .map_err(|_| Error::MlKem)?;
+    let (kem_ciphertext, kem_shared) =
+        receiver_mlkem.encapsulate_deterministic(&ml_kem::B32::from(randomness.kem_message));
+    let receiver_dh = receiver_hepk
+        .curve25519()
+        .copied()
+        .ok_or(Error::HybridBox)?;
+    let dh_shared = software_dh_shared(sender_seed, &DhPublicKey::Curve25519(receiver_dh))?;
+    let derivation = hybrid_key_derivation_payload(
+        kem_shared.as_slice(),
+        dh_shared.as_slice(),
+        receiver_hepk,
+        &DhPublicKey::Curve25519(sender_dh),
+    )?;
+    let mut hash = <Sha3_256 as Sha3Digest>::new();
+    hash.update(HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID.to_be_bytes());
+    hash.update(derivation.as_slice());
+    let key = Zeroizing::new(<[u8; 32]>::from(hash.finalize()));
+    let mut nonce = [0u8; 24];
+    nonce[..8].copy_from_slice(&payload_type_id.to_be_bytes());
+    nonce[8..].copy_from_slice(&randomness.nonce);
+    let ciphertext = XSalsa20Poly1305::new(key.as_slice().into())
+        .encrypt((&nonce).into(), cleartext)
+        .map_err(|_| Error::Decryption)?;
+    Ok(HybridBox {
+        kem_ciphertext: kem_ciphertext.as_slice().to_vec(),
+        dh_type: 1,
+        sender_dh: include_sender.then_some(DhPublicKey::Curve25519(sender_dh)),
+        nonce: randomness.nonce,
+        ciphertext,
+    })
 }
 
 /// Caller-controlled inputs that are intentionally retained after signup.
@@ -1196,7 +2180,7 @@ pub fn make_software_eldest_link(
     ]))?;
     let label = &input.device_name.label;
     let device_label_object = encode(&Value::Array(vec![
-        Value::Unsigned(label.device_type),
+        Value::Unsigned(label.device_type.protocol_value()),
         Value::Text(label.normalized_name.clone()),
         Value::Unsigned(label.serial),
     ]))?;
@@ -1278,28 +2262,17 @@ pub fn seal_initial_puk_box(
     let (kem_ciphertext, kem_shared) = receiver_mlkem.encapsulate_deterministic(&kem_message);
     let sender_dh = device.hepk.curve25519().copied().ok_or(Error::HybridBox)?;
     let dh_shared = software_dh_shared(device_seed, &DhPublicKey::Curve25519(sender_dh))?;
-    let receiver_hepk = decode(&device.hepk.encoded()?)?;
-    let sender_dh_value = dh_public_value(&DhPublicKey::Curve25519(sender_dh));
-    let payload = Zeroizing::new(encode(&Value::Array(vec![
-        Value::Unsigned(1),
-        Value::Binary(kem_shared.as_slice().to_vec()),
-        Value::Binary(dh_shared.as_slice().to_vec()),
-        receiver_hepk,
-        sender_dh_value,
-    ]))?);
+    let payload = hybrid_key_derivation_payload(
+        kem_shared.as_slice(),
+        dh_shared.as_slice(),
+        &device.hepk,
+        &DhPublicKey::Curve25519(sender_dh),
+    )?;
     let mut hash = <Sha3_256 as Sha3Digest>::new();
     hash.update(HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID.to_be_bytes());
     hash.update(payload.as_slice());
     let key = Zeroizing::new(<[u8; 32]>::from(hash.finalize()));
-    let cleartext = encode(&Value::Array(vec![
-        Value::Array(vec![
-            Value::Binary(device.id.as_bytes().to_vec()),
-            Value::Binary(host.as_bytes().to_vec()),
-        ]),
-        Value::Unsigned(1),
-        Role::OWNER.to_value(),
-        Value::Binary(puk_seed.as_slice().to_vec()),
-    ]))?;
+    let cleartext = shared_key_seed_plaintext(&device.id, &host, 1, Role::OWNER, puk_seed)?;
     let mut nonce = [0u8; 24];
     nonce[..8].copy_from_slice(&SHARED_KEY_SEED_TYPE_ID.to_be_bytes());
     nonce[8..].copy_from_slice(&randomness.nonce);
@@ -1472,6 +2445,8 @@ pub fn open_puk_parcel_with_for_role(
         sender_hepk,
         expected_puk_verify_key,
         expected_host,
+        Role::NONE,
+        0,
         expected_role,
         foks_proto::ENTITY_PUK_VERIFY,
     )
@@ -1537,13 +2512,19 @@ pub fn open_shared_key_parcel_with(
     sender_hepk: &Hepk,
     expected_verify_key: &EntityId,
     expected_host: &EntityId,
+    expected_receiver_role: Role,
+    expected_receiver_generation: u64,
     expected_role: Role,
     expected_verify_key_type: u8,
 ) -> Result<SharedKeySeed> {
     if parcel.role != expected_role || parcel.hybrid.sender_dh.is_some() {
         return Err(Error::HybridBox);
     }
-    if &parcel.target != receiver.entity_id() {
+    if &parcel.target != receiver.entity_id()
+        || parcel.target_host.is_some()
+        || parcel.target_role != expected_receiver_role
+        || parcel.target_generation != expected_receiver_generation
+    {
         return Err(Error::WrongReceiver);
     }
     let sender_dh = authenticated_sender_dh(parcel, receiver.hepk(), sender_hepk, expected_host)?;
@@ -1677,13 +2658,12 @@ fn open_hybrid_box(
     }
     let dh_shared = receiver.derive_dh_shared(sender_dh)?;
     let kem_shared = receiver.decapsulate_mlkem768(&hybrid.kem_ciphertext)?;
-    let payload = Zeroizing::new(encode(&Value::Array(vec![
-        Value::Unsigned(1),
-        Value::Binary(kem_shared.as_slice().to_vec()),
-        Value::Binary(dh_shared.as_slice().to_vec()),
-        foks_snowpack::decode(&receiver.hepk().encoded()?)?,
-        dh_public_value(sender_dh),
-    ]))?);
+    let payload = hybrid_key_derivation_payload(
+        kem_shared.as_slice(),
+        dh_shared.as_slice(),
+        receiver.hepk(),
+        sender_dh,
+    )?;
     let mut hash = <Sha3_256 as Sha3Digest>::new();
     hash.update(HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID.to_be_bytes());
     hash.update(&payload);
@@ -1791,21 +2771,12 @@ fn derive_hybrid_key(
         .map_err(|_| Error::MlKem)?;
     let kem_shared = decapsulation.decapsulate(&ciphertext);
 
-    let receiver_hepk = foks_snowpack::decode(&receiver_hepk.encoded()?)?;
-    let sender_dh = Value::Array(vec![
-        Value::Unsigned(1),
-        Value::Variant(Some((
-            b"0".to_vec(),
-            Box::new(Value::Binary(sender_key.to_vec())),
-        ))),
-    ]);
-    let payload = Zeroizing::new(encode(&Value::Array(vec![
-        Value::Unsigned(1),
-        Value::Binary(kem_shared.as_slice().to_vec()),
-        Value::Binary(dh_shared.as_slice().to_vec()),
+    let payload = hybrid_key_derivation_payload(
+        kem_shared.as_slice(),
+        dh_shared.as_slice(),
         receiver_hepk,
-        sender_dh,
-    ]))?);
+        &DhPublicKey::Curve25519(*sender_key),
+    )?;
     let mut hash = <Sha3_256 as Sha3Digest>::new();
     hash.update(HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID.to_be_bytes());
     hash.update(&payload);
@@ -1925,7 +2896,7 @@ mod tests {
     use super::*;
     use foks_proto::{
         ProbeResponse, PukParcel, TeamChain, UserChain, UserLink, ENTITY_PTK_VERIFY,
-        PUBLIC_ZONE_BLOB_TYPE_ID,
+        ENTITY_PUK_VERIFY, PUBLIC_ZONE_BLOB_TYPE_ID,
     };
 
     const PROBE: &[u8] = include_bytes!(
@@ -1969,7 +2940,7 @@ mod tests {
                     .unwrap(),
                 device_name: &DeviceLabelNameAndCommitmentKey {
                     label: foks_proto::DeviceLabel {
-                        device_type: 0,
+                        device_type: foks_proto::DeviceType::Computer,
                         normalized_name: b"signup device".to_vec(),
                         serial: 1,
                     },
@@ -2175,7 +3146,10 @@ mod tests {
                 generation: 1,
                 role,
                 receiver_id: &owner.party,
+                receiver_host: None,
                 receiver_hepk: &owner_public.hepk,
+                receiver_role: Role::OWNER,
+                receiver_generation: owner.keys.as_ref().unwrap().generation,
             })
             .collect::<Vec<_>>();
         let randomness = (0_u8..4)
@@ -2200,6 +3174,9 @@ mod tests {
                 role: shared.role,
                 hybrid: shared.hybrid.clone(),
                 target: shared.target.entity.clone(),
+                target_host: shared.target.host.clone(),
+                target_role: shared.target.role,
+                target_generation: shared.target.generation,
                 sender: owner_public.verify_key.clone(),
                 box_id: boxes.box_id,
                 temp_dh_key: boxes.temp_dh_key.clone(),
@@ -2211,6 +3188,8 @@ mod tests {
                 &owner_public.hepk,
                 &material.ptks[index].verify_key,
                 &change.host,
+                Role::OWNER,
+                owner.keys.as_ref().unwrap().generation,
                 roles[index],
                 ENTITY_PTK_VERIFY,
             )
@@ -2243,6 +3222,502 @@ mod tests {
             [&ptk_seeds[0], &ptk_seeds[1], &ptk_seeds[2], &ptk_seeds[3],],
         )
         .is_err());
+    }
+
+    #[test]
+    fn single_owner_named_team_matches_official_go_fixture() {
+        let expected = UserLink::decode(&mutation_fixture("named-team-link.snowp")).unwrap();
+        let change = expected.decode_team_group_change().unwrap();
+        let expected_membership =
+            UserLink::decode(&mutation_fixture("named-membership-link.snowp")).unwrap();
+        let device_seed = SecretSeed::new(user_fixture("device-seed.bin").try_into().unwrap());
+        let owner_seed = SecretSeed::new(user_fixture("puk-seed.bin").try_into().unwrap());
+        let ptk_seeds = [
+            "adhoc-ptk-member-min-seed.bin",
+            "adhoc-ptk-member-seed.bin",
+            "adhoc-ptk-admin-seed.bin",
+            "adhoc-ptk-owner-seed.bin",
+        ]
+        .map(|name| SecretSeed::new(mutation_fixture(name).try_into().unwrap()));
+        let removal_key = SecretSeed::new(
+            mutation_fixture("named-removal-key.bin")
+                .try_into()
+                .unwrap(),
+        );
+        let owner = &change.changes[0];
+        let material = make_single_owner_named_team(
+            &NamedTeamInput {
+                user: &owner.party,
+                host: &change.host,
+                root: &change.root,
+                time: change.time,
+                owner_puk_generation: owner.keys.as_ref().unwrap().generation,
+                normalized_name: b"auditteam",
+                name_sequence: 7,
+                team_name_commitment_key: mutation_fixture("named-team-name-commitment-key.bin")
+                    .try_into()
+                    .unwrap(),
+                next_tree_location: mutation_fixture("named-next-tree-location.bin")
+                    .try_into()
+                    .unwrap(),
+                subchain_tree_location: mutation_fixture("named-subchain-tree-location.bin")
+                    .try_into()
+                    .unwrap(),
+                membership_next_tree_location: mutation_fixture(
+                    "named-membership-next-tree-location.bin",
+                )
+                .try_into()
+                .unwrap(),
+            },
+            &device_seed,
+            &owner_seed,
+            [&ptk_seeds[0], &ptk_seeds[1], &ptk_seeds[2], &ptk_seeds[3]],
+            &removal_key,
+        )
+        .unwrap();
+        assert_eq!(
+            material.link.encoded().unwrap(),
+            expected.encoded().unwrap()
+        );
+        assert_eq!(
+            material.membership_link.encoded().unwrap(),
+            expected_membership.encoded().unwrap()
+        );
+        let expected_team = match decode(&mutation_fixture("named-team-id.snowp")).unwrap() {
+            Value::Binary(bytes) => EntityId::from_bytes(bytes).unwrap(),
+            other => panic!("expected named TeamID fixture, got {other:?}"),
+        };
+        assert_eq!(material.team, expected_team);
+        assert_eq!(
+            material.removal_key_commitment,
+            owner.keys.as_ref().unwrap().removal_key_commitment.unwrap()
+        );
+        let removal_box =
+            TeamRemovalBoxData::decode(&mutation_fixture("named-removal-boxes.snowp")).unwrap();
+        let member_receiver = SharedKeyDecapsulator::new(&owner_seed, owner.party.clone()).unwrap();
+        let opened_member = open_team_removal_key(
+            &removal_box.member_box,
+            &member_receiver,
+            Role::OWNER,
+            owner.keys.as_ref().unwrap().generation,
+            &removal_box.commitment,
+            &removal_box.metadata,
+        )
+        .unwrap();
+        let team_receiver =
+            SharedKeyDecapsulator::new(&ptk_seeds[2], material.team.clone()).unwrap();
+        let opened_team = open_team_removal_key(
+            &removal_box.team_box,
+            &team_receiver,
+            Role::ADMIN,
+            1,
+            &removal_box.commitment,
+            &removal_box.metadata,
+        )
+        .unwrap();
+        assert_eq!(opened_member, removal_key);
+        assert_eq!(opened_team, removal_key);
+    }
+
+    #[test]
+    fn team_admin_opens_official_member_removal_key_box() {
+        let addition = UserLink::decode(&mutation_fixture("add-member-link.snowp"))
+            .unwrap()
+            .decode_team_group_change()
+            .unwrap();
+        let member = &addition.changes[0];
+        let commitment = member
+            .keys
+            .as_ref()
+            .unwrap()
+            .removal_key_commitment
+            .unwrap();
+        let admin_seed = SecretSeed::new(
+            mutation_fixture("adhoc-ptk-admin-seed.bin")
+                .try_into()
+                .unwrap(),
+        );
+        let receiver = SharedKeyDecapsulator::new(&admin_seed, addition.team.clone()).unwrap();
+        let boxed =
+            TeamRemovalKeyBox::decode(&mutation_fixture("team-removal-admin-box.snowp")).unwrap();
+        let (opened, metadata) = open_team_removal_key_for_member(
+            &boxed,
+            &receiver,
+            &TeamRemovalKeyExpectation {
+                commitment: &commitment,
+                team: &addition.team,
+                host: &addition.host,
+                member: &member.party,
+                member_host: &addition.host,
+                source_role: member.source_role,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            opened.as_slice(),
+            mutation_fixture("add-member-removal-key.bin")
+        );
+        assert_eq!(metadata.destination_role, member.role);
+        assert_eq!(metadata.team_sequence, addition.seqno);
+    }
+
+    #[test]
+    fn federated_shared_key_box_binds_remote_host_in_target_and_plaintext() {
+        let sender_seed = SecretSeed::new(user_fixture("puk-seed.bin").try_into().unwrap());
+        let receiver_seed = SecretSeed::new(
+            mutation_fixture("add-member-target-puk-seed.bin")
+                .try_into()
+                .unwrap(),
+        );
+        let sender = derive_shared_public(&sender_seed, foks_proto::ENTITY_PUK_VERIFY).unwrap();
+        let receiver = derive_shared_public(&receiver_seed, foks_proto::ENTITY_PUK_VERIFY).unwrap();
+        let receiver_id = match decode(&mutation_fixture("add-member-target-uid.snowp")).unwrap() {
+            Value::Binary(bytes) => EntityId::from_bytes(bytes).unwrap(),
+            other => panic!("expected target user fixture, got {other:?}"),
+        };
+        let local_host = UserLink::decode(&mutation_fixture("named-team-link.snowp"))
+            .unwrap()
+            .decode_team_group_change()
+            .unwrap()
+            .host;
+        let mut remote_bytes = local_host.as_bytes().to_vec();
+        remote_bytes[32] ^= 1;
+        let remote_host = EntityId::from_bytes(remote_bytes).unwrap();
+        let shared_seed = SecretSeed::new([0x55; 32]);
+        let boxes = seal_shared_key_boxes(
+            &local_host,
+            &sender_seed,
+            &sender.hepk,
+            [0x33; 16],
+            &[SharedKeyBoxInput {
+                seed: &shared_seed,
+                generation: 4,
+                role: Role::member(0),
+                receiver_id: &receiver_id,
+                receiver_host: Some(&remote_host),
+                receiver_hepk: &receiver.hepk,
+                receiver_role: Role::OWNER,
+                receiver_generation: 3,
+            }],
+            &[PukBoxRandomness {
+                kem_message: [0x44; 32],
+                nonce: [0x22; 16],
+            }],
+        )
+        .unwrap();
+        assert_eq!(boxes.boxes[0].target.host, Some(remote_host.clone()));
+        let decapsulator = SharedKeyDecapsulator::new(&receiver_seed, receiver_id).unwrap();
+        let sender_dh = sender.hepk.curve25519().copied().unwrap();
+        let plaintext = open_hybrid_box(
+            &boxes.boxes[0].hybrid,
+            &decapsulator,
+            &DhPublicKey::Curve25519(sender_dh),
+            SHARED_KEY_SEED_TYPE_ID,
+        )
+        .unwrap();
+        let clear = SharedKeySeed::decode(&plaintext).unwrap();
+        assert_eq!(clear.host, remote_host);
+        assert_eq!(clear.seed, shared_seed);
+    }
+
+    #[test]
+    fn additive_named_team_link_matches_official_go_fixture() {
+        let eldest = UserLink::decode(&mutation_fixture("named-team-link.snowp")).unwrap();
+        let expected = UserLink::decode(&mutation_fixture("add-member-link.snowp")).unwrap();
+        let change = expected.decode_team_group_change().unwrap();
+        let actor_seed = SecretSeed::new(user_fixture("puk-seed.bin").try_into().unwrap());
+        let target_seed = SecretSeed::new(
+            mutation_fixture("add-member-target-puk-seed.bin")
+                .try_into()
+                .unwrap(),
+        );
+        let target = derive_shared_public(&target_seed, foks_proto::ENTITY_PUK_VERIFY).unwrap();
+        let removal_key = SecretSeed::new(
+            mutation_fixture("add-member-removal-key.bin")
+                .try_into()
+                .unwrap(),
+        );
+        let member = &change.changes[0];
+        let material = make_add_local_team_member_link(
+            &AddLocalTeamMemberInput {
+                actor: &change.signer_owner.party,
+                actor_source_role: change.signer_owner.source_role,
+                team: &change.team,
+                host: &change.host,
+                sequence: change.seqno,
+                previous: prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, &eldest.encoded().unwrap()),
+                root: &change.root,
+                time: change.time,
+                next_tree_location: mutation_fixture("add-member-next-tree-location.bin")
+                    .try_into()
+                    .unwrap(),
+                member: &member.party,
+                member_source_role: member.source_role,
+                member_destination_role: member.role,
+                member_generation: member.keys.as_ref().unwrap().generation,
+                member_public: &target,
+            },
+            &actor_seed,
+            &removal_key,
+        )
+        .unwrap();
+        assert_eq!(material.link.decode_team_group_change().unwrap(), change);
+        assert_eq!(
+            material.link.encoded().unwrap(),
+            expected.encoded().unwrap()
+        );
+        assert_eq!(
+            material.removal_key_commitment,
+            member
+                .keys
+                .as_ref()
+                .unwrap()
+                .removal_key_commitment
+                .unwrap()
+        );
+        assert_eq!(
+            material.removal_key_commitment,
+            team_removal_key_commitment(&removal_key).unwrap()
+        );
+    }
+
+    #[test]
+    fn named_team_demotion_matches_official_go_fixture() {
+        let addition = UserLink::decode(&mutation_fixture("add-member-link.snowp")).unwrap();
+        let expected = UserLink::decode(&mutation_fixture("demote-member-link.snowp")).unwrap();
+        let change = expected.decode_team_group_change().unwrap();
+        let member = &change.changes[0];
+        let actor_seed = SecretSeed::new(user_fixture("puk-seed.bin").try_into().unwrap());
+        let target_seed = SecretSeed::new(
+            mutation_fixture("add-member-target-puk-seed.bin")
+                .try_into()
+                .unwrap(),
+        );
+        let target = derive_shared_public(&target_seed, foks_proto::ENTITY_PUK_VERIFY).unwrap();
+        let rotation_seed = SecretSeed::new(
+            mutation_fixture("demote-member-ptk-seed.bin")
+                .try_into()
+                .unwrap(),
+        );
+        let rotations = [TeamPtkRotation {
+            role: Role::member(0),
+            generation: 2,
+            seed: &rotation_seed,
+        }];
+        let material = make_change_team_member_link(
+            &ChangeTeamMemberInput {
+                actor: &change.signer_owner.party,
+                actor_source_role: change.signer_owner.source_role,
+                team: &change.team,
+                host: &change.host,
+                sequence: change.seqno,
+                previous: prefixed_hash(
+                    foks_proto::LINK_OUTER_TYPE_ID,
+                    &addition.encoded().unwrap(),
+                ),
+                root: &change.root,
+                time: change.time,
+                next_tree_location: mutation_fixture("demote-member-next-tree-location.bin")
+                    .try_into()
+                    .unwrap(),
+                member: &member.party,
+                member_host: member.scoped_host.as_ref(),
+                member_source_role: member.source_role,
+                destination_role: member.role,
+                member_generation: Some(member.keys.as_ref().unwrap().generation),
+                member_public: Some(&target),
+            },
+            &actor_seed,
+            &rotations,
+        )
+        .unwrap();
+        assert_eq!(
+            material.link.encoded().unwrap(),
+            expected.encoded().unwrap()
+        );
+        assert_eq!(material.link.decode_team_group_change().unwrap(), change);
+    }
+
+    #[test]
+    fn named_team_removal_rotation_matches_official_go_fixture() {
+        let addition = UserLink::decode(&mutation_fixture("add-member-link.snowp")).unwrap();
+        let expected = UserLink::decode(&mutation_fixture("remove-member-link.snowp")).unwrap();
+        let change = expected.decode_team_group_change().unwrap();
+        let actor_seed = SecretSeed::new(user_fixture("puk-seed.bin").try_into().unwrap());
+        let old_seeds = [
+            SecretSeed::new(
+                mutation_fixture("adhoc-ptk-member-min-seed.bin")
+                    .try_into()
+                    .unwrap(),
+            ),
+            SecretSeed::new(
+                mutation_fixture("adhoc-ptk-member-seed.bin")
+                    .try_into()
+                    .unwrap(),
+            ),
+        ];
+        let new_seeds = [
+            SecretSeed::new(
+                mutation_fixture("remove-member-ptk-member-min-seed.bin")
+                    .try_into()
+                    .unwrap(),
+            ),
+            SecretSeed::new(
+                mutation_fixture("remove-member-ptk-member-seed.bin")
+                    .try_into()
+                    .unwrap(),
+            ),
+        ];
+        let roles = [Role::member(-0x4000), Role::member(0)];
+        let rotations = new_seeds
+            .iter()
+            .zip(roles)
+            .map(|(seed, role)| TeamPtkRotation {
+                role,
+                generation: 2,
+                seed,
+            })
+            .collect::<Vec<_>>();
+        let removed = &change.changes[0];
+        let material = make_remove_local_team_member_link(
+            &RemoveLocalTeamMemberInput {
+                actor: &change.signer_owner.party,
+                actor_source_role: change.signer_owner.source_role,
+                team: &change.team,
+                host: &change.host,
+                sequence: change.seqno,
+                previous: prefixed_hash(
+                    foks_proto::LINK_OUTER_TYPE_ID,
+                    &addition.encoded().unwrap(),
+                ),
+                root: &change.root,
+                time: change.time,
+                next_tree_location: mutation_fixture("remove-member-next-tree-location.bin")
+                    .try_into()
+                    .unwrap(),
+                member: &removed.party,
+                member_source_role: removed.source_role,
+            },
+            &actor_seed,
+            &rotations,
+        )
+        .unwrap();
+        assert_eq!(
+            material.link.encoded().unwrap(),
+            expected.encoded().unwrap()
+        );
+        assert_eq!(material.link.decode_team_group_change().unwrap(), change);
+
+        let duplicated = [
+            TeamPtkRotation {
+                role: roles[0],
+                generation: 2,
+                seed: &new_seeds[0],
+            },
+            TeamPtkRotation {
+                role: roles[1],
+                generation: 2,
+                seed: &new_seeds[0],
+            },
+        ];
+        assert!(make_remove_local_team_member_link(
+            &RemoveLocalTeamMemberInput {
+                actor: &change.signer_owner.party,
+                actor_source_role: change.signer_owner.source_role,
+                team: &change.team,
+                host: &change.host,
+                sequence: change.seqno,
+                previous: change.previous.unwrap(),
+                root: &change.root,
+                time: change.time,
+                next_tree_location: [1; 32],
+                member: &removed.party,
+                member_source_role: removed.source_role,
+            },
+            &actor_seed,
+            &duplicated,
+        )
+        .is_err());
+
+        let rotated_boxes =
+            SharedKeyBoxSet::decode(&mutation_fixture("remove-member-ptk-boxes.snowp")).unwrap();
+        let actor_public =
+            derive_shared_public(&actor_seed, foks_proto::ENTITY_PUK_VERIFY).unwrap();
+        let receiver =
+            SharedKeyDecapsulator::new(&actor_seed, change.signer_owner.party.clone()).unwrap();
+        for (index, role) in roles.into_iter().enumerate() {
+            let expected_box = foks_proto::SeedChainBox::decode(&mutation_fixture(
+                [
+                    "remove-member-seed-chain-member-min.snowp",
+                    "remove-member-seed-chain-member.snowp",
+                ][index],
+            ))
+            .unwrap();
+            let actual = seal_puk_seed_chain_box(
+                &new_seeds[index],
+                &old_seeds[index],
+                &change.signer_owner.party,
+                &change.host,
+                1,
+                role,
+                expected_box.secret_box.nonce,
+            )
+            .unwrap();
+            assert_eq!(actual, expected_box);
+            let shared = &rotated_boxes.boxes[index];
+            let parcel = PukParcel {
+                generation: shared.generation,
+                role: shared.role,
+                hybrid: shared.hybrid.clone(),
+                target: shared.target.entity.clone(),
+                target_host: shared.target.host.clone(),
+                target_role: shared.target.role,
+                target_generation: shared.target.generation,
+                sender: actor_public.verify_key.clone(),
+                box_id: rotated_boxes.box_id,
+                temp_dh_key: rotated_boxes.temp_dh_key.clone(),
+                seed_chain: vec![expected_box],
+            };
+            let clear = open_shared_key_parcel_with(
+                &parcel,
+                &receiver,
+                &actor_public.hepk,
+                &material.ptks[index].verify_key,
+                &change.host,
+                Role::OWNER,
+                2,
+                role,
+                ENTITY_PTK_VERIFY,
+            )
+            .unwrap();
+            let history = open_shared_key_seed_chain(
+                clear,
+                &parcel,
+                &change.signer_owner.party,
+                &change.host,
+            )
+            .unwrap();
+            assert_eq!(history.len(), 2);
+            assert_eq!(history[0].seed, old_seeds[index]);
+            assert_eq!(history[1].seed, new_seeds[index]);
+        }
+
+        let removal_key = SecretSeed::new(
+            mutation_fixture("add-member-removal-key.bin")
+                .try_into()
+                .unwrap(),
+        );
+        let expected_proof = foks_proto::TeamRemovalAndCommitment::decode(&mutation_fixture(
+            "remove-member-proof.snowp",
+        ))
+        .unwrap();
+        let actual_proof =
+            make_team_removal_proof(&removal_key, expected_proof.removal.payload.clone()).unwrap();
+        assert_eq!(actual_proof, expected_proof);
+        assert_eq!(
+            actual_proof.encoded().unwrap(),
+            mutation_fixture("remove-member-proof.snowp")
+        );
     }
 
     #[test]
@@ -2419,6 +3894,9 @@ mod tests {
             role: shared.role,
             hybrid: shared.hybrid,
             target: shared.target.entity,
+            target_host: shared.target.host,
+            target_role: shared.target.role,
+            target_generation: shared.target.generation,
             sender: sender.id,
             box_id: boxes.box_id,
             temp_dh_key: boxes.temp_dh_key,
@@ -2457,6 +3935,9 @@ mod tests {
             role: shared.role,
             hybrid: shared.hybrid,
             target: shared.target.entity,
+            target_host: shared.target.host,
+            target_role: shared.target.role,
+            target_generation: shared.target.generation,
             sender: device.id,
             box_id,
             temp_dh_key: temporary,
@@ -2513,6 +3994,9 @@ mod tests {
             role: shared.role,
             hybrid: shared.hybrid.clone(),
             target: shared.target.entity.clone(),
+            target_host: shared.target.host.clone(),
+            target_role: shared.target.role,
+            target_generation: shared.target.generation,
             sender: device.id.clone(),
             box_id: boxed.box_id,
             temp_dh_key: boxed.temp_dh_key.clone(),
@@ -2655,6 +4139,8 @@ mod tests {
         let receiver = SharedKeyDecapsulator::new(&puk_seed, uid).unwrap();
         let chain = TeamChain::decode(&user_fixture("team-chain.snowp")).unwrap();
         let change = chain.links[0].decode_team_group_change().unwrap();
+        let member = &change.changes[0];
+        let member_keys = member.keys.as_ref().unwrap();
         let expected = [
             (Role::member(-0x4000), "team-ptk-member-min-seed.bin"),
             (Role::member(0), "team-ptk-member-seed.bin"),
@@ -2673,12 +4159,17 @@ mod tests {
                 .iter()
                 .find(|parcel| parcel.role == role)
                 .expect("fixture has a parcel for every eldest role");
+            assert_eq!(parcel.target_role, member.source_role);
+            assert_eq!(parcel.target_generation, member_keys.generation);
+            assert!(parcel.target_host.is_none());
             let clear = open_shared_key_parcel_with(
                 parcel,
                 &receiver,
                 receiver.hepk(),
                 &key.verify_key,
                 &change.host,
+                member.source_role,
+                member_keys.generation,
                 role,
                 ENTITY_PTK_VERIFY,
             )
@@ -3053,5 +4544,139 @@ mod tests {
         )
         .unwrap();
         assert_eq!(clear.seed.as_slice(), user_fixture("puk-seed.bin"));
+    }
+
+    #[test]
+    fn backup_enrollment_and_recovery_links_match_go_v019() {
+        let backup =
+            BackupKey::from_seed(mutation_fixture("backup-seed.bin").try_into().unwrap()).unwrap();
+        let existing_seed = SecretSeed::new(user_fixture("device-seed.bin").try_into().unwrap());
+
+        let expected_enroll =
+            UserLink::decode(&mutation_fixture("backup-enroll-link.snowp")).unwrap();
+        let enroll = expected_enroll.decode_group_change().unwrap();
+        let name = backup.device_name();
+        let enroll_material = make_backup_provision_link(
+            &SoftwareProvisionInput {
+                base: UserMutationBase {
+                    uid: &enroll.uid,
+                    host: &enroll.host,
+                    seqno: enroll.seqno,
+                    previous: enroll.previous.unwrap(),
+                    root: &enroll.root,
+                    time: enroll.time,
+                    next_tree_location: mutation_fixture("backup-enroll-next-tree-location.bin")
+                        .try_into()
+                        .unwrap(),
+                },
+                role: Role::OWNER,
+                device_label: &foks_proto::DeviceLabel {
+                    device_type: foks_proto::DeviceType::Backup,
+                    normalized_name: name.as_bytes().to_vec(),
+                    serial: 1,
+                },
+                device_name_commitment_key: mutation_fixture(
+                    "backup-enroll-device-name-commitment-key.bin",
+                )
+                .try_into()
+                .unwrap(),
+            },
+            &existing_seed,
+            &backup,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            enroll_material.link.encoded().unwrap(),
+            expected_enroll.encoded().unwrap()
+        );
+
+        let expected_recover =
+            UserLink::decode(&mutation_fixture("backup-recover-link.snowp")).unwrap();
+        let recover = expected_recover.decode_group_change().unwrap();
+        let replacement_seed = SecretSeed::new(
+            mutation_fixture("backup-recover-device-seed.bin")
+                .try_into()
+                .unwrap(),
+        );
+        let recover_material = make_software_provision_link_from_backup(
+            &SoftwareProvisionInput {
+                base: UserMutationBase {
+                    uid: &recover.uid,
+                    host: &recover.host,
+                    seqno: recover.seqno,
+                    previous: recover.previous.unwrap(),
+                    root: &recover.root,
+                    time: recover.time,
+                    next_tree_location: mutation_fixture("backup-recover-next-tree-location.bin")
+                        .try_into()
+                        .unwrap(),
+                },
+                role: Role::OWNER,
+                device_label: &foks_proto::DeviceLabel {
+                    device_type: foks_proto::DeviceType::Computer,
+                    normalized_name: b"recovered fixture device".to_vec(),
+                    serial: 1,
+                },
+                device_name_commitment_key: mutation_fixture(
+                    "backup-recover-device-name-commitment-key.bin",
+                )
+                .try_into()
+                .unwrap(),
+            },
+            &backup,
+            &replacement_seed,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            recover_material.link.encoded().unwrap(),
+            expected_recover.encoded().unwrap()
+        );
+    }
+
+    #[test]
+    fn backup_opens_the_official_enrollment_puk_box() {
+        let backup =
+            BackupKey::from_seed(mutation_fixture("backup-seed.bin").try_into().unwrap()).unwrap();
+        let boxes =
+            SharedKeyBoxSet::decode(&mutation_fixture("backup-enroll-boxes.snowp")).unwrap();
+        let boxed = boxes.boxes[0].clone();
+        let sender_seed = SecretSeed::new(user_fixture("device-seed.bin").try_into().unwrap());
+        let sender = derive_device_public(&sender_seed).unwrap();
+        let parcel = PukParcel {
+            generation: boxed.generation,
+            role: boxed.role,
+            hybrid: boxed.hybrid,
+            target: boxed.target.entity,
+            target_host: boxed.target.host,
+            target_role: boxed.target.role,
+            target_generation: boxed.target.generation,
+            sender: sender.id,
+            box_id: boxes.box_id,
+            temp_dh_key: boxes.temp_dh_key,
+            seed_chain: Vec::new(),
+        };
+        let expected_seed = SecretSeed::new(user_fixture("puk-seed.bin").try_into().unwrap());
+        let verify = derive_shared_verify_key(&expected_seed, ENTITY_PUK_VERIFY).unwrap();
+        let receiver = backup.key_material().unwrap();
+        let opened = open_puk_parcel_with_for_role(
+            &parcel,
+            &receiver,
+            &sender.hepk,
+            &verify,
+            &expected_enroll_host(),
+            Role::OWNER,
+        )
+        .unwrap();
+        assert_eq!(opened.seed, expected_seed);
+    }
+
+    fn expected_enroll_host() -> EntityId {
+        UserLink::decode(&mutation_fixture("backup-enroll-link.snowp"))
+            .unwrap()
+            .decode_group_change()
+            .unwrap()
+            .host
     }
 }

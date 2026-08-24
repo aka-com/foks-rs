@@ -2,9 +2,9 @@
 
 use crate::{
     array, binary, decode, device_entity, encode, entity, expect_unsigned, fixed_blob, integer,
-    list, option, signature, type_error, unsigned, variant, EntityId, Error, Result, Role,
-    Signature, TreeRoot, Value, ENTITY_AD_HOC_TEAM, ENTITY_DEVICE, ENTITY_HOST, ENTITY_NAMED_TEAM,
-    ENTITY_PTK_VERIFY, ENTITY_PUK_VERIFY, ENTITY_USER, ENTITY_YUBI,
+    list, option, signature, type_error, unsigned, user_member_entity, variant, EntityId, Error,
+    Result, Role, Signature, TreeRoot, Value, ENTITY_AD_HOC_TEAM, ENTITY_DEVICE, ENTITY_HOST,
+    ENTITY_NAMED_TEAM, ENTITY_PTK_VERIFY, ENTITY_PUK_VERIFY, ENTITY_USER, ENTITY_YUBI,
 };
 
 /// Exact v0.1.9 user-chain outer link. The inner blob is retained verbatim
@@ -297,6 +297,79 @@ impl UnsignedUserLink {
         })
     }
 
+    /// Builds the exact v0.1.9 `Approved` membership link used by named teams.
+    pub fn approved_membership(input: &ApprovedMembershipLinkPublic<'_>) -> Result<Self> {
+        input.user.clone().require_type(ENTITY_USER)?;
+        input.host.clone().require_type(ENTITY_HOST)?;
+        if !matches!(input.signer.entity_type(), ENTITY_DEVICE | ENTITY_YUBI) {
+            return Err(Error::WrongEntityType {
+                expected: ENTITY_DEVICE,
+                found: input.signer.entity_type(),
+            });
+        }
+        input.team.clone().require_type(ENTITY_NAMED_TEAM)?;
+        if input.sequence == 0
+            || (input.sequence == 1) != input.previous.is_none()
+            || input.team_sequence == 0
+        {
+            return Err(Error::IntegerRange("named-team membership sequence"));
+        }
+        let membership = Value::Array(vec![
+            Value::Array(vec![
+                Value::Binary(input.team.as_bytes().to_vec()),
+                Value::Binary(input.host.as_bytes().to_vec()),
+            ]),
+            input.source_role.to_value(),
+            Value::Array(vec![
+                Value::Unsigned(2),
+                Value::Variant(Some((
+                    b"1".to_vec(),
+                    Box::new(Value::Array(vec![
+                        Value::Array(vec![
+                            input.destination_role.to_value(),
+                            Value::Unsigned(input.team_sequence),
+                        ]),
+                        Value::Binary(input.removal_key_commitment.to_vec()),
+                    ])),
+                ))),
+            ]),
+        ]);
+        let generic = Value::Array(vec![
+            Value::Array(vec![
+                Value::Array(vec![
+                    Value::Unsigned(input.sequence),
+                    input
+                        .previous
+                        .map_or(Value::Null, |hash| Value::Binary(hash.to_vec())),
+                    Value::Array(vec![
+                        Value::Unsigned(input.root.epoch),
+                        Value::Binary(input.root.hash.to_vec()),
+                    ]),
+                    Value::Unsigned(input.time),
+                ]),
+                Value::Binary(input.next_location_commitment.to_vec()),
+            ]),
+            Value::Array(vec![
+                Value::Binary(input.user.as_bytes().to_vec()),
+                Value::Binary(input.host.as_bytes().to_vec()),
+            ]),
+            Value::Array(vec![
+                Value::Binary(input.signer.as_bytes().to_vec()),
+                Value::Null,
+            ]),
+            Value::Array(vec![
+                Value::Unsigned(4),
+                Value::Variant(Some((b"1".to_vec(), Box::new(membership)))),
+            ]),
+        ]);
+        Ok(Self {
+            inner: encode(&Value::Array(vec![
+                Value::Unsigned(2),
+                Value::Variant(Some((b"1".to_vec(), Box::new(generic)))),
+            ]))?,
+        })
+    }
+
     pub fn signing_bytes(&self, signatures: &[Signature]) -> Result<Vec<u8>> {
         let signatures = if signatures.is_empty() {
             Value::Null
@@ -347,6 +420,22 @@ pub struct AdHocMembershipLinkPublic<'a> {
     pub source_role: Role,
     pub destination_role: Role,
     pub team_sequence: u64,
+}
+
+pub struct ApprovedMembershipLinkPublic<'a> {
+    pub user: &'a EntityId,
+    pub host: &'a EntityId,
+    pub signer: &'a EntityId,
+    pub sequence: u64,
+    pub previous: Option<[u8; 32]>,
+    pub root: &'a TreeRoot,
+    pub time: u64,
+    pub next_location_commitment: [u8; 32],
+    pub team: &'a EntityId,
+    pub source_role: Role,
+    pub destination_role: Role,
+    pub team_sequence: u64,
+    pub removal_key_commitment: [u8; 32],
 }
 
 pub(crate) fn list_or_null(values: impl Iterator<Item = Value>) -> Value {
@@ -638,7 +727,7 @@ impl UserLink {
             next_location_commitment: fixed_blob(&hiding[1], "next tree location commitment")?,
             uid: entity(&fq_user[0])?.require_type(ENTITY_USER)?,
             host: entity(&fq_user[1])?.require_type(ENTITY_HOST)?,
-            signer: device_entity(&signer[0])?,
+            signer: user_member_entity(&signer[0])?,
             changes: list(&group[3], user_member_change)?,
             shared_keys: list(&group[5], user_shared_key)?,
             metadata: list(&group[6], change_metadata)?,
@@ -941,7 +1030,7 @@ fn user_member_change(value: &Value) -> Result<UserMemberChange> {
     };
     Ok(UserMemberChange {
         role: role(&fields[0])?,
-        entity: device_entity(&scoped[0])?,
+        entity: user_member_entity(&scoped[0])?,
         scoped_host: option(&scoped[1], |value| entity(value)?.require_type(ENTITY_HOST))?,
         source_role: role(&member[1])?,
         keys,

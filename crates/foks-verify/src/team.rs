@@ -1,13 +1,15 @@
 //! Team-chain replay, roster validation, and sealed team state.
 
 use crate::{
-    authenticated_user_chain_bytes, chain_merkle_key, commitment, encode, find_hepk,
+    append_authenticated_user_chain_bytes, authenticated_user_chain_bytes,
+    authenticated_user_chain_link_at, chain_merkle_key, commitment, encode, find_hepk,
     normalize_username, prefixed_hash, username_merkle_key, username_merkle_leaf,
-    verify_hostchain_at_tail, verify_merkle_path, verify_typed, AuthenticatedMerkleRoots, BTreeMap,
-    ChangeMetadata, EntityId, Error, HashSet, Hepk, HostchainTail, Result, Role, RoleType,
-    TeamChain, Value, VerifiedSharedKey, VerifiedUserSharedKey, ENTITY_AD_HOC_TEAM,
-    ENTITY_NAMED_TEAM, ENTITY_PTK_VERIFY, ENTITY_USER, LINK_OUTER_TYPE_ID, LINK_OUTER_V1_TYPE_ID,
-    MERKLE_ROOT_TYPE_ID, NAME_COMMITMENT_TYPE_ID, TREE_LOCATION_TYPE_ID,
+    verify_hostchain_at_tail, verify_merkle_path, verify_merkle_path_present, verify_typed,
+    AuthenticatedMerkleRoots, BTreeMap, ChangeMetadata, EntityId, Error, HashSet, Hepk,
+    HostchainTail, Result, Role, RoleType, TeamChain, Value, VerifiedSharedKey,
+    VerifiedUserSharedKey, ENTITY_AD_HOC_TEAM, ENTITY_NAMED_TEAM, ENTITY_PTK_VERIFY, ENTITY_USER,
+    LINK_OUTER_TYPE_ID, LINK_OUTER_V1_TYPE_ID, MERKLE_ROOT_TYPE_ID, NAME_COMMITMENT_TYPE_ID,
+    TREE_LOCATION_TYPE_ID,
 };
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -19,6 +21,7 @@ pub struct VerifiedTeamMember {
     pub generation: u64,
     pub verify_key: Vec<u8>,
     pub hepk_fingerprint: [u8; 32],
+    pub removal_key_commitment: Option<[u8; 32]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,6 +92,7 @@ pub struct VerifiedTeamState {
     authenticated_chain_bytes: Vec<u8>,
     evidence_bytes: Vec<u8>,
     chain_seqno: u64,
+    next_tree_location: [u8; 32],
     team_name: Vec<u8>,
     team_name_utf8: Vec<u8>,
     team_name_sequence: u64,
@@ -105,6 +109,7 @@ pub struct VerifiedTeamMemberState {
     pub generation: u64,
     pub verify_key: EntityId,
     pub hepk_fingerprint: [u8; 32],
+    pub removal_key_commitment: Option<[u8; 32]>,
 }
 
 impl VerifiedTeamState {
@@ -116,6 +121,12 @@ impl VerifiedTeamState {
     }
     pub fn chain_seqno(&self) -> u64 {
         self.chain_seqno
+    }
+    pub fn chain_tail_hash(&self) -> [u8; 32] {
+        self.chain_tail_hash
+    }
+    pub fn next_tree_location(&self) -> [u8; 32] {
+        self.next_tree_location
     }
     pub fn team_name(&self) -> &[u8] {
         &self.team_name
@@ -136,6 +147,20 @@ impl VerifiedTeamState {
         self.shared_keys.iter().find(|key| key.role == role)
     }
 
+    /// Returns one already-authenticated chain transition by its one-based
+    /// sequence number. This is intended for exact mutation reconciliation:
+    /// callers can prove a prepared link occupied its expected position even
+    /// when the latest chain has advanced further.
+    pub fn group_change_at(&self, sequence: u64) -> Result<foks_proto::TeamGroupChange> {
+        let index = sequence
+            .checked_sub(1)
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or(Error::TeamChainContinuity)?;
+        authenticated_user_chain_link_at(&self.authenticated_chain_bytes, index)?
+            .decode_team_group_change()
+            .map_err(Into::into)
+    }
+
     pub fn hard_state_snapshot(&self) -> Result<VerifiedTeamSnapshot> {
         let mut members = self
             .members
@@ -152,6 +177,7 @@ impl VerifiedTeamState {
                     generation: member.generation,
                     verify_key: member.verify_key.as_bytes().to_vec(),
                     hepk_fingerprint: member.hepk_fingerprint,
+                    removal_key_commitment: member.removal_key_commitment,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -301,6 +327,156 @@ pub fn verify_team_chain(
         authenticated_chain_bytes: authenticated_user_chain_bytes(&chain.links)?,
         evidence_bytes: chain_bytes.to_vec(),
         chain_seqno,
+        next_tree_location: *chain.locations.last().ok_or(Error::TeamChainContinuity)?,
+        team_name,
+        team_name_utf8,
+        team_name_sequence,
+        members: members.into_values().collect(),
+        shared_keys: shared_keys.into_values().collect(),
+    })
+}
+
+/// Verifies and replays only the team links returned after a trusted tail.
+pub fn verify_team_chain_increment(
+    chain_bytes: &[u8],
+    prior: &VerifiedTeamState,
+    expected_team: &EntityId,
+    expected_host: &EntityId,
+    authenticated_roots: &AuthenticatedMerkleRoots,
+    trusted_hostchain: &HostchainTail,
+) -> Result<VerifiedTeamState> {
+    if prior.team != *expected_team || prior.host != *expected_host {
+        return Err(Error::TeamChainContinuity);
+    }
+    let chain = TeamChain::decode(chain_bytes)?;
+    if chain.locations.len() != chain.links.len().saturating_add(1)
+        || chain.locations.first() != Some(&prior.next_tree_location)
+    {
+        return Err(Error::TeamChainContinuity);
+    }
+    let root_bytes = chain.merkle.encoded_root()?;
+    let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes);
+    if authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
+        || &chain.merkle.root().hostchain != trusted_hostchain
+    {
+        return Err(Error::UntrustedUserRoot);
+    }
+    let (team_name, team_name_utf8, team_name_sequence) =
+        verify_incremental_team_disclosures(&chain, prior, expected_team, expected_host)?;
+    let path_offset =
+        usize::try_from(chain.num_team_name_links).map_err(|_| Error::TeamChainContinuity)?;
+    let mut members = prior
+        .members
+        .iter()
+        .cloned()
+        .map(|member| {
+            (
+                team_member_key(
+                    &member.party,
+                    member.scoped_host.as_ref(),
+                    member.source_role,
+                ),
+                member,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut shared_keys = prior
+        .shared_keys
+        .iter()
+        .cloned()
+        .map(|key| (key.role, key))
+        .collect::<BTreeMap<_, _>>();
+    let mut previous_hash = prior.chain_tail_hash;
+    let start_sequence = prior
+        .chain_seqno
+        .checked_add(1)
+        .ok_or(Error::TeamChainContinuity)?;
+
+    for (index, ((link, locations), path)) in chain
+        .links
+        .iter()
+        .zip(chain.locations.windows(2))
+        .zip(&chain.merkle.paths()[path_offset..path_offset + chain.links.len()])
+        .enumerate()
+    {
+        let sequence = start_sequence
+            .checked_add(u64::try_from(index).map_err(|_| Error::TeamChainContinuity)?)
+            .ok_or(Error::TeamChainContinuity)?;
+        let change = link.decode_team_group_change()?;
+        if change.seqno != sequence
+            || change.previous != Some(previous_hash)
+            || &change.team != expected_team
+            || &change.host != expected_host
+            || authenticated_roots.get(&change.root.epoch) != Some(&change.root.hash)
+        {
+            return Err(Error::TeamChainContinuity);
+        }
+        let location_wire = encode(&Value::Binary(locations[1].to_vec()))?;
+        if prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire) != change.next_location_commitment {
+            return Err(Error::TeamChainContinuity);
+        }
+        let merkle_key = chain_merkle_key(3, expected_team, sequence, Some(&locations[0]))?;
+        let link_hash = prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?);
+        verify_merkle_path(
+            path,
+            &merkle_key,
+            Some(&link_hash),
+            &chain.merkle.root().root_node,
+        )
+        .map_err(|_| Error::TeamChainContinuity)?;
+        let introduced = validate_team_shared_keys(&change, &chain.hepks, &shared_keys, false)?;
+        validate_team_rotation_schedule(&change, &members, &shared_keys, &introduced)?;
+        replay_team_transition(link, &change, &introduced, &mut members)?;
+        for key in introduced {
+            shared_keys.insert(key.role, key);
+        }
+        previous_hash = link_hash;
+    }
+    let chain_seqno = prior
+        .chain_seqno
+        .checked_add(u64::try_from(chain.links.len()).map_err(|_| Error::TeamChainContinuity)?)
+        .ok_or(Error::TeamChainContinuity)?;
+    let next_tree_location = *chain.locations.last().ok_or(Error::TeamChainContinuity)?;
+    let next_key = chain_merkle_key(
+        3,
+        expected_team,
+        chain_seqno
+            .checked_add(1)
+            .ok_or(Error::TeamChainContinuity)?,
+        Some(&next_tree_location),
+    )?;
+    verify_merkle_path(
+        chain
+            .merkle
+            .paths()
+            .last()
+            .ok_or(Error::TeamChainContinuity)?,
+        &next_key,
+        None,
+        &chain.merkle.root().root_node,
+    )
+    .map_err(|_| Error::TeamChainContinuity)?;
+    if chain.links.is_empty()
+        && root_hash == prior.merkle_root_hash
+        && team_name == prior.team_name
+        && team_name_sequence == prior.team_name_sequence
+    {
+        return Ok(prior.clone());
+    }
+    Ok(VerifiedTeamState {
+        team: expected_team.clone(),
+        host: expected_host.clone(),
+        chain_tail_hash: previous_hash,
+        merkle_root_hash: root_hash,
+        merkle_epoch: chain.merkle.root().epoch,
+        merkle_root_bytes: root_bytes,
+        authenticated_chain_bytes: append_authenticated_user_chain_bytes(
+            &prior.authenticated_chain_bytes,
+            &chain.links,
+        )?,
+        evidence_bytes: append_team_evidence(&prior.evidence_bytes, chain_bytes)?,
+        chain_seqno,
+        next_tree_location,
         team_name,
         team_name_utf8,
         team_name_sequence,
@@ -404,6 +580,7 @@ pub(crate) fn verified_team_member(
         generation: keys.generation,
         verify_key: keys.verify_key.clone(),
         hepk_fingerprint: keys.hepk_fingerprint,
+        removal_key_commitment: keys.removal_key_commitment,
     })
 }
 
@@ -500,6 +677,9 @@ fn replay_team_transition(
     introduced: &[VerifiedSharedKey],
     members: &mut BTreeMap<Vec<u8>, VerifiedTeamMemberState>,
 ) -> Result<()> {
+    if change.team.entity_type() == ENTITY_AD_HOC_TEAM {
+        return Err(Error::TeamRoster);
+    }
     let mut matching = members
         .values()
         .filter(|member| {
@@ -558,7 +738,19 @@ fn replay_team_transition(
             members.remove(&key);
             continue;
         }
-        let verified = verified_team_member(member)?;
+        let mut verified = verified_team_member(member)?;
+        if prior.is_none() && verified.removal_key_commitment.is_none() {
+            return Err(Error::TeamRoster);
+        }
+        if let Some(old) = prior {
+            if verified
+                .removal_key_commitment
+                .is_some_and(|commitment| Some(commitment) != old.removal_key_commitment)
+            {
+                return Err(Error::TeamRoster);
+            }
+            verified.removal_key_commitment = old.removal_key_commitment;
+        }
         if signer.role < verified.role
             || prior.is_some_and(|old| signer.role < old.role)
             || prior.is_some_and(|old| verified.generation < old.generation)
@@ -654,12 +846,7 @@ fn verify_team_disclosures(
     host: &EntityId,
 ) -> Result<(Vec<u8>, Vec<u8>, u64)> {
     if team.entity_type() == ENTITY_AD_HOC_TEAM {
-        if !chain.team_names.is_empty()
-            || chain.num_team_name_links != 0
-            || chain.team_name_utf8 != b"-"
-        {
-            return Err(Error::TeamDisclosure);
-        }
+        verify_adhoc_team_name_paths(chain, host)?;
         return Ok((b"-".to_vec(), b"-".to_vec(), 0));
     }
     let commitments = chain
@@ -700,20 +887,173 @@ fn verify_team_disclosures(
             .and_then(|index| index.checked_add(1))
             .ok_or(Error::TeamDisclosure)?;
         let key = username_merkle_key(&normalized, host, sequence)?;
-        let expected_leaf = if index + 1 == path_count {
-            None
+        let proof = if index + 1 == path_count {
+            verify_merkle_path(path, &key, None, &chain.merkle.root().root_node)
+        } else if index + 2 == path_count {
+            verify_merkle_path(
+                path,
+                &key,
+                Some(&username_merkle_leaf(team)?),
+                &chain.merkle.root().root_node,
+            )
         } else {
-            Some(username_merkle_leaf(team)?)
+            verify_merkle_path_present(path, &key, &chain.merkle.root().root_node)
         };
-        verify_merkle_path(
-            path,
-            &key,
-            expected_leaf.as_ref(),
-            &chain.merkle.root().root_node,
-        )
-        .map_err(|_| Error::TeamDisclosure)?;
+        proof.map_err(|_| Error::TeamDisclosure)?;
     }
     Ok((normalized, chain.team_name_utf8.clone(), last.sequence))
+}
+
+fn team_evidence_segments(evidence: &[u8]) -> Result<Vec<Vec<u8>>> {
+    match foks_snowpack::decode(evidence)? {
+        Value::Variant(Some((tag, value))) if tag == b"1" => {
+            let Value::Array(values) = *value else {
+                return Err(Error::TeamChainContinuity);
+            };
+            values
+                .into_iter()
+                .map(|value| match value {
+                    Value::Binary(bytes) if !bytes.is_empty() => Ok(bytes),
+                    _ => Err(Error::TeamChainContinuity),
+                })
+                .collect()
+        }
+        _ => Ok(vec![evidence.to_vec()]),
+    }
+}
+
+fn append_team_evidence(prior: &[u8], suffix: &[u8]) -> Result<Vec<u8>> {
+    let mut segments = team_evidence_segments(prior)?;
+    while segments.len() > 1
+        && segments
+            .last()
+            .map(|segment| TeamChain::decode(segment).map(|chain| chain.links.is_empty()))
+            .transpose()?
+            .unwrap_or(false)
+    {
+        segments.pop();
+    }
+    segments.push(suffix.to_vec());
+    Ok(encode(&Value::Variant(Some((
+        b"1".to_vec(),
+        Box::new(Value::Array(
+            segments.into_iter().map(Value::Binary).collect(),
+        )),
+    ))))?)
+}
+
+fn verify_incremental_team_disclosures(
+    chain: &TeamChain,
+    prior: &VerifiedTeamState,
+    team: &EntityId,
+    host: &EntityId,
+) -> Result<(Vec<u8>, Vec<u8>, u64)> {
+    if team.entity_type() == ENTITY_AD_HOC_TEAM {
+        if prior.team_name != b"-" || prior.team_name_sequence != 0 {
+            return Err(Error::TeamDisclosure);
+        }
+        verify_adhoc_team_name_paths(chain, host)?;
+        return Ok((b"-".to_vec(), b"-".to_vec(), 0));
+    }
+    let commitments = chain
+        .links
+        .iter()
+        .flat_map(|link| link.decode_team_group_change().into_iter())
+        .flat_map(|change| change.metadata)
+        .filter_map(|metadata| match metadata {
+            ChangeMetadata::TeamName(value) => Some(value),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if commitments.len() != chain.team_names.len() {
+        return Err(Error::TeamDisclosure);
+    }
+    for (disclosed, expected) in chain.team_names.iter().zip(commitments) {
+        let wire = encode(&Value::Array(vec![
+            Value::Text(disclosed.name.clone()),
+            Value::Unsigned(disclosed.sequence),
+        ]))?;
+        if commitment(NAME_COMMITMENT_TYPE_ID, &wire, &disclosed.commitment_key) != expected {
+            return Err(Error::TeamDisclosure);
+        }
+    }
+    let normalized = normalize_username(&chain.team_name_utf8).ok_or(Error::TeamDisclosure)?;
+    let (team_name, team_name_sequence, name_start) = match chain.team_names.last() {
+        Some(last) if last.name == normalized => {
+            let start = if normalized == prior.team_name {
+                prior
+                    .team_name_sequence
+                    .checked_add(1)
+                    .ok_or(Error::TeamDisclosure)?
+            } else {
+                1
+            };
+            (normalized, last.sequence, start)
+        }
+        None if normalized == prior.team_name => (
+            prior.team_name.clone(),
+            prior.team_name_sequence,
+            prior
+                .team_name_sequence
+                .checked_add(1)
+                .ok_or(Error::TeamDisclosure)?,
+        ),
+        _ => return Err(Error::TeamDisclosure),
+    };
+    let path_count =
+        usize::try_from(chain.num_team_name_links).map_err(|_| Error::TeamDisclosure)?;
+    let expected_count = team_name_sequence
+        .checked_add(2)
+        .and_then(|end| end.checked_sub(name_start))
+        .and_then(|count| usize::try_from(count).ok())
+        .ok_or(Error::TeamDisclosure)?;
+    if path_count != expected_count || path_count == 0 {
+        return Err(Error::TeamDisclosure);
+    }
+    for (index, path) in chain.merkle.paths()[..path_count].iter().enumerate() {
+        let sequence = name_start
+            .checked_add(u64::try_from(index).map_err(|_| Error::TeamDisclosure)?)
+            .ok_or(Error::TeamDisclosure)?;
+        let key = username_merkle_key(&team_name, host, sequence)?;
+        let proof = if index + 1 == path_count {
+            verify_merkle_path(path, &key, None, &chain.merkle.root().root_node)
+        } else if index + 2 == path_count {
+            verify_merkle_path(
+                path,
+                &key,
+                Some(&username_merkle_leaf(team)?),
+                &chain.merkle.root().root_node,
+            )
+        } else {
+            verify_merkle_path_present(path, &key, &chain.merkle.root().root_node)
+        };
+        proof.map_err(|_| Error::TeamDisclosure)?;
+    }
+    Ok((team_name, chain.team_name_utf8.clone(), team_name_sequence))
+}
+
+fn verify_adhoc_team_name_paths(chain: &TeamChain, host: &EntityId) -> Result<()> {
+    // v0.1.9 stores one host-wide `-` row so ad-hoc teams can use the ordinary
+    // loader. It is not assigned to any individual team and therefore has no
+    // name-tree leaves. The server still returns the first slot and terminal
+    // slot as two absence proofs; Go's team loader skips entity-name binding
+    // but counts both paths before the team-chain proofs.
+    if !chain.team_names.is_empty()
+        || chain.num_team_name_links != 2
+        || chain.team_name_utf8 != b"-"
+    {
+        return Err(Error::TeamDisclosure);
+    }
+    for (index, path) in chain.merkle.paths()[..2].iter().enumerate() {
+        let sequence = u64::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_add(1))
+            .ok_or(Error::TeamDisclosure)?;
+        let key = username_merkle_key(b"-", host, sequence)?;
+        verify_merkle_path(path, &key, None, &chain.merkle.root().root_node)
+            .map_err(|_| Error::TeamDisclosure)?;
+    }
+    Ok(())
 }
 
 /// Replays persisted team-chain evidence before recreating a sealed team
@@ -725,16 +1065,31 @@ pub fn restore_verified_team(
 ) -> Result<VerifiedTeamState> {
     let team = EntityId::from_bytes(persisted.team_id.to_vec())?;
     let host = EntityId::from_bytes(persisted.host_id.to_vec())?;
-    let evidence = TeamChain::decode(persisted.evidence_bytes)?;
     let hostchain = foks_proto::decode_hostchain(trusted_hostchain_bytes)?;
-    verify_hostchain_at_tail(&hostchain, &evidence.merkle.root().hostchain)?;
-    let verified = verify_team_chain(
-        persisted.evidence_bytes,
+    let segments = team_evidence_segments(persisted.evidence_bytes)?;
+    let mut segments = segments.into_iter();
+    let first = segments.next().ok_or(Error::PersistedTeamEvidence)?;
+    let first_chain = TeamChain::decode(&first)?;
+    verify_hostchain_at_tail(&hostchain, &first_chain.merkle.root().hostchain)?;
+    let mut verified = verify_team_chain(
+        &first,
         &team,
         &host,
         authenticated_roots,
-        &evidence.merkle.root().hostchain,
+        &first_chain.merkle.root().hostchain,
     )?;
+    for segment in segments {
+        let chain = TeamChain::decode(&segment)?;
+        verify_hostchain_at_tail(&hostchain, &chain.merkle.root().hostchain)?;
+        verified = verify_team_chain_increment(
+            &segment,
+            &verified,
+            &team,
+            &host,
+            authenticated_roots,
+            &chain.merkle.root().hostchain,
+        )?;
+    }
     let snapshot = verified.hard_state_snapshot()?;
     let reproduced = snapshot.parts();
     if reproduced.host_id != persisted.host_id
@@ -755,4 +1110,197 @@ pub fn restore_verified_team(
         return Err(Error::PersistedTeamEvidence);
     }
     Ok(verified)
+}
+
+#[cfg(test)]
+mod transition_tests {
+    use super::{
+        replay_team_transition, team_member_key, validate_team_rotation_schedule,
+        verified_team_member, BTreeMap, EntityId, Error, Role, VerifiedSharedKey,
+    };
+    use foks_crypto::derive_shared_public;
+    use foks_proto::{SecretSeed, UserLink, ENTITY_PTK_VERIFY};
+
+    const MUTATION_DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user-mutations";
+
+    fn fixture(name: &str) -> Vec<u8> {
+        std::fs::read(format!("{MUTATION_DIR}/{name}")).unwrap()
+    }
+
+    #[test]
+    fn official_addition_replays_and_retains_removal_commitment() {
+        let eldest = UserLink::decode(&fixture("named-team-link.snowp")).unwrap();
+        let eldest_change = eldest.decode_team_group_change().unwrap();
+        let owner = verified_team_member(&eldest_change.changes[0]).unwrap();
+        let owner_key =
+            team_member_key(&owner.party, owner.scoped_host.as_ref(), owner.source_role);
+        let mut members = BTreeMap::from([(owner_key, owner)]);
+        let addition = UserLink::decode(&fixture("add-member-link.snowp")).unwrap();
+        let addition_change = addition.decode_team_group_change().unwrap();
+        replay_team_transition(
+            &addition,
+            &addition_change,
+            &Vec::<VerifiedSharedKey>::new(),
+            &mut members,
+        )
+        .unwrap();
+        let target = &addition_change.changes[0];
+        let key = team_member_key(&target.party, None, Role::OWNER);
+        assert_eq!(
+            members.get(&key).unwrap().removal_key_commitment,
+            target.keys.as_ref().unwrap().removal_key_commitment
+        );
+    }
+
+    #[test]
+    fn later_adhoc_edits_are_rejected_before_signature_use() {
+        let addition = UserLink::decode(&fixture("add-member-link.snowp")).unwrap();
+        let mut change = addition.decode_team_group_change().unwrap();
+        let mut team = change.team.as_bytes().to_vec();
+        team[0] = foks_proto::ENTITY_AD_HOC_TEAM;
+        change.team = EntityId::from_bytes(team).unwrap();
+        assert!(matches!(
+            replay_team_transition(
+                &addition,
+                &change,
+                &Vec::<VerifiedSharedKey>::new(),
+                &mut BTreeMap::new(),
+            ),
+            Err(Error::TeamRoster)
+        ));
+    }
+
+    #[test]
+    fn official_removal_rotates_exactly_the_exposed_ptks() {
+        let eldest = UserLink::decode(&fixture("named-team-link.snowp")).unwrap();
+        let eldest_change = eldest.decode_team_group_change().unwrap();
+        let owner = verified_team_member(&eldest_change.changes[0]).unwrap();
+        let owner_key =
+            team_member_key(&owner.party, owner.scoped_host.as_ref(), owner.source_role);
+        let mut members = BTreeMap::from([(owner_key, owner)]);
+        let addition = UserLink::decode(&fixture("add-member-link.snowp")).unwrap();
+        let addition_change = addition.decode_team_group_change().unwrap();
+        replay_team_transition(
+            &addition,
+            &addition_change,
+            &Vec::<VerifiedSharedKey>::new(),
+            &mut members,
+        )
+        .unwrap();
+
+        let old_seed_names = [
+            "adhoc-ptk-member-min-seed.bin",
+            "adhoc-ptk-member-seed.bin",
+            "adhoc-ptk-admin-seed.bin",
+            "adhoc-ptk-owner-seed.bin",
+        ];
+        let mut current = BTreeMap::new();
+        for (wire, name) in eldest_change.shared_keys.iter().zip(old_seed_names) {
+            let seed = SecretSeed::new(fixture(name).try_into().unwrap());
+            let public = derive_shared_public(&seed, ENTITY_PTK_VERIFY).unwrap();
+            current.insert(
+                wire.role,
+                VerifiedSharedKey {
+                    role: wire.role,
+                    generation: wire.generation,
+                    verify_key: public.verify_key,
+                    hepk: public.hepk,
+                },
+            );
+        }
+        let rotation = UserLink::decode(&fixture("remove-member-link.snowp")).unwrap();
+        let rotation_change = rotation.decode_team_group_change().unwrap();
+        let new_seed_names = [
+            "remove-member-ptk-member-min-seed.bin",
+            "remove-member-ptk-member-seed.bin",
+        ];
+        let introduced = rotation_change
+            .shared_keys
+            .iter()
+            .zip(new_seed_names)
+            .map(|(wire, name)| {
+                let seed = SecretSeed::new(fixture(name).try_into().unwrap());
+                let public = derive_shared_public(&seed, ENTITY_PTK_VERIFY).unwrap();
+                VerifiedSharedKey {
+                    role: wire.role,
+                    generation: wire.generation,
+                    verify_key: public.verify_key,
+                    hepk: public.hepk,
+                }
+            })
+            .collect::<Vec<_>>();
+        validate_team_rotation_schedule(&rotation_change, &members, &current, &introduced).unwrap();
+        assert!(matches!(
+            validate_team_rotation_schedule(&rotation_change, &members, &current, &introduced[..1],),
+            Err(Error::TeamKeySchedule)
+        ));
+        replay_team_transition(&rotation, &rotation_change, &introduced, &mut members).unwrap();
+        assert_eq!(members.len(), 1);
+    }
+
+    #[test]
+    fn official_demotion_rotates_only_lost_visibility_and_retains_commitment() {
+        let eldest = UserLink::decode(&fixture("named-team-link.snowp")).unwrap();
+        let eldest_change = eldest.decode_team_group_change().unwrap();
+        let owner = verified_team_member(&eldest_change.changes[0]).unwrap();
+        let owner_key =
+            team_member_key(&owner.party, owner.scoped_host.as_ref(), owner.source_role);
+        let mut members = BTreeMap::from([(owner_key, owner)]);
+        let addition = UserLink::decode(&fixture("add-member-link.snowp")).unwrap();
+        let addition_change = addition.decode_team_group_change().unwrap();
+        replay_team_transition(
+            &addition,
+            &addition_change,
+            &Vec::<VerifiedSharedKey>::new(),
+            &mut members,
+        )
+        .unwrap();
+
+        let mut current = BTreeMap::new();
+        for (wire, name) in eldest_change.shared_keys.iter().zip([
+            "adhoc-ptk-member-min-seed.bin",
+            "adhoc-ptk-member-seed.bin",
+            "adhoc-ptk-admin-seed.bin",
+            "adhoc-ptk-owner-seed.bin",
+        ]) {
+            let public = derive_shared_public(
+                &SecretSeed::new(fixture(name).try_into().unwrap()),
+                ENTITY_PTK_VERIFY,
+            )
+            .unwrap();
+            current.insert(
+                wire.role,
+                VerifiedSharedKey {
+                    role: wire.role,
+                    generation: wire.generation,
+                    verify_key: public.verify_key,
+                    hepk: public.hepk,
+                },
+            );
+        }
+        let demotion = UserLink::decode(&fixture("demote-member-link.snowp")).unwrap();
+        let change = demotion.decode_team_group_change().unwrap();
+        let public = derive_shared_public(
+            &SecretSeed::new(fixture("demote-member-ptk-seed.bin").try_into().unwrap()),
+            ENTITY_PTK_VERIFY,
+        )
+        .unwrap();
+        let introduced = [VerifiedSharedKey {
+            role: change.shared_keys[0].role,
+            generation: change.shared_keys[0].generation,
+            verify_key: public.verify_key,
+            hepk: public.hepk,
+        }];
+        validate_team_rotation_schedule(&change, &members, &current, &introduced).unwrap();
+        let commitment = addition_change.changes[0]
+            .keys
+            .as_ref()
+            .unwrap()
+            .removal_key_commitment;
+        replay_team_transition(&demotion, &change, &introduced, &mut members).unwrap();
+        let changed = &change.changes[0];
+        let key = team_member_key(&changed.party, None, changed.source_role);
+        assert_eq!(members[&key].role, Role::member(-0x4000));
+        assert_eq!(members[&key].removal_key_commitment, commitment);
+    }
 }

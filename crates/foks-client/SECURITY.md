@@ -55,7 +55,7 @@ from restoring that copy intentionally.
 | Type-prefixed hashes, signatures, hybrid key derivation, PUK/PTK unboxing and seed chains | `foks-crypto` | `verify_typed`, `derive_device_public`, `open_puk_seed_chain` |
 | Host-chain authority and service delegation | `foks-verify` | `verify_public_host` |
 | Merkle signatures, host-chain binding, and skip-path continuity | `foks-verify` | `verify_merkle_advance` |
-| User-chain continuity, proofs, roles, and transition authorization | `foks-verify` | `verify_user_chain` |
+| User/team chain continuity, suffix proofs, roles, and transition authorization | `foks-verify` | `verify_user_chain`, `verify_user_chain_increment`, `verify_team_chain_increment` |
 | Host identity, chain, Merkle, and user rollback/fork rejection | `foks-client-db` | `accept_verified_*` |
 | Authenticated TLS roots, endpoint/vhost selection, transaction ordering, KV mutation preconditions, and cache revalidation | `foks-client` | `PinnedHost`, `authenticate_and_pin`, `KvWriteSession` |
 
@@ -65,29 +65,76 @@ Merkle-committed input. Top-level verified values have private constructors and
 fields, so storage code cannot accidentally accept an application-assembled
 lookalike.
 
+## Transport lifetime and resource bounds
+
+Pooled connections are partitioned by endpoint, HostID, authenticated TLS-root
+fingerprint, a one-way private-key fingerprint, client certificate chain, and
+whether virtual-host selection has completed. A private key is also checked
+against its certificate on every checkout and is never copied into the pool
+key. Connections survive only completely
+decoded successful exchanges; transport, framing, sequence, and remote-status
+errors drop the connection and are not automatically retried. This is required
+because a failed write may have reached the server.
+
+The configured timeout covers DNS completion, TCP attempts, TLS, request write,
+and response read for one logical RPC. Standard synchronous DNS resolution
+cannot be interrupted mid-call, but an overrun is rejected immediately after
+resolution. Once a socket exists, cancellation and deadlines are checked at
+most every 250 ms during stalled I/O. Frame limits are configurable from one
+byte through 1 GiB; raising the default 16 MiB limit increases the maximum
+single response allocation and should be done only for a protocol path that
+requires it.
+
 ## Secret handling
 
 Device and PUK seeds use `SecretSeed`, an opaque, non-`Clone`, redacted type
 whose storage is zeroized on drop. Intermediate shared secrets and private-key
 encodings are also held in zeroizing buffers where their dependency APIs allow
-it. SQLite stores only public identifiers, HEPKs, signatures, ciphertext, and
-verified history. It never stores a device seed or clear PUK seed.
+it. Encrypted Snowpack plaintexts constructed by `foks-crypto` are encoded
+from borrowed fields directly into zeroizing output; seed-bearing plaintexts
+are copied into zeroizing storage and redacted before generic schema decoding,
+so an ordinary `Value::Binary` never owns the clear seed. SQLite stores only public
+identifiers, HEPKs, signatures, ciphertext, and verified history. It never
+stores a device seed or clear PUK seed.
 
 Returned PUK/PTK seed sequences are intentionally live secret material. Their
 caller must move them into the encrypted AKA key store or consume them
 promptly; logging, serializing, or placing them in ordinary SQLite rows is
 outside this crate's contract.
 
-Software account creation requires the caller to persist its device seed, PUK
-seed, and self token in that encrypted store before submission. The hard-state
-signup journal contains only public identifiers, normalized username, an
-exact-request hash, timestamps, and monotonic prepared/submitted/verified
-state. It is therefore useful for reconciliation but cannot recover a lost
-credential or retry a request without the caller's protected material.
-`resume_software_account` never replays signup: it proves that the supplied
-seeds derive the journaled UID/device, reloads the accepted account, and
-idempotently loads or creates the initial KV root. This covers a lost signup
-response as well as interruption between account and KV creation.
+Crash-safe mutations require a caller-supplied `ProtectedMutationStore` backed
+by an encrypted credential store, platform keychain, or equivalent durable
+secret store. The client commits the exact request and required seeds there
+before it creates the public SQLite journal row. That row contains only public
+bindings, request and protected-material fingerprints, timestamps, attempt
+count, and monotonic state. Protected bytes are fingerprint-checked before the
+one allowed submission and are deleted only after terminal SQLite state is
+committed. A crash before the SQLite row can leave an unreachable protected
+record; a crash during deletion can leave a terminal record plus orphaned
+protected material. Neither case permits network replay.
+
+For local deployments, `EncryptedFileMutationStore` implements this contract
+with a caller-supplied 256-bit master key, XChaCha20-Poly1305 records bound to
+their logical key, synced temporary files, and atomic no-replace installation.
+AKA must obtain and retain the master key in its platform keychain or encrypted
+vault; losing or replacing that key makes pending mutations unrecoverable.
+Protected records are capped at 128 MiB to bound allocation when reading a
+tampered file. On Unix, the adapter creates private files and refuses to follow
+a symbolic link at a record path.
+
+Only `Prepared` may transition to `Submitting`, and only once. `Submitting` and
+`SubmissionUnknown` are deliberately indistinguishable for replay purposes:
+after restart they may only reconcile against authenticated server state.
+Software signup, device provisioning and revocation, PUK rotation, and KV
+namespace/root changes use this generic journal. `resume_software_account`
+also proves that protected seeds derive the journaled UID/device and that the
+normalized username and PUK match the authenticated accepted account.
+
+The scheduler database contains only public host/scope identifiers, timing,
+leases, counters, and the handler's last error string. Handlers must not put
+credentials, tokens, seeds, or sensitive server responses into that error.
+Leases prevent concurrent claims but intentionally expire after crashes, so
+scheduled refresh and reconciliation handlers must tolerate repeat execution.
 
 ## Commit ordering
 
@@ -105,13 +152,27 @@ An interrupted run after step 3 is safe: the cumulative authenticated root
 history is durable, and a retry can verify the same user response without
 trusting it to supply its own root.
 
+When a user or team projection already exists, step 4 requests only links
+after the stored tail and name slots after the stored name sequence. The
+verifier binds the suffix's first link to the prior tail hash and prior hidden
+tree location, verifies all returned proofs and the next-link absence under
+the new root, and replays transitions from the sealed prior state. Hard state
+stores the exact initial response and later response segments; reopening
+repeats that sequence of full and incremental verification before exposing a
+capability.
+
 ## Implemented scope and exclusions
 
 Implemented here: non-interactive single-owner software account creation;
 non-interactive software-device provisioning and revocation with required PUK
 rotation and historical seed-chain preservation; standalone software PUK
-rotation over a complete role prefix; single-owner ad-hoc team creation with
-four generation-1 PTKs and an immutable creator membership link;
+rotation over a complete role prefix; single-owner ad-hoc and named-team
+creation with four generation-1 PTKs and authenticated creator membership;
+same-host named-team user additions under authenticated open-viewership policy;
+same-host named-team user removal plus generalized removal, demotion, and
+member-key-generation changes for local, nested-team, and federated members,
+with TeamAdmin removal-key retrieval, mandatory PTK rotation, and historical
+seed-chain preservation;
 public probe; hostchain-delegated TLS CAs and virtual-host
 selection; host, Merkle, user, and team-chain verification; certificate
 retrieval for already enrolled software and Yubi subkeys; device mTLS;
@@ -167,22 +228,82 @@ bytes. The host remains authoritative for its open-viewership policy. v0.1.9
 ad-hoc membership is fixed at founding, so this API exposes no misleading edit
 path.
 
+Named-team creation additionally reserves the normalized name, commits the
+name and one caller-retained removal key in the eldest link, boxes that removal
+key independently to the admin PTK and creator PUK, and emits an `Approved`
+membership link carrying the same commitment. Official Go v0.1.9 builders and
+RPC encoding provide differential fixtures for the eldest link, membership
+link, reservation, removal boxes, and complete request. The public journal
+excludes the reservation token, name-commitment key, removal key, PTKs, and
+hidden tree locations. This slice supports one local owner only.
+
+Named-team addition accepts only a sealed, verified same-host user state and
+the target's current owner PUK. The actor must be exactly one unscoped admin or
+owner in the verified team roster, cannot grant above its own role, and can
+only grant a role with an existing PTK. The signed link contains exactly one
+addition and no PTK rotation. The caller-retained removal key is committed in
+that link, dual-boxed to the current admin PTK and target PUK, and excluded
+from SQLite. Reconciliation replays the authenticated team chain and checks
+the exact expected link rather than trusting the latest roster projection.
+FOKS's closed-viewership three-way invitation flow is intentionally absent.
+
+Named-team removal and downgrade accept exactly one member already present in
+the authenticated roster. A caller-retained removal key may be used by the
+legacy local-user API; the general path instead activates a short-lived
+TeamAdmin bearer token with the current admin/owner PTK and opens the returned
+historical admin box. In either case, the key must reproduce the member's
+signed commitment and its encrypted metadata must bind team, member, host
+scope, and source role. The actor must be an unscoped admin or owner with
+authority over the target, and sealed verified user/team states must exactly
+cover the post-transition roster. The rotation role set is derived from the
+pre-transition PTKs, old destination role, new destination role, and source
+credential generation; skipped, duplicated,
+reordered, surplus, unchanged, or key-reusing replacements fail before
+journaling. New PTKs are distributed only to
+remaining members whose roles can read them, while each old generation is
+secret-boxed under its replacement for authorized history. The link's stacked
+signatures, off-chain box set, seed chain, and removal MAC have byte-exact Go
+v0.1.9 fixtures. Reconciliation binds the target, scoped host, source and
+destination roles, replacement PUK/PTK generation and verify key, introduced
+PTK verify keys and generations, and expected chain position. A unique public
+journal lookup allows reconciliation after a TeamAdmin-loaded removal key has
+already left memory.
+
 KV namespace writes use the complete accepted path-version vector as the
-server precondition. Explicit stale-cache responses trigger at most three
-targeted refresh-and-retry attempts; transport failures are never replayed.
+server precondition. The canonical vector and exact authenticated dirent bytes
+are protected outbox material; the public journal binds their fingerprint,
+party, parent, and root version. Explicit stale-cache responses terminally
+reject that attempt and trigger at most three freshly prepared targeted
+refresh-and-retry attempts; transport failures are never blindly replayed.
 Content objects are uploaded before their authenticated
 dirent is linked, as required by v0.1.9; an interrupted or raced operation can
 therefore leave an unreachable encrypted object for server-side collection,
 but cannot expose a partially linked plaintext name. After a successful
 dirent/root mutation the client immediately runs cache-check synchronization.
-If that final synchronization fails, the remote mutation may already be
-committed and callers must treat the result as indeterminate and resynchronize
-before retrying. Large uploads are bounded to FOKS's 1 GiB limit and retain at
-most one 4 MiB cleartext chunk plus one-byte lookahead in memory.
+If that synchronization or the response fails, the operation remains pending;
+its public resume method performs targeted authenticated synchronization and
+accepts only the exact root or dirent transition. Large uploads are bounded to
+FOKS's 1 GiB limit and retain at most one 4 MiB cleartext chunk plus one-byte
+lookahead in memory. Content-object creation and upload chunks are not replayed
+after process loss; callers restart the stream, possibly leaving unreachable
+encrypted objects. Only the subsequent namespace link is authoritative and
+durably recoverable.
 
-Not yet implemented: named-team creation; additional ad-hoc founding members;
-team membership or credential management; PTK rotation; beacon resolution;
-federation; CLKR; Git; chat/realtime; account recovery; SSO; a production
+Backup-key account recovery is implemented through the exact v0.1.9 HESP,
+registration lookup, PUK unboxing, and loopback provision semantics. The raw
+26-byte phrase seed is caller-owned and must be recorded before enrollment.
+Its first word/number pair is disclosed as the device name, leaving 179 secret
+bits from the 203-bit encoding after enrollment. New keys should be made with
+`BackupKey::generate` rather than caller-assembled random bytes.
+Loading consumes it and retains only a derived zeroizing credential in a
+non-serializable value; successful recovery returns a normal caller-durable
+software credential. Backup keys are not written to SQLite. Losing both every
+permanent device and every enrolled backup phrase remains unrecoverable.
+
+Not yet implemented: additional founding members; promotion/addition through
+closed-viewership invitation and remote-join protocols; beacon resolution;
+federated discovery and remote-view-token issuance; CLKR; Git; chat/realtime;
+passphrase-based device recovery; SSO; a production
 encrypted key-store integration; or a FOKS server. These omissions should fail
 by absence, not by permissive fallbacks.
 
@@ -198,3 +319,9 @@ test covers host-selected registration followed by authenticated user, Merkle,
 and PUK RPCs without a browser or interactive input. A separate official Go
 oracle creates the full software-signup link, box set, hidden values, and
 byte-exact registration RPC frames entirely from the command line.
+The command-line live compatibility harness starts the official v0.1.9 Go
+server with PostgreSQL, then drives native Rust probe, registration, user/PUK
+authentication, root creation, KV write, and incremental SQLite projection.
+Deterministic mutation tests place a lost-response proxy after authoritative
+acceptance and restart at every durability boundary, including protected-only,
+Prepared, Submitting, SubmissionUnknown, and terminal-before-cleanup states.

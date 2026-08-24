@@ -4,6 +4,7 @@ mod chain;
 mod hepk;
 mod merkle;
 mod mutation;
+mod recovery;
 mod team;
 mod user;
 
@@ -11,6 +12,7 @@ pub use chain::*;
 pub use hepk::*;
 pub use merkle::*;
 pub use mutation::*;
+pub use recovery::*;
 pub use team::*;
 pub use user::*;
 

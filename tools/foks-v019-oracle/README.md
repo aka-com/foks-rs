@@ -125,11 +125,22 @@ go run . \
 ```
 
 The fixture reuses officially constructed provision/revoke links and a valid
-PUK parcel, then constructs an official membership-preserving PUK rotation and
-a complete ad-hoc eldest/membership/box-set request. Mutation randomness and
-link times are deterministic, and the Go test suite generates the full corpus
-twice to require byte-identical output. The generator opens the team eldest and
-creator membership through the official server-shared validators, then checks
+PUK parcel, then constructs an official membership-preserving PUK rotation,
+complete ad-hoc and named-team creation requests, and one named-team local-user
+addition followed by removal with the exact two-role PTK rotation, recipient
+boxes, historical seed chain, removal MAC, and TeamAdmin edit frame. It also
+emits an independently randomized, officially replayed member demotion and the
+complete TeamAdmin removal-key retrieval exchange: inert bearer-token request,
+typed PTK signature, activation request, scoped box request, and returned
+historical admin box. The same command also covers backup-key HESP derivation,
+enrollment, signed account lookup, certificate request, PUK delivery, and
+backup-countersigned permanent-device recovery. All of those steps use the
+official Go v0.1.9 implementation and require no browser, agent, or live
+account. Mutation randomness and link times are deterministic,
+and the Go test suite generates the full corpus
+twice to require byte-identical output. The generator opens the team eldest,
+addition, removal, and creator membership through the official server-shared
+validators, then checks
 their team, host, owner, roles, PTK/box counts, and hidden-location bindings
 against the RPC argument before setting `server_semantics_verified`.
 
@@ -139,3 +150,19 @@ deprecated provision fields. It is not a live handler transaction: the reused
 parcel makes the user-mutation request frames encoding oracles rather than one
 coherent mutation against a Postgres-backed server. A full handler test still
 requires the official integration environment, but never a browser.
+
+## Live Rust compatibility test
+
+The opt-in happy-path harness builds the Rust client, starts the unmodified
+official v0.1.9 Go integration environment with Postgres 17, and drives account
+creation, authenticated user-chain and PUK loading, personal KV initialization,
+a file write, incremental cache-check synchronization, and SQLite projection:
+
+```sh
+./run-live-compat.sh
+```
+
+This requires a working Docker daemon because the official Go test environment
+uses testcontainers for Postgres. It requires no browser or interactive input.
+Ordinary `go test ./...` skips the live test unless `FOKS_RUST_LIVE_DRIVER` is
+set, so the existing fixture suite remains command-line-only and hermetic.

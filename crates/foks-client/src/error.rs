@@ -10,6 +10,12 @@ pub enum Error {
     NoAddress(String),
     #[error("TCP connection to every resolved address failed: {0}")]
     Connect(std::io::Error),
+    #[error("FOKS operation was cancelled")]
+    Cancelled,
+    #[error("FOKS operation deadline was exceeded")]
+    DeadlineExceeded,
+    #[error("FOKS transport configuration failed: {0}")]
+    Transport(&'static str),
     #[error("TLS configuration failed: {0}")]
     Tls(#[from] rustls::Error),
     #[error("invalid TLS server name")]
@@ -26,6 +32,8 @@ pub enum Error {
     Snowpack(#[from] foks_snowpack::Error),
     #[error("FOKS device cryptography failed: {0}")]
     Crypto(#[from] foks_crypto::Error),
+    #[error("invalid FOKS backup key: {0}")]
+    Backup(#[from] foks_crypto::BackupPhraseError),
     #[error("registration returned an invalid certificate chain")]
     CertificateChain,
     #[error("authenticated hostchain contains no usable TLS CA certificates")]
@@ -44,6 +52,8 @@ pub enum Error {
     KeyBinding(&'static str),
     #[error("FOKS mutation-journal binding failed: {0}")]
     OperationBinding(&'static str),
+    #[error("FOKS protected mutation material failed: {0}")]
+    ProtectedMaterial(String),
     #[error("FOKS transition was not observed: {0}")]
     TransitionNotObserved(&'static str),
     #[error("pinned host is missing or has a malformed {0} service endpoint")]
@@ -54,6 +64,8 @@ pub enum Error {
     AccountRequest(&'static str),
     #[error("invalid FOKS team request: {0}")]
     TeamRequest(&'static str),
+    #[error("invalid FOKS scheduler configuration: {0}")]
+    Scheduler(&'static str),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

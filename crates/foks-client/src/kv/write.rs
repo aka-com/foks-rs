@@ -3,12 +3,17 @@
 use std::io::Read;
 use std::time::Duration;
 
-use foks_client_db::KvDirectoryProjection;
+use foks_client_db::{
+    HardStateStore, KvDirectoryProjection, MutationKind, MutationOperation, MutationState,
+    SoftStateStore,
+};
 use foks_crypto::{derive_kv_keys, seal_kv_chunk, seal_kv_dirent_name};
 use foks_proto::{
     KvDirectory, KvDirectoryPair, KvDirectoryStatus, KvDirent, KvNodeId, KvNodeType, KvRoot,
     KvSmallFilePlaintext, Role, RoleAndGeneration, SecretSeed,
 };
+use foks_snowpack::{decode, encode, Value};
+use zeroize::Zeroizing;
 
 use super::rpc::KvRequest;
 use super::support::{
@@ -17,12 +22,15 @@ use super::support::{
     validate_kv_component, validate_kv_symlink,
 };
 use super::{KvWriteOptions, KvWriteResult, KvWriteSession};
-use crate::{now_microseconds, random_bytes, Error, Result};
+use crate::{now_microseconds, random_bytes, Error, MutationCoordinator, MutationDraft, Result};
+
+const KV_NAMESPACE_REQUEST_HASH_TYPE_ID: u64 = 0x4303_44d4_219a_8b1e;
+const KV_ROOT_REQUEST_HASH_TYPE_ID: u64 = 0x1dca_75c8_c2dd_b868;
 
 impl KvWriteSession<'_> {
     const MAX_NAMESPACE_ATTEMPTS: usize = 3;
-    pub(crate) const MAX_UPLOAD_CHUNK: usize = 4 * 1024 * 1024;
-    const MAX_UPLOAD_BYTES: u64 = 1024 * 1024 * 1024;
+    pub(crate) const MAX_UPLOAD_CHUNK: usize = super::MAX_KV_UPLOAD_CHUNK;
+    const MAX_UPLOAD_BYTES: u64 = super::MAX_KV_FILE_BYTES;
     // Upstream reserves eight bytes of Snowpack overhead inside its 2 KiB
     // small-file budget. Larger plaintexts use the chunked-file protocol.
     pub(crate) const SMALL_FILE_BYTES: usize = 2048 - 8;
@@ -64,8 +72,7 @@ impl KvWriteSession<'_> {
             precondition: None,
             directory,
         })?;
-        self.call(KvRequest::PutRoot(KvRoot::new(id, 1, key, binding_mac)?))?;
-        self.sync()
+        self.put_root_journaled(KvRoot::new(id, 1, key, binding_mac)?)
     }
 
     /// Returns the existing namespace or creates it when `kvGetRoot` reports
@@ -416,20 +423,301 @@ impl KvWriteSession<'_> {
     {
         for attempt in 0..Self::MAX_NAMESPACE_ATTEMPTS {
             let dirents = prepare(self, &tree)?;
-            match self.call(KvRequest::Put {
+            let request = KvRequest::Put {
                 precondition: kv_version_vector_from_tree(&tree),
                 dirents: dirents.clone(),
-            }) {
-                Ok(_) => return Ok((dirents, self.sync()?)),
-                Err(error)
-                    if is_kv_stale_cache(&error) && attempt + 1 < Self::MAX_NAMESPACE_ATTEMPTS =>
-                {
-                    tree = self.sync()?;
+            };
+            let operation = self.prepare_namespace_mutation(&request, &dirents)?;
+            MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+                .begin_submission(&operation.operation_id)?;
+            let submission = self.call(request);
+            if let Err(error) = submission {
+                if is_kv_stale_cache(&error) {
+                    MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+                        .rejected(&operation.operation_id)?;
+                    if attempt + 1 < Self::MAX_NAMESPACE_ATTEMPTS {
+                        tree = self.sync()?;
+                        continue;
+                    }
+                    return Err(error);
                 }
-                Err(error) => return Err(error),
+                if matches!(error, Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) {
+                    MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+                        .rejected(&operation.operation_id)?;
+                    return Err(error);
+                }
+                MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+                    .submission_unknown(&operation.operation_id)?;
+                return match self.reconcile_namespace_mutation(&operation, &dirents) {
+                    Ok(tree) => Ok((dirents, tree)),
+                    Err(_) => Err(error),
+                };
             }
+            let projected = self.reconcile_namespace_mutation(&operation, &dirents)?;
+            return Ok((dirents, projected));
         }
         Err(Error::KvResponse("KV namespace retry limit exhausted"))
+    }
+
+    /// Recovers one durable namespace outbox entry. Prepared operations submit
+    /// their sequence-1 frame on a fresh connection; ambiguous operations only
+    /// synchronize and compare authenticated dirents.
+    pub fn resume_namespace_mutation(
+        &mut self,
+        operation_id: [u8; 16],
+    ) -> Result<Vec<KvDirectoryProjection>> {
+        let operation = HardStateStore::open(&self.host.database_path)?
+            .mutation(&operation_id)?
+            .ok_or(Error::OperationBinding(
+                "KV namespace mutation is not recorded",
+            ))?;
+        if operation.kind != MutationKind::KvNamespace
+            || operation.host_id != self.host.host_id.as_bytes()
+            || operation.scope_id != self.party.party.as_bytes()
+        {
+            return Err(Error::OperationBinding(
+                "KV namespace mutation belongs to another party",
+            ));
+        }
+        let material =
+            MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+                .load_bound_material(&operation)?;
+        let (precondition, dirents) = decode_namespace_material(&material)?;
+        if foks_crypto::prefixed_hash(KV_NAMESPACE_REQUEST_HASH_TYPE_ID, &material)
+            != operation.request_hash
+        {
+            return Err(Error::OperationBinding(
+                "KV namespace outbox request fingerprint changed",
+            ));
+        }
+        validate_namespace_operation_binding(&operation, &precondition, &dirents)?;
+        match operation.state {
+            MutationState::Prepared => {
+                MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+                    .begin_submission(&operation_id)?;
+                if let Err(error) = self.call(KvRequest::Put {
+                    precondition,
+                    dirents: dirents.clone(),
+                }) {
+                    if is_kv_stale_cache(&error)
+                        || matches!(error, Error::Rpc(foks_rpc::Error::RemoteStatus { .. }))
+                    {
+                        MutationCoordinator::new(
+                            &self.host.database_path,
+                            &mut *self.protected_store,
+                        )
+                        .rejected(&operation_id)?;
+                        return Err(error);
+                    }
+                    MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+                        .submission_unknown(&operation_id)?;
+                }
+            }
+            MutationState::Submitting | MutationState::SubmissionUnknown => {}
+            MutationState::Verified | MutationState::Rejected => {
+                return Err(Error::OperationBinding("KV namespace mutation is terminal"));
+            }
+        }
+        self.reconcile_namespace_mutation(&operation, &dirents)
+    }
+
+    /// Recovers creation of a party's first root. As with namespace writes,
+    /// only `Prepared` may submit; ambiguous states are resolved by loading
+    /// and authenticating the server root.
+    pub fn resume_root_mutation(
+        &mut self,
+        operation_id: [u8; 16],
+    ) -> Result<Vec<KvDirectoryProjection>> {
+        let operation = HardStateStore::open(&self.host.database_path)?
+            .mutation(&operation_id)?
+            .ok_or(Error::OperationBinding("KV root mutation is not recorded"))?;
+        if operation.kind != MutationKind::KvRoot
+            || operation.host_id != self.host.host_id.as_bytes()
+            || operation.scope_id != self.party.party.as_bytes()
+        {
+            return Err(Error::OperationBinding(
+                "KV root mutation belongs to another party",
+            ));
+        }
+        let material =
+            MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+                .load_bound_material(&operation)?;
+        if foks_crypto::prefixed_hash(KV_ROOT_REQUEST_HASH_TYPE_ID, &material)
+            != operation.request_hash
+        {
+            return Err(Error::OperationBinding(
+                "KV root outbox fingerprint changed",
+            ));
+        }
+        let root = KvRoot::decode(&material)?;
+        if operation.subject_id != root.root || operation.expected_version != Some(root.version) {
+            return Err(Error::OperationBinding(
+                "KV root outbox public binding differs from protected material",
+            ));
+        }
+        match operation.state {
+            MutationState::Prepared => {
+                MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+                    .begin_submission(&operation_id)?;
+                if let Err(error) = self.call(KvRequest::PutRoot(root.clone())) {
+                    if matches!(error, Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) {
+                        MutationCoordinator::new(
+                            &self.host.database_path,
+                            &mut *self.protected_store,
+                        )
+                        .rejected(&operation_id)?;
+                        return Err(error);
+                    }
+                    MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+                        .submission_unknown(&operation_id)?;
+                }
+            }
+            MutationState::Submitting | MutationState::SubmissionUnknown => {}
+            MutationState::Verified | MutationState::Rejected => {
+                return Err(Error::OperationBinding("KV root mutation is terminal"));
+            }
+        }
+        self.reconcile_root_mutation(&operation, &root)
+    }
+
+    fn put_root_journaled(&mut self, root: KvRoot) -> Result<Vec<KvDirectoryProjection>> {
+        let operation_id = random_bytes()?;
+        let material = Zeroizing::new(root.encoded().to_vec());
+        let operation =
+            MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+                .prepare(
+                    MutationDraft {
+                        operation_id,
+                        kind: MutationKind::KvRoot,
+                        host_id: self.host.host_id.as_bytes().to_vec(),
+                        scope_id: self.party.party.as_bytes().to_vec(),
+                        subject_id: root.root.to_vec(),
+                        expected_version: Some(root.version),
+                        request_hash: foks_crypto::prefixed_hash(
+                            KV_ROOT_REQUEST_HASH_TYPE_ID,
+                            &material,
+                        ),
+                    },
+                    material,
+                )?;
+        MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+            .begin_submission(&operation_id)?;
+        if let Err(error) = self.call(KvRequest::PutRoot(root.clone())) {
+            if matches!(error, Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) {
+                MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+                    .rejected(&operation_id)?;
+                return Err(error);
+            }
+            MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+                .submission_unknown(&operation_id)?;
+            return match self.reconcile_root_mutation(&operation, &root) {
+                Ok(tree) => Ok(tree),
+                Err(_) => Err(error),
+            };
+        }
+        self.reconcile_root_mutation(&operation, &root)
+    }
+
+    fn reconcile_root_mutation(
+        &mut self,
+        operation: &MutationOperation,
+        root: &KvRoot,
+    ) -> Result<Vec<KvDirectoryProjection>> {
+        let tree = self.sync()?;
+        let projected = tree.first().ok_or(Error::TransitionNotObserved(
+            "KV root was not reflected by synchronization",
+        ))?;
+        if projected.root_directory_id != root.root
+            || projected.root_version != root.version
+            || projected.root_bytes != root.encoded()
+        {
+            return Err(Error::TransitionNotObserved(
+                "KV root differs from the durable outbox",
+            ));
+        }
+        MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+            .verified(&operation.operation_id)?;
+        Ok(tree)
+    }
+
+    fn prepare_namespace_mutation(
+        &mut self,
+        request: &KvRequest,
+        dirents: &[KvDirent],
+    ) -> Result<MutationOperation> {
+        let precondition = match request {
+            KvRequest::Put { precondition, .. } => precondition,
+            _ => {
+                return Err(Error::KvResponse(
+                    "only kvPut can enter the namespace outbox",
+                ));
+            }
+        };
+        let material = encode_namespace_material(precondition, dirents)?;
+        let operation_id = random_bytes()?;
+        let subject_id = namespace_subject(dirents);
+        let expected_version = Some(precondition.root_version);
+        MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store).prepare(
+            MutationDraft {
+                operation_id,
+                kind: MutationKind::KvNamespace,
+                host_id: self.host.host_id.as_bytes().to_vec(),
+                scope_id: self.party.party.as_bytes().to_vec(),
+                subject_id,
+                expected_version,
+                request_hash: foks_crypto::prefixed_hash(
+                    KV_NAMESPACE_REQUEST_HASH_TYPE_ID,
+                    &material,
+                ),
+            },
+            material,
+        )
+    }
+
+    fn reconcile_namespace_mutation(
+        &mut self,
+        operation: &MutationOperation,
+        dirents: &[KvDirent],
+    ) -> Result<Vec<KvDirectoryProjection>> {
+        let affected = dirents
+            .iter()
+            .map(|dirent| dirent.parent)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        SoftStateStore::open(&self.soft_database_path)?.invalidate_directories(
+            self.host.host_id.as_bytes(),
+            self.party.party.as_bytes(),
+            &affected,
+        )?;
+        let tree = self.sync()?;
+        for expected in dirents {
+            let projected = tree
+                .iter()
+                .find(|directory| directory.directory_id == expected.parent)
+                .and_then(|directory| {
+                    directory
+                        .entries
+                        .iter()
+                        .find(|entry| entry.dirent_id == expected.id)
+                });
+            if expected.value.node_type()? == KvNodeType::None {
+                if projected.is_some() {
+                    return Err(Error::TransitionNotObserved(
+                        "KV tombstone was not reflected by synchronization",
+                    ));
+                }
+            } else if projected.is_none_or(|entry| {
+                entry.version != expected.version || entry.node_id != expected.value.0
+            }) {
+                return Err(Error::TransitionNotObserved(
+                    "KV dirent mutation was not reflected by synchronization",
+                ));
+            }
+        }
+        MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+            .verified(&operation.operation_id)?;
+        Ok(tree)
     }
 
     fn call(&mut self, request: KvRequest) -> Result<Vec<u8>> {
@@ -554,5 +842,135 @@ impl KvWriteSession<'_> {
         )?
         .open_directory_seed(directory)
         .map_err(Into::into)
+    }
+}
+
+fn encode_namespace_material(
+    precondition: &foks_proto::KvPathVersionVector,
+    dirents: &[KvDirent],
+) -> Result<Zeroizing<Vec<u8>>> {
+    Ok(Zeroizing::new(encode(&Value::Array(vec![
+        precondition.to_value(),
+        Value::Array(
+            dirents
+                .iter()
+                .map(|dirent| Value::Binary(dirent.encoded().to_vec()))
+                .collect(),
+        ),
+    ]))?))
+}
+
+fn decode_namespace_material(
+    material: &[u8],
+) -> Result<(foks_proto::KvPathVersionVector, Vec<KvDirent>)> {
+    let Value::Array(fields) = decode(material)? else {
+        return Err(Error::OperationBinding(
+            "KV namespace outbox material is malformed",
+        ));
+    };
+    let [precondition, Value::Array(encoded_dirents)] = fields.as_slice() else {
+        return Err(Error::OperationBinding(
+            "KV namespace outbox material has the wrong shape",
+        ));
+    };
+    if encoded_dirents.is_empty() || encoded_dirents.len() > 2 {
+        return Err(Error::OperationBinding(
+            "KV namespace outbox material has invalid limits",
+        ));
+    }
+    let dirents = encoded_dirents
+        .iter()
+        .map(|value| match value {
+            Value::Binary(bytes) => KvDirent::decode(bytes).map_err(Error::from),
+            _ => Err(Error::OperationBinding(
+                "KV namespace outbox dirent is malformed",
+            )),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((
+        foks_proto::KvPathVersionVector::from_value(precondition)?,
+        dirents,
+    ))
+}
+
+fn namespace_subject(dirents: &[KvDirent]) -> Vec<u8> {
+    let parents = dirents
+        .iter()
+        .map(|dirent| dirent.parent)
+        .collect::<std::collections::BTreeSet<_>>();
+    if parents.len() == 1 {
+        parents.iter().next().expect("one parent").to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
+fn validate_namespace_operation_binding(
+    operation: &MutationOperation,
+    precondition: &foks_proto::KvPathVersionVector,
+    dirents: &[KvDirent],
+) -> Result<()> {
+    if operation.subject_id != namespace_subject(dirents)
+        || operation.expected_version != Some(precondition.root_version)
+    {
+        return Err(Error::OperationBinding(
+            "KV namespace outbox public binding differs from protected material",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod outbox_tests {
+    use super::*;
+
+    #[test]
+    fn namespace_outbox_preserves_exact_request_and_dirents() {
+        let dirent = KvDirent::decode(include_bytes!(
+            "../../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/kv-write-dirent.snowp"
+        ))
+        .unwrap();
+        let precondition = foks_proto::KvPathVersionVector {
+            root_version: 3,
+            directories: Vec::new(),
+        };
+        let material =
+            encode_namespace_material(&precondition, std::slice::from_ref(&dirent)).unwrap();
+        let (decoded_precondition, decoded_dirents) = decode_namespace_material(&material).unwrap();
+        assert_eq!(decoded_precondition, precondition);
+        assert_eq!(decoded_dirents.len(), 1);
+        assert_eq!(decoded_dirents[0].encoded(), dirent.encoded());
+
+        let operation = MutationOperation {
+            operation_id: [1; 16],
+            kind: MutationKind::KvNamespace,
+            host_id: vec![2; 32],
+            scope_id: vec![3; 33],
+            subject_id: dirent.parent.to_vec(),
+            expected_version: Some(precondition.root_version),
+            request_hash: foks_crypto::prefixed_hash(KV_NAMESPACE_REQUEST_HASH_TYPE_ID, &material),
+            material_ref: vec![4; 16],
+            material_hash: [5; 32],
+            state: MutationState::Prepared,
+            attempt_count: 0,
+            created_at: 6,
+            updated_at: 6,
+        };
+        validate_namespace_operation_binding(&operation, &precondition, &decoded_dirents).unwrap();
+
+        let mut changed = operation.clone();
+        changed.expected_version = Some(precondition.root_version + 1);
+        assert!(
+            validate_namespace_operation_binding(&changed, &precondition, &decoded_dirents)
+                .is_err()
+        );
+        changed = operation;
+        changed.subject_id[0] ^= 1;
+        assert!(
+            validate_namespace_operation_binding(&changed, &precondition, &decoded_dirents)
+                .is_err()
+        );
+
+        assert!(decode_namespace_material(&[0xc0]).is_err());
     }
 }

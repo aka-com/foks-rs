@@ -18,6 +18,24 @@ impl UserReplayState {
         }
     }
 
+    pub(super) fn from_verified(
+        devices: &[VerifiedDevice],
+        shared_keys: &[VerifiedSharedKey],
+    ) -> Self {
+        Self {
+            devices: devices
+                .iter()
+                .cloned()
+                .map(|device| (device.id.as_bytes().to_vec(), device))
+                .collect(),
+            shared_keys: shared_keys
+                .iter()
+                .cloned()
+                .map(|key| (key.role, key))
+                .collect(),
+        }
+    }
+
     pub(super) fn replay(
         &mut self,
         link: &foks_proto::UserLink,
@@ -166,11 +184,18 @@ fn validate_shared_key_rotations(
             ));
         }
         last_role = Some(key.role);
+        let hepk = find_hepk(hepks, key.hepk_fingerprint)?;
+        if hepk.curve25519().is_none() {
+            return Err(invalid_transition(
+                change,
+                UserTransitionRule::SharedKeyRotation,
+            ));
+        }
         rotated.push(VerifiedSharedKey {
             role: key.role,
             generation: key.generation,
             verify_key: key.verify_key.clone(),
-            hepk: find_hepk(hepks, key.hepk_fingerprint)?,
+            hepk,
         });
     }
     Ok(rotated)
@@ -212,15 +237,39 @@ fn validate_provisioning(
     else {
         return Err(invalid_transition(change, UserTransitionRule::Provisioning));
     };
+    let valid_subkey = match member.entity.entity_type() {
+        foks_proto::ENTITY_YUBI => subkey.is_some(),
+        foks_proto::ENTITY_DEVICE
+        | foks_proto::ENTITY_BACKUP_KEY
+        | foks_proto::ENTITY_BOT_TOKEN_KEY => subkey.is_none(),
+        _ => false,
+    };
+    if !valid_subkey {
+        return Err(invalid_transition(change, UserTransitionRule::Provisioning));
+    }
+    let hepk = find_hepk(hepks, *hepk_fingerprint)?;
+    if !user_member_hepk_matches(&member.entity, &hepk) {
+        return Err(invalid_transition(change, UserTransitionRule::Provisioning));
+    }
     Ok((
         Some(VerifiedDevice {
             id: member.entity.clone(),
             role: member.role,
-            hepk: find_hepk(hepks, *hepk_fingerprint)?,
+            hepk,
             subkey: subkey.clone(),
         }),
         subkey.clone(),
     ))
+}
+
+pub(crate) fn user_member_hepk_matches(entity: &EntityId, hepk: &Hepk) -> bool {
+    match entity.entity_type() {
+        foks_proto::ENTITY_DEVICE
+        | foks_proto::ENTITY_BACKUP_KEY
+        | foks_proto::ENTITY_BOT_TOKEN_KEY => hepk.curve25519().is_some(),
+        foks_proto::ENTITY_YUBI => hepk.p256().is_some(),
+        _ => false,
+    }
 }
 
 fn verify_transition_signatures(
@@ -287,5 +336,122 @@ fn invalid_transition(change: &foks_proto::UserGroupChange, rule: UserTransition
     Error::UserTransition {
         seqno: change.seqno,
         rule,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use foks_proto::{SecretSeed, UserChain, UserLink, UserMemberKeys};
+
+    const USER_DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user";
+    const MUTATION_DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user-mutations";
+
+    fn user_fixture(name: &str) -> Vec<u8> {
+        std::fs::read(format!("{USER_DIR}/{name}")).unwrap()
+    }
+
+    fn mutation_fixture(name: &str) -> Vec<u8> {
+        std::fs::read(format!("{MUTATION_DIR}/{name}")).unwrap()
+    }
+
+    fn state_before_backup() -> (UserReplayState, EntityId) {
+        let chain = UserChain::decode(&user_fixture("user-chain.snowp")).unwrap();
+        let eldest = chain.links[0].decode_eldest().unwrap();
+        let rotation = chain.links[2].decode_group_change().unwrap();
+        let current = &rotation.shared_keys[0];
+        (
+            UserReplayState::from_eldest(
+                VerifiedDevice {
+                    id: eldest.member,
+                    role: Role::OWNER,
+                    hepk: find_hepk(&chain.hepks, eldest.member_hepk_fingerprint).unwrap(),
+                    subkey: None,
+                },
+                VerifiedSharedKey {
+                    role: current.role,
+                    generation: current.generation,
+                    verify_key: current.verify_key.clone(),
+                    hepk: find_hepk(&chain.hepks, current.hepk_fingerprint).unwrap(),
+                },
+            ),
+            eldest.host,
+        )
+    }
+
+    #[test]
+    fn official_backup_and_recovered_device_transitions_replay() {
+        let (mut state, host) = state_before_backup();
+        let enroll = UserLink::decode(&mutation_fixture("backup-enroll-link.snowp")).unwrap();
+        let enroll_change = enroll.decode_group_change().unwrap();
+        let backup_hepk = Hepk::decode(&mutation_fixture("backup-hepk.snowp")).unwrap();
+        state
+            .replay(&enroll, &enroll_change, &[backup_hepk], &host)
+            .unwrap();
+        assert!(state.devices.values().any(|device| {
+            device.id.entity_type() == foks_proto::ENTITY_BACKUP_KEY && device.role == Role::OWNER
+        }));
+
+        let recover = UserLink::decode(&mutation_fixture("backup-recover-link.snowp")).unwrap();
+        let recover_change = recover.decode_group_change().unwrap();
+        let replacement_seed = SecretSeed::new(
+            mutation_fixture("backup-recover-device-seed.bin")
+                .try_into()
+                .unwrap(),
+        );
+        let replacement = foks_crypto::derive_device_public(&replacement_seed).unwrap();
+        state
+            .replay(&recover, &recover_change, &[replacement.hepk], &host)
+            .unwrap();
+        assert!(state.devices.contains_key(replacement.id.as_bytes()));
+    }
+
+    #[test]
+    fn backup_provisioning_rejects_a_subkey() {
+        let (state, _) = state_before_backup();
+        let link = UserLink::decode(&mutation_fixture("backup-enroll-link.snowp")).unwrap();
+        let mut change = link.decode_group_change().unwrap();
+        let UserMemberKeys::User { subkey, .. } = &mut change.changes[0].keys else {
+            panic!("backup fixture must contain user member keys");
+        };
+        let seed = SecretSeed::new([7; 32]);
+        *subkey = Some(foks_crypto::derive_subkey_id(&seed).unwrap());
+        let backup_hepk = Hepk::decode(&mutation_fixture("backup-hepk.snowp")).unwrap();
+        let signer = state.devices.get(change.signer.as_bytes()).unwrap();
+        let rotated = validate_shared_key_rotations(
+            &change,
+            std::slice::from_ref(&backup_hepk),
+            &state.shared_keys,
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_provisioning(
+                &change,
+                &[backup_hepk],
+                signer,
+                &state.devices,
+                &state.shared_keys,
+                &rotated,
+            ),
+            Err(Error::UserTransition {
+                rule: UserTransitionRule::Provisioning,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn backup_members_require_the_software_hepk_suite() {
+        let backup_id =
+            match foks_snowpack::decode(&mutation_fixture("backup-entity-id.snowp")).unwrap() {
+                foks_snowpack::Value::Binary(bytes) => EntityId::from_bytes(bytes).unwrap(),
+                _ => panic!("backup fixture must contain an EntityID"),
+            };
+        let backup_hepk = Hepk::decode(&mutation_fixture("backup-hepk.snowp")).unwrap();
+        let yubi_hepk =
+            Hepk::decode(&std::fs::read(format!("{USER_DIR}/yubi/yubi-hepk.snowp")).unwrap())
+                .unwrap();
+        assert!(user_member_hepk_matches(&backup_id, &backup_hepk));
+        assert!(!user_member_hepk_matches(&backup_id, &yubi_hepk));
     }
 }

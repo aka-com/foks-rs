@@ -1,4 +1,4 @@
-use foks_snowpack::{decode, decode_prefix, encode, Value};
+use foks_snowpack::{decode, decode_prefix, encode, encode_ref, Value, ValueRef};
 use quickcheck::{Arbitrary, Gen, QuickCheck, TestResult};
 
 #[derive(Clone, Debug)]
@@ -111,11 +111,29 @@ fn scalar(generator: &mut Gen) -> Value {
     }
 }
 
+fn borrow_every_field(value: &Value) -> ValueRef<'_> {
+    match value {
+        Value::Null => ValueRef::Null,
+        Value::Bool(value) => ValueRef::Bool(*value),
+        Value::Unsigned(value) => ValueRef::Unsigned(*value),
+        Value::Negative(value) => ValueRef::Negative(*value),
+        Value::Binary(bytes) => ValueRef::Binary(bytes),
+        Value::Text(bytes) => ValueRef::Text(bytes),
+        Value::Array(values) => ValueRef::Array(values.iter().map(borrow_every_field).collect()),
+        Value::Variant(value) => ValueRef::Variant(
+            value
+                .as_ref()
+                .map(|(tag, value)| (tag.as_slice(), Box::new(borrow_every_field(value)))),
+        ),
+    }
+}
+
 #[test]
 fn arbitrary_values_round_trip_byte_exactly() {
     fn property(value: CanonicalValue) -> bool {
         let encoded = encode(&value.0).unwrap();
-        decode(&encoded).is_ok_and(|decoded| decoded == value.0)
+        encode_ref(&borrow_every_field(&value.0)).is_ok_and(|borrowed| borrowed == encoded)
+            && decode(&encoded).is_ok_and(|decoded| decoded == value.0)
     }
     QuickCheck::new()
         .tests(2_000)

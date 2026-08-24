@@ -6,6 +6,31 @@
   "server_semantics_verified": true,
   "files": [
     {
+      "file": "add-member-edit-result.snowp",
+      "bytes": 2,
+      "sha256": "ba3c63c2b85eb22eaf8c7a61cf2c72d34d0968c3556eef3f74b94052bf587412"
+    },
+    {
+      "file": "add-member-link.snowp",
+      "bytes": 515,
+      "sha256": "e98ce39afa9dbb227d2815146a11b98da62149e60d3869dd86a079ed72a6df73"
+    },
+    {
+      "file": "add-member-ptk-boxes.snowp",
+      "bytes": 2641,
+      "sha256": "84fd1c2ae2db9e5f1a174c73b5ef45ee5f94639f09dc6039e8216ad8d584883c"
+    },
+    {
+      "file": "add-member-removal-boxes.snowp",
+      "bytes": 2947,
+      "sha256": "c482b25df64663cb143783ab75953782e22c9e7e3b78236379339cfe397f2c86"
+    },
+    {
+      "file": "add-member-target-uid.snowp",
+      "bytes": 35,
+      "sha256": "d209a5f0bd104a21564c012d64993c58e666a3dd432f3c8d2229b50d5f6b8e29"
+    },
+    {
       "file": "adhoc-box-set.snowp",
       "bytes": 5245,
       "sha256": "af6bf23ec3caf8238e9b54baee882df1c6cb248dd01e315a51b87543611fce4f"
@@ -26,9 +51,59 @@
       "sha256": "1e617072b20939d24c047ad42d3343393f022e67a7b7f4908aa881ad469e0e4a"
     },
     {
+      "file": "backup-enroll-boxes.snowp",
+      "bytes": 1323,
+      "sha256": "0d0646c863c4ca23d35a1eff9954ff6b49c333ed0f3ae9995ecb9a798ed96a49"
+    },
+    {
+      "file": "backup-enroll-link.snowp",
+      "bytes": 514,
+      "sha256": "54e4ee571d4a626a11ae51f8135fb6059ea991cb65d2688e9bb033e93344b87b"
+    },
+    {
+      "file": "backup-entity-id.snowp",
+      "bytes": 35,
+      "sha256": "5c1a1ffdcc65f73eba841d9320e21fe9eba15a48330604cabc512ca6e482f3a9"
+    },
+    {
+      "file": "backup-hepk.snowp",
+      "bytes": 1237,
+      "sha256": "6efeb44b1cec1b90b8eed8ffcee6a1d96305c15dbf87aa70102ba98709666e64"
+    },
+    {
+      "file": "backup-lookup-challenge.snowp",
+      "bytes": 151,
+      "sha256": "18b432c8df395d8f02329477738b8adba648811da3d58f9f9d9efb9e313aeb4c"
+    },
+    {
+      "file": "backup-lookup-result.snowp",
+      "bytes": 105,
+      "sha256": "9316708ad1e093a47a4546567f9e8e6506588d5a947e05b9cffa14abfe8d5ea0"
+    },
+    {
+      "file": "backup-lookup-signature.snowp",
+      "bytes": 71,
+      "sha256": "2ce7538c9c147ef08c29970be83f4f33da174f5ceb9cb360957f423f03d3e4cd"
+    },
+    {
+      "file": "backup-recover-boxes.snowp",
+      "bytes": 1323,
+      "sha256": "cd75e3f0bd53bc3a9c0a52e4859ea83cf850edd4be4c1245a898a83aac3c58ff"
+    },
+    {
+      "file": "backup-recover-link.snowp",
+      "bytes": 514,
+      "sha256": "1a9cb3dcc65bfb6fa683f4e0146d9cc70ccee12bf58055f9fff39995baeb1eae"
+    },
+    {
       "file": "box-set.snowp",
       "bytes": 1323,
       "sha256": "987d121dd71a1e1467f4ea7b0044feeb6477a18c6c3b41b0fee03b2476d32cb7"
+    },
+    {
+      "file": "demote-member-link.snowp",
+      "bytes": 632,
+      "sha256": "503c8a9e2717cc8927282003ce4d449bc3b1428bf14c1644b2299b57e54364c0"
     },
     {
       "file": "host-config-open.snowp",
@@ -36,12 +111,112 @@
       "sha256": "be3eacf1904099593378fb70b0dcd29192a19c1fc77edc8d1e73daece3426b45"
     },
     {
+      "file": "named-membership-link.snowp",
+      "bytes": 397,
+      "sha256": "a3289bd21e476e6342a648f2e5715d23fb34234fa85717e2a454777891fcb4ab"
+    },
+    {
+      "file": "named-removal-boxes.snowp",
+      "bytes": 2938,
+      "sha256": "0a62fc561b96153c69d52ef8329e553a89718751cdea930379de683955f72887"
+    },
+    {
+      "file": "named-reservation.snowp",
+      "bytes": 30,
+      "sha256": "08c457836721a5d7e67bf7998dc6a333342b8ab3f9822c794c84e4005874efea"
+    },
+    {
+      "file": "named-team-id.snowp",
+      "bytes": 35,
+      "sha256": "7b0356f40a7c5ce5d8561663908bbc3f4e3d15458fdd11e8d4f1f303fcf35630"
+    },
+    {
+      "file": "named-team-link.snowp",
+      "bytes": 1173,
+      "sha256": "13a01b9d1c295c86acb865045ead692ad0b47271b5526571b5f4a51d2bb08140"
+    },
+    {
+      "file": "remove-member-link.snowp",
+      "bytes": 702,
+      "sha256": "fce9929bc404f85e5cefbbdff2bd8a9cf8a1c17abbe154950810cc2e4508dcaf"
+    },
+    {
+      "file": "remove-member-offchain.snowp",
+      "bytes": 5787,
+      "sha256": "2f6902cc59a08233c6719c990461cb8842f9017316e81a6dbab1806adbb73c9f"
+    },
+    {
+      "file": "remove-member-proof.snowp",
+      "bytes": 334,
+      "sha256": "a142bb903539f3fc6ee2807807c3a070d5d3172837e040cafed029288392310f"
+    },
+    {
+      "file": "remove-member-ptk-boxes.snowp",
+      "bytes": 2641,
+      "sha256": "e10a34c76bd80e1087a11d2146efae0e6f34f7f373268de8119a3f2d4aca412b"
+    },
+    {
+      "file": "remove-member-seed-chain-member-min.snowp",
+      "bytes": 167,
+      "sha256": "a34be591213d646ad65657df609d2fd16f37b8c67f3cf99496512c7af76ed202"
+    },
+    {
+      "file": "remove-member-seed-chain-member.snowp",
+      "bytes": 163,
+      "sha256": "189a182d655b976e702013d0a61cf8cfe120bef48b84f591f80d5cd33006e0d0"
+    },
+    {
       "file": "rotation-link.snowp",
       "bytes": 463,
       "sha256": "a804edf59f073b5cf629f1d0053338e4c135f86fe053beb320b0fd00272a2dad"
+    },
+    {
+      "file": "team-bearer-challenge-blob.snowp",
+      "bytes": 140,
+      "sha256": "bba16595ddc8beed8b0c3410277658fd5bdbaaee710df33bb3a1fe957c9d0017"
+    },
+    {
+      "file": "team-bearer-challenge-payload.snowp",
+      "bytes": 138,
+      "sha256": "d77a254aed3772550f0c82df2c28f45d7eb7c54781abad78169776e4a65cbde5"
+    },
+    {
+      "file": "team-bearer-signature.snowp",
+      "bytes": 71,
+      "sha256": "ab5aa346f6125cc69b01622e9c206c34a2d15fa1a78839c4e6dbeb6f31d29a64"
+    },
+    {
+      "file": "team-bearer-token.snowp",
+      "bytes": 18,
+      "sha256": "533b433f9681d720e5189c7baac0a46516d394dfa8e21ff9819a9c24b20d749b"
+    },
+    {
+      "file": "team-removal-admin-box.snowp",
+      "bytes": 1379,
+      "sha256": "aeadb1dea4708dc97c5813f025f9c8895bd6a5147a76a38fc9ce8b89ce03b7b3"
     }
   ],
   "raw_files": [
+    {
+      "file": "add-member-next-tree-location.bin",
+      "bytes": 32,
+      "sha256": "c12e43018d80de3911e5b4b0498210f32df78b1533b4675cd73b2c6b308d2977"
+    },
+    {
+      "file": "add-member-removal-key.bin",
+      "bytes": 32,
+      "sha256": "6392d5b265811987532227219d382dac2010b849aed05c3eecf628a23300d617"
+    },
+    {
+      "file": "add-member-request.frame",
+      "bytes": 7459,
+      "sha256": "6a4a7c2f72a5d2785dbb1a68ddf50502ab171d426096bde9d2c80c2aa6cbf6e3"
+    },
+    {
+      "file": "add-member-target-puk-seed.bin",
+      "bytes": 32,
+      "sha256": "b2080e028a0cccfb58ca2cd5f687498f3b6bc2458b05c817cf3cd28a6e3beb9a"
+    },
     {
       "file": "adhoc-create-request.frame",
       "bytes": 11811,
@@ -83,14 +258,154 @@
       "sha256": "5d9dac7425d4f2127d539d0d90c750cbec43bc10d4a129939f5653746c6fa0ef"
     },
     {
+      "file": "backup-cert-request.frame",
+      "bytes": 108,
+      "sha256": "339d79e2164720d66cddda2292f3faf69f4db9401e27377bbc7c9d5892a86873"
+    },
+    {
+      "file": "backup-derived-seed.bin",
+      "bytes": 32,
+      "sha256": "b79e69b74416ee081f250b016f37d0c7c568fad5cbb117314a8f7a66c5648efd"
+    },
+    {
+      "file": "backup-enroll-device-name-commitment-key.bin",
+      "bytes": 16,
+      "sha256": "05cff455324dcbcda99f2a30f68fe87048a23aea7a8722c55043520889d3246b"
+    },
+    {
+      "file": "backup-enroll-next-tree-location.bin",
+      "bytes": 32,
+      "sha256": "30d9cb0bd276024271008e35956a36638703cc93464e57f735551f8796546d9a"
+    },
+    {
+      "file": "backup-enroll-request.frame",
+      "bytes": 3220,
+      "sha256": "e7a1b2b338af61b8fa4d89144bfe1503d8d177940d8c51f1b93f28eee5286187"
+    },
+    {
+      "file": "backup-enroll-self-token.bin",
+      "bytes": 17,
+      "sha256": "6ec801fa5b74a048017b738e859b0913bcd65b5356821e27a6441759de15d9bc"
+    },
+    {
+      "file": "backup-lookup-challenge-request.frame",
+      "bytes": 73,
+      "sha256": "573317ebd06f7749c7a82063b87b5c3875424215674b625a20f484c1a29da81e"
+    },
+    {
+      "file": "backup-lookup-request.frame",
+      "bytes": 297,
+      "sha256": "96c1b1c91761f55a894aab401de8245bf6ff4ab32e2574773d51b3d6d8d8b15e"
+    },
+    {
+      "file": "backup-phrase.json",
+      "bytes": 117,
+      "sha256": "4ff8a76b0f5bb2e86590568792a6cd79655851b74f67a25330f70fdcd5ed1ab3"
+    },
+    {
+      "file": "backup-recover-device-name-commitment-key.bin",
+      "bytes": 16,
+      "sha256": "e3aedde4af9664634158eb43cc4444b702c300be6cb145ce1a4c18922e11c65a"
+    },
+    {
+      "file": "backup-recover-device-seed.bin",
+      "bytes": 32,
+      "sha256": "43d63df433d003656057105947f60a66fad3fb7a5369e399e33ca49392533071"
+    },
+    {
+      "file": "backup-recover-next-tree-location.bin",
+      "bytes": 32,
+      "sha256": "95013553ddd1d21737ae70b419d949a7a812595042bf60346ee352731755a03b"
+    },
+    {
+      "file": "backup-recover-request.frame",
+      "bytes": 3252,
+      "sha256": "30d263e787c8f2ff9fb6f81bbc2866f12dd8a2ec38cf7e658c8f0a56d103f6ec"
+    },
+    {
+      "file": "backup-recover-self-token.bin",
+      "bytes": 17,
+      "sha256": "4545a5d8058916d858b22e3d3c910294960bc003b5431983a5bb65ff5bbf4ff4"
+    },
+    {
+      "file": "backup-seed.bin",
+      "bytes": 26,
+      "sha256": "73853e02c42141528151cc9d5c125e6d6e7b4f0176fc537271ed9da1724c60c8"
+    },
+    {
+      "file": "demote-member-next-tree-location.bin",
+      "bytes": 32,
+      "sha256": "c80cbd8c9208319ea2d03e3064446053a4d18c4d81b28f55bdefc68b16bdf98c"
+    },
+    {
+      "file": "demote-member-ptk-seed.bin",
+      "bytes": 32,
+      "sha256": "ae3cff1e6c26880b66ca398da23dd67bc249a3ed5236965041caee51c88b7ab3"
+    },
+    {
       "file": "host-config-request.frame",
       "bytes": 38,
       "sha256": "682cfe410620c44107ff1b2587be107ddb57ff5d2b975c135e98b46e31d60a47"
     },
     {
+      "file": "named-create-request.frame",
+      "bytes": 14913,
+      "sha256": "ae89a23bba6395d4e81cdc69e021cb774a956c1248475d8cca7e01ddb48d410b"
+    },
+    {
+      "file": "named-membership-next-tree-location.bin",
+      "bytes": 32,
+      "sha256": "d4cf1d52802341128600e348fece296d509f4818973d990709088bbb6a57d903"
+    },
+    {
+      "file": "named-next-tree-location.bin",
+      "bytes": 32,
+      "sha256": "e51fa9d7c21b951e766be29fab6a36b653bd3d026ca87fd8985724ac4b01deb3"
+    },
+    {
+      "file": "named-removal-key.bin",
+      "bytes": 32,
+      "sha256": "7bfaaa7bcfab5cfae97a7b5b2faaf55bb72b257af07d89fb6e1ec090d9d43d5e"
+    },
+    {
+      "file": "named-reserve-request.frame",
+      "bytes": 48,
+      "sha256": "a5ba8cd1ff1c97d495febaae6e6060f00be9a2a67c24ba38394c85717663f074"
+    },
+    {
+      "file": "named-subchain-tree-location.bin",
+      "bytes": 32,
+      "sha256": "c9727ee3442127b4dc6429789a6f322647e43820869204efbe173c53bfb04e60"
+    },
+    {
+      "file": "named-team-name-commitment-key.bin",
+      "bytes": 16,
+      "sha256": "832e9abe8b78d8f45008b469718a34807951427e8933c0310f2f99a07fc8891a"
+    },
+    {
       "file": "provision-request.frame",
       "bytes": 6951,
       "sha256": "044608ccfae602034a0f1e04831ec909aeb0b25f2a119a39222d1113863c12f4"
+    },
+    {
+      "file": "remove-member-next-tree-location.bin",
+      "bytes": 32,
+      "sha256": "60a1000191d70eaef83492da2df5aa93f6b72e65510f2a9d80978a43bfe3e33e"
+    },
+    {
+      "file": "remove-member-ptk-member-min-seed.bin",
+      "bytes": 32,
+      "sha256": "4caefae11480b2e4db223c9e540405e8e703511bd5f03185c61d9ff01db22ce6"
+    },
+    {
+      "file": "remove-member-ptk-member-seed.bin",
+      "bytes": 32,
+      "sha256": "3b63a8a6383aaa74df97ee944b253fe55a78a20f17e4fae7889de119140d537d"
+    },
+    {
+      "file": "remove-member-request.frame",
+      "bytes": 6565,
+      "sha256": "eff3c9e9c871c122acf5add1b75150f16e8d6b49987c75259ac79b854f70b6f8"
     },
     {
       "file": "revoke-request.frame",
@@ -116,6 +431,21 @@
       "file": "self-token.bin",
       "bytes": 17,
       "sha256": "b9a101ec418c2d7be1e720c900d9139adf02c5bd8f26513ead527b7298f99c90"
+    },
+    {
+      "file": "team-bearer-activate-request.frame",
+      "bytes": 250,
+      "sha256": "dab176dc28a5eb80e80c977714af343ae87f7476bc8261e894ee8c1c790081b1"
+    },
+    {
+      "file": "team-bearer-make-request.frame",
+      "bytes": 77,
+      "sha256": "2fc8a05ca9582402cf7697e7027af75bb3ac05be4d8a91a94e18b04e43ada624"
+    },
+    {
+      "file": "team-removal-key-load-request.frame",
+      "bytes": 131,
+      "sha256": "630461760a6c56e1f8b9f3beaec1b35eacecbdf2060806236d6f76bb819efd4f"
     }
   ]
 }
