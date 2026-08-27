@@ -42,4 +42,12 @@ impl IsolatedPaths {
     pub(crate) fn keys(&self) -> &Path {
         &self.keys
     }
+
+    pub(crate) fn backup(&self) -> &Path {
+        &self.backup
+    }
+
+    pub(crate) fn logs(&self) -> &Path {
+        &self.logs
+    }
 }

@@ -2809,25 +2809,16 @@ fn accept_merkle_root(
                 });
             }
             std::cmp::Ordering::Equal => {
-                let stored_head = connection.query_row(
-                    "SELECT r.root_bytes, h.evidence_kind, h.anchor_epoch, h.evidence_bytes \
+                let stored_root_bytes = connection.query_row(
+                    "SELECT r.root_bytes \
                      FROM merkle_heads h JOIN merkle_roots r \
                      ON r.host_id = h.host_id AND r.epoch = h.epoch \
                      WHERE h.host_id = ?1 AND h.epoch = ?2",
                     params![host_id, epoch],
-                    |row| {
-                        Ok((
-                            row.get::<_, Option<Vec<u8>>>(0)?,
-                            row.get::<_, i64>(1)?,
-                            row.get::<_, Option<i64>>(2)?,
-                            row.get::<_, Vec<u8>>(3)?,
-                        ))
-                    },
+                    |row| row.get::<_, Option<Vec<u8>>>(0),
                 )?;
                 if stored_hash != root.root_hash
-                    || stored_head.0.as_deref() != Some(root.root_bytes)
-                    || &decode_evidence(stored_head.1, stored_head.2, stored_head.3)?
-                        != root.evidence
+                    || stored_root_bytes.as_deref() != Some(root.root_bytes)
                 {
                     return Err(Error::MerkleFork { epoch: root.epoch });
                 }
@@ -3759,6 +3750,20 @@ mod tests {
                 received: 10
             })
         ));
+    }
+
+    #[test]
+    fn same_merkle_root_accepts_a_different_verified_evidence_path() {
+        let (_directory, mut store) = store();
+        let original = snapshot();
+        store.accept_host_parts(original.parts()).unwrap();
+
+        let mut direct = original;
+        direct.merkle_root.evidence = MerkleRootEvidence::SignedBootstrap(vec![0x55; 96]);
+        assert_eq!(
+            store.accept_host_parts(direct.parts()).unwrap(),
+            Acceptance::Unchanged
+        );
     }
 
     #[test]

@@ -8,11 +8,15 @@
 
 mod auth;
 mod config;
+mod diagnostics;
 mod entropy;
 mod error;
+mod fault;
 pub mod host;
 mod identity;
 pub mod keys;
+mod maintenance;
+mod metrics;
 pub mod net;
 pub mod pki;
 pub mod rpc;
@@ -21,8 +25,15 @@ mod standalone;
 mod writer;
 
 pub use config::{Config, ReadDatabaseConfig, SessionLimits};
+pub use diagnostics::{SessionDiagnostics, SessionErrorClass, StderrSessionDiagnostics};
 pub use entropy::{Entropy, OsEntropy};
 pub use error::{Error, Result};
+#[doc(hidden)]
+pub use fault::{SessionFaultPoint, SessionFaults};
+pub use metrics::{ServerMetrics, ServerMetricsSnapshot};
 pub use net::{start, RunningServer, ServerAddresses};
-pub use standalone::{start_standalone, RunningStandaloneServer, StandaloneConfig};
-pub use writer::{Writer, WriterHandle};
+pub use standalone::{
+    backup_standalone_installation, restore_backup, start_standalone, BackupArtifacts,
+    RunningStandaloneServer, StandaloneConfig,
+};
+pub use writer::{Writer, WriterHandle, WriterMetrics};

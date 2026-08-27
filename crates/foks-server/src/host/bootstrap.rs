@@ -189,6 +189,65 @@ pub fn bootstrap(
     })
 }
 
+/// Loads an existing immutable host bootstrap or creates it for an empty
+/// installation. Restart validation deliberately does not reconstruct genesis
+/// bytes from the current wall clock.
+pub fn load_or_bootstrap(
+    database: &mut Database,
+    provider: &dyn HostKeyProvider,
+    input: &BootstrapInput,
+) -> Result<BootstrapState> {
+    let Some(stored) = database.host_bootstrap()? else {
+        return bootstrap(database, provider, input);
+    };
+    validate_input(input)?;
+
+    let manifest = KeyGenerationManifest::load_or_create(provider)?;
+    if stored.key_manifest != manifest.encode() || stored.canonical_name != input.canonical_name {
+        return Err(crate::Error::Config("stored host bootstrap configuration"));
+    }
+    let verified = foks_verify::verify_public_host(&input.canonical_name, &stored.probe_response)?;
+    if verified.snapshot.host_id() != stored.host_id
+        || verified.public_zone.ttl_seconds != input.ttl_seconds
+        || verified.public_zone.services.probe != input.endpoints.probe
+        || verified.public_zone.services.registration != input.endpoints.public_services
+        || verified.public_zone.services.merkle_query != input.endpoints.public_services
+        || verified.public_zone.services.user != input.endpoints.authenticated
+        || verified.public_zone.services.kv_store != input.endpoints.authenticated
+        || verified.public_zone.services.realtime != input.endpoints.authenticated
+    {
+        return Err(crate::Error::Config("stored host bootstrap configuration"));
+    }
+
+    let parts = verified.snapshot.parts();
+    let identity = foks_verify::restore_public_host_identity(
+        parts.host_id,
+        parts.genesis_key,
+        parts.chain_seqno,
+        parts.chain_tail_hash,
+        parts.chain_bytes,
+        parts.public_zone_bytes,
+    )?;
+    let delegated_key = provider.load_or_create(KeyPurpose::DelegatedTls)?;
+    let delegated_tls_ca =
+        crate::pki::host_tls::delegated_tls_ca_der(&delegated_key, &input.canonical_name)?;
+    if !identity
+        .tls_ca_certificates()
+        .iter()
+        .any(|certificate| certificate == &delegated_tls_ca)
+    {
+        return Err(crate::Error::Config("stored delegated TLS key"));
+    }
+
+    Ok(BootstrapState {
+        created: false,
+        host_id: EntityId::from_bytes(stored.host_id)?,
+        probe_response: stored.probe_response,
+        delegated_tls_ca,
+        key_manifest: manifest,
+    })
+}
+
 fn entity(entity_type: u8, key: &SecretKey) -> Result<EntityId> {
     let mut bytes = Vec::with_capacity(33);
     bytes.push(entity_type);

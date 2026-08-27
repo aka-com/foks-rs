@@ -11,9 +11,13 @@ pub struct TestDatabase {
 
 impl TestDatabase {
     pub fn new() -> Self {
+        Self::with_config(Config::default())
+    }
+
+    pub fn with_config(config: Config) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("foks-server.sqlite");
-        let database = Database::open(&path, Config::default()).unwrap();
+        let database = Database::open(&path, config).unwrap();
         Self {
             _directory: directory,
             path,

@@ -2,6 +2,8 @@
 
 use unicode_normalization::{char::is_combining_mark, UnicodeNormalization as _};
 
+use std::collections::BTreeSet;
+
 use crate::{
     commitment, encode, prefixed_hash, user_transition::user_member_hepk_matches,
     verify_hostchain_at_tail, verify_merkle_path, verify_merkle_path_present, verify_typed,
@@ -18,6 +20,21 @@ pub struct VerifiedUserDevice {
     pub role: Role,
     pub hepk_bytes: Vec<u8>,
     pub subkey_id: Option<Vec<u8>>,
+}
+
+/// Extracts the bounded Merkle epochs an untrusted user-chain response asks
+/// the caller to authenticate. This grants no trust; callers must prove every
+/// returned epoch from an already authenticated root before replay.
+pub fn user_chain_root_epochs(chain_bytes: &[u8]) -> Result<Vec<u64>> {
+    let chain = UserChain::decode(chain_bytes)?;
+    if chain.links.len() > 4096 {
+        return Err(Error::UserChainContinuity);
+    }
+    let mut epochs = BTreeSet::from([chain.merkle.root().epoch]);
+    for link in &chain.links {
+        epochs.insert(link.decode_group_change()?.root.epoch);
+    }
+    Ok(epochs.into_iter().collect())
 }
 
 impl VerifiedUserDevice {

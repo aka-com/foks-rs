@@ -48,6 +48,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
     use quickcheck::QuickCheck;
+    use std::collections::BTreeSet;
 
     const PROBE: &[u8] = include_bytes!(
         "../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp"
@@ -263,6 +264,120 @@ mod tests {
             ),
             Err(Error::PersistedUserEvidence)
         ));
+    }
+
+    #[test]
+    fn user_selected_history_is_proved_from_latest_and_tampering_fails() {
+        let chain = UserChain::decode(USER_CHAIN).unwrap();
+        let uid = binary_entity(include_bytes!(
+            "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/uid.snowp"
+        ));
+        let host = chain.links[0].decode_eldest().unwrap().host;
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let advance = verify_merkle_advance(
+            &public.snapshot.merkle_root,
+            USER_ROOT,
+            USER_HISTORY,
+            &trusted_tail(&public),
+        )
+        .unwrap();
+        let latest_hash = advance.snapshot.root_hash;
+        let latest_only = VerifiedMerkleAdvance {
+            root: advance.root.clone(),
+            snapshot: VerifiedMerkleRoot {
+                epoch: advance.snapshot.epoch,
+                root_hash: latest_hash,
+                root_bytes: advance.snapshot.root_bytes.clone(),
+                evidence: MerkleRootEvidence::SignedBootstrap(Vec::new()),
+                authenticated_roots: vec![AuthenticatedMerkleRoot {
+                    epoch: advance.snapshot.epoch,
+                    root_hash: latest_hash,
+                    root_bytes: Some(advance.snapshot.root_bytes.clone()),
+                }],
+            },
+            authenticated_roots: AuthenticatedMerkleRoots(BTreeMap::from([(
+                advance.snapshot.epoch,
+                latest_hash,
+            )])),
+        };
+        let targets = user_chain_root_epochs(USER_CHAIN)
+            .unwrap()
+            .into_iter()
+            .filter(|epoch| *epoch != latest_only.root.epoch)
+            .collect::<Vec<_>>();
+        let available_roots = BTreeMap::from([
+            (995, public.merkle_root.clone()),
+            (
+                996,
+                MerkleRoot::decode(include_bytes!(
+                    "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/merkle-root-996.snowp"
+                ))
+                .unwrap(),
+            ),
+            (
+                997,
+                MerkleRoot::decode(include_bytes!(
+                    "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/merkle-root-997.snowp"
+                ))
+                .unwrap(),
+            ),
+        ]);
+        let original_requirements = merkle_history_requirements(998, 995).unwrap();
+        let original_history = HistoricalMerkleRoots::decode(USER_HISTORY).unwrap();
+        let available_hashes = original_requirements
+            .hashes
+            .into_iter()
+            .zip(original_history.hashes)
+            .collect::<BTreeMap<_, _>>();
+        let mut full_epochs = BTreeSet::new();
+        let mut hash_epochs = BTreeSet::new();
+        for target in &targets {
+            full_epochs.insert(*target);
+            let requirements = merkle_history_requirements(998, *target).unwrap();
+            full_epochs.extend(requirements.full_roots);
+            hash_epochs.extend(requirements.hashes);
+        }
+        let full_epochs = full_epochs.into_iter().collect::<Vec<_>>();
+        let hash_epochs = hash_epochs.into_iter().collect::<Vec<_>>();
+        let history = HistoricalMerkleRoots {
+            roots: full_epochs
+                .iter()
+                .map(|epoch| available_roots[epoch].clone())
+                .collect(),
+            hashes: hash_epochs
+                .iter()
+                .map(|epoch| available_hashes[epoch])
+                .collect(),
+        }
+        .encoded()
+        .unwrap();
+        let roots = authenticate_historical_roots_from_latest(
+            &latest_only,
+            &targets,
+            &full_epochs,
+            &hash_epochs,
+            &history,
+        )
+        .unwrap();
+        verify_user_chain(
+            USER_CHAIN,
+            &uid,
+            &host,
+            &roots,
+            &chain.merkle.root().hostchain,
+        )
+        .unwrap();
+
+        let mut tampered = HistoricalMerkleRoots::decode(&history).unwrap();
+        tampered.hashes[0][0] ^= 1;
+        assert!(authenticate_historical_roots_from_latest(
+            &latest_only,
+            &targets,
+            &full_epochs,
+            &hash_epochs,
+            &tampered.encoded().unwrap(),
+        )
+        .is_err());
     }
 
     #[test]

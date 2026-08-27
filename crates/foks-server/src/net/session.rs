@@ -3,8 +3,8 @@ use std::net::TcpStream;
 use std::sync::Arc;
 
 use foks_proto::{
-    DecodedSoftwareSignupArgument, EntityId, HistoricalMerkleRoots, MerkleRoot, SignedBlob,
-    UsernameReservation,
+    DecodedSoftwareSignupArgument, EntityId, HistoricalMerkleRoots, MerkleRoot, ProbeResponse,
+    SignedBlob, UsernameReservation,
 };
 use foks_rpc::{
     encode_status_response_at, encode_success_response_at, encode_void_success_response_at,
@@ -29,17 +29,13 @@ pub(crate) struct ServerData {
     entropy: Arc<dyn Entropy>,
     key_provider: Option<Arc<dyn HostKeyProvider>>,
     hostchain_tail: foks_proto::HostchainTail,
+    session_faults: Option<Arc<crate::SessionFaults>>,
+    metrics: Arc<crate::ServerMetrics>,
 }
 
 impl ServerData {
-    pub(crate) fn from_probe(
-        probe_response: Arc<[u8]>,
-        read_database: Option<ReadDatabaseConfig>,
-        writer: Option<WriterHandle>,
-        clock: Arc<dyn foks_server_db::Clock>,
-        entropy: Arc<dyn Entropy>,
-        key_provider: Option<Arc<dyn HostKeyProvider>>,
-    ) -> Result<Self> {
+    pub(crate) fn from_config(config: &crate::Config) -> Result<Self> {
+        let probe_response = Arc::clone(&config.probe_response);
         let probe = foks_proto::ProbeResponse::decode(&probe_response)?;
         let first = probe
             .hostchain
@@ -56,12 +52,14 @@ impl ServerData {
             host_id,
             canonical_name,
             current_root: probe.merkle_root.inner,
-            read_database,
-            writer,
-            clock,
-            entropy,
-            key_provider,
+            read_database: config.read_database.clone(),
+            writer: config.writer.clone(),
+            clock: Arc::clone(&config.clock),
+            entropy: Arc::clone(&config.entropy),
+            key_provider: config.key_provider.clone(),
             hostchain_tail: root.hostchain,
+            session_faults: config.session_faults.clone(),
+            metrics: Arc::clone(&config.metrics),
         })
     }
 
@@ -74,7 +72,7 @@ impl ServerData {
         match (call.route.protocol, call.route.method) {
             ("Probe", "probe") => {
                 self.validate_probe(call.call.argument())?;
-                encode_success_response_at(&self.probe_response, sequence)
+                encode_success_response_at(&self.current_probe_response()?, sequence)
                     .map_err(|_| RpcStatus::Unsupported)
             }
             ("Reg" | "MerkleQuery" | "KvStore", "selectVHost") => {
@@ -120,6 +118,27 @@ impl ServerData {
                     principal,
                 )?;
                 encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
+            }
+            ("KvStore", method) => {
+                let principal = principal.ok_or_else(permission_denied)?;
+                let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
+                match crate::services::kv::dispatch(
+                    method,
+                    call.call.argument(),
+                    principal,
+                    &self.read_database()?,
+                    writer,
+                    self.clock.as_ref(),
+                )? {
+                    crate::services::kv::Response::Data(response) => {
+                        encode_success_response_at(&response, sequence)
+                            .map_err(|_| RpcStatus::Unsupported)
+                    }
+                    crate::services::kv::Response::Void => {
+                        encode_void_success_response_at(sequence)
+                            .map_err(|_| RpcStatus::Unsupported)
+                    }
+                }
             }
             _ => Err(RpcStatus::Unsupported),
         }
@@ -433,6 +452,28 @@ impl ServerData {
         Ok(root.exact_root)
     }
 
+    fn current_probe_response(&self) -> std::result::Result<Vec<u8>, RpcStatus> {
+        let Some(config) = &self.read_database else {
+            return Ok(self.probe_response.to_vec());
+        };
+        let database = foks_server_db::ReadDatabase::open(&config.path, config.database.clone())
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        let root = database
+            .current_root()
+            .map_err(|_| RpcStatus::TransactionRetry)?
+            .ok_or_else(|| RpcStatus::NotFound("Merkle root not found".to_owned()))?;
+        validated_root(&root)?;
+        let signed =
+            SignedBlob::decode(&root.exact_signed_root).map_err(|_| RpcStatus::TransactionRetry)?;
+        if signed.inner != root.exact_root {
+            return Err(RpcStatus::TransactionRetry);
+        }
+        let mut probe =
+            ProbeResponse::decode(&self.probe_response).map_err(|_| RpcStatus::TransactionRetry)?;
+        probe.merkle_root = signed;
+        probe.encoded().map_err(|_| RpcStatus::TransactionRetry)
+    }
+
     fn historical_roots(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
         let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
             return Err(bad_arguments("historical roots argument is not a struct"));
@@ -585,6 +626,7 @@ pub(crate) fn serve(
             }
             Err(error) => return Err(error.into()),
         };
+        service_data.metrics.request_started();
         if listener == Listener::Authenticated && principal.is_none() {
             let certificate = stream
                 .conn
@@ -596,11 +638,24 @@ pub(crate) fn serve(
             principal = Some(Principal::from_certificate(certificate)?);
         }
         let sequence = call.sequence();
+        let mut route = None;
         let response = match route_call(call, listener) {
-            Ok(call) => match service_data.response(call, principal.as_ref()) {
-                Ok(response) => response,
-                Err(status) => encode_status_response_at(&status, sequence)?,
-            },
+            Ok(call) => {
+                let protocol = call.route.protocol;
+                let method = call.route.method;
+                route = Some((protocol, method));
+                if service_data.should_disconnect(
+                    crate::SessionFaultPoint::BeforeDurableMutation,
+                    protocol,
+                    method,
+                ) {
+                    return Ok(());
+                }
+                match service_data.response(call, principal.as_ref()) {
+                    Ok(response) => response,
+                    Err(status) => encode_status_response_at(&status, sequence)?,
+                }
+            }
             Err(RouteError::RequestTooLarge { .. }) => encode_status_response_at(
                 &RpcStatus::BadArguments("request exceeds the method limit".to_owned()),
                 sequence,
@@ -609,13 +664,50 @@ pub(crate) fn serve(
                 encode_status_response_at(&RpcStatus::Unsupported, sequence)?
             }
         };
+        if let Some((protocol, method)) = route {
+            let point = if protocol == "KvStore" && method == "fileUploadChunk" {
+                crate::SessionFaultPoint::BetweenLargeFileChunks
+            } else {
+                crate::SessionFaultPoint::AfterDurableCommitBeforeResponse
+            };
+            if service_data.should_disconnect(point, protocol, method) {
+                return Ok(());
+            }
+            if service_data.should_disconnect(
+                crate::SessionFaultPoint::DuringResponseWrite,
+                protocol,
+                method,
+            ) {
+                let split = response.len().div_ceil(2);
+                stream.write_all(&response[..split])?;
+                stream.flush()?;
+                while stream.conn.wants_write() {
+                    stream.conn.complete_io(&mut stream.sock)?;
+                }
+                return Ok(());
+            }
+        }
         stream.write_all(&response)?;
         stream.flush()?;
         while stream.conn.wants_write() {
             stream.conn.complete_io(&mut stream.sock)?;
         }
+        service_data.metrics.response_completed();
     }
     Ok(())
+}
+
+impl ServerData {
+    fn should_disconnect(
+        &self,
+        point: crate::SessionFaultPoint,
+        protocol: &str,
+        method: &str,
+    ) -> bool {
+        self.session_faults
+            .as_ref()
+            .is_some_and(|faults| faults.disconnect(point, protocol, method))
+    }
 }
 
 fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {

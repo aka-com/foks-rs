@@ -3,7 +3,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 pub const APPLICATION_ID: i64 = 0x464f_4b53;
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 10;
 
 const SCHEMA: &str = concat!(
     include_str!("schema/core.sql"),
@@ -11,6 +11,7 @@ const SCHEMA: &str = concat!(
     include_str!("schema/merkle.sql"),
     include_str!("schema/certificates.sql"),
     include_str!("schema/receipts.sql"),
+    include_str!("schema/kv.sql"),
 );
 
 pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {

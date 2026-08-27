@@ -78,6 +78,7 @@ pub const SERVICES: &[ServiceSpec] = &[
 
 const BASIC: &[&str] = &["ok", "bad_args", "not_found"];
 const KV_WRITE: &[&str] = &["ok", "bad_args", "stale_cache", "quota_exceeded"];
+const KV_READ: &[&str] = &["ok", "bad_args", "kv_noent"];
 
 pub const ROUTES: &[RouteSpec] = &[
     RouteSpec {
@@ -272,7 +273,7 @@ pub const ROUTES: &[RouteSpec] = &[
         request: "KvUploadInitArgument",
         result: "Void",
         statuses: KV_WRITE,
-        max_request_bytes: 1_048_576,
+        max_request_bytes: 16_777_216,
         supported: true,
     },
     RouteSpec {
@@ -285,7 +286,7 @@ pub const ROUTES: &[RouteSpec] = &[
         request: "KvUploadChunkArgument",
         result: "Void",
         statuses: &["ok", "bad_args", "not_found", "quota_exceeded"],
-        max_request_bytes: 8_388_608,
+        max_request_bytes: 16_777_216,
         supported: true,
     },
     RouteSpec {
@@ -310,7 +311,7 @@ pub const ROUTES: &[RouteSpec] = &[
         authentication: "active_device_mtls",
         request: "KvGetRootArgument",
         result: "KvRoot",
-        statuses: BASIC,
+        statuses: KV_READ,
         max_request_bytes: 16_384,
         supported: true,
     },
@@ -323,7 +324,7 @@ pub const ROUTES: &[RouteSpec] = &[
         authentication: "active_device_mtls",
         request: "KvGetNodeArgument",
         result: "KvNode",
-        statuses: BASIC,
+        statuses: KV_READ,
         max_request_bytes: 16_384,
         supported: true,
     },
@@ -336,7 +337,7 @@ pub const ROUTES: &[RouteSpec] = &[
         authentication: "active_device_mtls",
         request: "KvGetChunkArgument",
         result: "KvEncryptedChunk",
-        statuses: BASIC,
+        statuses: KV_READ,
         max_request_bytes: 16_384,
         supported: true,
     },
@@ -349,7 +350,7 @@ pub const ROUTES: &[RouteSpec] = &[
         authentication: "active_device_mtls",
         request: "KvGetDirArgument",
         result: "KvDirectory",
-        statuses: BASIC,
+        statuses: KV_READ,
         max_request_bytes: 16_384,
         supported: true,
     },
@@ -375,7 +376,7 @@ pub const ROUTES: &[RouteSpec] = &[
         authentication: "active_device_mtls",
         request: "KvListArgument",
         result: "KvList",
-        statuses: BASIC,
+        statuses: KV_READ,
         max_request_bytes: 16_384,
         supported: true,
     },

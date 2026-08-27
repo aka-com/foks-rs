@@ -19,6 +19,10 @@ pub struct Config {
     pub clock: Arc<dyn foks_server_db::Clock>,
     pub entropy: Arc<dyn Entropy>,
     pub key_provider: Option<Arc<dyn crate::keys::HostKeyProvider>>,
+    #[doc(hidden)]
+    pub session_faults: Option<Arc<crate::SessionFaults>>,
+    pub diagnostics: Option<Arc<dyn crate::SessionDiagnostics>>,
+    pub metrics: Arc<crate::ServerMetrics>,
     pub limits: SessionLimits,
 }
 
@@ -41,7 +45,7 @@ impl Default for SessionLimits {
     fn default() -> Self {
         Self {
             maximum_frame_bytes: foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
-            maximum_requests: 64,
+            maximum_requests: 4096,
             worker_threads: 4,
             maximum_pending_connections: 32,
             io_timeout: Duration::from_secs(15),

@@ -1,5 +1,7 @@
 //! KV namespace, content, version-vector, and ciphertext wire objects.
 
+use std::collections::BTreeMap;
+
 use crate::codec::value_name;
 use crate::{
     array, binary, boolean, decode, encode, expect_unsigned, fixed_blob, list, option, role,
@@ -140,6 +142,38 @@ impl KvPathVersionVector {
     pub fn encode(&self) -> Result<Vec<u8>> {
         Ok(encode(&self.to_value())?)
     }
+
+    /// Compares the versioned object set without depending on wire ordering.
+    /// Clients sort verified entries by decrypted names, which the server
+    /// cannot observe. Duplicate object IDs are never a valid equivalent set.
+    pub fn equivalent(&self, other: &Self) -> bool {
+        self.root_version == other.root_version
+            && normalized_versions(&self.directories)
+                .zip(normalized_versions(&other.directories))
+                .is_some_and(|(left, right)| left == right)
+    }
+}
+
+type KvEntryVersions = BTreeMap<[u8; 16], u64>;
+type KvDirectoryVersions = BTreeMap<[u8; 16], (u64, KvEntryVersions)>;
+
+fn normalized_versions(directories: &[KvDirectoryVersion]) -> Option<KvDirectoryVersions> {
+    let mut output = BTreeMap::new();
+    for directory in directories {
+        let mut entries = BTreeMap::new();
+        for entry in &directory.entries {
+            if entries.insert(entry.id, entry.version).is_some() {
+                return None;
+            }
+        }
+        if output
+            .insert(directory.id, (directory.version, entries))
+            .is_some()
+        {
+            return None;
+        }
+    }
+    Some(output)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -232,6 +266,10 @@ pub struct KvDirectory {
 }
 
 impl KvDirectory {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        kv_directory(&decode(bytes)?)
+    }
+
     pub fn to_value(&self) -> Value {
         Value::Array(vec![
             Value::Binary(self.id.to_vec()),
@@ -258,6 +296,15 @@ pub struct KvDirectoryPair {
 }
 
 impl KvDirectoryPair {
+    pub fn from_active(active: KvDirectory) -> Result<Self> {
+        let exact = encode(&Value::Array(vec![active.to_value(), Value::Null]))?;
+        Ok(Self {
+            active,
+            encrypting: None,
+            exact,
+        })
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
         let fields = array(&value, 2)?;
@@ -392,6 +439,44 @@ pub struct KvListResponse {
 }
 
 impl KvListResponse {
+    pub fn new(
+        entries: Vec<KvDirent>,
+        final_page: bool,
+        extended: Vec<KvExtendedDirent>,
+    ) -> Result<Self> {
+        let entries_value = if entries.is_empty() {
+            Value::Null
+        } else {
+            Value::Array(entries.iter().map(KvDirent::to_value).collect())
+        };
+        let extended_value = if extended.is_empty() {
+            Value::Null
+        } else {
+            Value::Array(
+                extended
+                    .iter()
+                    .map(|item| {
+                        Value::Array(vec![
+                            Value::Unsigned(item.position),
+                            item.small_file.to_value(),
+                        ])
+                    })
+                    .collect(),
+            )
+        };
+        let exact = encode(&Value::Array(vec![
+            entries_value,
+            Value::Bool(final_page),
+            extended_value,
+        ]))?;
+        Ok(Self {
+            entries,
+            final_page,
+            extended,
+            exact,
+        })
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
         let fields = array(&value, 3)?;
@@ -542,6 +627,22 @@ impl KvNode {
             }),
         }
     }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        let (kind, tag, payload) = match self {
+            Self::File(metadata) => (2, b"0".to_vec(), metadata.to_value()),
+            Self::SmallFile(boxed) => (3, b"2".to_vec(), boxed.to_value()),
+            Self::Symlink(boxed) => (4, b"3".to_vec(), boxed.to_value()),
+            Self::Directory(directory) => {
+                let payload = decode(directory.encoded())?;
+                (1, b"4".to_vec(), payload)
+            }
+        };
+        Ok(encode(&Value::Array(vec![
+            Value::Unsigned(kind),
+            Value::Variant(Some((tag, Box::new(payload)))),
+        ]))?)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -560,6 +661,18 @@ impl KvEncryptedChunk {
             offset: unsigned(&fields[1])?,
             final_chunk: boolean(&fields[2])?,
         })
+    }
+
+    pub fn to_value(&self) -> Value {
+        Value::Array(vec![
+            Value::Binary(self.ciphertext.clone()),
+            Value::Unsigned(self.offset),
+            Value::Bool(self.final_chunk),
+        ])
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        Ok(encode(&self.to_value())?)
     }
 }
 

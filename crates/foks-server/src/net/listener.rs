@@ -37,6 +37,7 @@ struct WorkerContext {
     class: Listener,
     tls: Arc<rustls::ServerConfig>,
     service_data: Arc<ServerData>,
+    diagnostics: Option<Arc<dyn crate::SessionDiagnostics>>,
     limits: crate::SessionLimits,
     stopping: Arc<AtomicBool>,
     active: Arc<Mutex<Vec<ActiveConnection>>>,
@@ -67,14 +68,7 @@ impl RunningServer {
             authenticated,
             addresses,
         } = listeners;
-        let service_data = Arc::new(ServerData::from_probe(
-            Arc::clone(&config.probe_response),
-            config.read_database,
-            config.writer,
-            config.clock,
-            config.entropy,
-            config.key_provider,
-        )?);
+        let service_data = Arc::new(ServerData::from_config(&config)?);
         let stopping = Arc::new(AtomicBool::new(false));
         let threads = vec![
             spawn_listener(
@@ -82,6 +76,7 @@ impl RunningServer {
                 Listener::Probe,
                 config.probe_tls,
                 Arc::clone(&service_data),
+                config.diagnostics.clone(),
                 config.limits,
                 Arc::clone(&stopping),
             ),
@@ -90,6 +85,7 @@ impl RunningServer {
                 Listener::PublicServices,
                 config.public_tls,
                 Arc::clone(&service_data),
+                config.diagnostics.clone(),
                 config.limits,
                 Arc::clone(&stopping),
             ),
@@ -98,6 +94,7 @@ impl RunningServer {
                 Listener::Authenticated,
                 config.authenticated_tls,
                 service_data,
+                config.diagnostics,
                 config.limits,
                 Arc::clone(&stopping),
             ),
@@ -163,6 +160,7 @@ fn spawn_listener(
     class: Listener,
     tls: Arc<rustls::ServerConfig>,
     service_data: Arc<ServerData>,
+    diagnostics: Option<Arc<dyn crate::SessionDiagnostics>>,
     limits: crate::SessionLimits,
     stopping: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
@@ -174,6 +172,7 @@ fn spawn_listener(
             class,
             tls,
             service_data,
+            diagnostics,
             limits,
             stopping: Arc::clone(&stopping),
             active: Arc::clone(&active),
@@ -243,13 +242,16 @@ fn spawn_worker(
                 }
             }
         }
-        let _ = serve(
+        let result = serve(
             stream,
             context.class,
             &context.tls,
             &context.service_data,
             context.limits,
         );
+        if let (Err(error), Some(diagnostics)) = (result, &context.diagnostics) {
+            diagnostics.session_failed(context.class, id, crate::diagnostics::classify(&error));
+        }
         if let Ok(mut active) = context.active.lock() {
             active.retain(|connection| connection.id != id);
         }
