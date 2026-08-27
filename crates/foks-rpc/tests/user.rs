@@ -1,10 +1,11 @@
 use foks_proto::{
-    AdHocTeamCreateArgument, AddTeamMemberArgument, DeviceLabel, DeviceLabelNameAndCommitmentKey,
-    DeviceType, EntityId, HostConfig, InviteCode, NamedTeamCreateArgument, ProvisionDeviceArgument,
-    PukParcel, RegistrationChallenge, RemoveTeamMemberArgument, RevokeDeviceArgument, Role,
-    SecretSeed, SeedChainBox, SharedKeyBoxSet, SoftwareSignupArgument, TeamBearerTokenChallenge,
-    TeamChain, TeamRemovalAndCommitment, TeamRemovalBoxData, TeamViewChallenge, TeamViewRequest,
-    UserChain, UserLink, UsernameReservation, ViewershipMode, TEAM_VIEW_CHALLENGE_TYPE_ID,
+    AdHocTeamCreateArgument, AddTeamMemberArgument, DecodedSoftwareSignupArgument, DeviceLabel,
+    DeviceLabelNameAndCommitmentKey, DeviceType, EntityId, HostConfig, InviteCode,
+    NamedTeamCreateArgument, ProvisionDeviceArgument, PukParcel, RegistrationChallenge,
+    RemoveTeamMemberArgument, RevokeDeviceArgument, Role, SecretSeed, SeedChainBox,
+    SharedKeyBoxSet, SoftwareSignupArgument, TeamBearerTokenChallenge, TeamChain,
+    TeamRemovalAndCommitment, TeamRemovalBoxData, TeamViewChallenge, TeamViewRequest, UserChain,
+    UserLink, UsernameReservation, ViewershipMode, TEAM_VIEW_CHALLENGE_TYPE_ID,
 };
 use foks_rpc::{
     decode_team_bearer_token, decode_team_edit_result, decode_team_removal_key_box,
@@ -448,6 +449,19 @@ fn software_signup_requests_match_go_v019() {
         actual.len(),
         expected.len()
     );
+    let call = foks_rpc::read_call(
+        &mut std::io::Cursor::new(expected),
+        foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
+    )
+    .unwrap();
+    let decoded = DecodedSoftwareSignupArgument::decode(call.argument()).unwrap();
+    assert_eq!(decoded.username_utf8, b"signupfixture");
+    assert_eq!(decoded.reservation, reservation);
+    assert_eq!(decoded.link, link);
+    assert_eq!(decoded.puk_box, puk_box);
+    assert_eq!(decoded.invite_code, InviteCode::Empty);
+    assert_eq!(decoded.puk_hepk, puk.hepk);
+    assert_eq!(decoded.device_hepk, device.hepk);
 }
 
 #[test]

@@ -1,13 +1,21 @@
 use foks_merkle_store::{NodeReader, Result as MerkleResult};
 use rusqlite::{Connection, OptionalExtension as _};
 
-use crate::Database;
+use crate::{Database, ReadDatabase};
 
 pub struct SqliteNodeReader<'a> {
     connection: &'a Connection,
 }
 
 impl Database {
+    pub fn node_reader(&self) -> SqliteNodeReader<'_> {
+        SqliteNodeReader {
+            connection: &self.connection,
+        }
+    }
+}
+
+impl ReadDatabase {
     pub fn node_reader(&self) -> SqliteNodeReader<'_> {
         SqliteNodeReader {
             connection: &self.connection,

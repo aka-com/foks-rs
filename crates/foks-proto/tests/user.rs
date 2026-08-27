@@ -1,6 +1,7 @@
 use foks_proto::{
     decode_merkle_back_pointers, ChangeMetadata, EntityId, Hepk, HistoricalMerkleRoots, PukParcel,
-    Role, SharedKeySeed, SoftwareEldestPublic, TeamChain, UnsignedUserLink, UserChain, UserLink,
+    Role, SharedKeySeed, SoftwareEldestPublic, TeamChain, UnsignedUserLink, UserChain,
+    UserChainResponse, UserLink,
 };
 
 const DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user";
@@ -11,7 +12,8 @@ fn fixture(name: &str) -> Vec<u8> {
 
 #[test]
 fn official_eldest_user_chain_decodes() {
-    let chain = UserChain::decode(&fixture("user-chain.snowp")).unwrap();
+    let exact = fixture("user-chain.snowp");
+    let chain = UserChain::decode(&exact).unwrap();
     assert_eq!(chain.links.len(), 3);
     assert_eq!(chain.locations.len(), 3);
     assert_eq!(chain.merkle.paths().len(), 6);
@@ -48,6 +50,36 @@ fn official_eldest_user_chain_decodes() {
         ]
     ));
     assert_eq!(chain.hepks[0].mlkem768().len(), 1184);
+
+    let links = chain
+        .links
+        .iter()
+        .map(UserLink::encoded)
+        .collect::<foks_proto::Result<Vec<_>>>()
+        .unwrap();
+    let root = chain.merkle.encoded_root().unwrap();
+    let hepks = chain
+        .hepks
+        .iter()
+        .map(Hepk::encoded)
+        .collect::<foks_proto::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        UserChainResponse {
+            exact_links: &links,
+            locations: &chain.locations,
+            usernames: &chain.usernames,
+            exact_root: &root,
+            paths: chain.merkle.paths(),
+            device_names: &chain.device_names,
+            username_utf8: &chain.username_utf8,
+            num_username_links: chain.num_username_links,
+            exact_hepks: &hepks,
+        }
+        .encoded()
+        .unwrap(),
+        exact
+    );
 }
 
 #[test]
@@ -102,6 +134,10 @@ fn official_transition_links_and_merkle_history_decode() {
         HistoricalMerkleRoots::decode(&fixture("merkle-historical-response.snowp")).unwrap();
     assert_eq!(history.roots[0].epoch, 996);
     assert_eq!(history.hashes.len(), 4);
+    assert_eq!(
+        history.encoded().unwrap(),
+        fixture("merkle-historical-response.snowp")
+    );
 }
 
 #[test]
@@ -198,7 +234,8 @@ fn official_mock_yubi_and_subkey_matrix_decodes() {
 
 #[test]
 fn official_puk_parcel_and_cleartext_decode() {
-    let parcel = PukParcel::decode(&fixture("puk-parcel.snowp")).unwrap();
+    let exact = fixture("puk-parcel.snowp");
+    let parcel = PukParcel::decode(&exact).unwrap();
     assert_eq!(parcel.generation, 2);
     assert_eq!(parcel.role, Role::OWNER);
     assert_eq!(parcel.hybrid.kem_ciphertext.len(), 1088);
@@ -208,6 +245,7 @@ fn official_puk_parcel_and_cleartext_decode() {
     assert_eq!(parcel.seed_chain.len(), 1);
     assert_eq!(parcel.seed_chain[0].generation, 1);
     assert_eq!(parcel.seed_chain[0].role, Role::OWNER);
+    assert_eq!(parcel.encoded().unwrap(), exact);
 
     let cleartext = SharedKeySeed::decode(&fixture("puk-cleartext.snowp")).unwrap();
     assert_eq!(cleartext.generation, 2);

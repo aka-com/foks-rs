@@ -10,7 +10,7 @@ use crate::keys::DirectoryKeyProvider;
 use crate::net::{bind_addresses, RunningServer, ServerAddresses};
 use crate::pki::build_host_tls;
 use crate::Writer;
-use crate::{Config, Result, SessionLimits};
+use crate::{Config, OsEntropy, ReadDatabaseConfig, Result, SessionLimits};
 
 pub struct StandaloneConfig {
     pub database_path: PathBuf,
@@ -61,8 +61,11 @@ impl RunningStandaloneServer {
 
 pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneServer> {
     config.limits.validate()?;
-    let keys = DirectoryKeyProvider::open(&config.key_directory, *config.root_key)?;
-    let tls = build_host_tls(&keys, &config.canonical_name)?;
+    let keys = Arc::new(DirectoryKeyProvider::open(
+        &config.key_directory,
+        *config.root_key,
+    )?);
+    let tls = build_host_tls(keys.as_ref(), &config.canonical_name)?;
     let listeners = bind_addresses(
         config.probe_address,
         config.public_address,
@@ -88,13 +91,15 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         now_microseconds: config.now_microseconds,
     };
     let mut database = Database::open(&config.database_path, config.database.clone())?;
-    let bootstrap = bootstrap(&mut database, &keys, &input)?;
+    let bootstrap = bootstrap(&mut database, keys.as_ref(), &input)?;
     drop(database);
+    let database_config = config.database;
     let writer = Writer::start(
         config.database_path.clone(),
-        config.database,
+        database_config.clone(),
         config.maximum_pending_writes,
     )?;
+    let writer_handle = writer.handle();
 
     let server = RunningServer::start_bound(
         Config {
@@ -105,6 +110,14 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
             public_tls: tls.public,
             authenticated_tls: tls.authenticated,
             probe_response: Arc::from(bootstrap.probe_response.clone()),
+            read_database: Some(ReadDatabaseConfig {
+                path: config.database_path,
+                database: database_config,
+            }),
+            writer: Some(writer_handle),
+            clock: Arc::new(foks_server_db::SystemClock),
+            entropy: Arc::new(OsEntropy),
+            key_provider: Some(keys),
             limits: config.limits,
         },
         listeners,

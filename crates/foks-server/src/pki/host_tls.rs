@@ -72,6 +72,14 @@ pub(crate) fn delegated_tls_ca_der(key: &SecretKey, canonical_name: &str) -> Res
         .to_vec())
 }
 
+pub(crate) fn client_identity_ca(
+    provider: &dyn HostKeyProvider,
+    canonical_name: &str,
+) -> Result<CertifiedIssuer<'static, KeyPair>> {
+    let key = provider.load_or_create(KeyPurpose::ClientCa)?;
+    ed25519_ca(&key, canonical_name, "FOKS client identity CA")
+}
+
 fn ed25519_ca(
     key: &SecretKey,
     canonical_name: &str,

@@ -5,7 +5,7 @@ use super::{
     user_merkle_paths, DeviceLabelNameAndCommitmentKey, Hepk, NameCommitmentAndKey, UserLink,
     UserMerklePaths,
 };
-use crate::{array, decode, fixed_blob, list, text, unsigned, Error, Result};
+use crate::{array, decode, encode, fixed_blob, list, text, unsigned, Error, Result, Value};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UserChain {
@@ -18,6 +18,74 @@ pub struct UserChain {
     pub num_username_links: u64,
     pub hepks: Vec<Hepk>,
     pub exact_bytes: Vec<u8>,
+}
+
+/// Canonical server-side construction of the v0.1.9 `UserChain` result.
+pub struct UserChainResponse<'a> {
+    pub exact_links: &'a [Vec<u8>],
+    pub locations: &'a [[u8; 32]],
+    pub usernames: &'a [NameCommitmentAndKey],
+    pub exact_root: &'a [u8],
+    pub paths: &'a [super::MerklePathCompressed],
+    pub device_names: &'a [DeviceLabelNameAndCommitmentKey],
+    pub username_utf8: &'a [u8],
+    pub num_username_links: u64,
+    pub exact_hepks: &'a [Vec<u8>],
+}
+
+impl UserChainResponse<'_> {
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        let links = self
+            .exact_links
+            .iter()
+            .map(|link| decode(link).map_err(Error::from))
+            .collect::<Result<Vec<_>>>()?;
+        let root = decode(self.exact_root)?;
+        let hepks = self
+            .exact_hepks
+            .iter()
+            .map(|hepk| decode(hepk).map_err(Error::from))
+            .collect::<Result<Vec<_>>>()?;
+        let wire = Value::Array(vec![
+            list_value(links),
+            list_value(
+                self.locations
+                    .iter()
+                    .map(|location| Value::Binary(location.to_vec()))
+                    .collect(),
+            ),
+            list_value(
+                self.usernames
+                    .iter()
+                    .map(NameCommitmentAndKey::to_value)
+                    .collect(),
+            ),
+            Value::Array(vec![
+                root,
+                Value::Array(self.paths.iter().map(|path| path.to_value()).collect()),
+            ]),
+            list_value(
+                self.device_names
+                    .iter()
+                    .map(DeviceLabelNameAndCommitmentKey::to_value)
+                    .collect(),
+            ),
+            Value::Text(self.username_utf8.to_vec()),
+            Value::Unsigned(self.num_username_links),
+            Value::Array(vec![list_value(hepks)]),
+        ]);
+        let encoded = encode(&wire)?;
+        UserChain::decode(&encoded)?;
+        Ok(encoded)
+    }
+}
+
+fn list_value(values: Vec<Value>) -> Value {
+    if values.is_empty() {
+        Value::Null
+    } else {
+        Value::Array(values)
+    }
 }
 
 impl UserChain {

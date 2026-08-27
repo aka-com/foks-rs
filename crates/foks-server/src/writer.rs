@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use foks_server_db::Database;
@@ -35,8 +36,18 @@ enum Message {
 }
 
 pub struct Writer {
-    sender: SyncSender<Message>,
+    handle: WriterHandle,
     thread: Option<JoinHandle<()>>,
+}
+
+#[derive(Clone)]
+pub struct WriterHandle {
+    queue: Arc<WriterQueue>,
+}
+
+struct WriterQueue {
+    sender: SyncSender<Message>,
+    accepting: Mutex<bool>,
 }
 
 impl Writer {
@@ -65,7 +76,12 @@ impl Writer {
         });
         match startup_receiver.recv() {
             Ok(Ok(())) => Ok(Self {
-                sender,
+                handle: WriterHandle {
+                    queue: Arc::new(WriterQueue {
+                        sender,
+                        accepting: Mutex::new(true),
+                    }),
+                },
                 thread: Some(thread),
             }),
             Ok(Err(error)) => {
@@ -84,14 +100,11 @@ impl Writer {
         F: FnOnce(&mut Database) -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        let (response, receiver) = mpsc::sync_channel(1);
-        self.sender
-            .try_send(Message::Task(Box::new(Call {
-                operation,
-                response,
-            })))
-            .map_err(|_| Error::WriterQueue)?;
-        receiver.recv().map_err(|_| Error::WriterQueue)?
+        self.handle.call(operation)
+    }
+
+    pub fn handle(&self) -> WriterHandle {
+        self.handle.clone()
     }
 
     pub fn shutdown(mut self) -> Result<()> {
@@ -99,11 +112,48 @@ impl Writer {
     }
 
     fn stop(&mut self) -> Result<()> {
-        let _ = self.sender.send(Message::Shutdown);
+        let mut accepting = self
+            .handle
+            .queue
+            .accepting
+            .lock()
+            .map_err(|_| Error::Thread)?;
+        if *accepting {
+            *accepting = false;
+            let _ = self.handle.queue.sender.send(Message::Shutdown);
+        }
+        drop(accepting);
         if let Some(thread) = self.thread.take() {
             thread.join().map_err(|_| Error::Thread)?;
         }
         Ok(())
+    }
+}
+
+impl WriterHandle {
+    pub fn call<F, T>(&self, operation: F) -> Result<T>
+    where
+        F: FnOnce(&mut Database) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let accepting = self
+            .queue
+            .accepting
+            .lock()
+            .map_err(|_| Error::WriterQueue)?;
+        if !*accepting {
+            return Err(Error::WriterQueue);
+        }
+        self.queue
+            .sender
+            .try_send(Message::Task(Box::new(Call {
+                operation,
+                response,
+            })))
+            .map_err(|_| Error::WriterQueue)?;
+        drop(accepting);
+        receiver.recv().map_err(|_| Error::WriterQueue)?
     }
 }
 

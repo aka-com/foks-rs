@@ -16,9 +16,10 @@ mod receipts;
 mod schema;
 mod transaction;
 
+pub use certificates::StoredCertificate;
 pub use clock::{Clock, SystemClock};
 pub use config::Config;
-pub use connection::{Database, Pragmas};
+pub use connection::{Database, Pragmas, ReadDatabase};
 pub use error::{Error, Result};
 pub use host::{BootstrapService, HostBootstrap, StoredHostBootstrap};
 pub use identity::{CommitOutcome, FailurePoint, IdentityMutation};

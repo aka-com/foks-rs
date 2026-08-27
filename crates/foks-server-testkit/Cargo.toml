@@ -18,6 +18,8 @@ zeroize = { workspace = true }
 [dev-dependencies]
 foks-client = { workspace = true }
 foks-client-db = { workspace = true }
+foks-crypto = { workspace = true }
+foks-proto = { workspace = true }
 foks-rpc = { workspace = true }
 
 [lints]

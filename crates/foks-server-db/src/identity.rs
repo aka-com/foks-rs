@@ -15,12 +15,16 @@ pub enum FailurePoint {
 
 pub struct IdentityMutation<'a> {
     pub normalized_name: &'a [u8],
-    pub reservation_token: &'a [u8; 32],
+    pub reservation_token: &'a [u8; 17],
     pub reservation_sequence: u64,
+    pub reservation_expires_at: u64,
+    pub username_utf8: &'a [u8],
+    pub username_commitment_key: &'a [u8; 16],
     pub uid: &'a [u8],
     pub device_id: &'a [u8],
     pub device_hepk_fingerprint: &'a [u8; 32],
     pub exact_device_hepk: &'a [u8],
+    pub exact_device_name: &'a [u8],
     pub link_hash: &'a [u8; 32],
     pub exact_link: &'a [u8],
     pub tree_location: &'a [u8; 32],
@@ -87,6 +91,7 @@ impl Database {
         };
         if token.as_slice() != mutation.reservation_token
             || sequence != sql_integer(mutation.reservation_sequence)?
+            || expires_at != sql_integer(mutation.reservation_expires_at)?
             || expires_at <= sql_integer(mutation.now)?
         {
             return Err(Error::Reservation);
@@ -99,30 +104,43 @@ impl Database {
         inject(failure, FailurePoint::Name)?;
 
         transaction.execute(
-            "INSERT INTO users(uid, normalized_name, created_at) VALUES (?1, ?2, ?3)",
+            "INSERT INTO users
+             (uid, normalized_name, username_utf8, username_sequence,
+              username_commitment_key, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 mutation.uid,
                 mutation.normalized_name,
+                mutation.username_utf8,
+                sql_integer(mutation.reservation_sequence)?,
+                mutation.username_commitment_key,
                 sql_integer(mutation.now)?
             ],
         )?;
         inject(failure, FailurePoint::User)?;
         transaction.execute(
-            "INSERT INTO devices(device_id, uid, active, hepk_fingerprint, exact_hepk)
-             VALUES (?1, ?2, 1, ?3, ?4)",
+            "INSERT INTO devices
+             (device_id, uid, active, hepk_fingerprint, exact_hepk, exact_name)
+             VALUES (?1, ?2, 1, ?3, ?4, ?5)",
             params![
                 mutation.device_id,
                 mutation.uid,
                 mutation.device_hepk_fingerprint,
-                mutation.exact_device_hepk
+                mutation.exact_device_hepk,
+                mutation.exact_device_name
             ],
         )?;
         inject(failure, FailurePoint::Device)?;
 
         transaction.execute(
-            "INSERT INTO user_chain_links(uid, seqno, link_hash, exact_link)
-             VALUES (?1, 1, ?2, ?3)",
-            params![mutation.uid, mutation.link_hash, mutation.exact_link],
+            "INSERT INTO user_chain_links(uid, seqno, link_hash, exact_link, root_epoch)
+             VALUES (?1, 1, ?2, ?3, ?4)",
+            params![
+                mutation.uid,
+                mutation.link_hash,
+                mutation.exact_link,
+                sql_integer(mutation.root_epoch)?
+            ],
         )?;
         transaction.execute(
             "INSERT INTO user_chain_heads(uid, seqno, link_hash) VALUES (?1, 1, ?2)",
@@ -250,7 +268,9 @@ impl Database {
 
 fn validate(database: &Database, mutation: &IdentityMutation<'_>) -> Result<()> {
     let blobs = [
+        mutation.username_utf8,
         mutation.exact_device_hepk,
+        mutation.exact_device_name,
         mutation.exact_link,
         mutation.exact_shared_hepk,
         mutation.exact_parcel,
@@ -261,6 +281,7 @@ fn validate(database: &Database, mutation: &IdentityMutation<'_>) -> Result<()> 
         || !matches!(mutation.device_id.len(), 33 | 34)
         || !matches!(mutation.shared_verify_key.len(), 33 | 34)
         || mutation.normalized_name.is_empty()
+        || mutation.username_utf8.is_empty()
         || mutation.normalized_name.len() > database.config.maximum_name_bytes
         || mutation.response.len() > database.config.maximum_receipt_bytes
         || blobs
@@ -270,6 +291,7 @@ fn validate(database: &Database, mutation: &IdentityMutation<'_>) -> Result<()> 
         || mutation.back_pointers.len() > database.config.maximum_back_pointers
         || mutation.shared_generation == 0
         || mutation.reservation_sequence == 0
+        || mutation.reservation_expires_at <= mutation.now
         || mutation.receipt_expires_at <= mutation.now
         || mutation.merkle_commit.root == [0; 32]
     {

@@ -6,18 +6,23 @@
 
 #![forbid(unsafe_code)]
 
+mod auth;
 mod config;
+mod entropy;
 mod error;
 pub mod host;
+mod identity;
 pub mod keys;
 pub mod net;
 pub mod pki;
 pub mod rpc;
+mod services;
 mod standalone;
 mod writer;
 
-pub use config::{Config, SessionLimits};
+pub use config::{Config, ReadDatabaseConfig, SessionLimits};
+pub use entropy::{Entropy, OsEntropy};
 pub use error::{Error, Result};
 pub use net::{start, RunningServer, ServerAddresses};
 pub use standalone::{start_standalone, RunningStandaloneServer, StandaloneConfig};
-pub use writer::Writer;
+pub use writer::{Writer, WriterHandle};

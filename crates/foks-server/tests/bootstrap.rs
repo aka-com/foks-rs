@@ -24,7 +24,7 @@ fn bootstrap_is_verified_atomic_and_byte_stable_across_restart() {
     assert!(first.created);
     let verified = foks_verify::verify_public_host("localhost", &first.probe_response).unwrap();
     assert_eq!(verified.snapshot.host_id(), first.host_id.as_bytes());
-    assert_eq!(database.current_root().unwrap().unwrap().epoch, 0);
+    assert_eq!(database.current_root().unwrap().unwrap().epoch, 1);
 
     drop(database);
     drop(provider);

@@ -89,6 +89,87 @@ pub struct DeviceLabelNameAndCommitmentKey {
     pub commitment_key: [u8; 16],
 }
 
+impl DeviceLabelNameAndCommitmentKey {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        device_label_name_and_commitment_key(&decode(bytes)?)
+    }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&self.to_value())?)
+    }
+
+    pub(crate) fn to_value(&self) -> Value {
+        Value::Array(vec![
+            Value::Array(vec![
+                Value::Array(vec![
+                    Value::Unsigned(self.label.device_type.protocol_value()),
+                    Value::Text(self.label.normalized_name.clone()),
+                    Value::Unsigned(self.label.serial),
+                ]),
+                Value::Unsigned(self.normalization_version),
+                Value::Text(self.display_name.clone()),
+            ]),
+            Value::Binary(self.commitment_key.to_vec()),
+        ])
+    }
+}
+
+impl NameCommitmentAndKey {
+    pub(crate) fn to_value(&self) -> Value {
+        Value::Array(vec![
+            Value::Array(vec![
+                Value::Text(self.name.clone()),
+                Value::Unsigned(self.sequence),
+            ]),
+            Value::Binary(self.commitment_key.to_vec()),
+        ])
+    }
+}
+
+impl MerklePathCompressed {
+    pub(crate) fn to_value(&self) -> Value {
+        let edges = self
+            .edges
+            .iter()
+            .flat_map(|edge| edge.iter().copied())
+            .collect();
+        let terminal = match &self.terminal {
+            MerkleTerminal::Leaf { leaf, found_key } => Value::Array(vec![
+                Value::Bool(true),
+                Value::Variant(Some((
+                    b"1".to_vec(),
+                    Box::new(Value::Array(vec![
+                        Value::Binary(leaf.to_vec()),
+                        found_key
+                            .map(|key| Value::Binary(key.to_vec()))
+                            .unwrap_or(Value::Null),
+                    ])),
+                ))),
+            ]),
+            MerkleTerminal::PrefixMiss {
+                prefix_bit_start,
+                prefix_bit_count,
+                prefix,
+                left,
+                right,
+            } => Value::Array(vec![
+                Value::Bool(false),
+                Value::Variant(Some((
+                    b"0".to_vec(),
+                    Box::new(Value::Array(vec![Value::Array(vec![
+                        Value::Unsigned(*prefix_bit_start),
+                        Value::Unsigned(*prefix_bit_count),
+                        Value::Binary(prefix.clone()),
+                        Value::Binary(left.to_vec()),
+                        Value::Binary(right.to_vec()),
+                    ])])),
+                ))),
+            ]),
+        };
+        Value::Array(vec![Value::Binary(edges), terminal])
+    }
+}
+
 pub(crate) fn name_commitment_and_key(value: &Value) -> Result<NameCommitmentAndKey> {
     let fields = array(value, 2)?;
     let commitment = array(&fields[0], 2)?;

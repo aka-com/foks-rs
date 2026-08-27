@@ -1,6 +1,9 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+
+use crate::{Entropy, WriterHandle};
 
 #[derive(Clone)]
 pub struct Config {
@@ -11,7 +14,18 @@ pub struct Config {
     pub public_tls: Arc<rustls::ServerConfig>,
     pub authenticated_tls: Arc<rustls::ServerConfig>,
     pub probe_response: Arc<[u8]>,
+    pub read_database: Option<ReadDatabaseConfig>,
+    pub writer: Option<WriterHandle>,
+    pub clock: Arc<dyn foks_server_db::Clock>,
+    pub entropy: Arc<dyn Entropy>,
+    pub key_provider: Option<Arc<dyn crate::keys::HostKeyProvider>>,
     pub limits: SessionLimits,
+}
+
+#[derive(Clone)]
+pub struct ReadDatabaseConfig {
+    pub path: PathBuf,
+    pub database: foks_server_db::Config,
 }
 
 #[derive(Clone, Copy, Debug)]

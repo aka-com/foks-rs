@@ -115,7 +115,7 @@ pub fn bootstrap(
 
     let empty_back_pointers = encode(&Value::Null)?;
     let merkle_root = MerkleRoot {
-        epoch: 0,
+        epoch: 1,
         time: input.now_microseconds,
         back_pointers: foks_crypto::prefixed_hash(
             MERKLE_BACK_POINTERS_TYPE_ID,
@@ -174,6 +174,7 @@ pub fn bootstrap(
         services,
         root_hash,
         root_node: [0; 32],
+        root_epoch: 1,
         exact_root,
         exact_signed_root,
         created_at: input.now_microseconds,

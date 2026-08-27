@@ -1,6 +1,13 @@
 use rusqlite::{params, OptionalExtension as _};
 
-use crate::{error::sql_integer, Database, Error, Result};
+use crate::{error::sql_integer, Database, Error, ReadDatabase, Result};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredCertificate {
+    pub not_before: u64,
+    pub not_after: u64,
+    pub exact_certificate: Vec<u8>,
+}
 
 impl Database {
     pub fn record_certificate(
@@ -31,15 +38,55 @@ impl Database {
         Ok(())
     }
 
-    pub fn certificate_for_device(&self, uid: &[u8], device_id: &[u8]) -> Result<Option<Vec<u8>>> {
+    pub fn certificate_for_device(
+        &self,
+        uid: &[u8],
+        device_id: &[u8],
+    ) -> Result<Option<StoredCertificate>> {
         self.connection
             .query_row(
-                "SELECT exact_certificate FROM issued_certificates
+                "SELECT not_before, not_after, exact_certificate FROM issued_certificates
                  WHERE uid = ?1 AND device_id = ?2 ORDER BY not_after DESC LIMIT 1",
                 params![uid, device_id],
-                |row| row.get(0),
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get(2)?)),
             )
             .optional()
             .map_err(Into::into)
+            .and_then(|stored| {
+                stored
+                    .map(|(not_before, not_after, exact_certificate)| {
+                        Ok(StoredCertificate {
+                            not_before: crate::error::unsigned(not_before)?,
+                            not_after: crate::error::unsigned(not_after)?,
+                            exact_certificate,
+                        })
+                    })
+                    .transpose()
+            })
     }
+
+    pub fn is_active_device(&self, uid: &[u8], device_id: &[u8]) -> Result<bool> {
+        is_active_device(&self.connection, uid, device_id)
+    }
+}
+
+impl ReadDatabase {
+    pub fn is_active_device(&self, uid: &[u8], device_id: &[u8]) -> Result<bool> {
+        is_active_device(&self.connection, uid, device_id)
+    }
+}
+
+fn is_active_device(
+    connection: &rusqlite::Connection,
+    uid: &[u8],
+    device_id: &[u8],
+) -> Result<bool> {
+    Ok(connection
+        .query_row(
+            "SELECT 1 FROM devices WHERE uid = ?1 AND device_id = ?2 AND active = 1",
+            params![uid, device_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }

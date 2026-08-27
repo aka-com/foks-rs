@@ -23,6 +23,7 @@ pub struct HostBootstrap {
     pub services: Vec<BootstrapService>,
     pub root_hash: [u8; 32],
     pub root_node: [u8; 32],
+    pub root_epoch: u64,
     pub exact_root: Vec<u8>,
     pub exact_signed_root: Vec<u8>,
     pub created_at: u64,
@@ -83,8 +84,9 @@ impl Database {
         transaction.execute(
             "INSERT INTO merkle_roots
              (epoch, root_hash, root_node, exact_root, exact_signed_root, created_at)
-             VALUES (0, ?1, ?2, ?3, ?4, ?5)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
+                sql_integer(bootstrap.root_epoch)?,
                 bootstrap.root_hash,
                 bootstrap.root_node,
                 bootstrap.exact_root,
@@ -93,8 +95,8 @@ impl Database {
             ],
         )?;
         transaction.execute(
-            "INSERT INTO merkle_root_heads(singleton, epoch, root_hash) VALUES (1, 0, ?1)",
-            [bootstrap.root_hash],
+            "INSERT INTO merkle_root_heads(singleton, epoch, root_hash) VALUES (1, ?1, ?2)",
+            params![sql_integer(bootstrap.root_epoch)?, bootstrap.root_hash],
         )?;
         transaction.commit()?;
         Ok(true)
@@ -120,6 +122,7 @@ fn validate(bootstrap: &HostBootstrap, maximum_blob_bytes: usize) -> Result<()> 
         || bootstrap.canonical_name.is_empty()
         || bootstrap.canonical_name.len() > 255
         || bootstrap.root_node != [0; 32]
+        || bootstrap.root_epoch != 1
         || bootstrap.exact_hostchain_link.is_empty()
         || bootstrap.services.len() != 6
         || bootstrap.services.iter().any(|service| {
@@ -198,8 +201,8 @@ fn bootstrap_matches(transaction: &Transaction<'_>, bootstrap: &HostBootstrap) -
     let root: Option<StoredGenesisRoot> = transaction
         .query_row(
             "SELECT root_hash, root_node, exact_root, exact_signed_root, created_at
-             FROM merkle_roots WHERE epoch = 0",
-            [],
+             FROM merkle_roots WHERE epoch = ?1",
+            [sql_integer(bootstrap.root_epoch)?],
             |row| {
                 Ok((
                     row.get(0)?,
@@ -253,5 +256,10 @@ fn bootstrap_matches(transaction: &Transaction<'_>, bootstrap: &HostBootstrap) -
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    Ok(services == expected && head == Some((0, bootstrap.root_hash.to_vec())))
+    Ok(services == expected
+        && head
+            == Some((
+                sql_integer(bootstrap.root_epoch)?,
+                bootstrap.root_hash.to_vec(),
+            )))
 }
