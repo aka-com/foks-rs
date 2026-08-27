@@ -1,0 +1,393 @@
+version = 1
+baseline = "foks-v0.1.9"
+
+# Exact numeric values from proto/lib/status.go in go-foks v0.1.9. Route
+# entries use the narrower semantic names below; aliases intentionally share
+# the upstream code when the v1 policy maps them to the same wire status.
+[status_codes]
+ok = 0
+bad_args = 1030
+locked = 8014
+name_in_use = 1023
+not_found = 1049
+permission_denied = 1013
+quota_exceeded = 1060
+rate_limited = 1012
+stale_cache = 8012
+stale_root = 1014
+tx_retry = 1014
+unsupported = 1020
+
+[[service]]
+name = "registration"
+service_type = 1
+listener = "public_services"
+supported = true
+
+[[service]]
+name = "user"
+service_type = 2
+listener = "authenticated"
+supported = true
+
+[[service]]
+name = "merkle_query"
+service_type = 5
+listener = "public_services"
+supported = true
+
+[[service]]
+name = "probe"
+service_type = 10
+listener = "probe"
+supported = true
+
+[[service]]
+name = "kv_store"
+service_type = 12
+listener = "authenticated"
+supported = true
+
+[[service]]
+name = "realtime"
+service_type = 16
+listener = "authenticated"
+supported = false
+
+[[route]]
+protocol = "Probe"
+protocol_id = 0xc5884ff6
+method = "probe"
+position = 1
+listener = "probe"
+authentication = "public"
+request = "ProbeArgument"
+result = "ProbeResponse"
+statuses = ["ok", "bad_args", "unsupported"]
+max_request_bytes = 4096
+supported = true
+
+[[route]]
+protocol = "Reg"
+protocol_id = 0xf7ab85f3
+method = "reserveUsername"
+position = 0
+listener = "public_services"
+authentication = "delegated_tls"
+request = "ReserveUsernameArgument"
+result = "UsernameReservation"
+statuses = ["ok", "bad_args", "name_in_use", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+
+[[route]]
+protocol = "Reg"
+protocol_id = 0xf7ab85f3
+method = "getClientCertChain"
+position = 1
+listener = "public_services"
+authentication = "delegated_tls"
+request = "ClientCertChainArgument"
+result = "CertificateChain"
+statuses = ["ok", "bad_args", "not_found", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+
+[[route]]
+protocol = "Reg"
+protocol_id = 0xf7ab85f3
+method = "signup"
+position = 2
+listener = "public_services"
+authentication = "signed_signup"
+request = "SoftwareSignupArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "name_in_use", "stale_root", "tx_retry"]
+max_request_bytes = 1048576
+supported = true
+
+[[route]]
+protocol = "Reg"
+protocol_id = 0xf7ab85f3
+method = "selectVHost"
+position = 15
+listener = "public_services"
+authentication = "delegated_tls"
+request = "SelectVHostArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 4096
+supported = true
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "loadUserChain"
+position = 9
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "LoadUserChainArgument"
+result = "UserChain"
+statuses = ["ok", "bad_args", "not_found", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "getPukForRole"
+position = 14
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "GetPukForRoleArgument"
+result = "SharedKeyParcel"
+statuses = ["ok", "bad_args", "not_found", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "getHostConfig"
+position = 24
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "Void"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 1024
+supported = false
+
+[[route]]
+protocol = "MerkleQuery"
+protocol_id = 0xc0412aa6
+method = "getHistoricalRoots"
+position = 1
+listener = "public_services"
+authentication = "delegated_tls"
+request = "HistoricalMerkleRootsArgument"
+result = "HistoricalMerkleRoots"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 1048576
+supported = true
+
+[[route]]
+protocol = "MerkleQuery"
+protocol_id = 0xc0412aa6
+method = "getCurrentRoot"
+position = 2
+listener = "public_services"
+authentication = "delegated_tls"
+request = "CurrentMerkleRootArgument"
+result = "MerkleRoot"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 4096
+supported = true
+
+[[route]]
+protocol = "MerkleQuery"
+protocol_id = 0xc0412aa6
+method = "selectVHost"
+position = 8
+listener = "public_services"
+authentication = "delegated_tls"
+request = "SelectVHostArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 4096
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "mkdir"
+position = 0
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvMkdirArgument"
+result = "KvDirectory"
+statuses = ["ok", "bad_args", "stale_cache", "quota_exceeded"]
+max_request_bytes = 1048576
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "put"
+position = 1
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvPutArgument"
+result = "KvDirectory"
+statuses = ["ok", "bad_args", "stale_cache", "quota_exceeded"]
+max_request_bytes = 4194304
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "putRoot"
+position = 2
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvPutRootArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "stale_cache", "quota_exceeded"]
+max_request_bytes = 1048576
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "fileUploadInit"
+position = 3
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvUploadInitArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "stale_cache", "quota_exceeded"]
+max_request_bytes = 1048576
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "fileUploadChunk"
+position = 4
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvUploadChunkArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "not_found", "quota_exceeded"]
+max_request_bytes = 8388608
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "putSmallFileOrSymlink"
+position = 7
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvPutSmallArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "stale_cache", "quota_exceeded"]
+max_request_bytes = 4194304
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "getRoot"
+position = 8
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvGetRootArgument"
+result = "KvRoot"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "getNode"
+position = 10
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvGetNodeArgument"
+result = "KvNode"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "getEncryptedChunk"
+position = 11
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvGetChunkArgument"
+result = "KvEncryptedChunk"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "getDir"
+position = 12
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvGetDirArgument"
+result = "KvDirectory"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "cacheCheck"
+position = 13
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvCacheCheckArgument"
+result = "KvPathVersionVector"
+statuses = ["ok", "bad_args", "stale_cache"]
+max_request_bytes = 1048576
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "list"
+position = 14
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvListArgument"
+result = "KvList"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "lockAcquire"
+position = 15
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvLockAcquireArgument"
+result = "KvLock"
+statuses = ["ok", "bad_args", "locked"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "lockRelease"
+position = 16
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvLockReleaseArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "KvStore"
+protocol_id = 0x8ee37b6b
+method = "selectVHost"
+position = 18
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "SelectVHostArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 4096
+supported = true

@@ -1,0 +1,22 @@
+[package]
+name = "foks-server-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Sealed isolated-process test composition for foks-server"
+
+[dependencies]
+foks-server = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]
+foks-client = { workspace = true }
+foks-client-db = { workspace = true }
+foks-rpc = { workspace = true }
+
+[lints]
+workspace = true
