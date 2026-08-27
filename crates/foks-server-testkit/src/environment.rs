@@ -15,6 +15,8 @@ pub(crate) struct EnvironmentInner {
     pub(crate) database_config: foks_server_db::Config,
     pub(crate) session_limits: foks_server::SessionLimits,
     pub(crate) maximum_pending_writes: usize,
+    pub(crate) rate_limits: foks_server::RateLimitConfig,
+    pub(crate) backup: Option<foks_server::BackupSchedule>,
     pub(crate) addresses: Mutex<Option<foks_server::ServerAddresses>>,
     pub(crate) running: Mutex<bool>,
 }
@@ -40,9 +42,27 @@ impl TestEnvironment {
     ) -> foks_server::Result<Self> {
         let now = foks_server_db::Clock::now_micros(&foks_server_db::SystemClock)?;
         let (database_config, session_limits, maximum_pending_writes) = profile.configuration();
+        let paths = IsolatedPaths::create()?;
+        let rate_limits = if matches!(profile, TestProfile::RateLimited) {
+            foks_server::RateLimitConfig {
+                connection_burst: 16,
+                connections_per_second: 1,
+                request_burst: 2,
+                requests_per_second: 1,
+                maximum_tracked_ips: 16,
+            }
+        } else {
+            foks_server::RateLimitConfig::default()
+        };
+        let backup =
+            matches!(profile, TestProfile::BackupAutomation).then(|| foks_server::BackupSchedule {
+                directory: paths.backup().join("automatic"),
+                interval: std::time::Duration::from_millis(25),
+                retain: 2,
+            });
         Ok(Self {
             inner: Arc::new(EnvironmentInner {
-                paths: IsolatedPaths::create()?,
+                paths,
                 tls: make_tls(),
                 clock: Arc::new(TestClock::new(now)),
                 root_key,
@@ -50,6 +70,8 @@ impl TestEnvironment {
                 database_config,
                 session_limits,
                 maximum_pending_writes,
+                rate_limits,
+                backup,
                 addresses: Mutex::new(addresses),
                 running: Mutex::new(false),
             }),
@@ -182,6 +204,9 @@ pub enum TestProfile {
     SmallTeamCapacity,
     QueuePressure,
     TightIo,
+    ProductionBenchmark,
+    RateLimited,
+    BackupAutomation,
 }
 
 impl TestProfile {
@@ -209,12 +234,26 @@ impl TestProfile {
                 maximum_database_bytes: 16 * 1024 * 1024,
                 ..foks_server_db::Config::default()
             },
-            Self::Default | Self::QueuePressure | Self::TightIo => {
-                foks_server_db::Config::default()
-            }
+            Self::Default
+            | Self::QueuePressure
+            | Self::TightIo
+            | Self::ProductionBenchmark
+            | Self::RateLimited
+            | Self::BackupAutomation => foks_server_db::Config::default(),
         };
         let limits = foks_server::SessionLimits {
-            worker_threads: 16,
+            // TightIo intentionally uses one runtime worker: listener boundary
+            // tests then prove a slow persistent session cannot occupy it.
+            worker_threads: if matches!(self, Self::TightIo | Self::ProductionBenchmark) {
+                1
+            } else {
+                16
+            },
+            maximum_active_connections: if matches!(self, Self::ProductionBenchmark) {
+                128
+            } else {
+                64
+            },
             maximum_pending_connections: 64,
             maximum_frame_bytes: if matches!(self, Self::TightIo) {
                 1024
@@ -222,7 +261,9 @@ impl TestProfile {
                 foks_server::SessionLimits::default().maximum_frame_bytes
             },
             io_timeout: if matches!(self, Self::TightIo) {
-                std::time::Duration::from_millis(200)
+                std::time::Duration::from_millis(500)
+            } else if matches!(self, Self::ProductionBenchmark) {
+                std::time::Duration::from_secs(5)
             } else {
                 foks_server::SessionLimits::default().io_timeout
             },

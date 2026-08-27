@@ -22,7 +22,7 @@ sort -u -o "$changed_paths" "$changed_paths"
 
 while IFS= read -r path; do
     case "$path" in
-        ""|crates/foks-*|tools/foks-v019-oracle/*|tools/foks-server/*|Cargo.toml|Cargo.lock|rust-project.json|MODULE.bazel|MODULE.bazel.lock|.gitattributes)
+        ""|crates/foks-*|tools/foks-v019-oracle/*|tools/foks-protocol-sync/*|tools/foks-server/*|.github/workflows/foks-protocol-drift.yml|Cargo.toml|Cargo.lock|rust-project.json|MODULE.bazel|MODULE.bazel.lock|.gitattributes)
             ;;
         *)
             echo "path escapes standalone FOKS boundary: $path" >&2

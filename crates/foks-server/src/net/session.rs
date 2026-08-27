@@ -1,5 +1,3 @@
-use std::io::Write as _;
-use std::net::TcpStream;
 use std::sync::Arc;
 
 use foks_proto::{
@@ -8,22 +6,25 @@ use foks_proto::{
 };
 use foks_rpc::{
     encode_status_response_at, encode_success_response_at, encode_void_success_response_at,
-    read_call, RpcStatus,
+    RpcStatus,
 };
 use foks_snowpack::{decode, Value};
+use rustls::pki_types::CertificateDer;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::sync::watch;
 
 use crate::auth::Principal;
 use crate::identity::validate_software_signup;
 use crate::keys::{HostKeyProvider, KeyPurpose};
 use crate::rpc::{route_call, Listener, RouteError, RoutedCall};
-use crate::{Entropy, ReadDatabaseConfig, Result, SessionLimits, WriterHandle};
+use crate::{Entropy, Result, SessionLimits, WriterHandle};
 
 pub(crate) struct ServerData {
     probe_response: Arc<[u8]>,
     host_id: Vec<u8>,
     canonical_name: String,
     current_root: Vec<u8>,
-    read_database: Option<ReadDatabaseConfig>,
+    read_database: Option<crate::read_pool::ReadPool>,
     writer: Option<WriterHandle>,
     clock: Arc<dyn foks_server_db::Clock>,
     entropy: Arc<dyn Entropy>,
@@ -31,10 +32,14 @@ pub(crate) struct ServerData {
     hostchain_tail: foks_proto::HostchainTail,
     session_faults: Option<Arc<crate::SessionFaults>>,
     metrics: Arc<crate::ServerMetrics>,
+    rate_limiter: Arc<crate::rate_limit::RateLimiter>,
 }
 
 impl ServerData {
-    pub(crate) fn from_config(config: &crate::Config) -> Result<Self> {
+    pub(crate) fn from_config(
+        config: &crate::Config,
+        rate_limiter: Arc<crate::rate_limit::RateLimiter>,
+    ) -> Result<Self> {
         let probe_response = Arc::clone(&config.probe_response);
         let probe = foks_proto::ProbeResponse::decode(&probe_response)?;
         let first = probe
@@ -52,7 +57,16 @@ impl ServerData {
             host_id,
             canonical_name,
             current_root: probe.merkle_root.inner,
-            read_database: config.read_database.clone(),
+            read_database: config
+                .read_database
+                .clone()
+                .map(|database| {
+                    crate::read_pool::ReadPool::new(
+                        database,
+                        config.limits.maximum_read_connections,
+                    )
+                })
+                .transpose()?,
             writer: config.writer.clone(),
             clock: Arc::clone(&config.clock),
             entropy: Arc::clone(&config.entropy),
@@ -60,6 +74,7 @@ impl ServerData {
             hostchain_tail: root.hostchain,
             session_faults: config.session_faults.clone(),
             metrics: Arc::clone(&config.metrics),
+            rate_limiter,
         })
     }
 
@@ -123,8 +138,9 @@ impl ServerData {
             }
             ("User", "loadUserChain") => {
                 let principal = principal.ok_or_else(permission_denied)?;
+                let database = self.read_database()?;
                 let response = crate::services::user::load_user_chain(
-                    &self.read_database()?,
+                    &database,
                     &self.host()?,
                     call.call.argument(),
                     principal,
@@ -133,8 +149,9 @@ impl ServerData {
             }
             ("User", "getPukForRole") => {
                 let principal = principal.ok_or_else(permission_denied)?;
+                let database = self.read_database()?;
                 let response = crate::services::user::puk_for_role(
-                    &self.read_database()?,
+                    &database,
                     call.call.argument(),
                     principal,
                 )?;
@@ -153,17 +170,18 @@ impl ServerData {
             }
             ("User", "getHostConfig") => {
                 let principal = principal.ok_or_else(permission_denied)?;
-                let response =
-                    crate::services::user::host_config(&self.read_database()?, principal)?;
+                let database = self.read_database()?;
+                let response = crate::services::user::host_config(&database, principal)?;
                 encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
             }
             ("TeamLoader", "getTeamVOBearerTokenChallenge") => {
                 let principal = principal.ok_or_else(permission_denied)?;
+                let database = self.read_database()?;
                 let response = crate::services::team_loader::issue_challenge(
                     call.call.argument(),
                     principal,
                     &self.host()?,
-                    &self.read_database()?,
+                    &database,
                     self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
                     self.key_provider.as_deref().ok_or(RpcStatus::Unsupported)?,
                     self.clock.as_ref(),
@@ -173,11 +191,12 @@ impl ServerData {
             }
             ("TeamLoader", "activateTeamVOBearerToken") => {
                 let principal = principal.ok_or_else(permission_denied)?;
+                let database = self.read_database()?;
                 let response = crate::services::team_loader::activate(
                     call.call.argument(),
                     principal,
                     &self.host()?,
-                    &self.read_database()?,
+                    &database,
                     self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
                     self.key_provider.as_deref().ok_or(RpcStatus::Unsupported)?,
                     self.clock.as_ref(),
@@ -186,11 +205,12 @@ impl ServerData {
             }
             ("TeamLoader", "loadTeamChain") => {
                 let principal = principal.ok_or_else(permission_denied)?;
+                let database = self.read_database()?;
                 let response = crate::services::team_loader::load_chain(
                     call.call.argument(),
                     principal,
                     &self.host()?,
-                    &self.read_database()?,
+                    &database,
                     self.clock.as_ref(),
                 )?;
                 encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
@@ -208,12 +228,13 @@ impl ServerData {
             }
             ("TeamAdmin", "createTeam" | "createTeamAdHoc") => {
                 let principal = principal.ok_or_else(permission_denied)?;
+                let database = self.read_database()?;
                 crate::services::team_admin::create(
                     call.call.argument(),
                     call.route.method == "createTeam",
                     principal,
                     &self.host()?,
-                    &self.read_database()?,
+                    &database,
                     self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
                     self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
                     &self.clock,
@@ -223,11 +244,12 @@ impl ServerData {
             }
             ("TeamAdmin", "editTeam") => {
                 let principal = principal.ok_or_else(permission_denied)?;
+                let database = self.read_database()?;
                 let response = crate::services::team_admin::edit(
                     call.call.argument(),
                     principal,
                     &self.host()?,
-                    &self.read_database()?,
+                    &database,
                     self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
                     self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
                     &self.clock,
@@ -237,10 +259,11 @@ impl ServerData {
             }
             ("TeamAdmin", "makeInertTeamBearerToken") => {
                 let principal = principal.ok_or_else(permission_denied)?;
+                let database = self.read_database()?;
                 let response = crate::services::team_admin::make_inert_token(
                     call.call.argument(),
                     principal,
-                    &self.read_database()?,
+                    &database,
                     self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
                     self.clock.as_ref(),
                     self.entropy.as_ref(),
@@ -249,11 +272,12 @@ impl ServerData {
             }
             ("TeamAdmin", "activateTeamBearerToken") => {
                 let principal = principal.ok_or_else(permission_denied)?;
+                let database = self.read_database()?;
                 crate::services::team_admin::activate_token(
                     call.call.argument(),
                     principal,
                     &self.host()?,
-                    &self.read_database()?,
+                    &database,
                     self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
                     self.clock.as_ref(),
                 )?;
@@ -261,11 +285,12 @@ impl ServerData {
             }
             ("TeamAdmin", "loadRemovalKeyBoxForTeamAdmin") => {
                 let principal = principal.ok_or_else(permission_denied)?;
+                let database = self.read_database()?;
                 let response = crate::services::team_admin::load_removal_box(
                     call.call.argument(),
                     principal,
                     &self.host()?,
-                    &self.read_database()?,
+                    &database,
                     self.clock.as_ref(),
                 )?;
                 encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
@@ -274,11 +299,12 @@ impl ServerData {
                 let principal = principal.ok_or_else(permission_denied)?;
                 principal.require_ordinary_device()?;
                 let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
+                let database = self.read_database()?;
                 match crate::services::kv::dispatch(
                     method,
                     call.call.argument(),
                     principal,
-                    &self.read_database()?,
+                    &database,
                     writer,
                     &self.clock,
                 )? {
@@ -576,12 +602,7 @@ impl ServerData {
         let request = DecodedSoftwareSignupArgument::decode(argument).map_err(bad_arguments)?;
         let idempotency_key = request.self_token;
         let request_hash = foks_crypto::prefixed_hash(SIGNUP_REQUEST_HASH_TYPE_ID, argument);
-        let database_config = self.read_database.as_ref().ok_or(RpcStatus::Unsupported)?;
-        let reader = foks_server_db::ReadDatabase::open(
-            &database_config.path,
-            database_config.database.clone(),
-        )
-        .map_err(|_| RpcStatus::TransactionRetry)?;
+        let reader = self.read_database()?;
         let receipt_now = self
             .clock
             .now_micros()
@@ -814,10 +835,16 @@ impl ServerData {
         }
     }
 
-    fn read_database(&self) -> std::result::Result<foks_server_db::ReadDatabase, RpcStatus> {
-        let config = self.read_database.as_ref().ok_or(RpcStatus::Unsupported)?;
-        foks_server_db::ReadDatabase::open(&config.path, config.database.clone())
-            .map_err(|_| RpcStatus::TransactionRetry)
+    fn read_database(&self) -> std::result::Result<crate::read_pool::ReadLease, RpcStatus> {
+        let pool = self.read_database.as_ref().ok_or(RpcStatus::Unsupported)?;
+        match pool.checkout() {
+            Ok(database) => Ok(database),
+            Err(crate::Error::ReaderPool) => {
+                self.metrics.request_rate_limited();
+                Err(RpcStatus::RateLimited)
+            }
+            Err(_) => Err(RpcStatus::TransactionRetry),
+        }
     }
 
     fn host(&self) -> std::result::Result<EntityId, RpcStatus> {
@@ -825,11 +852,10 @@ impl ServerData {
     }
 
     fn current_root(&self) -> std::result::Result<Vec<u8>, RpcStatus> {
-        let Some(config) = &self.read_database else {
+        if self.read_database.is_none() {
             return Ok(self.current_root.clone());
-        };
-        let database = foks_server_db::ReadDatabase::open(&config.path, config.database.clone())
-            .map_err(|_| RpcStatus::TransactionRetry)?;
+        }
+        let database = self.read_database()?;
         let root = database
             .current_root()
             .map_err(|_| RpcStatus::TransactionRetry)?
@@ -839,11 +865,10 @@ impl ServerData {
     }
 
     fn current_probe_response(&self) -> std::result::Result<Vec<u8>, RpcStatus> {
-        let Some(config) = &self.read_database else {
+        if self.read_database.is_none() {
             return Ok(self.probe_response.to_vec());
-        };
-        let database = foks_server_db::ReadDatabase::open(&config.path, config.database.clone())
-            .map_err(|_| RpcStatus::TransactionRetry)?;
+        }
+        let database = self.read_database()?;
         let root = database
             .current_root()
             .map_err(|_| RpcStatus::TransactionRetry)?
@@ -872,11 +897,10 @@ impl ServerData {
         self.validate_host_value(host)?;
         let full_epochs = decode_epochs(full_epochs)?;
         let hash_epochs = decode_epochs(hash_epochs)?;
-        let Some(config) = &self.read_database else {
+        if self.read_database.is_none() {
             return Err(RpcStatus::Unsupported);
-        };
-        let database = foks_server_db::ReadDatabase::open(&config.path, config.database.clone())
-            .map_err(|_| RpcStatus::TransactionRetry)?;
+        }
+        let database = self.read_database()?;
         let full = database
             .roots_at(&full_epochs)
             .map_err(|_| RpcStatus::TransactionRetry)?
@@ -984,22 +1008,47 @@ fn decode_epochs(value: &Value) -> std::result::Result<Vec<u64>, RpcStatus> {
         .collect()
 }
 
-pub(crate) fn serve(
-    stream: TcpStream,
+pub(crate) async fn serve(
+    stream: tokio::net::TcpStream,
+    peer_ip: std::net::IpAddr,
     listener: Listener,
     tls: &Arc<rustls::ServerConfig>,
     service_data: &Arc<ServerData>,
     limits: SessionLimits,
+    mut stop: watch::Receiver<bool>,
 ) -> Result<()> {
-    stream.set_read_timeout(Some(limits.io_timeout))?;
-    stream.set_write_timeout(Some(limits.io_timeout))?;
-    let connection = rustls::ServerConnection::new(Arc::clone(tls))?;
-    let mut stream = rustls::StreamOwned::new(connection, stream);
-    let mut principal = None;
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::clone(tls));
+    let handshake = tokio::select! {
+        result = stop.changed() => {
+            let _ = result;
+            return Ok(());
+        }
+        result = tokio::time::timeout(limits.io_timeout, acceptor.accept(stream)) => result,
+    };
+    let mut stream =
+        handshake.map_err(|_| crate::Error::Io(timeout_error("TLS handshake timed out")))??;
+    let peer_certificate = stream
+        .get_ref()
+        .1
+        .peer_certificates()
+        .and_then(|certificates| certificates.first())
+        .map(|certificate| certificate.as_ref().to_vec());
+
     for _ in 0..limits.maximum_requests {
-        let call = match read_call(&mut stream, limits.maximum_frame_bytes) {
-            Ok(call) => call,
-            Err(foks_rpc::Error::Io(error))
+        let read = tokio::select! {
+            result = stop.changed() => {
+                let _ = result;
+                break;
+            }
+            result = tokio::time::timeout(
+                limits.io_timeout,
+                read_call_async(&mut stream, limits.maximum_frame_bytes),
+            ) => result,
+        };
+        let call = match read {
+            Err(_) => break,
+            Ok(Ok(call)) => call,
+            Ok(Err(foks_rpc::Error::Io(error)))
                 if matches!(
                     error.kind(),
                     std::io::ErrorKind::UnexpectedEof
@@ -1010,53 +1059,82 @@ pub(crate) fn serve(
             {
                 break;
             }
-            Err(error) => return Err(error.into()),
+            Ok(Err(error)) => return Err(error.into()),
         };
         service_data.metrics.request_started();
-        if listener == Listener::Authenticated {
-            let certificate = stream
-                .conn
-                .peer_certificates()
-                .and_then(|certificates| certificates.first())
-                .ok_or(crate::Error::Config(
-                    "authenticated TLS session has no client certificate",
-                ))?;
-            let now = service_data.clock.now_micros()?;
-            principal = Some(Principal::authenticate(
-                certificate,
-                &service_data
-                    .read_database()
-                    .map_err(|_| crate::Error::Config("authenticated database is unavailable"))?,
-                now,
-            )?);
+        if !service_data.rate_limiter.allow_request(peer_ip) {
+            service_data.metrics.request_rate_limited();
+            let response = encode_status_response_at(&RpcStatus::RateLimited, call.sequence())?;
+            write_response(&mut stream, &response, limits.io_timeout).await?;
+            service_data.metrics.response_completed();
+            return Ok(());
         }
         let sequence = call.sequence();
-        let mut route = None;
-        let response = match route_call(call, listener) {
-            Ok(call) => {
-                let protocol = call.route.protocol;
-                let method = call.route.method;
-                route = Some((protocol, method));
-                if service_data.should_disconnect(
-                    crate::SessionFaultPoint::BeforeDurableMutation,
-                    protocol,
-                    method,
-                ) {
-                    return Ok(());
+        let data = Arc::clone(service_data);
+        let certificate = peer_certificate.clone();
+        let outcome = tokio::task::spawn_blocking(move || -> Result<RequestOutcome> {
+            let principal = if listener == Listener::Authenticated {
+                let certificate = CertificateDer::from(certificate.ok_or(crate::Error::Config(
+                    "authenticated TLS session has no client certificate",
+                ))?);
+                let now = data.clock.now_micros()?;
+                let database = match data.read_database() {
+                    Ok(database) => database,
+                    Err(status) => {
+                        return Ok(RequestOutcome {
+                            response: encode_status_response_at(&status, sequence)?,
+                            route: None,
+                            disconnect_before_response: false,
+                        });
+                    }
+                };
+                Some(Principal::authenticate(&certificate, &database, now)?)
+            } else {
+                None
+            };
+            let mut route = None;
+            let response = match route_call(call, listener) {
+                Ok(call) => {
+                    let protocol = call.route.protocol;
+                    let method = call.route.method;
+                    route = Some((protocol, method));
+                    if data.should_disconnect(
+                        crate::SessionFaultPoint::BeforeDurableMutation,
+                        protocol,
+                        method,
+                    ) {
+                        return Ok(RequestOutcome {
+                            response: Vec::new(),
+                            route,
+                            disconnect_before_response: true,
+                        });
+                    }
+                    match data.response(call, principal.as_ref()) {
+                        Ok(response) => response,
+                        Err(status) => encode_status_response_at(&status, sequence)?,
+                    }
                 }
-                match service_data.response(call, principal.as_ref()) {
-                    Ok(response) => response,
-                    Err(status) => encode_status_response_at(&status, sequence)?,
+                Err(RouteError::RequestTooLarge { .. }) => encode_status_response_at(
+                    &RpcStatus::BadArguments("request exceeds the method limit".to_owned()),
+                    sequence,
+                )?,
+                Err(RouteError::Unknown { .. } | RouteError::WrongListener) => {
+                    encode_status_response_at(&RpcStatus::Unsupported, sequence)?
                 }
-            }
-            Err(RouteError::RequestTooLarge { .. }) => encode_status_response_at(
-                &RpcStatus::BadArguments("request exceeds the method limit".to_owned()),
-                sequence,
-            )?,
-            Err(RouteError::Unknown { .. } | RouteError::WrongListener) => {
-                encode_status_response_at(&RpcStatus::Unsupported, sequence)?
-            }
-        };
+            };
+            Ok(RequestOutcome {
+                response,
+                route,
+                disconnect_before_response: false,
+            })
+        })
+        .await
+        .map_err(|_| crate::Error::Thread)??;
+        if outcome.disconnect_before_response {
+            return Ok(());
+        }
+        let response = outcome.response;
+        let route = outcome.route;
         if let Some((protocol, method)) = route {
             let point = if protocol == "KvStore" && method == "fileUploadChunk" {
                 crate::SessionFaultPoint::BetweenLargeFileChunks
@@ -1072,22 +1150,109 @@ pub(crate) fn serve(
                 method,
             ) {
                 let split = response.len().div_ceil(2);
-                stream.write_all(&response[..split])?;
-                stream.flush()?;
-                while stream.conn.wants_write() {
-                    stream.conn.complete_io(&mut stream.sock)?;
-                }
+                write_response(&mut stream, &response[..split], limits.io_timeout).await?;
                 return Ok(());
             }
         }
-        stream.write_all(&response)?;
-        stream.flush()?;
-        while stream.conn.wants_write() {
-            stream.conn.complete_io(&mut stream.sock)?;
-        }
+        let write = tokio::select! {
+            result = stop.changed() => {
+                let _ = result;
+                break;
+            }
+            result = write_response(&mut stream, &response, limits.io_timeout) => result,
+        };
+        write?;
         service_data.metrics.response_completed();
     }
     Ok(())
+}
+
+struct RequestOutcome {
+    response: Vec<u8>,
+    route: Option<(&'static str, &'static str)>,
+    disconnect_before_response: bool,
+}
+
+async fn read_call_async<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    maximum: usize,
+) -> foks_rpc::Result<foks_rpc::DecodedCall> {
+    let marker = read_byte_async(reader).await?;
+    let length = match marker {
+        0x00..=0x7f => usize::from(marker),
+        0xcc => {
+            let value = usize::from(read_byte_async(reader).await?);
+            if value <= 0x7f {
+                return Err(foks_rpc::Error::FrameLengthMarker(marker));
+            }
+            value
+        }
+        0xcd => {
+            let value = usize::from(read_u16_async(reader).await?);
+            if value <= usize::from(u8::MAX) {
+                return Err(foks_rpc::Error::FrameLengthMarker(marker));
+            }
+            value
+        }
+        0xce => {
+            let value = usize::try_from(read_u32_async(reader).await?).map_err(|_| {
+                foks_rpc::Error::FrameTooLarge {
+                    received: usize::MAX,
+                    maximum,
+                }
+            })?;
+            if value <= usize::from(u16::MAX) {
+                return Err(foks_rpc::Error::FrameLengthMarker(marker));
+            }
+            value
+        }
+        _ => return Err(foks_rpc::Error::FrameLengthMarker(marker)),
+    };
+    if length > maximum {
+        return Err(foks_rpc::Error::FrameTooLarge {
+            received: length,
+            maximum,
+        });
+    }
+    let mut content = vec![0; length];
+    reader.read_exact(&mut content).await?;
+    foks_rpc::decode_call(&content)
+}
+
+async fn read_byte_async<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<u8> {
+    let mut byte = [0];
+    reader.read_exact(&mut byte).await?;
+    Ok(byte[0])
+}
+
+async fn read_u16_async<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<u16> {
+    let mut bytes = [0; 2];
+    reader.read_exact(&mut bytes).await?;
+    Ok(u16::from_be_bytes(bytes))
+}
+
+async fn read_u32_async<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<u32> {
+    let mut bytes = [0; 4];
+    reader.read_exact(&mut bytes).await?;
+    Ok(u32::from_be_bytes(bytes))
+}
+
+async fn write_response<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    response: &[u8],
+    timeout: std::time::Duration,
+) -> Result<()> {
+    tokio::time::timeout(timeout, async {
+        writer.write_all(response).await?;
+        writer.flush().await
+    })
+    .await
+    .map_err(|_| crate::Error::Io(timeout_error("response write timed out")))??;
+    Ok(())
+}
+
+fn timeout_error(message: &'static str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::TimedOut, message)
 }
 
 impl ServerData {

@@ -1,8 +1,10 @@
-use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+
+use tokio::sync::{mpsc, watch, Semaphore};
+use tokio::task::JoinSet;
 
 use crate::net::session::{serve, ServerData};
 use crate::rpc::Listener;
@@ -17,8 +19,9 @@ pub struct ServerAddresses {
 
 pub struct RunningServer {
     addresses: ServerAddresses,
-    stopping: Arc<AtomicBool>,
-    threads: Vec<JoinHandle<()>>,
+    live: Arc<AtomicBool>,
+    stop: watch::Sender<bool>,
+    thread: Option<JoinHandle<Result<()>>>,
 }
 
 pub(crate) struct BoundListeners {
@@ -28,20 +31,15 @@ pub(crate) struct BoundListeners {
     addresses: ServerAddresses,
 }
 
-struct ActiveConnection {
-    id: u64,
-    stream: TcpStream,
-}
-
-struct WorkerContext {
+#[derive(Clone)]
+struct ListenerContext {
     class: Listener,
     tls: Arc<rustls::ServerConfig>,
     service_data: Arc<ServerData>,
     diagnostics: Option<Arc<dyn crate::SessionDiagnostics>>,
     limits: crate::SessionLimits,
-    stopping: Arc<AtomicBool>,
-    active: Arc<Mutex<Vec<ActiveConnection>>>,
-    next_connection_id: AtomicU64,
+    metrics: Arc<crate::ServerMetrics>,
+    rate_limiter: Arc<crate::rate_limit::RateLimiter>,
 }
 
 impl BoundListeners {
@@ -68,41 +66,56 @@ impl RunningServer {
             authenticated,
             addresses,
         } = listeners;
-        let service_data = Arc::new(ServerData::from_config(&config)?);
-        let stopping = Arc::new(AtomicBool::new(false));
-        let threads = vec![
-            spawn_listener(
+        let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(config.rate_limits)?);
+        let service_data = Arc::new(ServerData::from_config(&config, Arc::clone(&rate_limiter))?);
+        let (stop, stop_receiver) = watch::channel(false);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(config.limits.worker_threads)
+            .thread_name("foks-server-io")
+            .enable_all()
+            .build()
+            .map_err(Error::Io)?;
+        let limits = config.limits;
+        let live = Arc::new(AtomicBool::new(false));
+        let thread_live = Arc::clone(&live);
+        let (startup, started) = std::sync::mpsc::sync_channel(1);
+        let thread = thread::spawn(move || {
+            let _liveness = LivenessGuard(Arc::clone(&thread_live));
+            runtime.block_on(run_server(
                 probe,
-                Listener::Probe,
-                config.probe_tls,
-                Arc::clone(&service_data),
-                config.diagnostics.clone(),
-                config.limits,
-                Arc::clone(&stopping),
-            ),
-            spawn_listener(
                 public,
-                Listener::PublicServices,
-                config.public_tls,
-                Arc::clone(&service_data),
-                config.diagnostics.clone(),
-                config.limits,
-                Arc::clone(&stopping),
-            ),
-            spawn_listener(
                 authenticated,
-                Listener::Authenticated,
-                config.authenticated_tls,
+                [
+                    config.probe_tls,
+                    config.public_tls,
+                    config.authenticated_tls,
+                ],
                 service_data,
                 config.diagnostics,
-                config.limits,
-                Arc::clone(&stopping),
-            ),
-        ];
+                config.metrics,
+                rate_limiter,
+                limits,
+                stop_receiver,
+                thread_live,
+                startup,
+            ))
+        });
+        match started.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                let _ = thread.join();
+                return Err(Error::Io(error));
+            }
+            Err(_) => {
+                let _ = thread.join();
+                return Err(Error::Thread);
+            }
+        }
         Ok(Self {
             addresses,
-            stopping,
-            threads,
+            live,
+            stop,
+            thread: Some(thread),
         })
     }
 
@@ -110,21 +123,39 @@ impl RunningServer {
         self.addresses
     }
 
+    pub(crate) fn liveness(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.live)
+    }
+
     pub fn shutdown(mut self) -> Result<()> {
-        self.stopping.store(true, Ordering::Release);
-        for thread in self.threads.drain(..) {
-            thread.join().map_err(|_| Error::Thread)?;
+        self.request_stop();
+        self.join()
+    }
+
+    fn request_stop(&self) {
+        let _ = self.stop.send(true);
+    }
+
+    fn join(&mut self) -> Result<()> {
+        match self.thread.take() {
+            Some(thread) => thread.join().map_err(|_| Error::Thread)?,
+            None => Ok(()),
         }
-        Ok(())
+    }
+}
+
+struct LivenessGuard(Arc<AtomicBool>);
+
+impl Drop for LivenessGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
     }
 }
 
 impl Drop for RunningServer {
     fn drop(&mut self) {
-        self.stopping.store(true, Ordering::Release);
-        for thread in self.threads.drain(..) {
-            let _ = thread.join();
-        }
+        self.request_stop();
+        let _ = self.join();
     }
 }
 
@@ -155,105 +186,192 @@ pub(crate) fn bind_addresses(
     })
 }
 
-fn spawn_listener(
-    listener: TcpListener,
-    class: Listener,
-    tls: Arc<rustls::ServerConfig>,
+#[allow(clippy::too_many_arguments)]
+async fn run_server(
+    probe: TcpListener,
+    public: TcpListener,
+    authenticated: TcpListener,
+    tls: [Arc<rustls::ServerConfig>; 3],
     service_data: Arc<ServerData>,
     diagnostics: Option<Arc<dyn crate::SessionDiagnostics>>,
+    metrics: Arc<crate::ServerMetrics>,
+    rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     limits: crate::SessionLimits,
-    stopping: Arc<AtomicBool>,
-) -> JoinHandle<()> {
-    thread::spawn(move || {
-        let (sender, receiver) = mpsc::sync_channel(limits.maximum_pending_connections);
-        let receiver = Arc::new(Mutex::new(receiver));
-        let active = Arc::new(Mutex::new(Vec::<ActiveConnection>::new()));
-        let context = Arc::new(WorkerContext {
-            class,
-            tls,
+    stop: watch::Receiver<bool>,
+    live: Arc<AtomicBool>,
+    startup: std::sync::mpsc::SyncSender<std::io::Result<()>>,
+) -> Result<()> {
+    let probe = listener_from_std(probe, &startup)?;
+    let public = listener_from_std(public, &startup)?;
+    let authenticated = listener_from_std(authenticated, &startup)?;
+    let contexts = [
+        ListenerContext {
+            class: Listener::Probe,
+            tls: Arc::clone(&tls[0]),
+            service_data: Arc::clone(&service_data),
+            diagnostics: diagnostics.clone(),
+            metrics: Arc::clone(&metrics),
+            rate_limiter: Arc::clone(&rate_limiter),
+            limits,
+        },
+        ListenerContext {
+            class: Listener::PublicServices,
+            tls: Arc::clone(&tls[1]),
+            service_data: Arc::clone(&service_data),
+            diagnostics: diagnostics.clone(),
+            metrics: Arc::clone(&metrics),
+            rate_limiter: Arc::clone(&rate_limiter),
+            limits,
+        },
+        ListenerContext {
+            class: Listener::Authenticated,
+            tls: Arc::clone(&tls[2]),
             service_data,
             diagnostics,
+            metrics,
+            rate_limiter,
             limits,
-            stopping: Arc::clone(&stopping),
-            active: Arc::clone(&active),
-            next_connection_id: AtomicU64::new(1),
-        });
-        let workers = (0..limits.worker_threads)
-            .map(|_| spawn_worker(Arc::clone(&receiver), Arc::clone(&context)))
-            .collect::<Vec<_>>();
-        while !stopping.load(Ordering::Acquire) {
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    if stream.set_nonblocking(false).is_ok() {
-                        let _ = sender.try_send(stream);
-                    }
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(5));
-                }
-                Err(_) => break,
-            }
-        }
-        drop(sender);
-        if let Ok(active) = active.lock() {
-            for connection in active.iter() {
-                let _ = connection.stream.shutdown(Shutdown::Both);
-            }
-        }
-        for worker in workers {
-            let _ = worker.join();
-        }
+        },
+    ];
+    live.store(true, Ordering::Release);
+    let _ = startup.send(Ok(()));
+    tokio::try_join!(
+        run_listener(probe, contexts[0].clone(), stop.clone()),
+        run_listener(public, contexts[1].clone(), stop.clone()),
+        run_listener(authenticated, contexts[2].clone(), stop),
+    )?;
+    Ok(())
+}
+
+fn listener_from_std(
+    listener: TcpListener,
+    startup: &std::sync::mpsc::SyncSender<std::io::Result<()>>,
+) -> Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::from_std(listener).map_err(|error| {
+        let startup_error = std::io::Error::new(error.kind(), error.to_string());
+        let _ = startup.send(Err(startup_error));
+        Error::Io(error)
     })
 }
 
-fn spawn_worker(
-    receiver: Arc<Mutex<mpsc::Receiver<std::net::TcpStream>>>,
-    context: Arc<WorkerContext>,
-) -> JoinHandle<()> {
-    thread::spawn(move || loop {
-        let stream = match receiver.lock() {
-            Ok(receiver) => receiver.recv(),
-            Err(_) => break,
-        };
-        let Ok(stream) = stream else {
-            break;
-        };
-        if context.stopping.load(Ordering::Acquire) {
-            break;
-        }
-        let id = context.next_connection_id.fetch_add(1, Ordering::Relaxed);
-        let control = match stream.try_clone() {
-            Ok(stream) => stream,
-            Err(_) => continue,
-        };
-        let registered = context.active.lock().map(|mut active| {
-            active.push(ActiveConnection {
-                id,
-                stream: control,
-            });
-        });
-        if registered.is_err() {
-            break;
-        }
-        if context.stopping.load(Ordering::Acquire) {
-            if let Ok(active) = context.active.lock() {
-                if let Some(connection) = active.iter().find(|connection| connection.id == id) {
-                    let _ = connection.stream.shutdown(Shutdown::Both);
+async fn run_listener(
+    listener: tokio::net::TcpListener,
+    context: ListenerContext,
+    mut stop: watch::Receiver<bool>,
+) -> Result<()> {
+    let (sender, mut receiver) = mpsc::channel::<(tokio::net::TcpStream, u64, std::net::IpAddr)>(
+        context.limits.maximum_pending_connections,
+    );
+    let next_connection_id = Arc::new(AtomicU64::new(1));
+    let accept_ids = Arc::clone(&next_connection_id);
+    let mut accept_stop = stop.clone();
+    let accept_metrics = Arc::clone(&context.metrics);
+    let accept_limiter = Arc::clone(&context.rate_limiter);
+    let acceptor = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                result = accept_stop.changed() => {
+                    if result.is_err() || *accept_stop.borrow() {
+                        return Ok::<(), Error>(());
+                    }
+                }
+                accepted = listener.accept() => {
+                    let (stream, peer) = accepted?;
+                    if !accept_limiter.allow_connection(peer.ip()) {
+                        accept_metrics.connection_rate_limited();
+                        continue;
+                    }
+                    let id = accept_ids.fetch_add(1, Ordering::Relaxed);
+                    // A full admission queue deliberately rejects new work. This keeps
+                    // memory bounded and lets TCP/TLS clients retry with backoff.
+                    match sender.try_send((stream, id, peer.ip())) {
+                        Ok(()) => accept_metrics.connection_accepted(),
+                        Err(_) => accept_metrics.connection_rejected(),
+                    }
                 }
             }
         }
-        let result = serve(
-            stream,
-            context.class,
-            &context.tls,
-            &context.service_data,
-            context.limits,
-        );
-        if let (Err(error), Some(diagnostics)) = (result, &context.diagnostics) {
-            diagnostics.session_failed(context.class, id, crate::diagnostics::classify(&error));
+    });
+
+    let active = Arc::new(Semaphore::new(context.limits.maximum_active_connections));
+    let mut sessions = JoinSet::new();
+    loop {
+        while let Some(joined) = sessions.try_join_next() {
+            if joined.is_err() {
+                return Err(Error::Thread);
+            }
         }
-        if let Ok(mut active) = context.active.lock() {
-            active.retain(|connection| connection.id != id);
-        }
-    })
+        let permit = tokio::select! {
+            result = stop.changed() => {
+                if result.is_err() || *stop.borrow() {
+                    break;
+                }
+                continue;
+            }
+            permit = Arc::clone(&active).acquire_owned() => permit.map_err(|_| Error::Thread)?,
+        };
+        let Some((stream, id, peer_ip)) = (tokio::select! {
+            result = stop.changed() => {
+                if result.is_err() || *stop.borrow() {
+                    None
+                } else {
+                    continue;
+                }
+            }
+            connection = receiver.recv() => connection,
+        }) else {
+            break;
+        };
+        let session_context = context.clone();
+        let session_stop = stop.clone();
+        sessions.spawn(async move {
+            let _permit = permit;
+            let _active = ActiveConnectionMetric::new(Arc::clone(&session_context.metrics));
+            let result = serve(
+                stream,
+                peer_ip,
+                session_context.class,
+                &session_context.tls,
+                &session_context.service_data,
+                session_context.limits,
+                session_stop,
+            )
+            .await;
+            if let (Err(error), Some(diagnostics)) = (result, &session_context.diagnostics) {
+                diagnostics.session_failed(
+                    session_context.class,
+                    id,
+                    crate::diagnostics::classify(&error),
+                );
+            }
+        });
+    }
+
+    drop(receiver);
+    let accept_result = if acceptor.is_finished() {
+        acceptor.await.map_err(|_| Error::Thread)?
+    } else {
+        acceptor.abort();
+        let _ = acceptor.await;
+        Ok(())
+    };
+    while let Some(joined) = sessions.join_next().await {
+        joined.map_err(|_| Error::Thread)?;
+    }
+    accept_result
+}
+
+struct ActiveConnectionMetric(Arc<crate::ServerMetrics>);
+
+impl ActiveConnectionMetric {
+    fn new(metrics: Arc<crate::ServerMetrics>) -> Self {
+        metrics.connection_opened();
+        Self(metrics)
+    }
+}
+
+impl Drop for ActiveConnectionMetric {
+    fn drop(&mut self) {
+        self.0.connection_closed();
+    }
 }

@@ -42,7 +42,9 @@ pub(crate) fn classify(error: &Error) -> SessionErrorClass {
         | Error::Verify(_)
         | Error::Signup(_)
         | Error::AuthorizationChanged => SessionErrorClass::Protocol,
-        Error::Database(_) | Error::Merkle(_) | Error::WriterQueue => SessionErrorClass::Storage,
+        Error::Database(_) | Error::Merkle(_) | Error::WriterQueue | Error::ReaderPool => {
+            SessionErrorClass::Storage
+        }
         Error::Certificate(_)
         | Error::Thread
         | Error::Config(_)

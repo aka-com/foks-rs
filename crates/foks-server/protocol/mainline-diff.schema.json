@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aka.invalid/foks/mainline-diff.schema.json",
+  "title": "FOKS normalized protocol drift report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "baseline", "candidate", "counts", "changes"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "baseline": { "$ref": "#/$defs/source" },
+    "candidate": { "$ref": "#/$defs/source" },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wire_breaking", "behavior_review_required", "additive", "outside_local_slice", "source_only"],
+      "properties": {
+        "wire_breaking": { "type": "integer", "minimum": 0 },
+        "behavior_review_required": { "type": "integer", "minimum": 0 },
+        "additive": { "type": "integer", "minimum": 0 },
+        "outside_local_slice": { "type": "integer", "minimum": 0 },
+        "source_only": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["class", "kind", "subject", "detail"],
+        "properties": {
+          "class": {
+            "enum": ["wire_breaking", "behavior_review_required", "additive", "outside_local_slice", "source_only"]
+          },
+          "kind": { "type": "string", "minLength": 1 },
+          "subject": { "type": "string", "minLength": 1 },
+          "detail": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module", "version", "sum", "go_mod_sum"],
+      "properties": {
+        "module": { "type": "string" },
+        "version": { "type": "string" },
+        "sum": { "type": "string" },
+        "go_mod_sum": { "type": "string" },
+        "commit": { "type": "string" }
+      }
+    }
+  }
+}

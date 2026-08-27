@@ -21,6 +21,19 @@ creation. This is not a drop-in replacement for the full Go server. The
 executable contract is [protocol-v1.toml](protocol-v1.toml), and tests require
 it to match the registered route table exactly.
 
+Protocol IDs, method positions, status codes, and service numbers are extracted
+from the checksum-pinned go-foks v0.1.9 module into
+[`protocol/upstream-v0.1.9.json`](protocol/upstream-v0.1.9.json). The only
+handwritten input is [`protocol/policy-v1.toml`](protocol/policy-v1.toml), which
+owns listeners, authentication, support decisions, adapters, bounds, and test
+coverage. Checked Rust constants, routes, and `protocol-v1.toml` are generated
+from that merge. Normal builds need no Go toolchain or upstream source.
+
+Key-at-rest and public hostchain rotation have different failure and
+compatibility models. See [KEY_ROTATION.md](KEY_ROTATION.md) before creating a
+durable installation; operator-root rewrapping is implemented, while public
+host-key mutation remains gated on the listed upstream compatibility tests.
+
 ## Running
 
 The probe certificate must be trusted by clients and cover the canonical
@@ -42,6 +55,32 @@ foks-server serve \
   --authenticated-address 0.0.0.0:4432
 ```
 
+The separate management listener defaults to `127.0.0.1:9090` and serves
+`/healthz`, `/readyz`, and Prometheus text at `/metrics`. It is plaintext HTTP
+and must remain loopback-only or sit behind operator authentication and a
+firewall. Readiness requires both completed startup and a bounded round trip
+through the SQLite writer. Metrics use fixed, non-user-derived names and never
+export paths, identities, request values, or key material.
+
+Connection and request token buckets are enforced per source IP with bounded
+tracking memory. CLI flags set their refill rates, bursts, and maximum tracked
+IP count. Saturated connection admission is dropped; a framed request that
+exceeds its bucket receives FOKS status 1012 and the connection closes.
+
+Automatic backups are opt-in:
+
+```text
+  --automatic-backup-directory /srv/foks/backups \
+  --automatic-backup-interval-seconds 86400 \
+  --automatic-backup-retain 7
+```
+
+Each run uses SQLite online backup plus the encrypted KEK/purpose-key snapshot,
+validates the database, publishes the manifest last, then atomically renames a
+hidden staging directory. Only complete `backup-*` directories count toward
+retention; unrelated paths are never removed. Operators should monitor backup
+failure and last-success metrics and regularly restore a backup in isolation.
+
 Root-key and private-key files must be regular, non-symlink files with no group
 or other permissions. `SIGINT` and `SIGTERM` stop accepts, cancel idle
 sessions, drain accepted writer work, stop maintenance, and join all threads.
@@ -49,9 +88,10 @@ sessions, drain accepted writer work, stop maintenance, and join all threads.
 ## Architecture, jobs, and scheduling
 
 One bounded writer actor owns every authoritative SQLite mutation. Network
-reads use read-only connections on fixed worker pools; the default limits are
-four workers, 32 pending connections, 4,096 requests per connection, 64 pending
-writes in the executable, a 15-second I/O timeout, and a 16 MiB frame ceiling.
+reads use read-only connections from bounded asynchronous sessions; the default
+limits are four async runtime workers, 256 active and 32 pending connections per
+listener, 4,096 requests per connection, 64 pending writes in the executable, a
+15-second I/O timeout, and a 16 MiB frame ceiling.
 This intentionally favors a simple total order and predictable overload
 behavior over write parallelism. A future partition can move opaque chunks
 first and then independent KV namespaces; identity/name publication and the
@@ -151,9 +191,11 @@ Operational checks should run against a copy or during a maintenance window:
 5. periodically perform a restore rehearsal with an existing pinned client.
 
 The Rust API exposes full integrity checking, online backup, storage-size
-reporting, bounded maintenance, and WAL checkpoint results. HTTP health and
-metrics endpoints, automated backup triggers, structured audit export, disk-
-full fault injection, and published load results remain release-hardening work.
+reporting, bounded maintenance, and WAL checkpoint results. The standalone
+server also provides loopback health, readiness, and Prometheus metrics
+endpoints, plus scheduled online backups with bounded retention. Structured
+audit export, disk-full fault injection, and published load results remain
+release-hardening work.
 
 ## Isolated development gate
 
@@ -164,6 +206,7 @@ format, lint, protocol-matrix, unit, and process suite with:
 
 ```text
 tools/foks-server/check.sh
+tools/foks-server/generate-protocol.sh --check --offline
 tools/foks-server/test-client-server.sh
 tools/foks-server/test-small-team.sh
 tools/foks-server/test-small-team-repeat.sh 5
@@ -171,6 +214,12 @@ tools/foks-server/test-small-team-repeat.sh 5
 
 The gate rejects any AKA dependency or changed path outside the standalone FOKS
 boundary. The optional official-Go frame audit is
-`tools/foks-v019-oracle/run-live-team-compat.sh`; it needs a Go 1.19-compatible
+`tools/foks-v019-oracle/run-live-team-compat.sh`; it needs a Go 1.25-compatible
 toolchain and may populate Go compiler/module caches, but does not use an AKA
 crate or user data path.
+
+Run `tools/foks-server/generate-protocol.sh --write` only for a reviewed
+baseline or policy update. The scheduled
+`tools/foks-server/diff-upstream-protocol.sh` audit compares the pinned artifact
+with upstream's immutable current commit, publishes semantic JSON/Markdown
+drift reports, and never edits the baseline or a lockfile.

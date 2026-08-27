@@ -79,6 +79,23 @@ fn partial_slow_frame_times_out_without_monopolizing_other_workers() {
     slow.write_all(&[0x40, 0x90]).unwrap();
     slow.flush().unwrap();
 
+    // Exercise the same listener, not merely a separate listener task. With
+    // the former worker-per-connection model and one configured worker, this
+    // response could not arrive until the slow frame timed out.
+    let started = std::time::Instant::now();
+    let mut parallel = connect_without_client_certificate(
+        server.addresses().public_services,
+        server.service_roots(),
+    );
+    let request = foks_rpc::encode_load_user_chain_request(&[1; 33], 0).unwrap();
+    parallel.write_all(&request).unwrap();
+    parallel.flush().unwrap();
+    assert!(matches!(
+        foks_rpc::read_void_response(&mut parallel, DEFAULT_MAX_FRAME_LENGTH, 0),
+        Err(Error::RemoteStatus { code: 1020, .. })
+    ));
+    assert!(started.elapsed() < std::time::Duration::from_millis(250));
+
     let client = TestClient::new(&environment, "parallel-to-slow-client").unwrap();
     client.probe_and_pin().unwrap();
     let started = std::time::Instant::now();

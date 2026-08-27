@@ -21,11 +21,13 @@ struct Arguments {
 #[derive(clap::Subcommand)]
 enum Command {
     /// Runs the standalone network service.
-    Serve(ServeArguments),
+    Serve(Box<ServeArguments>),
     /// Creates a validated online backup of an installation.
     Backup(BackupArguments),
     /// Installs a validated backup into an empty installation.
     Restore(RestoreArguments),
+    /// Atomically rewraps installation keys under a new operator root key.
+    RotateOperatorRoot(RotateOperatorRootArguments),
 }
 
 #[derive(clap::Args)]
@@ -48,14 +50,36 @@ struct ServeArguments {
     public_address: SocketAddr,
     #[arg(long, default_value = "127.0.0.1:4432")]
     authenticated_address: SocketAddr,
+    #[arg(long, default_value = "127.0.0.1:9090")]
+    management_address: SocketAddr,
     #[arg(long, default_value_t = 60)]
     ttl_seconds: i64,
     #[arg(long, default_value_t = 4)]
     worker_threads: usize,
     #[arg(long, default_value_t = 32)]
+    maximum_read_connections: usize,
+    #[arg(long, default_value_t = 256)]
+    maximum_active_connections: usize,
+    #[arg(long, default_value_t = 32)]
     maximum_pending_connections: usize,
     #[arg(long, default_value_t = 64)]
     maximum_pending_writes: usize,
+    #[arg(long, default_value_t = 512)]
+    connection_rate_burst: u32,
+    #[arg(long, default_value_t = 256)]
+    connections_per_second: u32,
+    #[arg(long, default_value_t = 2_000)]
+    request_rate_burst: u32,
+    #[arg(long, default_value_t = 1_000)]
+    requests_per_second: u32,
+    #[arg(long, default_value_t = 4_096)]
+    maximum_rate_limit_ips: usize,
+    #[arg(long)]
+    automatic_backup_directory: Option<PathBuf>,
+    #[arg(long, default_value_t = 86_400)]
+    automatic_backup_interval_seconds: u64,
+    #[arg(long, default_value_t = 7)]
+    automatic_backup_retain: usize,
 }
 
 #[derive(clap::Args)]
@@ -80,11 +104,22 @@ struct RestoreArguments {
     key_directory: PathBuf,
 }
 
+#[derive(clap::Args)]
+struct RotateOperatorRootArguments {
+    #[arg(long)]
+    key_directory: PathBuf,
+    #[arg(long)]
+    old_root_key_file: PathBuf,
+    #[arg(long)]
+    new_root_key_file: PathBuf,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     match Arguments::parse().command {
-        Command::Serve(arguments) => serve(arguments),
+        Command::Serve(arguments) => serve(*arguments),
         Command::Backup(arguments) => backup(arguments),
         Command::Restore(arguments) => restore(arguments),
+        Command::RotateOperatorRoot(arguments) => rotate_operator_root(arguments),
     }
 }
 
@@ -102,13 +137,32 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
         probe_address: arguments.probe_address,
         public_address: arguments.public_address,
         authenticated_address: arguments.authenticated_address,
+        management_address: arguments.management_address,
         probe_tls,
         database: foks_server_db::Config::default(),
         limits: SessionLimits {
             worker_threads: arguments.worker_threads,
+            maximum_read_connections: arguments.maximum_read_connections,
+            maximum_active_connections: arguments.maximum_active_connections,
             maximum_pending_connections: arguments.maximum_pending_connections,
             ..SessionLimits::default()
         },
+        rate_limits: foks_server::RateLimitConfig {
+            connection_burst: arguments.connection_rate_burst,
+            connections_per_second: arguments.connections_per_second,
+            request_burst: arguments.request_rate_burst,
+            requests_per_second: arguments.requests_per_second,
+            maximum_tracked_ips: arguments.maximum_rate_limit_ips,
+        },
+        backup: arguments
+            .automatic_backup_directory
+            .map(|directory| foks_server::BackupSchedule {
+                directory,
+                interval: std::time::Duration::from_secs(
+                    arguments.automatic_backup_interval_seconds,
+                ),
+                retain: arguments.automatic_backup_retain,
+            }),
         clock: Arc::new(foks_server_db::SystemClock),
         entropy: Arc::new(foks_server::OsEntropy),
         session_faults: None,
@@ -119,8 +173,11 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let addresses = server.addresses();
     eprintln!(
-        "FOKS server ready: probe={}, public={}, authenticated={}",
-        addresses.probe, addresses.public_services, addresses.authenticated
+        "FOKS server ready: probe={}, public={}, authenticated={}, management={}",
+        addresses.probe,
+        addresses.public_services,
+        addresses.authenticated,
+        server.management_address(),
     );
     let _ = signals.forever().next();
     server.shutdown()?;
@@ -149,6 +206,19 @@ fn restore(arguments: RestoreArguments) -> Result<(), Box<dyn std::error::Error>
         arguments.database,
         arguments.key_directory,
         foks_server_db::Config::default(),
+    )?;
+    Ok(())
+}
+
+fn rotate_operator_root(
+    arguments: RotateOperatorRootArguments,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let old_root_key = read_root_key_file(arguments.old_root_key_file)?;
+    let new_root_key = read_root_key_file(arguments.new_root_key_file)?;
+    foks_server::keys::DirectoryKeyProvider::rotate_operator_root(
+        arguments.key_directory,
+        *old_root_key,
+        *new_root_key,
     )?;
     Ok(())
 }

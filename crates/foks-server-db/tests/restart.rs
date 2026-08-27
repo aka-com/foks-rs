@@ -1,6 +1,6 @@
 mod common;
 
-use foks_server_db::{Config, Database};
+use foks_server_db::{Config, Database, Error, ReadDatabase};
 
 #[test]
 fn reopen_and_online_backup_preserve_exact_signed_bytes() {
@@ -26,4 +26,16 @@ fn reopen_and_online_backup_preserve_exact_signed_bytes() {
         reopened.current_root().unwrap().unwrap().exact_signed_root,
         b"signed-root"
     );
+}
+
+#[test]
+fn online_backup_can_be_cancelled_between_steps() {
+    let original = common::TestDatabase::new();
+    let source = ReadDatabase::open(&original.path, Config::default()).unwrap();
+    let backup_path = original.path.with_file_name("cancelled-backup.sqlite");
+
+    assert!(matches!(
+        source.online_backup_until(&backup_path, || true),
+        Err(Error::Invalid("online backup cancelled"))
+    ));
 }

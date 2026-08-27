@@ -14,6 +14,53 @@ fn options() -> KvWriteOptions {
 }
 
 #[test]
+fn operator_root_rotation_preserves_client_pins_and_post_rotation_backups() {
+    let source = TestEnvironment::new().unwrap();
+    let server = source.start_server().unwrap();
+    let addresses = server.addresses();
+    let original_client_roots = server.client_roots();
+    let original_service_roots = server.service_roots();
+    let client = TestClient::new(&source, "root-rotation-client").unwrap();
+    let probe = client.probe_and_pin().unwrap();
+    let created = client
+        .create_account(&probe.pinned, &TestAccountSpec::new("rootrotation", 0x70))
+        .unwrap();
+    let [database, keys, _, _] = server.owned_paths().map(std::path::Path::to_path_buf);
+    server.shutdown().unwrap();
+
+    let new_root = [0x84; 32];
+    foks_server::keys::DirectoryKeyProvider::rotate_operator_root(&keys, [0x51; 32], new_root)
+        .unwrap();
+    let artifacts = foks_server::backup_standalone_installation(
+        &database,
+        &keys,
+        new_root,
+        source.root().join("post-rotation-backup"),
+        foks_server_db::Config::default(),
+    )
+    .unwrap();
+    let restored =
+        TestEnvironment::restore_backup_with_root_key(&artifacts, addresses, new_root).unwrap();
+    let restored_server = restored.start_server().unwrap();
+    assert_eq!(
+        restored_server.client_roots().roots,
+        original_client_roots.roots
+    );
+    assert_eq!(
+        restored_server.service_roots().roots,
+        original_service_roots.roots
+    );
+    let reconstructed = TestClient::new(&source, "root-rotation-client").unwrap();
+    let pinned = reconstructed.pinned_host().unwrap();
+    assert_eq!(pinned.host_id(), probe.pinned.host_id());
+    reconstructed
+        .foks()
+        .authenticate_and_pin(&pinned, &created.credential)
+        .unwrap();
+    restored_server.shutdown().unwrap();
+}
+
+#[test]
 fn matching_backup_restores_under_the_existing_pin_and_credential() {
     let source = TestEnvironment::new().unwrap();
     let server = source.start_server().unwrap();
@@ -154,6 +201,7 @@ fn backup_manifest_database_and_key_failures_are_closed() {
         .create_account(&probe.pinned, &TestAccountSpec::new("failureuser", 0x72))
         .unwrap();
     let wrong_root = server.backup_named("wrong-root").unwrap();
+    let missing_wrapping = server.backup_named("missing-wrapping").unwrap();
     let missing_key = server.backup_named("missing-key").unwrap();
     let modified_key = server.backup_named("modified-key").unwrap();
     let swapped_key = server.backup_named("swapped-key").unwrap();
@@ -170,6 +218,13 @@ fn backup_manifest_database_and_key_failures_are_closed() {
     let error = expect_server_error(wrong.start_server());
     assert_bounded_non_secret(&error);
     assert_bounded_non_secret(&expect_server_error(wrong.start_server()));
+
+    std::fs::remove_file(missing_wrapping.key_directory.join("key-encryption.key")).unwrap();
+    let error = expect_environment_error(TestEnvironment::restore_backup(
+        &missing_wrapping,
+        addresses,
+    ));
+    assert_bounded_non_secret(&error);
 
     std::fs::remove_file(missing_key.key_directory.join("host.key")).unwrap();
     let error = expect_environment_error(TestEnvironment::restore_backup(&missing_key, addresses));
@@ -231,7 +286,7 @@ fn online_backup_is_coherent_while_kv_writes_continue() {
     let artifacts = std::thread::scope(|scope| {
         let backup = scope.spawn(|| {
             barrier.wait();
-            server.operator_backup_named("concurrent")
+            server.backup_named("concurrent")
         });
         let mut protected = client.open_protected_store().unwrap();
         let mut session = client

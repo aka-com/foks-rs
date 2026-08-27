@@ -33,9 +33,12 @@ impl InProcessServer {
             probe_address,
             public_address,
             authenticated_address,
+            management_address: std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
             probe_tls: Arc::clone(&environment.inner.tls.public),
             database: environment.inner.database_config.clone(),
             limits: environment.inner.session_limits,
+            rate_limits: environment.inner.rate_limits,
+            backup: environment.inner.backup.clone(),
             clock: environment.inner.clock.clone(),
             entropy: Arc::new(foks_server::OsEntropy),
             session_faults: Some(Arc::clone(&environment.inner.session_faults)),
@@ -90,6 +93,11 @@ impl InProcessServer {
 
     pub fn service_roots(&self) -> rustls::RootCertStore {
         self.server().delegated_roots()
+    }
+
+    #[doc(hidden)]
+    pub fn client_roots(&self) -> rustls::RootCertStore {
+        self.server().client_roots()
     }
 
     pub fn probe_response(&self) -> Vec<u8> {
@@ -192,6 +200,10 @@ impl InProcessServer {
         self.server().metrics()
     }
 
+    pub fn management_address(&self) -> std::net::SocketAddr {
+        self.server().management_address()
+    }
+
     pub fn storage_report(&self) -> foks_server::Result<foks_server_db::StorageReport> {
         self.server().storage_report()
     }
@@ -266,6 +278,7 @@ impl ProbeOverrideServer {
             session_faults: Some(Arc::clone(&environment.inner.session_faults)),
             diagnostics: None,
             metrics: Arc::new(foks_server::ServerMetrics::default()),
+            rate_limits: foks_server::RateLimitConfig::default(),
             limits: SessionLimits {
                 worker_threads: 4,
                 ..SessionLimits::default()
@@ -335,6 +348,10 @@ impl IsolatedTestServer {
 
     pub fn addresses(&self) -> ServerAddresses {
         self.server.addresses()
+    }
+
+    pub fn management_address(&self) -> std::net::SocketAddr {
+        self.server.management_address()
     }
 
     pub fn probe_roots(&self) -> rustls::RootCertStore {

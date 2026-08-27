@@ -17,12 +17,15 @@ foks-snowpack = { workspace = true }
 foks-verify = { workspace = true }
 getrandom = { workspace = true }
 libc = { workspace = true }
+lru = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 signal-hook = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
+tokio = { workspace = true }
+tokio-rustls = { workspace = true }
 x509-parser = { workspace = true }
 zeroize = { workspace = true }
 

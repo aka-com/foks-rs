@@ -18,7 +18,10 @@ pub mod keys;
 mod maintenance;
 mod metrics;
 pub mod net;
+mod operations;
 pub mod pki;
+mod rate_limit;
+mod read_pool;
 pub mod rpc;
 mod services;
 mod standalone;
@@ -32,8 +35,9 @@ pub use error::{Error, Result};
 pub use fault::{SessionFaultPoint, SessionFaults};
 pub use metrics::{ServerMetrics, ServerMetricsSnapshot};
 pub use net::{start, RunningServer, ServerAddresses};
+pub use rate_limit::RateLimitConfig;
 pub use standalone::{
     backup_standalone_installation, restore_backup, start_standalone, BackupArtifacts,
-    RunningStandaloneServer, StandaloneConfig,
+    BackupSchedule, RunningStandaloneServer, StandaloneConfig,
 };
 pub use writer::{Writer, WriterHandle, WriterMetrics};

@@ -21,61 +21,16 @@ use foks_snowpack::{decode, encode, Value};
 use thiserror::Error;
 
 pub mod arguments;
+mod generated;
 mod response;
 mod server;
 
+pub use generated::*;
 pub use response::{encode_status_response_at, encode_void_success_response_at, RpcStatus};
 pub use server::{decode_call, read_call, DecodedCall};
 
-pub const PROBE_PROTOCOL_ID: u64 = 0xc588_4ff6;
-pub const PROBE_METHOD_POSITION: u64 = 1;
-pub const REG_PROTOCOL_ID: u64 = 0xf7ab_85f3;
-pub const REG_RESERVE_USERNAME_METHOD_POSITION: u64 = 0;
-pub const REG_GET_CLIENT_CERT_CHAIN_METHOD_POSITION: u64 = 1;
-pub const REG_SIGNUP_METHOD_POSITION: u64 = 2;
-pub const REG_GET_UID_LOOKUP_CHALLENGE_METHOD_POSITION: u64 = 6;
-pub const REG_LOOKUP_UID_BY_DEVICE_METHOD_POSITION: u64 = 7;
-pub const REG_SELECT_VHOST_METHOD_POSITION: u64 = 15;
-pub const USER_PROTOCOL_ID: u64 = 0x823f_0899;
-pub const USER_PROVISION_DEVICE_METHOD_POSITION: u64 = 6;
-pub const USER_REVOKE_DEVICE_METHOD_POSITION: u64 = 7;
-pub const USER_LOAD_USER_CHAIN_METHOD_POSITION: u64 = 9;
-pub const USER_GET_PUK_FOR_ROLE_METHOD_POSITION: u64 = 14;
-pub const USER_GET_HOST_CONFIG_METHOD_POSITION: u64 = 24;
-pub const MERKLE_QUERY_PROTOCOL_ID: u64 = 0xc041_2aa6;
-pub const MERKLE_GET_HISTORICAL_ROOTS_METHOD_POSITION: u64 = 1;
-pub const MERKLE_GET_CURRENT_ROOT_METHOD_POSITION: u64 = 2;
-pub const MERKLE_SELECT_VHOST_METHOD_POSITION: u64 = 8;
-pub const TEAM_LOADER_PROTOCOL_ID: u64 = 0xf912_8579;
-pub const TEAM_ADMIN_PROTOCOL_ID: u64 = 0xdbe1_ddbe;
-pub const TEAM_GET_VIEW_CHALLENGE_METHOD_POSITION: u64 = 0;
-pub const TEAM_ACTIVATE_VIEW_METHOD_POSITION: u64 = 1;
-pub const TEAM_LOAD_CHAIN_METHOD_POSITION: u64 = 3;
-pub const TEAM_RESERVE_NAME_METHOD_POSITION: u64 = 0;
-pub const TEAM_CREATE_NAMED_METHOD_POSITION: u64 = 1;
-pub const TEAM_EDIT_METHOD_POSITION: u64 = 2;
-pub const TEAM_MAKE_INERT_BEARER_TOKEN_METHOD_POSITION: u64 = 3;
-pub const TEAM_ACTIVATE_BEARER_TOKEN_METHOD_POSITION: u64 = 4;
-pub const TEAM_LOAD_REMOVAL_KEY_BOX_METHOD_POSITION: u64 = 10;
-pub const KV_STORE_PROTOCOL_ID: u64 = 0x8ee3_7b6b;
-pub const KV_MKDIR_METHOD_POSITION: u64 = 0;
-pub const KV_PUT_METHOD_POSITION: u64 = 1;
-pub const KV_PUT_ROOT_METHOD_POSITION: u64 = 2;
-pub const KV_FILE_UPLOAD_INIT_METHOD_POSITION: u64 = 3;
-pub const KV_FILE_UPLOAD_CHUNK_METHOD_POSITION: u64 = 4;
-pub const KV_PUT_SMALL_FILE_OR_SYMLINK_METHOD_POSITION: u64 = 7;
-pub const KV_GET_ROOT_METHOD_POSITION: u64 = 8;
-pub const KV_GET_NODE_METHOD_POSITION: u64 = 10;
-pub const KV_GET_ENCRYPTED_CHUNK_METHOD_POSITION: u64 = 11;
-pub const KV_GET_DIR_METHOD_POSITION: u64 = 12;
-pub const KV_CACHE_CHECK_METHOD_POSITION: u64 = 13;
-pub const KV_LIST_METHOD_POSITION: u64 = 14;
-pub const KV_LOCK_ACQUIRE_METHOD_POSITION: u64 = 15;
-pub const KV_LOCK_RELEASE_METHOD_POSITION: u64 = 16;
-pub const KV_SELECT_VHOST_METHOD_POSITION: u64 = 18;
 pub const CURRENT_COMPATIBILITY_VERSION: u64 = 1;
 pub const DEFAULT_MAX_FRAME_LENGTH: usize = 16 * 1024 * 1024;
-pub const STATUS_TX_RETRY_ERROR: u64 = 1014;
 
 const METHOD_CALL_V2: u64 = 5;
 const METHOD_RESPONSE: u64 = 1;
@@ -443,7 +398,12 @@ pub fn encode_revoke_device_request(argument: &RevokeDeviceArgument<'_>) -> Resu
 }
 
 pub fn encode_create_adhoc_team_request(argument: &AdHocTeamCreateArgument<'_>) -> Result<Vec<u8>> {
-    encode_call(TEAM_ADMIN_PROTOCOL_ID, 15, &argument.encoded()?, 0)
+    encode_call(
+        TEAM_ADMIN_PROTOCOL_ID,
+        TEAM_CREATE_AD_HOC_METHOD_POSITION,
+        &argument.encoded()?,
+        0,
+    )
 }
 
 pub fn encode_reserve_team_name_request(name: &[u8]) -> Result<Vec<u8>> {
