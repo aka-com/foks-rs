@@ -1,10 +1,12 @@
 //! Registration, device mutation, host-policy, and ad-hoc team arguments.
 
-use super::{DeviceLabelNameAndCommitmentKey, Hepk, UserLink};
+use super::{
+    device_label_name_and_commitment_key, hepk, DeviceLabelNameAndCommitmentKey, Hepk, UserLink,
+};
 use crate::{
-    array, boolean, decode, encode, entity, fixed_blob, list_or_null, role, unsigned, EntityId,
-    Error, Result, Role, SecretSeed, SeedChainBox, SharedKeyBoxSet, TeamRemovalKeyBox, Value,
-    ENTITY_AD_HOC_TEAM, ENTITY_HOST, ENTITY_NAMED_TEAM, ENTITY_USER,
+    array, boolean, decode, encode, entity, expect_unsigned, fixed_blob, list_or_null, role, text,
+    unsigned, EntityId, Error, Result, Role, SecretSeed, SeedChainBox, SharedKeyBoxSet,
+    TeamRemovalKeyBox, Value, ENTITY_AD_HOC_TEAM, ENTITY_HOST, ENTITY_NAMED_TEAM, ENTITY_USER,
 };
 use zeroize::Zeroizing;
 
@@ -230,6 +232,10 @@ impl UsernameReservation {
             Value::Unsigned(self.expires_at),
         ])
     }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&self.to_value())?)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -256,6 +262,102 @@ impl InviteCode {
             Self::Sso => Value::Array(vec![Value::Unsigned(3), Value::Variant(None)]),
             Self::Empty => Value::Array(vec![Value::Unsigned(4), Value::Variant(None)]),
         }
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        let fields = array(value, 2)?;
+        let discriminant = unsigned(&fields[0])?;
+        match (discriminant, &fields[1]) {
+            (0, Value::Variant(None)) => Ok(Self::None),
+            (1, Value::Variant(Some((tag, value)))) if tag == b"1" => {
+                let Value::Binary(code) = value.as_ref() else {
+                    return Err(Error::Type {
+                        expected: "standard invite code",
+                        found: "another value",
+                    });
+                };
+                Ok(Self::Standard(code.clone()))
+            }
+            (2, Value::Variant(Some((tag, value)))) if tag == b"2" => {
+                let Value::Text(code) = value.as_ref() else {
+                    return Err(Error::Type {
+                        expected: "multi-use invite code",
+                        found: "another value",
+                    });
+                };
+                Ok(Self::MultiUse(code.clone()))
+            }
+            (3, Value::Variant(None)) => Ok(Self::Sso),
+            (4, Value::Variant(None)) => Ok(Self::Empty),
+            _ => Err(Error::UnknownEnum {
+                kind: "invite code",
+                value: discriminant,
+            }),
+        }
+    }
+}
+
+/// Owned, strictly decoded v0.1.9 software-signup request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecodedSoftwareSignupArgument {
+    pub username_utf8: Vec<u8>,
+    pub reservation: UsernameReservation,
+    pub link: UserLink,
+    pub puk_box: SharedKeyBoxSet,
+    pub username_commitment_key: [u8; 16],
+    pub device_name: DeviceLabelNameAndCommitmentKey,
+    pub next_tree_location: [u8; 32],
+    pub invite_code: InviteCode,
+    pub email: Vec<u8>,
+    pub subchain_tree_location: [u8; 32],
+    pub self_token: [u8; 17],
+    pub puk_hepk: Hepk,
+    pub device_hepk: Hepk,
+}
+
+impl DecodedSoftwareSignupArgument {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let fields = array(&value, 16)?;
+        require_null(&fields[9], "signup Yubi registration")?;
+        require_null(&fields[10], "signup passphrase stretch")?;
+        require_null(&fields[14], "signup subkey")?;
+        let host_policy = array(&fields[15], 2)?;
+        expect_unsigned(&host_policy[0], "signup host policy", 0)?;
+        if !matches!(host_policy[1], Value::Variant(None)) {
+            return Err(Error::Type {
+                expected: "empty signup host policy",
+                found: "another value",
+            });
+        }
+        let hepk_outer = array(&fields[13], 1)?;
+        let hepks = array(&hepk_outer[0], 2)?;
+        Ok(Self {
+            username_utf8: text(&fields[0])?.into_bytes(),
+            reservation: UsernameReservation::decode(&encode(&fields[1])?)?,
+            link: UserLink::decode(&encode(&fields[2])?)?,
+            puk_box: SharedKeyBoxSet::decode(&encode(&fields[3])?)?,
+            username_commitment_key: fixed_blob(&fields[4], "username commitment key")?,
+            device_name: device_label_name_and_commitment_key(&fields[5])?,
+            next_tree_location: fixed_blob(&fields[6], "next tree location")?,
+            invite_code: InviteCode::from_value(&fields[7])?,
+            email: text(&fields[8])?.into_bytes(),
+            subchain_tree_location: fixed_blob(&fields[11], "subchain tree location")?,
+            self_token: fixed_blob(&fields[12], "signup self token")?,
+            puk_hepk: hepk(&hepks[0])?,
+            device_hepk: hepk(&hepks[1])?,
+        })
+    }
+}
+
+fn require_null(value: &Value, kind: &'static str) -> Result<()> {
+    if matches!(value, Value::Null) {
+        Ok(())
+    } else {
+        Err(Error::Type {
+            expected: kind,
+            found: "another value",
+        })
     }
 }
 

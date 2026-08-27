@@ -23,7 +23,7 @@ impl TestDatabase {
 
     pub fn reserve(&mut self, now: u64) {
         self.database
-            .reserve_name(b"fixtureuser", &[0x44; 32], 1, now, now + 1_000_000)
+            .reserve_name(b"fixtureuser", &[0x44; 17], 1, now, now + 1_000_000)
             .unwrap();
     }
 
@@ -61,12 +61,16 @@ pub fn commit_with_request_at(
     .unwrap();
     let mutation = IdentityMutation {
         normalized_name: b"fixtureuser",
-        reservation_token: &[0x44; 32],
+        reservation_token: &[0x44; 17],
         reservation_sequence: 1,
+        reservation_expires_at: now + 1_000_000,
+        username_utf8: b"Fixture User",
+        username_commitment_key: &[0x45; 16],
         uid: &[1; 33],
         device_id: &[4; 33],
         device_hepk_fingerprint: &[0x31; 32],
         exact_device_hepk: b"device-hepk",
+        exact_device_name: b"device-name",
         link_hash: &[0x32; 32],
         exact_link: b"exact-link",
         tree_location: &[0x33; 32],

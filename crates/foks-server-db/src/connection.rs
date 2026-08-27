@@ -10,6 +10,10 @@ pub struct Database {
     path: PathBuf,
 }
 
+pub struct ReadDatabase {
+    pub(crate) connection: Connection,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Pragmas {
     pub foreign_keys: bool,
@@ -61,10 +65,28 @@ impl Database {
     }
 }
 
+impl ReadDatabase {
+    pub fn open(path: impl AsRef<Path>, config: Config) -> Result<Self> {
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let connection = Connection::open_with_flags(path, flags)?;
+        configure_reader(&connection, &config)?;
+        schema::validate_connection(&connection)?;
+        Ok(Self { connection })
+    }
+}
+
 fn configure(connection: &Connection, config: &Config) -> Result<()> {
     connection.pragma_update(None, "foreign_keys", true)?;
     connection.pragma_update(None, "journal_mode", "WAL")?;
     connection.pragma_update(None, "synchronous", "FULL")?;
+    connection.pragma_update(None, "trusted_schema", false)?;
+    connection.pragma_update(None, "temp_store", "MEMORY")?;
+    connection.busy_timeout(config.busy_timeout)?;
+    Ok(())
+}
+
+fn configure_reader(connection: &Connection, config: &Config) -> Result<()> {
+    connection.pragma_update(None, "foreign_keys", true)?;
     connection.pragma_update(None, "trusted_schema", false)?;
     connection.pragma_update(None, "temp_store", "MEMORY")?;
     connection.busy_timeout(config.busy_timeout)?;

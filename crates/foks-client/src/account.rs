@@ -384,6 +384,9 @@ impl FoksClient {
         for attempt in 0..40 {
             match self.authenticate_and_pin(host, credential) {
                 Ok(outcome) => return Ok(outcome),
+                Err(error @ Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1020, .. })) => {
+                    return Err(error);
+                }
                 Err(error) => last_error = Some(error),
             }
             if attempt != 39 {

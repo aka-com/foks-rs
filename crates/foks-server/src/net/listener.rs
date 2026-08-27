@@ -67,7 +67,14 @@ impl RunningServer {
             authenticated,
             addresses,
         } = listeners;
-        let service_data = Arc::new(ServerData::from_probe(Arc::clone(&config.probe_response))?);
+        let service_data = Arc::new(ServerData::from_probe(
+            Arc::clone(&config.probe_response),
+            config.read_database,
+            config.writer,
+            config.clock,
+            config.entropy,
+            config.key_provider,
+        )?);
         let stopping = Arc::new(AtomicBool::new(false));
         let threads = vec![
             spawn_listener(

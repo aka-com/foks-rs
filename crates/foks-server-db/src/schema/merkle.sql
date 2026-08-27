@@ -15,13 +15,12 @@ CREATE TABLE merkle_roots (
     exact_root BLOB NOT NULL,
     exact_signed_root BLOB NOT NULL,
     created_at INTEGER NOT NULL CHECK (created_at >= 0),
-    UNIQUE (epoch, root_hash),
-    CHECK (epoch != 0 OR root_node = zeroblob(32))
+    UNIQUE (epoch, root_hash)
 ) STRICT;
 
 CREATE TRIGGER merkle_roots_require_node
 BEFORE INSERT ON merkle_roots
-WHEN NEW.epoch != 0
+WHEN NEW.root_node != zeroblob(32)
   AND NOT EXISTS (SELECT 1 FROM merkle_nodes WHERE node_hash = NEW.root_node)
 BEGIN
     SELECT RAISE(ABORT, 'missing Merkle root node');
@@ -29,7 +28,7 @@ END;
 
 CREATE TRIGGER merkle_roots_require_node_on_update
 BEFORE UPDATE OF epoch, root_node ON merkle_roots
-WHEN NEW.epoch != 0
+WHEN NEW.root_node != zeroblob(32)
   AND NOT EXISTS (SELECT 1 FROM merkle_nodes WHERE node_hash = NEW.root_node)
 BEGIN
     SELECT RAISE(ABORT, 'missing Merkle root node');
@@ -37,14 +36,14 @@ END;
 
 CREATE TRIGGER merkle_nodes_restrict_delete
 BEFORE DELETE ON merkle_nodes
-WHEN EXISTS (SELECT 1 FROM merkle_roots WHERE epoch != 0 AND root_node = OLD.node_hash)
+WHEN EXISTS (SELECT 1 FROM merkle_roots WHERE root_node = OLD.node_hash)
 BEGIN
     SELECT RAISE(ABORT, 'Merkle node is referenced by a root');
 END;
 
 CREATE TRIGGER merkle_nodes_restrict_hash_update
 BEFORE UPDATE OF node_hash ON merkle_nodes
-WHEN EXISTS (SELECT 1 FROM merkle_roots WHERE epoch != 0 AND root_node = OLD.node_hash)
+WHEN EXISTS (SELECT 1 FROM merkle_roots WHERE root_node = OLD.node_hash)
 BEGIN
     SELECT RAISE(ABORT, 'Merkle node is referenced by a root');
 END;

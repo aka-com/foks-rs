@@ -17,7 +17,7 @@ fn bootstrap_is_atomic_idempotent_and_conflict_safe() {
             .probe_response,
         bootstrap.probe_response
     );
-    assert_eq!(database.database.current_root().unwrap().unwrap().epoch, 0);
+    assert_eq!(database.database.current_root().unwrap().unwrap().epoch, 1);
 
     let mut conflict = bootstrap.clone();
     conflict.key_manifest.push(9);
@@ -67,6 +67,7 @@ fn example() -> HostBootstrap {
             .collect(),
         root_hash: [3; 32],
         root_node: [0; 32],
+        root_epoch: 1,
         exact_root: b"root".to_vec(),
         exact_signed_root: b"signed-root".to_vec(),
         created_at: 1,

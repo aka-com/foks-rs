@@ -6,7 +6,7 @@ impl Database {
     pub fn reserve_name(
         &mut self,
         normalized_name: &[u8],
-        token: &[u8; 32],
+        token: &[u8; 17],
         sequence: u64,
         now: u64,
         expires_at: u64,

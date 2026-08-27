@@ -312,6 +312,23 @@ impl HistoricalMerkleRoots {
             hashes: list(&fields[1], |value| fixed_blob(value, "Merkle root hash"))?,
         })
     }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        let roots = self
+            .roots
+            .iter()
+            .map(|root| Ok(decode(&root.encoded()?)?))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(encode(&Value::Array(vec![
+            list_value(roots),
+            list_value(
+                self.hashes
+                    .iter()
+                    .map(|hash| Value::Binary(hash.to_vec()))
+                    .collect(),
+            ),
+        ]))?)
+    }
 }
 
 pub(crate) fn signed_blob(value: &Value) -> Result<SignedBlob> {

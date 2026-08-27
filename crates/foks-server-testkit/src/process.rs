@@ -56,6 +56,17 @@ impl IsolatedTestServer {
         self.paths.root()
     }
 
+    pub fn identity(
+        &self,
+        uid: &[u8],
+    ) -> foks_server_db::Result<Option<foks_server_db::IdentitySnapshot>> {
+        foks_server_db::ReadDatabase::open(
+            self.paths.database(),
+            foks_server_db::Config::default(),
+        )?
+        .identity(uid)
+    }
+
     pub fn owned_paths(&self) -> [&Path; 4] {
         self.paths.all()
     }

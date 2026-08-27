@@ -18,6 +18,8 @@ pub enum Error {
     Verify(#[from] foks_verify::Error),
     #[error("SQLite server storage failed: {0}")]
     Database(#[from] foks_server_db::Error),
+    #[error("Merkle construction failed: {0}")]
+    Merkle(#[from] foks_merkle_store::Error),
     #[error("certificate construction failed: {0}")]
     Certificate(#[from] rcgen::Error),
     #[error("server thread panicked")]
@@ -30,6 +32,8 @@ pub enum Error {
     Key(&'static str),
     #[error("key encryption or authentication failed")]
     KeyCrypto,
+    #[error("invalid software signup: {0}")]
+    Signup(&'static str),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

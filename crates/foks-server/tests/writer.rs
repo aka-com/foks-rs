@@ -16,7 +16,7 @@ fn writer_serializes_calls_and_persists_before_returning() {
             std::thread::spawn(move || {
                 barrier.wait();
                 writer.call(move |database| {
-                    let token = [index as u8; 32];
+                    let token = [index as u8; 17];
                     database.reserve_name(&[index as u8 + 1], &token, 1, 1, 100)?;
                     Ok(())
                 })
@@ -44,4 +44,18 @@ fn writer_rejects_an_unbounded_configuration() {
         0,
     )
     .is_err());
+}
+
+#[test]
+fn writer_handles_fail_promptly_after_shutdown() {
+    let temporary = tempfile::tempdir().unwrap();
+    let writer = Writer::start(
+        temporary.path().join("foks-server.sqlite"),
+        foks_server_db::Config::default(),
+        1,
+    )
+    .unwrap();
+    let handle = writer.handle();
+    writer.shutdown().unwrap();
+    assert!(handle.call(|_| Ok(())).is_err());
 }

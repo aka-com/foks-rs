@@ -164,15 +164,7 @@ impl SharedKeyBoxSet {
         let value = Value::Array(vec![
             Value::Binary(box_id.to_vec()),
             Value::Array(boxes.iter().map(shared_key_box_value).collect()),
-            temp_dh_key.as_ref().map_or(Value::Null, |temporary| {
-                Value::Array(vec![
-                    Value::Array(vec![
-                        dh_public_value(&temporary.key),
-                        Value::Unsigned(temporary.time),
-                    ]),
-                    temporary.signature.to_value(),
-                ])
-            }),
+            temp_dh_key.as_ref().map_or(Value::Null, temp_dh_key_value),
         ]);
         Ok(Self {
             box_id,
@@ -304,9 +296,67 @@ impl SeedChainBox {
 }
 
 impl PukParcel {
+    /// Selects one exact recipient box from a mutation box set and attaches
+    /// the authenticated sender and any prior seed-chain boxes required by a
+    /// `getPukForRole` response.
+    pub fn from_box_set(
+        set: &SharedKeyBoxSet,
+        index: usize,
+        sender: EntityId,
+        seed_chain: Vec<SeedChainBox>,
+    ) -> Result<Self> {
+        let boxed = set.boxes.get(index).ok_or(Error::FieldCount {
+            expected: index.saturating_add(1),
+            found: set.boxes.len(),
+        })?;
+        let parcel = Self {
+            generation: boxed.generation,
+            role: boxed.role,
+            hybrid: boxed.hybrid.clone(),
+            target: boxed.target.entity.clone(),
+            target_host: boxed.target.host.clone(),
+            target_role: boxed.target.role,
+            target_generation: boxed.target.generation,
+            sender,
+            box_id: set.box_id,
+            temp_dh_key: set.temp_dh_key.clone(),
+            seed_chain,
+        };
+        parcel.validate_target()?;
+        Ok(parcel)
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
         puk_parcel(&wire)
+    }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        self.validate_target()?;
+        let shared = SharedKeyBox {
+            generation: self.generation,
+            role: self.role,
+            hybrid: self.hybrid.clone(),
+            target: SharedKeyBoxTarget {
+                entity: self.target.clone(),
+                host: self.target_host.clone(),
+                role: self.target_role,
+                generation: self.target_generation,
+            },
+        };
+        Ok(encode(&Value::Array(vec![
+            shared_key_box_value(&shared),
+            Value::Binary(self.sender.as_bytes().to_vec()),
+            Value::Binary(self.box_id.to_vec()),
+            self.temp_dh_key
+                .as_ref()
+                .map_or(Value::Null, temp_dh_key_value),
+            if self.seed_chain.is_empty() {
+                Value::Null
+            } else {
+                Value::Array(self.seed_chain.iter().map(SeedChainBox::to_value).collect())
+            },
+        ]))?)
     }
 
     fn validate_target(&self) -> Result<()> {
@@ -324,6 +374,26 @@ impl PukParcel {
         }
         Ok(())
     }
+}
+
+impl SeedChainBox {
+    fn to_value(&self) -> Value {
+        Value::Array(vec![
+            Value::Unsigned(self.generation),
+            self.role.to_value(),
+            self.secret_box.to_value(),
+        ])
+    }
+}
+
+fn temp_dh_key_value(temporary: &TempDhKeySigned) -> Value {
+    Value::Array(vec![
+        Value::Array(vec![
+            dh_public_value(&temporary.key),
+            Value::Unsigned(temporary.time),
+        ]),
+        temporary.signature.to_value(),
+    ])
 }
 
 pub(crate) fn puk_parcel(value: &Value) -> Result<PukParcel> {

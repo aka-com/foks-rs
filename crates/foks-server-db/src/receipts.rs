@@ -1,12 +1,34 @@
 use rusqlite::{params, Connection, OptionalExtension as _};
 
-use crate::{error::sql_integer, Error, Result};
+use crate::{error::sql_integer, Database, Error, ReadDatabase, Result};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Receipt {
     pub response: Vec<u8>,
     pub created_at: u64,
     pub expires_at: u64,
+}
+
+impl Database {
+    pub fn request_receipt(
+        &self,
+        idempotency_key: &[u8],
+        request_hash: &[u8; 32],
+        now: u64,
+    ) -> Result<Option<Receipt>> {
+        lookup(&self.connection, idempotency_key, request_hash, now)
+    }
+}
+
+impl ReadDatabase {
+    pub fn request_receipt(
+        &self,
+        idempotency_key: &[u8],
+        request_hash: &[u8; 32],
+        now: u64,
+    ) -> Result<Option<Receipt>> {
+        lookup(&self.connection, idempotency_key, request_hash, now)
+    }
 }
 
 pub(crate) fn lookup(
