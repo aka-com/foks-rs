@@ -1,0 +1,17 @@
+[package]
+name = "foks-server-db"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Authoritative standalone SQLite storage for the FOKS v0.1.9 server"
+
+[dependencies]
+foks-merkle-store = { workspace = true }
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

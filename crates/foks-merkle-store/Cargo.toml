@@ -1,0 +1,15 @@
+[package]
+name = "foks-merkle-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Deterministic storage-neutral FOKS v0.1.9 Merkle tree"
+
+[dependencies]
+foks-crypto = { workspace = true }
+foks-proto = { workspace = true }
+foks-snowpack = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

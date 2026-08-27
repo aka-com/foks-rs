@@ -20,6 +20,12 @@ use foks_proto::{
 use foks_snowpack::{decode, encode, Value};
 use thiserror::Error;
 
+mod response;
+mod server;
+
+pub use response::{encode_status_response_at, encode_void_success_response_at, RpcStatus};
+pub use server::{decode_call, read_call, DecodedCall};
+
 pub const PROBE_PROTOCOL_ID: u64 = 0xc588_4ff6;
 pub const PROBE_METHOD_POSITION: u64 = 1;
 pub const REG_PROTOCOL_ID: u64 = 0xf7ab_85f3;
