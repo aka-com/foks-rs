@@ -145,6 +145,13 @@ fn every_registered_route_has_an_executable_client_server_scenario() {
             route.protocol,
             route.method
         );
+        assert_eq!(
+            route.coverage.iter().copied().collect::<BTreeSet<_>>(),
+            covered[&(route.protocol, route.method)],
+            "{}::{} has stale generated coverage metadata",
+            route.protocol,
+            route.method
+        );
     }
     let contract: Contract = toml::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),

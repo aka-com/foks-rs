@@ -22,9 +22,12 @@ pub struct StandaloneConfig {
     pub probe_address: SocketAddr,
     pub public_address: SocketAddr,
     pub authenticated_address: SocketAddr,
+    pub management_address: SocketAddr,
     pub probe_tls: Arc<rustls::ServerConfig>,
     pub database: foks_server_db::Config,
     pub limits: SessionLimits,
+    pub rate_limits: crate::RateLimitConfig,
+    pub backup: Option<BackupSchedule>,
     pub clock: Arc<dyn foks_server_db::Clock>,
     pub entropy: Arc<dyn crate::Entropy>,
     #[doc(hidden)]
@@ -42,10 +45,29 @@ pub struct RunningStandaloneServer {
     client_roots: rustls::RootCertStore,
     writer: Writer,
     maintenance: Maintenance,
+    database_path: PathBuf,
     key_directory: PathBuf,
     database_config: foks_server_db::Config,
     clock: Arc<dyn foks_server_db::Clock>,
     metrics: Arc<crate::ServerMetrics>,
+    management: crate::operations::ManagementServer,
+    backup: Option<crate::operations::BackupScheduler>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BackupSchedule {
+    pub directory: PathBuf,
+    pub interval: std::time::Duration,
+    pub retain: usize,
+}
+
+impl BackupSchedule {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.interval.is_zero() || self.retain == 0 {
+            return Err(crate::Error::Config("invalid backup schedule"));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -99,6 +121,9 @@ pub fn restore_backup(
     }
     drop(backup);
 
+    let wrapping_key = artifacts.key_directory.join(crate::keys::WRAPPING_KEY_FILE);
+    regular_file_metadata(&wrapping_key)?;
+
     for purpose in crate::keys::MANIFEST_PURPOSES {
         let expected = decoded_manifest
             .generation(purpose)
@@ -126,6 +151,10 @@ pub fn restore_backup(
     if let Some(parent) = database_path.parent() {
         std::fs::File::open(parent)?.sync_all()?;
     }
+    copy_new_file(
+        &artifacts.key_directory.join(crate::keys::WRAPPING_KEY_FILE),
+        &key_directory.join(crate::keys::WRAPPING_KEY_FILE),
+    )?;
     for purpose in crate::keys::MANIFEST_PURPOSES {
         let name = format!("{}.key", purpose.label());
         copy_new_file(
@@ -222,7 +251,7 @@ pub fn backup_standalone_installation(
     )
 }
 
-fn create_backup(
+pub(crate) fn create_backup(
     destination: &Path,
     source_key_directory: &Path,
     manifest: &[u8],
@@ -233,6 +262,12 @@ fn create_backup(
     let database = destination.join("foks-server.sqlite");
     let key_directory = destination.join("keys");
     std::fs::create_dir(&key_directory)?;
+    let wrapping_key = source_key_directory.join(crate::keys::WRAPPING_KEY_FILE);
+    regular_file_metadata(&wrapping_key)?;
+    copy_new_file(
+        &wrapping_key,
+        &key_directory.join(crate::keys::WRAPPING_KEY_FILE),
+    )?;
     for purpose in crate::keys::MANIFEST_PURPOSES {
         let name = format!("{}.key", purpose.label());
         let source = source_key_directory.join(&name);
@@ -312,6 +347,10 @@ impl RunningStandaloneServer {
         self.metrics.snapshot()
     }
 
+    pub fn management_address(&self) -> SocketAddr {
+        self.management.address()
+    }
+
     pub fn storage_report(&self) -> Result<foks_server_db::StorageReport> {
         self.writer
             .handle()
@@ -323,23 +362,27 @@ impl RunningStandaloneServer {
     /// never copied and must be restored through its original secret channel.
     pub fn backup(&self, destination: impl AsRef<std::path::Path>) -> Result<BackupArtifacts> {
         let manifest = self.bootstrap.key_manifest.encode();
+        let source =
+            foks_server_db::ReadDatabase::open(&self.database_path, self.database_config.clone())?;
         create_backup(
             destination.as_ref(),
             &self.key_directory,
             &manifest,
             self.database_config.clone(),
             |backup_database| {
-                let backup_database = backup_database.to_path_buf();
-                self.writer.call(move |source| {
-                    source.online_backup(backup_database)?;
-                    Ok(())
-                })
+                source.online_backup(backup_database)?;
+                Ok(())
             },
         )
     }
 
     pub fn shutdown(self) -> Result<()> {
+        self.management.mark_not_ready();
         self.server.shutdown()?;
+        self.management.shutdown()?;
+        if let Some(backup) = self.backup {
+            backup.shutdown()?;
+        }
         self.maintenance.shutdown()?;
         self.writer.shutdown()
     }
@@ -389,6 +432,20 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     let writer_handle = writer.handle();
     let maintenance = Maintenance::start(writer_handle.clone(), Arc::clone(&config.clock));
     let metrics = Arc::new(crate::ServerMetrics::default());
+    let backup = config
+        .backup
+        .map(|schedule| {
+            crate::operations::BackupScheduler::start(
+                schedule,
+                config.database_path.clone(),
+                key_directory.clone(),
+                bootstrap.key_manifest.encode(),
+                database_config.clone(),
+                Arc::clone(&config.clock),
+                Arc::clone(&metrics),
+            )
+        })
+        .transpose()?;
 
     let server = RunningServer::start_bound(
         Config {
@@ -400,20 +457,28 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
             authenticated_tls: tls.authenticated,
             probe_response: Arc::from(bootstrap.probe_response.clone()),
             read_database: Some(ReadDatabaseConfig {
-                path: config.database_path,
+                path: config.database_path.clone(),
                 database: database_config.clone(),
             }),
-            writer: Some(writer_handle),
+            writer: Some(writer_handle.clone()),
             clock: Arc::clone(&config.clock),
             entropy: config.entropy,
             key_provider: Some(keys),
             session_faults: config.session_faults,
             diagnostics: config.diagnostics,
             metrics: Arc::clone(&metrics),
+            rate_limits: config.rate_limits,
             limits: config.limits,
         },
         listeners,
     )?;
+    let management = crate::operations::ManagementServer::start(
+        config.management_address,
+        writer_handle,
+        Arc::clone(&metrics),
+        server.liveness(),
+    )?;
+    management.mark_ready();
     Ok(RunningStandaloneServer {
         server,
         bootstrap,
@@ -421,9 +486,12 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         client_roots: tls.client_ca,
         writer,
         maintenance,
+        database_path: config.database_path,
         key_directory,
         database_config,
         clock: config.clock,
         metrics,
+        management,
+        backup,
     })
 }

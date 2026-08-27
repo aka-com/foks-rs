@@ -1,0 +1,1754 @@
+{
+  "schema_version": 1,
+  "source": {
+    "module": "github.com/foks-proj/go-foks",
+    "version": "v0.1.9",
+    "sum": "h1:esVU4H00tL7kwyZXbPxfgTDJSBeqGRa5xPFv5xb/Ph0=",
+    "go_mod_sum": "h1:x2wPw159s6fYDrvdpTCqqML392rkjqAniUCdkRIkudY=",
+    "commit": "f07a5816f54120f5fb4985cf980a7c45d74449b1"
+  },
+  "protocols": [
+    {
+      "name": "Beacon",
+      "unique_id": 3190902588,
+      "go_file": "proto/rem/beacon.go",
+      "methods": [
+        {
+          "name": "beaconRegister",
+          "position": 1,
+          "qualified_name": "Beacon.beaconRegister"
+        },
+        {
+          "name": "beaconLookup",
+          "position": 2,
+          "qualified_name": "Beacon.beaconLookup"
+        }
+      ]
+    },
+    {
+      "name": "KVStore",
+      "unique_id": 2397272939,
+      "go_file": "proto/rem/kv.go",
+      "methods": [
+        {
+          "name": "kvMkdir",
+          "position": 0,
+          "qualified_name": "KVStore.kvMkdir"
+        },
+        {
+          "name": "kvPut",
+          "position": 1,
+          "qualified_name": "KVStore.kvPut"
+        },
+        {
+          "name": "kvPutRoot",
+          "position": 2,
+          "qualified_name": "KVStore.kvPutRoot"
+        },
+        {
+          "name": "kvFileUploadInit",
+          "position": 3,
+          "qualified_name": "KVStore.kvFileUploadInit"
+        },
+        {
+          "name": "kvFileUploadChunk",
+          "position": 4,
+          "qualified_name": "KVStore.kvFileUploadChunk"
+        },
+        {
+          "name": "kvPutSmallFileOrSymlink",
+          "position": 7,
+          "qualified_name": "KVStore.kvPutSmallFileOrSymlink"
+        },
+        {
+          "name": "kvGetRoot",
+          "position": 8,
+          "qualified_name": "KVStore.kvGetRoot"
+        },
+        {
+          "name": "kvGet",
+          "position": 9,
+          "qualified_name": "KVStore.kvGet"
+        },
+        {
+          "name": "kvGetNode",
+          "position": 10,
+          "qualified_name": "KVStore.kvGetNode"
+        },
+        {
+          "name": "kvGetEncryptedChunk",
+          "position": 11,
+          "qualified_name": "KVStore.kvGetEncryptedChunk"
+        },
+        {
+          "name": "kvGetDir",
+          "position": 12,
+          "qualified_name": "KVStore.kvGetDir"
+        },
+        {
+          "name": "kvCacheCheck",
+          "position": 13,
+          "qualified_name": "KVStore.kvCacheCheck"
+        },
+        {
+          "name": "kvList",
+          "position": 14,
+          "qualified_name": "KVStore.kvList"
+        },
+        {
+          "name": "kvLockAcquire",
+          "position": 15,
+          "qualified_name": "KVStore.kvLockAcquire"
+        },
+        {
+          "name": "kvLockRelease",
+          "position": 16,
+          "qualified_name": "KVStore.kvLockRelease"
+        },
+        {
+          "name": "kvUsage",
+          "position": 17,
+          "qualified_name": "KVStore.kvUsage"
+        },
+        {
+          "name": "selectVHost",
+          "position": 18,
+          "qualified_name": "KVStore.selectVHost"
+        }
+      ]
+    },
+    {
+      "name": "LogSend",
+      "unique_id": 4198967001,
+      "go_file": "proto/rem/logsend.go",
+      "methods": [
+        {
+          "name": "logSendInit",
+          "position": 1,
+          "qualified_name": "LogSend.logSendInit"
+        },
+        {
+          "name": "logSendInitFile",
+          "position": 2,
+          "qualified_name": "LogSend.logSendInitFile"
+        },
+        {
+          "name": "logSendUploadBlock",
+          "position": 3,
+          "qualified_name": "LogSend.logSendUploadBlock"
+        }
+      ]
+    },
+    {
+      "name": "MerkleQuery",
+      "unique_id": 3225496230,
+      "go_file": "proto/rem/merkle.go",
+      "methods": [
+        {
+          "name": "lookup",
+          "position": 0,
+          "qualified_name": "MerkleQuery.lookup"
+        },
+        {
+          "name": "getHistoricalRoots",
+          "position": 1,
+          "qualified_name": "MerkleQuery.getHistoricalRoots"
+        },
+        {
+          "name": "getCurrentRoot",
+          "position": 2,
+          "qualified_name": "MerkleQuery.getCurrentRoot"
+        },
+        {
+          "name": "getCurrentRootHash",
+          "position": 3,
+          "qualified_name": "MerkleQuery.getCurrentRootHash"
+        },
+        {
+          "name": "checkKeyExists",
+          "position": 4,
+          "qualified_name": "MerkleQuery.checkKeyExists"
+        },
+        {
+          "name": "getCurrentRootSigned",
+          "position": 5,
+          "qualified_name": "MerkleQuery.getCurrentRootSigned"
+        },
+        {
+          "name": "mLookup",
+          "position": 6,
+          "qualified_name": "MerkleQuery.mLookup"
+        },
+        {
+          "name": "getCurrentRootSignedEpno",
+          "position": 7,
+          "qualified_name": "MerkleQuery.getCurrentRootSignedEpno"
+        },
+        {
+          "name": "selectVHost",
+          "position": 8,
+          "qualified_name": "MerkleQuery.selectVHost"
+        },
+        {
+          "name": "confirmRoot",
+          "position": 9,
+          "qualified_name": "MerkleQuery.confirmRoot"
+        }
+      ]
+    },
+    {
+      "name": "Probe",
+      "unique_id": 3314044918,
+      "go_file": "proto/rem/probe.go",
+      "methods": [
+        {
+          "name": "probe",
+          "position": 1,
+          "qualified_name": "Probe.probe"
+        }
+      ]
+    },
+    {
+      "name": "RealTime",
+      "unique_id": 1331226580,
+      "go_file": "proto/rem/realtime.go",
+      "methods": [
+        {
+          "name": "rtNewChannel",
+          "position": 0,
+          "qualified_name": "RealTime.rtNewChannel"
+        },
+        {
+          "name": "rtGetChannel",
+          "position": 1,
+          "qualified_name": "RealTime.rtGetChannel"
+        },
+        {
+          "name": "rtListAllChannelsForTeam",
+          "position": 2,
+          "qualified_name": "RealTime.rtListAllChannelsForTeam"
+        },
+        {
+          "name": "rtSend",
+          "position": 3,
+          "qualified_name": "RealTime.rtSend"
+        },
+        {
+          "name": "rtGetThread",
+          "position": 4,
+          "qualified_name": "RealTime.rtGetThread"
+        },
+        {
+          "name": "rtGetInboxVersion",
+          "position": 5,
+          "qualified_name": "RealTime.rtGetInboxVersion"
+        },
+        {
+          "name": "rtGetChangedThreads",
+          "position": 6,
+          "qualified_name": "RealTime.rtGetChangedThreads"
+        },
+        {
+          "name": "rtReadThrough",
+          "position": 7,
+          "qualified_name": "RealTime.rtReadThrough"
+        },
+        {
+          "name": "rtPollInbox",
+          "position": 8,
+          "qualified_name": "RealTime.rtPollInbox"
+        },
+        {
+          "name": "rtSelectVHost",
+          "position": 9,
+          "qualified_name": "RealTime.rtSelectVHost"
+        },
+        {
+          "name": "rtGetThreadRecents",
+          "position": 10,
+          "qualified_name": "RealTime.rtGetThreadRecents"
+        }
+      ]
+    },
+    {
+      "name": "Reg",
+      "unique_id": 4155213299,
+      "go_file": "proto/rem/reg.go",
+      "methods": [
+        {
+          "name": "reserveUsername",
+          "position": 0,
+          "qualified_name": "Reg.reserveUsername"
+        },
+        {
+          "name": "getClientCertChain",
+          "position": 1,
+          "qualified_name": "Reg.getClientCertChain"
+        },
+        {
+          "name": "signup",
+          "position": 2,
+          "qualified_name": "Reg.signup"
+        },
+        {
+          "name": "getHostID",
+          "position": 3,
+          "qualified_name": "Reg.getHostID"
+        },
+        {
+          "name": "getLoginChallenge",
+          "position": 4,
+          "qualified_name": "Reg.getLoginChallenge"
+        },
+        {
+          "name": "login",
+          "position": 5,
+          "qualified_name": "Reg.login"
+        },
+        {
+          "name": "getUIDLookupChallege",
+          "position": 6,
+          "qualified_name": "Reg.getUIDLookupChallege"
+        },
+        {
+          "name": "lookupUIDByDevice",
+          "position": 7,
+          "qualified_name": "Reg.lookupUIDByDevice"
+        },
+        {
+          "name": "checkInviteCode",
+          "position": 8,
+          "qualified_name": "Reg.checkInviteCode"
+        },
+        {
+          "name": "joinWaitList",
+          "position": 9,
+          "qualified_name": "Reg.joinWaitList"
+        },
+        {
+          "name": "checkNameExists",
+          "position": 10,
+          "qualified_name": "Reg.checkNameExists"
+        },
+        {
+          "name": "loadUserChain",
+          "position": 11,
+          "qualified_name": "Reg.loadUserChain"
+        },
+        {
+          "name": "getSubkeyBoxChallenge",
+          "position": 12,
+          "qualified_name": "Reg.getSubkeyBoxChallenge"
+        },
+        {
+          "name": "loadSubkeyBox",
+          "position": 13,
+          "qualified_name": "Reg.loadSubkeyBox"
+        },
+        {
+          "name": "stretchVersion",
+          "position": 14,
+          "qualified_name": "Reg.stretchVersion"
+        },
+        {
+          "name": "selectVHost",
+          "position": 15,
+          "qualified_name": "Reg.selectVHost"
+        },
+        {
+          "name": "resolveUsername",
+          "position": 16,
+          "qualified_name": "Reg.resolveUsername"
+        },
+        {
+          "name": "getServerConfig",
+          "position": 17,
+          "qualified_name": "Reg.getServerConfig"
+        },
+        {
+          "name": "initOAuth2Session",
+          "position": 18,
+          "qualified_name": "Reg.initOAuth2Session"
+        },
+        {
+          "name": "pollOAuth2SessionCompletion",
+          "position": 19,
+          "qualified_name": "Reg.pollOAuth2SessionCompletion"
+        },
+        {
+          "name": "ssoLogin",
+          "position": 20,
+          "qualified_name": "Reg.ssoLogin"
+        },
+        {
+          "name": "probeKeyExists",
+          "position": 21,
+          "qualified_name": "Reg.probeKeyExists"
+        },
+        {
+          "name": "getVHostMgmtHost",
+          "position": 22,
+          "qualified_name": "Reg.getVHostMgmtHost"
+        },
+        {
+          "name": "getClientVersionInfo",
+          "position": 23,
+          "qualified_name": "Reg.getClientVersionInfo"
+        }
+      ]
+    },
+    {
+      "name": "TeamAdmin",
+      "unique_id": 3689012670,
+      "go_file": "proto/rem/team.go",
+      "methods": [
+        {
+          "name": "reserveTeamname",
+          "position": 0,
+          "qualified_name": "TeamAdmin.reserveTeamname"
+        },
+        {
+          "name": "createTeam",
+          "position": 1,
+          "qualified_name": "TeamAdmin.createTeam"
+        },
+        {
+          "name": "editTeam",
+          "position": 2,
+          "qualified_name": "TeamAdmin.editTeam"
+        },
+        {
+          "name": "makeInertTeamBearerToken",
+          "position": 3,
+          "qualified_name": "TeamAdmin.makeInertTeamBearerToken"
+        },
+        {
+          "name": "activateTeamBearerToken",
+          "position": 4,
+          "qualified_name": "TeamAdmin.activateTeamBearerToken"
+        },
+        {
+          "name": "checkTeamBearerToken",
+          "position": 5,
+          "qualified_name": "TeamAdmin.checkTeamBearerToken"
+        },
+        {
+          "name": "putTeamCert",
+          "position": 6,
+          "qualified_name": "TeamAdmin.putTeamCert"
+        },
+        {
+          "name": "getCurrentTeamCerts",
+          "position": 7,
+          "qualified_name": "TeamAdmin.getCurrentTeamCerts"
+        },
+        {
+          "name": "loadTeamRemoteJoinReq",
+          "position": 8,
+          "qualified_name": "TeamAdmin.loadTeamRemoteJoinReq"
+        },
+        {
+          "name": "postTeamMembershipLink",
+          "position": 9,
+          "qualified_name": "TeamAdmin.postTeamMembershipLink"
+        },
+        {
+          "name": "loadRemovalKeyBoxForTeamAdmin",
+          "position": 10,
+          "qualified_name": "TeamAdmin.loadRemovalKeyBoxForTeamAdmin"
+        },
+        {
+          "name": "postTeamRemoval",
+          "position": 11,
+          "qualified_name": "TeamAdmin.postTeamRemoval"
+        },
+        {
+          "name": "loadTeamRawInbox",
+          "position": 12,
+          "qualified_name": "TeamAdmin.loadTeamRawInbox"
+        },
+        {
+          "name": "rejectJoinReq",
+          "position": 13,
+          "qualified_name": "TeamAdmin.rejectJoinReq"
+        },
+        {
+          "name": "getTeamConfig",
+          "position": 14,
+          "qualified_name": "TeamAdmin.getTeamConfig"
+        },
+        {
+          "name": "createTeamAdHoc",
+          "position": 15,
+          "qualified_name": "TeamAdmin.createTeamAdHoc"
+        }
+      ]
+    },
+    {
+      "name": "TeamGuest",
+      "unique_id": 4141307996,
+      "go_file": "proto/rem/team.go",
+      "methods": [
+        {
+          "name": "lookupTeamCertByHash",
+          "position": 0,
+          "qualified_name": "TeamGuest.lookupTeamCertByHash"
+        },
+        {
+          "name": "acceptInviteRemote",
+          "position": 1,
+          "qualified_name": "TeamGuest.acceptInviteRemote"
+        }
+      ]
+    },
+    {
+      "name": "TeamLoader",
+      "unique_id": 4178740601,
+      "go_file": "proto/rem/team.go",
+      "methods": [
+        {
+          "name": "getTeamVOBearerTokenChallenge",
+          "position": 0,
+          "qualified_name": "TeamLoader.getTeamVOBearerTokenChallenge"
+        },
+        {
+          "name": "activateTeamVOBearerToken",
+          "position": 1,
+          "qualified_name": "TeamLoader.activateTeamVOBearerToken"
+        },
+        {
+          "name": "checkTeamVOBearerToken",
+          "position": 2,
+          "qualified_name": "TeamLoader.checkTeamVOBearerToken"
+        },
+        {
+          "name": "loadTeamChain",
+          "position": 3,
+          "qualified_name": "TeamLoader.loadTeamChain"
+        },
+        {
+          "name": "loadTeamMembershipChain",
+          "position": 4,
+          "qualified_name": "TeamLoader.loadTeamMembershipChain"
+        },
+        {
+          "name": "loadRemovalForMember",
+          "position": 5,
+          "qualified_name": "TeamLoader.loadRemovalForMember"
+        },
+        {
+          "name": "loadTeamRemoteViewTokens",
+          "position": 6,
+          "qualified_name": "TeamLoader.loadTeamRemoteViewTokens"
+        },
+        {
+          "name": "getServerConfig",
+          "position": 7,
+          "qualified_name": "TeamLoader.getServerConfig"
+        }
+      ]
+    },
+    {
+      "name": "TeamMember",
+      "unique_id": 3181623763,
+      "go_file": "proto/rem/team.go",
+      "methods": [
+        {
+          "name": "acceptInviteLocal",
+          "position": 0,
+          "qualified_name": "TeamMember.acceptInviteLocal"
+        },
+        {
+          "name": "grantRemoteViewPermissionForTeam",
+          "position": 1,
+          "qualified_name": "TeamMember.grantRemoteViewPermissionForTeam"
+        },
+        {
+          "name": "grantLocalViewPermissionForTeam",
+          "position": 2,
+          "qualified_name": "TeamMember.grantLocalViewPermissionForTeam"
+        }
+      ]
+    },
+    {
+      "name": "User",
+      "unique_id": 2185169049,
+      "go_file": "proto/rem/user.go",
+      "methods": [
+        {
+          "name": "ping",
+          "position": 0,
+          "qualified_name": "User.ping"
+        },
+        {
+          "name": "setPassphrase",
+          "position": 1,
+          "qualified_name": "User.setPassphrase"
+        },
+        {
+          "name": "changePassphrase",
+          "position": 2,
+          "qualified_name": "User.changePassphrase"
+        },
+        {
+          "name": "getSalt",
+          "position": 3,
+          "qualified_name": "User.getSalt"
+        },
+        {
+          "name": "nextPassphraseGeneration",
+          "position": 4,
+          "qualified_name": "User.nextPassphraseGeneration"
+        },
+        {
+          "name": "stretchVersion",
+          "position": 5,
+          "qualified_name": "User.stretchVersion"
+        },
+        {
+          "name": "provisionDevice",
+          "position": 6,
+          "qualified_name": "User.provisionDevice"
+        },
+        {
+          "name": "revokeDevice",
+          "position": 7,
+          "qualified_name": "User.revokeDevice"
+        },
+        {
+          "name": "loadUserChain",
+          "position": 9,
+          "qualified_name": "User.loadUserChain"
+        },
+        {
+          "name": "grantLocalViewPermissionForUser",
+          "position": 10,
+          "qualified_name": "User.grantLocalViewPermissionForUser"
+        },
+        {
+          "name": "changeUsername",
+          "position": 11,
+          "qualified_name": "User.changeUsername"
+        },
+        {
+          "name": "reserveUsernameForChange",
+          "position": 12,
+          "qualified_name": "User.reserveUsernameForChange"
+        },
+        {
+          "name": "getTreeLocation",
+          "position": 13,
+          "qualified_name": "User.getTreeLocation"
+        },
+        {
+          "name": "getPUKForRole",
+          "position": 14,
+          "qualified_name": "User.getPUKForRole"
+        },
+        {
+          "name": "getPpeParcel",
+          "position": 15,
+          "qualified_name": "User.getPpeParcel"
+        },
+        {
+          "name": "postGenericLink",
+          "position": 16,
+          "qualified_name": "User.postGenericLink"
+        },
+        {
+          "name": "loadGenericChain",
+          "position": 17,
+          "qualified_name": "User.loadGenericChain"
+        },
+        {
+          "name": "grantRemoteViewPermissionForUser",
+          "position": 18,
+          "qualified_name": "User.grantRemoteViewPermissionForUser"
+        },
+        {
+          "name": "getTeamListServerTrust",
+          "position": 19,
+          "qualified_name": "User.getTeamListServerTrust"
+        },
+        {
+          "name": "assertPQKeyNotInUse",
+          "position": 20,
+          "qualified_name": "User.assertPQKeyNotInUse"
+        },
+        {
+          "name": "newWebAdminPanelURL",
+          "position": 21,
+          "qualified_name": "User.newWebAdminPanelURL"
+        },
+        {
+          "name": "checkURL",
+          "position": 22,
+          "qualified_name": "User.checkURL"
+        },
+        {
+          "name": "resolveUsername",
+          "position": 23,
+          "qualified_name": "User.resolveUsername"
+        },
+        {
+          "name": "getHostConfig",
+          "position": 24,
+          "qualified_name": "User.getHostConfig"
+        },
+        {
+          "name": "getDeviceNag",
+          "position": 25,
+          "qualified_name": "User.getDeviceNag"
+        },
+        {
+          "name": "clearDeviceNag",
+          "position": 26,
+          "qualified_name": "User.clearDeviceNag"
+        },
+        {
+          "name": "putYubiManagementKey",
+          "position": 27,
+          "qualified_name": "User.putYubiManagementKey"
+        },
+        {
+          "name": "getYubiManagementKey",
+          "position": 28,
+          "qualified_name": "User.getYubiManagementKey"
+        },
+        {
+          "name": "getAllYubiManagementKeys",
+          "position": 29,
+          "qualified_name": "User.getAllYubiManagementKeys"
+        }
+      ]
+    },
+    {
+      "name": "kex",
+      "unique_id": 2924345384,
+      "go_file": "proto/rem/kex.go",
+      "methods": [
+        {
+          "name": "send",
+          "position": 0,
+          "qualified_name": "kex.send"
+        },
+        {
+          "name": "receive",
+          "position": 1,
+          "qualified_name": "kex.receive"
+        }
+      ]
+    }
+  ],
+  "statuses": [
+    {
+      "name": "AGENT_CONNECT_ERROR",
+      "value": 1080,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "AMBIGUOUS_ERROR",
+      "value": 1039,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "AUTH_ERROR",
+      "value": 1006,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "AUTOCERT_FAILED_ERROR",
+      "value": 1065,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "BAD_ARGS_ERROR",
+      "value": 1030,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "BAD_FORMAT_ERROR",
+      "value": 1050,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "BAD_INVITE_CODE_ERROR",
+      "value": 1019,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "BAD_PASSPHRASE_ERROR",
+      "value": 1011,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "BAD_RANGE_ERROR",
+      "value": 1051,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "BOT_TOKEN_ERROR",
+      "value": 1081,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "BOT_TOKEN_LOCKED_ERROR",
+      "value": 1082,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "BOX_ERROR",
+      "value": 1008,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "CANCELED_INPUT_ERROR",
+      "value": 1041,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "CHAIN_LOADER_ERROR",
+      "value": 6001,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "COMMITMENT_ERROR",
+      "value": 1017,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "CONFIG_ERROR",
+      "value": 101,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "CONNECT_ERROR",
+      "value": 1056,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "CONTEXT_CANCELED_ERROR",
+      "value": 1055,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "DEVICE_ALREADY_PROVISIONED_ERROR",
+      "value": 1072,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "DNS_ERROR",
+      "value": 1064,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "DUPLICATE_ERROR",
+      "value": 1001,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "EXPIRED_ERROR",
+      "value": 1062,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "GENERIC_ERROR",
+      "value": 100,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "GENERIC_NOT_FOUND_ERROR",
+      "value": 1049,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "GIT_BAD_HEAD_ERROR",
+      "value": 9003,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "GIT_BAD_PATH_ERROR",
+      "value": 9002,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "GIT_BAD_REF_NAME_ERROR",
+      "value": 9004,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "GIT_DANGLING_REF_ERROR",
+      "value": 9005,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "GIT_GENERIC_ERROR",
+      "value": 9001,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "GRANT_ERROR",
+      "value": 1028,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "HOSTCHAIN_ERROR",
+      "value": 5001,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "HOSTID_NOT_FOUND_ERROR",
+      "value": 1048,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "HOST_IN_USE_ERROR",
+      "value": 1063,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "HOST_MISMATCH_ERROR",
+      "value": 1036,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "HOST_PIN_ERROR",
+      "value": 1037,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "HTTP_ERROR",
+      "value": 10001,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "INSERT_ERROR",
+      "value": 2001,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "INTERNAL_ERROR",
+      "value": 102,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KEX_BAD_SECRET",
+      "value": 1032,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KEX_WRAPPER_ERROR",
+      "value": 3001,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KEYCHAIN_ERROR",
+      "value": 1074,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KEY_IN_USE_ERROR",
+      "value": 1026,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KEY_NOT_FOUND_ERROR",
+      "value": 1025,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_ABS_PATH_ERROR",
+      "value": 8020,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_EXISTS_ERROR",
+      "value": 8007,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_LOCK_ALREADY_HELD_ERROR",
+      "value": 8014,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_LOCK_TIMEOUT_ERROR",
+      "value": 8015,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_MKDIR_ERROR",
+      "value": 8006,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_NEED_DIR_ERROR",
+      "value": 8010,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_NEED_FILE_ERROR",
+      "value": 8009,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_NOENT_ERROR",
+      "value": 8016,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_NOT_AVAILABLE_ERROR",
+      "value": 8019,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_PATH_ERROR",
+      "value": 8005,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_PATH_TOO_DEEP_ERROR",
+      "value": 8013,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_PERM_ERROR",
+      "value": 8011,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_RACE_ERROR",
+      "value": 8003,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_RMDIR_NEED_RECURSIVE_ERROR",
+      "value": 8018,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_STALE_CACHE_ERROR",
+      "value": 8012,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_TOO_BIG_ERROR",
+      "value": 8001,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_TYPE_ERROR",
+      "value": 8008,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_UPLOAD_ERROR",
+      "value": 8002,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "KV_UPLOAD_IN_PROGRESS_ERROR",
+      "value": 8017,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "LINK_ERROR",
+      "value": 1003,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "MERKLE_LEAF_NOT_FOUND_ERROR",
+      "value": 4002,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "MERKLE_NO_ROOT_ERROR",
+      "value": 4001,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "MERKLE_VERIFY_ERROR",
+      "value": 4003,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "METHOD_NOT_FOUND_ERROR",
+      "value": 211,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "NEED_LOGIN_ERROR",
+      "value": 1047,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "NETWORK_CONDITIONER_ERROR",
+      "value": 1057,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "NOT_IMPLEMENTED",
+      "value": 1020,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "NO_ACTIVE_PLAN_ERROR",
+      "value": 1059,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "NO_ACTIVE_USER_ERROR",
+      "value": 1038,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "NO_CHANGE_ERROR",
+      "value": 1029,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "NO_DEFAULT_HOST_ERROR",
+      "value": 1024,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "OAUTH2_AUTH_ERROR",
+      "value": 1069,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "OAUTH2_ERROR",
+      "value": 1067,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "OAUTH2_IDP_ERROR",
+      "value": 1070,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "OAUTH2_TOKEN_ERROR",
+      "value": 1068,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "OK",
+      "value": 0,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "OVER_QUOTA_ERROR",
+      "value": 1060,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "PASSPHRASE_LOCKED_ERROR",
+      "value": 1034,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "PASSPHRASE_NOT_FOUND_ERROR",
+      "value": 1043,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "PERMISSION_ERROR",
+      "value": 1013,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "PLAN_EXISTS_ERROR",
+      "value": 1061,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "PREV_ERROR",
+      "value": 1015,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "PROTO_DATA_ERROR",
+      "value": 1035,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "PROTO_NOT_FOUND_ERROR",
+      "value": 210,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "RATE_LIMIT_ERROR",
+      "value": 1012,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "REPLAY_ERROR",
+      "value": 1010,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "RESERVATION_ERROR",
+      "value": 1002,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "REVOKE_ERROR",
+      "value": 1016,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "REVOKE_RACE_ERROR",
+      "value": 1044,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "ROLE_ERROR",
+      "value": 1040,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "ROW_NOT_FOUND_ERROR",
+      "value": 1031,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "RPC_EOF",
+      "value": 1046,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "RT_AMBIGUOUS_CHANNEL_ERROR",
+      "value": 12004,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "RT_CHANNEL_EXISTS_ERROR",
+      "value": 12002,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "RT_GENERIC_ERROR",
+      "value": 12001,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "RT_MSG_ORDER_ERROR",
+      "value": 12006,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "RT_NOT_FOUND_ERROR",
+      "value": 12005,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "RT_RACE",
+      "value": 12003,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "SECRET_KEY_STORAGE_TYPE_ERROR",
+      "value": 1045,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "SESSION_NOT_FOUND_ERROR",
+      "value": 1021,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "SIGNING_KEY_NOT_FULLY_PROVISIONED_ERROR",
+      "value": 1052,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "SOCKET_ERROR",
+      "value": 1066,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "SSO_IDP_LOCKED_ERROR",
+      "value": 1071,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "STRIPE_SESSION_EXISTS_ERROR",
+      "value": 11001,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_ADHOC_CREATOR_INCLUDED_ERROR",
+      "value": 7101,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_ADHOC_DUPLICATE_ERROR",
+      "value": 7104,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_ADHOC_INVALID_TEAM_CHANGE_ERROR",
+      "value": 7103,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_ADHOC_OPEN_VIEWERSHIP_ERROR",
+      "value": 7102,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_BAD_INBOX_ROW_ERROR",
+      "value": 7014,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_BEARER_TOKEN_STALE_ERROR",
+      "value": 7003,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_CERT_ERROR",
+      "value": 7005,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_CYCLE_ERROR",
+      "value": 7012,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_ERROR",
+      "value": 7001,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_EXPLORE_ERROR",
+      "value": 7010,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_INDEX_RANGE_ERROR",
+      "value": 7013,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_INVITE_ALREADY_ACCEPTED_ERROR",
+      "value": 7015,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_KEY_ERROR",
+      "value": 7007,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_NOT_FOUND_ERROR",
+      "value": 7004,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_NO_SRC_ROLE_ERROR",
+      "value": 7008,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_PTK_NOT_FOUND_ERROR",
+      "value": 7011,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_RACE_ERROR",
+      "value": 7002,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_REMOVAL_KEY_ERROR",
+      "value": 7009,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TEAM_ROSTER_ERROR",
+      "value": 7006,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TESTING_ONLY_ERROR",
+      "value": 1042,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TIMEOUT_ERROR",
+      "value": 1009,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TLS_ERROR",
+      "value": 200,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "TX_RETRY_ERROR",
+      "value": 1014,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "UPDATE_ERROR",
+      "value": 2002,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "UPGRADE_NEEDED_ERROR",
+      "value": 1053,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "USERNAME_IN_USE_ERROR",
+      "value": 1023,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "USER_NOT_FOUND_ERROR",
+      "value": 1027,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "VALIDATION_ERROR",
+      "value": 1004,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "VERIFY_ERROR",
+      "value": 1005,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "VERSION_NOT_SUPPORTED_ERROR",
+      "value": 1054,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "WEB_SESSION_NOT_FOUND_ERROR",
+      "value": 1058,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "WRONG_USER_ERROR",
+      "value": 1018,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "X509_ERROR",
+      "value": 1007,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "YUBI_AUTH_ERROR",
+      "value": 1075,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "YUBI_BAD_PIN_FORMAT_ERROR",
+      "value": 1077,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "YUBI_BUS_ERROR",
+      "value": 1073,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "YUBI_DEFAULT_MANAGEMENT_KEY_ERROR",
+      "value": 1076,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "YUBI_DEFAULT_PIN_ERROR",
+      "value": 1079,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "YUBI_ERROR",
+      "value": 1022,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "YUBI_LOCKED_ERROR",
+      "value": 1033,
+      "go_file": "proto/lib/status.go"
+    },
+    {
+      "name": "YUBI_PIN_REQUIRED_ERROR",
+      "value": 1078,
+      "go_file": "proto/lib/status.go"
+    }
+  ],
+  "services": [
+    {
+      "name": "Autocert",
+      "value": 15,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "Beacon",
+      "value": 11,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "InternalCA",
+      "value": 4,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "KVStore",
+      "value": 12,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "MerkleBatcher",
+      "value": 8,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "MerkleBuilder",
+      "value": 3,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "MerkleQuery",
+      "value": 5,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "MerkleSigner",
+      "value": 9,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "None",
+      "value": 0,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "Probe",
+      "value": 10,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "Queue",
+      "value": 6,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "Quota",
+      "value": 13,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "RealTime",
+      "value": 16,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "Reg",
+      "value": 1,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "Test",
+      "value": 101,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "Tools",
+      "value": 7,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "User",
+      "value": 2,
+      "go_file": "proto/lib/common.go"
+    },
+    {
+      "name": "Web",
+      "value": 64,
+      "go_file": "proto/lib/common.go"
+    }
+  ],
+  "sources": [
+    {
+      "path": "proto-src/lib/chains.snowp",
+      "sha256": "fb50a10c23739bcc1d85f5a33274be99eeca019f99000b3cf50536eefde2f0a4",
+      "semantic_sha256": "8c315d9af3cc09df9341bdfdc587675dc4e92b029bba57f5bfe1deb1ff0ac402"
+    },
+    {
+      "path": "proto-src/lib/common.snowp",
+      "sha256": "d0ea177a5060e679c7fca6cf79dfd96a8630139753e7b2f958bcbcf6904b6225",
+      "semantic_sha256": "09de9694f28b404a126e697ca01094b444ad3a78f50709d96274744996959477"
+    },
+    {
+      "path": "proto-src/lib/compat.snowp",
+      "sha256": "af05dd4029efbf4087550cc50f10f1863da4314239e18737fe4e1cf7d75c3be3",
+      "semantic_sha256": "03ff824d4b53b3a2fddb84aaea19561a928316c6903cc25605206435d78016c3"
+    },
+    {
+      "path": "proto-src/lib/config.snowp",
+      "sha256": "a38445a90208a12f65de1bf708927cd9a35b45fac6373bb27b09b0cfc2bbf0ad",
+      "semantic_sha256": "4fd5e4ac0daeabcf2820fd7ebd886932181b1db7f91d77f98e67c5f9b89700d0"
+    },
+    {
+      "path": "proto-src/lib/device.snowp",
+      "sha256": "e4b4a5c763337615a45615c4ef1e651e07aa5c8e1f880439eeb969c0592bd970",
+      "semantic_sha256": "768a32f954f2a7bf0c9d893cbdf7319b06b49f138f2861c265135488f11c499c"
+    },
+    {
+      "path": "proto-src/lib/git.snowp",
+      "sha256": "07edc57371faf3663d84bbfe1bbc67c0188bb6b1c0f2bfe82eee26a3192a4899",
+      "semantic_sha256": "2a80cd74c82af0a5acb77e8861270cf1f24e92aab2b4075f7427e5e53e5dcf05"
+    },
+    {
+      "path": "proto-src/lib/hostchain.snowp",
+      "sha256": "b7d223d96cb237ec9924b691ec3f9478c453cb6cd768c06f3119ae8ec9a97bb9",
+      "semantic_sha256": "6f9c817371d6f969139f42dbf8a88b3a7cebc9408d27e9f7a03561ac8af20e32"
+    },
+    {
+      "path": "proto-src/lib/kex.snowp",
+      "sha256": "a36b5d30606160f0b9ae8450d1388648c25885138ff7617d9e519b3e6b9d1e7f",
+      "semantic_sha256": "153d7ad2f4d82c43704f7ba5c192f32fab5203710516a7ba874dbc4aa68e3f0d"
+    },
+    {
+      "path": "proto-src/lib/keys.snowp",
+      "sha256": "c972d08a10e344eef2003687f472976e491653c70f64d255ffc99521d228fd99",
+      "semantic_sha256": "e7b7df51e99af0160e18a2d03dafb9923a16614994d9c1d198e6ff3f568d3f10"
+    },
+    {
+      "path": "proto-src/lib/kv.snowp",
+      "sha256": "7a5ceb9622195dbcabf4715e197a724f174d4a8c09aab2de366691a3e93ca698",
+      "semantic_sha256": "aecc95132fca6e4a9b7467e6378d3bed4d3ca1ce278bf61f48e541ba9e6055fe"
+    },
+    {
+      "path": "proto-src/lib/merkle.snowp",
+      "sha256": "8415f2f5f06fc32fde4822d634327bcd47654f18aafa0a3412542b92d4199a80",
+      "semantic_sha256": "57df99b2d1f93ee0e9f03f54822b1eed300078bacb35475d015ae0896060a550"
+    },
+    {
+      "path": "proto-src/lib/names.snowp",
+      "sha256": "567511f2be4090e1c73782b38651a1ef0427a02c454a6b334c05e8512ebd1f6d",
+      "semantic_sha256": "4d48f2730a86efc4c5d63575742a4b33bd7d1d42e4e917a17da18f55d9ddf27b"
+    },
+    {
+      "path": "proto-src/lib/ppe.snowp",
+      "sha256": "ff9c4fc55442c1c4147ae0fe67fe6b6f27f2ae2488ad0cdbee2dd917bc8df93b",
+      "semantic_sha256": "16084a841ffc78d423bd9302faf49513bd7a183edccb5250353fb7649a4437e9"
+    },
+    {
+      "path": "proto-src/lib/probe.snowp",
+      "sha256": "a2e753f2c00ddb77f4adf0dda3af138350bdacc89f13b6a42e5eebdd0f8bed54",
+      "semantic_sha256": "d90accb9db707ee38572ecef9adb923f57fc5fe5b7dfd77e4e8e2d81583da6d5"
+    },
+    {
+      "path": "proto-src/lib/realtime.snowp",
+      "sha256": "643939e1d8ce9cc938f2c4def69f9b627cd30b39e809dd103b875dcbf693559e",
+      "semantic_sha256": "9cb8ecb77aa6f82b432031233b9d3e071b5879a933f7b3bd0ce0656692e1bfeb"
+    },
+    {
+      "path": "proto-src/lib/sso.snowp",
+      "sha256": "916d2fe4ad6a54c01bec985ab546c2ab2897a906bff99bf195afe8cae3a7054f",
+      "semantic_sha256": "d533ac7f3f7c03e23a29e1a07b1b4887363c5d2bdc0ce75f11729f98de730b14"
+    },
+    {
+      "path": "proto-src/lib/status.snowp",
+      "sha256": "486315de431bf2cd04004ca63a03b567bd1f6baed935c173b4758a7c24f6a942",
+      "semantic_sha256": "893243644ec9ba89b835f02521dc209812a01fe43492da5c07783f54b215659a"
+    },
+    {
+      "path": "proto-src/lib/team.snowp",
+      "sha256": "e5d507256c91373b4b89c35722b7ef555032759b3f9ed2b2d32d269003d3fbcf",
+      "semantic_sha256": "c410e8c8c74402cf7f919b5e0eb9a08311208ff748bedcd23c06c4c228078b7a"
+    },
+    {
+      "path": "proto-src/lib/test.snowp",
+      "sha256": "16f47080495514f15784685276ddab54426ad9e5d5087d0c53687af7b85d882a",
+      "semantic_sha256": "a88c2e06b4f90a77137f61589a6123fb07e75fc82b0f64e51b96627b6185576a"
+    },
+    {
+      "path": "proto-src/lib/token.snowp",
+      "sha256": "c776f26cbfd663992dcf069196b19f53954acb374da10d8592ec5b4d6c3a8b34",
+      "semantic_sha256": "d3fba08244159eb9ae11526b00231dcee2c940585c1f516e1039b55fcc936462"
+    },
+    {
+      "path": "proto-src/lib/ui.snowp",
+      "sha256": "7ddbb22507039690e934cfce24879c7cc729bdaea794be5929aaa8c5200c0501",
+      "semantic_sha256": "ff3b78f530707999d9e14516a2b2b65ebbffd1df5a4275a7d194342241ae18f3"
+    },
+    {
+      "path": "proto-src/lib/user.snowp",
+      "sha256": "497e36406df1f4f119c65f493d4c15e97c9085a7e9ff6ea9b469636a472d4353",
+      "semantic_sha256": "633e303761d4ba6d310b98535b8244b092b6e0dd38e90a314c56451831cbd58d"
+    },
+    {
+      "path": "proto-src/lib/web.snowp",
+      "sha256": "06b1569730a54c3e5f08429c522d82bf230af5e11abde9583bbad77c2cf17618",
+      "semantic_sha256": "df056f0793ea316fa5ceaac56605682146f40e005b3c5dd180c3d0ddeb55be51"
+    },
+    {
+      "path": "proto-src/lib/yubi.snowp",
+      "sha256": "a710add20478e1d94488b5d4a26f2237f5e31a8a4a12935bf2eb947cc13ec421",
+      "semantic_sha256": "ea05c9e4d74916dcaf466c09de7974d67270ce1b3c9e8e045c07b09b022c6f7f"
+    },
+    {
+      "path": "proto-src/rem/beacon.snowp",
+      "sha256": "86a92a7c5b5180c6141ba45b7491d8ad30a20dedde0168873259b11f1c3c3bca",
+      "semantic_sha256": "64de6a1dd02b1d0f9db26ba581533f53f9c7cd4cc07e754ae9699e8b694617bc"
+    },
+    {
+      "path": "proto-src/rem/invite.snowp",
+      "sha256": "5636d65263d17f62dc0783693e27cd0f9d67700f56d73d9c3334ad3474e9ee0a",
+      "semantic_sha256": "647cd4d73312e9ab588c0fdc62704b632d2848e42302deec3ea76c3bb74de62c"
+    },
+    {
+      "path": "proto-src/rem/kex.snowp",
+      "sha256": "d866f89085a36b81146cec22bf7537f341ca0dfb36dd66e8e603390aa50f3eb5",
+      "semantic_sha256": "d7c7e95d96fb440bb65972ed752ac471738f4bc43ad6c9ab3489461d3baea582"
+    },
+    {
+      "path": "proto-src/rem/kv.snowp",
+      "sha256": "353962cfa16a0876e68950fbd7e64e3f6220c9296cb4491c7f3c3dd8d594460b",
+      "semantic_sha256": "4c00e627785597bfd43d735f1e108e8c7f16182d28d87ed577fff1005290ee32"
+    },
+    {
+      "path": "proto-src/rem/logsend.snowp",
+      "sha256": "cfa959561e6e7108c9ff053e3eb59e4263ddd947561aa6f37d9930a84a93c921",
+      "semantic_sha256": "deead34a6bed2e1560dcc914d82c7797cea84aba2bc6d2dc0f01db666255f2a4"
+    },
+    {
+      "path": "proto-src/rem/merkle.snowp",
+      "sha256": "91a08f10da7eb9f8d0ba1f5263799a3b6eb2a655af28ae0eac8d2b8ee8733a5f",
+      "semantic_sha256": "e88d210a373ad68cfc28a6078a05fcd1d8071f36409fb155dda49de0fcef6019"
+    },
+    {
+      "path": "proto-src/rem/probe.snowp",
+      "sha256": "739655f51b114538742d5853e3b5b5fbec95dde15abcaf2225fbfb509c701623",
+      "semantic_sha256": "1a04468eca52c56537f405d2a4944213cac8de8171b923e7d9ce8d76093ed560"
+    },
+    {
+      "path": "proto-src/rem/realtime.snowp",
+      "sha256": "d57ed6b8707fcee61d5e4816b568176d3d1d0d0a1640755e6ad1e729ce886e13",
+      "semantic_sha256": "9e9b8a8174e233ee8291812377cfb9a485029e706d1d4448a857b8b9351b9d8b"
+    },
+    {
+      "path": "proto-src/rem/reg.snowp",
+      "sha256": "13d8bd774fc9dfff00097bf58fc761eb702ca2e2911a2662b3a31662ac134799",
+      "semantic_sha256": "5957d16fa558e985e3b9f67ef0862a26fabd5c596f8983850c662dcb8c76c1e5"
+    },
+    {
+      "path": "proto-src/rem/team.snowp",
+      "sha256": "1771c96ed978ba879c3478d8728c5cfd2498f853fcdc4185f47d4c7bea8aed5a",
+      "semantic_sha256": "66bb3e89ef396ee84bad8c0ddc7cc5ad5f0f2adbf4a7651cee5510f782b2d6c7"
+    },
+    {
+      "path": "proto-src/rem/user.snowp",
+      "sha256": "efee62f6a6cc97702d10d339a5d73730f58b59ca9d998cb32f4e99bac0f51af5",
+      "semantic_sha256": "f7b6b33f4b88f558d34dcb925275e07c1ad677bfc5a00b189a5db2338f09acbe"
+    }
+  ]
+}

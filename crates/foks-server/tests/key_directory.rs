@@ -54,9 +54,8 @@ fn wrong_root_and_tampering_are_rejected() {
     let provider = DirectoryKeyProvider::open(&directory, ROOT_KEY).unwrap();
     provider.load_or_create(KeyPurpose::Host).unwrap();
 
-    let wrong = DirectoryKeyProvider::open(&directory, [0x24; 32]).unwrap();
     assert!(matches!(
-        wrong.load_or_create(KeyPurpose::Host),
+        DirectoryKeyProvider::open(&directory, [0x24; 32]),
         Err(foks_server::Error::KeyCrypto)
     ));
 
@@ -68,6 +67,41 @@ fn wrong_root_and_tampering_are_rejected() {
         provider.load_or_create(KeyPurpose::Host),
         Err(foks_server::Error::KeyCrypto)
     ));
+}
+
+#[test]
+fn operator_root_rotation_is_atomic_and_preserves_every_key_generation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = temporary.path().join("keys");
+    let provider = DirectoryKeyProvider::open(&directory, ROOT_KEY).unwrap();
+    let before = foks_server::keys::MANIFEST_PURPOSES.map(|purpose| {
+        let key = provider.load_or_create(purpose).unwrap();
+        (*key.expose(), key.generation())
+    });
+    assert!(matches!(
+        DirectoryKeyProvider::rotate_operator_root(&directory, ROOT_KEY, [0x83; 32]),
+        Err(foks_server::Error::Config("key directory is in use"))
+    ));
+    drop(provider);
+
+    let new_root = [0x83; 32];
+    DirectoryKeyProvider::rotate_operator_root(&directory, ROOT_KEY, new_root).unwrap();
+    assert!(matches!(
+        DirectoryKeyProvider::open(&directory, ROOT_KEY),
+        Err(foks_server::Error::KeyCrypto)
+    ));
+    let reopened = DirectoryKeyProvider::open(&directory, new_root).unwrap();
+    let after = foks_server::keys::MANIFEST_PURPOSES.map(|purpose| {
+        let key = reopened.load_existing(purpose).unwrap();
+        (*key.expose(), key.generation())
+    });
+    assert_eq!(after, before);
+    assert!(std::fs::read_dir(&directory).unwrap().all(|entry| !entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .ends_with(".tmp")));
+    assert!(DirectoryKeyProvider::rotate_operator_root(&directory, new_root, new_root).is_err());
 }
 
 #[test]

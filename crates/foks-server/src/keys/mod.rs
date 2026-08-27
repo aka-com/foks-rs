@@ -3,6 +3,7 @@ mod manifest;
 mod memory;
 
 pub use directory::DirectoryKeyProvider;
+pub(crate) use directory::WRAPPING_KEY_FILE;
 pub use manifest::{KeyGenerationManifest, MANIFEST_PURPOSES};
 pub use memory::MemoryKeyProvider;
 

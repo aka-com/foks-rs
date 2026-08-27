@@ -65,7 +65,7 @@ impl Database {
     }
 
     pub fn online_backup(&self, destination: impl AsRef<Path>) -> Result<()> {
-        online_backup(&self.connection, destination.as_ref())
+        online_backup(&self.connection, destination.as_ref(), || false)
     }
 }
 
@@ -86,11 +86,23 @@ impl ReadDatabase {
     }
 
     pub fn online_backup(&self, destination: impl AsRef<Path>) -> Result<()> {
-        online_backup(&self.connection, destination.as_ref())
+        online_backup(&self.connection, destination.as_ref(), || false)
+    }
+
+    pub fn online_backup_until(
+        &self,
+        destination: impl AsRef<Path>,
+        cancelled: impl FnMut() -> bool,
+    ) -> Result<()> {
+        online_backup(&self.connection, destination.as_ref(), cancelled)
     }
 }
 
-fn online_backup(source: &Connection, destination: &Path) -> Result<()> {
+fn online_backup(
+    source: &Connection,
+    destination: &Path,
+    mut cancelled: impl FnMut() -> bool,
+) -> Result<()> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -101,7 +113,20 @@ fn online_backup(source: &Connection, destination: &Path) -> Result<()> {
     options.open(destination)?.sync_all()?;
     let mut target = Connection::open(destination)?;
     let backup = rusqlite::backup::Backup::new(source, &mut target)?;
-    backup.run_to_completion(128, std::time::Duration::from_millis(1), None)?;
+    loop {
+        if cancelled() {
+            return Err(crate::Error::Invalid("online backup cancelled"));
+        }
+        match backup.step(128)? {
+            rusqlite::backup::StepResult::Done => break,
+            rusqlite::backup::StepResult::More
+            | rusqlite::backup::StepResult::Busy
+            | rusqlite::backup::StepResult::Locked => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            _ => std::thread::sleep(std::time::Duration::from_millis(1)),
+        }
+    }
     drop(backup);
     target.close().map_err(|(_, error)| error)?;
     std::fs::OpenOptions::new()

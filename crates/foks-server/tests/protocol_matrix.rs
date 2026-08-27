@@ -14,6 +14,10 @@ const CONTRACT: &str = include_str!("../protocol-v1.toml");
 struct Contract {
     version: u64,
     baseline: String,
+    upstream_module: String,
+    upstream_version: String,
+    upstream_sum: String,
+    upstream_commit: String,
     status_codes: BTreeMap<String, u64>,
     service: Vec<Service>,
     route: Vec<Route>,
@@ -73,6 +77,7 @@ struct Route {
     statuses: Vec<String>,
     max_request_bytes: usize,
     supported: bool,
+    coverage: Vec<String>,
 }
 
 #[test]
@@ -80,6 +85,16 @@ fn protocol_contract_is_valid_and_exactly_registered() {
     let contract: Contract = toml::from_str(CONTRACT).expect("valid protocol-v1.toml");
     assert_eq!(contract.version, 1);
     assert_eq!(contract.baseline, "foks-v0.1.9");
+    assert_eq!(contract.upstream_module, "github.com/foks-proj/go-foks");
+    assert_eq!(contract.upstream_version, "v0.1.9");
+    assert_eq!(
+        contract.upstream_sum,
+        "h1:esVU4H00tL7kwyZXbPxfgTDJSBeqGRa5xPFv5xb/Ph0="
+    );
+    assert_eq!(
+        contract.upstream_commit,
+        "f07a5816f54120f5fb4985cf980a7c45d74449b1"
+    );
     assert_eq!(
         contract.status_codes,
         BTreeMap::from([
@@ -149,6 +164,11 @@ fn protocol_contract_is_valid_and_exactly_registered() {
                 .collect(),
             max_request_bytes: route.max_request_bytes,
             supported: route.supported,
+            coverage: route
+                .coverage
+                .iter()
+                .map(|coverage| (*coverage).into())
+                .collect(),
         })
         .collect::<BTreeSet<_>>();
     assert_eq!(declared_routes, registered_routes);
@@ -175,6 +195,7 @@ fn validate_unique_contract_entries(contract: &Contract) {
         assert!(!route.request.is_empty());
         assert!(!route.result.is_empty());
         assert!(!route.statuses.is_empty());
+        assert!(!route.coverage.is_empty());
         assert!(
             route
                 .statuses

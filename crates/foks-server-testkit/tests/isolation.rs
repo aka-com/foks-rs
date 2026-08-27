@@ -16,6 +16,7 @@ fn every_path_and_socket_is_confined_to_the_test_root() {
         server.addresses().probe,
         server.addresses().public_services,
         server.addresses().authenticated,
+        server.management_address(),
     ] {
         assert!(address.ip().is_loopback());
         assert_ne!(address.port(), 0);

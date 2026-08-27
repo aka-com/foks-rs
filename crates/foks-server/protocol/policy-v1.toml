@@ -1,0 +1,862 @@
+# Handwritten local policy. Numeric wire identities come only from upstream metadata.
+version = 1
+baseline = "foks-v0.1.9"
+
+[status_aliases]
+ok = "OK"
+bad_args = "BAD_ARGS_ERROR"
+device_already_provisioned = "DEVICE_ALREADY_PROVISIONED_ERROR"
+expired = "EXPIRED_ERROR"
+locked = "KV_LOCK_ALREADY_HELD_ERROR"
+kv_noent = "KV_NOENT_ERROR"
+kv_permission = "KV_PERM_ERROR"
+name_in_use = "USERNAME_IN_USE_ERROR"
+not_found = "GENERIC_NOT_FOUND_ERROR"
+permission_denied = "PERMISSION_ERROR"
+quota_exceeded = "OVER_QUOTA_ERROR"
+rate_limited = "RATE_LIMIT_ERROR"
+stale_cache = "KV_STALE_CACHE_ERROR"
+stale_root = "TX_RETRY_ERROR"
+tx_retry = "TX_RETRY_ERROR"
+team_error = "TEAM_ERROR"
+team_race = "TEAM_RACE_ERROR"
+team_bearer_token_stale = "TEAM_BEARER_TOKEN_STALE_ERROR"
+team_not_found = "TEAM_NOT_FOUND_ERROR"
+team_cert = "TEAM_CERT_ERROR"
+team_roster = "TEAM_ROSTER_ERROR"
+team_key = "TEAM_KEY_ERROR"
+team_no_source_role = "TEAM_NO_SRC_ROLE_ERROR"
+team_removal_key = "TEAM_REMOVAL_KEY_ERROR"
+team_explore = "TEAM_EXPLORE_ERROR"
+team_adhoc_creator_included = "TEAM_ADHOC_CREATOR_INCLUDED_ERROR"
+team_adhoc_open_viewership = "TEAM_ADHOC_OPEN_VIEWERSHIP_ERROR"
+team_adhoc_invalid_change = "TEAM_ADHOC_INVALID_TEAM_CHANGE_ERROR"
+team_adhoc_duplicate = "TEAM_ADHOC_DUPLICATE_ERROR"
+unsupported = "NOT_IMPLEMENTED"
+
+[[protocol]]
+name = "Probe"
+upstream = "Probe"
+id_constant = "PROBE_PROTOCOL_ID"
+
+[[protocol]]
+name = "Reg"
+upstream = "Reg"
+id_constant = "REG_PROTOCOL_ID"
+
+[[protocol]]
+name = "User"
+upstream = "User"
+id_constant = "USER_PROTOCOL_ID"
+
+[[protocol]]
+name = "TeamLoader"
+upstream = "TeamLoader"
+id_constant = "TEAM_LOADER_PROTOCOL_ID"
+
+[[protocol]]
+name = "TeamAdmin"
+upstream = "TeamAdmin"
+id_constant = "TEAM_ADMIN_PROTOCOL_ID"
+
+[[protocol]]
+name = "MerkleQuery"
+upstream = "MerkleQuery"
+id_constant = "MERKLE_QUERY_PROTOCOL_ID"
+
+[[protocol]]
+name = "KvStore"
+upstream = "KVStore"
+id_constant = "KV_STORE_PROTOCOL_ID"
+
+[[service]]
+name = "registration"
+upstream = "Reg"
+listener = "public_services"
+supported = true
+
+[[service]]
+name = "user"
+upstream = "User"
+listener = "authenticated"
+supported = true
+
+[[service]]
+name = "merkle_query"
+upstream = "MerkleQuery"
+listener = "public_services"
+supported = true
+
+[[service]]
+name = "probe"
+upstream = "Probe"
+listener = "probe"
+supported = true
+
+[[service]]
+name = "kv_store"
+upstream = "KVStore"
+listener = "authenticated"
+supported = true
+
+[[service]]
+name = "realtime"
+upstream = "RealTime"
+listener = "authenticated"
+supported = false
+
+[[route]]
+protocol = "Probe"
+method = "probe"
+position_constant = "PROBE_METHOD_POSITION"
+listener = "probe"
+authentication = "public"
+request = "ProbeArgument"
+result = "ProbeResponse"
+statuses = ["ok", "bad_args", "unsupported"]
+max_request_bytes = 4096
+supported = true
+coverage = ["probe_and_pin"]
+
+
+[[route]]
+protocol = "Reg"
+method = "reserveUsername"
+position_constant = "REG_RESERVE_USERNAME_METHOD_POSITION"
+listener = "public_services"
+authentication = "delegated_tls"
+request = "ReserveUsernameArgument"
+result = "UsernameReservation"
+statuses = ["ok", "bad_args", "name_in_use", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+coverage = ["probe_and_pin"]
+
+
+[[route]]
+protocol = "Reg"
+method = "getClientCertChain"
+position_constant = "REG_GET_CLIENT_CERT_CHAIN_METHOD_POSITION"
+listener = "public_services"
+authentication = "delegated_tls"
+request = "ClientCertChainArgument"
+result = "CertificateChain"
+statuses = ["ok", "bad_args", "not_found", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+coverage = ["signup_and_user"]
+
+
+[[route]]
+protocol = "Reg"
+method = "signup"
+position_constant = "REG_SIGNUP_METHOD_POSITION"
+listener = "public_services"
+authentication = "signed_signup"
+request = "SoftwareSignupArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "name_in_use", "stale_root", "tx_retry"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["signup_and_user"]
+
+
+[[route]]
+protocol = "Reg"
+method = "getUIDLookupChallege"
+position_constant = "REG_GET_UID_LOOKUP_CHALLENGE_METHOD_POSITION"
+listener = "public_services"
+authentication = "delegated_tls"
+request = "EntityId"
+result = "RegistrationChallenge"
+statuses = ["ok", "bad_args", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+coverage = ["recovery"]
+
+
+[[route]]
+protocol = "Reg"
+method = "lookupUIDByDevice"
+position_constant = "REG_LOOKUP_UID_BY_DEVICE_METHOD_POSITION"
+listener = "public_services"
+authentication = "signed_lookup_challenge"
+request = "LookupUIDByDeviceArgument"
+result = "LookupUserResult"
+statuses = ["ok", "bad_args", "expired", "not_found", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+coverage = ["recovery"]
+
+
+[[route]]
+protocol = "Reg"
+method = "selectVHost"
+position_constant = "REG_SELECT_VHOST_METHOD_POSITION"
+listener = "public_services"
+authentication = "delegated_tls"
+request = "SelectVHostArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 4096
+supported = true
+coverage = ["probe_and_pin"]
+
+
+[[route]]
+protocol = "User"
+method = "provisionDevice"
+position_constant = "USER_PROVISION_DEVICE_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_credential_mtls"
+request = "ProvisionDeviceArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "device_already_provisioned", "permission_denied", "stale_root", "tx_retry"]
+max_request_bytes = 4194304
+supported = true
+coverage = ["provisioning"]
+
+
+[[route]]
+protocol = "User"
+method = "revokeDevice"
+position_constant = "USER_REVOKE_DEVICE_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "RevokeDeviceArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "permission_denied", "stale_root", "tx_retry"]
+max_request_bytes = 4194304
+supported = true
+coverage = ["provisioning"]
+
+
+[[route]]
+protocol = "User"
+method = "loadUserChain"
+position_constant = "USER_LOAD_USER_CHAIN_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "LoadUserChainArgument"
+result = "UserChain"
+statuses = ["ok", "bad_args", "not_found", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+coverage = ["signup_and_user"]
+
+
+[[route]]
+protocol = "User"
+method = "getPukForRole"
+upstream_method = "getPUKForRole"
+position_constant = "USER_GET_PUK_FOR_ROLE_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "GetPukForRoleArgument"
+result = "SharedKeyParcel"
+statuses = ["ok", "bad_args", "not_found", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+coverage = ["signup_and_user"]
+
+
+[[route]]
+protocol = "User"
+method = "getHostConfig"
+position_constant = "USER_GET_HOST_CONFIG_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "Void"
+result = "HostConfig"
+statuses = ["ok", "permission_denied"]
+max_request_bytes = 1024
+supported = true
+coverage = ["authorization"]
+
+
+[[route]]
+protocol = "TeamLoader"
+method = "getTeamVOBearerTokenChallenge"
+position_constant = "TEAM_GET_VIEW_CHALLENGE_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "TeamViewRequest"
+result = "TeamViewChallenge"
+statuses = ["ok", "bad_args", "team_not_found", "team_roster", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+coverage = ["team_create_edit_and_kv"]
+
+
+[[route]]
+protocol = "TeamLoader"
+method = "activateTeamVOBearerToken"
+position_constant = "TEAM_ACTIVATE_VIEW_METHOD_POSITION"
+listener = "authenticated"
+authentication = "current_puk_signature"
+request = "ActivateTeamViewArgument"
+result = "ActivatedTeamView"
+statuses = ["ok", "bad_args", "expired", "team_bearer_token_stale", "team_not_found", "team_roster", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+coverage = ["team_create_edit_and_kv"]
+
+
+[[route]]
+protocol = "TeamLoader"
+method = "checkTeamVOBearerToken"
+listener = "authenticated"
+authentication = "active_team_view_token"
+request = "TeamViewToken"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+coverage = ["unsupported_team_routes"]
+
+
+[[route]]
+protocol = "TeamLoader"
+method = "loadTeamChain"
+position_constant = "TEAM_LOAD_CHAIN_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_team_view_token"
+request = "LoadTeamChainArgument"
+result = "TeamChain"
+statuses = ["ok", "bad_args", "expired", "team_bearer_token_stale", "team_not_found", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+coverage = ["team_create_edit_and_kv"]
+
+
+[[route]]
+protocol = "TeamLoader"
+method = "loadTeamMembershipChain"
+listener = "authenticated"
+authentication = "active_team_view_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+coverage = ["unsupported_team_routes"]
+
+
+[[route]]
+protocol = "TeamLoader"
+method = "loadRemovalForMember"
+listener = "authenticated"
+authentication = "active_team_view_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+coverage = ["unsupported_team_routes"]
+
+
+[[route]]
+protocol = "TeamLoader"
+method = "loadTeamRemoteViewTokens"
+listener = "authenticated"
+authentication = "active_team_view_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+coverage = ["unsupported_team_routes"]
+
+
+[[route]]
+protocol = "TeamLoader"
+method = "getServerConfig"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 1024
+supported = false
+coverage = ["unsupported_team_routes"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "reserveTeamname"
+position_constant = "TEAM_RESERVE_NAME_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_owner_device_mtls"
+request = "TeamName"
+result = "TeamNameReservation"
+statuses = ["ok", "bad_args", "name_in_use", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+coverage = ["team_create_edit_and_kv"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "createTeam"
+position_constant = "TEAM_CREATE_NAMED_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_owner_device_mtls"
+request = "NamedTeamCreateArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "name_in_use", "team_error", "team_race", "team_roster", "team_key", "stale_root", "tx_retry"]
+max_request_bytes = 8388608
+supported = true
+coverage = ["team_create_edit_and_kv"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "editTeam"
+position_constant = "TEAM_EDIT_METHOD_POSITION"
+listener = "authenticated"
+authentication = "current_team_admin"
+request = "TeamEditArgument"
+result = "TeamEditResult"
+statuses = ["ok", "bad_args", "team_error", "team_race", "team_roster", "team_key", "team_no_source_role", "team_removal_key", "team_adhoc_invalid_change", "stale_root", "tx_retry"]
+max_request_bytes = 8388608
+supported = true
+coverage = ["team_create_edit_and_kv"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "makeInertTeamBearerToken"
+position_constant = "TEAM_MAKE_INERT_BEARER_TOKEN_METHOD_POSITION"
+listener = "authenticated"
+authentication = "current_team_admin"
+request = "MakeInertTeamBearerTokenArgument"
+result = "TeamBearerToken"
+statuses = ["ok", "bad_args", "team_not_found", "team_no_source_role", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+coverage = ["team_create_edit_and_kv"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "activateTeamBearerToken"
+position_constant = "TEAM_ACTIVATE_BEARER_TOKEN_METHOD_POSITION"
+listener = "authenticated"
+authentication = "current_ptk_signature"
+request = "ActivateTeamBearerTokenArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "expired", "team_bearer_token_stale", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+coverage = ["team_create_edit_and_kv"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "checkTeamBearerToken"
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+coverage = ["unsupported_team_routes"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "putTeamCert"
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+coverage = ["unsupported_team_routes"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "getCurrentTeamCerts"
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+coverage = ["unsupported_team_routes"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "loadTeamRemoteJoinReq"
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+coverage = ["unsupported_team_routes"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "postTeamMembershipLink"
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+coverage = ["unsupported_team_routes"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "loadRemovalKeyBoxForTeamAdmin"
+position_constant = "TEAM_LOAD_REMOVAL_KEY_BOX_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "LoadRemovalKeyBoxArgument"
+result = "TeamRemovalKeyBox"
+statuses = ["ok", "bad_args", "expired", "team_bearer_token_stale", "team_removal_key", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+coverage = ["team_create_edit_and_kv"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "postTeamRemoval"
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+coverage = ["unsupported_team_routes"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "loadTeamRawInbox"
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+coverage = ["unsupported_team_routes"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "rejectJoinReq"
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+coverage = ["unsupported_team_routes"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "getTeamConfig"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 1024
+supported = false
+coverage = ["unsupported_team_routes"]
+
+
+[[route]]
+protocol = "TeamAdmin"
+method = "createTeamAdHoc"
+position_constant = "TEAM_CREATE_AD_HOC_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_owner_device_mtls"
+request = "AdHocTeamCreateArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "team_error", "team_roster", "team_key", "team_adhoc_creator_included", "team_adhoc_open_viewership", "team_adhoc_duplicate", "stale_root", "tx_retry"]
+max_request_bytes = 8388608
+supported = true
+coverage = ["team_create_edit_and_kv"]
+
+
+[[route]]
+protocol = "MerkleQuery"
+method = "getHistoricalRoots"
+position_constant = "MERKLE_GET_HISTORICAL_ROOTS_METHOD_POSITION"
+listener = "public_services"
+authentication = "delegated_tls"
+request = "HistoricalMerkleRootsArgument"
+result = "HistoricalMerkleRoots"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["signup_and_user"]
+
+
+[[route]]
+protocol = "MerkleQuery"
+method = "getCurrentRoot"
+position_constant = "MERKLE_GET_CURRENT_ROOT_METHOD_POSITION"
+listener = "public_services"
+authentication = "delegated_tls"
+request = "CurrentMerkleRootArgument"
+result = "MerkleRoot"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 4096
+supported = true
+coverage = ["probe_and_pin"]
+
+
+[[route]]
+protocol = "MerkleQuery"
+method = "selectVHost"
+position_constant = "MERKLE_SELECT_VHOST_METHOD_POSITION"
+listener = "public_services"
+authentication = "delegated_tls"
+request = "SelectVHostArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 4096
+supported = true
+coverage = ["probe_and_pin"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "mkdir"
+upstream_method = "kvMkdir"
+position_constant = "KV_MKDIR_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvMkdirArgument"
+result = "KvDirectory"
+statuses = ["ok", "bad_args", "stale_cache", "quota_exceeded"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["kv_small"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "put"
+upstream_method = "kvPut"
+position_constant = "KV_PUT_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvPutArgument"
+result = "KvDirectory"
+statuses = ["ok", "bad_args", "stale_cache", "quota_exceeded"]
+max_request_bytes = 4194304
+supported = true
+coverage = ["kv_small"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "putRoot"
+upstream_method = "kvPutRoot"
+position_constant = "KV_PUT_ROOT_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvPutRootArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "stale_cache", "quota_exceeded"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["kv_small"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "fileUploadInit"
+upstream_method = "kvFileUploadInit"
+position_constant = "KV_FILE_UPLOAD_INIT_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvUploadInitArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "stale_cache", "quota_exceeded"]
+max_request_bytes = 16777216
+supported = true
+coverage = ["kv_large"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "fileUploadChunk"
+upstream_method = "kvFileUploadChunk"
+position_constant = "KV_FILE_UPLOAD_CHUNK_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvUploadChunkArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "not_found", "quota_exceeded"]
+max_request_bytes = 16777216
+supported = true
+coverage = ["kv_large"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "putSmallFileOrSymlink"
+upstream_method = "kvPutSmallFileOrSymlink"
+position_constant = "KV_PUT_SMALL_FILE_OR_SYMLINK_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvPutSmallArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "stale_cache", "quota_exceeded"]
+max_request_bytes = 4194304
+supported = true
+coverage = ["kv_small"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "getRoot"
+upstream_method = "kvGetRoot"
+position_constant = "KV_GET_ROOT_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvGetRootArgument"
+result = "KvRoot"
+statuses = ["ok", "bad_args", "kv_noent"]
+max_request_bytes = 16384
+supported = true
+coverage = ["kv_small"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "getNode"
+upstream_method = "kvGetNode"
+position_constant = "KV_GET_NODE_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvGetNodeArgument"
+result = "KvNode"
+statuses = ["ok", "bad_args", "kv_noent"]
+max_request_bytes = 16384
+supported = true
+coverage = ["kv_small"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "getEncryptedChunk"
+upstream_method = "kvGetEncryptedChunk"
+position_constant = "KV_GET_ENCRYPTED_CHUNK_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvGetChunkArgument"
+result = "KvEncryptedChunk"
+statuses = ["ok", "bad_args", "kv_noent"]
+max_request_bytes = 16384
+supported = true
+coverage = ["kv_large"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "getDir"
+upstream_method = "kvGetDir"
+position_constant = "KV_GET_DIR_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvGetDirArgument"
+result = "KvDirectory"
+statuses = ["ok", "bad_args", "kv_noent"]
+max_request_bytes = 16384
+supported = true
+coverage = ["kv_small"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "cacheCheck"
+upstream_method = "kvCacheCheck"
+position_constant = "KV_CACHE_CHECK_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvCacheCheckArgument"
+result = "KvPathVersionVector"
+statuses = ["ok", "bad_args", "stale_cache"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["kv_small"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "list"
+upstream_method = "kvList"
+position_constant = "KV_LIST_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvListArgument"
+result = "KvList"
+statuses = ["ok", "bad_args", "kv_noent"]
+max_request_bytes = 16384
+supported = true
+coverage = ["kv_small"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "lockAcquire"
+upstream_method = "kvLockAcquire"
+position_constant = "KV_LOCK_ACQUIRE_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvLockAcquireArgument"
+result = "KvLock"
+statuses = ["ok", "bad_args", "locked"]
+max_request_bytes = 16384
+supported = true
+coverage = ["kv_small"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "lockRelease"
+upstream_method = "kvLockRelease"
+position_constant = "KV_LOCK_RELEASE_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "KvLockReleaseArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 16384
+supported = true
+coverage = ["kv_small"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "selectVHost"
+position_constant = "KV_SELECT_VHOST_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "SelectVHostArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 4096
+supported = true
+coverage = ["kv_small"]

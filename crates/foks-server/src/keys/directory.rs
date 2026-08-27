@@ -10,16 +10,21 @@ use super::{HostKeyProvider, KeyPurpose, SecretKey};
 use crate::{Error, Result};
 
 const MAGIC: &[u8; 8] = b"FOKSK01\0";
+const WRAPPING_MAGIC: &[u8; 8] = b"FOKSW01\0";
+pub(crate) const WRAPPING_KEY_FILE: &str = "key-encryption.key";
+const ROTATION_LOCK_FILE: &str = ".key-encryption.lock";
 const GENERATION_BYTES: usize = 16;
 const NONCE_BYTES: usize = 24;
 
 pub struct DirectoryKeyProvider {
     directory: PathBuf,
-    root_key: Zeroizing<[u8; 32]>,
+    wrapping_key: Zeroizing<[u8; 32]>,
+    _process_lock: File,
 }
 
 impl DirectoryKeyProvider {
     pub fn open(directory: impl AsRef<Path>, root_key: [u8; 32]) -> Result<Self> {
+        let root_key = Zeroizing::new(root_key);
         let directory = directory.as_ref().to_path_buf();
         std::fs::create_dir_all(&directory)?;
         set_directory_permissions(&directory)?;
@@ -29,10 +34,56 @@ impl DirectoryKeyProvider {
         {
             return Err(Error::Key("key directory is a symlink"));
         }
+        let process_lock = open_rotation_lock(&directory)?;
+        process_lock
+            .try_lock_shared()
+            .map_err(|_| Error::Config("key directory rotation is active"))?;
+        let wrapping_key = load_or_create_wrapping_key(&directory, &root_key)?;
         Ok(Self {
             directory,
-            root_key: Zeroizing::new(root_key),
+            wrapping_key,
+            _process_lock: process_lock,
         })
+    }
+
+    /// Atomically rewraps the installation key-encryption key. Purpose keys
+    /// and their generation IDs are unchanged, so the database and clients do
+    /// not observe operator-root rotation.
+    pub fn rotate_operator_root(
+        directory: impl AsRef<Path>,
+        old_root_key: [u8; 32],
+        new_root_key: [u8; 32],
+    ) -> Result<()> {
+        let old_root_key = Zeroizing::new(old_root_key);
+        let new_root_key = Zeroizing::new(new_root_key);
+        if *old_root_key == *new_root_key {
+            return Err(Error::Key("new operator root key is unchanged"));
+        }
+        let directory = directory.as_ref();
+        let metadata = std::fs::symlink_metadata(directory)?;
+        if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+            return Err(Error::Key("key directory is not a regular directory"));
+        }
+        let process_lock = open_rotation_lock(directory)?;
+        process_lock
+            .try_lock()
+            .map_err(|_| Error::Config("key directory is in use"))?;
+        let path = directory.join(WRAPPING_KEY_FILE);
+        let wrapping_key = load_wrapping_key(&path, &old_root_key)?;
+        let encoded = encode_wrapping_key(&wrapping_key, &new_root_key)?;
+        let temporary = temporary_path(directory, "operator-root")?;
+        let result = (|| {
+            write_new_secret(&temporary, &encoded)?;
+            let verified = load_wrapping_key(&temporary, &new_root_key)?;
+            if *verified != *wrapping_key {
+                return Err(Error::Key("operator root rotation verification"));
+            }
+            std::fs::rename(&temporary, &path)?;
+            sync_directory(directory)?;
+            Ok(())
+        })();
+        let _ = std::fs::remove_file(temporary);
+        result
     }
 
     pub fn load_existing(&self, purpose: KeyPurpose) -> Result<SecretKey> {
@@ -67,7 +118,7 @@ impl DirectoryKeyProvider {
             .try_into()
             .map_err(|_| Error::Key("invalid key generation"))?;
         let aad = associated_data(purpose, &generation);
-        let cipher = XChaCha20Poly1305::new((&*self.root_key).into());
+        let cipher = XChaCha20Poly1305::new((&*self.wrapping_key).into());
         let plaintext = Zeroizing::new(
             cipher
                 .decrypt(
@@ -95,7 +146,7 @@ impl DirectoryKeyProvider {
         let mut generation = [0; GENERATION_BYTES];
         getrandom::fill(&mut generation).map_err(|_| Error::Key("operating-system entropy"))?;
         let aad = associated_data(purpose, &generation);
-        let cipher = XChaCha20Poly1305::new((&*self.root_key).into());
+        let cipher = XChaCha20Poly1305::new((&*self.wrapping_key).into());
         let ciphertext = cipher
             .encrypt(
                 &XNonce::from(nonce),
@@ -105,13 +156,7 @@ impl DirectoryKeyProvider {
                 },
             )
             .map_err(|_| Error::KeyCrypto)?;
-        let mut suffix = [0; 8];
-        getrandom::fill(&mut suffix).map_err(|_| Error::Key("operating-system entropy"))?;
-        let temporary = self.directory.join(format!(
-            ".{}.{}.tmp",
-            purpose.label(),
-            u64::from_be_bytes(suffix)
-        ));
+        let temporary = temporary_path(&self.directory, purpose.label())?;
         let result = (|| {
             let mut file = secure_create(&temporary)?;
             file.write_all(MAGIC)?;
@@ -133,6 +178,126 @@ impl DirectoryKeyProvider {
         let _ = std::fs::remove_file(temporary);
         result
     }
+}
+
+fn load_or_create_wrapping_key(
+    directory: &Path,
+    root_key: &[u8; 32],
+) -> Result<Zeroizing<[u8; 32]>> {
+    let path = directory.join(WRAPPING_KEY_FILE);
+    match load_wrapping_key(&path, root_key) {
+        Ok(key) => Ok(key),
+        Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            create_wrapping_key(directory, &path, root_key)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn load_wrapping_key(path: &Path, root_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(Error::Key("key-encryption file is a symlink"));
+    }
+    let mut file = secure_open_read(path)?;
+    validate_file_permissions(&file)?;
+    let expected = WRAPPING_MAGIC.len() + NONCE_BYTES + 32 + 16;
+    if usize::try_from(file.metadata()?.len()).map_err(|_| Error::Key("key file size"))? != expected
+    {
+        return Err(Error::Key("invalid key-encryption file length"));
+    }
+    let mut encoded = Zeroizing::new(Vec::with_capacity(expected));
+    file.read_to_end(&mut encoded)?;
+    if &encoded[..WRAPPING_MAGIC.len()] != WRAPPING_MAGIC {
+        return Err(Error::Key("invalid key-encryption file magic"));
+    }
+    let nonce_start = WRAPPING_MAGIC.len();
+    let ciphertext_start = nonce_start + NONCE_BYTES;
+    let cipher = XChaCha20Poly1305::new(root_key.into());
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(
+                <&XNonce>::try_from(&encoded[nonce_start..ciphertext_start])
+                    .map_err(|_| Error::Key("invalid key-encryption nonce"))?,
+                Payload {
+                    msg: &encoded[ciphertext_start..],
+                    aad: b"foks-server-operator-root-v1",
+                },
+            )
+            .map_err(|_| Error::KeyCrypto)?,
+    );
+    Ok(Zeroizing::new(plaintext.as_slice().try_into().map_err(
+        |_| Error::Key("invalid key-encryption plaintext"),
+    )?))
+}
+
+fn create_wrapping_key(
+    directory: &Path,
+    path: &Path,
+    root_key: &[u8; 32],
+) -> Result<Zeroizing<[u8; 32]>> {
+    let mut wrapping_key = Zeroizing::new([0; 32]);
+    getrandom::fill(&mut *wrapping_key).map_err(|_| Error::Key("operating-system entropy"))?;
+    let encoded = encode_wrapping_key(&wrapping_key, root_key)?;
+    let temporary = temporary_path(directory, "key-encryption")?;
+    let result = (|| {
+        write_new_secret(&temporary, &encoded)?;
+        match std::fs::hard_link(&temporary, path) {
+            Ok(()) => {
+                sync_directory(directory)?;
+                Ok(wrapping_key)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                load_wrapping_key(path, root_key)
+            }
+            Err(error) => Err(error.into()),
+        }
+    })();
+    let _ = std::fs::remove_file(temporary);
+    result
+}
+
+fn encode_wrapping_key(key: &[u8; 32], root_key: &[u8; 32]) -> Result<Vec<u8>> {
+    let mut nonce = [0; NONCE_BYTES];
+    getrandom::fill(&mut nonce).map_err(|_| Error::Key("operating-system entropy"))?;
+    let cipher = XChaCha20Poly1305::new(root_key.into());
+    let ciphertext = cipher
+        .encrypt(
+            &XNonce::from(nonce),
+            Payload {
+                msg: key,
+                aad: b"foks-server-operator-root-v1",
+            },
+        )
+        .map_err(|_| Error::KeyCrypto)?;
+    let mut encoded = Vec::with_capacity(WRAPPING_MAGIC.len() + nonce.len() + ciphertext.len());
+    encoded.extend_from_slice(WRAPPING_MAGIC);
+    encoded.extend_from_slice(&nonce);
+    encoded.extend_from_slice(&ciphertext);
+    Ok(encoded)
+}
+
+fn temporary_path(directory: &Path, label: &str) -> Result<PathBuf> {
+    let mut suffix = [0; 8];
+    getrandom::fill(&mut suffix).map_err(|_| Error::Key("operating-system entropy"))?;
+    Ok(directory.join(format!(".{label}.{}.tmp", u64::from_be_bytes(suffix))))
+}
+
+fn write_new_secret(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = secure_create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn open_rotation_lock(directory: &Path) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    Ok(options.open(directory.join(ROTATION_LOCK_FILE))?)
 }
 
 fn associated_data(purpose: KeyPurpose, generation: &[u8; GENERATION_BYTES]) -> Vec<u8> {

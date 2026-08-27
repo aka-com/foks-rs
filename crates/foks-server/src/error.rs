@@ -26,6 +26,8 @@ pub enum Error {
     Thread,
     #[error("SQLite writer queue is full or closed")]
     WriterQueue,
+    #[error("SQLite reader pool is exhausted")]
+    ReaderPool,
     #[error("request authorization changed before the queued write committed")]
     AuthorizationChanged,
     #[error("invalid server configuration: {0}")]

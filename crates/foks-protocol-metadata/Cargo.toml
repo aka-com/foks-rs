@@ -1,0 +1,20 @@
+[package]
+name = "foks-protocol-metadata"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Validation and deterministic generation for pinned FOKS protocol metadata"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
