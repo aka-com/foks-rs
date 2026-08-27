@@ -8,11 +8,16 @@
 
 mod config;
 mod error;
+pub mod host;
 pub mod keys;
 pub mod net;
 pub mod pki;
 pub mod rpc;
+mod standalone;
+mod writer;
 
 pub use config::{Config, SessionLimits};
 pub use error::{Error, Result};
 pub use net::{start, RunningServer, ServerAddresses};
+pub use standalone::{start_standalone, RunningStandaloneServer, StandaloneConfig};
+pub use writer::Writer;

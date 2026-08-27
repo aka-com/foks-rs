@@ -29,6 +29,14 @@ impl ProbeResponse {
             self.hostchain.iter().map(HostchainLink::to_value).collect(),
         ))?)
     }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&Value::Array(vec![
+            signed_blob_value(&self.merkle_root),
+            signed_blob_value(&self.public_zone),
+            list_value(self.hostchain.iter().map(HostchainLink::to_value).collect()),
+        ]))?)
+    }
 }
 
 /// Decodes the exact standalone host-chain array stored as durable hard state.
@@ -114,6 +122,38 @@ pub struct HostchainChange {
     pub changes: Vec<HostchainChangeItem>,
 }
 
+impl HostchainChange {
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        let changes = self
+            .changes
+            .iter()
+            .map(hostchain_change_value)
+            .collect::<Vec<_>>();
+        Ok(encode(&Value::Array(vec![
+            Value::Unsigned(1),
+            Value::Variant(Some((
+                b"1".to_vec(),
+                Box::new(Value::Array(vec![
+                    Value::Array(vec![
+                        Value::Unsigned(self.chainer.seqno),
+                        self.chainer
+                            .previous
+                            .map_or(Value::Null, |hash| Value::Binary(hash.to_vec())),
+                        Value::Array(vec![
+                            Value::Unsigned(self.chainer.root.epoch),
+                            Value::Binary(self.chainer.root.hash.to_vec()),
+                        ]),
+                        Value::Unsigned(self.chainer.time),
+                    ]),
+                    Value::Binary(self.host.as_bytes().to_vec()),
+                    Value::Binary(self.signer.as_bytes().to_vec()),
+                    list_value(changes),
+                ])),
+            ))),
+        ]))?)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HostchainChangeItem {
     Revoke(EntityId),
@@ -166,6 +206,24 @@ impl PublicZone {
                 realtime: text(&services[5])?,
             },
         })
+    }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        let ttl = if self.ttl_seconds >= 0 {
+            Value::Unsigned(self.ttl_seconds as u64)
+        } else {
+            Value::Negative(self.ttl_seconds)
+        };
+        Ok(encode(&Value::Array(vec![
+            ttl,
+            Value::Array(
+                self.services
+                    .entries()
+                    .into_iter()
+                    .map(|(_, endpoint)| Value::Text(endpoint.as_bytes().to_vec()))
+                    .collect(),
+            ),
+        ]))?)
     }
 }
 
@@ -262,6 +320,42 @@ pub(crate) fn signed_blob(value: &Value) -> Result<SignedBlob> {
         inner: binary(&fields[0])?.to_vec(),
         signature: signature(&fields[1])?,
     })
+}
+
+fn signed_blob_value(blob: &SignedBlob) -> Value {
+    Value::Array(vec![
+        Value::Binary(blob.inner.clone()),
+        blob.signature.to_value(),
+    ])
+}
+
+fn list_value(values: Vec<Value>) -> Value {
+    if values.is_empty() {
+        Value::Null
+    } else {
+        Value::Array(values)
+    }
+}
+
+fn hostchain_change_value(change: &HostchainChangeItem) -> Value {
+    let (discriminant, tag, payload) = match change {
+        HostchainChangeItem::Revoke(id) => {
+            (1, b"1".to_vec(), Value::Binary(id.as_bytes().to_vec()))
+        }
+        HostchainChangeItem::Key(id) => (2, b"2".to_vec(), Value::Binary(id.as_bytes().to_vec())),
+        HostchainChangeItem::TlsCa { id, certificate } => (
+            3,
+            b"3".to_vec(),
+            Value::Array(vec![
+                Value::Binary(id.as_bytes().to_vec()),
+                Value::Binary(certificate.clone()),
+            ]),
+        ),
+    };
+    Value::Array(vec![
+        Value::Unsigned(discriminant),
+        Value::Variant(Some((tag, Box::new(payload)))),
+    ])
 }
 
 pub(crate) fn signature(value: &Value) -> Result<Signature> {

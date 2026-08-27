@@ -8,10 +8,12 @@ description = "Sealed isolated-process test composition for foks-server"
 
 [dependencies]
 foks-server = { workspace = true }
+foks-server-db = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 tempfile = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 foks-client = { workspace = true }

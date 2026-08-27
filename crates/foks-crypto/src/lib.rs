@@ -555,6 +555,28 @@ pub fn prefixed_hash(type_id: u64, canonical_object: &[u8]) -> [u8; 32] {
     hash.finalize().into()
 }
 
+/// Returns the Ed25519 public key for a raw 32-byte server signing seed.
+pub fn ed25519_public_key(seed: &[u8; 32]) -> [u8; 32] {
+    SigningKey::from_bytes(seed).verifying_key().to_bytes()
+}
+
+/// Signs a canonical object using the FOKS typed Ed25519 message format.
+///
+/// This low-level primitive is intended for host keys whose persistence and
+/// lifetime are managed outside the client-oriented [`SecretSeed`] type.
+pub fn sign_ed25519_typed(
+    seed: &[u8; 32],
+    type_id: u64,
+    canonical_object: &[u8],
+) -> Result<Signature> {
+    foks_snowpack::validate(canonical_object)?;
+    let signing = SigningKey::from_bytes(seed);
+    let mut message = Vec::with_capacity(8 + canonical_object.len());
+    message.extend_from_slice(&type_id.to_be_bytes());
+    message.extend_from_slice(canonical_object);
+    Ok(Signature::Ed25519(signing.sign(&message).to_bytes()))
+}
+
 /// Computes the exact v0.1.9 commitment authenticated by named-team member
 /// links and removal-key boxes.
 pub fn team_removal_key_commitment(removal_key: &SecretSeed) -> Result<[u8; 32]> {

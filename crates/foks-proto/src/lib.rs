@@ -123,12 +123,17 @@ mod tests {
     #[test]
     fn exact_nested_wire_objects_are_retained() {
         let probe = ProbeResponse::decode(FIXTURE).unwrap();
+        assert_eq!(probe.encoded().unwrap(), FIXTURE);
         assert_eq!(
             probe.hostchain[0].encoded().unwrap(),
             include_bytes!(
                 "../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/hostchain-link-0001.snowp"
             )
         );
+        let change = probe.hostchain[0].decode_change().unwrap();
+        assert_eq!(change.encoded().unwrap(), probe.hostchain[0].inner);
+        let zone = PublicZone::decode(&probe.public_zone.inner).unwrap();
+        assert_eq!(zone.encoded().unwrap(), probe.public_zone.inner);
         assert_eq!(
             probe.public_zone.encoded().unwrap(),
             include_bytes!(

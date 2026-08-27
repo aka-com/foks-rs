@@ -10,7 +10,7 @@ fn public_listener_returns_unsupported_for_private_methods() {
     let server = IsolatedTestServer::start().unwrap();
     let mut tls = connect_without_client_certificate(
         server.addresses().public_services,
-        server.probe_roots(),
+        server.service_roots(),
     );
     let request = foks_rpc::encode_load_user_chain_request(&[1; 33], 0).unwrap();
     tls.write_all(&request).unwrap();
@@ -25,8 +25,10 @@ fn public_listener_returns_unsupported_for_private_methods() {
 #[test]
 fn authenticated_listener_rejects_a_client_without_a_certificate() {
     let server = IsolatedTestServer::start().unwrap();
-    let mut tls =
-        connect_without_client_certificate(server.addresses().authenticated, server.probe_roots());
+    let mut tls = connect_without_client_certificate(
+        server.addresses().authenticated,
+        server.service_roots(),
+    );
     let request = foks_rpc::encode_load_user_chain_request(&[1; 33], 0).unwrap();
     let rejected = tls
         .write_all(&request)

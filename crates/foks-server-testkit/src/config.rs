@@ -34,4 +34,12 @@ impl IsolatedPaths {
     pub(crate) fn all(&self) -> [&Path; 4] {
         [&self.database, &self.keys, &self.backup, &self.logs]
     }
+
+    pub(crate) fn database(&self) -> &Path {
+        &self.database
+    }
+
+    pub(crate) fn keys(&self) -> &Path {
+        &self.keys
+    }
 }
