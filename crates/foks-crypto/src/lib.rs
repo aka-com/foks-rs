@@ -470,6 +470,23 @@ fn verify_mac(key: &[u8], type_id: u64, object: &[u8], expected: &[u8; 32]) -> R
     mac.verify_slice(expected).map_err(|_| Error::KvBinding)
 }
 
+/// Computes a domain-separated HMAC-SHA-512/256 for opaque server
+/// capabilities. Protocol-specific code should assign a stable, unique
+/// `type_id` and MAC the exact canonical payload bytes.
+pub fn capability_mac(key: &[u8], type_id: u64, object: &[u8]) -> [u8; 32] {
+    typed_hmac(key, type_id, object)
+}
+
+/// Verifies a capability MAC in constant time.
+pub fn verify_capability_mac(
+    key: &[u8],
+    type_id: u64,
+    object: &[u8],
+    expected: &[u8; 32],
+) -> Result<()> {
+    verify_mac(key, type_id, object, expected)
+}
+
 fn open_typed_secretbox(
     key: &[u8; 32],
     type_id: u64,

@@ -1,5 +1,7 @@
 use foks_rpc::RpcStatus;
 use foks_snowpack::{decode, encode, Value};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::auth::Principal;
 use crate::WriterHandle;
@@ -15,46 +17,71 @@ struct LockFields {
     lock: [u8; 16],
 }
 
+#[derive(Clone)]
+struct KvAuthority {
+    party: Vec<u8>,
+    actor: Vec<u8>,
+    token_hash: Option<[u8; 32]>,
+    maximum_role: foks_proto::Role,
+    key_generations: BTreeMap<foks_proto::Role, u64>,
+    clock: Arc<dyn foks_server_db::Clock>,
+}
+
 pub(crate) fn dispatch(
     method: &str,
     argument: &[u8],
     principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
-    clock: &dyn foks_server_db::Clock,
+    clock: &Arc<dyn foks_server_db::Clock>,
 ) -> Result<Response, RpcStatus> {
+    let authority = resolve_authority(argument, principal, reader, clock)?;
     match method {
-        "getRoot" => get_root(argument, principal, reader),
-        "mkdir" => mkdir(argument, principal, reader, writer),
-        "fileUploadInit" => file_upload_init(argument, principal, reader, writer, clock),
-        "fileUploadChunk" => file_upload_chunk(argument, principal, reader, writer, clock),
-        "putSmallFileOrSymlink" => put_small_file_or_symlink(argument, principal, reader, writer),
-        "put" => put(argument, principal, reader, writer),
-        "putRoot" => put_root(argument, principal, reader, writer),
-        "getDir" => get_directory(argument, principal, reader),
-        "getNode" => get_node(argument, principal, reader),
-        "getEncryptedChunk" => get_encrypted_chunk(argument, principal, reader),
-        "list" => list(argument, principal, reader),
-        "cacheCheck" => cache_check(argument, principal, reader),
-        "lockAcquire" => lock_acquire(argument, principal, reader, writer, clock),
-        "lockRelease" => lock_release(argument, principal, reader, writer),
+        "getRoot" => get_root(argument, reader, &authority),
+        "mkdir" => mkdir(argument, principal, reader, writer, &authority),
+        "fileUploadInit" => {
+            file_upload_init(argument, principal, writer, clock.as_ref(), &authority)
+        }
+        "fileUploadChunk" => {
+            file_upload_chunk(argument, principal, writer, clock.as_ref(), &authority)
+        }
+        "putSmallFileOrSymlink" => {
+            put_small_file_or_symlink(argument, principal, reader, writer, &authority)
+        }
+        "put" => put(argument, principal, reader, writer, &authority),
+        "putRoot" => put_root(argument, principal, reader, writer, &authority),
+        "getDir" => get_directory(argument, reader, &authority),
+        "getNode" => get_node(argument, reader, &authority),
+        "getEncryptedChunk" => get_encrypted_chunk(argument, reader, &authority),
+        "list" => list(argument, reader, &authority),
+        "cacheCheck" => cache_check(argument, reader, &authority),
+        "lockAcquire" => lock_acquire(
+            argument,
+            principal,
+            reader,
+            writer,
+            clock.as_ref(),
+            &authority,
+        ),
+        "lockRelease" => lock_release(argument, principal, reader, writer, &authority),
         _ => Err(RpcStatus::Unsupported),
     }
 }
 
 fn get_root(
     argument: &[u8],
-    principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
-    let fields = fields(argument, 1)?;
-    require_user_auth(&fields[0])?;
-    let uid = active_uid(reader, principal)?;
+    let _fields = fields(argument, 1)?;
+    let uid = authority.party.clone();
     let root = reader
         .kv_root(&uid)
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or(RpcStatus::KvNoEnt)?;
-    foks_proto::KvRoot::decode(&root.exact).map_err(|_| RpcStatus::TransactionRetry)?;
+    let decoded =
+        foks_proto::KvRoot::decode(&root.exact).map_err(|_| RpcStatus::TransactionRetry)?;
+    authority.require_read_key(decoded.key)?;
     Ok(Response::Data(root.exact))
 }
 
@@ -63,15 +90,15 @@ fn mkdir(
     principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 2)?;
     let Value::Array(header) = &fields[0] else {
         return Err(bad_arguments("KV request header is not a struct"));
     };
-    let [auth, precondition] = header.as_slice() else {
+    let [_auth, precondition] = header.as_slice() else {
         return Err(bad_arguments("KV request header has the wrong shape"));
     };
-    require_user_auth(auth)?;
     let precondition = match precondition {
         Value::Null => None,
         value => Some(foks_proto::KvPathVersionVector::from_value(value).map_err(bad_arguments)?),
@@ -80,22 +107,22 @@ fn mkdir(
     let directory = foks_proto::KvDirectory::decode(&exact).map_err(bad_arguments)?;
     if directory.version != 1
         || directory.status != foks_proto::KvDirectoryStatus::Active
-        || directory.key.role != foks_proto::Role::OWNER
-        || directory.key.generation != 1
-        || directory.write_role != foks_proto::Role::OWNER
+        || !authority.can_write_key(directory.key)
+        || !authority.can_write_role(directory.write_role)
     {
         return Err(bad_arguments(
             "initial KV directory must be active version one",
         ));
     }
     let (key_role, key_visibility) = role_parts(directory.key.role);
-    let uid = active_uid(reader, principal)?;
+    let uid = authority.party.clone();
     let error_uid = uid.clone();
-    let device = *principal.device_id();
+    let device = principal.device_id().to_vec();
+    let write_authority = authority.clone();
     writer
         .call(move |database| {
-            if !database.is_active_device(&uid, &device)? {
-                return Err(crate::Error::Database(foks_server_db::Error::KvConflict));
+            if !kv_write_is_current(database, &write_authority, &device)? {
+                return Err(crate::Error::AuthorizationChanged);
             }
             database.put_kv_directory_with_precondition(
                 &foks_server_db::KvDirectoryMutation {
@@ -121,22 +148,23 @@ fn put_root(
     principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 2)?;
-    require_user_auth(&fields[0])?;
     let exact = encode(&fields[1]).map_err(bad_arguments)?;
     let root = foks_proto::KvRoot::decode(&exact).map_err(bad_arguments)?;
-    if root.version != 1 || root.key.role != foks_proto::Role::OWNER || root.key.generation != 1 {
+    if root.version != 1 || !authority.can_write_key(root.key) {
         return Err(bad_arguments("initial KV root must be version one"));
     }
     let (key_role, key_visibility) = role_parts(root.key.role);
-    let uid = active_uid(reader, principal)?;
+    let uid = authority.party.clone();
     let error_uid = uid.clone();
-    let device = *principal.device_id();
+    let device = principal.device_id().to_vec();
+    let write_authority = authority.clone();
     writer
         .call(move |database| {
-            if !database.is_active_device(&uid, &device)? {
-                return Err(crate::Error::Database(foks_server_db::Error::KvConflict));
+            if !kv_write_is_current(database, &write_authority, &device)? {
+                return Err(crate::Error::AuthorizationChanged);
             }
             database.put_kv_root(&foks_server_db::KvRootMutation {
                 uid: &uid,
@@ -157,20 +185,16 @@ fn put_root(
 fn file_upload_init(
     argument: &[u8],
     principal: &Principal,
-    reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
     clock: &dyn foks_server_db::Clock,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 4)?;
-    require_user_auth(&fields[0])?;
     let file_id = fixed_16(&fields[1], "KV file ID")?;
     let exact_metadata = encode(&fields[2]).map_err(bad_arguments)?;
     let metadata =
         foks_proto::KvLargeFileMetadata::decode(&exact_metadata).map_err(bad_arguments)?;
-    if metadata.key.role != foks_proto::Role::OWNER
-        || metadata.key.generation != 1
-        || metadata.version != 1
-    {
+    if !authority.can_write_key(metadata.key) || metadata.version != 1 {
         return Err(bad_arguments("KV file uses unsupported metadata"));
     }
     put_file_chunk(
@@ -178,29 +202,28 @@ fn file_upload_init(
         Some(exact_metadata),
         file_id,
         principal,
-        reader,
         writer,
         clock,
+        authority,
     )
 }
 
 fn file_upload_chunk(
     argument: &[u8],
     principal: &Principal,
-    reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
     clock: &dyn foks_server_db::Clock,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 3)?;
-    require_user_auth(&fields[0])?;
     put_file_chunk(
         &fields[2],
         None,
         fixed_16(&fields[1], "KV file ID")?,
         principal,
-        reader,
         writer,
         clock,
+        authority,
     )
 }
 
@@ -209,9 +232,9 @@ fn put_file_chunk(
     exact_metadata: Option<Vec<u8>>,
     file_id: [u8; 16],
     principal: &Principal,
-    reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
     clock: &dyn foks_server_db::Clock,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let exact_chunk = encode(value).map_err(bad_arguments)?;
     let chunk = foks_proto::KvUploadChunk::decode(&exact_chunk).map_err(bad_arguments)?;
@@ -225,12 +248,13 @@ fn put_file_chunk(
     let now = clock
         .now_micros()
         .map_err(|_| RpcStatus::TransactionRetry)?;
-    let uid = active_uid(reader, principal)?;
-    let device = *principal.device_id();
+    let uid = authority.party.clone();
+    let device = principal.device_id().to_vec();
+    let write_authority = authority.clone();
     writer
         .call(move |database| {
-            if !database.is_active_device(&uid, &device)? {
-                return Err(crate::Error::Database(foks_server_db::Error::KvConflict));
+            if !kv_write_is_current(database, &write_authority, &device)? {
+                return Err(crate::Error::AuthorizationChanged);
             }
             database.put_kv_file_chunk(&foks_server_db::KvFileChunkMutation {
                 uid: &uid,
@@ -253,9 +277,9 @@ fn put_small_file_or_symlink(
     principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 3)?;
-    require_user_auth(&fields[0])?;
     let id = fixed_17(&fields[1], "KV node ID")?;
     if !matches!(id[0], 3 | 4) {
         return Err(bad_arguments("KV node is not a small file or symlink"));
@@ -265,16 +289,17 @@ fn put_small_file_or_symlink(
         return Err(bad_arguments("encoded KV small node exceeds 64 KiB"));
     }
     let boxed = foks_proto::KvSmallFileBox::decode(&exact).map_err(bad_arguments)?;
-    if boxed.key.role != foks_proto::Role::OWNER || boxed.key.generation != 1 {
+    if !authority.can_write_key(boxed.key) {
         return Err(bad_arguments("KV node uses an unsupported content key"));
     }
-    let uid = active_uid(reader, principal)?;
+    let uid = authority.party.clone();
     let error_uid = uid.clone();
-    let device = *principal.device_id();
+    let device = principal.device_id().to_vec();
+    let write_authority = authority.clone();
     writer
         .call(move |database| {
-            if !database.is_active_device(&uid, &device)? {
-                return Err(crate::Error::Database(foks_server_db::Error::KvConflict));
+            if !kv_write_is_current(database, &write_authority, &device)? {
+                return Err(crate::Error::AuthorizationChanged);
             }
             database.put_kv_node(&foks_server_db::KvNodeMutation {
                 uid: &uid,
@@ -293,15 +318,15 @@ fn put(
     principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 2)?;
     let Value::Array(header) = &fields[0] else {
         return Err(bad_arguments("KV request header is not a struct"));
     };
-    let [auth, precondition] = header.as_slice() else {
+    let [_auth, precondition] = header.as_slice() else {
         return Err(bad_arguments("KV request header has the wrong shape"));
     };
-    require_user_auth(auth)?;
     let precondition = match precondition {
         Value::Null => return Err(bad_arguments("KV put requires a cache precondition")),
         value => foks_proto::KvPathVersionVector::from_value(value).map_err(bad_arguments)?,
@@ -321,7 +346,7 @@ fn put(
             let dirent = foks_proto::KvDirent::decode(&exact).map_err(bad_arguments)?;
             if dirent.version == 0
                 || dirent.directory_version == 0
-                || dirent.write_role != foks_proto::Role::OWNER
+                || !authority.can_write_role(dirent.write_role)
                 || dirent.directory_status != foks_proto::KvDirectoryStatus::Active
             {
                 return Err(bad_arguments(
@@ -331,13 +356,17 @@ fn put(
             Ok((dirent, exact))
         })
         .collect::<Result<Vec<_>, RpcStatus>>()?;
-    let uid = active_uid(reader, principal)?;
+    for (dirent, _) in &dirents {
+        require_directory_write_access(reader, authority, &dirent.parent)?;
+    }
+    let uid = authority.party.clone();
     let error_uid = uid.clone();
-    let device = *principal.device_id();
+    let device = principal.device_id().to_vec();
+    let write_authority = authority.clone();
     writer
         .call(move |database| {
-            if !database.is_active_device(&uid, &device)? {
-                return Err(crate::Error::Database(foks_server_db::Error::KvConflict));
+            if !kv_write_is_current(database, &write_authority, &device)? {
+                return Err(crate::Error::AuthorizationChanged);
             }
             let mutations = dirents
                 .iter()
@@ -361,16 +390,15 @@ fn put(
 
 fn get_node(
     argument: &[u8],
-    principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 2)?;
-    require_user_auth(&fields[0])?;
     let id = fixed_17(&fields[1], "KV node ID")?;
     if !matches!(id[0], 2..=4) {
         return Err(RpcStatus::KvNoEnt);
     }
-    let uid = active_uid(reader, principal)?;
+    let uid = authority.party.clone();
     if id[0] == 2 {
         let object_id: [u8; 16] = id[1..].try_into().expect("KV node ID width was checked");
         let stored = reader
@@ -379,6 +407,7 @@ fn get_node(
             .ok_or(RpcStatus::KvNoEnt)?;
         let metadata = foks_proto::KvLargeFileMetadata::decode(&stored.exact_metadata)
             .map_err(|_| RpcStatus::TransactionRetry)?;
+        authority.require_read_key(metadata.key)?;
         return Ok(Response::Data(
             foks_proto::KvNode::File(metadata)
                 .encoded()
@@ -391,6 +420,7 @@ fn get_node(
         .ok_or(RpcStatus::KvNoEnt)?;
     let boxed = foks_proto::KvSmallFileBox::decode(&stored.exact)
         .map_err(|_| RpcStatus::TransactionRetry)?;
+    authority.require_read_key(boxed.key)?;
     let node = if stored.node_type == 3 {
         foks_proto::KvNode::SmallFile(boxed)
     } else {
@@ -403,16 +433,22 @@ fn get_node(
 
 fn get_encrypted_chunk(
     argument: &[u8],
-    principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 3)?;
-    require_user_auth(&fields[0])?;
     let id = fixed_16(&fields[1], "KV file ID")?;
     let Value::Unsigned(offset) = &fields[2] else {
         return Err(bad_arguments("KV chunk offset is not unsigned"));
     };
-    let uid = active_uid(reader, principal)?;
+    let uid = authority.party.clone();
+    let file = reader
+        .kv_file(&uid, &id)
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or(RpcStatus::KvNoEnt)?;
+    let metadata = foks_proto::KvLargeFileMetadata::decode(&file.exact_metadata)
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    authority.require_read_key(metadata.key)?;
     let chunk = reader
         .kv_file_chunk(&uid, &id, *offset)
         .map_err(|_| RpcStatus::TransactionRetry)?
@@ -429,19 +465,19 @@ fn get_encrypted_chunk(
 
 fn get_directory(
     argument: &[u8],
-    principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 2)?;
-    require_user_auth(&fields[0])?;
     let id = fixed_16(&fields[1], "KV directory ID")?;
-    let uid = active_uid(reader, principal)?;
+    let uid = authority.party.clone();
     let stored = reader
         .kv_directory(&uid, &id)
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or(RpcStatus::KvNoEnt)?;
     let directory =
         foks_proto::KvDirectory::decode(&stored.exact).map_err(|_| RpcStatus::TransactionRetry)?;
+    authority.require_read_key(directory.key)?;
     let pair = foks_proto::KvDirectoryPair::from_active(directory)
         .map_err(|_| RpcStatus::TransactionRetry)?;
     Ok(Response::Data(pair.encoded().to_vec()))
@@ -449,11 +485,10 @@ fn get_directory(
 
 fn list(
     argument: &[u8],
-    principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 3)?;
-    require_user_auth(&fields[0])?;
     let id = fixed_16(&fields[1], "KV directory ID")?;
     let Value::Array(pagination) = &fields[2] else {
         return Err(bad_arguments("KV pagination is not a struct"));
@@ -465,11 +500,14 @@ fn list(
         return Err(bad_arguments("KV pagination count is out of range"));
     }
     let after = list_cursor(cursor)?;
-    let uid = active_uid(reader, principal)?;
-    reader
+    let uid = authority.party.clone();
+    let parent = reader
         .kv_directory(&uid, &id)
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or(RpcStatus::KvNoEnt)?;
+    let parent =
+        foks_proto::KvDirectory::decode(&parent.exact).map_err(|_| RpcStatus::TransactionRetry)?;
+    authority.require_read_key(parent.key)?;
     let limit =
         usize::try_from(*number).map_err(|_| bad_arguments("KV pagination count overflows"))? + 1;
     let mut stored = reader
@@ -489,10 +527,12 @@ fn list(
                 .kv_node(&uid, &stored.node_id)
                 .map_err(|_| RpcStatus::TransactionRetry)?
                 .ok_or(RpcStatus::KvNoEnt)?;
+            let small_file = foks_proto::KvSmallFileBox::decode(&node.exact)
+                .map_err(|_| RpcStatus::TransactionRetry)?;
+            authority.require_read_key(small_file.key)?;
             extended.push(foks_proto::KvExtendedDirent {
                 position: u64::try_from(position).map_err(|_| RpcStatus::TransactionRetry)?,
-                small_file: foks_proto::KvSmallFileBox::decode(&node.exact)
-                    .map_err(|_| RpcStatus::TransactionRetry)?,
+                small_file,
             });
         }
         entries.push(entry);
@@ -504,19 +544,18 @@ fn list(
 
 fn cache_check(
     argument: &[u8],
-    principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 1)?;
     let Value::Array(inner) = &fields[0] else {
         return Err(bad_arguments("KV cache check is not a struct"));
     };
-    let [auth, versions] = inner.as_slice() else {
+    let [_auth, versions] = inner.as_slice() else {
         return Err(bad_arguments("KV cache check has the wrong shape"));
     };
-    require_user_auth(auth)?;
     let supplied = foks_proto::KvPathVersionVector::from_value(versions).map_err(bad_arguments)?;
-    let uid = active_uid(reader, principal)?;
+    let uid = authority.party.clone();
     let current = current_versions(reader, &uid)?;
     if supplied.equivalent(&current) {
         Ok(Response::Void)
@@ -531,10 +570,10 @@ fn lock_acquire(
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
     clock: &dyn foks_server_db::Clock,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     const MAXIMUM_LOCK_MILLIS: u64 = 24 * 60 * 60 * 1000;
     let fields = fields(argument, 3)?;
-    require_user_auth(&fields[0])?;
     let LockFields {
         parent,
         dirent,
@@ -546,6 +585,7 @@ fn lock_acquire(
     if *timeout_millis == 0 || *timeout_millis > MAXIMUM_LOCK_MILLIS {
         return Err(bad_arguments("KV lock timeout is out of range"));
     }
+    require_directory_write_access(reader, authority, &parent)?;
     let now = clock
         .now_micros()
         .map_err(|_| RpcStatus::TransactionRetry)?;
@@ -553,12 +593,13 @@ fn lock_acquire(
         .checked_mul(1000)
         .and_then(|duration| now.checked_add(duration))
         .ok_or_else(|| bad_arguments("KV lock expiry overflows"))?;
-    let uid = active_uid(reader, principal)?;
-    let device = *principal.device_id();
+    let uid = authority.party.clone();
+    let device = principal.device_id().to_vec();
+    let write_authority = authority.clone();
     writer
         .call(move |database| {
-            if !database.is_active_device(&uid, &device)? {
-                return Err(crate::Error::Database(foks_server_db::Error::KvConflict));
+            if !kv_write_is_current(database, &write_authority, &device)? {
+                return Err(crate::Error::AuthorizationChanged);
             }
             database.acquire_kv_lock(&uid, &parent, &dirent, &lock, now, expires_at)?;
             Ok(())
@@ -572,20 +613,22 @@ fn lock_release(
     principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
+    authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 2)?;
-    require_user_auth(&fields[0])?;
     let LockFields {
         parent,
         dirent,
         lock,
     } = lock_fields(&fields[1])?;
-    let uid = active_uid(reader, principal)?;
-    let device = *principal.device_id();
+    require_directory_write_access(reader, authority, &parent)?;
+    let uid = authority.party.clone();
+    let device = principal.device_id().to_vec();
+    let write_authority = authority.clone();
     writer
         .call(move |database| {
-            if !database.is_active_device(&uid, &device)? {
-                return Err(crate::Error::Database(foks_server_db::Error::KvConflict));
+            if !kv_write_is_current(database, &write_authority, &device)? {
+                return Err(crate::Error::AuthorizationChanged);
             }
             database.release_kv_lock(&uid, &parent, &dirent, &lock)?;
             Ok(())
@@ -604,15 +647,210 @@ fn current_versions(
         .ok_or(RpcStatus::KvNoEnt)
 }
 
-fn active_uid(
+fn require_directory_write_access(
     reader: &foks_server_db::ReadDatabase,
-    principal: &Principal,
-) -> Result<Vec<u8>, RpcStatus> {
-    reader
-        .identity_by_active_device(principal.device_id())
+    authority: &KvAuthority,
+    directory_id: &[u8; 16],
+) -> Result<(), RpcStatus> {
+    let stored = reader
+        .kv_directory(&authority.party, directory_id)
         .map_err(|_| RpcStatus::TransactionRetry)?
-        .map(|identity| identity.uid)
+        .ok_or(RpcStatus::KvNoEnt)?;
+    let directory =
+        foks_proto::KvDirectory::decode(&stored.exact).map_err(|_| RpcStatus::TransactionRetry)?;
+    authority.require_read_key(directory.key)?;
+    authority.require_write_role(directory.write_role)
+}
+
+fn resolve_authority(
+    argument: &[u8],
+    principal: &Principal,
+    reader: &foks_server_db::ReadDatabase,
+    clock: &Arc<dyn foks_server_db::Clock>,
+) -> Result<KvAuthority, RpcStatus> {
+    let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
+        return Err(bad_arguments("KV argument is not a struct"));
+    };
+    let first = fields
+        .first()
+        .ok_or_else(|| bad_arguments("KV argument has no authentication"))?;
+    let Value::Array(first_fields) = first else {
+        return Err(bad_arguments("KV authentication is not a struct"));
+    };
+    let auth = if matches!(first_fields.first(), Some(Value::Unsigned(0 | 1))) {
+        first
+    } else {
+        first_fields
+            .first()
+            .ok_or_else(|| bad_arguments("KV request header has no authentication"))?
+    };
+    let Value::Array(auth) = auth else {
+        return Err(bad_arguments("KV authentication is not a struct"));
+    };
+    let now = clock
+        .now_micros()
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    match auth.as_slice() {
+        [Value::Unsigned(0), Value::Variant(None)] => {
+            if reader
+                .active_credential_owner(principal.uid(), principal.device_id())
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .is_none()
+            {
+                return Err(permission_denied());
+            }
+            let user = reader
+                .user_authority(principal.uid())
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .ok_or_else(permission_denied)?;
+            let maximum_role = user
+                .devices
+                .iter()
+                .find(|device| {
+                    device.active
+                        && (device.device_id.as_slice() == principal.device_id()
+                            || device.subkey_id.as_deref() == Some(principal.device_id()))
+                })
+                .and_then(|device| {
+                    crate::auth::team::stored_role(device.role_type, device.visibility)
+                })
+                .ok_or_else(permission_denied)?;
+            let key_generations = key_generations(&user.shared_keys)?;
+            Ok(KvAuthority {
+                party: principal.uid().to_vec(),
+                actor: principal.uid().to_vec(),
+                token_hash: None,
+                maximum_role,
+                key_generations,
+                clock: Arc::clone(clock),
+            })
+        }
+        [Value::Unsigned(1), Value::Variant(Some((tag, token)))] if tag == b"1" => {
+            let Value::Binary(token) = token.as_ref() else {
+                return Err(bad_arguments("team KV token is not binary"));
+            };
+            let token: [u8; 16] = token
+                .as_slice()
+                .try_into()
+                .map_err(|_| bad_arguments("team KV token has the wrong width"))?;
+            let token_hash = crate::auth::team::token_hash(&token);
+            let authority = reader
+                .resolve_team_view_token(&token_hash, now)
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .ok_or(RpcStatus::Expired)?;
+            if authority.member_id.as_slice() != principal.uid() {
+                return Err(permission_denied());
+            }
+            let maximum_role = crate::auth::team::stored_role(
+                authority.effective_role_type,
+                authority.effective_visibility,
+            )
+            .ok_or(RpcStatus::TransactionRetry)?;
+            let team = reader
+                .team(&authority.team_id)
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .ok_or(RpcStatus::Expired)?;
+            let key_generations = key_generations(&team.shared_keys)?;
+            Ok(KvAuthority {
+                party: authority.team_id,
+                actor: authority.member_id,
+                token_hash: Some(token_hash),
+                maximum_role,
+                key_generations,
+                clock: Arc::clone(clock),
+            })
+        }
+        _ => Err(bad_arguments("unsupported KV authentication")),
+    }
+}
+
+impl KvAuthority {
+    fn can_write_role(&self, role: foks_proto::Role) -> bool {
+        role <= self.maximum_role
+    }
+
+    fn require_write_role(&self, role: foks_proto::Role) -> Result<(), RpcStatus> {
+        self.can_write_role(role)
+            .then_some(())
+            .ok_or_else(permission_denied)
+    }
+
+    fn can_write_key(&self, key: foks_proto::RoleAndGeneration) -> bool {
+        self.can_write_role(key.role)
+            && self.key_generations.get(&key.role) == Some(&key.generation)
+    }
+
+    fn require_read_key(&self, key: foks_proto::RoleAndGeneration) -> Result<(), RpcStatus> {
+        (key.role <= self.maximum_role
+            && key.generation > 0
+            && self
+                .key_generations
+                .get(&key.role)
+                .is_some_and(|current| key.generation <= *current))
+        .then_some(())
         .ok_or_else(permission_denied)
+    }
+}
+
+fn key_generations(
+    keys: &[foks_server_db::UserSharedKeySnapshot],
+) -> Result<BTreeMap<foks_proto::Role, u64>, RpcStatus> {
+    let mut generations: BTreeMap<foks_proto::Role, u64> = BTreeMap::new();
+    for key in keys {
+        let role = crate::auth::team::stored_role(key.role_type, key.visibility)
+            .ok_or(RpcStatus::TransactionRetry)?;
+        generations
+            .entry(role)
+            .and_modify(|generation| *generation = (*generation).max(key.generation))
+            .or_insert(key.generation);
+    }
+    Ok(generations)
+}
+
+fn kv_write_is_current(
+    database: &mut foks_server_db::Database,
+    authority: &KvAuthority,
+    credential: &[u8],
+) -> crate::Result<bool> {
+    if database
+        .active_credential_owner(&authority.actor, credential)?
+        .is_none()
+    {
+        return Ok(false);
+    }
+    let now = authority.clock.now_micros()?;
+    let authorized = match authority.token_hash {
+        None => {
+            let Some(user) = database.user_authority(&authority.actor)? else {
+                return Ok(false);
+            };
+            let current_role = user.devices.iter().find_map(|device| {
+                (device.active
+                    && (device.device_id.as_slice() == credential
+                        || device.subkey_id.as_deref() == Some(credential)))
+                .then(|| crate::auth::team::stored_role(device.role_type, device.visibility))
+                .flatten()
+            });
+            authority.party == authority.actor
+                && current_role == Some(authority.maximum_role)
+                && key_generations(&user.shared_keys)
+                    .is_ok_and(|keys| keys == authority.key_generations)
+        }
+        Some(token_hash) => {
+            let token_current = database.team_view_token_is_current(
+                &token_hash,
+                &authority.party,
+                &authority.actor,
+                now,
+            )?;
+            let keys_current = database
+                .team(&authority.party)?
+                .and_then(|team| key_generations(&team.shared_keys).ok())
+                .is_some_and(|keys| keys == authority.key_generations);
+            token_current && keys_current
+        }
+    };
+    Ok(authorized && database.ensure_kv_namespace(&authority.party)?)
 }
 
 fn fields(argument: &[u8], expected: usize) -> Result<Vec<Value>, RpcStatus> {
@@ -623,20 +861,6 @@ fn fields(argument: &[u8], expected: usize) -> Result<Vec<Value>, RpcStatus> {
         return Err(bad_arguments("KV argument has the wrong shape"));
     }
     Ok(fields)
-}
-
-fn require_user_auth(value: &Value) -> Result<(), RpcStatus> {
-    if matches!(
-        value,
-        Value::Array(auth)
-            if matches!(auth.as_slice(), [Value::Unsigned(0), Value::Variant(None)])
-    ) {
-        Ok(())
-    } else {
-        Err(bad_arguments(
-            "only personal KV authentication is supported",
-        ))
-    }
 }
 
 fn fixed_16(value: &Value, kind: &'static str) -> Result<[u8; 16], RpcStatus> {
@@ -715,6 +939,7 @@ fn map_write_error(
         return RpcStatus::QuotaExceeded;
     }
     match error {
+        crate::Error::AuthorizationChanged => permission_denied(),
         crate::Error::Database(foks_server_db::Error::KvConflict) => current_versions(reader, uid)
             .map(RpcStatus::StaleCache)
             .unwrap_or(RpcStatus::TransactionRetry),
@@ -728,6 +953,7 @@ fn map_upload_error(error: crate::Error) -> RpcStatus {
         return RpcStatus::QuotaExceeded;
     }
     match error {
+        crate::Error::AuthorizationChanged => permission_denied(),
         crate::Error::Database(foks_server_db::Error::KvConflict) => RpcStatus::KvNoEnt,
         crate::Error::Database(
             foks_server_db::Error::Invalid(_) | foks_server_db::Error::IntegerRange,
@@ -742,6 +968,7 @@ fn map_lock_error(error: crate::Error) -> RpcStatus {
         return RpcStatus::QuotaExceeded;
     }
     match error {
+        crate::Error::AuthorizationChanged => permission_denied(),
         crate::Error::Database(foks_server_db::Error::KvLocked) => RpcStatus::Locked,
         crate::Error::Database(foks_server_db::Error::KvConflict) => RpcStatus::KvNoEnt,
         crate::Error::Database(

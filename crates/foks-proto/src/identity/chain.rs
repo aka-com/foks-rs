@@ -16,6 +16,23 @@ pub struct UserLink {
     exact: Vec<u8>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecodedMembershipLink {
+    pub user: EntityId,
+    pub host: EntityId,
+    pub signer: EntityId,
+    pub sequence: u64,
+    pub previous: Option<[u8; 32]>,
+    pub root: TreeRoot,
+    pub time: u64,
+    pub next_location_commitment: [u8; 32],
+    pub team: EntityId,
+    pub source_role: Role,
+    pub destination_role: Role,
+    pub team_sequence: u64,
+    pub removal_key_commitment: Option<[u8; 32]>,
+}
+
 /// Public inputs committed by a software-device user eldest link.
 ///
 /// Commitment values are supplied rather than recomputed here so this exact
@@ -633,6 +650,79 @@ impl UserLink {
             Value::Binary(self.inner.clone()),
             signatures,
         ]))?)
+    }
+
+    pub fn decode_approved_membership(&self) -> Result<DecodedMembershipLink> {
+        let inner = decode(&self.inner)?;
+        let outer = array(&inner, 2)?;
+        expect_unsigned(&outer[0], "membership inner version", 2)?;
+        let generic = array(variant(&outer[1], "1")?, 4)?;
+        let hiding = array(&generic[0], 2)?;
+        let chainer = array(&hiding[0], 4)?;
+        let root = array(&chainer[2], 2)?;
+        let user = array(&generic[1], 2)?;
+        let signer = array(&generic[2], 2)?;
+        if signer[1] != Value::Null {
+            return Err(type_error("empty membership signer owner", &signer[1]));
+        }
+        let wrapper = array(&generic[3], 2)?;
+        expect_unsigned(&wrapper[0], "membership wrapper", 4)?;
+        let membership = array(variant(&wrapper[1], "1")?, 3)?;
+        let team = array(&membership[0], 2)?;
+        let team_id = entity(&team[0])?;
+        let decision = array(&membership[2], 2)?;
+        let kind = unsigned(&decision[0])?;
+        let (destination_role, team_sequence, removal_key_commitment) = match kind {
+            4 => {
+                let approved = array(variant(&decision[1], "2")?, 2)?;
+                (role(&approved[0])?, unsigned(&approved[1])?, None)
+            }
+            2 => {
+                let approved = array(variant(&decision[1], "1")?, 2)?;
+                let destination = array(&approved[0], 2)?;
+                (
+                    role(&destination[0])?,
+                    unsigned(&destination[1])?,
+                    Some(fixed_blob(&approved[1], "membership removal commitment")?),
+                )
+            }
+            _ => return Err(Error::IntegerRange("membership approval kind")),
+        };
+        if (kind == 4 && team_id.entity_type() != ENTITY_AD_HOC_TEAM)
+            || (kind == 2 && team_id.entity_type() != ENTITY_NAMED_TEAM)
+        {
+            return Err(Error::WrongEntityType {
+                expected: if kind == 4 {
+                    ENTITY_AD_HOC_TEAM
+                } else {
+                    ENTITY_NAMED_TEAM
+                },
+                found: team_id.entity_type(),
+            });
+        }
+        Ok(DecodedMembershipLink {
+            user: entity(&user[0])?.require_type(ENTITY_USER)?,
+            host: entity(&user[1])?.require_type(ENTITY_HOST)?,
+            signer: device_entity(&signer[0])?,
+            sequence: unsigned(&chainer[0])?,
+            previous: option(&chainer[1], |value| {
+                fixed_blob(value, "membership previous")
+            })?,
+            root: TreeRoot {
+                epoch: unsigned(&root[0])?,
+                hash: fixed_blob(&root[1], "membership root hash")?,
+            },
+            time: unsigned(&chainer[3])?,
+            next_location_commitment: fixed_blob(
+                &hiding[1],
+                "membership next location commitment",
+            )?,
+            team: team_id,
+            source_role: role(&membership[1])?,
+            destination_role,
+            team_sequence,
+            removal_key_commitment,
+        })
     }
 
     /// Decodes the security-critical fields of an eldest group-change link.

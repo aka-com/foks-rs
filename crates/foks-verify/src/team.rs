@@ -1,5 +1,7 @@
 //! Team-chain replay, roster validation, and sealed team state.
 
+use std::collections::BTreeSet;
+
 use crate::{
     append_authenticated_user_chain_bytes, authenticated_user_chain_bytes,
     authenticated_user_chain_link_at, chain_merkle_key, commitment, encode, find_hepk,
@@ -22,6 +24,21 @@ pub struct VerifiedTeamMember {
     pub verify_key: Vec<u8>,
     pub hepk_fingerprint: [u8; 32],
     pub removal_key_commitment: Option<[u8; 32]>,
+}
+
+/// Extracts the bounded Merkle epochs referenced by an untrusted team-chain
+/// response. The returned epochs carry no authority; callers must prove them
+/// from an already authenticated later root before replaying the chain.
+pub fn team_chain_root_epochs(chain_bytes: &[u8]) -> Result<Vec<u64>> {
+    let chain = TeamChain::decode(chain_bytes)?;
+    if chain.links.len() > 4096 {
+        return Err(Error::TeamChainContinuity);
+    }
+    let mut epochs = BTreeSet::from([chain.merkle.root().epoch]);
+    for link in &chain.links {
+        epochs.insert(link.decode_team_group_change()?.root.epoch);
+    }
+    Ok(epochs.into_iter().collect())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -110,6 +127,121 @@ pub struct VerifiedTeamMemberState {
     pub verify_key: EntityId,
     pub hepk_fingerprint: [u8; 32],
     pub removal_key_commitment: Option<[u8; 32]>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedTeamFounding {
+    pub link_hash: [u8; 32],
+    pub members: Vec<VerifiedTeamMemberState>,
+    pub shared_keys: Vec<VerifiedSharedKey>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedTeamTransition {
+    pub link_hash: [u8; 32],
+    pub members: Vec<VerifiedTeamMemberState>,
+    pub shared_keys: Vec<VerifiedSharedKey>,
+    pub introduced_keys: Vec<VerifiedSharedKey>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn verify_team_transition(
+    link: &foks_proto::UserLink,
+    hepks: &[Hepk],
+    expected_team: &EntityId,
+    expected_host: &EntityId,
+    expected_sequence: u64,
+    expected_previous: [u8; 32],
+    expected_root: foks_proto::TreeRoot,
+    next_tree_location: [u8; 32],
+    current_members: &[VerifiedTeamMemberState],
+    current_shared_keys: &[VerifiedSharedKey],
+) -> Result<VerifiedTeamTransition> {
+    if expected_team.entity_type() == ENTITY_AD_HOC_TEAM {
+        return Err(Error::TeamRoster);
+    }
+    let change = link.decode_team_group_change()?;
+    let location_wire = encode(&Value::Binary(next_tree_location.to_vec()))?;
+    if change.seqno != expected_sequence
+        || change.previous != Some(expected_previous)
+        || change.team != *expected_team
+        || change.host != *expected_host
+        || change.root != expected_root
+        || prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire) != change.next_location_commitment
+    {
+        return Err(Error::TeamChainContinuity);
+    }
+    let mut members = current_members
+        .iter()
+        .cloned()
+        .map(|member| {
+            (
+                team_member_key(
+                    &member.party,
+                    member.scoped_host.as_ref(),
+                    member.source_role,
+                ),
+                member,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    if members.len() != current_members.len() {
+        return Err(Error::TeamRoster);
+    }
+    let current = current_shared_keys
+        .iter()
+        .cloned()
+        .map(|key| (key.role, key))
+        .collect::<BTreeMap<_, _>>();
+    if current.len() != current_shared_keys.len() {
+        return Err(Error::TeamKeySchedule);
+    }
+    let introduced = validate_team_shared_keys(&change, hepks, &current, false)?;
+    validate_team_rotation_schedule(&change, &members, &current, &introduced)?;
+    replay_team_transition(link, &change, &introduced, &mut members)?;
+    let mut keys = current;
+    for key in &introduced {
+        keys.insert(key.role, key.clone());
+    }
+    Ok(VerifiedTeamTransition {
+        link_hash: prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?),
+        members: members.into_values().collect(),
+        shared_keys: keys.into_values().collect(),
+        introduced_keys: introduced,
+    })
+}
+
+/// Verifies a founding team link independently of persistence and of the new
+/// Merkle root the server will publish for it. The link must cite the exact
+/// currently authenticated root supplied by the caller.
+pub fn verify_team_founding(
+    link: &foks_proto::UserLink,
+    hepks: &[Hepk],
+    expected_team: &EntityId,
+    expected_host: &EntityId,
+    expected_root: foks_proto::TreeRoot,
+    next_tree_location: [u8; 32],
+) -> Result<VerifiedTeamFounding> {
+    let change = link.decode_team_group_change()?;
+    let location_wire = encode(&Value::Binary(next_tree_location.to_vec()))?;
+    if change.seqno != 1
+        || change.previous.is_some()
+        || change.team != *expected_team
+        || change.host != *expected_host
+        || change.root != expected_root
+        || prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire) != change.next_location_commitment
+    {
+        return Err(Error::TeamChainContinuity);
+    }
+    let current = BTreeMap::new();
+    let shared_keys = validate_team_shared_keys(&change, hepks, &current, true)?;
+    let mut members = BTreeMap::new();
+    verify_team_eldest(link, &change, expected_team, &shared_keys, &mut members)?;
+    Ok(VerifiedTeamFounding {
+        link_hash: prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?),
+        members: members.into_values().collect(),
+        shared_keys,
+    })
 }
 
 impl VerifiedTeamState {

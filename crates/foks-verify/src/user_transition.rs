@@ -5,6 +5,53 @@ use foks_proto::{ChangeMetadata, EntityId, Hepk, Role, UserMemberKeys, LINK_OUTE
 
 use crate::{find_hepk, Error, Result, UserTransitionRule, VerifiedDevice, VerifiedSharedKey};
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedUserTransition {
+    pub change: foks_proto::UserGroupChange,
+    pub devices: Vec<VerifiedDevice>,
+    pub shared_keys: Vec<VerifiedSharedKey>,
+}
+
+/// Verifies one user mutation against an already authenticated server
+/// projection. Merkle publication is intentionally outside this pure step;
+/// the caller must compare `expected_root` to its current authoritative root
+/// and commit the verified transition and new root atomically.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_user_transition(
+    link: &foks_proto::UserLink,
+    hepks: &[Hepk],
+    expected_uid: &EntityId,
+    expected_host: &EntityId,
+    expected_sequence: u64,
+    expected_previous: [u8; 32],
+    expected_root: foks_proto::TreeRoot,
+    next_tree_location: [u8; 32],
+    devices: &[VerifiedDevice],
+    shared_keys: &[VerifiedSharedKey],
+) -> Result<VerifiedUserTransition> {
+    let change = link.decode_group_change()?;
+    let location_wire =
+        foks_snowpack::encode(&foks_snowpack::Value::Binary(next_tree_location.to_vec()))?;
+    if change.uid != *expected_uid
+        || change.host != *expected_host
+        || change.seqno != expected_sequence
+        || change.previous != Some(expected_previous)
+        || change.root != expected_root
+        || change.next_location_commitment
+            != foks_crypto::prefixed_hash(foks_proto::TREE_LOCATION_TYPE_ID, &location_wire)
+    {
+        return Err(Error::UserChainContinuity);
+    }
+    let mut replay = UserReplayState::from_verified(devices, shared_keys);
+    replay.replay(link, &change, hepks, expected_host)?;
+    let (devices, shared_keys) = replay.into_parts();
+    Ok(VerifiedUserTransition {
+        change,
+        devices,
+        shared_keys,
+    })
+}
+
 pub(super) struct UserReplayState {
     devices: BTreeMap<Vec<u8>, VerifiedDevice>,
     shared_keys: BTreeMap<Role, VerifiedSharedKey>,

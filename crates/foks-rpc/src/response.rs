@@ -10,8 +10,11 @@ use super::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RpcStatus {
     BadArguments(String),
+    DeviceAlreadyProvisioned,
+    Expired,
     Locked,
     KvNoEnt,
+    KvPermission { operation: u64, resource: u64 },
     NameInUse,
     NotFound(String),
     PermissionDenied(String),
@@ -20,6 +23,20 @@ pub enum RpcStatus {
     StaleCache(KvPathVersionVector),
     StaleRoot,
     TransactionRetry,
+    TeamError(String),
+    TeamRace(String),
+    TeamBearerTokenStale(String),
+    TeamNotFound,
+    TeamCertificate(String),
+    TeamRoster(String),
+    TeamKey(String),
+    TeamNoSourceRole,
+    TeamRemovalKey(String),
+    TeamExplore(String),
+    TeamAdHocCreatorIncluded,
+    TeamAdHocOpenViewership,
+    TeamAdHocInvalidChange(String),
+    TeamAdHocDuplicate,
     Unsupported,
 }
 
@@ -27,8 +44,11 @@ impl RpcStatus {
     fn code(&self) -> u64 {
         match self {
             Self::BadArguments(_) => 1030,
+            Self::Expired => 1062,
+            Self::DeviceAlreadyProvisioned => 1072,
             Self::Locked => 8014,
             Self::KvNoEnt => 8016,
+            Self::KvPermission { .. } => 8011,
             Self::NameInUse => 1023,
             Self::NotFound(_) => 1049,
             Self::PermissionDenied(_) => 1013,
@@ -36,6 +56,20 @@ impl RpcStatus {
             Self::RateLimited => 1012,
             Self::StaleCache(_) => 8012,
             Self::StaleRoot | Self::TransactionRetry => 1014,
+            Self::TeamError(_) => 7001,
+            Self::TeamRace(_) => 7002,
+            Self::TeamBearerTokenStale(_) => 7003,
+            Self::TeamNotFound => 7004,
+            Self::TeamCertificate(_) => 7005,
+            Self::TeamRoster(_) => 7006,
+            Self::TeamKey(_) => 7007,
+            Self::TeamNoSourceRole => 7008,
+            Self::TeamRemovalKey(_) => 7009,
+            Self::TeamExplore(_) => 7010,
+            Self::TeamAdHocCreatorIncluded => 7101,
+            Self::TeamAdHocOpenViewership => 7102,
+            Self::TeamAdHocInvalidChange(_) => 7103,
+            Self::TeamAdHocDuplicate => 7104,
             Self::Unsupported => 1020,
         }
     }
@@ -74,6 +108,16 @@ fn encode_status(status: &RpcStatus, output: &mut Vec<u8>) -> Result<()> {
         RpcStatus::BadArguments(_)
             | RpcStatus::NotFound(_)
             | RpcStatus::PermissionDenied(_)
+            | RpcStatus::TeamError(_)
+            | RpcStatus::TeamRace(_)
+            | RpcStatus::TeamBearerTokenStale(_)
+            | RpcStatus::TeamCertificate(_)
+            | RpcStatus::TeamRoster(_)
+            | RpcStatus::TeamKey(_)
+            | RpcStatus::TeamRemovalKey(_)
+            | RpcStatus::TeamExplore(_)
+            | RpcStatus::TeamAdHocInvalidChange(_)
+            | RpcStatus::KvPermission { .. }
             | RpcStatus::StaleCache(_)
     );
     output.push(if has_payload { 0x82 } else { 0x81 });
@@ -82,13 +126,31 @@ fn encode_status(status: &RpcStatus, output: &mut Vec<u8>) -> Result<()> {
     match status {
         RpcStatus::BadArguments(message)
         | RpcStatus::NotFound(message)
-        | RpcStatus::PermissionDenied(message) => {
+        | RpcStatus::PermissionDenied(message)
+        | RpcStatus::TeamError(message)
+        | RpcStatus::TeamRace(message)
+        | RpcStatus::TeamBearerTokenStale(message)
+        | RpcStatus::TeamCertificate(message)
+        | RpcStatus::TeamRoster(message)
+        | RpcStatus::TeamKey(message)
+        | RpcStatus::TeamRemovalKey(message)
+        | RpcStatus::TeamExplore(message)
+        | RpcStatus::TeamAdHocInvalidChange(message) => {
             encode_text(b"f1", output);
             encode_text(message.as_bytes(), output);
         }
         RpcStatus::StaleCache(versions) => {
             encode_text(b"f11", output);
             encode_named_path_version_vector(versions, output)?;
+        }
+        RpcStatus::KvPermission {
+            operation,
+            resource,
+        } => {
+            encode_text(b"f10", output);
+            output.push(0x92);
+            encode_unsigned(*operation, output);
+            encode_unsigned(*resource, output);
         }
         _ => {}
     }

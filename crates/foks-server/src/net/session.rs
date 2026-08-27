@@ -100,6 +100,27 @@ impl ServerData {
                 let response = self.client_certificate_chain(call.call.argument())?;
                 encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
             }
+            ("Reg", "getUIDLookupChallege") => {
+                let response = crate::services::registration::issue_uid_lookup_challenge(
+                    call.call.argument(),
+                    &self.host()?,
+                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+                    self.key_provider.as_deref().ok_or(RpcStatus::Unsupported)?,
+                    self.clock.as_ref(),
+                    self.entropy.as_ref(),
+                )?;
+                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
+            }
+            ("Reg", "lookupUIDByDevice") => {
+                let response = crate::services::registration::lookup_uid_by_device(
+                    call.call.argument(),
+                    &self.host()?,
+                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+                    self.key_provider.as_deref().ok_or(RpcStatus::Unsupported)?,
+                    self.clock.as_ref(),
+                )?;
+                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
+            }
             ("User", "loadUserChain") => {
                 let principal = principal.ok_or_else(permission_denied)?;
                 let response = crate::services::user::load_user_chain(
@@ -119,8 +140,139 @@ impl ServerData {
                 )?;
                 encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
             }
+            ("User", "provisionDevice") => {
+                let principal = principal.ok_or_else(permission_denied)?;
+                self.user_mutation(call.call.argument(), principal, true)?;
+                encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
+            }
+            ("User", "revokeDevice") => {
+                let principal = principal.ok_or_else(permission_denied)?;
+                principal.require_ordinary_device()?;
+                self.user_mutation(call.call.argument(), principal, false)?;
+                encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
+            }
+            ("User", "getHostConfig") => {
+                let principal = principal.ok_or_else(permission_denied)?;
+                let response =
+                    crate::services::user::host_config(&self.read_database()?, principal)?;
+                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
+            }
+            ("TeamLoader", "getTeamVOBearerTokenChallenge") => {
+                let principal = principal.ok_or_else(permission_denied)?;
+                let response = crate::services::team_loader::issue_challenge(
+                    call.call.argument(),
+                    principal,
+                    &self.host()?,
+                    &self.read_database()?,
+                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+                    self.key_provider.as_deref().ok_or(RpcStatus::Unsupported)?,
+                    self.clock.as_ref(),
+                    self.entropy.as_ref(),
+                )?;
+                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
+            }
+            ("TeamLoader", "activateTeamVOBearerToken") => {
+                let principal = principal.ok_or_else(permission_denied)?;
+                let response = crate::services::team_loader::activate(
+                    call.call.argument(),
+                    principal,
+                    &self.host()?,
+                    &self.read_database()?,
+                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+                    self.key_provider.as_deref().ok_or(RpcStatus::Unsupported)?,
+                    self.clock.as_ref(),
+                )?;
+                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
+            }
+            ("TeamLoader", "loadTeamChain") => {
+                let principal = principal.ok_or_else(permission_denied)?;
+                let response = crate::services::team_loader::load_chain(
+                    call.call.argument(),
+                    principal,
+                    &self.host()?,
+                    &self.read_database()?,
+                    self.clock.as_ref(),
+                )?;
+                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
+            }
+            ("TeamAdmin", "reserveTeamname") => {
+                let principal = principal.ok_or_else(permission_denied)?;
+                let response = crate::services::team_admin::reserve_name(
+                    call.call.argument(),
+                    principal,
+                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+                    self.clock.as_ref(),
+                    self.entropy.as_ref(),
+                )?;
+                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
+            }
+            ("TeamAdmin", "createTeam" | "createTeamAdHoc") => {
+                let principal = principal.ok_or_else(permission_denied)?;
+                crate::services::team_admin::create(
+                    call.call.argument(),
+                    call.route.method == "createTeam",
+                    principal,
+                    &self.host()?,
+                    &self.read_database()?,
+                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+                    self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
+                    &self.clock,
+                    &self.hostchain_tail,
+                )?;
+                encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
+            }
+            ("TeamAdmin", "editTeam") => {
+                let principal = principal.ok_or_else(permission_denied)?;
+                let response = crate::services::team_admin::edit(
+                    call.call.argument(),
+                    principal,
+                    &self.host()?,
+                    &self.read_database()?,
+                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+                    self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
+                    &self.clock,
+                    &self.hostchain_tail,
+                )?;
+                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
+            }
+            ("TeamAdmin", "makeInertTeamBearerToken") => {
+                let principal = principal.ok_or_else(permission_denied)?;
+                let response = crate::services::team_admin::make_inert_token(
+                    call.call.argument(),
+                    principal,
+                    &self.read_database()?,
+                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+                    self.clock.as_ref(),
+                    self.entropy.as_ref(),
+                )?;
+                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
+            }
+            ("TeamAdmin", "activateTeamBearerToken") => {
+                let principal = principal.ok_or_else(permission_denied)?;
+                crate::services::team_admin::activate_token(
+                    call.call.argument(),
+                    principal,
+                    &self.host()?,
+                    &self.read_database()?,
+                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+                    self.clock.as_ref(),
+                )?;
+                encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
+            }
+            ("TeamAdmin", "loadRemovalKeyBoxForTeamAdmin") => {
+                let principal = principal.ok_or_else(permission_denied)?;
+                let response = crate::services::team_admin::load_removal_box(
+                    call.call.argument(),
+                    principal,
+                    &self.host()?,
+                    &self.read_database()?,
+                    self.clock.as_ref(),
+                )?;
+                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
+            }
             ("KvStore", method) => {
                 let principal = principal.ok_or_else(permission_denied)?;
+                principal.require_ordinary_device()?;
                 let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
                 match crate::services::kv::dispatch(
                     method,
@@ -128,7 +280,7 @@ impl ServerData {
                     principal,
                     &self.read_database()?,
                     writer,
-                    self.clock.as_ref(),
+                    &self.clock,
                 )? {
                     crate::services::kv::Response::Data(response) => {
                         encode_success_response_at(&response, sequence)
@@ -141,6 +293,233 @@ impl ServerData {
                 }
             }
             _ => Err(RpcStatus::Unsupported),
+        }
+    }
+
+    fn user_mutation(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+        provision: bool,
+    ) -> std::result::Result<(), RpcStatus> {
+        const RECEIPT_LIFETIME_MICROSECONDS: u64 = 24 * 60 * 60 * 1_000_000;
+        let decoded = if provision {
+            crate::identity::mutation::Argument::Provision(
+                foks_rpc::arguments::decode_provision_device(argument).map_err(bad_arguments)?,
+            )
+        } else {
+            crate::identity::mutation::Argument::Revoke(
+                foks_rpc::arguments::decode_revoke_device(argument).map_err(bad_arguments)?,
+            )
+        };
+        let reader = self.read_database()?;
+        let exact_link = decoded.link().encoded().map_err(bad_arguments)?;
+        let idempotency_key =
+            foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, &exact_link);
+        let request_hash = foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, argument);
+        let receipt_now = self
+            .clock
+            .now_micros()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        match reader.request_receipt(&idempotency_key, &request_hash, receipt_now) {
+            Ok(Some(receipt)) if receipt.response.is_empty() => return Ok(()),
+            Ok(Some(_)) => return Err(RpcStatus::TransactionRetry),
+            Ok(None) => {}
+            Err(foks_server_db::Error::ReceiptConflict) => {
+                return Err(bad_arguments("user mutation retry binding failed"));
+            }
+            Err(_) => return Err(RpcStatus::TransactionRetry),
+        }
+        let identity = reader
+            .identity_by_active_device(principal.device_id())
+            .map_err(|_| RpcStatus::TransactionRetry)?
+            .ok_or_else(permission_denied)?;
+        let uid = identity.uid;
+        let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
+        let keys = Arc::clone(self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?);
+        let clock = Arc::clone(&self.clock);
+        let host = self.host().map_err(|_| RpcStatus::TransactionRetry)?;
+        let hostchain_tail = self.hostchain_tail.clone();
+        let signer = principal.device_id().to_vec();
+        let result = writer.call(move |database| {
+            let now = clock.now_micros()?;
+            let receipt_expires_at = now
+                .checked_add(RECEIPT_LIFETIME_MICROSECONDS)
+                .ok_or(crate::Error::Signup("user mutation receipt expiry"))?;
+            let authority = database
+                .user_authority(&uid)?
+                .ok_or(crate::Error::Signup("user mutation authority missing"))?;
+            let command = crate::identity::mutation::validate(&authority, &host, &signer, decoded)?;
+            let authoritative_root = database
+                .current_root()?
+                .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?;
+            if authoritative_root.epoch != command.expected_root_epoch
+                || authoritative_root.root_hash != command.expected_root_hash
+            {
+                return Err(crate::Error::Database(foks_server_db::Error::StaleRoot));
+            }
+            if now < decode_stored_root(&authoritative_root)?.time {
+                return Err(crate::Error::Signup("system clock moved backwards"));
+            }
+            let chain_key = foks_merkle_store::chain_key(
+                0,
+                &EntityId::from_bytes(command.uid.clone())?,
+                command.sequence,
+                Some(&authority.next_tree_location),
+            )?;
+            let leaves = [(chain_key, command.link_hash)];
+            let merkle_commit = foks_merkle_store::prepare(
+                &database.node_reader(),
+                authoritative_root.root_node,
+                &[foks_merkle_store::LeafChange::Set {
+                    key: chain_key,
+                    value: command.link_hash,
+                }],
+            )?;
+            let root_epoch = authoritative_root
+                .epoch
+                .checked_add(1)
+                .ok_or(crate::Error::Signup("Merkle epoch overflow"))?;
+            let pointer_epochs = foks_merkle_store::back_pointer_sequence(root_epoch);
+            let pointer_roots = database
+                .roots_at(&pointer_epochs)?
+                .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?;
+            for root in &pointer_roots {
+                decode_stored_root(root)?;
+            }
+            let back_pointers = pointer_roots
+                .into_iter()
+                .map(|root| (root.epoch, root.root_hash))
+                .collect::<Vec<_>>();
+            let root = MerkleRoot {
+                epoch: root_epoch,
+                time: now,
+                back_pointers: foks_merkle_store::back_pointer_hash(&back_pointers)?,
+                root_node: merkle_commit.root,
+                hostchain: hostchain_tail,
+            };
+            let exact_root = root.encoded()?;
+            let root_hash =
+                foks_crypto::prefixed_hash(foks_proto::MERKLE_ROOT_TYPE_ID, &exact_root);
+            let root_blob = foks_snowpack::encode(&Value::Binary(exact_root.clone()))?;
+            let merkle_key = keys.load_or_create(KeyPurpose::Merkle)?;
+            let exact_signed_root = SignedBlob {
+                inner: exact_root.clone(),
+                signature: foks_crypto::sign_ed25519_typed(
+                    merkle_key.expose(),
+                    foks_proto::MERKLE_ROOT_BLOB_TYPE_ID,
+                    &root_blob,
+                )?,
+            }
+            .encoded()?;
+            let added = command.added.as_ref().map(|added| {
+                let (role_type, visibility) = crate::identity::mutation::role_parts(added.role);
+                foks_server_db::AddedCredential {
+                    device_id: &added.device_id,
+                    hepk_fingerprint: &added.hepk_fingerprint,
+                    exact_hepk: &added.exact_hepk,
+                    exact_name: &added.exact_name,
+                    role_type,
+                    visibility,
+                    subkey_id: added.subkey_id.as_deref(),
+                }
+            });
+            let shared_keys = command
+                .shared_keys
+                .iter()
+                .map(|key| {
+                    let (role_type, visibility) = crate::identity::mutation::role_parts(key.role);
+                    foks_server_db::SharedKeyMutation {
+                        role_type,
+                        visibility,
+                        generation: key.generation,
+                        verify_key: &key.verify_key,
+                        exact_hepk: &key.exact_hepk,
+                    }
+                })
+                .collect::<Vec<_>>();
+            let parcels = command
+                .parcels
+                .iter()
+                .map(|parcel| {
+                    let (role_type, visibility) =
+                        crate::identity::mutation::role_parts(parcel.role);
+                    foks_server_db::ParcelMutation {
+                        device_id: &parcel.device_id,
+                        sender_id: &command.signer,
+                        role_type,
+                        visibility,
+                        generation: parcel.generation,
+                        exact_parcel: &parcel.exact,
+                    }
+                })
+                .collect::<Vec<_>>();
+            // Keep exact seed-box bytes alive for the duration of the commit.
+            let exact_seed_chain = command
+                .seed_chain
+                .iter()
+                .map(foks_proto::SeedChainBox::encoded)
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let seed_chain = command
+                .seed_chain
+                .iter()
+                .zip(&exact_seed_chain)
+                .map(|(boxed, exact)| {
+                    let (role_type, visibility) = crate::identity::mutation::role_parts(boxed.role);
+                    foks_server_db::SeedChainMutation {
+                        role_type,
+                        visibility,
+                        generation: boxed.generation,
+                        exact_box: exact,
+                    }
+                })
+                .collect::<Vec<_>>();
+            if command.link_hash != idempotency_key {
+                return Err(crate::Error::Signup("user mutation link hash changed"));
+            }
+            database.commit_user_mutation(&foks_server_db::UserMutation {
+                uid: &command.uid,
+                signer_device_id: &command.signer,
+                expected_sequence: command.sequence,
+                expected_tail_hash: &command.expected_tail_hash,
+                link_hash: &command.link_hash,
+                exact_link: &command.exact_link,
+                next_tree_location: &command.next_tree_location,
+                added_credential: added,
+                revoked_device_id: command.revoked.as_deref(),
+                shared_keys: &shared_keys,
+                parcels: &parcels,
+                seed_chain: &seed_chain,
+                expected_root_epoch: command.expected_root_epoch,
+                expected_root_hash: &command.expected_root_hash,
+                merkle_commit: &merkle_commit,
+                merkle_leaves: &leaves,
+                root_epoch,
+                root_hash: &root_hash,
+                exact_root: &exact_root,
+                exact_signed_root: &exact_signed_root,
+                back_pointers: &back_pointers,
+                idempotency_key: &idempotency_key,
+                request_hash: &request_hash,
+                response: &[],
+                now,
+                receipt_expires_at,
+            })?;
+            Ok(())
+        });
+        match result {
+            Ok(()) => Ok(()),
+            Err(crate::Error::Database(foks_server_db::Error::StaleRoot)) => {
+                Err(RpcStatus::StaleRoot)
+            }
+            Err(crate::Error::Database(foks_server_db::Error::QuotaExceeded)) => {
+                Err(RpcStatus::QuotaExceeded)
+            }
+            Err(crate::Error::Database(foks_server_db::Error::ReceiptConflict)) => {
+                Err(bad_arguments("user mutation retry binding failed"))
+            }
+            Err(crate::Error::WriterQueue) => Err(RpcStatus::RateLimited),
+            Err(_) => Err(bad_arguments("user mutation validation failed")),
         }
     }
 
@@ -363,18 +742,24 @@ impl ServerData {
         let uid = EntityId::from_bytes(uid.clone())
             .and_then(|uid| uid.require_type(foks_proto::ENTITY_USER))
             .map_err(bad_arguments)?;
-        let device = EntityId::from_bytes(device_id.clone())
-            .and_then(|device| device.require_type(foks_proto::ENTITY_DEVICE))
-            .map_err(bad_arguments)?;
+        let device = EntityId::from_bytes(device_id.clone()).map_err(bad_arguments)?;
+        if !matches!(
+            device.entity_type(),
+            foks_proto::ENTITY_DEVICE | foks_proto::ENTITY_BACKUP_KEY | foks_proto::ENTITY_SUBKEY
+        ) {
+            return Err(bad_arguments("unsupported certificate credential kind"));
+        }
         let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
         let keys = Arc::clone(self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?);
         let clock = Arc::clone(&self.clock);
         let entropy = Arc::clone(&self.entropy);
         let canonical_name = self.canonical_name.clone();
         let result = writer.call(move |database| {
-            if !database.is_active_device(uid.as_bytes(), device.as_bytes())? {
+            let Some(owner) =
+                database.active_credential_owner(uid.as_bytes(), device.as_bytes())?
+            else {
                 return Ok(None);
-            }
+            };
             let now = clock.now_micros()?;
             if let Some(certificate) =
                 database.certificate_for_device(uid.as_bytes(), device.as_bytes())?
@@ -410,6 +795,7 @@ impl ServerData {
             database.record_certificate(
                 &serial,
                 uid.as_bytes(),
+                &owner,
                 device.as_bytes(),
                 not_before,
                 not_after,
@@ -627,7 +1013,7 @@ pub(crate) fn serve(
             Err(error) => return Err(error.into()),
         };
         service_data.metrics.request_started();
-        if listener == Listener::Authenticated && principal.is_none() {
+        if listener == Listener::Authenticated {
             let certificate = stream
                 .conn
                 .peer_certificates()
@@ -635,7 +1021,14 @@ pub(crate) fn serve(
                 .ok_or(crate::Error::Config(
                     "authenticated TLS session has no client certificate",
                 ))?;
-            principal = Some(Principal::from_certificate(certificate)?);
+            let now = service_data.clock.now_micros()?;
+            principal = Some(Principal::authenticate(
+                certificate,
+                &service_data
+                    .read_database()
+                    .map_err(|_| crate::Error::Config("authenticated database is unavailable"))?,
+                now,
+            )?);
         }
         let sequence = call.sequence();
         let mut route = None;

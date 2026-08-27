@@ -4,8 +4,8 @@ use super::{
     device_label_name_and_commitment_key, hepk, DeviceLabelNameAndCommitmentKey, Hepk, UserLink,
 };
 use crate::{
-    array, boolean, decode, encode, entity, expect_unsigned, fixed_blob, list_or_null, role, text,
-    unsigned, EntityId, Error, Result, Role, SecretSeed, SeedChainBox, SharedKeyBoxSet,
+    array, boolean, decode, encode, entity, expect_unsigned, fixed_blob, list, list_or_null, role,
+    text, unsigned, EntityId, Error, Result, Role, SecretSeed, SeedChainBox, SharedKeyBoxSet,
     TeamRemovalKeyBox, Value, ENTITY_AD_HOC_TEAM, ENTITY_HOST, ENTITY_NAMED_TEAM, ENTITY_USER,
 };
 use zeroize::Zeroizing;
@@ -25,6 +25,23 @@ pub struct TeamBearerTokenChallenge {
 }
 
 impl TeamBearerTokenChallenge {
+    pub fn decode_payload(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let fields = array(&value, 6)?;
+        let user = array(&fields[0], 2)?;
+        let result = Self {
+            user: entity(&user[0])?,
+            user_host: entity(&user[1])?,
+            team: entity(&fields[1])?,
+            role: role(&fields[2])?,
+            generation: unsigned(&fields[3])?,
+            token: fixed_blob(&fields[4], "team bearer token")?,
+            time: unsigned(&fields[5])?,
+        };
+        result.validate()?;
+        Ok(result)
+    }
+
     pub fn encoded_payload(&self) -> Result<Vec<u8>> {
         self.validate()?;
         Ok(encode(&Value::Array(vec![
@@ -211,6 +228,11 @@ impl TeamRemovalBoxData {
         self.team_box.validate()?;
         self.member_box.validate()?;
         self.metadata.validate()
+    }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        self.validate()?;
+        Ok(encode(&self.to_value())?)
     }
 }
 
@@ -428,6 +450,35 @@ pub struct ProvisionDeviceArgument<'a> {
     pub hepks: &'a [Hepk],
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecodedProvisionDeviceArgument {
+    pub link: UserLink,
+    pub puk_boxes: SharedKeyBoxSet,
+    pub device_name: DeviceLabelNameAndCommitmentKey,
+    pub next_tree_location: [u8; 32],
+    pub self_token: [u8; 17],
+    pub hepks: Vec<Hepk>,
+}
+
+impl DecodedProvisionDeviceArgument {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let fields = array(&value, 15)?;
+        require_null(&fields[4], "provisioning KEX state")?;
+        for field in &fields[7..15] {
+            require_null(field, "unsupported provisioning field")?;
+        }
+        Ok(Self {
+            link: UserLink::decode(&encode(&fields[0])?)?,
+            puk_boxes: SharedKeyBoxSet::decode(&encode(&fields[1])?)?,
+            device_name: DeviceLabelNameAndCommitmentKey::decode(&encode(&fields[2])?)?,
+            next_tree_location: fixed_blob(&fields[3], "next tree location")?,
+            self_token: fixed_blob(&fields[5], "provisioning self token")?,
+            hepks: decode_hepk_set(&fields[6])?,
+        })
+    }
+}
+
 pub struct AdHocTeamCreateArgument<'a> {
     pub link: &'a UserLink,
     pub next_tree_location: [u8; 32],
@@ -436,6 +487,46 @@ pub struct AdHocTeamCreateArgument<'a> {
     pub subchain_tree_location: [u8; 32],
     pub membership_link: &'a UserLink,
     pub membership_next_tree_location: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecodedAdHocTeamCreateArgument {
+    pub link: UserLink,
+    pub next_tree_location: [u8; 32],
+    pub ptk_boxes: SharedKeyBoxSet,
+    pub hepks: Vec<Hepk>,
+    pub subchain_tree_location: [u8; 32],
+    pub membership_link: UserLink,
+    pub membership_next_tree_location: [u8; 32],
+}
+
+impl DecodedAdHocTeamCreateArgument {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let outer = array(&value, 1)?;
+        let common = array(&outer[0], 3)?;
+        let edit = decode_team_edit_common(&common[1])?;
+        if !edit.seed_chain.is_empty()
+            || !edit.removal_keys.is_empty()
+            || !edit.removals.is_empty()
+            || !edit.local_permissions_for.is_empty()
+        {
+            return Err(Error::IntegerRange("ad-hoc team founding edit"));
+        }
+        let membership = array(&common[2], 2)?;
+        Ok(Self {
+            link: edit.link,
+            next_tree_location: edit.next_tree_location,
+            ptk_boxes: edit.ptk_boxes,
+            hepks: edit.hepks,
+            subchain_tree_location: fixed_blob(&common[0], "team subchain tree location")?,
+            membership_link: UserLink::decode(&encode(&membership[0])?)?,
+            membership_next_tree_location: fixed_blob(
+                &membership[1],
+                "membership next tree location",
+            )?,
+        })
+    }
 }
 
 pub struct NamedTeamCreateArgument<'a> {
@@ -452,6 +543,44 @@ pub struct NamedTeamCreateArgument<'a> {
     pub membership_next_tree_location: [u8; 32],
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecodedNamedTeamCreateArgument {
+    pub name_utf8: Vec<u8>,
+    pub team_name_commitment_key: [u8; 16],
+    pub subchain_tree_location: [u8; 32],
+    pub reservation: TeamNameReservation,
+    pub edit: DecodedTeamEditArgument,
+    pub membership_link: UserLink,
+    pub membership_next_tree_location: [u8; 32],
+}
+
+impl DecodedNamedTeamCreateArgument {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let fields = array(&value, 6)?;
+        let membership = array(&fields[5], 2)?;
+        let edit = decode_team_edit_common(&fields[4])?;
+        if !edit.seed_chain.is_empty()
+            || !edit.removals.is_empty()
+            || !edit.local_permissions_for.is_empty()
+        {
+            return Err(Error::IntegerRange("named-team founding edit"));
+        }
+        Ok(Self {
+            name_utf8: text(&fields[0])?.into_bytes(),
+            team_name_commitment_key: fixed_blob(&fields[1], "team name commitment key")?,
+            subchain_tree_location: fixed_blob(&fields[2], "team subchain tree location")?,
+            reservation: TeamNameReservation::decode(&encode(&fields[3])?)?,
+            edit,
+            membership_link: UserLink::decode(&encode(&membership[0])?)?,
+            membership_next_tree_location: fixed_blob(
+                &membership[1],
+                "membership next tree location",
+            )?,
+        })
+    }
+}
+
 pub struct AddTeamMemberArgument<'a> {
     pub link: &'a UserLink,
     pub next_tree_location: [u8; 32],
@@ -459,6 +588,24 @@ pub struct AddTeamMemberArgument<'a> {
     pub removal_keys: &'a [TeamRemovalBoxData],
     pub hepks: &'a [Hepk],
     pub local_permissions_for: &'a [EntityId],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecodedTeamEditArgument {
+    pub link: UserLink,
+    pub next_tree_location: [u8; 32],
+    pub ptk_boxes: SharedKeyBoxSet,
+    pub seed_chain: Vec<SeedChainBox>,
+    pub removal_keys: Vec<TeamRemovalBoxData>,
+    pub removals: Vec<TeamRemovalAndCommitment>,
+    pub hepks: Vec<Hepk>,
+    pub local_permissions_for: Vec<EntityId>,
+}
+
+impl DecodedTeamEditArgument {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        decode_team_edit_common(&decode(bytes)?)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -621,6 +768,17 @@ impl TeamEditResult {
             local_invitees: invitees,
         })
     }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&Value::Array(vec![list_or_null(
+            self.local_invitees.iter().map(|(entity, role)| {
+                Value::Array(vec![
+                    Value::Binary(entity.as_bytes().to_vec()),
+                    role.to_value(),
+                ])
+            }),
+        )]))?)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -640,6 +798,10 @@ impl ViewershipMode {
             _ => Err(Error::IntegerRange("viewership mode")),
         }
     }
+
+    pub fn to_value(self) -> Value {
+        Value::Unsigned(self as u64)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -654,6 +816,22 @@ pub struct HostConfig {
 }
 
 impl HostConfig {
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&Value::Array(vec![
+            Value::Array(vec![
+                Value::Bool(self.meter_users),
+                Value::Bool(self.meter_vhosts),
+                Value::Bool(self.meter_per_vhost_disk),
+            ]),
+            Value::Array(vec![
+                self.user_viewership.to_value(),
+                self.team_viewership.to_value(),
+            ]),
+            Value::Unsigned(self.host_type),
+            Value::Unsigned(self.invite_code_regime),
+        ]))?)
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
         let fields = array(&wire, 4)?;
@@ -892,6 +1070,30 @@ pub struct RevokeDeviceArgument<'a> {
     pub hepks: &'a [Hepk],
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecodedRevokeDeviceArgument {
+    pub link: UserLink,
+    pub puk_boxes: SharedKeyBoxSet,
+    pub seed_chain: Vec<SeedChainBox>,
+    pub next_tree_location: [u8; 32],
+    pub hepks: Vec<Hepk>,
+}
+
+impl DecodedRevokeDeviceArgument {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let fields = array(&value, 6)?;
+        require_null(&fields[4], "revoke optional metadata")?;
+        Ok(Self {
+            link: UserLink::decode(&encode(&fields[0])?)?,
+            puk_boxes: SharedKeyBoxSet::decode(&encode(&fields[1])?)?,
+            seed_chain: list(&fields[2], |value| SeedChainBox::decode(&encode(value)?))?,
+            next_tree_location: fixed_blob(&fields[3], "next tree location")?,
+            hepks: decode_hepk_set(&fields[5])?,
+        })
+    }
+}
+
 impl RevokeDeviceArgument<'_> {
     pub fn encoded(&self) -> Result<Vec<u8>> {
         let hepks = self
@@ -914,4 +1116,44 @@ impl RevokeDeviceArgument<'_> {
             Value::Array(vec![Value::Array(hepks)]),
         ]))?)
     }
+}
+
+fn decode_hepk_set(value: &Value) -> Result<Vec<Hepk>> {
+    let outer = array(value, 1)?;
+    let values = match &outer[0] {
+        Value::Null => &[][..],
+        Value::Array(values) => values.as_slice(),
+        _ => {
+            return Err(Error::Type {
+                expected: "HEPK list",
+                found: "another value",
+            });
+        }
+    };
+    values
+        .iter()
+        .map(|value| Hepk::decode(&encode(value)?))
+        .collect()
+}
+
+fn decode_team_edit_common(value: &Value) -> Result<DecodedTeamEditArgument> {
+    let fields = array(value, 5)?;
+    require_null(&fields[3], "team edit invite links")?;
+    let offchain = array(&fields[2], 7)?;
+    require_null(&offchain[2], "team edit remote removal boxes")?;
+    require_null(&offchain[6], "team edit remote join requests")?;
+    Ok(DecodedTeamEditArgument {
+        link: UserLink::decode(&encode(&fields[0])?)?,
+        next_tree_location: fixed_blob(&fields[1], "team next tree location")?,
+        ptk_boxes: SharedKeyBoxSet::decode(&encode(&offchain[0])?)?,
+        seed_chain: list(&offchain[1], |value| SeedChainBox::decode(&encode(value)?))?,
+        removal_keys: list(&offchain[3], |value| {
+            TeamRemovalBoxData::decode(&encode(value)?)
+        })?,
+        removals: list(&offchain[4], |value| {
+            TeamRemovalAndCommitment::decode(&encode(value)?)
+        })?,
+        hepks: decode_hepk_set(&offchain[5])?,
+        local_permissions_for: list(&fields[4], entity)?,
+    })
 }

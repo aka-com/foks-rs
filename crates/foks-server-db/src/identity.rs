@@ -120,8 +120,9 @@ impl Database {
         inject(failure, FailurePoint::User)?;
         transaction.execute(
             "INSERT INTO devices
-             (device_id, uid, active, hepk_fingerprint, exact_hepk, exact_name)
-             VALUES (?1, ?2, 1, ?3, ?4, ?5)",
+             (device_id, uid, active, role_type, visibility, subkey_id,
+              hepk_fingerprint, exact_hepk, exact_name)
+             VALUES (?1, ?2, 1, 3, 0, NULL, ?3, ?4, ?5)",
             params![
                 mutation.device_id,
                 mutation.uid,
@@ -165,8 +166,8 @@ impl Database {
         )?;
         transaction.execute(
             "INSERT INTO parcels
-             (uid, device_id, role_type, visibility, generation, exact_parcel)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             (uid, device_id, sender_id, role_type, visibility, generation, exact_parcel)
+             VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6)",
             params![
                 mutation.uid,
                 mutation.device_id,

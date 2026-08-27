@@ -116,6 +116,19 @@ fn configure(connection: &Connection, config: &Config) -> Result<()> {
         || config.maximum_kv_namespace_bytes == 0
         || config.maximum_kv_namespace_objects == 0
         || config.maximum_kv_node_bytes == 0
+        || config.maximum_active_credentials_per_user == 0
+        || config.maximum_backup_credentials_per_user == 0
+        || config.maximum_user_chain_links == 0
+        || config.maximum_team_chain_links == 0
+        || config.maximum_teams == 0
+        || config.maximum_team_members == 0
+        || config.maximum_team_role_bands == 0
+        || config.maximum_team_name_reservations == 0
+        || config.maximum_boxes_per_mutation == 0
+        || config.maximum_active_recovery_challenges == 0
+        || config.maximum_recovery_challenges_per_entity == 0
+        || config.maximum_team_view_capabilities_per_pair == 0
+        || config.maximum_active_team_view_capabilities == 0
     {
         return Err(crate::Error::Invalid("zero database capacity limit"));
     }

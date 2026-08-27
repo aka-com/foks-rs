@@ -19,6 +19,8 @@ pub enum KeyPurpose {
     Merkle,
     ClientCa,
     DelegatedTls,
+    Recovery,
+    Capability,
 }
 
 impl KeyPurpose {
@@ -29,6 +31,8 @@ impl KeyPurpose {
             Self::Merkle => "merkle",
             Self::ClientCa => "client-ca",
             Self::DelegatedTls => "delegated-tls",
+            Self::Recovery => "recovery",
+            Self::Capability => "capability",
         }
     }
 }

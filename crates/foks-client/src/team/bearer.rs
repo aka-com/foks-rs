@@ -49,7 +49,7 @@ impl FoksClient {
             time: now_microseconds()?,
         };
         let signature = sign_team_bearer_token_challenge(bearer_seed, &challenge)?;
-        self.call_with_material(
+        self.call_void_with_material(
             host,
             &host.user,
             &encode_activate_team_bearer_token_request(&challenge, &signature)?,

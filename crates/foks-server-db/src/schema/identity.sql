@@ -23,6 +23,9 @@ CREATE TABLE devices (
     device_id BLOB PRIMARY KEY CHECK (length(device_id) IN (33, 34)),
     uid BLOB NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
     active INTEGER NOT NULL CHECK (active IN (0, 1)),
+    role_type INTEGER NOT NULL CHECK (role_type BETWEEN 1 AND 3),
+    visibility INTEGER NOT NULL,
+    subkey_id BLOB CHECK (subkey_id IS NULL OR length(subkey_id) IN (33, 34)),
     hepk_fingerprint BLOB NOT NULL CHECK (length(hepk_fingerprint) = 32),
     exact_hepk BLOB NOT NULL,
     exact_name BLOB NOT NULL
@@ -65,6 +68,7 @@ CREATE TABLE shared_keys (
 CREATE TABLE parcels (
     uid BLOB NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
     device_id BLOB NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+    sender_id BLOB NOT NULL REFERENCES devices(device_id),
     role_type INTEGER NOT NULL,
     visibility INTEGER NOT NULL,
     generation INTEGER NOT NULL CHECK (generation >= 1),
@@ -76,7 +80,9 @@ CREATE TABLE parcels (
 
 CREATE TABLE seed_chain_boxes (
     uid BLOB NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+    role_type INTEGER NOT NULL CHECK (role_type BETWEEN 0 AND 3),
+    visibility INTEGER NOT NULL,
     generation INTEGER NOT NULL CHECK (generation >= 1),
     exact_box BLOB NOT NULL,
-    PRIMARY KEY (uid, generation)
+    PRIMARY KEY (uid, role_type, visibility, generation)
 ) STRICT;

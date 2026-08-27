@@ -94,6 +94,47 @@ pub struct StoredKvFileChunk {
 }
 
 impl Database {
+    /// Materializes a party-scoped KV namespace only for a local user or team.
+    /// The polymorphic party binding is resolved from authoritative identity
+    /// tables rather than accepted from the caller.
+    pub fn ensure_kv_namespace(&mut self, namespace_id: &[u8]) -> Result<bool> {
+        if namespace_id.len() != 33 {
+            return Err(Error::Invalid("KV namespace ID"));
+        }
+        let party: Option<(i64, Vec<u8>)> = self
+            .connection
+            .query_row(
+                "SELECT party_kind, host_id FROM (
+                     -- Identity-only DB tests intentionally have no host
+                     -- bootstrap; production always selects host_metadata.
+                     SELECT 1 AS party_kind,
+                            COALESCE((SELECT host_id FROM host_metadata WHERE singleton = 1),
+                                     zeroblob(33)) AS host_id
+                       FROM users u WHERE u.uid = ?1
+                     UNION ALL
+                     SELECT t.team_kind AS party_kind, t.host_id AS host_id
+                       FROM teams t WHERE t.team_id = ?1
+                 ) LIMIT 1",
+                [namespace_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((party_kind, host_id)) = party else {
+            return Ok(false);
+        };
+        let changed = self.connection.execute(
+            "INSERT INTO kv_namespaces(namespace_id, party_kind, host_id)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(namespace_id) DO UPDATE SET
+               party_kind = excluded.party_kind,
+               host_id = excluded.host_id
+             WHERE kv_namespaces.party_kind = excluded.party_kind
+               AND kv_namespaces.host_id = excluded.host_id",
+            params![namespace_id, party_kind, host_id],
+        )?;
+        Ok(changed == 1)
+    }
+
     pub fn put_kv_directory(&mut self, mutation: &KvDirectoryMutation<'_>) -> Result<()> {
         self.put_kv_directory_with_precondition(mutation, None)
     }
@@ -104,6 +145,9 @@ impl Database {
         precondition: Option<&foks_proto::KvPathVersionVector>,
     ) -> Result<()> {
         validate_directory(self, mutation)?;
+        if !self.ensure_kv_namespace(mutation.uid)? {
+            return Err(Error::Invalid("unknown KV namespace"));
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -176,6 +220,9 @@ impl Database {
         {
             return Err(Error::Invalid("KV node mutation"));
         }
+        if !self.ensure_kv_namespace(mutation.uid)? {
+            return Err(Error::Invalid("unknown KV namespace"));
+        }
         let existing: Option<Vec<u8>> = self
             .connection
             .query_row(
@@ -229,6 +276,9 @@ impl Database {
             {
                 return Err(Error::Invalid("KV dirent mutation"));
             }
+        }
+        if !self.ensure_kv_namespace(uid)? {
+            return Err(Error::Invalid("unknown KV namespace"));
         }
         let transaction = self
             .connection
@@ -374,6 +424,9 @@ impl Database {
         {
             return Err(Error::Invalid("KV file chunk mutation"));
         }
+        if !self.ensure_kv_namespace(mutation.uid)? {
+            return Err(Error::Invalid("unknown KV namespace"));
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -504,6 +557,9 @@ impl Database {
         if uid.len() != 33 || expires_at <= now {
             return Err(Error::Invalid("KV lock"));
         }
+        if !self.ensure_kv_namespace(uid)? {
+            return Err(Error::Invalid("unknown KV namespace"));
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -574,6 +630,9 @@ impl Database {
             || mutation.exact.len() > self.config.maximum_blob_bytes
         {
             return Err(Error::Invalid("KV root mutation"));
+        }
+        if !self.ensure_kv_namespace(mutation.uid)? {
+            return Err(Error::Invalid("unknown KV namespace"));
         }
         let transaction = self
             .connection

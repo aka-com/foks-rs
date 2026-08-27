@@ -20,6 +20,7 @@ use foks_proto::{
 use foks_snowpack::{decode, encode, Value};
 use thiserror::Error;
 
+pub mod arguments;
 mod response;
 mod server;
 

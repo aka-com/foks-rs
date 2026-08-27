@@ -1,24 +1,25 @@
 # foks-server
 
-Standalone, single-host FOKS v0.1.9 personal server backed by a dedicated
-SQLite database. It creates encrypted named host keys, constructs and verifies
-a fresh genesis hostchain/public zone/Merkle root, and binds separate probe,
-public-service, and authenticated mTLS listeners.
+Standalone, single-host FOKS v0.1.9 personal and small-team server backed by a
+dedicated SQLite database. It creates encrypted named host keys, constructs and
+verifies a fresh genesis hostchain/public zone/Merkle root, and binds separate
+probe, public-service, and authenticated mTLS listeners.
 
 The implemented v1 slice supports username reservation, software-device
 signup, device certificate issuance, current and historical Merkle roots,
-authenticated user-chain and owner-PUK reads, and the complete personal KV
-surface used by `foks-client`: roots, directories, optimistic dirent writes,
+authenticated user-chain and PUK reads, device provisioning/revocation,
+backup-key enrollment and recovery, named and ad-hoc team creation, local team
+membership edits and removals, PTK rotation/history, removal-key retrieval,
+and personal/team KV. KV covers roots, directories, optimistic dirent writes,
 small files, symlinks, chunked files, pagination, cache checks, and expiring
-locks. The release test creates two accounts and uses the public client without
-server test hooks to create a nested encrypted namespace and round-trip both
-small and multi-chunk content.
+locks. Public-client tests exercise these paths without server test hooks.
 
-Teams, federation, invites, passphrase login, YubiKey enrollment, user-chain
-mutation after signup, recovery, realtime services, and cross-host operation
-are intentionally unsupported. This is not a drop-in replacement for the full
-Go server. The executable contract is [protocol-v1.toml](protocol-v1.toml), and
-tests require it to match the registered route table exactly.
+Federation, remote users/teams, invites, passphrase login, YubiKey enrollment,
+team nesting, team-member/guest services, realtime services, and cross-host
+operation are intentionally unsupported. Ad-hoc teams are immutable after
+creation. This is not a drop-in replacement for the full Go server. The
+executable contract is [protocol-v1.toml](protocol-v1.toml), and tests require
+it to match the registered route table exactly.
 
 ## Running
 
@@ -57,11 +58,13 @@ first and then independent KV namespaces; identity/name publication and the
 global Merkle log still require one leader or a consensus protocol.
 
 The only background job is a bounded in-process maintenance loop. Once per
-minute it submits one ordinary writer task that removes expired reservations,
-receipts, and locks, reclaims uploads not referenced by a current directory
-entry after 24 idle hours, and requests a truncating WAL checkpoint. Foreground expiry and completeness checks enforce
-correctness even if this job never runs. There is no durable general-purpose
-job queue, retry farm, cron dependency, or multi-process lease system.
+minute it submits one ordinary writer task that removes expired user/team
+reservations, receipts, recovery challenges, team-view and TeamAdmin
+capabilities, and locks; reclaims uploads not referenced by a current
+directory entry after 24 idle hours; and requests a truncating WAL checkpoint.
+Foreground expiry, current-device, current-roster, role, and key-generation
+checks enforce correctness even if this job never runs. There is no durable
+general-purpose job queue, retry farm, cron dependency, or multi-process lease system.
 An operating-system lock on the database sidecar rejects a second writer
 process; active/active service instances are not supported.
 
@@ -74,8 +77,14 @@ Defaults are enforced before authoritative KV writes:
 - 9 MiB per stored encrypted chunk and 512 chunks per upload;
 - the client-compatible 1 GiB cleartext file ceiling, allowing up to just over
   2 GiB of v0.1.9 padded ciphertext;
-- 16 GiB and 1,000,000 stored objects per personal KV namespace; and
+- 16 GiB and 1,000,000 stored objects per user or team KV namespace; and
 - 64 GiB for the SQLite main database through `max_page_count`.
+
+Identity/team defaults also bound each user to 16 active devices and four
+backup credentials; each team to 64 members, 16 PTK role/visibility bands,
+4,096 links, and 1,024 boxes of each class per mutation; the installation to
+4,096 teams and pending team-name reservations; and team view/admin
+capabilities to 32 per member/team pair and 16,384 per class globally.
 
 Namespace accounting charges encoded bytes actually stored, including upload
 envelopes and ciphertext duplication. Tombstone/history versions remain
@@ -118,6 +127,12 @@ uses a read-only source connection. Restore accepts only a complete manifest,
 integrity-checked database, and exact declared key set, and requires empty
 destination paths.
 
+The SQLite snapshot includes names, recovery credentials, user/team chains,
+current projections, encrypted PUK/PTK histories, capability policy state, and
+all user/team KV namespaces. Usable bearer tokens are never stored; only their
+hashes are present and restored tokens still undergo foreground expiry and
+current-authority checks.
+
 For restore, stop the process, retain the damaged directory, place the backed-up
 database and key directory at new explicit paths, supply the matching operator
 root key, and start the server. Startup revalidates the database application and
@@ -150,7 +165,12 @@ format, lint, protocol-matrix, unit, and process suite with:
 ```text
 tools/foks-server/check.sh
 tools/foks-server/test-client-server.sh
+tools/foks-server/test-small-team.sh
+tools/foks-server/test-small-team-repeat.sh 5
 ```
 
 The gate rejects any AKA dependency or changed path outside the standalone FOKS
-boundary.
+boundary. The optional official-Go frame audit is
+`tools/foks-v019-oracle/run-live-team-compat.sh`; it needs a Go 1.19-compatible
+toolchain and may populate Go compiler/module caches, but does not use an AKA
+crate or user data path.

@@ -88,6 +88,10 @@ pub enum Signature {
 }
 
 impl Signature {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        crate::host::signature(&crate::decode(bytes)?)
+    }
+
     pub fn to_value(&self) -> Value {
         match self {
             Self::Ed25519(bytes) => Value::Array(vec![

@@ -73,6 +73,26 @@ pub struct LookupUserResult {
 }
 
 impl LookupUserResult {
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        let role = self.role.to_value();
+        let yubi = self
+            .yubi_pq_hint
+            .as_ref()
+            .map(|exact| decode(exact))
+            .transpose()?
+            .unwrap_or(Value::Null);
+        Ok(encode(&Value::Array(vec![
+            Value::Array(vec![
+                Value::Binary(self.uid.as_bytes().to_vec()),
+                Value::Binary(self.host.as_bytes().to_vec()),
+            ]),
+            Value::Text(self.username.clone()),
+            Value::Text(self.username_utf8.clone()),
+            role,
+            yubi,
+        ]))?)
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
         let fields = array(&wire, 5)?;

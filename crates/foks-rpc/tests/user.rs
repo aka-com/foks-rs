@@ -1,5 +1,7 @@
 use foks_proto::{
-    AdHocTeamCreateArgument, AddTeamMemberArgument, DecodedSoftwareSignupArgument, DeviceLabel,
+    AdHocTeamCreateArgument, AddTeamMemberArgument, DecodedAdHocTeamCreateArgument,
+    DecodedNamedTeamCreateArgument, DecodedProvisionDeviceArgument, DecodedRevokeDeviceArgument,
+    DecodedSoftwareSignupArgument, DecodedTeamEditArgument, DeviceLabel,
     DeviceLabelNameAndCommitmentKey, DeviceType, EntityId, HostConfig, InviteCode,
     NamedTeamCreateArgument, ProvisionDeviceArgument, PukParcel, RegistrationChallenge,
     RemoveTeamMemberArgument, RevokeDeviceArgument, Role, SecretSeed, SeedChainBox,
@@ -22,6 +24,7 @@ use foks_rpc::{
     encode_registration_select_vhost_request, encode_remove_team_member_request,
     encode_reserve_team_name_request, encode_reserve_username_request_at,
     encode_revoke_device_request, encode_signup_request_at, encode_team_view_challenge_request,
+    read_call, DEFAULT_MAX_FRAME_LENGTH,
 };
 use foks_snowpack::{decode, encode, Value};
 
@@ -39,6 +42,40 @@ fn signup_fixture(name: &str) -> Vec<u8> {
 
 fn mutation_fixture(name: &str) -> Vec<u8> {
     std::fs::read(format!("{MUTATION_DIR}/{name}")).unwrap()
+}
+
+fn request_argument(name: &str) -> Vec<u8> {
+    let frame = mutation_fixture(name);
+    read_call(&mut std::io::Cursor::new(frame), DEFAULT_MAX_FRAME_LENGTH)
+        .unwrap()
+        .argument()
+        .to_vec()
+}
+
+#[test]
+fn server_decoders_accept_the_exact_go_v019_mutation_arguments() {
+    let provision =
+        DecodedProvisionDeviceArgument::decode(&request_argument("provision-request.frame"))
+            .unwrap();
+    assert!(!provision.hepks.is_empty());
+    DecodedProvisionDeviceArgument::decode(&request_argument("backup-enroll-request.frame"))
+        .unwrap();
+    DecodedProvisionDeviceArgument::decode(&request_argument("backup-recover-request.frame"))
+        .unwrap();
+    DecodedRevokeDeviceArgument::decode(&request_argument("revoke-request.frame")).unwrap();
+    DecodedRevokeDeviceArgument::decode(&request_argument("rotation-request.frame")).unwrap();
+    DecodedAdHocTeamCreateArgument::decode(&request_argument("adhoc-create-request.frame"))
+        .unwrap();
+    let named =
+        DecodedNamedTeamCreateArgument::decode(&request_argument("named-create-request.frame"))
+            .unwrap();
+    assert_eq!(named.name_utf8, b"AuditTeam");
+    let addition =
+        DecodedTeamEditArgument::decode(&request_argument("add-member-request.frame")).unwrap();
+    assert_eq!(addition.local_permissions_for.len(), 1);
+    let removal =
+        DecodedTeamEditArgument::decode(&request_argument("remove-member-request.frame")).unwrap();
+    assert_eq!(removal.removals.len(), 1);
 }
 
 #[test]

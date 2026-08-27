@@ -1651,8 +1651,7 @@ impl HardStateStore {
                             seqno: snapshot.chain_seqno,
                         });
                     }
-                    if evidence != snapshot.evidence_bytes
-                        || username != snapshot.username
+                    if username != snapshot.username
                         || username_utf8 != snapshot.username_utf8
                         || stored_unsigned("username sequence", *username_sequence)?
                             != snapshot.username_sequence
@@ -1675,6 +1674,7 @@ impl HardStateStore {
                         std::cmp::Ordering::Equal => {
                             if root_hash.as_slice() != snapshot.merkle_root_hash
                                 || root_bytes != snapshot.merkle_root_bytes
+                                || evidence != snapshot.evidence_bytes
                             {
                                 return Err(Error::MerkleFork {
                                     epoch: snapshot.merkle_epoch,
@@ -1840,8 +1840,7 @@ impl HardStateStore {
                         seqno: snapshot.chain_seqno,
                     });
                 }
-                if stored.evidence_bytes != snapshot.evidence_bytes
-                    || stored.team_name != snapshot.team_name
+                if stored.team_name != snapshot.team_name
                     || stored.team_name_utf8 != snapshot.team_name_utf8
                     || stored.team_name_sequence != snapshot.team_name_sequence
                     || stored.members != members
@@ -1861,6 +1860,7 @@ impl HardStateStore {
                     std::cmp::Ordering::Equal => {
                         if stored.merkle_root_hash != snapshot.merkle_root_hash
                             || stored.merkle_root_bytes != snapshot.merkle_root_bytes
+                            || stored.evidence_bytes != snapshot.evidence_bytes
                         {
                             return Err(Error::MerkleFork {
                                 epoch: snapshot.merkle_epoch,

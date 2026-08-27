@@ -7,8 +7,11 @@ baseline = "foks-v0.1.9"
 [status_codes]
 ok = 0
 bad_args = 1030
+device_already_provisioned = 1072
+expired = 1062
 locked = 8014
 kv_noent = 8016
+kv_permission = 8011
 name_in_use = 1023
 not_found = 1049
 permission_denied = 1013
@@ -17,6 +20,20 @@ rate_limited = 1012
 stale_cache = 8012
 stale_root = 1014
 tx_retry = 1014
+team_error = 7001
+team_race = 7002
+team_bearer_token_stale = 7003
+team_not_found = 7004
+team_cert = 7005
+team_roster = 7006
+team_key = 7007
+team_no_source_role = 7008
+team_removal_key = 7009
+team_explore = 7010
+team_adhoc_creator_included = 7101
+team_adhoc_open_viewership = 7102
+team_adhoc_invalid_change = 7103
+team_adhoc_duplicate = 7104
 unsupported = 1020
 
 [[service]]
@@ -110,6 +127,32 @@ supported = true
 [[route]]
 protocol = "Reg"
 protocol_id = 0xf7ab85f3
+method = "getUIDLookupChallege"
+position = 6
+listener = "public_services"
+authentication = "delegated_tls"
+request = "EntityId"
+result = "RegistrationChallenge"
+statuses = ["ok", "bad_args", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+
+[[route]]
+protocol = "Reg"
+protocol_id = 0xf7ab85f3
+method = "lookupUIDByDevice"
+position = 7
+listener = "public_services"
+authentication = "signed_lookup_challenge"
+request = "LookupUIDByDeviceArgument"
+result = "LookupUserResult"
+statuses = ["ok", "bad_args", "expired", "not_found", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "Reg"
+protocol_id = 0xf7ab85f3
 method = "selectVHost"
 position = 15
 listener = "public_services"
@@ -118,6 +161,32 @@ request = "SelectVHostArgument"
 result = "Void"
 statuses = ["ok", "bad_args", "not_found"]
 max_request_bytes = 4096
+supported = true
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "provisionDevice"
+position = 6
+listener = "authenticated"
+authentication = "active_credential_mtls"
+request = "ProvisionDeviceArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "device_already_provisioned", "permission_denied", "stale_root", "tx_retry"]
+max_request_bytes = 4194304
+supported = true
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "revokeDevice"
+position = 7
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "RevokeDeviceArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "permission_denied", "stale_root", "tx_retry"]
+max_request_bytes = 4194304
 supported = true
 
 [[route]]
@@ -154,10 +223,322 @@ position = 24
 listener = "authenticated"
 authentication = "active_device_mtls"
 request = "Void"
+result = "HostConfig"
+statuses = ["ok", "permission_denied"]
+max_request_bytes = 1024
+supported = true
+
+[[route]]
+protocol = "TeamLoader"
+protocol_id = 0xf9128579
+method = "getTeamVOBearerTokenChallenge"
+position = 0
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "TeamViewRequest"
+result = "TeamViewChallenge"
+statuses = ["ok", "bad_args", "team_not_found", "team_roster", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "TeamLoader"
+protocol_id = 0xf9128579
+method = "activateTeamVOBearerToken"
+position = 1
+listener = "authenticated"
+authentication = "current_puk_signature"
+request = "ActivateTeamViewArgument"
+result = "ActivatedTeamView"
+statuses = ["ok", "bad_args", "expired", "team_bearer_token_stale", "team_not_found", "team_roster", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "TeamLoader"
+protocol_id = 0xf9128579
+method = "checkTeamVOBearerToken"
+position = 2
+listener = "authenticated"
+authentication = "active_team_view_token"
+request = "TeamViewToken"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+
+[[route]]
+protocol = "TeamLoader"
+protocol_id = 0xf9128579
+method = "loadTeamChain"
+position = 3
+listener = "authenticated"
+authentication = "active_team_view_token"
+request = "LoadTeamChainArgument"
+result = "TeamChain"
+statuses = ["ok", "bad_args", "expired", "team_bearer_token_stale", "team_not_found", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "TeamLoader"
+protocol_id = 0xf9128579
+method = "loadTeamMembershipChain"
+position = 4
+listener = "authenticated"
+authentication = "active_team_view_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+
+[[route]]
+protocol = "TeamLoader"
+protocol_id = 0xf9128579
+method = "loadRemovalForMember"
+position = 5
+listener = "authenticated"
+authentication = "active_team_view_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+
+[[route]]
+protocol = "TeamLoader"
+protocol_id = 0xf9128579
+method = "loadTeamRemoteViewTokens"
+position = 6
+listener = "authenticated"
+authentication = "active_team_view_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+
+[[route]]
+protocol = "TeamLoader"
+protocol_id = 0xf9128579
+method = "getServerConfig"
+position = 7
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "Unsupported"
 result = "Unsupported"
 statuses = ["unsupported"]
 max_request_bytes = 1024
 supported = false
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "reserveTeamname"
+position = 0
+listener = "authenticated"
+authentication = "active_owner_device_mtls"
+request = "TeamName"
+result = "TeamNameReservation"
+statuses = ["ok", "bad_args", "name_in_use", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "createTeam"
+position = 1
+listener = "authenticated"
+authentication = "active_owner_device_mtls"
+request = "NamedTeamCreateArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "name_in_use", "team_error", "team_race", "team_roster", "team_key", "stale_root", "tx_retry"]
+max_request_bytes = 8388608
+supported = true
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "editTeam"
+position = 2
+listener = "authenticated"
+authentication = "current_team_admin"
+request = "TeamEditArgument"
+result = "TeamEditResult"
+statuses = ["ok", "bad_args", "team_error", "team_race", "team_roster", "team_key", "team_no_source_role", "team_removal_key", "team_adhoc_invalid_change", "stale_root", "tx_retry"]
+max_request_bytes = 8388608
+supported = true
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "makeInertTeamBearerToken"
+position = 3
+listener = "authenticated"
+authentication = "current_team_admin"
+request = "MakeInertTeamBearerTokenArgument"
+result = "TeamBearerToken"
+statuses = ["ok", "bad_args", "team_not_found", "team_no_source_role", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "activateTeamBearerToken"
+position = 4
+listener = "authenticated"
+authentication = "current_ptk_signature"
+request = "ActivateTeamBearerTokenArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "expired", "team_bearer_token_stale", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "checkTeamBearerToken"
+position = 5
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "putTeamCert"
+position = 6
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "getCurrentTeamCerts"
+position = 7
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "loadTeamRemoteJoinReq"
+position = 8
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "postTeamMembershipLink"
+position = 9
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "loadRemovalKeyBoxForTeamAdmin"
+position = 10
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "LoadRemovalKeyBoxArgument"
+result = "TeamRemovalKeyBox"
+statuses = ["ok", "bad_args", "expired", "team_bearer_token_stale", "team_removal_key", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "postTeamRemoval"
+position = 11
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "loadTeamRawInbox"
+position = 12
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "rejectJoinReq"
+position = 13
+listener = "authenticated"
+authentication = "active_team_admin_token"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 4096
+supported = false
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "getTeamConfig"
+position = 14
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 1024
+supported = false
+
+[[route]]
+protocol = "TeamAdmin"
+protocol_id = 0xdbe1ddbe
+method = "createTeamAdHoc"
+position = 15
+listener = "authenticated"
+authentication = "active_owner_device_mtls"
+request = "AdHocTeamCreateArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "team_error", "team_roster", "team_key", "team_adhoc_creator_included", "team_adhoc_open_viewership", "team_adhoc_duplicate", "stale_root", "tx_retry"]
+max_request_bytes = 8388608
+supported = true
 
 [[route]]
 protocol = "MerkleQuery"

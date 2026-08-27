@@ -240,11 +240,13 @@ impl FoksClient {
             credential.key.expose_signing_key_pkcs8()?,
             &credential.certificate_chain,
         )?;
+        let authenticated_roots =
+            self.authenticate_user_chain_roots(host, &merkle, &chain_bytes)?;
         let verified = verify_user_chain(
             &chain_bytes,
             &credential.uid,
             host.host_id(),
-            merkle.authenticated_roots(),
+            &authenticated_roots,
             &merkle.root().hostchain,
         )?;
         let enrolled = verified

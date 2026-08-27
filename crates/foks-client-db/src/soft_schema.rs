@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464b_5653; // `FKVS`
-pub(crate) const VERSION: u32 = 1;
+pub(crate) const VERSION: u32 = 2;
 
 pub(crate) const INITIAL: &str = r#"
 CREATE TABLE kv_parties (
@@ -44,6 +44,19 @@ CREATE TABLE kv_entries (
     FOREIGN KEY (host_id, party_id, parent_dir_id)
         REFERENCES kv_directories(host_id, party_id, dir_id) ON DELETE CASCADE,
     FOREIGN KEY (large_file_id) REFERENCES kv_large_files(id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE kv_entry_history (
+    host_id BLOB NOT NULL,
+    party_id BLOB NOT NULL,
+    parent_dir_id BLOB NOT NULL CHECK (length(parent_dir_id) = 16),
+    dirent_id BLOB NOT NULL CHECK (length(dirent_id) = 16),
+    version INTEGER NOT NULL CHECK (version > 0),
+    dirent_bytes BLOB NOT NULL CHECK (length(dirent_bytes) > 0),
+    present INTEGER NOT NULL CHECK (present IN (0, 1)),
+    PRIMARY KEY (host_id, party_id, parent_dir_id, dirent_id),
+    FOREIGN KEY (host_id, party_id, parent_dir_id)
+        REFERENCES kv_directories(host_id, party_id, dir_id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE kv_large_files (

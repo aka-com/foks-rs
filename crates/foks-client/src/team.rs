@@ -29,7 +29,8 @@ use foks_rpc::{
     encode_team_view_challenge_request, STATUS_TX_RETRY_ERROR,
 };
 use foks_verify::{
-    verify_team_chain, verify_team_chain_increment, VerifiedTeamState, VerifiedUserState,
+    team_chain_root_epochs, verify_team_chain, verify_team_chain_increment, VerifiedTeamState,
+    VerifiedUserState,
 };
 
 use crate::{
@@ -697,7 +698,14 @@ impl FoksClient {
         }
 
         let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
-        let prior = self.pinned_team(host, team)?;
+        let prior = match self.pinned_team(host, team) {
+            Ok(prior) => prior,
+            Err(Error::Verify(
+                foks_verify::Error::PersistedMerkleEvidence
+                | foks_verify::Error::TeamChainContinuity,
+            )) => None,
+            Err(error) => return Err(error),
+        };
         let (start, name) = match prior.as_ref() {
             Some(prior) => (
                 prior
@@ -727,20 +735,26 @@ impl FoksClient {
             auth_seed,
             certificate_chain,
         )?;
+        let targets = team_chain_root_epochs(&chain_bytes)?
+            .into_iter()
+            .filter(|epoch| !merkle.authenticated_roots().contains_epoch(*epoch))
+            .collect();
+        let authenticated_roots =
+            self.authenticate_chain_roots(host, &merkle, targets, Error::TeamBinding)?;
         let verified = match prior.as_ref() {
             Some(prior) => verify_team_chain_increment(
                 &chain_bytes,
                 prior,
                 team,
                 host.host_id(),
-                merkle.authenticated_roots(),
+                &authenticated_roots,
                 &merkle.root().hostchain,
             )?,
             None => verify_team_chain(
                 &chain_bytes,
                 team,
                 host.host_id(),
-                merkle.authenticated_roots(),
+                &authenticated_roots,
                 &merkle.root().hostchain,
             )?,
         };
