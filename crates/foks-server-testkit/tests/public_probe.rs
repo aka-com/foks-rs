@@ -46,5 +46,20 @@ fn public_client_verifies_and_pins_the_real_tls_probe() {
         first.verified.snapshot.host_id(),
         second.verified.snapshot.host_id()
     );
+    assert_eq!(
+        first.verified.public_zone.services.probe,
+        format!("localhost:{}", server.addresses().probe.port())
+    );
+    assert_eq!(
+        first.verified.public_zone.services.registration,
+        format!("localhost:{}", server.addresses().public_services.port())
+    );
+    assert_eq!(
+        first.verified.public_zone.services.user,
+        format!("localhost:{}", server.addresses().authenticated.port())
+    );
+    let (acceptance, advanced) = client.advance_merkle_root(&first.pinned).unwrap();
+    assert_eq!(acceptance, Acceptance::Unchanged);
+    assert_eq!(advanced.root().epoch, 0);
     server.shutdown().unwrap();
 }

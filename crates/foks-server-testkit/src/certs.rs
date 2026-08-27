@@ -5,12 +5,10 @@ use rcgen::{
     KeyUsagePurpose, PKCS_ED25519,
 };
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
-use rustls::server::WebPkiClientVerifier;
 
 pub(crate) struct TestTls {
     pub roots: rustls::RootCertStore,
     pub public: Arc<rustls::ServerConfig>,
-    pub authenticated: Arc<rustls::ServerConfig>,
 }
 
 pub(crate) fn make_tls() -> TestTls {
@@ -36,31 +34,12 @@ pub(crate) fn make_tls() -> TestTls {
             .unwrap()
             .with_no_client_auth()
             .with_single_cert(
-                certificate_chain.clone(),
-                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key_der.clone())),
-            )
-            .unwrap(),
-    );
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add(ca.der().clone()).unwrap();
-    let verifier =
-        WebPkiClientVerifier::builder_with_provider(Arc::new(roots.clone()), Arc::clone(&provider))
-            .build()
-            .unwrap();
-    let authenticated = Arc::new(
-        rustls::ServerConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
-            .unwrap()
-            .with_client_cert_verifier(verifier)
-            .with_single_cert(
                 certificate_chain,
                 PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key_der)),
             )
             .unwrap(),
     );
-    TestTls {
-        roots,
-        public,
-        authenticated,
-    }
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(ca.der().clone()).unwrap();
+    TestTls { roots, public }
 }

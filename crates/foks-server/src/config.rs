@@ -34,3 +34,17 @@ impl Default for SessionLimits {
         }
     }
 }
+
+impl SessionLimits {
+    pub(crate) fn validate(self) -> crate::Result<()> {
+        if self.maximum_frame_bytes == 0
+            || self.maximum_requests == 0
+            || self.worker_threads == 0
+            || self.maximum_pending_connections == 0
+            || self.io_timeout.is_zero()
+        {
+            return Err(crate::Error::Config("zero session limit"));
+        }
+        Ok(())
+    }
+}

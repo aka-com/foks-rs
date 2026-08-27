@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use foks_server::keys::{DirectoryKeyProvider, HostKeyProvider, KeyGenerationManifest, KeyPurpose};
+use foks_server::keys::{
+    read_root_key_file, DirectoryKeyProvider, HostKeyProvider, KeyGenerationManifest, KeyPurpose,
+};
 
 const ROOT_KEY: [u8; 32] = [0x42; 32];
 const PURPOSES: [KeyPurpose; 5] = [
@@ -141,6 +143,28 @@ fn owner_only_permissions_and_no_symlinks_are_enforced() {
         DirectoryKeyProvider::open(linked_directory, ROOT_KEY),
         Err(foks_server::Error::Key("key directory is a symlink"))
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn operator_root_key_file_must_be_exact_private_and_not_a_symlink() {
+    use std::os::unix::fs::{symlink, PermissionsExt as _};
+
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("root.key");
+    std::fs::write(&path, [0x91; 32]).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(&*read_root_key_file(&path).unwrap(), &[0x91; 32]);
+
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+    assert!(read_root_key_file(&path).is_err());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(&path, [0x91; 31]).unwrap();
+    assert!(read_root_key_file(&path).is_err());
+
+    let link = temporary.path().join("root-link.key");
+    symlink(&path, &link).unwrap();
+    assert!(read_root_key_file(link).is_err());
 }
 
 fn label(purpose: KeyPurpose) -> &'static str {
