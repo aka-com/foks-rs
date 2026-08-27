@@ -3,12 +3,14 @@ use std::collections::BTreeMap;
 use super::{HostKeyProvider, KeyGenerationId, KeyPurpose};
 use crate::{Error, Result};
 
-pub const MANIFEST_PURPOSES: [KeyPurpose; 5] = [
+pub const MANIFEST_PURPOSES: [KeyPurpose; 7] = [
     KeyPurpose::Host,
     KeyPurpose::Metadata,
     KeyPurpose::Merkle,
     KeyPurpose::ClientCa,
     KeyPurpose::DelegatedTls,
+    KeyPurpose::Recovery,
+    KeyPurpose::Capability,
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]

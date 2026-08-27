@@ -1,5 +1,21 @@
+CREATE TABLE kv_namespaces (
+    namespace_id BLOB PRIMARY KEY CHECK (length(namespace_id) = 33),
+    party_kind INTEGER NOT NULL CHECK (party_kind IN (1, 3, 20)),
+    host_id BLOB NOT NULL CHECK (length(host_id) = 33)
+) STRICT;
+
+CREATE TRIGGER delete_user_kv_namespace AFTER DELETE ON users
+BEGIN
+    DELETE FROM kv_namespaces WHERE namespace_id = OLD.uid AND party_kind = 1;
+END;
+
+CREATE TRIGGER delete_team_kv_namespace AFTER DELETE ON teams
+BEGIN
+    DELETE FROM kv_namespaces WHERE namespace_id = OLD.team_id AND party_kind IN (3, 20);
+END;
+
 CREATE TABLE kv_directories (
-    uid BLOB NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+    uid BLOB NOT NULL REFERENCES kv_namespaces(namespace_id) ON DELETE CASCADE,
     directory_id BLOB NOT NULL CHECK (length(directory_id) = 16),
     version INTEGER NOT NULL CHECK (version >= 1),
     key_role INTEGER NOT NULL CHECK (key_role BETWEEN 0 AND 3),
@@ -20,7 +36,7 @@ CREATE TABLE kv_directory_heads (
 ) STRICT;
 
 CREATE TABLE kv_roots (
-    uid BLOB PRIMARY KEY REFERENCES users(uid) ON DELETE CASCADE,
+    uid BLOB PRIMARY KEY REFERENCES kv_namespaces(namespace_id) ON DELETE CASCADE,
     root_version INTEGER NOT NULL CHECK (root_version >= 1),
     directory_id BLOB NOT NULL CHECK (length(directory_id) = 16),
     directory_version INTEGER NOT NULL CHECK (directory_version >= 1),
@@ -30,7 +46,7 @@ CREATE TABLE kv_roots (
 ) STRICT;
 
 CREATE TABLE kv_nodes (
-    uid BLOB NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+    uid BLOB NOT NULL REFERENCES kv_namespaces(namespace_id) ON DELETE CASCADE,
     node_id BLOB NOT NULL CHECK (length(node_id) = 17),
     node_type INTEGER NOT NULL CHECK (node_type IN (3, 4)),
     exact_node BLOB NOT NULL,
@@ -42,7 +58,7 @@ CREATE TABLE kv_nodes (
 ) STRICT;
 
 CREATE TABLE kv_dirents (
-    uid BLOB NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+    uid BLOB NOT NULL REFERENCES kv_namespaces(namespace_id) ON DELETE CASCADE,
     parent_id BLOB NOT NULL CHECK (length(parent_id) = 16),
     dirent_id BLOB NOT NULL CHECK (length(dirent_id) = 16),
     version INTEGER NOT NULL CHECK (version >= 1),
@@ -70,7 +86,7 @@ CREATE INDEX kv_dirent_listing
     ON kv_dirents(uid, parent_id, name_mac, dirent_id, version);
 
 CREATE TABLE kv_file_uploads (
-    uid BLOB NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+    uid BLOB NOT NULL REFERENCES kv_namespaces(namespace_id) ON DELETE CASCADE,
     file_id BLOB NOT NULL CHECK (length(file_id) = 16),
     exact_metadata BLOB NOT NULL,
     complete INTEGER NOT NULL DEFAULT 0 CHECK (complete IN (0, 1)),
@@ -95,7 +111,7 @@ CREATE UNIQUE INDEX kv_file_one_final_chunk
     ON kv_file_chunks(uid, file_id) WHERE final_chunk = 1;
 
 CREATE TABLE kv_locks (
-    uid BLOB NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+    uid BLOB NOT NULL REFERENCES kv_namespaces(namespace_id) ON DELETE CASCADE,
     parent_id BLOB NOT NULL CHECK (length(parent_id) = 16),
     dirent_id BLOB NOT NULL CHECK (length(dirent_id) = 16),
     lock_id BLOB NOT NULL CHECK (length(lock_id) = 16),

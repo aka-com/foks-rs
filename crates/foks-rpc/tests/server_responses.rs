@@ -43,8 +43,14 @@ fn every_typed_status_is_observed_as_an_application_error() {
     let versions = KvPathVersionVector::decode(&fixture("kv-path-version-vector.snowp")).unwrap();
     let statuses = [
         RpcStatus::BadArguments("bad input".into()),
+        RpcStatus::DeviceAlreadyProvisioned,
+        RpcStatus::Expired,
         RpcStatus::Locked,
         RpcStatus::KvNoEnt,
+        RpcStatus::KvPermission {
+            operation: 0,
+            resource: 0,
+        },
         RpcStatus::NameInUse,
         RpcStatus::NotFound("missing".into()),
         RpcStatus::PermissionDenied("denied".into()),
@@ -53,6 +59,20 @@ fn every_typed_status_is_observed_as_an_application_error() {
         RpcStatus::StaleCache(versions),
         RpcStatus::StaleRoot,
         RpcStatus::TransactionRetry,
+        RpcStatus::TeamError("team".into()),
+        RpcStatus::TeamRace("race".into()),
+        RpcStatus::TeamBearerTokenStale("stale".into()),
+        RpcStatus::TeamNotFound,
+        RpcStatus::TeamCertificate("certificate".into()),
+        RpcStatus::TeamRoster("roster".into()),
+        RpcStatus::TeamKey("key".into()),
+        RpcStatus::TeamNoSourceRole,
+        RpcStatus::TeamRemovalKey("removal".into()),
+        RpcStatus::TeamExplore("explore".into()),
+        RpcStatus::TeamAdHocCreatorIncluded,
+        RpcStatus::TeamAdHocOpenViewership,
+        RpcStatus::TeamAdHocInvalidChange("change".into()),
+        RpcStatus::TeamAdHocDuplicate,
         RpcStatus::Unsupported,
     ];
     for status in statuses {

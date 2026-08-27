@@ -4,6 +4,11 @@ use crate::{error::sql_integer, Database, Error, Result};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct MaintenanceReport {
+    pub challenges: u64,
+    pub team_reservations: u64,
+    pub team_view_challenges: u64,
+    pub team_view_tokens: u64,
+    pub team_admin_tokens: u64,
     pub reservations: u64,
     pub receipts: u64,
     pub locks: u64,
@@ -36,8 +41,28 @@ impl Database {
             "DELETE FROM names WHERE uid IS NULL AND expires_at <= ?1",
             [sql_integer(now)?],
         )?;
+        let team_reservations = transaction.execute(
+            "DELETE FROM team_names WHERE team_id IS NULL AND expires_at <= ?1",
+            [sql_integer(now)?],
+        )?;
         let receipts = transaction.execute(
             "DELETE FROM request_receipts WHERE expires_at <= ?1",
+            [sql_integer(now)?],
+        )?;
+        let challenges = transaction.execute(
+            "DELETE FROM recovery_challenges WHERE expires_at <= ?1 OR consumed = 1",
+            [sql_integer(now)?],
+        )?;
+        let team_view_tokens = transaction.execute(
+            "DELETE FROM team_view_tokens WHERE expires_at <= ?1",
+            [sql_integer(now)?],
+        )?;
+        let team_view_challenges = transaction.execute(
+            "DELETE FROM team_view_challenges WHERE expires_at <= ?1",
+            [sql_integer(now)?],
+        )?;
+        let team_admin_tokens = transaction.execute(
+            "DELETE FROM team_admin_tokens WHERE expires_at <= ?1",
             [sql_integer(now)?],
         )?;
         let locks = transaction.execute(
@@ -63,6 +88,12 @@ impl Database {
         )?;
         transaction.commit()?;
         Ok(MaintenanceReport {
+            challenges: u64::try_from(challenges).map_err(|_| Error::IntegerRange)?,
+            team_reservations: u64::try_from(team_reservations).map_err(|_| Error::IntegerRange)?,
+            team_view_challenges: u64::try_from(team_view_challenges)
+                .map_err(|_| Error::IntegerRange)?,
+            team_view_tokens: u64::try_from(team_view_tokens).map_err(|_| Error::IntegerRange)?,
+            team_admin_tokens: u64::try_from(team_admin_tokens).map_err(|_| Error::IntegerRange)?,
             reservations: u64::try_from(reservations).map_err(|_| Error::IntegerRange)?,
             receipts: u64::try_from(receipts).map_err(|_| Error::IntegerRange)?,
             locks: u64::try_from(locks).map_err(|_| Error::IntegerRange)?,

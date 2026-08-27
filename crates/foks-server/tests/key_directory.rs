@@ -174,5 +174,7 @@ fn label(purpose: KeyPurpose) -> &'static str {
         KeyPurpose::Merkle => "merkle",
         KeyPurpose::ClientCa => "client-ca",
         KeyPurpose::DelegatedTls => "delegated-tls",
+        KeyPurpose::Recovery => "recovery",
+        KeyPurpose::Capability => "capability",
     }
 }

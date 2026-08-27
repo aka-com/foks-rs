@@ -8,11 +8,19 @@ mod kv_locks;
 mod kv_small;
 #[path = "conformance/probe_and_pin.rs"]
 mod probe_and_pin;
+#[path = "conformance/provisioning.rs"]
+mod provisioning;
+#[path = "conformance/recovery.rs"]
+mod recovery;
 #[path = "conformance/registry.rs"]
 mod registry;
 #[path = "conformance/signup_and_user.rs"]
 mod signup_and_user;
 #[path = "conformance/support.rs"]
 mod support;
+#[path = "conformance/team_create.rs"]
+mod team_create;
+#[path = "conformance/team_kv.rs"]
+mod team_kv;
 #[path = "conformance/trust_and_registration.rs"]
 mod trust_and_registration;

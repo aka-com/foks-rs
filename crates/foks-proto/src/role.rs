@@ -1,6 +1,6 @@
 //! Exact protocol roles, including member visibility.
 
-use crate::Value;
+use crate::{Result, Value};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
@@ -42,6 +42,10 @@ impl Role {
 
     pub const fn protocol_value(self) -> u64 {
         self.kind as u64
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        crate::identity::role(&crate::decode(bytes)?)
     }
 
     pub fn to_value(self) -> Value {

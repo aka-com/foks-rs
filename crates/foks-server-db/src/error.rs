@@ -30,6 +30,10 @@ pub enum Error {
     QuotaExceeded,
     #[error("injected transaction failure at {0:?}")]
     Injected(crate::FailurePoint),
+    #[error("injected user-mutation failure at {0:?}")]
+    UserMutationInjected(crate::UserMutationFailurePoint),
+    #[error("injected team-mutation failure at {0:?}")]
+    TeamMutationInjected(crate::TeamMutationFailurePoint),
     #[error("Merkle storage failed: {0}")]
     Merkle(#[from] foks_merkle_store::Error),
     #[error("I/O failed: {0}")]

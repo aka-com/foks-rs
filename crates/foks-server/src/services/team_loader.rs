@@ -1,0 +1,382 @@
+use foks_proto::{ActivatedTeamView, EntityId, TeamViewChallenge};
+use foks_rpc::RpcStatus;
+
+use crate::auth::{team, Principal};
+use crate::keys::{HostKeyProvider, KeyPurpose};
+use crate::{Entropy, WriterHandle};
+
+const VIEW_LIFETIME_MICROSECONDS: u64 = 6 * 60 * 60 * 1_000_000;
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn issue_challenge(
+    argument: &[u8],
+    principal: &Principal,
+    host: &EntityId,
+    reader: &foks_server_db::ReadDatabase,
+    writer: &WriterHandle,
+    keys: &dyn HostKeyProvider,
+    clock: &dyn foks_server_db::Clock,
+    entropy: &dyn Entropy,
+) -> Result<Vec<u8>, RpcStatus> {
+    principal.require_ordinary_device()?;
+    let request = foks_rpc::arguments::decode_team_view_request(argument).map_err(bad_arguments)?;
+    if request.host != *host
+        || request.member_host != *host
+        || request.member.as_bytes() != principal.uid()
+        || !matches!(
+            request.team.entity_type(),
+            foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+        )
+    {
+        return Err(permission_denied());
+    }
+    let (source_role, source_visibility) = team::role_parts(request.source_role);
+    let authority = reader
+        .team_view_authority(
+            request.team.as_bytes(),
+            request.member.as_bytes(),
+            request.member_host.as_bytes(),
+            source_role,
+            source_visibility,
+            request.generation,
+        )
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or_else(permission_denied)?;
+    let key = keys
+        .load_or_create(KeyPurpose::Capability)
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let now = clock
+        .now_micros()
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let expires_at = now
+        .checked_add(VIEW_LIFETIME_MICROSECONDS)
+        .ok_or(RpcStatus::TransactionRetry)?;
+    let mut token = [0; 16];
+    entropy
+        .fill(&mut token)
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let mut challenge = TeamViewChallenge {
+        request,
+        time: now,
+        token,
+        key_id: key.generation().as_bytes(),
+        mac: [0; 32],
+    };
+    let payload = challenge
+        .payload_encoded()
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    challenge.mac = foks_crypto::capability_mac(
+        key.expose(),
+        foks_proto::TEAM_VIEW_CHALLENGE_TYPE_ID,
+        &payload,
+    );
+    let exact = challenge
+        .encoded()
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let challenge_hash = team::challenge_hash(&exact);
+    let token_hash = team::token_hash(&token);
+    let key_generation = key.generation().as_bytes();
+    writer
+        .call(move |database| {
+            database.issue_team_view_challenge(
+                &challenge_hash,
+                &token_hash,
+                &authority,
+                &key_generation,
+                expires_at,
+                now,
+            )?;
+            Ok(())
+        })
+        .map_err(map_write_error)?;
+    Ok(exact)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn activate(
+    argument: &[u8],
+    principal: &Principal,
+    host: &EntityId,
+    reader: &foks_server_db::ReadDatabase,
+    writer: &WriterHandle,
+    keys: &dyn HostKeyProvider,
+    clock: &dyn foks_server_db::Clock,
+) -> Result<Vec<u8>, RpcStatus> {
+    principal.require_ordinary_device()?;
+    let activation =
+        foks_rpc::arguments::decode_activate_team_view(argument).map_err(bad_arguments)?;
+    let challenge = &activation.challenge;
+    if challenge.request.host != *host
+        || challenge.request.member_host != *host
+        || challenge.request.member.as_bytes() != principal.uid()
+        || challenge.key_id
+            != keys
+                .load_or_create(KeyPurpose::Capability)
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .generation()
+                .as_bytes()
+    {
+        return Err(permission_denied());
+    }
+    let key = keys
+        .load_or_create(KeyPurpose::Capability)
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let payload = challenge.payload_encoded().map_err(bad_arguments)?;
+    foks_crypto::verify_capability_mac(
+        key.expose(),
+        foks_proto::TEAM_VIEW_CHALLENGE_TYPE_ID,
+        &payload,
+        &challenge.mac,
+    )
+    .map_err(|_| permission_denied())?;
+    let (role, visibility) = team::role_parts(challenge.request.source_role);
+    let authority = reader
+        .team_view_authority(
+            challenge.request.team.as_bytes(),
+            challenge.request.member.as_bytes(),
+            challenge.request.member_host.as_bytes(),
+            role,
+            visibility,
+            challenge.request.generation,
+        )
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or_else(permission_denied)?;
+    let verify_key = EntityId::from_bytes(authority.source_verify_key)
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let exact_challenge = challenge.encoded().map_err(bad_arguments)?;
+    foks_crypto::verify_typed(
+        &verify_key,
+        &activation.signature,
+        foks_proto::TEAM_VIEW_CHALLENGE_TYPE_ID,
+        &exact_challenge,
+    )
+    .map_err(|_| permission_denied())?;
+    let challenge_hash = team::challenge_hash(&exact_challenge);
+    const ACTIVATION_TYPE_ID: u64 = 0x6d10_7e4c_464f_4b53;
+    let activation_hash = foks_crypto::prefixed_hash(ACTIVATION_TYPE_ID, argument);
+    let now = clock
+        .now_micros()
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let activated = writer
+        .call(move |database| {
+            Ok(database.activate_team_view_challenge(&challenge_hash, &activation_hash, now)?)
+        })
+        .map_err(map_write_error)?
+        .ok_or(RpcStatus::Expired)?;
+    if activated.member_id.as_slice() != principal.uid() {
+        return Err(permission_denied());
+    }
+    ActivatedTeamView {
+        token: challenge.token,
+        team: challenge.request.team.clone(),
+    }
+    .encoded()
+    .map_err(|_| RpcStatus::TransactionRetry)
+}
+
+pub(crate) fn load_chain(
+    argument: &[u8],
+    principal: &Principal,
+    host: &EntityId,
+    reader: &foks_server_db::ReadDatabase,
+    clock: &dyn foks_server_db::Clock,
+) -> Result<Vec<u8>, RpcStatus> {
+    principal.require_ordinary_device()?;
+    let request = foks_rpc::arguments::decode_load_team_chain(argument).map_err(bad_arguments)?;
+    if request.host != *host {
+        return Err(permission_denied());
+    }
+    let now = clock
+        .now_micros()
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let authority = reader
+        .resolve_team_view_token(&team::token_hash(&request.token), now)
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or(RpcStatus::Expired)?;
+    if authority.team_id != request.team.as_bytes()
+        || authority.member_id.as_slice() != principal.uid()
+    {
+        return Err(permission_denied());
+    }
+    encode_team_chain(reader, host, &request, &authority)
+}
+
+fn encode_team_chain(
+    database: &foks_server_db::ReadDatabase,
+    host: &EntityId,
+    request: &foks_rpc::arguments::LoadTeamChainArgument,
+    authority: &foks_server_db::TeamViewAuthoritySnapshot,
+) -> Result<Vec<u8>, RpcStatus> {
+    let team_state = database
+        .team(request.team.as_bytes())
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or(RpcStatus::TeamNotFound)?;
+    let maximum_start = u64::try_from(team_state.links.len())
+        .ok()
+        .and_then(|value| value.checked_add(1))
+        .ok_or(RpcStatus::TransactionRetry)?;
+    let full = request.start == 1 && request.name_cursor.is_none();
+    if request.start == 0 || (!full && request.start < 2) || request.start > maximum_start {
+        return Err(bad_arguments("team-chain start is out of range"));
+    }
+    if !full
+        && request.name_cursor.as_ref().is_none_or(|(name, sequence)| {
+            name.as_slice() != team_state.normalized_name.as_deref().unwrap_or(b"-")
+                || *sequence != team_state.team_name_sequence.saturating_add(1)
+        })
+    {
+        return Err(bad_arguments("team-name cursor is stale"));
+    }
+    let root = database
+        .current_root()
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or(RpcStatus::StaleRoot)?;
+    foks_proto::MerkleRoot::decode(&root.exact_root).map_err(|_| RpcStatus::TransactionRetry)?;
+    let start_index =
+        usize::try_from(request.start - 1).map_err(|_| RpcStatus::TransactionRetry)?;
+    let selected = &team_state.links[start_index..];
+    let links = selected
+        .iter()
+        .map(|link| link.exact_link.clone())
+        .collect::<Vec<_>>();
+    let mut locations = if full {
+        Vec::new()
+    } else {
+        vec![team_state.links[start_index - 1].next_tree_location]
+    };
+    locations.extend(selected.iter().map(|link| link.next_tree_location));
+    let reader = database.node_reader();
+    let prove = |key| {
+        foks_merkle_store::proof(&reader, root.root_node, key)
+            .map_err(|_| RpcStatus::TransactionRetry)
+    };
+    let name = team_state.normalized_name.as_deref().unwrap_or(b"-");
+    let mut paths = if team_state.kind == foks_proto::ENTITY_AD_HOC_TEAM {
+        vec![
+            prove(
+                foks_merkle_store::username_key(name, host, 1)
+                    .map_err(|_| RpcStatus::TransactionRetry)?,
+            )?,
+            prove(
+                foks_merkle_store::username_key(name, host, 2)
+                    .map_err(|_| RpcStatus::TransactionRetry)?,
+            )?,
+        ]
+    } else if full {
+        vec![
+            prove(
+                foks_merkle_store::username_key(name, host, 1)
+                    .map_err(|_| RpcStatus::TransactionRetry)?,
+            )?,
+            prove(
+                foks_merkle_store::username_key(name, host, team_state.team_name_sequence + 1)
+                    .map_err(|_| RpcStatus::TransactionRetry)?,
+            )?,
+        ]
+    } else {
+        vec![prove(
+            foks_merkle_store::username_key(name, host, team_state.team_name_sequence + 1)
+                .map_err(|_| RpcStatus::TransactionRetry)?,
+        )?]
+    };
+    for index in start_index..team_state.links.len() {
+        let sequence = u64::try_from(index + 1).map_err(|_| RpcStatus::TransactionRetry)?;
+        let prior = index
+            .checked_sub(1)
+            .map(|prior| &team_state.links[prior].next_tree_location);
+        paths.push(prove(
+            foks_merkle_store::chain_key(3, &request.team, sequence, prior)
+                .map_err(|_| RpcStatus::TransactionRetry)?,
+        )?);
+    }
+    paths.push(prove(
+        foks_merkle_store::chain_key(
+            3,
+            &request.team,
+            maximum_start,
+            team_state.links.last().map(|link| &link.next_tree_location),
+        )
+        .map_err(|_| RpcStatus::TransactionRetry)?,
+    )?);
+    let names = if full && team_state.kind == foks_proto::ENTITY_NAMED_TEAM {
+        vec![foks_proto::NameCommitmentAndKey {
+            name: name.to_vec(),
+            sequence: team_state.team_name_sequence,
+            commitment_key: team_state
+                .team_name_commitment_key
+                .ok_or(RpcStatus::TransactionRetry)?,
+        }]
+    } else {
+        Vec::new()
+    };
+    let effective = team::stored_role(
+        authority.effective_role_type,
+        authority.effective_visibility,
+    )
+    .ok_or(RpcStatus::TransactionRetry)?;
+    let parcels = database
+        .team_parcels(request.team.as_bytes(), &authority.member_id)
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .into_iter()
+        .map(|exact| {
+            let parcel =
+                foks_proto::PukParcel::decode(&exact).map_err(|_| RpcStatus::TransactionRetry)?;
+            Ok((parcel.role <= effective).then_some(exact))
+        })
+        .collect::<Result<Vec<_>, RpcStatus>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let mut hepks = team_state
+        .shared_keys
+        .iter()
+        .map(|key| key.exact_hepk.clone())
+        .collect::<Vec<_>>();
+    hepks.extend(
+        database
+            .team_member_hepks(request.team.as_bytes())
+            .map_err(|_| RpcStatus::TransactionRetry)?,
+    );
+    hepks.sort_unstable();
+    hepks.dedup();
+    foks_proto::TeamChainResponse {
+        exact_links: &links,
+        locations: &locations,
+        team_names: &names,
+        exact_root: &root.exact_root,
+        paths: &paths,
+        team_name_utf8: if team_state.kind == foks_proto::ENTITY_AD_HOC_TEAM {
+            b"-"
+        } else {
+            &team_state.team_name_utf8
+        },
+        num_team_name_links: if team_state.kind == foks_proto::ENTITY_AD_HOC_TEAM || full {
+            2
+        } else {
+            1
+        },
+        exact_parcels: &parcels,
+        exact_hepks: &hepks,
+    }
+    .encoded()
+    .map_err(|_| RpcStatus::TransactionRetry)
+}
+
+fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
+    RpcStatus::BadArguments(error.to_string())
+}
+
+fn permission_denied() -> RpcStatus {
+    RpcStatus::PermissionDenied("team-view authorization failed".to_owned())
+}
+
+fn map_write_error(error: crate::Error) -> RpcStatus {
+    match error {
+        crate::Error::WriterQueue => RpcStatus::RateLimited,
+        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::RateLimited,
+        crate::Error::Database(foks_server_db::Error::ReceiptConflict) => {
+            bad_arguments("conflicting team-view activation replay")
+        }
+        _ => RpcStatus::TransactionRetry,
+    }
+}

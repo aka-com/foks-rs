@@ -3,8 +3,8 @@ use std::net::{Shutdown, TcpStream};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use foks_client::KvWriteOptions;
-use foks_proto::Role;
+use foks_client::{KvWriteOptions, NamedTeamSecrets};
+use foks_proto::{Role, SecretSeed};
 use foks_server_testkit::{BinaryServer, TestAccountSpec, TestClient, TestEnvironment};
 
 #[test]
@@ -39,6 +39,55 @@ fn explicit_binary_passes_serve_backup_restore_and_crash_restart_scenario() {
         "before-backup.txt",
         b"binary secret content",
     );
+    let member_min = SecretSeed::new([account_seed.wrapping_add(1); 32]);
+    let member = SecretSeed::new([account_seed.wrapping_add(2); 32]);
+    let admin = SecretSeed::new([account_seed.wrapping_add(3); 32]);
+    let owner = SecretSeed::new([account_seed.wrapping_add(4); 32]);
+    let removal = SecretSeed::new([account_seed.wrapping_add(5); 32]);
+    let team = client
+        .foks()
+        .create_single_owner_named_team(
+            &probe.pinned,
+            &created.credential,
+            "binaryteam",
+            &NamedTeamSecrets {
+                member_min,
+                member,
+                admin,
+                owner,
+                removal_key: removal,
+                team_name_commitment_key: [account_seed.wrapping_add(6); 16],
+            },
+        )
+        .unwrap();
+    let mut team_protected = client.open_protected_store().unwrap();
+    let mut team_session = client
+        .foks()
+        .team_kv_write_session(
+            &probe.pinned,
+            &created.credential,
+            &team.authenticated,
+            client.soft_state_path(),
+            &mut team_protected,
+        )
+        .unwrap();
+    let team_tree = team_session.ensure_root(Role::OWNER, Role::OWNER).unwrap();
+    let team_root = team_tree[0].root_directory_id;
+    team_session
+        .put_file(
+            team_root,
+            "team-before-backup.txt",
+            &mut Cursor::new(b"binary team secret content"),
+            KvWriteOptions {
+                read_role: Role::OWNER,
+                write_role: Role::OWNER,
+                overwrite: false,
+                expected_version: None,
+            },
+        )
+        .unwrap();
+    drop(team_session);
+    drop(team_protected);
     let backup = server.backup_named("binary-release").unwrap();
     let first_exit = server.graceful_shutdown().unwrap();
     assert!(first_exit.status.success());
@@ -67,6 +116,27 @@ fn explicit_binary_passes_serve_backup_restore_and_crash_restart_scenario() {
     assert_eq!(tree[0].root_directory_id, root);
     assert_eq!(tree[0].entries.len(), 1);
     assert_eq!(tree[0].entries[0].name, b"before-backup.txt");
+    let restored_team = reconstructed
+        .foks()
+        .load_and_pin_team(
+            &pinned,
+            &created.credential,
+            &authenticated.verified,
+            &authenticated.puks,
+            &team.team,
+        )
+        .unwrap();
+    let team_tree = reconstructed
+        .foks()
+        .sync_team_kv(
+            &pinned,
+            &created.credential,
+            &restored_team,
+            reconstructed.soft_state_path(),
+        )
+        .unwrap();
+    assert_eq!(team_tree[0].root_directory_id, team_root);
+    assert_eq!(team_tree[0].entries[0].name, b"team-before-backup.txt");
     write_file(
         &reconstructed,
         &pinned,
@@ -117,6 +187,7 @@ fn explicit_binary_passes_serve_backup_restore_and_crash_restart_scenario() {
     let account_seed_marker = format!("{account_seed:02x}").repeat(8);
     for secret in [
         "binary secret content".to_owned(),
+        "binary team secret content".to_owned(),
         "committed before forced termination".to_owned(),
         account_seed_marker,
         "5151515151515151".to_owned(),

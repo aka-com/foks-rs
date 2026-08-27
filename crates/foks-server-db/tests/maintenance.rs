@@ -77,6 +77,10 @@ fn maintenance_reclaims_only_expired_or_abandoned_state() {
     assert_eq!(report.locks, 1);
     assert_eq!(report.uploads, 2);
     assert_eq!(report.receipts, 0);
+    assert_eq!(report.challenges, 0);
+    assert_eq!(report.team_reservations, 0);
+    assert_eq!(report.team_view_challenges, 0);
+    assert_eq!(report.team_view_tokens, 0);
     assert!(test.database.integrity_check().unwrap());
     let checkpoint = test.database.checkpoint().unwrap();
     assert_eq!(checkpoint.busy, 0);

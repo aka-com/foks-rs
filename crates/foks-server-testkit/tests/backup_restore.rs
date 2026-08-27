@@ -1,7 +1,7 @@
 use std::io::Cursor;
 
-use foks_client::KvWriteOptions;
-use foks_proto::Role;
+use foks_client::{KvWriteOptions, NamedTeamSecrets};
+use foks_proto::{Role, SecretSeed};
 use foks_server_testkit::{TestAccountSpec, TestClient, TestEnvironment};
 
 fn options() -> KvWriteOptions {
@@ -45,6 +45,43 @@ fn matching_backup_restores_under_the_existing_pin_and_credential() {
         )
         .unwrap();
     drop(session);
+    let team = client
+        .foks()
+        .create_single_owner_named_team(
+            &probe.pinned,
+            &created.credential,
+            "restoreteam",
+            &NamedTeamSecrets {
+                member_min: SecretSeed::new([0x31; 32]),
+                member: SecretSeed::new([0x32; 32]),
+                admin: SecretSeed::new([0x33; 32]),
+                owner: SecretSeed::new([0x34; 32]),
+                removal_key: SecretSeed::new([0x35; 32]),
+                team_name_commitment_key: [0x36; 16],
+            },
+        )
+        .unwrap();
+    let mut team_session = client
+        .foks()
+        .team_kv_write_session(
+            &probe.pinned,
+            &created.credential,
+            &team.authenticated,
+            client.soft_state_path(),
+            &mut protected,
+        )
+        .unwrap();
+    let team_tree = team_session.ensure_root(Role::OWNER, Role::OWNER).unwrap();
+    let team_root = team_tree[0].root_directory_id;
+    team_session
+        .put_file(
+            team_root,
+            "team-before-backup.txt",
+            &mut Cursor::new(b"durable team backup content"),
+            options(),
+        )
+        .unwrap();
+    drop(team_session);
     drop(protected);
     let artifacts = server.backup_named("matching").unwrap();
     assert!(server.backup_is_valid(&artifacts).unwrap());
@@ -77,6 +114,31 @@ fn matching_backup_restores_under_the_existing_pin_and_credential() {
     assert_eq!(
         tree[0].entries[0].content.as_deref(),
         Some(b"durable backup content".as_slice())
+    );
+    let restored_team = reconstructed
+        .foks()
+        .load_and_pin_team(
+            &pinned,
+            &created.credential,
+            &authenticated.verified,
+            &authenticated.puks,
+            &team.team,
+        )
+        .unwrap();
+    let team_tree = reconstructed
+        .foks()
+        .sync_team_kv(
+            &pinned,
+            &created.credential,
+            &restored_team,
+            reconstructed.soft_state_path(),
+        )
+        .unwrap();
+    assert_eq!(team_tree[0].root_directory_id, team_root);
+    assert_eq!(team_tree[0].entries[0].name, b"team-before-backup.txt");
+    assert_eq!(
+        team_tree[0].entries[0].content.as_deref(),
+        Some(b"durable team backup content".as_slice())
     );
     restored_server.shutdown().unwrap();
 }

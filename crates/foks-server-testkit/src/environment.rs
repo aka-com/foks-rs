@@ -179,6 +179,7 @@ pub enum TestProfile {
     #[default]
     Default,
     SmallCapacity,
+    SmallTeamCapacity,
     QueuePressure,
     TightIo,
 }
@@ -187,6 +188,22 @@ impl TestProfile {
     fn configuration(self) -> (foks_server_db::Config, foks_server::SessionLimits, usize) {
         let database = match self {
             Self::SmallCapacity => foks_server_db::Config {
+                maximum_kv_namespace_bytes: 512 * 1024,
+                maximum_kv_namespace_objects: 128,
+                maximum_database_bytes: 16 * 1024 * 1024,
+                ..foks_server_db::Config::default()
+            },
+            Self::SmallTeamCapacity => foks_server_db::Config {
+                maximum_team_chain_links: 4,
+                maximum_teams: 2,
+                maximum_team_members: 2,
+                maximum_team_role_bands: 4,
+                maximum_team_name_reservations: 2,
+                maximum_boxes_per_mutation: 16,
+                maximum_team_view_capabilities_per_pair: 2,
+                maximum_active_team_view_capabilities: 4,
+                maximum_team_admin_capabilities_per_pair: 2,
+                maximum_active_team_admin_capabilities: 4,
                 maximum_kv_namespace_bytes: 512 * 1024,
                 maximum_kv_namespace_objects: 128,
                 maximum_database_bytes: 16 * 1024 * 1024,

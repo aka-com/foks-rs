@@ -80,6 +80,72 @@ impl TeamChain {
     }
 }
 
+pub struct TeamChainResponse<'a> {
+    pub exact_links: &'a [Vec<u8>],
+    pub locations: &'a [[u8; 32]],
+    pub team_names: &'a [NameCommitmentAndKey],
+    pub exact_root: &'a [u8],
+    pub paths: &'a [super::MerklePathCompressed],
+    pub team_name_utf8: &'a [u8],
+    pub num_team_name_links: u64,
+    pub exact_parcels: &'a [Vec<u8>],
+    pub exact_hepks: &'a [Vec<u8>],
+}
+
+impl TeamChainResponse<'_> {
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        let list_or_null = |values: Vec<Value>| {
+            if values.is_empty() {
+                Value::Null
+            } else {
+                Value::Array(values)
+            }
+        };
+        let encoded = encode(&Value::Array(vec![
+            list_or_null(
+                self.exact_links
+                    .iter()
+                    .map(|exact| decode(exact).map_err(Error::from))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+            list_or_null(
+                self.locations
+                    .iter()
+                    .map(|location| Value::Binary(location.to_vec()))
+                    .collect(),
+            ),
+            list_or_null(
+                self.team_names
+                    .iter()
+                    .map(NameCommitmentAndKey::to_value)
+                    .collect(),
+            ),
+            Value::Array(vec![
+                decode(self.exact_root)?,
+                Value::Array(self.paths.iter().map(|path| path.to_value()).collect()),
+            ]),
+            Value::Text(self.team_name_utf8.to_vec()),
+            Value::Unsigned(self.num_team_name_links),
+            list_or_null(
+                self.exact_parcels
+                    .iter()
+                    .map(|exact| decode(exact).map_err(Error::from))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+            Value::Null,
+            Value::Null,
+            Value::Array(vec![list_or_null(
+                self.exact_hepks
+                    .iter()
+                    .map(|exact| decode(exact).map_err(Error::from))
+                    .collect::<Result<Vec<_>>>()?,
+            )]),
+        ]))?;
+        TeamChain::decode(&encoded)?;
+        Ok(encoded)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TeamViewRequest {
     pub team: EntityId,
@@ -91,6 +157,10 @@ pub struct TeamViewRequest {
 }
 
 impl TeamViewRequest {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        team_view_request(&decode(bytes)?)
+    }
+
     pub fn to_value(&self) -> Value {
         Value::Array(vec![
             Value::Array(vec![
@@ -127,6 +197,15 @@ pub struct TeamViewChallenge {
 }
 
 impl TeamViewChallenge {
+    pub fn payload_encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&Value::Array(vec![
+            self.request.to_value(),
+            Value::Unsigned(self.time),
+            Value::Binary(self.token.to_vec()),
+            Value::Binary(self.key_id.to_vec()),
+        ]))?)
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
         let fields = array(&wire, 2)?;
@@ -142,12 +221,7 @@ impl TeamViewChallenge {
 
     pub fn encoded(&self) -> Result<Vec<u8>> {
         Ok(encode(&Value::Array(vec![
-            Value::Array(vec![
-                self.request.to_value(),
-                Value::Unsigned(self.time),
-                Value::Binary(self.token.to_vec()),
-                Value::Binary(self.key_id.to_vec()),
-            ]),
+            decode(&self.payload_encoded()?)?,
             Value::Binary(self.mac.to_vec()),
         ]))?)
     }
@@ -178,6 +252,13 @@ pub struct ActivatedTeamView {
 }
 
 impl ActivatedTeamView {
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&Value::Array(vec![
+            Value::Binary(self.token.to_vec()),
+            Value::Binary(self.team.as_bytes().to_vec()),
+        ]))?)
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
         let fields = array(&wire, 2)?;

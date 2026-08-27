@@ -258,7 +258,7 @@ impl FoksClient {
         Ok((acceptance, verified))
     }
 
-    fn authenticate_user_chain_roots(
+    pub(crate) fn authenticate_user_chain_roots(
         &self,
         host: &PinnedHost,
         latest: &VerifiedMerkleAdvance,
@@ -268,6 +268,16 @@ impl FoksClient {
             .into_iter()
             .filter(|epoch| !latest.authenticated_roots().contains_epoch(*epoch))
             .collect::<Vec<_>>();
+        self.authenticate_chain_roots(host, latest, targets, Error::UserBinding)
+    }
+
+    pub(crate) fn authenticate_chain_roots(
+        &self,
+        host: &PinnedHost,
+        latest: &VerifiedMerkleAdvance,
+        targets: Vec<u64>,
+        binding: fn(&'static str) -> Error,
+    ) -> Result<AuthenticatedMerkleRoots> {
         if targets.is_empty() {
             return Ok(latest.authenticated_roots().clone());
         }
@@ -275,7 +285,7 @@ impl FoksClient {
         let mut hash_epochs = std::collections::BTreeSet::new();
         for &target in &targets {
             if target == 0 || target >= latest.root().epoch {
-                return Err(Error::UserBinding(
+                return Err(binding(
                     "user chain references an unauthenticated future Merkle root",
                 ));
             }
@@ -287,7 +297,7 @@ impl FoksClient {
         let full_epochs = full_epochs.into_iter().collect::<Vec<_>>();
         let hash_epochs = hash_epochs.into_iter().collect::<Vec<_>>();
         if full_epochs.len() > 64 || hash_epochs.len() > 64 {
-            return Err(Error::UserBinding(
+            return Err(binding(
                 "user chain requires too many historical Merkle roots",
             ));
         }
@@ -321,7 +331,14 @@ impl FoksClient {
     ) -> Result<AuthenticatedUserOutcome> {
         let derived = derive_device_public(&credential.seed)?;
         let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
-        let prior = self.pinned_user(host, &credential.uid)?;
+        let prior = match self.pinned_user(host, &credential.uid) {
+            Ok(prior) => prior,
+            Err(Error::Verify(
+                foks_verify::Error::PersistedMerkleEvidence
+                | foks_verify::Error::UserChainContinuity,
+            )) => None,
+            Err(error) => return Err(error),
+        };
         let chain_bytes = self.load_user_chain(host, credential, prior.as_ref())?;
         let authenticated_roots =
             self.authenticate_user_chain_roots(host, &merkle, &chain_bytes)?;

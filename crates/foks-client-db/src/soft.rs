@@ -374,15 +374,20 @@ impl SoftStateStore {
                         received: snapshot.directory_version,
                     });
                 }
-                if snapshot.directory_version == stored.directory_version {
-                    if stored == *snapshot {
-                        continue;
-                    }
+                if snapshot.directory_version == stored.directory_version
+                    && (stored.host_id != snapshot.host_id
+                        || stored.party_id != snapshot.party_id
+                        || stored.root_version != snapshot.root_version
+                        || stored.root_directory_id != snapshot.root_directory_id
+                        || stored.root_bytes != snapshot.root_bytes
+                        || stored.directory_id != snapshot.directory_id
+                        || stored.directory_bytes != snapshot.directory_bytes)
+                {
                     return Err(Error::KvProjectionConflict(
                         "directory changed at the same version",
                     ));
                 }
-                if acceptance == Acceptance::Unchanged {
+                if stored != *snapshot && acceptance == Acceptance::Unchanged {
                     acceptance = Acceptance::Advanced;
                 }
             } else if acceptance == Acceptance::Unchanged {
@@ -410,6 +415,59 @@ impl SoftStateStore {
                 ],
             )?;
             for entry in &snapshot.entries {
+                let prior: Option<(i64, Vec<u8>, i64)> = transaction
+                    .query_row(
+                        "SELECT version, dirent_bytes, present FROM kv_entry_history
+                         WHERE host_id = ?1 AND party_id = ?2 AND parent_dir_id = ?3
+                           AND dirent_id = ?4",
+                        params![
+                            snapshot.host_id,
+                            snapshot.party_id,
+                            snapshot.directory_id.as_slice(),
+                            entry.dirent_id.as_slice()
+                        ],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .optional()?;
+                if let Some((version, exact, present)) = prior {
+                    let version = stored_unsigned("KV historical dirent version", version)?;
+                    if entry.version < version
+                        || (entry.version == version && exact != entry.dirent_bytes)
+                        || (present == 0 && entry.version == version)
+                    {
+                        return Err(Error::KvProjectionConflict(
+                            "dirent rolled back or changed at the same version",
+                        ));
+                    }
+                }
+            }
+            transaction.execute(
+                "UPDATE kv_entry_history SET present = 0
+                 WHERE host_id = ?1 AND party_id = ?2 AND parent_dir_id = ?3",
+                params![
+                    snapshot.host_id,
+                    snapshot.party_id,
+                    snapshot.directory_id.as_slice()
+                ],
+            )?;
+            for entry in &snapshot.entries {
+                transaction.execute(
+                    "INSERT INTO kv_entry_history
+                     (host_id, party_id, parent_dir_id, dirent_id, version, dirent_bytes, present)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
+                     ON CONFLICT(host_id, party_id, parent_dir_id, dirent_id) DO UPDATE SET
+                       version = excluded.version,
+                       dirent_bytes = excluded.dirent_bytes,
+                       present = 1",
+                    params![
+                        snapshot.host_id,
+                        snapshot.party_id,
+                        snapshot.directory_id.as_slice(),
+                        entry.dirent_id.as_slice(),
+                        sqlite_integer("KV dirent version", entry.version)?,
+                        entry.dirent_bytes
+                    ],
+                )?;
                 let large_file_id = if entry.node_id[0] == 2 {
                     let stage = large_files
                         .get(&entry.node_id)
@@ -998,6 +1056,42 @@ mod tests {
             store.project_directory(&projected),
             Err(Error::KvDirectoryRollback { .. })
         ));
+    }
+
+    #[test]
+    fn same_directory_version_accepts_external_dirent_advances_but_not_resurrection() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("soft.sqlite3");
+        let mut store = SoftStateStore::open(&path).unwrap();
+        let initial = snapshot();
+        store.project_directory(&initial).unwrap();
+
+        let mut external = initial.clone();
+        external.entries.push(entry(3, b"c"));
+        assert_eq!(
+            store.project_directory(&external).unwrap(),
+            Acceptance::Advanced
+        );
+
+        let mut removed = external.clone();
+        removed.entries.retain(|entry| entry.dirent_id != [3; 16]);
+        assert_eq!(
+            store.project_directory(&removed).unwrap(),
+            Acceptance::Advanced
+        );
+        assert!(matches!(
+            store.project_directory(&external),
+            Err(Error::KvProjectionConflict(_))
+        ));
+
+        let mut recreated = external;
+        let recreated_entry = recreated.entries.last_mut().unwrap();
+        recreated_entry.version = 2;
+        recreated_entry.dirent_bytes.push(2);
+        assert_eq!(
+            store.project_directory(&recreated).unwrap(),
+            Acceptance::Advanced
+        );
     }
 
     #[test]

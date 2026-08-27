@@ -42,6 +42,7 @@ pub use merkle::*;
 pub(crate) use proof::{verify_merkle_path, verify_merkle_path_present};
 pub use team::*;
 pub use user::*;
+pub use user_transition::{verify_user_transition, VerifiedUserTransition};
 
 #[cfg(test)]
 mod tests {
