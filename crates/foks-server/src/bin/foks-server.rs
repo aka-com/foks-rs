@@ -14,6 +14,22 @@ use signal_hook::iterator::Signals;
 #[derive(clap::Parser)]
 #[command(name = "foks-server", about = "Standalone SQLite FOKS v0.1.9 server")]
 struct Arguments {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(clap::Subcommand)]
+enum Command {
+    /// Runs the standalone network service.
+    Serve(ServeArguments),
+    /// Creates a validated online backup of an installation.
+    Backup(BackupArguments),
+    /// Installs a validated backup into an empty installation.
+    Restore(RestoreArguments),
+}
+
+#[derive(clap::Args)]
+struct ServeArguments {
     #[arg(long)]
     canonical_name: String,
     #[arg(long)]
@@ -42,8 +58,37 @@ struct Arguments {
     maximum_pending_writes: usize,
 }
 
+#[derive(clap::Args)]
+struct BackupArguments {
+    #[arg(long)]
+    database: PathBuf,
+    #[arg(long)]
+    key_directory: PathBuf,
+    #[arg(long)]
+    root_key_file: PathBuf,
+    #[arg(long)]
+    destination: PathBuf,
+}
+
+#[derive(clap::Args)]
+struct RestoreArguments {
+    #[arg(long)]
+    backup_directory: PathBuf,
+    #[arg(long)]
+    database: PathBuf,
+    #[arg(long)]
+    key_directory: PathBuf,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let arguments = Arguments::parse();
+    match Arguments::parse().command {
+        Command::Serve(arguments) => serve(arguments),
+        Command::Backup(arguments) => backup(arguments),
+        Command::Restore(arguments) => restore(arguments),
+    }
+}
+
+fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
     let root_key = read_root_key_file(&arguments.root_key_file)?;
     let probe_tls = probe_tls(&arguments)?;
     let mut signals = Signals::new([SIGINT, SIGTERM])?;
@@ -64,6 +109,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             maximum_pending_connections: arguments.maximum_pending_connections,
             ..SessionLimits::default()
         },
+        clock: Arc::new(foks_server_db::SystemClock),
+        entropy: Arc::new(foks_server::OsEntropy),
+        session_faults: None,
+        diagnostics: Some(Arc::new(foks_server::StderrSessionDiagnostics)),
         ttl_seconds: arguments.ttl_seconds,
         now_microseconds,
         maximum_pending_writes: arguments.maximum_pending_writes,
@@ -78,8 +127,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn backup(arguments: BackupArguments) -> Result<(), Box<dyn std::error::Error>> {
+    let root_key = read_root_key_file(&arguments.root_key_file)?;
+    foks_server::backup_standalone_installation(
+        arguments.database,
+        arguments.key_directory,
+        *root_key,
+        arguments.destination,
+        foks_server_db::Config::default(),
+    )?;
+    Ok(())
+}
+
+fn restore(arguments: RestoreArguments) -> Result<(), Box<dyn std::error::Error>> {
+    foks_server::restore_backup(
+        &foks_server::BackupArtifacts {
+            database: arguments.backup_directory.join("foks-server.sqlite"),
+            key_directory: arguments.backup_directory.join("keys"),
+            key_manifest: arguments.backup_directory.join("key-manifest.txt"),
+        },
+        arguments.database,
+        arguments.key_directory,
+        foks_server_db::Config::default(),
+    )?;
+    Ok(())
+}
+
 fn probe_tls(
-    arguments: &Arguments,
+    arguments: &ServeArguments,
 ) -> Result<Arc<rustls::ServerConfig>, Box<dyn std::error::Error>> {
     let certificates = arguments
         .probe_certificate_der

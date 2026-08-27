@@ -22,12 +22,29 @@ pub enum Error {
     ReceiptExpired,
     #[error("expected Merkle head does not match the authoritative head")]
     StaleRoot,
+    #[error("KV object conflicts with authoritative state")]
+    KvConflict,
+    #[error("KV lock is held by another token")]
+    KvLocked,
+    #[error("configured storage quota is exhausted")]
+    QuotaExceeded,
     #[error("injected transaction failure at {0:?}")]
     Injected(crate::FailurePoint),
     #[error("Merkle storage failed: {0}")]
     Merkle(#[from] foks_merkle_store::Error),
     #[error("I/O failed: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl Error {
+    pub fn is_quota(&self) -> bool {
+        matches!(self, Self::QuotaExceeded)
+            || matches!(
+                self,
+                Self::Sql(rusqlite::Error::SqliteFailure(error, _))
+                    if error.code == rusqlite::ErrorCode::DiskFull
+            )
+    }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

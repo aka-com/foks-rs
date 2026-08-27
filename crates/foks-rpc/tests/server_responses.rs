@@ -44,6 +44,7 @@ fn every_typed_status_is_observed_as_an_application_error() {
     let statuses = [
         RpcStatus::BadArguments("bad input".into()),
         RpcStatus::Locked,
+        RpcStatus::KvNoEnt,
         RpcStatus::NameInUse,
         RpcStatus::NotFound("missing".into()),
         RpcStatus::PermissionDenied("denied".into()),

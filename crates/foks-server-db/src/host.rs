@@ -116,6 +116,21 @@ impl Database {
     }
 }
 
+impl crate::ReadDatabase {
+    pub fn host_bootstrap(&self) -> Result<Option<StoredHostBootstrap>> {
+        stored_metadata_connection(&self.connection).map(|stored| {
+            stored.map(|(host_id, canonical_name, probe_response, key_manifest)| {
+                StoredHostBootstrap {
+                    host_id,
+                    canonical_name,
+                    probe_response,
+                    key_manifest,
+                }
+            })
+        })
+    }
+}
+
 fn validate(bootstrap: &HostBootstrap, maximum_blob_bytes: usize) -> Result<()> {
     let mut service_types = std::collections::BTreeSet::new();
     if bootstrap.host_id.len() != 33

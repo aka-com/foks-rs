@@ -9,6 +9,8 @@ mod connection;
 mod error;
 mod host;
 mod identity;
+mod kv;
+mod maintenance;
 mod merkle;
 mod names;
 mod read;
@@ -23,6 +25,11 @@ pub use connection::{Database, Pragmas, ReadDatabase};
 pub use error::{Error, Result};
 pub use host::{BootstrapService, HostBootstrap, StoredHostBootstrap};
 pub use identity::{CommitOutcome, FailurePoint, IdentityMutation};
+pub use kv::{
+    KvDirectoryMutation, KvDirentMutation, KvFileChunkMutation, KvNodeMutation, KvRootMutation,
+    StoredKvDirectory, StoredKvDirent, StoredKvFile, StoredKvFileChunk, StoredKvNode, StoredKvRoot,
+};
+pub use maintenance::{CheckpointReport, MaintenanceReport, StorageReport};
 pub use merkle::SqliteNodeReader;
 pub use read::{identity_snapshot, root_snapshot, IdentitySnapshot, RootSnapshot};
 pub use receipts::Receipt;

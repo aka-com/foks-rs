@@ -103,9 +103,22 @@ impl KvWriteSession<'_> {
         let tree = self.sync()?;
         let (first, mut carry, first_is_final) = read_kv_upload_chunk(reader)?;
         let first_len = first.len();
+        let node_type = if first_is_final && first.len() <= Self::SMALL_FILE_BYTES {
+            KvNodeType::SmallFile
+        } else {
+            KvNodeType::File
+        };
+        self.validate_dirent_precondition(
+            &tree,
+            parent,
+            name.as_bytes(),
+            node_type,
+            options,
+            false,
+        )?;
         let (content_seed, key) = self.current_content_key(options.read_role)?;
         let (node_id, boxed_small, large_metadata, first_chunk, file_seed) =
-            if first_is_final && first.len() <= Self::SMALL_FILE_BYTES {
+            if node_type == KvNodeType::SmallFile {
                 let id = random_kv_node_id(KvNodeType::SmallFile)?;
                 let boxed = derive_kv_keys(content_seed)?.seal_small_file(
                     id,
@@ -195,6 +208,14 @@ impl KvWriteSession<'_> {
         validate_kv_component(name.as_bytes())?;
         validate_kv_symlink(target.as_bytes())?;
         let tree = self.sync()?;
+        self.validate_dirent_precondition(
+            &tree,
+            parent,
+            name.as_bytes(),
+            KvNodeType::Symlink,
+            options,
+            false,
+        )?;
         let (seed, key) = self.current_content_key(options.read_role)?;
         let id = random_kv_node_id(KvNodeType::Symlink)?;
         let boxed = derive_kv_keys(seed)?.seal_small_file(
@@ -214,6 +235,14 @@ impl KvWriteSession<'_> {
     ) -> Result<KvWriteResult> {
         validate_kv_component(name.as_bytes())?;
         let tree = self.sync()?;
+        self.validate_dirent_precondition(
+            &tree,
+            parent,
+            name.as_bytes(),
+            KvNodeType::Directory,
+            options,
+            false,
+        )?;
         let (seed, key) = self.current_content_key(options.read_role)?;
         let id = random_bytes()?;
         let directory_seed = SecretSeed::new(random_bytes()?);
@@ -755,6 +784,14 @@ impl KvWriteSession<'_> {
         options: KvWriteOptions,
         unlink: bool,
     ) -> Result<KvDirent> {
+        self.validate_dirent_precondition(
+            tree,
+            parent,
+            name,
+            node_id.node_type()?,
+            options,
+            unlink,
+        )?;
         let projection = tree
             .iter()
             .find(|directory| directory.directory_id == parent)
@@ -763,32 +800,8 @@ impl KvWriteSession<'_> {
             ))?;
         let pair = KvDirectoryPair::decode(&projection.directory_bytes)?;
         let existing = projection.entries.iter().find(|entry| entry.name == name);
-        if unlink && existing.is_none() {
-            return Err(Error::KvResponse("cannot unlink a missing KV entry"));
-        }
-        if let Some(expected) = options.expected_version {
-            let actual = existing.map_or(0, |entry| entry.version);
-            if actual != expected {
-                return Err(Error::KvResponse("KV dirent version precondition failed"));
-            }
-        }
         if let Some(entry) = existing {
             let old = KvDirent::decode(&entry.dirent_bytes)?;
-            let old_type = old.value.node_type()?;
-            let new_type = node_id.node_type()?;
-            if !unlink && old_type != KvNodeType::None {
-                if !options.overwrite {
-                    return Err(Error::KvResponse("KV entry already exists"));
-                }
-                if !matches!(old_type, KvNodeType::File | KvNodeType::SmallFile)
-                    || !matches!(
-                        new_type,
-                        KvNodeType::File | KvNodeType::SmallFile | KvNodeType::Symlink
-                    )
-                {
-                    return Err(Error::KvResponse("incompatible KV overwrite"));
-                }
-            }
             let seed = self.directory_seed(&pair, old.directory_version)?;
             return bound_dirent(
                 &seed,
@@ -828,6 +841,50 @@ impl KvWriteSession<'_> {
             directory.status,
             now_microseconds()?,
         )
+    }
+
+    fn validate_dirent_precondition(
+        &self,
+        tree: &[KvDirectoryProjection],
+        parent: [u8; 16],
+        name: &[u8],
+        new_type: KvNodeType,
+        options: KvWriteOptions,
+        unlink: bool,
+    ) -> Result<()> {
+        let projection = tree
+            .iter()
+            .find(|directory| directory.directory_id == parent)
+            .ok_or(Error::KvResponse(
+                "parent directory is not in the verified cache",
+            ))?;
+        let existing = projection.entries.iter().find(|entry| entry.name == name);
+        if unlink && existing.is_none() {
+            return Err(Error::KvResponse("cannot unlink a missing KV entry"));
+        }
+        if let Some(expected) = options.expected_version {
+            let actual = existing.map_or(0, |entry| entry.version);
+            if actual != expected {
+                return Err(Error::KvResponse("KV dirent version precondition failed"));
+            }
+        }
+        if let Some(entry) = existing {
+            let old_type = KvDirent::decode(&entry.dirent_bytes)?.value.node_type()?;
+            if !unlink && old_type != KvNodeType::None {
+                if !options.overwrite {
+                    return Err(Error::KvResponse("KV entry already exists"));
+                }
+                if !matches!(old_type, KvNodeType::File | KvNodeType::SmallFile)
+                    || !matches!(
+                        new_type,
+                        KvNodeType::File | KvNodeType::SmallFile | KvNodeType::Symlink
+                    )
+                {
+                    return Err(Error::KvResponse("incompatible KV overwrite"));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn directory_seed(&self, pair: &KvDirectoryPair, version: u64) -> Result<SecretSeed> {

@@ -84,6 +84,7 @@ fn protocol_contract_is_valid_and_exactly_registered() {
         contract.status_codes,
         BTreeMap::from([
             ("bad_args".to_owned(), 1030),
+            ("kv_noent".to_owned(), 8016),
             ("locked".to_owned(), 8014),
             ("name_in_use".to_owned(), 1023),
             ("not_found".to_owned(), 1049),

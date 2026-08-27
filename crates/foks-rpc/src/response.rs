@@ -11,6 +11,7 @@ use super::{
 pub enum RpcStatus {
     BadArguments(String),
     Locked,
+    KvNoEnt,
     NameInUse,
     NotFound(String),
     PermissionDenied(String),
@@ -27,6 +28,7 @@ impl RpcStatus {
         match self {
             Self::BadArguments(_) => 1030,
             Self::Locked => 8014,
+            Self::KvNoEnt => 8016,
             Self::NameInUse => 1023,
             Self::NotFound(_) => 1049,
             Self::PermissionDenied(_) => 1013,

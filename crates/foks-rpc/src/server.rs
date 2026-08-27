@@ -1,6 +1,9 @@
 use std::io::Read;
 
-use super::{read_frame, text, unsigned, Cursor, Error, Result, METHOD_CALL_V2, RESPONSE_HEADER};
+use super::{
+    read_frame, text, unsigned, Cursor, Error, Result, METHOD_CALL_V2, RESPONSE_HEADER,
+    USER_GET_HOST_CONFIG_METHOD_POSITION, USER_PROTOCOL_ID,
+};
 
 /// A validated v0.1.9 RPC call whose protocol argument remains byte-exact.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,11 +92,16 @@ pub fn decode_call(content: &[u8]) -> Result<DecodedCall> {
             found: "trailing data",
         });
     }
-    foks_snowpack::validate(&argument).map_err(|source| Error::ArgumentSnowpack {
-        protocol_id,
-        method_position,
-        source,
-    })?;
+    let sanctioned_zero_field_struct = protocol_id == USER_PROTOCOL_ID
+        && method_position == USER_GET_HOST_CONFIG_METHOD_POSITION
+        && argument == [0x90];
+    if !sanctioned_zero_field_struct {
+        foks_snowpack::validate(&argument).map_err(|source| Error::ArgumentSnowpack {
+            protocol_id,
+            method_position,
+            source,
+        })?;
+    }
 
     Ok(DecodedCall {
         sequence,

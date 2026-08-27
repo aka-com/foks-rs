@@ -1,40 +1,34 @@
 # foks-server
 
-Standalone, single-host FOKS v0.1.9 server backed by a dedicated SQLite
-database. The implemented shell creates encrypted named host keys, constructs
-and verifies a fresh genesis hostchain/public zone/Merkle root, binds three
-policy-separated TLS listeners, and serves Probe plus current and historical
-Merkle roots from validated read-only SQLite snapshots. One bounded writer
-actor owns authoritative SQLite mutations; network work runs in fixed worker
-pools with bounded queues and shutdown cancellation.
+Standalone, single-host FOKS v0.1.9 personal server backed by a dedicated
+SQLite database. It creates encrypted named host keys, constructs and verifies
+a fresh genesis hostchain/public zone/Merkle root, and binds separate probe,
+public-service, and authenticated mTLS listeners.
 
-Username reservation and software-device signup are implemented. Signup
-strictly decodes the narrow v0.1.9 request, verifies both eldest signatures and
-all public disclosures/bindings, consumes the exact 17-byte expiring
-reservation, commits identity state and Merkle epoch 2 atomically, signs the
-new root, and records a replay receipt. Public client-certificate lookup issues
-and persists a seven-day certificate for the exact enrolled Ed25519 device key;
-the certificate completes mTLS against the installation's private client CA.
-Application-level active-device binding, user-chain reads, and KV handlers are
-not implemented yet; they return the stable v0.1.9 unsupported status.
-Consequently the existing client's full account-creation API commits signup,
-obtains a working certificate, and then stops at user-chain loading.
-Registration rate limiting is not implemented yet. Merkle history is currently
-limited to 64 full roots and 64 hashes per call and opens one read-only SQLite
-connection per request. The authenticated listener already requires a
-certificate from the installation's private client CA, but active device
-authorization is intentionally not claimed until those handlers land.
+The implemented v1 slice supports username reservation, software-device
+signup, device certificate issuance, current and historical Merkle roots,
+authenticated user-chain and owner-PUK reads, and the complete personal KV
+surface used by `foks-client`: roots, directories, optimistic dirent writes,
+small files, symlinks, chunked files, pagination, cache checks, and expiring
+locks. The release test creates two accounts and uses the public client without
+server test hooks to create a nested encrypted namespace and round-trip both
+small and multi-chunk content.
 
-## Running the shell
+Teams, federation, invites, passphrase login, YubiKey enrollment, user-chain
+mutation after signup, recovery, realtime services, and cross-host operation
+are intentionally unsupported. This is not a drop-in replacement for the full
+Go server. The executable contract is [protocol-v1.toml](protocol-v1.toml), and
+tests require it to match the registered route table exactly.
 
-The probe certificate must be publicly trusted by clients and cover the
-canonical hostname. Service listener certificates are generated under the
-delegated CA authenticated by the hostchain. All state paths and the 32-byte
-operator root-key file are explicit; there is no user-home or AKA data-path
-default.
+## Running
+
+The probe certificate must be trusted by clients and cover the canonical
+hostname. Service certificates are generated under the delegated CA committed
+by the hostchain. Every state path and the 32-byte operator root-key file is
+explicit; there is no home-directory or AKA path default.
 
 ```text
-foks-server \
+foks-server serve \
   --canonical-name foks.example.test \
   --database /srv/foks/foks-server.sqlite \
   --key-directory /srv/foks/keys \
@@ -47,10 +41,116 @@ foks-server \
   --authenticated-address 0.0.0.0:4432
 ```
 
-The root-key and probe-private-key files must be regular, non-symlink files
-with no group or other permissions. `SIGINT` and `SIGTERM` stop accepts,
-cancel idle sessions, drain accepted database work, and join the writer.
+Root-key and private-key files must be regular, non-symlink files with no group
+or other permissions. `SIGINT` and `SIGTERM` stop accepts, cancel idle
+sessions, drain accepted writer work, stop maintenance, and join all threads.
 
-`foks-server-testkit` composes the same path only inside owned temporary
-directories and ephemeral loopback sockets. It is publish-disabled and is not
-a production dependency.
+## Architecture, jobs, and scheduling
+
+One bounded writer actor owns every authoritative SQLite mutation. Network
+reads use read-only connections on fixed worker pools; the default limits are
+four workers, 32 pending connections, 4,096 requests per connection, 64 pending
+writes in the executable, a 15-second I/O timeout, and a 16 MiB frame ceiling.
+This intentionally favors a simple total order and predictable overload
+behavior over write parallelism. A future partition can move opaque chunks
+first and then independent KV namespaces; identity/name publication and the
+global Merkle log still require one leader or a consensus protocol.
+
+The only background job is a bounded in-process maintenance loop. Once per
+minute it submits one ordinary writer task that removes expired reservations,
+receipts, and locks, reclaims uploads not referenced by a current directory
+entry after 24 idle hours, and requests a truncating WAL checkpoint. Foreground expiry and completeness checks enforce
+correctness even if this job never runs. There is no durable general-purpose
+job queue, retry farm, cron dependency, or multi-process lease system.
+An operating-system lock on the database sidecar rejects a second writer
+process; active/active service instances are not supported.
+
+## Capacity limits
+
+Defaults are enforced before authoritative KV writes:
+
+- 64 KiB per encoded small node;
+- at most 64 dirents per mutation batch and 1,000 entries per list page;
+- 9 MiB per stored encrypted chunk and 512 chunks per upload;
+- the client-compatible 1 GiB cleartext file ceiling, allowing up to just over
+  2 GiB of v0.1.9 padded ciphertext;
+- 16 GiB and 1,000,000 stored objects per personal KV namespace; and
+- 64 GiB for the SQLite main database through `max_page_count`.
+
+Namespace accounting charges encoded bytes actually stored, including upload
+envelopes and ciphertext duplication. Tombstone/history versions remain
+charged until a future authenticated compactor can prove they are reclaimable.
+SQLite, filesystem, WAL, backup, and key-directory overhead means operators
+must reserve more disk than the configured database limit.
+
+No throughput number is a product claim yet. The single writer, `FULL`
+synchronous WAL commits, repeated reachable-tree version-vector construction,
+and namespace quota scans are expected to be the first saturation points.
+Benchmark reports must state hardware, SQLite settings, dataset shape, p50/p95/
+p99 latency, writer saturation, reader latency, WAL growth, and checkpoint
+cost before quoting capacity.
+
+## Backup, restore, and integrity
+
+`RunningStandaloneServer::backup` creates a new backup directory containing an
+online SQLite snapshot, the five immutable encrypted key files, and a canonical
+key-generation manifest. It never copies the operator root key. Protect that
+root key separately; neither the encrypted key snapshot nor the database is
+recoverable without it.
+
+The executable uses the same validated library entry points:
+
+```text
+foks-server backup \
+  --database /srv/foks/foks-server.sqlite \
+  --key-directory /srv/foks/keys \
+  --root-key-file /run/secrets/foks-root-key \
+  --destination /srv/backups/foks-2026-08-27
+
+foks-server restore \
+  --backup-directory /srv/backups/foks-2026-08-27 \
+  --database /srv/foks-restored/foks-server.sqlite \
+  --key-directory /srv/foks-restored/keys
+```
+
+Backup authenticates every encrypted key generation with the root key and
+uses a read-only source connection. Restore accepts only a complete manifest,
+integrity-checked database, and exact declared key set, and requires empty
+destination paths.
+
+For restore, stop the process, retain the damaged directory, place the backed-up
+database and key directory at new explicit paths, supply the matching operator
+root key, and start the server. Startup revalidates the database application and
+schema IDs, decrypts the keys, verifies key generations against persisted host
+state, and reconstructs the signed bootstrap. A missing, modified, or
+mismatched key fails startup rather than rotating identity. Reconnect an
+already-pinned client before switching traffic.
+
+Operational checks should run against a copy or during a maintenance window:
+
+1. call SQLite `quick_check` for routine sampling and `integrity_check` for a
+   full scan;
+2. verify the returned result is exactly `ok`;
+3. create and validate a fresh online backup and key manifest;
+4. record main-database and `-wal` sizes plus checkpoint duration; and
+5. periodically perform a restore rehearsal with an existing pinned client.
+
+The Rust API exposes full integrity checking, online backup, storage-size
+reporting, bounded maintenance, and WAL checkpoint results. HTTP health and
+metrics endpoints, automated backup triggers, structured audit export, disk-
+full fault injection, and published load results remain release-hardening work.
+
+## Isolated development gate
+
+`foks-server-testkit` is publish-disabled and excluded from default workspace
+members. It starts only through owned temporary database/key directories and
+ephemeral loopback sockets. Run the complete standalone boundary, dependency,
+format, lint, protocol-matrix, unit, and process suite with:
+
+```text
+tools/foks-server/check.sh
+tools/foks-server/test-client-server.sh
+```
+
+The gate rejects any AKA dependency or changed path outside the standalone FOKS
+boundary.

@@ -8,6 +8,7 @@ baseline = "foks-v0.1.9"
 ok = 0
 bad_args = 1030
 locked = 8014
+kv_noent = 8016
 name_in_use = 1023
 not_found = 1049
 permission_denied = 1013
@@ -246,7 +247,7 @@ authentication = "active_device_mtls"
 request = "KvUploadInitArgument"
 result = "Void"
 statuses = ["ok", "bad_args", "stale_cache", "quota_exceeded"]
-max_request_bytes = 1048576
+max_request_bytes = 16777216
 supported = true
 
 [[route]]
@@ -259,7 +260,7 @@ authentication = "active_device_mtls"
 request = "KvUploadChunkArgument"
 result = "Void"
 statuses = ["ok", "bad_args", "not_found", "quota_exceeded"]
-max_request_bytes = 8388608
+max_request_bytes = 16777216
 supported = true
 
 [[route]]
@@ -284,7 +285,7 @@ listener = "authenticated"
 authentication = "active_device_mtls"
 request = "KvGetRootArgument"
 result = "KvRoot"
-statuses = ["ok", "bad_args", "not_found"]
+statuses = ["ok", "bad_args", "kv_noent"]
 max_request_bytes = 16384
 supported = true
 
@@ -297,7 +298,7 @@ listener = "authenticated"
 authentication = "active_device_mtls"
 request = "KvGetNodeArgument"
 result = "KvNode"
-statuses = ["ok", "bad_args", "not_found"]
+statuses = ["ok", "bad_args", "kv_noent"]
 max_request_bytes = 16384
 supported = true
 
@@ -310,7 +311,7 @@ listener = "authenticated"
 authentication = "active_device_mtls"
 request = "KvGetChunkArgument"
 result = "KvEncryptedChunk"
-statuses = ["ok", "bad_args", "not_found"]
+statuses = ["ok", "bad_args", "kv_noent"]
 max_request_bytes = 16384
 supported = true
 
@@ -323,7 +324,7 @@ listener = "authenticated"
 authentication = "active_device_mtls"
 request = "KvGetDirArgument"
 result = "KvDirectory"
-statuses = ["ok", "bad_args", "not_found"]
+statuses = ["ok", "bad_args", "kv_noent"]
 max_request_bytes = 16384
 supported = true
 
@@ -349,7 +350,7 @@ listener = "authenticated"
 authentication = "active_device_mtls"
 request = "KvListArgument"
 result = "KvList"
-statuses = ["ok", "bad_args", "not_found"]
+statuses = ["ok", "bad_args", "kv_noent"]
 max_request_bytes = 16384
 supported = true
 

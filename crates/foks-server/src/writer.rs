@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -38,6 +39,7 @@ enum Message {
 pub struct Writer {
     handle: WriterHandle,
     thread: Option<JoinHandle<()>>,
+    _process_lock: std::fs::File,
 }
 
 #[derive(Clone)]
@@ -48,6 +50,16 @@ pub struct WriterHandle {
 struct WriterQueue {
     sender: SyncSender<Message>,
     accepting: Mutex<bool>,
+    accepted: AtomicU64,
+    rejected: AtomicU64,
+    pending: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WriterMetrics {
+    pub accepted: u64,
+    pub rejected: u64,
+    pub pending: u64,
 }
 
 impl Writer {
@@ -59,6 +71,17 @@ impl Writer {
         if maximum_pending == 0 {
             return Err(Error::Config("zero writer queue limit"));
         }
+        let mut lock_path = database_path.as_os_str().to_os_string();
+        lock_path.push(".writer-lock");
+        let process_lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(std::path::PathBuf::from(lock_path))?;
+        process_lock
+            .try_lock()
+            .map_err(|_| Error::Config("database writer is already active"))?;
         let (sender, receiver) = mpsc::sync_channel(maximum_pending);
         let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
         let thread = thread::spawn(move || {
@@ -80,9 +103,13 @@ impl Writer {
                     queue: Arc::new(WriterQueue {
                         sender,
                         accepting: Mutex::new(true),
+                        accepted: AtomicU64::new(0),
+                        rejected: AtomicU64::new(0),
+                        pending: AtomicU64::new(0),
                     }),
                 },
                 thread: Some(thread),
+                _process_lock: process_lock,
             }),
             Ok(Err(error)) => {
                 let _ = thread.join();
@@ -145,15 +172,33 @@ impl WriterHandle {
         if !*accepting {
             return Err(Error::WriterQueue);
         }
-        self.queue
+        self.queue.pending.fetch_add(1, Ordering::AcqRel);
+        if self
+            .queue
             .sender
             .try_send(Message::Task(Box::new(Call {
                 operation,
                 response,
             })))
-            .map_err(|_| Error::WriterQueue)?;
+            .is_err()
+        {
+            self.queue.pending.fetch_sub(1, Ordering::AcqRel);
+            self.queue.rejected.fetch_add(1, Ordering::Relaxed);
+            return Err(Error::WriterQueue);
+        }
+        self.queue.accepted.fetch_add(1, Ordering::Relaxed);
         drop(accepting);
-        receiver.recv().map_err(|_| Error::WriterQueue)?
+        let result = receiver.recv();
+        self.queue.pending.fetch_sub(1, Ordering::AcqRel);
+        result.map_err(|_| Error::WriterQueue)?
+    }
+
+    pub fn metrics(&self) -> WriterMetrics {
+        WriterMetrics {
+            accepted: self.queue.accepted.load(Ordering::Relaxed),
+            rejected: self.queue.rejected.load(Ordering::Relaxed),
+            pending: self.queue.pending.load(Ordering::Acquire),
+        }
     }
 }
 

@@ -1,7 +1,9 @@
 use std::io::{Cursor, Read};
 
 use foks_rpc::{
-    encode_call, read_call, DEFAULT_MAX_FRAME_LENGTH, PROBE_METHOD_POSITION, PROBE_PROTOCOL_ID,
+    encode_call, encode_get_host_config_request, read_call, DEFAULT_MAX_FRAME_LENGTH,
+    PROBE_METHOD_POSITION, PROBE_PROTOCOL_ID, USER_GET_HOST_CONFIG_METHOD_POSITION,
+    USER_PROTOCOL_ID,
 };
 
 fn fixture(path: &str) -> Vec<u8> {
@@ -11,6 +13,15 @@ fn fixture(path: &str) -> Vec<u8> {
             .join(path),
     )
     .unwrap()
+}
+
+#[test]
+fn sanctioned_zero_field_user_struct_reaches_server_routing() {
+    let frame = encode_get_host_config_request().unwrap();
+    let call = read_call(&mut Cursor::new(frame), DEFAULT_MAX_FRAME_LENGTH).unwrap();
+    assert_eq!(call.protocol_id(), USER_PROTOCOL_ID);
+    assert_eq!(call.method_position(), USER_GET_HOST_CONFIG_METHOD_POSITION);
+    assert_eq!(call.argument(), [0x90]);
 }
 
 #[test]

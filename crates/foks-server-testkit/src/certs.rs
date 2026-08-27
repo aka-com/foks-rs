@@ -9,6 +9,8 @@ use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 pub(crate) struct TestTls {
     pub roots: rustls::RootCertStore,
     pub public: Arc<rustls::ServerConfig>,
+    pub certificate_chain: Vec<Vec<u8>>,
+    pub private_key: zeroize::Zeroizing<Vec<u8>>,
 }
 
 pub(crate) fn make_tls() -> TestTls {
@@ -26,7 +28,12 @@ pub(crate) fn make_tls() -> TestTls {
     server_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
     let server_cert = server_params.signed_by(&server_key, &ca).unwrap();
     let certificate_chain = vec![server_cert.der().clone(), ca.der().clone()];
+    let retained_certificates = certificate_chain
+        .iter()
+        .map(|certificate| certificate.as_ref().to_vec())
+        .collect();
     let server_key_der = server_key.serialize_der();
+    let retained_private_key = zeroize::Zeroizing::new(server_key_der.clone());
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let public = Arc::new(
         rustls::ServerConfig::builder_with_provider(Arc::clone(&provider))
@@ -41,5 +48,10 @@ pub(crate) fn make_tls() -> TestTls {
     );
     let mut roots = rustls::RootCertStore::empty();
     roots.add(ca.der().clone()).unwrap();
-    TestTls { roots, public }
+    TestTls {
+        roots,
+        public,
+        certificate_chain: retained_certificates,
+        private_key: retained_private_key,
+    }
 }

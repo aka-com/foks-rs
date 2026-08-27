@@ -35,6 +35,10 @@ impl DirectoryKeyProvider {
         })
     }
 
+    pub fn load_existing(&self, purpose: KeyPurpose) -> Result<SecretKey> {
+        self.load(&self.path(purpose), purpose)
+    }
+
     fn path(&self, purpose: KeyPurpose) -> PathBuf {
         self.directory.join(format!("{}.key", purpose.label()))
     }

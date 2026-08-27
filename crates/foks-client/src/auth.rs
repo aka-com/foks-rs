@@ -1,15 +1,16 @@
 //! Credentials, Merkle advancement, and authenticated user loading.
 
 use super::{
-    decode, derive_device_public, derive_subkey_id, encode_get_client_cert_chain_request_at,
-    encode_get_current_merkle_root_request, encode_get_historical_merkle_roots_request,
-    encode_get_puk_for_role_request, encode_load_user_chain_request_from,
-    encode_merkle_select_vhost_request, encode_registration_select_vhost_request,
-    merkle_history_requirements, open_puk_parcel_for_role, open_puk_parcel_with_for_role,
-    open_puk_seed_chain, restore_merkle_anchor, verify_merkle_advance, verify_user_chain,
-    verify_user_chain_increment, Acceptance, EntityId, Error, FoksClient, HardStateStore,
-    HostchainTail, PinnedHost, PukParcel, Result, Role, SecretSeed, Value, VerifiedMerkleAdvance,
-    VerifiedUserState, YubiDevice, ENTITY_USER,
+    authenticate_historical_roots_from_latest, decode, derive_device_public, derive_subkey_id,
+    encode_get_client_cert_chain_request_at, encode_get_current_merkle_root_request,
+    encode_get_historical_merkle_roots_request, encode_get_puk_for_role_request,
+    encode_load_user_chain_request_from, encode_merkle_select_vhost_request,
+    encode_registration_select_vhost_request, merkle_history_requirements,
+    open_puk_parcel_for_role, open_puk_parcel_with_for_role, open_puk_seed_chain,
+    restore_merkle_anchor, user_chain_root_epochs, verify_merkle_advance, verify_user_chain,
+    verify_user_chain_increment, Acceptance, AuthenticatedMerkleRoots, EntityId, Error, FoksClient,
+    HardStateStore, HostchainTail, PinnedHost, PukParcel, Result, Role, SecretSeed, Value,
+    VerifiedMerkleAdvance, VerifiedUserState, YubiDevice, ENTITY_USER,
 };
 
 /// Device credential material used for mTLS. The master seed is never written
@@ -257,6 +258,59 @@ impl FoksClient {
         Ok((acceptance, verified))
     }
 
+    fn authenticate_user_chain_roots(
+        &self,
+        host: &PinnedHost,
+        latest: &VerifiedMerkleAdvance,
+        chain_bytes: &[u8],
+    ) -> Result<AuthenticatedMerkleRoots> {
+        let targets = user_chain_root_epochs(chain_bytes)?
+            .into_iter()
+            .filter(|epoch| !latest.authenticated_roots().contains_epoch(*epoch))
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            return Ok(latest.authenticated_roots().clone());
+        }
+        let mut full_epochs = std::collections::BTreeSet::new();
+        let mut hash_epochs = std::collections::BTreeSet::new();
+        for &target in &targets {
+            if target == 0 || target >= latest.root().epoch {
+                return Err(Error::UserBinding(
+                    "user chain references an unauthenticated future Merkle root",
+                ));
+            }
+            full_epochs.insert(target);
+            let requirements = merkle_history_requirements(latest.root().epoch, target)?;
+            full_epochs.extend(requirements.full_roots);
+            hash_epochs.extend(requirements.hashes);
+        }
+        let full_epochs = full_epochs.into_iter().collect::<Vec<_>>();
+        let hash_epochs = hash_epochs.into_iter().collect::<Vec<_>>();
+        if full_epochs.len() > 64 || hash_epochs.len() > 64 {
+            return Err(Error::UserBinding(
+                "user chain requires too many historical Merkle roots",
+            ));
+        }
+        let historical = self.call_after_vhost_selection(
+            host,
+            &host.merkle_query,
+            &encode_merkle_select_vhost_request(host.host_id())?,
+            &encode_get_historical_merkle_roots_request(
+                host.host_id(),
+                &full_epochs,
+                &hash_epochs,
+                1,
+            )?,
+        )?;
+        Ok(authenticate_historical_roots_from_latest(
+            latest,
+            &targets,
+            &full_epochs,
+            &hash_epochs,
+            &historical,
+        )?)
+    }
+
     /// Advances the host's Merkle pin, authenticates with device mTLS, replays
     /// the user chain, unboxes the enrolled device role's PUK history, and
     /// atomically advances public user hard state in SQLite.
@@ -269,20 +323,22 @@ impl FoksClient {
         let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
         let prior = self.pinned_user(host, &credential.uid)?;
         let chain_bytes = self.load_user_chain(host, credential, prior.as_ref())?;
+        let authenticated_roots =
+            self.authenticate_user_chain_roots(host, &merkle, &chain_bytes)?;
         let verified = match prior.as_ref() {
             Some(prior) => verify_user_chain_increment(
                 &chain_bytes,
                 prior,
                 &credential.uid,
                 &host.host_id,
-                merkle.authenticated_roots(),
+                &authenticated_roots,
                 &merkle.root().hostchain,
             )?,
             None => verify_user_chain(
                 &chain_bytes,
                 &credential.uid,
                 &host.host_id,
-                merkle.authenticated_roots(),
+                &authenticated_roots,
                 &merkle.root().hostchain,
             )?,
         };
@@ -349,20 +405,22 @@ impl FoksClient {
             &credential.subkey_seed,
             &credential.certificate_chain,
         )?;
+        let authenticated_roots =
+            self.authenticate_user_chain_roots(host, &merkle, &chain_bytes)?;
         let verified = match prior.as_ref() {
             Some(prior) => verify_user_chain_increment(
                 &chain_bytes,
                 prior,
                 &credential.uid,
                 &host.host_id,
-                merkle.authenticated_roots(),
+                &authenticated_roots,
                 &merkle.root().hostchain,
             )?,
             None => verify_user_chain(
                 &chain_bytes,
                 &credential.uid,
                 &host.host_id,
-                merkle.authenticated_roots(),
+                &authenticated_roots,
                 &merkle.root().hostchain,
             )?,
         };

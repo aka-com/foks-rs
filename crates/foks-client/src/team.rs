@@ -85,6 +85,32 @@ pub struct CreatedAdHocTeam {
 }
 
 impl FoksClient {
+    /// Loads the authenticated host capability policy advertised by
+    /// `User.getHostConfig`.
+    pub fn host_config(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+    ) -> Result<HostConfig> {
+        self.host_config_with_material(host, &credential.seed, &credential.certificate_chain)
+    }
+
+    fn host_config_with_material(
+        &self,
+        host: &PinnedHost,
+        auth_seed: &SecretSeed,
+        certificate_chain: &[Vec<u8>],
+    ) -> Result<HostConfig> {
+        HostConfig::decode(&self.call_with_material(
+            host,
+            &host.user,
+            &encode_get_host_config_request()?,
+            auth_seed,
+            certificate_chain,
+        )?)
+        .map_err(Into::into)
+    }
+
     /// Acquires a short-lived view token with the current device-role PUK,
     /// loads and verifies a team chain, unboxes exactly the PTKs visible to
     /// this member, and atomically seals the public team projection in SQLite.
@@ -276,13 +302,7 @@ impl FoksClient {
         auth_seed: &SecretSeed,
         certificate_chain: &[Vec<u8>],
     ) -> Result<()> {
-        let host_config = HostConfig::decode(&self.call_with_material(
-            host,
-            &host.user,
-            &encode_get_host_config_request()?,
-            auth_seed,
-            certificate_chain,
-        )?)?;
+        let host_config = self.host_config_with_material(host, auth_seed, certificate_chain)?;
         if host_config.user_viewership != ViewershipMode::Open {
             return Err(Error::TeamRequest(
                 "host does not allow open user viewership",

@@ -1,4 +1,4 @@
-use foks_server::host::{bootstrap, BootstrapEndpoints, BootstrapInput};
+use foks_server::host::{bootstrap, load_or_bootstrap, BootstrapEndpoints, BootstrapInput};
 use foks_server::keys::DirectoryKeyProvider;
 use foks_server_db::{Config, Database};
 
@@ -39,6 +39,35 @@ fn bootstrap_is_verified_atomic_and_byte_stable_across_restart() {
         database.host_bootstrap().unwrap().unwrap().probe_response,
         first.probe_response
     );
+}
+
+#[test]
+fn existing_bootstrap_ignores_a_new_startup_clock_but_not_changed_endpoints() {
+    let temporary = tempfile::tempdir().unwrap();
+    let database_path = temporary.path().join("foks-server.sqlite");
+    let key_path = temporary.path().join("keys");
+    let mut input = BootstrapInput {
+        canonical_name: "localhost".to_owned(),
+        endpoints: BootstrapEndpoints {
+            probe: "localhost:4430".to_owned(),
+            public_services: "localhost:4431".to_owned(),
+            authenticated: "localhost:4432".to_owned(),
+        },
+        ttl_seconds: 60,
+        now_microseconds: 1,
+    };
+    let provider = DirectoryKeyProvider::open(&key_path, [0x66; 32]).unwrap();
+    let mut database = Database::open(&database_path, Config::default()).unwrap();
+    let first = load_or_bootstrap(&mut database, &provider, &input).unwrap();
+    assert!(first.created);
+
+    input.now_microseconds = u64::MAX;
+    let restarted = load_or_bootstrap(&mut database, &provider, &input).unwrap();
+    assert!(!restarted.created);
+    assert_eq!(restarted.probe_response, first.probe_response);
+
+    input.endpoints.public_services = "localhost:4441".to_owned();
+    assert!(load_or_bootstrap(&mut database, &provider, &input).is_err());
 }
 
 #[test]

@@ -140,6 +140,93 @@ impl AuthenticatedMerkleRoots {
     }
 }
 
+/// Authenticates historical roots selected by a subsequently verified object
+/// (for example, signed user links) back to an already trusted latest root.
+/// The supplied response is untrusted and contributes hashes only after each
+/// target's complete skip-pointer proof reaches `latest`.
+pub fn authenticate_historical_roots_from_latest(
+    latest: &VerifiedMerkleAdvance,
+    targets: &[u64],
+    full_epochs: &[u64],
+    hash_epochs: &[u64],
+    historical_bytes: &[u8],
+) -> Result<AuthenticatedMerkleRoots> {
+    if targets.len() > 64 || full_epochs.len() > 64 || hash_epochs.len() > 64 {
+        return Err(Error::MerkleHistoryShape);
+    }
+    let historical = HistoricalMerkleRoots::decode(historical_bytes)?;
+    if historical.roots.len() != full_epochs.len() || historical.hashes.len() != hash_epochs.len() {
+        return Err(Error::MerkleHistoryShape);
+    }
+    let mut full = BTreeMap::new();
+    for (&epoch, root) in full_epochs.iter().zip(historical.roots) {
+        if root.epoch != epoch || full.insert(epoch, root).is_some() {
+            return Err(Error::MerkleHistoryShape);
+        }
+    }
+    let mut hashes = BTreeMap::new();
+    for (&epoch, hash) in hash_epochs.iter().zip(historical.hashes) {
+        if hashes.insert(epoch, hash).is_some() {
+            return Err(Error::MerkleHistoryShape);
+        }
+    }
+    let mut authenticated = latest.authenticated_roots.0.clone();
+    for &target in targets {
+        if authenticated.contains_key(&target) {
+            continue;
+        }
+        if target == 0 || target >= latest.root.epoch {
+            return Err(Error::MerkleHistoryShape);
+        }
+        let target_root = full.get(&target).ok_or(Error::MerkleHistoryShape)?;
+        let target_bytes = target_root.encoded()?;
+        let target_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &target_bytes);
+        let requirements = merkle_history_requirements(latest.root.epoch, target)?;
+        let tailored = HistoricalMerkleRoots {
+            roots: requirements
+                .full_roots
+                .iter()
+                .map(|epoch| full.get(epoch).cloned().ok_or(Error::MerkleHistoryShape))
+                .collect::<Result<Vec<_>>>()?,
+            hashes: requirements
+                .hashes
+                .iter()
+                .map(|epoch| hashes.get(epoch).copied().ok_or(Error::MerkleHistoryShape))
+                .collect::<Result<Vec<_>>>()?,
+        }
+        .encoded()?;
+        let untrusted_target = VerifiedMerkleRoot {
+            epoch: target,
+            root_hash: target_hash,
+            root_bytes: target_bytes,
+            evidence: MerkleRootEvidence::SignedBootstrap(Vec::new()),
+            authenticated_roots: vec![AuthenticatedMerkleRoot {
+                epoch: target,
+                root_hash: target_hash,
+                root_bytes: Some(target_root.encoded()?),
+            }],
+        };
+        let proof = verify_merkle_advance(
+            &untrusted_target,
+            latest.snapshot.root_bytes(),
+            &tailored,
+            &latest.root.hostchain,
+        )?;
+        if proof.snapshot.root_hash != latest.snapshot.root_hash {
+            return Err(Error::MerkleFork(latest.root.epoch));
+        }
+        for (epoch, hash) in proof.authenticated_roots.0 {
+            if authenticated
+                .insert(epoch, hash)
+                .is_some_and(|known| known != hash)
+            {
+                return Err(Error::MerkleFork(epoch));
+            }
+        }
+    }
+    Ok(AuthenticatedMerkleRoots(authenticated))
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MerkleHistoryRequest {
     pub full_roots: Vec<u64>,
