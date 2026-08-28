@@ -1,0 +1,33 @@
+[package]
+name = "foks-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "foks-desktop-backend"
+path = "src/main.rs"
+
+[[bin]]
+name = "foks-desktop"
+path = "src/gui.rs"
+
+[dependencies]
+clap = { workspace = true }
+foks-agent-client = { workspace = true }
+foks-agent-proto = { workspace = true }
+libc = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui = { workspace = true, features = ["runtime_shaders"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui = { workspace = true, features = ["wayland", "x11"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

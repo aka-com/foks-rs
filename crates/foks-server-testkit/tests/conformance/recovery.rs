@@ -21,6 +21,22 @@ pub(crate) fn recovery_success() {
         .unwrap();
     assert_eq!(enrolled.authenticated.verified.chain_seqno(), 2);
 
+    // Re-authenticating the just-enrolled backup on the existing client can
+    // produce a different, equally valid user-evidence path for the same
+    // Merkle head. Durable state must compare the authenticated root, not the
+    // particular proof serialization chosen for that authentication.
+    let same_client_backup = fixture
+        .client
+        .foks()
+        .load_backup_key(fixture.host(), BackupKey::from_seed(seed).unwrap())
+        .unwrap();
+    let same_client_authenticated = fixture
+        .client
+        .foks()
+        .authenticate_backup_and_pin(fixture.host(), &same_client_backup)
+        .unwrap();
+    assert_eq!(same_client_authenticated.verified.chain_seqno(), 2);
+
     // Recovery normally begins on a fresh installation. Give it an
     // independent durable trust store so the test also proves reconstruction
     // from the host pin and backup phrase alone.

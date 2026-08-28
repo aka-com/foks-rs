@@ -1,0 +1,26 @@
+[package]
+name = "foks-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "foks-rs"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+foks-client-app = { workspace = true }
+foks-compat-artifact = { workspace = true }
+foks-keystore = { workspace = true }
+libc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

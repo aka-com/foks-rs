@@ -235,6 +235,24 @@ pub fn restore_public_host_identity(
     })
 }
 
+/// Re-authenticates a persisted hostchain and proves that an externalized
+/// historical tail is an ancestor of its current head.
+pub fn hostchain_contains_tail(
+    chain_bytes: &[u8],
+    expected_seqno: u64,
+    expected_tail: [u8; 32],
+) -> Result<bool> {
+    let links = foks_proto::decode_hostchain(chain_bytes)?;
+    if expected_seqno == 0 || expected_seqno as usize > links.len() {
+        return Ok(false);
+    }
+    let mut state = HostchainState::default();
+    for link in links.into_iter().take(expected_seqno as usize) {
+        state = verify_hostchain_link(&state, &link)?;
+    }
+    Ok(state.seqno == expected_seqno && state.tail == expected_tail)
+}
+
 pub fn verify_public_host(lookup_name: &str, probe_bytes: &[u8]) -> Result<VerifiedPublicHost> {
     let probe = ProbeResponse::decode(probe_bytes)?;
     if probe.hostchain.is_empty() {

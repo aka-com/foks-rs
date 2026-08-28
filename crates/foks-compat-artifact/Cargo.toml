@@ -1,0 +1,26 @@
+[package]
+name = "foks-compat-artifact"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "foks-compat-artifact"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+ed25519-dalek = { workspace = true }
+libc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

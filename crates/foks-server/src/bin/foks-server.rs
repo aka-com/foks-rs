@@ -20,14 +20,54 @@ struct Arguments {
 
 #[derive(clap::Subcommand)]
 enum Command {
+    /// Creates a non-overwriting standalone installation layout.
+    Init(InitArguments),
     /// Runs the standalone network service.
     Serve(Box<ServeArguments>),
+    /// Runs an installation from its versioned TOML configuration.
+    ServeConfig {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Validates an installation configuration and its key/certificate artifacts.
+    ConfigCheck {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Reports offline database/bootstrap/integrity status.
+    Status {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Writes a pinned-client import bundle after the server has bootstrapped.
+    ClientBootstrap {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Creates a validated online backup of an installation.
     Backup(BackupArguments),
     /// Installs a validated backup into an empty installation.
     Restore(RestoreArguments),
     /// Atomically rewraps installation keys under a new operator root key.
     RotateOperatorRoot(RotateOperatorRootArguments),
+}
+
+#[derive(clap::Args)]
+struct InitArguments {
+    #[arg(long)]
+    directory: PathBuf,
+    #[arg(long)]
+    canonical_name: String,
+    #[arg(long, default_value = "127.0.0.1:4430")]
+    probe_address: SocketAddr,
+    #[arg(long, default_value = "127.0.0.1:4431")]
+    public_address: SocketAddr,
+    #[arg(long, default_value = "127.0.0.1:4432")]
+    authenticated_address: SocketAddr,
+    #[arg(long, default_value = "127.0.0.1:9090")]
+    management_address: SocketAddr,
 }
 
 #[derive(clap::Args)]
@@ -116,11 +156,97 @@ struct RotateOperatorRootArguments {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     match Arguments::parse().command {
+        Command::Init(arguments) => initialize(arguments),
         Command::Serve(arguments) => serve(*arguments),
+        Command::ServeConfig { config } => serve_config(config),
+        Command::ConfigCheck { config } => config_check(config),
+        Command::Status { config } => status(config),
+        Command::ClientBootstrap { config, output } => client_bootstrap(config, output),
         Command::Backup(arguments) => backup(arguments),
         Command::Restore(arguments) => restore(arguments),
         Command::RotateOperatorRoot(arguments) => rotate_operator_root(arguments),
     }
+}
+
+fn initialize(arguments: InitArguments) -> Result<(), Box<dyn std::error::Error>> {
+    let config = foks_server::installation::initialize(
+        arguments.directory,
+        &arguments.canonical_name,
+        arguments.probe_address,
+        arguments.public_address,
+        arguments.authenticated_address,
+        arguments.management_address,
+    )?;
+    println!(
+        "initialized FOKS server configuration: {}",
+        config.display()
+    );
+    Ok(())
+}
+
+fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let config = foks_server::installation::load_config(path)?;
+    foks_server::installation::validate_artifacts(&config)?;
+    serve(ServeArguments {
+        canonical_name: config.canonical_name,
+        database: config.database,
+        key_directory: config.key_directory,
+        root_key_file: config.root_key_file,
+        probe_certificate_der: vec![config.probe_certificate_der],
+        probe_private_key_der: config.probe_private_key_der,
+        probe_address: config.probe_address,
+        public_address: config.public_address,
+        authenticated_address: config.authenticated_address,
+        management_address: config.management_address,
+        ttl_seconds: 60,
+        worker_threads: 4,
+        maximum_read_connections: 32,
+        maximum_active_connections: 256,
+        maximum_pending_connections: 32,
+        maximum_pending_writes: 64,
+        connection_rate_burst: 512,
+        connections_per_second: 256,
+        request_rate_burst: 2_000,
+        requests_per_second: 1_000,
+        maximum_rate_limit_ips: 4_096,
+        automatic_backup_directory: Some(config.backup_directory),
+        automatic_backup_interval_seconds: config.backup_interval_seconds,
+        automatic_backup_retain: config.backup_retain,
+    })
+}
+
+fn config_check(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let config = foks_server::installation::load_config(path)?;
+    foks_server::installation::validate_artifacts(&config)?;
+    println!("FOKS server configuration and artifacts are valid");
+    Ok(())
+}
+
+fn status(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let config = foks_server::installation::load_config(path)?;
+    let status = foks_server::installation::status(&config)?;
+    println!(
+        "initialized={} canonical_name={} host_id={} database_bytes={} wal_bytes={} integrity={}",
+        status.initialized,
+        status.canonical_name,
+        status.host_id_hex.as_deref().unwrap_or("unavailable"),
+        status.database_bytes,
+        status.wal_bytes,
+        status
+            .integrity_ok
+            .map_or("not-run".to_owned(), |value| value.to_string()),
+    );
+    Ok(())
+}
+
+fn client_bootstrap(
+    config_path: PathBuf,
+    output: PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = foks_server::installation::load_config(config_path)?;
+    foks_server::installation::write_client_bootstrap(&config, &output)?;
+    println!("wrote FOKS client bootstrap: {}", output.display());
+    Ok(())
 }
 
 fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {

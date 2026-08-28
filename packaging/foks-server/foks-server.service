@@ -1,0 +1,26 @@
+[Unit]
+Description=Standalone FOKS server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=foks
+Group=foks
+ExecStart=/usr/local/bin/foks-server serve-config --config /etc/foks/server.toml
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths=/var/lib/foks
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

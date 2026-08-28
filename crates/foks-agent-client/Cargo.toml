@@ -1,0 +1,18 @@
+[package]
+name = "foks-agent-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+foks-agent-proto = { workspace = true }
+thiserror = { workspace = true }
+rustix = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

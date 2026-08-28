@@ -1,0 +1,63 @@
+name: standalone-foks
+
+on:
+  push:
+    paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/foks-*/**"
+      - "packaging/**"
+      - "tools/foks-client/**"
+      - "tools/foks-server/**"
+      - ".github/workflows/foks-standalone.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: standalone-foks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  client:
+    name: client (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install stable Rust components
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+      - name: Fetch the locked dependency graph
+        run: cargo fetch --locked
+      - name: Test the isolated AKA-free client graph
+        run: tools/foks-client/check.sh
+
+  server:
+    name: server (Linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install stable Rust components
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+      - name: Fetch the locked dependency graph
+        run: cargo fetch --locked
+      - name: Check generated protocol metadata
+        run: tools/foks-server/generate-protocol.sh --check --offline
+      - name: Test the complete isolated FOKS graph
+        run: tools/foks-server/check.sh
+      - name: Test release client/server lifecycle
+        run: tools/foks-server/test-client-server.sh
+      - name: Test small-team, restart, capacity, and backup behavior
+        run: tools/foks-server/test-small-team.sh
