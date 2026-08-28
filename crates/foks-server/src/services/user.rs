@@ -1,17 +1,193 @@
+use std::sync::Arc;
+
 use foks_proto::EntityId;
 use foks_rpc::RpcStatus;
 use foks_snowpack::{decode, Value};
 
 use crate::auth::Principal;
+use crate::{net::session::OwnedPassphraseMutation, WriterHandle};
+
+pub(crate) fn set_passphrase(
+    database: &foks_server_db::ReadDatabase,
+    writer: &WriterHandle,
+    clock: &Arc<dyn foks_server_db::Clock>,
+    argument: &[u8],
+    principal: &Principal,
+) -> Result<(), RpcStatus> {
+    authorize_database(database, principal)?;
+    principal.require_ordinary_device()?;
+    let decoded = foks_rpc::arguments::decode_set_passphrase(argument).map_err(bad_arguments)?;
+    let owned = OwnedPassphraseMutation::from_argument(&decoded)
+        .map_err(|_| bad_arguments("invalid passphrase boxes"))?;
+    let uid = principal.uid().to_vec();
+    let credential = principal.device_id().to_vec();
+    writer
+        .call_with_current_time(Arc::clone(clock), move |database, now| {
+            database.set_passphrase(&uid, &credential, owned.as_database(now))?;
+            Ok(())
+        })
+        .map_err(map_passphrase_write_error)
+}
+
+pub(crate) fn change_passphrase(
+    database: &foks_server_db::ReadDatabase,
+    writer: &WriterHandle,
+    clock: &Arc<dyn foks_server_db::Clock>,
+    argument: &[u8],
+    principal: &Principal,
+) -> Result<(), RpcStatus> {
+    authorize_database(database, principal)?;
+    principal.require_ordinary_device()?;
+    let current = database
+        .passphrase(principal.uid())
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or(RpcStatus::PassphraseNotFound)?;
+    let decoded = foks_rpc::arguments::decode_change_passphrase(argument, current.salt)
+        .map_err(bad_arguments)?;
+    let owned = OwnedPassphraseMutation::from_argument(&decoded)
+        .map_err(|_| bad_arguments("invalid passphrase boxes"))?;
+    let uid = principal.uid().to_vec();
+    let credential = principal.device_id().to_vec();
+    writer
+        .call_with_current_time(Arc::clone(clock), move |database, now| {
+            database.change_passphrase(&uid, &credential, owned.as_database(now))?;
+            Ok(())
+        })
+        .map_err(map_passphrase_write_error)
+}
+
+pub(crate) fn passphrase_salt(
+    database: &foks_server_db::ReadSnapshot<'_>,
+    argument: &[u8],
+    principal: &Principal,
+) -> Result<Vec<u8>, RpcStatus> {
+    foks_rpc::arguments::decode_void(argument).map_err(bad_arguments)?;
+    authorize(database, principal)?;
+    let state = database
+        .passphrase(principal.uid())
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or(RpcStatus::PassphraseNotFound)?;
+    foks_snowpack::encode(&Value::Binary(state.salt.to_vec()))
+        .map_err(|_| RpcStatus::TransactionRetry)
+}
+
+pub(crate) fn next_passphrase_generation(
+    database: &foks_server_db::ReadSnapshot<'_>,
+    argument: &[u8],
+    principal: &Principal,
+) -> Result<Vec<u8>, RpcStatus> {
+    foks_rpc::arguments::decode_void(argument).map_err(bad_arguments)?;
+    authorize(database, principal)?;
+    let next = database
+        .passphrase(principal.uid())
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .map_or(Ok(1), |state| {
+            state
+                .generation
+                .checked_add(1)
+                .ok_or(RpcStatus::TransactionRetry)
+        })?;
+    foks_snowpack::encode(&Value::Unsigned(next)).map_err(|_| RpcStatus::TransactionRetry)
+}
+
+pub(crate) fn stretch_version(
+    database: &foks_server_db::ReadSnapshot<'_>,
+    argument: &[u8],
+    principal: &Principal,
+) -> Result<Vec<u8>, RpcStatus> {
+    foks_rpc::arguments::decode_void(argument).map_err(bad_arguments)?;
+    authorize(database, principal)?;
+    foks_snowpack::encode(&foks_proto::StretchVersion::V1.to_value())
+        .map_err(|_| RpcStatus::TransactionRetry)
+}
+
+pub(crate) fn ppe_parcel(
+    database: &foks_server_db::ReadSnapshot<'_>,
+    argument: &[u8],
+    principal: &Principal,
+) -> Result<Vec<u8>, RpcStatus> {
+    foks_rpc::arguments::decode_void(argument).map_err(bad_arguments)?;
+    authorize(database, principal)?;
+    let state = database
+        .passphrase(principal.uid())
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or(RpcStatus::PassphraseNotFound)?;
+    let stretch_version =
+        foks_proto::StretchVersion::from_value(&Value::Unsigned(state.stretch_version))
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+    let verify_key =
+        EntityId::from_bytes(state.verify_key).map_err(|_| RpcStatus::TransactionRetry)?;
+    foks_proto::PpeParcel {
+        skmwk_box: foks_proto::SecretBox::decode(&state.exact_skmwk_box)
+            .map_err(|_| RpcStatus::TransactionRetry)?,
+        generation: state.generation,
+        passphrase_box: foks_proto::PpePassphraseBox::decode(&state.exact_passphrase_box)
+            .map_err(|_| RpcStatus::TransactionRetry)?,
+        puk_box: state
+            .exact_puk_box
+            .as_deref()
+            .map(foks_proto::PpePukBox::decode)
+            .transpose()
+            .map_err(|_| RpcStatus::TransactionRetry)?,
+        salt: state.salt,
+        stretch_version,
+        verify_key,
+    }
+    .encoded()
+    .map_err(|_| RpcStatus::TransactionRetry)
+}
+
+fn authorize(
+    database: &foks_server_db::ReadSnapshot<'_>,
+    principal: &Principal,
+) -> Result<(), RpcStatus> {
+    database
+        .identity_for_active_device(principal.uid(), principal.device_id())
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or_else(permission_denied)?;
+    Ok(())
+}
+
+fn authorize_database(
+    database: &foks_server_db::ReadDatabase,
+    principal: &Principal,
+) -> Result<(), RpcStatus> {
+    database
+        .identity_for_active_device(principal.uid(), principal.device_id())
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or_else(permission_denied)?;
+    Ok(())
+}
+
+fn map_passphrase_write_error(error: crate::Error) -> RpcStatus {
+    match error {
+        crate::Error::AuthorizationChanged => permission_denied(),
+        crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
+        crate::Error::WriterQueue => RpcStatus::RateLimited,
+        crate::Error::Database(foks_server_db::Error::PassphraseNotFound) => {
+            RpcStatus::PassphraseNotFound
+        }
+        crate::Error::Database(foks_server_db::Error::PassphraseGeneration) => {
+            RpcStatus::BadArguments("passphrase generation is stale".to_owned())
+        }
+        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::RateLimited,
+        _ => RpcStatus::TransactionRetry,
+    }
+}
 
 pub(crate) fn host_config(
-    database: &foks_server_db::ReadDatabase,
+    database: &foks_server_db::ReadSnapshot<'_>,
     principal: &Principal,
 ) -> Result<Vec<u8>, RpcStatus> {
     database
         .identity_for_active_device(principal.uid(), principal.device_id())
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or_else(permission_denied)?;
+    let invite_code_regime = database
+        .invite_policy()
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .regime
+        .protocol_value();
     foks_proto::HostConfig {
         meter_users: false,
         meter_vhosts: false,
@@ -19,14 +195,14 @@ pub(crate) fn host_config(
         user_viewership: foks_proto::ViewershipMode::Open,
         team_viewership: foks_proto::ViewershipMode::Open,
         host_type: 4,
-        invite_code_regime: 2,
+        invite_code_regime,
     }
     .encoded()
     .map_err(|_| RpcStatus::TransactionRetry)
 }
 
 pub(crate) fn load_user_chain(
-    database: &foks_server_db::ReadDatabase,
+    database: &foks_server_db::ReadSnapshot<'_>,
     host: &EntityId,
     argument: &[u8],
     principal: &Principal,
@@ -205,7 +381,7 @@ pub(crate) fn load_user_chain(
 }
 
 pub(crate) fn puk_for_role(
-    database: &foks_server_db::ReadDatabase,
+    database: &foks_server_db::ReadSnapshot<'_>,
     argument: &[u8],
     principal: &Principal,
 ) -> Result<Vec<u8>, RpcStatus> {

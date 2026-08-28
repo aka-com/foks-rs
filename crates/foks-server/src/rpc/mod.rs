@@ -4,4 +4,4 @@ mod router;
 mod routes;
 
 pub use router::{route_call, Listener, RouteError, RoutedCall};
-pub use routes::{route, RouteSpec, ServiceSpec, ROUTES, SERVICES};
+pub use routes::{route, RouteId, RouteSpec, ServiceSpec, ROUTES, SERVICES};

@@ -90,6 +90,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             device_name: "Rust live compatibility client".to_owned(),
             invite_code: InviteCode::Empty,
             email: format!("{username}@example.invalid"),
+            passphrase: None,
         },
         SoftwareAccountSecrets::new(
             SecretSeed::new([0x31; 32]),

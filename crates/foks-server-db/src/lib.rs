@@ -11,10 +11,12 @@ mod error;
 mod host;
 mod host_rotation;
 mod identity;
+mod invites;
 mod kv;
 mod maintenance;
 mod merkle;
 mod names;
+mod passphrases;
 mod read;
 mod receipts;
 mod recovery;
@@ -29,7 +31,7 @@ pub use capabilities::TeamViewAuthoritySnapshot;
 pub use certificates::{StoredCertificate, StoredCredentialBinding};
 pub use clock::{Clock, SystemClock};
 pub use config::Config;
-pub use connection::{Database, Pragmas, ReadDatabase};
+pub use connection::{Database, Pragmas, ReadDatabase, ReadSnapshot};
 pub use error::{Error, Result};
 pub use host::{BootstrapService, HostBootstrap, StoredHostBootstrap};
 pub use host_rotation::{
@@ -37,12 +39,16 @@ pub use host_rotation::{
     HostRotationPublication,
 };
 pub use identity::{CommitOutcome, FailurePoint, IdentityMutation};
+pub use invites::{
+    InviteConsumption, InviteKind, InvitePolicy, InviteRegime, InviteSnapshot, IssuedInvite,
+};
 pub use kv::{
     KvDirectoryMutation, KvDirentMutation, KvFileChunkMutation, KvNodeMutation, KvRootMutation,
     StoredKvDirectory, StoredKvDirent, StoredKvFile, StoredKvFileChunk, StoredKvNode, StoredKvRoot,
 };
 pub use maintenance::{CheckpointReport, MaintenanceReport, StorageReport};
 pub use merkle::SqliteNodeReader;
+pub use passphrases::{PassphraseMutation, PassphraseSnapshot};
 pub use read::{
     identity_snapshot, root_snapshot, IdentitySnapshot, PukMaterialSnapshot, RootSnapshot,
     TeamLinkSnapshot, TeamMemberSnapshot, TeamSnapshot, UserAuthoritySnapshot,

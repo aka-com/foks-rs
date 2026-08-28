@@ -7,8 +7,10 @@
 #![forbid(unsafe_code)]
 
 mod backup;
+mod passphrase;
 
 pub use backup::*;
+pub use passphrase::*;
 
 use crypto_secretbox::{aead::Aead, KeyInit, XSalsa20Poly1305};
 use ed25519_dalek::{Signature as DalekSignature, Signer as _, SigningKey, VerifyingKey};
@@ -82,6 +84,10 @@ pub enum Error {
     KvPadding,
     #[error("KV authenticated encryption failed")]
     KvEncryption,
+    #[error("invalid FOKS passphrase input or state")]
+    Passphrase,
+    #[error("FOKS passphrase stretching failed")]
+    PassphraseStretch,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

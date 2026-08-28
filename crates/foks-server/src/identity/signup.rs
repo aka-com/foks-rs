@@ -31,8 +31,10 @@ pub(crate) fn validate_software_signup(
     current_root: &MerkleRoot,
     current_root_hash: [u8; 32],
 ) -> Result<ValidatedSignup> {
-    if request.invite_code != InviteCode::Empty
-        || request.email.len() > 320
+    if !matches!(
+        request.invite_code,
+        InviteCode::Empty | InviteCode::Standard(_) | InviteCode::MultiUse(_)
+    ) || request.email.len() > 320
         || request.reservation.sequence != 1
     {
         return Err(Error::Signup("unsupported signup policy"));

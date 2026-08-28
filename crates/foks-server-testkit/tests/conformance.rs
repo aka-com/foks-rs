@@ -6,6 +6,8 @@ mod kv_large;
 mod kv_locks;
 #[path = "conformance/kv_small.rs"]
 mod kv_small;
+#[path = "conformance/passphrases.rs"]
+mod passphrases;
 #[path = "conformance/probe_and_pin.rs"]
 mod probe_and_pin;
 #[path = "conformance/provisioning.rs"]
@@ -16,6 +18,8 @@ mod recovery;
 mod registry;
 #[path = "conformance/signup_and_user.rs"]
 mod signup_and_user;
+#[path = "conformance/signup_invites.rs"]
+mod signup_invites;
 #[path = "conformance/support.rs"]
 mod support;
 #[path = "conformance/team_create.rs"]

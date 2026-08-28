@@ -3,13 +3,15 @@ use foks_snowpack::{encode, Value};
 
 use super::{
     encode_text, encode_unsigned, frame, Error, Result, DEFAULT_MAX_FRAME_LENGTH, METHOD_RESPONSE,
-    RESPONSE_HEADER,
+    RESPONSE_HEADER, STATUS_BAD_PASSPHRASE_ERROR, STATUS_PASSPHRASE_NOT_FOUND_ERROR,
 };
 
 /// Application errors that a v1 server may place on the v0.1.9 wire.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RpcStatus {
     BadArguments(String),
+    BadInvite,
+    BadPassphrase,
     DeviceAlreadyProvisioned,
     Expired,
     Locked,
@@ -18,6 +20,7 @@ pub enum RpcStatus {
     NameInUse,
     NotFound(String),
     PermissionDenied(String),
+    PassphraseNotFound,
     QuotaExceeded,
     RateLimited,
     StaleCache(KvPathVersionVector),
@@ -44,6 +47,8 @@ impl RpcStatus {
     fn code(&self) -> u64 {
         match self {
             Self::BadArguments(_) => 1030,
+            Self::BadInvite => 1019,
+            Self::BadPassphrase => STATUS_BAD_PASSPHRASE_ERROR,
             Self::Expired => 1062,
             Self::DeviceAlreadyProvisioned => 1072,
             Self::Locked => 8014,
@@ -52,6 +57,7 @@ impl RpcStatus {
             Self::NameInUse => 1023,
             Self::NotFound(_) => 1049,
             Self::PermissionDenied(_) => 1013,
+            Self::PassphraseNotFound => STATUS_PASSPHRASE_NOT_FOUND_ERROR,
             Self::QuotaExceeded => 1060,
             Self::RateLimited => 1012,
             Self::StaleCache(_) => 8012,

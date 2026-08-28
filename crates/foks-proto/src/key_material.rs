@@ -427,7 +427,7 @@ fn seed_chain_box(value: &Value) -> Result<SeedChainBox> {
     })
 }
 
-fn hybrid_box(value: &Value) -> Result<HybridBox> {
+pub(crate) fn hybrid_box(value: &Value) -> Result<HybridBox> {
     let boxed = array(value, 2)?;
     expect_unsigned(&boxed[0], "box type", 2)?;
     let hybrid = array(variant(&boxed[1], "2")?, 2)?;
@@ -531,6 +531,14 @@ pub struct SecretBox {
 }
 
 impl SecretBox {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        crate::kv::secret_box(&decode(bytes)?)
+    }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&self.to_value())?)
+    }
+
     pub fn to_value(&self) -> Value {
         Value::Array(vec![
             Value::Unsigned(0),

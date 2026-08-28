@@ -1,6 +1,6 @@
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
-use crate::{error::sql_integer, Database, Error, ReadDatabase, Result};
+use crate::{error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result};
 
 type TeamTokenRow = (Vec<u8>, Vec<u8>, Vec<u8>, i64, i64, i64, i64, i64);
 type TeamTokenWithExpiryRow = (Vec<u8>, Vec<u8>, Vec<u8>, i64, i64, i64, i64, i64, i64);
@@ -141,11 +141,14 @@ impl Database {
             return Err(Error::ReceiptConflict);
         }
         ensure_current_authority(&transaction, &authority)?;
-        transaction.execute(
+        let updated = transaction.execute(
             "UPDATE team_view_challenges SET consumed = 1, activation_hash = ?2
              WHERE challenge_hash = ?1 AND consumed = 0",
             params![challenge_hash, activation_hash],
         )?;
+        if updated != 1 {
+            return Err(Error::Invalid("team-view challenge activation transition"));
+        }
         transaction.execute(
             "INSERT INTO team_view_tokens
              (token_hash, team_id, member_id, member_host_id, source_role_type,
@@ -304,11 +307,14 @@ impl Database {
             }
             return Err(Error::ReceiptConflict);
         }
-        transaction.execute(
+        let updated = transaction.execute(
             "UPDATE team_admin_tokens SET activation_hash = ?2
              WHERE token_hash = ?1 AND activation_hash IS NULL",
             params![token_hash, activation_hash],
         )?;
+        if updated != 1 {
+            return Err(Error::Invalid("team-admin token activation transition"));
+        }
         transaction.commit()?;
         Ok(Some(authority))
     }
@@ -340,61 +346,7 @@ impl ReadDatabase {
         token_hash: &[u8; 32],
         now: u64,
     ) -> Result<Option<TeamViewAuthoritySnapshot>> {
-        let token: Option<TeamTokenWithExpiryRow> = self
-            .connection
-            .query_row(
-                "SELECT team_id, member_id, member_host_id, source_role_type,
-                        source_visibility, source_generation, effective_role_type,
-                        effective_visibility, expires_at
-                 FROM team_view_tokens WHERE token_hash = ?1 AND expires_at > ?2",
-                params![token_hash, sql_integer(now)?],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                        row.get(7)?,
-                        row.get(8)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let Some((
-            team,
-            member,
-            host,
-            source_role,
-            source_visibility,
-            source_generation,
-            effective_role,
-            effective_visibility,
-            expires_at,
-        )) = token
-        else {
-            return Ok(None);
-        };
-        let current = authority_query(
-            &self.connection,
-            &team,
-            &member,
-            &host,
-            crate::error::unsigned(source_role)?,
-            source_visibility,
-            crate::error::unsigned(source_generation)?,
-        )?;
-        Ok(current
-            .filter(|authority| {
-                authority.effective_role_type == u64::try_from(effective_role).unwrap_or(u64::MAX)
-                    && authority.effective_visibility == effective_visibility
-            })
-            .map(|mut authority| {
-                authority.expires_at = u64::try_from(expires_at).ok();
-                authority
-            }))
+        resolve_team_view_token(&self.connection, token_hash, now)
     }
 
     pub fn team_admin_authority(
@@ -420,6 +372,85 @@ impl ReadDatabase {
     ) -> Result<Option<TeamAdminAuthoritySnapshot>> {
         admin_token_query(&self.connection, token_hash, now, true)
     }
+}
+
+impl ReadSnapshot<'_> {
+    pub fn resolve_team_view_token(
+        &self,
+        token_hash: &[u8; 32],
+        now: u64,
+    ) -> Result<Option<TeamViewAuthoritySnapshot>> {
+        resolve_team_view_token(self.connection(), token_hash, now)
+    }
+
+    pub fn resolve_team_admin_token(
+        &self,
+        token_hash: &[u8; 32],
+        now: u64,
+    ) -> Result<Option<TeamAdminAuthoritySnapshot>> {
+        admin_token_query(self.connection(), token_hash, now, true)
+    }
+}
+
+fn resolve_team_view_token(
+    connection: &rusqlite::Connection,
+    token_hash: &[u8; 32],
+    now: u64,
+) -> Result<Option<TeamViewAuthoritySnapshot>> {
+    let token: Option<TeamTokenWithExpiryRow> = connection
+        .query_row(
+            "SELECT team_id, member_id, member_host_id, source_role_type,
+                    source_visibility, source_generation, effective_role_type,
+                    effective_visibility, expires_at
+             FROM team_view_tokens WHERE token_hash = ?1 AND expires_at > ?2",
+            params![token_hash, sql_integer(now)?],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((
+        team,
+        member,
+        host,
+        source_role,
+        source_visibility,
+        source_generation,
+        effective_role,
+        effective_visibility,
+        expires_at,
+    )) = token
+    else {
+        return Ok(None);
+    };
+    let current = authority_query(
+        connection,
+        &team,
+        &member,
+        &host,
+        crate::error::unsigned(source_role)?,
+        source_visibility,
+        crate::error::unsigned(source_generation)?,
+    )?;
+    Ok(current
+        .filter(|authority| {
+            authority.effective_role_type == u64::try_from(effective_role).unwrap_or(u64::MAX)
+                && authority.effective_visibility == effective_visibility
+        })
+        .map(|mut authority| {
+            authority.expires_at = u64::try_from(expires_at).ok();
+            authority
+        }))
 }
 
 fn admin_authority_query(

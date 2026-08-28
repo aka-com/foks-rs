@@ -10,12 +10,12 @@
 use std::io::{Read, Write};
 
 use foks_proto::{
-    AdHocTeamCreateArgument, AddTeamMemberArgument, EntityId, KvDirectory, KvDirent,
+    AdHocTeamCreateArgument, AddTeamMemberArgument, EntityId, InviteCode, KvDirectory, KvDirent,
     KvLargeFileMetadata, KvNodeId, KvPathVersionVector, KvSmallFileBox, KvUploadChunk,
-    NamedTeamCreateArgument, ProvisionDeviceArgument, RegistrationChallenge,
-    RemoveTeamMemberArgument, RevokeDeviceArgument, Role, Signature, SoftwareSignupArgument,
-    TeamBearerToken, TeamBearerTokenChallenge, TeamEditResult, TeamNameReservation,
-    TeamRemovalKeyBox, TeamViewChallenge, TeamViewRequest,
+    NamedTeamCreateArgument, PassphraseUpdateArgument, ProvisionDeviceArgument,
+    RegistrationChallenge, RemoveTeamMemberArgument, RevokeDeviceArgument, Role, Signature,
+    SoftwareSignupArgument, TeamBearerToken, TeamBearerTokenChallenge, TeamEditResult,
+    TeamNameReservation, TeamRemovalKeyBox, TeamViewChallenge, TeamViewRequest,
 };
 use foks_snowpack::{decode, encode, Value};
 use thiserror::Error;
@@ -278,6 +278,50 @@ pub fn encode_signup_request_at(
     )
 }
 
+pub fn encode_check_invite_code_request(code: &InviteCode) -> Result<Vec<u8>> {
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_CHECK_INVITE_CODE_METHOD_POSITION,
+        &encode(&Value::Array(vec![code.to_value()]))?,
+        0,
+    )
+}
+
+pub fn encode_get_login_challenge_request(uid: &EntityId) -> Result<Vec<u8>> {
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_GET_LOGIN_CHALLENGE_METHOD_POSITION,
+        &encode(&Value::Array(vec![Value::Binary(uid.as_bytes().to_vec())]))?,
+        0,
+    )
+}
+
+pub fn encode_passphrase_login_request(
+    uid: &EntityId,
+    challenge: &RegistrationChallenge,
+    signature: &Signature,
+) -> Result<Vec<u8>> {
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_LOGIN_METHOD_POSITION,
+        &encode(&Value::Array(vec![
+            Value::Binary(uid.as_bytes().to_vec()),
+            decode(&challenge.encoded()?)?,
+            signature.to_value(),
+        ]))?,
+        0,
+    )
+}
+
+pub fn encode_registration_stretch_version_request() -> Result<Vec<u8>> {
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_STRETCH_VERSION_METHOD_POSITION,
+        &encode(&Value::Null)?,
+        0,
+    )
+}
+
 pub fn encode_get_client_cert_chain_request_at(
     uid: &[u8],
     device_id: &[u8],
@@ -349,6 +393,44 @@ pub fn encode_get_puk_for_role_request(role: Role, device_id: &[u8]) -> Result<V
         &argument,
         0,
     )
+}
+
+pub fn encode_set_passphrase_request(argument: &PassphraseUpdateArgument) -> Result<Vec<u8>> {
+    encode_call(
+        USER_PROTOCOL_ID,
+        USER_SET_PASSPHRASE_METHOD_POSITION,
+        &argument.encoded_set()?,
+        0,
+    )
+}
+
+pub fn encode_change_passphrase_request(argument: &PassphraseUpdateArgument) -> Result<Vec<u8>> {
+    encode_call(
+        USER_PROTOCOL_ID,
+        USER_CHANGE_PASSPHRASE_METHOD_POSITION,
+        &argument.encoded_change()?,
+        0,
+    )
+}
+
+fn encode_user_void_request(position: u64) -> Result<Vec<u8>> {
+    encode_call(USER_PROTOCOL_ID, position, &encode(&Value::Null)?, 0)
+}
+
+pub fn encode_get_passphrase_salt_request() -> Result<Vec<u8>> {
+    encode_user_void_request(USER_GET_SALT_METHOD_POSITION)
+}
+
+pub fn encode_next_passphrase_generation_request() -> Result<Vec<u8>> {
+    encode_user_void_request(USER_NEXT_PASSPHRASE_GENERATION_METHOD_POSITION)
+}
+
+pub fn encode_user_stretch_version_request() -> Result<Vec<u8>> {
+    encode_user_void_request(USER_STRETCH_VERSION_METHOD_POSITION)
+}
+
+pub fn encode_get_ppe_parcel_request() -> Result<Vec<u8>> {
+    encode_user_void_request(USER_GET_PPE_PARCEL_METHOD_POSITION)
 }
 
 pub fn encode_provision_device_request(argument: &ProvisionDeviceArgument<'_>) -> Result<Vec<u8>> {

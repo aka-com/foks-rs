@@ -25,7 +25,9 @@ periodic scheduling uses nonblocking acquisition and skips contended profiles.
 
 The implemented application slice covers:
 
-- probe/pin, software signup, resume, and user refresh;
+- probe/pin, software signup with optional standard or multi-use invites and
+  an optional PPE passphrase, resume, and user refresh;
+- authenticated passphrase set/change and public-challenge verification;
 - personal KV list/read/write/mkdir/remove with streamed file I/O;
 - durable refresh jobs and bounded retry state;
 - owner software-device provisioning and resume;
@@ -33,9 +35,20 @@ The implemented application slice covers:
 - named/ad-hoc team creation, resume, PTK-protected local records, team sync,
   and team-KV root creation.
 
-Mutation and recovery inputs that contain secrets stay in the direct
-application/CLI boundary. The local agent exposes only read, sync, and due-job
-operations.
+Most provisioning and recovery inputs that contain long-lived secrets stay in
+the direct application/CLI boundary. Software signup and the PPE passphrase
+lifecycle deliberately cross the private local-agent protocol: their framed
+buffers and secret strings are zeroized, and the agent generates or opens
+long-term credential material inside the checked session so the desktop never
+opens the credential store directly. Current-server profiles require an
+explicit `passphrases` capability; the hosted canary must not grant it until a
+scheduled canary actually exercises these mutations and reads.
+
+The crate is split by ownership boundary: `checkpoint` owns native credentials
+and rollback enrollment, `registry` owns profiles and compatibility policy,
+`account`, `team`, and `kv` own their respective workflows and protected
+records, and `runtime` owns process locks and scheduled execution. These are
+internal modules; the crate's existing public API remains the frontend seam.
 
 Tests use temporary state roots and loopback fixtures. No API infers an AKA or
 user-data path.

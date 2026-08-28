@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::{fs, path::PathBuf};
 
 use foks_agent_client::AgentClient;
-use foks_agent_proto::{Operation, ResponseResult};
+use foks_agent_proto::{Operation, ResponseResult, SecretString};
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,6 +17,13 @@ pub enum Screen {
     PersonalKv,
     Teams,
     Jobs,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PassphraseAction {
+    Set,
+    Change,
+    Verify,
 }
 
 impl Screen {
@@ -149,6 +156,84 @@ impl DesktopModel {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_account_operation(
+        &self,
+        alias: &str,
+        username: &str,
+        device_name: &str,
+        email: &str,
+        invite: &str,
+        passphrase: Option<SecretString>,
+        confirmation: Option<SecretString>,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        if alias.trim().is_empty() || username.trim().is_empty() || device_name.trim().is_empty() {
+            return Err("alias, username, and device name are required");
+        }
+        let passphrase = confirmed_optional_passphrase(passphrase, confirmation)?;
+        Ok(Operation::CreateAccount {
+            profile,
+            alias: alias.to_owned(),
+            username: username.to_owned(),
+            device_name: device_name.to_owned(),
+            email: email.to_owned(),
+            invite: invite.to_owned(),
+            passphrase,
+        })
+    }
+
+    pub fn passphrase_operation(
+        &self,
+        action: PassphraseAction,
+        passphrase: SecretString,
+        confirmation: Option<SecretString>,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        let alias = self
+            .selected_account
+            .clone()
+            .ok_or("select an account first")?;
+        if passphrase.expose().is_empty() || passphrase.expose().len() > 1024 {
+            return Err("passphrase must contain 1 to 1024 bytes");
+        }
+        match action {
+            PassphraseAction::Set | PassphraseAction::Change => {
+                let confirmation = confirmation.ok_or("confirm the passphrase")?;
+                if passphrase.expose() != confirmation.expose() {
+                    return Err("passphrase confirmation does not match");
+                }
+            }
+            PassphraseAction::Verify if confirmation.is_some() => {
+                return Err("verification does not take a confirmation");
+            }
+            PassphraseAction::Verify => {}
+        }
+        Ok(match action {
+            PassphraseAction::Set => Operation::SetPassphrase {
+                profile,
+                alias,
+                passphrase,
+            },
+            PassphraseAction::Change => Operation::ChangePassphrase {
+                profile,
+                alias,
+                passphrase,
+            },
+            PassphraseAction::Verify => Operation::VerifyPassphrase {
+                profile,
+                alias,
+                passphrase,
+            },
+        })
+    }
+
     pub fn accept(&mut self, result: Result<Value, String>) {
         match result {
             Ok(value) => {
@@ -175,6 +260,30 @@ impl DesktopModel {
                 self.error = Some(error);
             }
         }
+    }
+}
+
+fn confirmed_optional_passphrase(
+    passphrase: Option<SecretString>,
+    confirmation: Option<SecretString>,
+) -> Result<Option<SecretString>, &'static str> {
+    match (passphrase, confirmation) {
+        (None, None) => Ok(None),
+        (Some(passphrase), Some(confirmation))
+            if passphrase.expose().is_empty() && confirmation.expose().is_empty() =>
+        {
+            Ok(None)
+        }
+        (Some(passphrase), Some(confirmation)) => {
+            if passphrase.expose().len() > 1024 {
+                return Err("passphrase exceeds 1024 bytes");
+            }
+            if passphrase.expose() != confirmation.expose() {
+                return Err("passphrase confirmation does not match");
+            }
+            Ok(Some(passphrase))
+        }
+        _ => Err("provide and confirm the signup passphrase"),
     }
 }
 
@@ -287,6 +396,137 @@ mod tests {
         model.navigate(Screen::Accounts);
         model.accept(Ok(serde_json::json!(["personal"])));
         assert_eq!(model.selected_account(), Some("personal"));
+    }
+
+    #[test]
+    fn account_creation_is_bound_to_the_selected_profile_and_invite() {
+        let transport = Arc::new(MockTransport {
+            operations: Mutex::new(Vec::new()),
+        });
+        let mut model = DesktopModel::new(transport);
+        assert_eq!(
+            model.create_account_operation("personal", "rae", "laptop", "", "invite", None, None,),
+            Err("select a profile first")
+        );
+        model.select_profile("local");
+        assert_eq!(
+            model
+                .create_account_operation(
+                    "personal",
+                    "rae",
+                    "laptop",
+                    "rae@example.test",
+                    "small-team+launch",
+                    None,
+                    None,
+                )
+                .unwrap(),
+            Operation::CreateAccount {
+                profile: "local".to_owned(),
+                alias: "personal".to_owned(),
+                username: "rae".to_owned(),
+                device_name: "laptop".to_owned(),
+                email: "rae@example.test".to_owned(),
+                invite: "small-team+launch".to_owned(),
+                passphrase: None,
+            }
+        );
+    }
+
+    #[test]
+    fn account_and_security_forms_bind_passphrase_operations_to_the_selection() {
+        let transport = Arc::new(MockTransport {
+            operations: Mutex::new(Vec::new()),
+        });
+        let mut model = DesktopModel::new(transport);
+        model.select_profile("local");
+
+        assert_eq!(
+            model
+                .create_account_operation(
+                    "personal",
+                    "rae",
+                    "laptop",
+                    "",
+                    "s.invite",
+                    Some(SecretString::new("signup passphrase")),
+                    Some(SecretString::new("signup passphrase")),
+                )
+                .unwrap(),
+            Operation::CreateAccount {
+                profile: "local".to_owned(),
+                alias: "personal".to_owned(),
+                username: "rae".to_owned(),
+                device_name: "laptop".to_owned(),
+                email: String::new(),
+                invite: "s.invite".to_owned(),
+                passphrase: Some(SecretString::new("signup passphrase")),
+            }
+        );
+        assert_eq!(
+            model.create_account_operation(
+                "personal",
+                "rae",
+                "laptop",
+                "",
+                "",
+                Some(SecretString::new("one")),
+                Some(SecretString::new("two")),
+            ),
+            Err("passphrase confirmation does not match")
+        );
+
+        model.select_account("personal");
+        assert_eq!(
+            model
+                .passphrase_operation(
+                    PassphraseAction::Set,
+                    SecretString::new("first passphrase"),
+                    Some(SecretString::new("first passphrase")),
+                )
+                .unwrap(),
+            Operation::SetPassphrase {
+                profile: "local".to_owned(),
+                alias: "personal".to_owned(),
+                passphrase: SecretString::new("first passphrase"),
+            }
+        );
+        assert_eq!(
+            model
+                .passphrase_operation(
+                    PassphraseAction::Change,
+                    SecretString::new("second passphrase"),
+                    Some(SecretString::new("second passphrase")),
+                )
+                .unwrap(),
+            Operation::ChangePassphrase {
+                profile: "local".to_owned(),
+                alias: "personal".to_owned(),
+                passphrase: SecretString::new("second passphrase"),
+            }
+        );
+        assert_eq!(
+            model
+                .passphrase_operation(
+                    PassphraseAction::Verify,
+                    SecretString::new("second passphrase"),
+                    None,
+                )
+                .unwrap(),
+            Operation::VerifyPassphrase {
+                profile: "local".to_owned(),
+                alias: "personal".to_owned(),
+                passphrase: SecretString::new("second passphrase"),
+            }
+        );
+        assert_eq!(
+            model.passphrase_operation(
+                PassphraseAction::Verify,
+                SecretString::new("second passphrase"),
+                Some(SecretString::new("second passphrase")),
+            ),
+            Err("verification does not take a confirmation")
+        );
     }
 
     #[test]

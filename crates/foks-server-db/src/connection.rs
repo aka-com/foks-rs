@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, Transaction};
 
 use crate::{schema, Config, Result};
 
@@ -12,6 +12,22 @@ pub struct Database {
 
 pub struct ReadDatabase {
     pub(crate) connection: Connection,
+}
+
+/// A short-lived, request-scoped view of one SQLite WAL snapshot.
+///
+/// Dropping the value ends its read-only transaction. Callers should not hold
+/// it across network I/O or other potentially unbounded work because an open
+/// reader can delay WAL checkpoints.
+#[must_use = "repository reads are pinned only while the snapshot is alive"]
+pub struct ReadSnapshot<'connection> {
+    transaction: Transaction<'connection>,
+}
+
+impl ReadSnapshot<'_> {
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.transaction
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -85,6 +101,13 @@ impl ReadDatabase {
         Ok(result == "ok")
     }
 
+    /// Pins subsequent repository reads to one database state.
+    pub fn snapshot(&self) -> Result<ReadSnapshot<'_>> {
+        Ok(ReadSnapshot {
+            transaction: self.connection.unchecked_transaction()?,
+        })
+    }
+
     pub fn online_backup(&self, destination: impl AsRef<Path>) -> Result<()> {
         online_backup(&self.connection, destination.as_ref(), || false)
     }
@@ -152,6 +175,11 @@ fn configure(connection: &Connection, config: &Config) -> Result<()> {
         || config.maximum_boxes_per_mutation == 0
         || config.maximum_active_recovery_challenges == 0
         || config.maximum_recovery_challenges_per_entity == 0
+        || config.maximum_passphrase_generations == 0
+        || config.maximum_active_passphrase_challenges == 0
+        || config.maximum_passphrase_challenges_per_user == 0
+        || config.maximum_bad_passphrase_attempts == 0
+        || config.bad_passphrase_window.is_zero()
         || config.maximum_team_view_capabilities_per_pair == 0
         || config.maximum_active_team_view_capabilities == 0
     {

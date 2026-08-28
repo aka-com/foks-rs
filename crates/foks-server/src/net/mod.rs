@@ -1,5 +1,5 @@
 mod listener;
-mod session;
+pub(crate) mod session;
 
 pub(crate) use listener::bind_addresses;
 pub use listener::{RunningServer, ServerAddresses};

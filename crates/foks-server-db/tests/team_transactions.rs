@@ -185,6 +185,36 @@ fn every_team_publication_boundary_is_atomic() {
                 1_000_006,
             )
             .unwrap();
+        {
+            let sabotage = rusqlite::Connection::open(&fixture.path).unwrap();
+            sabotage
+                .execute_batch(
+                    "CREATE TRIGGER ignore_team_view_activation
+                     BEFORE UPDATE OF consumed ON team_view_challenges
+                     WHEN OLD.consumed = 0
+                     BEGIN SELECT RAISE(IGNORE); END;",
+                )
+                .unwrap();
+            assert!(matches!(
+                fixture
+                    .database
+                    .activate_team_view_challenge(&[0x86; 32], &[0x89; 32], 1_000_009),
+                Err(foks_server_db::Error::Invalid(
+                    "team-view challenge activation transition"
+                ))
+            ));
+            let stored: i64 = sabotage
+                .query_row(
+                    "SELECT count(*) FROM team_view_tokens WHERE token_hash = ?1",
+                    [[0x87; 32]],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(stored, 0);
+            sabotage
+                .execute_batch("DROP TRIGGER ignore_team_view_activation")
+                .unwrap();
+        }
         assert!(fixture
             .database
             .activate_team_view_challenge(&[0x86; 32], &[0x89; 32], 1_000_010)
@@ -227,6 +257,33 @@ fn every_team_publication_boundary_is_atomic() {
         fixture
             .database
             .issue_team_admin_token(&[0x90; 32], &admin, 2_000_100, 1_000_008)
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER ignore_team_admin_activation
+                 BEFORE UPDATE OF activation_hash ON team_admin_tokens
+                 WHEN OLD.activation_hash IS NULL
+                 BEGIN SELECT RAISE(IGNORE); END;",
+            )
+            .unwrap();
+        assert!(matches!(
+            fixture
+                .database
+                .activate_team_admin_token(&[0x90; 32], &[0x91; 32], 1_000_009),
+            Err(foks_server_db::Error::Invalid(
+                "team-admin token activation transition"
+            ))
+        ));
+        let activation: Option<Vec<u8>> = connection
+            .query_row(
+                "SELECT activation_hash FROM team_admin_tokens WHERE token_hash = ?1",
+                [[0x90; 32]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(activation, None);
+        connection
+            .execute_batch("DROP TRIGGER ignore_team_admin_activation")
             .unwrap();
         assert!(reader
             .resolve_team_admin_token(&[0x90; 32], 1_000_009)

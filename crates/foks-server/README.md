@@ -1,25 +1,51 @@
 # foks-server
 
-Standalone, single-host FOKS v0.1.9 personal and small-team server backed by a
-dedicated SQLite database. It creates encrypted named host keys, constructs and
-verifies a fresh genesis hostchain/public zone/Merkle root, and binds separate
-probe, public-service, and authenticated mTLS listeners.
+Standalone, single-host server implementing a deliberately bounded,
+v0.1.9-compatible personal and small-team slice backed by a dedicated SQLite
+database. It creates encrypted named host keys, constructs and verifies a fresh
+genesis hostchain/public zone/Merkle root, and binds separate probe,
+public-service, and authenticated mTLS listeners.
 
-The implemented v1 slice supports username reservation, software-device
+The implemented v1 slice supports username reservation, optional or required
+signup invites (standard single-use and named multi-use), software-device
 signup, device certificate issuance, current and historical Merkle roots,
 authenticated user-chain and PUK reads, device provisioning/revocation,
-backup-key enrollment and recovery, named and ad-hoc team creation, local team
+backup-key enrollment and recovery, passphrase enrollment/change and public
+challenge login, atomic PPE reboxing during owner-PUK rotation, named and
+ad-hoc team creation, local team
 membership edits and removals, PTK rotation/history, removal-key retrieval,
 and personal/team KV. KV covers roots, directories, optimistic dirent writes,
 small files, symlinks, chunked files, pagination, cache checks, and expiring
 locks. Public-client tests exercise these paths without server test hooks.
 
-Federation, remote users/teams, invites, passphrase login, YubiKey enrollment,
-team nesting, team-member/guest services, realtime services, and cross-host
-operation are intentionally unsupported. Ad-hoc teams are immutable after
-creation. This is not a drop-in replacement for the full Go server. The
-executable contract is [protocol-v1.toml](protocol-v1.toml), and tests require
-it to match the registered route table exactly.
+Federation, remote users/teams, passphrase-only device provisioning/recovery,
+YubiKey enrollment, team nesting, team-member/guest services, realtime
+services, and cross-host operation are intentionally unsupported. Ad-hoc teams
+are immutable after creation. This v0.1.9-compatible slice is not a replacement
+for the full Go server. The executable contract is
+[protocol-v1.toml](protocol-v1.toml), and tests require it to match the
+registered route table exactly.
+
+Invite policy and issuance are offline operator operations. Codes are checked
+through the v0.1.9 `Reg.checkInviteCode` route and consumed in the same SQLite
+transaction that publishes the identity, so a failed signup cannot burn a
+code and concurrent redemption cannot exceed its use limit. SQLite stores a
+domain-separated code hash, policy, expiry/use metadata, and the resulting UID
+binding, never the plaintext code. Human-chosen multi-use codes remain
+susceptible to offline guessing after database disclosure and should be
+generated with adequate entropy. The operator CLI issues, lists, disables, and
+changes policy with `foks-server invite`; stop the serving process first.
+
+Passphrases use the v0.1.9 V1 Argon2id parameters and PPE wire format. The
+server stores only the public verification key, salt, and encrypted SKMWK/PPE
+boxes; the raw passphrase stays in the client. Signup can establish generation
+1, an active ordinary device can set or change it, and `Reg.login` consumes a
+host-bound, one-time challenge before returning encrypted PPE history. An
+owner-PUK rotation must atomically append a reboxed PPE generation whenever a
+passphrase exists. Generic user-settings links sent by Go clients are accepted
+as interoperability inputs but are not projected because this slice does not
+implement that separate chain. Public passphrase login does not by itself
+provision a device or expose the upstream interactive recovery workflow.
 
 Protocol IDs, method positions, status codes, and service numbers are extracted
 from the checksum-pinned go-foks v0.1.9 module into
@@ -27,7 +53,9 @@ from the checksum-pinned go-foks v0.1.9 module into
 handwritten input is [`protocol/policy-v1.toml`](protocol/policy-v1.toml), which
 owns listeners, authentication, support decisions, adapters, bounds, and test
 coverage. Checked Rust constants, routes, and `protocol-v1.toml` are generated
-from that merge. Normal builds need no Go toolchain or upstream source.
+from that merge. Each generated route also has a typed ID; family handlers and
+KV dispatch match those IDs exhaustively instead of comparing method strings.
+Normal builds need no Go toolchain or upstream source.
 
 Key-at-rest and public hostchain rotation have different failure and
 compatibility models. See [KEY_ROTATION.md](KEY_ROTATION.md) before creating a
@@ -181,6 +209,9 @@ backup credentials; each team to 64 members, 16 PTK role/visibility bands,
 4,096 links, and 1,024 boxes of each class per mutation; the installation to
 4,096 teams and pending team-name reservations; and team view/admin
 capabilities to 32 per member/team pair and 16,384 per class globally.
+Passphrase history is limited to 4,096 generations. Login state is limited to
+4,096 live challenges globally and eight per UID; five bad proofs within the
+default ten-minute window temporarily rate-limit that UID.
 
 Namespace accounting charges encoded bytes actually stored, including upload
 envelopes and ciphertext duplication. Tombstone/history versions remain
@@ -224,11 +255,12 @@ uses a read-only source connection. Restore accepts only a complete manifest,
 integrity-checked database, and exact declared key set, and requires empty
 destination paths.
 
-The SQLite snapshot includes names, recovery credentials, user/team chains,
-current projections, encrypted PUK/PTK histories, capability policy state, and
-all user/team KV namespaces. Usable bearer tokens are never stored; only their
-hashes are present and restored tokens still undergo foreground expiry and
-current-authority checks.
+The SQLite snapshot includes names, invite policy/hash/redemption metadata,
+passphrase salts and encrypted PPE history, recovery credentials, user/team
+chains, current projections, encrypted PUK/PTK histories, capability policy
+state, and all user/team KV namespaces. Usable bearer tokens are never stored;
+only their hashes are present and restored tokens still undergo foreground
+expiry and current-authority checks.
 
 For restore, stop the process, retain the damaged directory, place the backed-up
 database and key directory at new explicit paths, supply the matching operator

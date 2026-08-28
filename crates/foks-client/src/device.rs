@@ -8,10 +8,10 @@ use super::{
     AuthenticatedUserOutcome, BTreeSet, DeviceCredential, DeviceLabel,
     DeviceLabelNameAndCommitmentKey, DevicePublicMaterial, DeviceType, Duration, EntityId, Error,
     FoksClient, HardStateStore, MutationCoordinator, MutationDraft, MutationKind,
-    MutationOperation, MutationState, PinnedHost, ProtectedMutationStore, ProvisionDeviceArgument,
-    PukBoxRandomness, PukRotation, Result, RevokeDeviceArgument, Role, SecretSeed,
-    SoftwareProvisionInput, SoftwarePukBoxInput, UserMutationBase, VerifiedUserState, Zeroizing,
-    ENTITY_PUK_VERIFY,
+    MutationOperation, MutationState, PassphraseUpdateArgument, PinnedHost, ProtectedMutationStore,
+    ProvisionDeviceArgument, PukBoxRandomness, PukRotation, Result, RevokeDeviceArgument, Role,
+    SecretSeed, SoftwareProvisionInput, SoftwarePukBoxInput, UserMutationBase, VerifiedUserState,
+    Zeroizing, ENTITY_PUK_VERIFY,
 };
 
 const USER_MUTATION_REQUEST_HASH_TYPE_ID: u64 = 0xc530_72ae_e24c_91d4;
@@ -59,7 +59,8 @@ pub struct UserPukRotation {
 }
 
 /// Explicit caller assertion required before rotating an owner PUK without a
-/// passphrase annex. Construct it only when the account has no passphrase.
+/// passphrase annex. The client still confirms the absence with the server so
+/// a stale assertion cannot orphan configured passphrase recovery material.
 pub struct NoPassphraseConfigured;
 
 impl FoksClient {
@@ -321,11 +322,12 @@ impl FoksClient {
                 "revocation PUK rotation set is incomplete",
             ));
         }
-        if expected_roles.contains(&Role::OWNER) && no_passphrase.is_none() {
-            return Err(Error::AccountRequest(
-                "owner PUK rotation requires confirmation that no passphrase is configured",
-            ));
-        }
+        let passphrase_annex = self.owner_passphrase_rotation_annex(
+            host,
+            signer_credential,
+            rotations,
+            no_passphrase.is_some(),
+        )?;
         let next_tree_location = random_bytes()?;
         let rotation_refs = rotations
             .iter()
@@ -431,6 +433,7 @@ impl FoksClient {
             seed_chain: &seed_chain,
             next_tree_location,
             hepks: &hepks,
+            passphrase: passphrase_annex.as_ref(),
         })?);
         let operation_id = self.prepare_user_mutation(
             host,
@@ -468,6 +471,10 @@ impl FoksClient {
                     "rotated PUK does not match the verified user transition",
                 ));
             }
+        }
+        if let Some(expected) = &passphrase_annex {
+            let stored = self.fetch_ppe_parcel(host, signer_credential)?;
+            crate::passphrase::validate_committed_update(&stored, expected)?;
         }
         MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
         Ok(updated)
@@ -517,11 +524,6 @@ impl FoksClient {
                 "PUK rotation must be a complete ordered role prefix",
             ));
         }
-        if expected_roles.contains(&Role::OWNER) && no_passphrase.is_none() {
-            return Err(Error::AccountRequest(
-                "owner PUK rotation requires confirmation that no passphrase is configured",
-            ));
-        }
         let mut new_verify_keys = BTreeSet::new();
         for rotation in rotations {
             let current =
@@ -542,6 +544,12 @@ impl FoksClient {
                 return Err(Error::AccountRequest("invalid replacement PUK material"));
             }
         }
+        let passphrase_annex = self.owner_passphrase_rotation_annex(
+            host,
+            signer_credential,
+            rotations,
+            no_passphrase.is_some(),
+        )?;
 
         let next_tree_location = random_bytes()?;
         let rotation_refs = rotations
@@ -647,6 +655,7 @@ impl FoksClient {
             seed_chain: &seed_chain,
             next_tree_location,
             hepks: &hepks,
+            passphrase: passphrase_annex.as_ref(),
         })?);
         let operation_id = self.prepare_user_mutation(
             host,
@@ -683,8 +692,61 @@ impl FoksClient {
             Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
             Err(error) => return Err(error),
         };
+        if let Some(expected) = &passphrase_annex {
+            let stored = self.fetch_ppe_parcel(host, signer_credential)?;
+            crate::passphrase::validate_committed_update(&stored, expected)?;
+        }
         MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
         Ok(updated)
+    }
+
+    fn owner_passphrase_rotation_annex(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        rotations: &[UserPukRotation],
+        confirmed_no_passphrase: bool,
+    ) -> Result<Option<PassphraseUpdateArgument>> {
+        let Some(owner) = rotations
+            .iter()
+            .find(|rotation| rotation.role == Role::OWNER)
+        else {
+            return Ok(None);
+        };
+        let parcel = match self.fetch_ppe_parcel(host, credential) {
+            Ok(_) if confirmed_no_passphrase => {
+                return Err(Error::AccountRequest(
+                    "passphrase is configured; omit NoPassphraseConfigured so its PPE history is rotated",
+                ));
+            }
+            Ok(parcel) => parcel,
+            Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_PASSPHRASE_NOT_FOUND_ERROR,
+                ..
+            })) if confirmed_no_passphrase => return Ok(None),
+            Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_PASSPHRASE_NOT_FOUND_ERROR,
+                ..
+            })) => {
+                return Err(Error::AccountRequest(
+                    "account has no passphrase; pass NoPassphraseConfigured for owner PUK rotation",
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        let owner_generation = owner
+            .previous_generation
+            .checked_add(1)
+            .ok_or(Error::AccountRequest("PUK generation overflow"))?;
+        let update = foks_crypto::rotate_passphrase_for_puk(
+            &credential.uid,
+            host.host_id(),
+            &parcel,
+            &owner.previous_seed,
+            &owner.new_seed,
+            owner_generation,
+        )?;
+        Ok(Some(update.argument()))
     }
 
     /// Reconciles an interrupted software-device provision. A request is sent

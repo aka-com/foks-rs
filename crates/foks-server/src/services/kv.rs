@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::auth::Principal;
+use crate::rpc::RouteId;
 use crate::WriterHandle;
 
 pub(crate) enum Response {
@@ -27,50 +28,136 @@ struct KvAuthority {
     clock: Arc<dyn foks_server_db::Clock>,
 }
 
+trait KvContextRead {
+    fn active_credential_owner(
+        &self,
+        uid: &[u8],
+        credential: &[u8],
+    ) -> foks_server_db::Result<Option<Vec<u8>>>;
+    fn user_authority(
+        &self,
+        uid: &[u8],
+    ) -> foks_server_db::Result<Option<foks_server_db::UserAuthoritySnapshot>>;
+    fn resolve_team_view_token(
+        &self,
+        token_hash: &[u8; 32],
+        now: u64,
+    ) -> foks_server_db::Result<Option<foks_server_db::TeamViewAuthoritySnapshot>>;
+    fn team(&self, team_id: &[u8]) -> foks_server_db::Result<Option<foks_server_db::TeamSnapshot>>;
+    fn kv_version_vector(
+        &self,
+        uid: &[u8],
+    ) -> foks_server_db::Result<Option<foks_proto::KvPathVersionVector>>;
+}
+
+macro_rules! impl_kv_read {
+    ($reader:ty) => {
+        impl KvContextRead for $reader {
+            fn active_credential_owner(
+                &self,
+                uid: &[u8],
+                credential: &[u8],
+            ) -> foks_server_db::Result<Option<Vec<u8>>> {
+                self.active_credential_owner(uid, credential)
+            }
+
+            fn user_authority(
+                &self,
+                uid: &[u8],
+            ) -> foks_server_db::Result<Option<foks_server_db::UserAuthoritySnapshot>> {
+                self.user_authority(uid)
+            }
+
+            fn resolve_team_view_token(
+                &self,
+                token_hash: &[u8; 32],
+                now: u64,
+            ) -> foks_server_db::Result<Option<foks_server_db::TeamViewAuthoritySnapshot>> {
+                self.resolve_team_view_token(token_hash, now)
+            }
+
+            fn team(
+                &self,
+                team_id: &[u8],
+            ) -> foks_server_db::Result<Option<foks_server_db::TeamSnapshot>> {
+                self.team(team_id)
+            }
+
+            fn kv_version_vector(
+                &self,
+                uid: &[u8],
+            ) -> foks_server_db::Result<Option<foks_proto::KvPathVersionVector>> {
+                self.kv_version_vector(uid)
+            }
+        }
+    };
+}
+
+impl_kv_read!(foks_server_db::ReadDatabase);
+impl_kv_read!(foks_server_db::ReadSnapshot<'_>);
+
 pub(crate) fn dispatch(
-    method: &str,
+    route: RouteId,
     argument: &[u8],
     principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
     clock: &Arc<dyn foks_server_db::Clock>,
 ) -> Result<Response, RpcStatus> {
+    if matches!(
+        route,
+        RouteId::KvStoreGetRoot
+            | RouteId::KvStoreGetDir
+            | RouteId::KvStoreGetNode
+            | RouteId::KvStoreGetEncryptedChunk
+            | RouteId::KvStoreList
+            | RouteId::KvStoreCacheCheck
+    ) {
+        let snapshot = reader.snapshot().map_err(|_| RpcStatus::TransactionRetry)?;
+        let authority = resolve_authority(argument, principal, &snapshot, clock)?;
+        return match route {
+            RouteId::KvStoreGetRoot => get_root(argument, &snapshot, &authority),
+            RouteId::KvStoreGetDir => get_directory(argument, &snapshot, &authority),
+            RouteId::KvStoreGetNode => get_node(argument, &snapshot, &authority),
+            RouteId::KvStoreGetEncryptedChunk => {
+                get_encrypted_chunk(argument, &snapshot, &authority)
+            }
+            RouteId::KvStoreList => list(argument, &snapshot, &authority),
+            RouteId::KvStoreCacheCheck => cache_check(argument, &snapshot, &authority),
+            _ => unreachable!("read-only KV routes were matched above"),
+        };
+    }
     let authority = resolve_authority(argument, principal, reader, clock)?;
-    match method {
-        "getRoot" => get_root(argument, reader, &authority),
-        "mkdir" => mkdir(argument, principal, reader, writer, &authority),
-        "fileUploadInit" => {
-            file_upload_init(argument, principal, writer, clock.as_ref(), &authority)
+    match route {
+        RouteId::KvStoreMkdir => mkdir(argument, principal, reader, writer, &authority),
+        RouteId::KvStoreFileUploadInit => file_upload_init(argument, principal, writer, &authority),
+        RouteId::KvStoreFileUploadChunk => {
+            file_upload_chunk(argument, principal, writer, &authority)
         }
-        "fileUploadChunk" => {
-            file_upload_chunk(argument, principal, writer, clock.as_ref(), &authority)
-        }
-        "putSmallFileOrSymlink" => {
+        RouteId::KvStorePutSmallFileOrSymlink => {
             put_small_file_or_symlink(argument, principal, reader, writer, &authority)
         }
-        "put" => put(argument, principal, reader, writer, &authority),
-        "putRoot" => put_root(argument, principal, reader, writer, &authority),
-        "getDir" => get_directory(argument, reader, &authority),
-        "getNode" => get_node(argument, reader, &authority),
-        "getEncryptedChunk" => get_encrypted_chunk(argument, reader, &authority),
-        "list" => list(argument, reader, &authority),
-        "cacheCheck" => cache_check(argument, reader, &authority),
-        "lockAcquire" => lock_acquire(
-            argument,
-            principal,
-            reader,
-            writer,
-            clock.as_ref(),
-            &authority,
-        ),
-        "lockRelease" => lock_release(argument, principal, reader, writer, &authority),
+        RouteId::KvStorePut => put(argument, principal, reader, writer, &authority),
+        RouteId::KvStorePutRoot => put_root(argument, principal, reader, writer, &authority),
+        RouteId::KvStoreLockAcquire => {
+            lock_acquire(argument, principal, reader, writer, &authority)
+        }
+        RouteId::KvStoreLockRelease => {
+            lock_release(argument, principal, reader, writer, &authority)
+        }
+        RouteId::KvStoreGetRoot
+        | RouteId::KvStoreGetDir
+        | RouteId::KvStoreGetNode
+        | RouteId::KvStoreGetEncryptedChunk
+        | RouteId::KvStoreList
+        | RouteId::KvStoreCacheCheck => unreachable!("read-only KV routes returned above"),
         _ => Err(RpcStatus::Unsupported),
     }
 }
 
 fn get_root(
     argument: &[u8],
-    reader: &foks_server_db::ReadDatabase,
+    reader: &foks_server_db::ReadSnapshot<'_>,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let _fields = fields(argument, 1)?;
@@ -120,8 +207,8 @@ fn mkdir(
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
     writer
-        .call(move |database| {
-            if !kv_write_is_current(database, &write_authority, &device)? {
+        .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
+            if !kv_write_is_current(database, &write_authority, &device, now)? {
                 return Err(crate::Error::AuthorizationChanged);
             }
             database.put_kv_directory_with_precondition(
@@ -162,8 +249,8 @@ fn put_root(
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
     writer
-        .call(move |database| {
-            if !kv_write_is_current(database, &write_authority, &device)? {
+        .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
+            if !kv_write_is_current(database, &write_authority, &device, now)? {
                 return Err(crate::Error::AuthorizationChanged);
             }
             database.put_kv_root(&foks_server_db::KvRootMutation {
@@ -186,7 +273,6 @@ fn file_upload_init(
     argument: &[u8],
     principal: &Principal,
     writer: &WriterHandle,
-    clock: &dyn foks_server_db::Clock,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 4)?;
@@ -203,7 +289,6 @@ fn file_upload_init(
         file_id,
         principal,
         writer,
-        clock,
         authority,
     )
 }
@@ -212,7 +297,6 @@ fn file_upload_chunk(
     argument: &[u8],
     principal: &Principal,
     writer: &WriterHandle,
-    clock: &dyn foks_server_db::Clock,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 3)?;
@@ -222,7 +306,6 @@ fn file_upload_chunk(
         fixed_16(&fields[1], "KV file ID")?,
         principal,
         writer,
-        clock,
         authority,
     )
 }
@@ -233,7 +316,6 @@ fn put_file_chunk(
     file_id: [u8; 16],
     principal: &Principal,
     writer: &WriterHandle,
-    clock: &dyn foks_server_db::Clock,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let exact_chunk = encode(value).map_err(bad_arguments)?;
@@ -245,15 +327,12 @@ fn put_file_chunk(
         .final_upload
         .as_ref()
         .map(|final_upload| final_upload.size);
-    let now = clock
-        .now_micros()
-        .map_err(|_| RpcStatus::TransactionRetry)?;
     let uid = authority.party.clone();
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
     writer
-        .call(move |database| {
-            if !kv_write_is_current(database, &write_authority, &device)? {
+        .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
+            if !kv_write_is_current(database, &write_authority, &device, now)? {
                 return Err(crate::Error::AuthorizationChanged);
             }
             database.put_kv_file_chunk(&foks_server_db::KvFileChunkMutation {
@@ -297,8 +376,8 @@ fn put_small_file_or_symlink(
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
     writer
-        .call(move |database| {
-            if !kv_write_is_current(database, &write_authority, &device)? {
+        .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
+            if !kv_write_is_current(database, &write_authority, &device, now)? {
                 return Err(crate::Error::AuthorizationChanged);
             }
             database.put_kv_node(&foks_server_db::KvNodeMutation {
@@ -364,8 +443,8 @@ fn put(
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
     writer
-        .call(move |database| {
-            if !kv_write_is_current(database, &write_authority, &device)? {
+        .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
+            if !kv_write_is_current(database, &write_authority, &device, now)? {
                 return Err(crate::Error::AuthorizationChanged);
             }
             let mutations = dirents
@@ -390,7 +469,7 @@ fn put(
 
 fn get_node(
     argument: &[u8],
-    reader: &foks_server_db::ReadDatabase,
+    reader: &foks_server_db::ReadSnapshot<'_>,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 2)?;
@@ -433,7 +512,7 @@ fn get_node(
 
 fn get_encrypted_chunk(
     argument: &[u8],
-    reader: &foks_server_db::ReadDatabase,
+    reader: &foks_server_db::ReadSnapshot<'_>,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 3)?;
@@ -465,7 +544,7 @@ fn get_encrypted_chunk(
 
 fn get_directory(
     argument: &[u8],
-    reader: &foks_server_db::ReadDatabase,
+    reader: &foks_server_db::ReadSnapshot<'_>,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 2)?;
@@ -485,7 +564,7 @@ fn get_directory(
 
 fn list(
     argument: &[u8],
-    reader: &foks_server_db::ReadDatabase,
+    reader: &foks_server_db::ReadSnapshot<'_>,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 3)?;
@@ -544,7 +623,7 @@ fn list(
 
 fn cache_check(
     argument: &[u8],
-    reader: &foks_server_db::ReadDatabase,
+    reader: &foks_server_db::ReadSnapshot<'_>,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 1)?;
@@ -569,7 +648,6 @@ fn lock_acquire(
     principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
-    clock: &dyn foks_server_db::Clock,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     const MAXIMUM_LOCK_MILLIS: u64 = 24 * 60 * 60 * 1000;
@@ -585,22 +663,21 @@ fn lock_acquire(
     if *timeout_millis == 0 || *timeout_millis > MAXIMUM_LOCK_MILLIS {
         return Err(bad_arguments("KV lock timeout is out of range"));
     }
-    require_directory_write_access(reader, authority, &parent)?;
-    let now = clock
-        .now_micros()
-        .map_err(|_| RpcStatus::TransactionRetry)?;
-    let expires_at = timeout_millis
+    let duration = timeout_millis
         .checked_mul(1000)
-        .and_then(|duration| now.checked_add(duration))
-        .ok_or_else(|| bad_arguments("KV lock expiry overflows"))?;
+        .ok_or_else(|| bad_arguments("KV lock duration overflows"))?;
+    require_directory_write_access(reader, authority, &parent)?;
     let uid = authority.party.clone();
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
     writer
-        .call(move |database| {
-            if !kv_write_is_current(database, &write_authority, &device)? {
+        .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
+            if !kv_write_is_current(database, &write_authority, &device, now)? {
                 return Err(crate::Error::AuthorizationChanged);
             }
+            let expires_at = now
+                .checked_add(duration)
+                .ok_or(foks_server_db::Error::Invalid("KV lock expiry overflows"))?;
             database.acquire_kv_lock(&uid, &parent, &dirent, &lock, now, expires_at)?;
             Ok(())
         })
@@ -626,8 +703,8 @@ fn lock_release(
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
     writer
-        .call(move |database| {
-            if !kv_write_is_current(database, &write_authority, &device)? {
+        .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
+            if !kv_write_is_current(database, &write_authority, &device, now)? {
                 return Err(crate::Error::AuthorizationChanged);
             }
             database.release_kv_lock(&uid, &parent, &dirent, &lock)?;
@@ -638,7 +715,7 @@ fn lock_release(
 }
 
 fn current_versions(
-    reader: &foks_server_db::ReadDatabase,
+    reader: &dyn KvContextRead,
     uid: &[u8],
 ) -> Result<foks_proto::KvPathVersionVector, RpcStatus> {
     reader
@@ -665,7 +742,7 @@ fn require_directory_write_access(
 fn resolve_authority(
     argument: &[u8],
     principal: &Principal,
-    reader: &foks_server_db::ReadDatabase,
+    reader: &dyn KvContextRead,
     clock: &Arc<dyn foks_server_db::Clock>,
 ) -> Result<KvAuthority, RpcStatus> {
     let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
@@ -811,6 +888,7 @@ fn kv_write_is_current(
     database: &mut foks_server_db::Database,
     authority: &KvAuthority,
     credential: &[u8],
+    now: u64,
 ) -> crate::Result<bool> {
     if database
         .active_credential_owner(&authority.actor, credential)?
@@ -818,7 +896,6 @@ fn kv_write_is_current(
     {
         return Ok(false);
     }
-    let now = authority.clock.now_micros()?;
     let authorized = match authority.token_hash {
         None => {
             let Some(user) = database.user_authority(&authority.actor)? else {

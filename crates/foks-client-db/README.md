@@ -24,6 +24,11 @@ Wire-level identifiers and signed values remain opaque byte strings here.
 Private device and PUK seeds are expressly excluded and belong in an encrypted
 key store, not ordinary hard-state rows.
 
+Hard state is organized as host, user, team, journal, job, and metadata
+repositories over one connection-owning `HardStateStore`. Every repository
+uses the same immediate-write transaction layer; the split does not create
+independent connections or weaken atomic host/Merkle/user/team acceptance.
+
 The separate soft-state schema stores complete verified KV roots,
 directories, dirent versions, and content projections. It reconstructs durable
 FOKS path-version vectors for cache checks, atomically replaces and prunes

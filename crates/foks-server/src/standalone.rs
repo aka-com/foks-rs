@@ -414,13 +414,14 @@ impl RunningStandaloneServer {
         foks_server_db::MaintenanceReport,
         foks_server_db::CheckpointReport,
     )> {
-        let now = self.clock.now_micros()?;
-        let cutoff = now.saturating_sub(crate::maintenance::ABANDONED_UPLOAD_AGE_MICROS);
-        self.writer.handle().call(move |database| {
-            let maintenance = database.run_maintenance(now, cutoff)?;
-            let checkpoint = database.checkpoint()?;
-            Ok((maintenance, checkpoint))
-        })
+        self.writer
+            .handle()
+            .call_with_current_time(Arc::clone(&self.clock), |database, now| {
+                let cutoff = now.saturating_sub(crate::maintenance::ABANDONED_UPLOAD_AGE_MICROS);
+                let maintenance = database.run_maintenance(now, cutoff)?;
+                let checkpoint = database.checkpoint()?;
+                Ok((maintenance, checkpoint))
+            })
     }
 
     #[doc(hidden)]

@@ -26,16 +26,17 @@ use foks_crypto::{
 };
 use foks_proto::{
     DeviceLabel, DeviceLabelNameAndCommitmentKey, DeviceType, EntityId, HostchainTail, InviteCode,
-    ProvisionDeviceArgument, PukParcel, RevokeDeviceArgument, Role, SecretSeed, ServiceType,
-    SharedKeyBoxSet, SoftwareSignupArgument, TreeRoot, UsernameReservation, ENTITY_PUK_VERIFY,
-    ENTITY_USER,
+    PassphraseUpdateArgument, ProvisionDeviceArgument, PukParcel, RevokeDeviceArgument, Role,
+    SecretSeed, ServiceType, SharedKeyBoxSet, SoftwareSignupArgument, TreeRoot,
+    UsernameReservation, ENTITY_PUK_VERIFY, ENTITY_USER,
 };
 use foks_rpc::{
-    encode_get_client_cert_chain_request_at, encode_get_current_merkle_root_request,
-    encode_get_historical_merkle_roots_request, encode_get_puk_for_role_request,
-    encode_load_user_chain_request_from, encode_merkle_select_vhost_request,
-    encode_provision_device_request, encode_registration_select_vhost_request,
-    encode_reserve_username_request_at, encode_revoke_device_request, encode_signup_request_at,
+    encode_check_invite_code_request, encode_get_client_cert_chain_request_at,
+    encode_get_current_merkle_root_request, encode_get_historical_merkle_roots_request,
+    encode_get_puk_for_role_request, encode_load_user_chain_request_from,
+    encode_merkle_select_vhost_request, encode_provision_device_request,
+    encode_registration_select_vhost_request, encode_reserve_username_request_at,
+    encode_revoke_device_request, encode_signup_request_at,
 };
 use foks_snowpack::{decode, Value};
 use foks_verify::{
@@ -62,6 +63,7 @@ mod error;
 mod host;
 mod kv;
 mod mutation;
+mod passphrase;
 mod protected_store;
 mod recovery;
 mod scheduler;
@@ -75,6 +77,7 @@ pub use error::*;
 pub use host::*;
 pub use kv::*;
 pub use mutation::*;
+pub use passphrase::*;
 pub use protected_store::*;
 pub use recovery::*;
 pub use scheduler::*;
@@ -244,6 +247,7 @@ mod tests {
                     device_name: "  Signup  Device—One  ".to_owned(),
                     invite_code: InviteCode::Empty,
                     email: "fixture@example.com".to_owned(),
+                    passphrase: None,
                 },
                 UsernameReservation::decode(&signup_fixture("reservation.snowp")).unwrap(),
                 &secrets,

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use foks_rpc::{
     encode_call, read_call, DEFAULT_MAX_FRAME_LENGTH, PROBE_METHOD_POSITION, PROBE_PROTOCOL_ID,
@@ -54,6 +54,22 @@ fn registered_routes_enforce_listener_and_argument_limits() {
     ));
 }
 
+#[test]
+fn signup_contract_includes_authoritative_invite_and_saturation_outcomes() {
+    let contract: Contract = toml::from_str(CONTRACT).expect("valid protocol-v1.toml");
+    let signup = contract
+        .route
+        .iter()
+        .find(|route| route.protocol == "Reg" && route.method == "signup")
+        .expect("registration signup route");
+    for status in ["bad_invite", "rate_limited"] {
+        assert!(
+            signup.statuses.iter().any(|candidate| candidate == status),
+            "signup contract omits {status}"
+        );
+    }
+}
+
 #[derive(Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
 struct Service {
@@ -99,6 +115,8 @@ fn protocol_contract_is_valid_and_exactly_registered() {
         contract.status_codes,
         BTreeMap::from([
             ("bad_args".to_owned(), 1030),
+            ("bad_invite".to_owned(), 1019),
+            ("bad_passphrase".to_owned(), 1011),
             ("device_already_provisioned".to_owned(), 1072),
             ("expired".to_owned(), 1062),
             ("kv_noent".to_owned(), 8016),
@@ -107,6 +125,7 @@ fn protocol_contract_is_valid_and_exactly_registered() {
             ("name_in_use".to_owned(), 1023),
             ("not_found".to_owned(), 1049),
             ("ok".to_owned(), 0),
+            ("passphrase_not_found".to_owned(), 1043),
             ("permission_denied".to_owned(), 1013),
             ("quota_exceeded".to_owned(), 1060),
             ("rate_limited".to_owned(), 1012),
@@ -146,6 +165,12 @@ fn protocol_contract_is_valid_and_exactly_registered() {
     assert_eq!(declared_services, registered_services);
 
     let declared_routes = contract.route.into_iter().collect::<BTreeSet<_>>();
+    let route_ids = ROUTES.iter().map(|route| route.id).collect::<HashSet<_>>();
+    assert_eq!(
+        route_ids.len(),
+        ROUTES.len(),
+        "generated route IDs must be unique"
+    );
     let registered_routes = ROUTES
         .iter()
         .map(|route| Route {

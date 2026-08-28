@@ -15,6 +15,7 @@ mod fault;
 pub mod host;
 mod identity;
 pub mod installation;
+pub mod invites;
 pub mod keys;
 mod maintenance;
 mod metrics;

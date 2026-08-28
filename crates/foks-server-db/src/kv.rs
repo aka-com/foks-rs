@@ -1,6 +1,6 @@
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
-use crate::{error::sql_integer, Database, Error, ReadDatabase, Result};
+use crate::{error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredKvRoot {
@@ -703,39 +703,11 @@ impl ReadDatabase {
     }
 
     pub fn kv_node(&self, uid: &[u8], id: &[u8; 17]) -> Result<Option<StoredKvNode>> {
-        let stored: Option<(i64, Vec<u8>)> = self
-            .connection
-            .query_row(
-                "SELECT node_type, exact_node FROM kv_nodes WHERE uid = ?1 AND node_id = ?2",
-                params![uid, id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        stored
-            .map(|(node_type, exact)| {
-                Ok(StoredKvNode {
-                    id: *id,
-                    node_type: crate::error::unsigned(node_type)?,
-                    exact,
-                })
-            })
-            .transpose()
+        kv_node(&self.connection, uid, id)
     }
 
     pub fn kv_file(&self, uid: &[u8], id: &[u8; 16]) -> Result<Option<StoredKvFile>> {
-        self.connection
-            .query_row(
-                "SELECT exact_metadata FROM kv_file_uploads
-                 WHERE uid = ?1 AND file_id = ?2 AND complete = 1",
-                params![uid, id],
-                |row| {
-                    Ok(StoredKvFile {
-                        exact_metadata: row.get(0)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(Into::into)
+        kv_file(&self.connection, uid, id)
     }
 
     pub fn kv_file_chunk(
@@ -744,22 +716,7 @@ impl ReadDatabase {
         id: &[u8; 16],
         offset: u64,
     ) -> Result<Option<StoredKvFileChunk>> {
-        let stored: Option<(Vec<u8>, i64)> = self
-            .connection
-            .query_row(
-                "SELECT c.ciphertext, c.final_chunk FROM kv_file_chunks c
-                 JOIN kv_file_uploads f ON f.uid = c.uid AND f.file_id = c.file_id
-                 WHERE c.uid = ?1 AND c.file_id = ?2 AND c.clear_offset = ?3
-                   AND f.complete = 1",
-                params![uid, id, sql_integer(offset)?],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        Ok(stored.map(|(ciphertext, final_chunk)| StoredKvFileChunk {
-            ciphertext,
-            offset,
-            final_chunk: final_chunk != 0,
-        }))
+        kv_file_chunk(&self.connection, uid, id, offset)
     }
 
     pub fn kv_list(
@@ -769,42 +726,159 @@ impl ReadDatabase {
         after_name_mac: Option<&[u8; 32]>,
         limit: usize,
     ) -> Result<Vec<StoredKvDirent>> {
-        if limit == 0 || limit > 1001 {
-            return Err(Error::Invalid("KV list limit"));
-        }
-        let mut statement = self.connection.prepare(
-            "SELECT d.exact_dirent, d.node_id FROM kv_dirent_heads h
-             JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
-               AND d.dirent_id = h.dirent_id AND d.version = h.version
-             WHERE h.uid = ?1 AND h.parent_id = ?2
-               AND substr(d.node_id, 1, 1) != X'00'
-               AND (?3 IS NULL OR d.name_mac > ?3)
-             ORDER BY d.name_mac, d.dirent_id LIMIT ?4",
-        )?;
-        let rows = statement.query_map(
-            params![
-                uid,
-                parent,
-                after_name_mac,
-                i64::try_from(limit).map_err(|_| Error::IntegerRange)?
-            ],
-            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
-        )?;
-        rows.map(|row| {
-            let (exact, node_id) = row?;
-            Ok(StoredKvDirent {
-                exact,
-                node_id: node_id
-                    .try_into()
-                    .map_err(|_| Error::Invalid("stored KV node ID"))?,
-            })
-        })
-        .collect()
+        kv_list(&self.connection, uid, parent, after_name_mac, limit)
     }
 
     pub fn kv_version_vector(&self, uid: &[u8]) -> Result<Option<foks_proto::KvPathVersionVector>> {
         kv_version_vector(&self.connection, uid)
     }
+}
+
+impl ReadSnapshot<'_> {
+    pub fn kv_root(&self, uid: &[u8]) -> Result<Option<StoredKvRoot>> {
+        kv_root(self.connection(), uid)
+    }
+
+    pub fn kv_directory(&self, uid: &[u8], id: &[u8; 16]) -> Result<Option<StoredKvDirectory>> {
+        kv_directory(self.connection(), uid, id)
+    }
+
+    pub fn kv_node(&self, uid: &[u8], id: &[u8; 17]) -> Result<Option<StoredKvNode>> {
+        kv_node(self.connection(), uid, id)
+    }
+
+    pub fn kv_file(&self, uid: &[u8], id: &[u8; 16]) -> Result<Option<StoredKvFile>> {
+        kv_file(self.connection(), uid, id)
+    }
+
+    pub fn kv_file_chunk(
+        &self,
+        uid: &[u8],
+        id: &[u8; 16],
+        offset: u64,
+    ) -> Result<Option<StoredKvFileChunk>> {
+        kv_file_chunk(self.connection(), uid, id, offset)
+    }
+
+    pub fn kv_list(
+        &self,
+        uid: &[u8],
+        parent: &[u8; 16],
+        after_name_mac: Option<&[u8; 32]>,
+        limit: usize,
+    ) -> Result<Vec<StoredKvDirent>> {
+        kv_list(self.connection(), uid, parent, after_name_mac, limit)
+    }
+
+    pub fn kv_version_vector(&self, uid: &[u8]) -> Result<Option<foks_proto::KvPathVersionVector>> {
+        kv_version_vector(self.connection(), uid)
+    }
+}
+
+fn kv_node(
+    connection: &rusqlite::Connection,
+    uid: &[u8],
+    id: &[u8; 17],
+) -> Result<Option<StoredKvNode>> {
+    let stored: Option<(i64, Vec<u8>)> = connection
+        .query_row(
+            "SELECT node_type, exact_node FROM kv_nodes WHERE uid = ?1 AND node_id = ?2",
+            params![uid, id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    stored
+        .map(|(node_type, exact)| {
+            Ok(StoredKvNode {
+                id: *id,
+                node_type: crate::error::unsigned(node_type)?,
+                exact,
+            })
+        })
+        .transpose()
+}
+
+fn kv_file(
+    connection: &rusqlite::Connection,
+    uid: &[u8],
+    id: &[u8; 16],
+) -> Result<Option<StoredKvFile>> {
+    connection
+        .query_row(
+            "SELECT exact_metadata FROM kv_file_uploads
+             WHERE uid = ?1 AND file_id = ?2 AND complete = 1",
+            params![uid, id],
+            |row| {
+                Ok(StoredKvFile {
+                    exact_metadata: row.get(0)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+fn kv_file_chunk(
+    connection: &rusqlite::Connection,
+    uid: &[u8],
+    id: &[u8; 16],
+    offset: u64,
+) -> Result<Option<StoredKvFileChunk>> {
+    let stored: Option<(Vec<u8>, i64)> = connection
+        .query_row(
+            "SELECT c.ciphertext, c.final_chunk FROM kv_file_chunks c
+             JOIN kv_file_uploads f ON f.uid = c.uid AND f.file_id = c.file_id
+             WHERE c.uid = ?1 AND c.file_id = ?2 AND c.clear_offset = ?3
+               AND f.complete = 1",
+            params![uid, id, sql_integer(offset)?],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    Ok(stored.map(|(ciphertext, final_chunk)| StoredKvFileChunk {
+        ciphertext,
+        offset,
+        final_chunk: final_chunk != 0,
+    }))
+}
+
+fn kv_list(
+    connection: &rusqlite::Connection,
+    uid: &[u8],
+    parent: &[u8; 16],
+    after_name_mac: Option<&[u8; 32]>,
+    limit: usize,
+) -> Result<Vec<StoredKvDirent>> {
+    if limit == 0 || limit > 1001 {
+        return Err(Error::Invalid("KV list limit"));
+    }
+    let mut statement = connection.prepare(
+        "SELECT d.exact_dirent, d.node_id FROM kv_dirent_heads h
+         JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
+           AND d.dirent_id = h.dirent_id AND d.version = h.version
+         WHERE h.uid = ?1 AND h.parent_id = ?2
+           AND substr(d.node_id, 1, 1) != X'00'
+           AND (?3 IS NULL OR d.name_mac > ?3)
+         ORDER BY d.name_mac, d.dirent_id LIMIT ?4",
+    )?;
+    let rows = statement.query_map(
+        params![
+            uid,
+            parent,
+            after_name_mac,
+            i64::try_from(limit).map_err(|_| Error::IntegerRange)?
+        ],
+        |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+    )?;
+    rows.map(|row| {
+        let (exact, node_id) = row?;
+        Ok(StoredKvDirent {
+            exact,
+            node_id: node_id
+                .try_into()
+                .map_err(|_| Error::Invalid("stored KV node ID"))?,
+        })
+    })
+    .collect()
 }
 
 fn node_reference_exists(

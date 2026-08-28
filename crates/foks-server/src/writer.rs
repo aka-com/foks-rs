@@ -242,6 +242,21 @@ impl WriterHandle {
         result.map_err(|_| Error::WriterQueue)?
     }
 
+    pub(crate) fn call_with_current_time<F, T>(
+        &self,
+        clock: Arc<dyn foks_server_db::Clock>,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: FnOnce(&mut Database, u64) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.call(move |database| {
+            let now = clock.now_micros()?;
+            operation(database, now)
+        })
+    }
+
     pub fn metrics(&self) -> WriterMetrics {
         let timing = &self.queue.timing;
         WriterMetrics {
@@ -287,4 +302,59 @@ fn observe_duration(
     observations.fetch_add(1, Ordering::Relaxed);
     total.fetch_add(microseconds, Ordering::Relaxed);
     maximum.fetch_max(microseconds, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestClock(AtomicU64);
+
+    impl foks_server_db::Clock for TestClock {
+        fn now_micros(&self) -> foks_server_db::Result<u64> {
+            Ok(self.0.load(Ordering::Acquire))
+        }
+    }
+
+    #[test]
+    fn current_time_is_sampled_after_a_queued_task_starts() {
+        let temporary = tempfile::tempdir().unwrap();
+        let writer = Arc::new(
+            Writer::start(
+                temporary.path().join("foks-server.sqlite"),
+                foks_server_db::Config::default(),
+                2,
+            )
+            .unwrap(),
+        );
+        let (entered_sender, entered_receiver) = mpsc::sync_channel(1);
+        let (release_sender, release_receiver) = mpsc::sync_channel(1);
+        let blocker_writer = Arc::clone(&writer);
+        let blocker = thread::spawn(move || {
+            blocker_writer.call(move |_| {
+                entered_sender.send(()).unwrap();
+                release_receiver.recv().unwrap();
+                Ok(())
+            })
+        });
+        entered_receiver.recv().unwrap();
+
+        let clock = Arc::new(TestClock(AtomicU64::new(10)));
+        let timed_clock: Arc<dyn foks_server_db::Clock> = clock.clone();
+        let timed_writer = writer.handle();
+        let timed = thread::spawn(move || {
+            timed_writer.call_with_current_time(timed_clock, |_, now| Ok(now))
+        });
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while writer.handle().metrics().pending != 2 {
+            assert!(Instant::now() < deadline, "timed task was not queued");
+            thread::yield_now();
+        }
+        clock.0.store(20, Ordering::Release);
+        release_sender.send(()).unwrap();
+
+        blocker.join().unwrap().unwrap();
+        assert_eq!(timed.join().unwrap().unwrap(), 20);
+        Arc::into_inner(writer).unwrap().shutdown().unwrap();
+    }
 }

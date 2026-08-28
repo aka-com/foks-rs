@@ -1,4 +1,9 @@
-use foks_proto::{EntityId, LookupUserResult, RegistrationChallenge, RegistrationChallengePayload};
+use std::sync::Arc;
+
+use foks_proto::{
+    EntityId, InviteCode, LookupUserResult, PassphraseLoginResult, RegistrationChallenge,
+    RegistrationChallengePayload, SecretBox,
+};
 use foks_rpc::RpcStatus;
 
 use crate::keys::{HostKeyProvider, KeyPurpose};
@@ -6,12 +11,62 @@ use crate::{Entropy, WriterHandle};
 
 const CHALLENGE_LIFETIME_MICROSECONDS: u64 = 10 * 60 * 1_000_000;
 
+pub(crate) fn stretch_version(argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+    foks_rpc::arguments::decode_void(argument).map_err(bad_arguments)?;
+    foks_snowpack::encode(&foks_proto::StretchVersion::V1.to_value())
+        .map_err(|_| RpcStatus::TransactionRetry)
+}
+pub(crate) fn invite_fingerprint(code: &InviteCode) -> Result<[u8; 32], RpcStatus> {
+    crate::invites::invite_fingerprint(code).map_err(bad_arguments)
+}
+
+pub(crate) fn invite_kind(code: &InviteCode) -> Result<foks_server_db::InviteKind, RpcStatus> {
+    crate::invites::invite_kind(code).map_err(|_| RpcStatus::BadInvite)
+}
+
+pub(crate) fn check_invite_code(
+    argument: &[u8],
+    database: &foks_server_db::ReadDatabase,
+    clock: &dyn foks_server_db::Clock,
+) -> Result<(), RpcStatus> {
+    let code = foks_rpc::arguments::decode_check_invite_code(argument)
+        .map_err(|_| RpcStatus::BadInvite)?;
+    match code {
+        InviteCode::Empty => {
+            let policy = database
+                .invite_policy()
+                .map_err(|_| RpcStatus::TransactionRetry)?;
+            if policy.regime == foks_server_db::InviteRegime::Optional {
+                Ok(())
+            } else {
+                Err(RpcStatus::BadInvite)
+            }
+        }
+        InviteCode::Standard(_) | InviteCode::MultiUse(_) => {
+            let hash = invite_fingerprint(&code)?;
+            let kind = invite_kind(&code)?;
+            let now = clock
+                .now_micros()
+                .map_err(|_| RpcStatus::TransactionRetry)?;
+            if database
+                .invite_available(&hash, kind, now)
+                .map_err(|_| RpcStatus::TransactionRetry)?
+            {
+                Ok(())
+            } else {
+                Err(RpcStatus::BadInvite)
+            }
+        }
+        _ => Err(RpcStatus::BadInvite),
+    }
+}
+
 pub(crate) fn issue_uid_lookup_challenge(
     argument: &[u8],
     host: &EntityId,
     writer: &WriterHandle,
     keys: &dyn HostKeyProvider,
-    clock: &dyn foks_server_db::Clock,
+    clock: &Arc<dyn foks_server_db::Clock>,
     entropy: &dyn Entropy,
 ) -> Result<Vec<u8>, RpcStatus> {
     let entity = foks_rpc::arguments::decode_uid_lookup_challenge(argument)
@@ -55,14 +110,14 @@ pub(crate) fn issue_uid_lookup_challenge(
     let host = host.as_bytes().to_vec();
     let key_generation = key.generation().as_bytes();
     writer
-        .call(move |database| {
+        .call_with_current_time(Arc::clone(clock), move |database, current_time| {
             database.issue_recovery_challenge(
                 &hash,
                 &entity,
                 &host,
                 &key_generation,
                 expires_at,
-                now,
+                current_time,
             )?;
             Ok(())
         })
@@ -70,12 +125,173 @@ pub(crate) fn issue_uid_lookup_challenge(
     Ok(exact)
 }
 
+pub(crate) fn issue_login_challenge(
+    argument: &[u8],
+    host: &EntityId,
+    writer: &WriterHandle,
+    keys: &dyn HostKeyProvider,
+    clock: &Arc<dyn foks_server_db::Clock>,
+    entropy: &dyn Entropy,
+) -> Result<Vec<u8>, RpcStatus> {
+    let uid = foks_rpc::arguments::decode_login_challenge(argument)
+        .map_err(bad_arguments)?
+        .require_type(foks_proto::ENTITY_USER)
+        .map_err(bad_arguments)?;
+    let key = keys
+        .load_or_create(KeyPurpose::Recovery)
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let now = clock
+        .now_micros()
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let expires_at = now
+        .checked_add(CHALLENGE_LIFETIME_MICROSECONDS)
+        .ok_or(RpcStatus::TransactionRetry)?;
+    let mut random = [0; 16];
+    entropy
+        .fill(&mut random)
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let payload = RegistrationChallengePayload {
+        hmac_key_id: key.generation().as_bytes(),
+        entity: uid,
+        host: host.clone(),
+        random,
+        time: now / 1_000,
+    };
+    let exact_payload = payload.encoded().map_err(|_| RpcStatus::TransactionRetry)?;
+    let challenge = RegistrationChallenge {
+        mac: foks_crypto::capability_mac(
+            key.expose(),
+            foks_proto::REG_CHALLENGE_PAYLOAD_TYPE_ID,
+            &exact_payload,
+        ),
+        payload,
+    };
+    let exact = challenge
+        .encoded()
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let hash = challenge_hash(&exact);
+    let uid = challenge.payload.entity.as_bytes().to_vec();
+    let host = host.as_bytes().to_vec();
+    let generation = key.generation().as_bytes();
+    writer
+        .call_with_current_time(Arc::clone(clock), move |database, current_time| {
+            database.issue_passphrase_challenge(
+                &hash,
+                &uid,
+                &host,
+                &generation,
+                expires_at,
+                current_time,
+            )?;
+            Ok(())
+        })
+        .map_err(map_passphrase_write_error)?;
+    Ok(exact)
+}
+
+pub(crate) fn passphrase_login(
+    argument: &[u8],
+    host: &EntityId,
+    writer: &WriterHandle,
+    keys: &dyn HostKeyProvider,
+    clock: &Arc<dyn foks_server_db::Clock>,
+) -> Result<Vec<u8>, RpcStatus> {
+    let request = foks_rpc::arguments::decode_passphrase_login(argument).map_err(bad_arguments)?;
+    if request.challenge.payload.entity != request.uid || request.challenge.payload.host != *host {
+        return Err(RpcStatus::BadPassphrase);
+    }
+    let key = keys
+        .load_or_create(KeyPurpose::Recovery)
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    if request.challenge.payload.hmac_key_id != key.generation().as_bytes() {
+        return Err(RpcStatus::BadPassphrase);
+    }
+    let payload = request
+        .challenge
+        .payload
+        .encoded()
+        .map_err(|_| RpcStatus::BadPassphrase)?;
+    foks_crypto::verify_capability_mac(
+        key.expose(),
+        foks_proto::REG_CHALLENGE_PAYLOAD_TYPE_ID,
+        &payload,
+        &request.challenge.mac,
+    )
+    .map_err(|_| RpcStatus::BadPassphrase)?;
+    let uid = request.uid.as_bytes().to_vec();
+    let state = writer
+        .call_with_current_time(Arc::clone(clock), {
+            let uid = uid.clone();
+            move |database, now| Ok(database.passphrase_for_login(&uid, now)?)
+        })
+        .map_err(map_passphrase_write_error)?;
+    let Some(state) = state else {
+        record_bad_login(writer, clock, uid)?;
+        return Err(RpcStatus::BadPassphrase);
+    };
+    let verify_key =
+        EntityId::from_bytes(state.verify_key.clone()).map_err(|_| RpcStatus::TransactionRetry)?;
+    if foks_crypto::verify_typed(
+        &verify_key,
+        &request.signature,
+        foks_proto::REG_CHALLENGE_PAYLOAD_TYPE_ID,
+        &payload,
+    )
+    .is_err()
+    {
+        record_bad_login(writer, clock, uid)?;
+        return Err(RpcStatus::BadPassphrase);
+    }
+    let exact = request
+        .challenge
+        .encoded()
+        .map_err(|_| RpcStatus::BadPassphrase)?;
+    let hash = challenge_hash(&exact);
+    let host = host.as_bytes().to_vec();
+    let generation = key.generation().as_bytes();
+    let authenticated = writer
+        .call_with_current_time(Arc::clone(clock), move |database, now| {
+            Ok(database.consume_passphrase_challenge(
+                &hash,
+                &uid,
+                &host,
+                &generation,
+                verify_key.as_bytes(),
+                now,
+            )?)
+        })
+        .map_err(map_passphrase_write_error)?
+        .ok_or(RpcStatus::BadPassphrase)?;
+    PassphraseLoginResult {
+        generation: authenticated.generation,
+        skmwk_box: SecretBox::decode(&authenticated.exact_skmwk_box)
+            .map_err(|_| RpcStatus::TransactionRetry)?,
+        passphrase_box: foks_proto::PpePassphraseBox::decode(&authenticated.exact_passphrase_box)
+            .map_err(|_| RpcStatus::TransactionRetry)?,
+    }
+    .encoded()
+    .map_err(|_| RpcStatus::TransactionRetry)
+}
+
+fn record_bad_login(
+    writer: &WriterHandle,
+    clock: &Arc<dyn foks_server_db::Clock>,
+    uid: Vec<u8>,
+) -> Result<(), RpcStatus> {
+    writer
+        .call_with_current_time(Arc::clone(clock), move |database, now| {
+            database.record_bad_passphrase(&uid, now)?;
+            Ok(())
+        })
+        .map_err(map_passphrase_write_error)
+}
+
 pub(crate) fn lookup_uid_by_device(
     argument: &[u8],
     host: &EntityId,
     writer: &WriterHandle,
     keys: &dyn HostKeyProvider,
-    clock: &dyn foks_server_db::Clock,
+    clock: &Arc<dyn foks_server_db::Clock>,
 ) -> Result<Vec<u8>, RpcStatus> {
     let request =
         foks_rpc::arguments::decode_lookup_uid_by_device(argument).map_err(bad_arguments)?;
@@ -112,14 +328,11 @@ pub(crate) fn lookup_uid_by_device(
     .map_err(|_| lookup_failed())?;
     let exact = request.challenge.encoded().map_err(|_| lookup_failed())?;
     let hash = challenge_hash(&exact);
-    let now = clock
-        .now_micros()
-        .map_err(|_| RpcStatus::TransactionRetry)?;
     let entity = request.entity.into_bytes();
     let host_bytes = host.as_bytes().to_vec();
     let generation = key.generation().as_bytes();
     let snapshot = writer
-        .call(move |database| {
+        .call_with_current_time(Arc::clone(clock), move |database, now| {
             Ok(database.consume_recovery_challenge(
                 &hash,
                 &entity,
@@ -169,6 +382,17 @@ fn map_write_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::WriterQueue => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::RateLimited,
+        _ => RpcStatus::TransactionRetry,
+    }
+}
+
+fn map_passphrase_write_error(error: crate::Error) -> RpcStatus {
+    match error {
+        crate::Error::WriterQueue
+        | crate::Error::Database(foks_server_db::Error::QuotaExceeded)
+        | crate::Error::Database(foks_server_db::Error::PassphraseRateLimited) => {
+            RpcStatus::RateLimited
+        }
         _ => RpcStatus::TransactionRetry,
     }
 }

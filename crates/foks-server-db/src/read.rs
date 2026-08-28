@@ -1,6 +1,6 @@
 use rusqlite::{Connection, OptionalExtension as _};
 
-use crate::{error::unsigned, Database, ReadDatabase, Result};
+use crate::{error::unsigned, Database, ReadDatabase, ReadSnapshot, Result};
 
 type StoredRoot = (i64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
 type StoredUserHeader = (Vec<u8>, Vec<u8>, i64, Vec<u8>);
@@ -191,36 +191,11 @@ impl ReadDatabase {
     }
 
     pub fn team_parcels(&self, team_id: &[u8], party_id: &[u8]) -> Result<Vec<Vec<u8>>> {
-        let mut statement = self.connection.prepare(
-            "SELECT p.exact_parcel FROM team_parcels p
-             WHERE p.team_id = ?1 AND p.party_id = ?2
-               AND p.generation = (
-                   SELECT max(latest.generation) FROM team_parcels latest
-                   WHERE latest.team_id = p.team_id AND latest.party_id = p.party_id
-                     AND latest.role_type = p.role_type
-                     AND latest.visibility = p.visibility
-               )
-             ORDER BY role_type, visibility, generation",
-        )?;
-        let parcels = statement
-            .query_map(rusqlite::params![team_id, party_id], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(parcels)
+        team_parcels(&self.connection, team_id, party_id)
     }
 
     pub fn team_member_hepks(&self, team_id: &[u8]) -> Result<Vec<Vec<u8>>> {
-        let mut statement = self.connection.prepare(
-            "SELECT DISTINCT k.exact_hepk
-             FROM team_members m JOIN shared_keys k
-               ON k.uid = m.party_id AND k.role_type = m.source_role_type
-              AND k.visibility = m.source_visibility AND k.generation = m.generation
-              AND k.verify_key = m.verify_key
-             WHERE m.team_id = ?1 ORDER BY k.exact_hepk",
-        )?;
-        let hepks = statement
-            .query_map([team_id], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(hepks)
+        team_member_hepks(&self.connection, team_id)
     }
 
     pub fn team_removal_box(
@@ -231,22 +206,14 @@ impl ReadDatabase {
         source_role_type: u64,
         source_visibility: i64,
     ) -> Result<Option<Vec<u8>>> {
-        Ok(self
-            .connection
-            .query_row(
-                "SELECT exact_box FROM team_removal_boxes
-                 WHERE team_id = ?1 AND member_id = ?2 AND member_host_id = ?3
-                   AND source_role_type = ?4 AND source_visibility = ?5",
-                rusqlite::params![
-                    team_id,
-                    member_id,
-                    member_host_id,
-                    crate::error::sql_integer(source_role_type)?,
-                    source_visibility
-                ],
-                |row| row.get(0),
-            )
-            .optional()?)
+        team_removal_box(
+            &self.connection,
+            team_id,
+            member_id,
+            member_host_id,
+            source_role_type,
+            source_visibility,
+        )
     }
 
     pub fn puk_material(
@@ -260,7 +227,155 @@ impl ReadDatabase {
     }
 }
 
+fn team_parcels(connection: &Connection, team_id: &[u8], party_id: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let mut statement = connection.prepare(
+        "SELECT p.exact_parcel FROM team_parcels p
+         WHERE p.team_id = ?1 AND p.party_id = ?2
+           AND p.generation = (
+               SELECT max(latest.generation) FROM team_parcels latest
+               WHERE latest.team_id = p.team_id AND latest.party_id = p.party_id
+                 AND latest.role_type = p.role_type
+                 AND latest.visibility = p.visibility
+           )
+         ORDER BY role_type, visibility, generation",
+    )?;
+    let parcels = statement
+        .query_map(rusqlite::params![team_id, party_id], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(parcels)
+}
+
+fn team_member_hepks(connection: &Connection, team_id: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let mut statement = connection.prepare(
+        "SELECT DISTINCT k.exact_hepk
+         FROM team_members m JOIN shared_keys k
+           ON k.uid = m.party_id AND k.role_type = m.source_role_type
+          AND k.visibility = m.source_visibility AND k.generation = m.generation
+          AND k.verify_key = m.verify_key
+         WHERE m.team_id = ?1 ORDER BY k.exact_hepk",
+    )?;
+    let hepks = statement
+        .query_map([team_id], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(hepks)
+}
+
+fn team_removal_box(
+    connection: &Connection,
+    team_id: &[u8],
+    member_id: &[u8],
+    member_host_id: &[u8],
+    source_role_type: u64,
+    source_visibility: i64,
+) -> Result<Option<Vec<u8>>> {
+    Ok(connection
+        .query_row(
+            "SELECT exact_box FROM team_removal_boxes
+             WHERE team_id = ?1 AND member_id = ?2 AND member_host_id = ?3
+               AND source_role_type = ?4 AND source_visibility = ?5",
+            rusqlite::params![
+                team_id,
+                member_id,
+                member_host_id,
+                crate::error::sql_integer(source_role_type)?,
+                source_visibility
+            ],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+impl ReadSnapshot<'_> {
+    pub fn current_root(&self) -> Result<Option<RootSnapshot>> {
+        root_snapshot(self.connection())
+    }
+
+    pub fn roots_at(&self, epochs: &[u64]) -> Result<Option<Vec<RootSnapshot>>> {
+        roots_at_inner(self.connection(), epochs)
+    }
+
+    pub fn identity(&self, uid: &[u8]) -> Result<Option<IdentitySnapshot>> {
+        identity_snapshot(self.connection(), uid)
+    }
+
+    pub fn identity_for_active_device(
+        &self,
+        uid: &[u8],
+        device_id: &[u8],
+    ) -> Result<Option<IdentitySnapshot>> {
+        identity_snapshot_filtered(self.connection(), Some(uid), Some(device_id))
+    }
+
+    pub fn identity_by_active_device(&self, device_id: &[u8]) -> Result<Option<IdentitySnapshot>> {
+        identity_snapshot_filtered(self.connection(), None, Some(device_id))
+    }
+
+    pub fn user_authority(&self, uid: &[u8]) -> Result<Option<UserAuthoritySnapshot>> {
+        user_authority_inner(self.connection(), uid)
+    }
+
+    pub fn user_chain(&self, uid: &[u8]) -> Result<Option<UserChainSnapshot>> {
+        user_chain_inner(self.connection(), uid)
+    }
+
+    pub fn team(&self, team_id: &[u8]) -> Result<Option<TeamSnapshot>> {
+        team_snapshot_inner(self.connection(), team_id)
+    }
+
+    pub fn team_parcels(&self, team_id: &[u8], party_id: &[u8]) -> Result<Vec<Vec<u8>>> {
+        team_parcels(self.connection(), team_id, party_id)
+    }
+
+    pub fn team_member_hepks(&self, team_id: &[u8]) -> Result<Vec<Vec<u8>>> {
+        team_member_hepks(self.connection(), team_id)
+    }
+
+    pub fn team_removal_box(
+        &self,
+        team_id: &[u8],
+        member_id: &[u8],
+        member_host_id: &[u8],
+        source_role_type: u64,
+        source_visibility: i64,
+    ) -> Result<Option<Vec<u8>>> {
+        team_removal_box(
+            self.connection(),
+            team_id,
+            member_id,
+            member_host_id,
+            source_role_type,
+            source_visibility,
+        )
+    }
+
+    pub fn puk_material(
+        &self,
+        uid: &[u8],
+        device_id: &[u8],
+        role_type: u64,
+        visibility: i64,
+    ) -> Result<Option<PukMaterialSnapshot>> {
+        puk_material_inner(self.connection(), uid, device_id, role_type, visibility)
+    }
+}
+
+fn read_snapshot<T>(
+    connection: &Connection,
+    read: impl FnOnce(&Connection) -> Result<T>,
+) -> Result<T> {
+    let transaction = connection.unchecked_transaction()?;
+    let result = read(&transaction)?;
+    transaction.commit()?;
+    Ok(result)
+}
+
 fn team_snapshot(connection: &Connection, team_id: &[u8]) -> Result<Option<TeamSnapshot>> {
+    read_snapshot(connection, |connection| {
+        team_snapshot_inner(connection, team_id)
+    })
+}
+
+fn team_snapshot_inner(connection: &Connection, team_id: &[u8]) -> Result<Option<TeamSnapshot>> {
     type TeamRow = (i64, Vec<u8>, Option<Vec<u8>>, Vec<u8>, i64, Option<Vec<u8>>);
     let row: Option<TeamRow> = connection
         .query_row(
@@ -413,6 +528,10 @@ fn team_snapshot(connection: &Connection, team_id: &[u8]) -> Result<Option<TeamS
 }
 
 pub fn user_chain(connection: &Connection, uid: &[u8]) -> Result<Option<UserChainSnapshot>> {
+    read_snapshot(connection, |connection| user_chain_inner(connection, uid))
+}
+
+fn user_chain_inner(connection: &Connection, uid: &[u8]) -> Result<Option<UserChainSnapshot>> {
     let user: Option<StoredUserHeader> = connection
         .query_row(
             "SELECT normalized_name, username_utf8, username_sequence, username_commitment_key
@@ -451,7 +570,7 @@ pub fn user_chain(connection: &Connection, uid: &[u8]) -> Result<Option<UserChai
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let authority = user_authority(connection, uid)?
+    let authority = user_authority_inner(connection, uid)?
         .ok_or(crate::Error::Invalid("user chain has no authority"))?;
     let mut hepk_statement = connection.prepare(
         "SELECT exact_hepk FROM shared_keys WHERE uid = ?1
@@ -475,6 +594,18 @@ pub fn user_chain(connection: &Connection, uid: &[u8]) -> Result<Option<UserChai
 }
 
 fn puk_material(
+    connection: &Connection,
+    uid: &[u8],
+    device_id: &[u8],
+    role_type: u64,
+    visibility: i64,
+) -> Result<Option<PukMaterialSnapshot>> {
+    read_snapshot(connection, |connection| {
+        puk_material_inner(connection, uid, device_id, role_type, visibility)
+    })
+}
+
+fn puk_material_inner(
     connection: &Connection,
     uid: &[u8],
     device_id: &[u8],
@@ -517,6 +648,15 @@ fn puk_material(
 }
 
 pub fn user_authority(
+    connection: &Connection,
+    uid: &[u8],
+) -> Result<Option<UserAuthoritySnapshot>> {
+    read_snapshot(connection, |connection| {
+        user_authority_inner(connection, uid)
+    })
+}
+
+fn user_authority_inner(
     connection: &Connection,
     uid: &[u8],
 ) -> Result<Option<UserAuthoritySnapshot>> {
@@ -618,6 +758,10 @@ pub fn user_authority(
 }
 
 pub fn roots_at(connection: &Connection, epochs: &[u64]) -> Result<Option<Vec<RootSnapshot>>> {
+    read_snapshot(connection, |connection| roots_at_inner(connection, epochs))
+}
+
+fn roots_at_inner(connection: &Connection, epochs: &[u64]) -> Result<Option<Vec<RootSnapshot>>> {
     let mut statement = connection.prepare(
         "SELECT epoch, root_hash, root_node, exact_root, exact_signed_root
          FROM merkle_roots WHERE epoch = ?1",
@@ -790,4 +934,57 @@ fn identity_snapshot_filtered(
             },
         )
         .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_snapshot_keeps_repository_reads_on_one_concurrent_view() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("snapshot.sqlite");
+        let setup = Connection::open(&path).unwrap();
+        setup
+            .execute_batch(
+                "PRAGMA journal_mode = WAL;
+                 CREATE TABLE value(version INTEGER NOT NULL);
+                 INSERT INTO value(version) VALUES (1);",
+            )
+            .unwrap();
+        drop(setup);
+
+        let database = ReadDatabase {
+            connection: Connection::open(&path).unwrap(),
+        };
+        let (read_sender, read_receiver) = std::sync::mpsc::sync_channel(1);
+        let (commit_sender, commit_receiver) = std::sync::mpsc::sync_channel(1);
+        let writer = std::thread::spawn(move || {
+            read_receiver.recv().unwrap();
+            let writer = Connection::open(path).unwrap();
+            writer.execute("UPDATE value SET version = 2", []).unwrap();
+            commit_sender.send(()).unwrap();
+        });
+
+        let snapshot = database.snapshot().unwrap();
+        let before: i64 = snapshot
+            .connection()
+            .query_row("SELECT version FROM value", [], |row| row.get(0))
+            .unwrap();
+        read_sender.send(()).unwrap();
+        commit_receiver.recv().unwrap();
+        let after: i64 = snapshot
+            .connection()
+            .query_row("SELECT version FROM value", [], |row| row.get(0))
+            .unwrap();
+        drop(snapshot);
+        writer.join().unwrap();
+
+        assert_eq!((before, after), (1, 1));
+        let current: i64 = database
+            .connection
+            .query_row("SELECT version FROM value", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(current, 2);
+    }
 }

@@ -53,6 +53,48 @@ pub fn commit_with_request_at(
     request_hash: [u8; 32],
     now: u64,
 ) -> foks_server_db::Result<CommitOutcome> {
+    commit_with_request_at_and_invite(
+        database,
+        failure,
+        request_hash,
+        now,
+        foks_server_db::InviteConsumption::Empty,
+    )
+}
+
+pub fn commit_with_request_at_and_invite(
+    database: &mut Database,
+    failure: Option<FailurePoint>,
+    request_hash: [u8; 32],
+    now: u64,
+    invite: foks_server_db::InviteConsumption<'_>,
+) -> foks_server_db::Result<CommitOutcome> {
+    commit_with_request_at_invite_and_passphrase(database, failure, request_hash, now, invite, None)
+}
+
+pub fn commit_with_passphrase(
+    database: &mut Database,
+    failure: Option<FailurePoint>,
+    passphrase: foks_server_db::PassphraseMutation<'_>,
+) -> foks_server_db::Result<CommitOutcome> {
+    commit_with_request_at_invite_and_passphrase(
+        database,
+        failure,
+        [0x99; 32],
+        1_000_000,
+        foks_server_db::InviteConsumption::Empty,
+        Some(passphrase),
+    )
+}
+
+fn commit_with_request_at_invite_and_passphrase(
+    database: &mut Database,
+    failure: Option<FailurePoint>,
+    request_hash: [u8; 32],
+    now: u64,
+    invite: foks_server_db::InviteConsumption<'_>,
+    passphrase: Option<foks_server_db::PassphraseMutation<'_>>,
+) -> foks_server_db::Result<CommitOutcome> {
     let leaf = ([0x10; 32], [0x20; 32]);
     let merkle_commit = prepare(
         &MemoryStore::default(),
@@ -95,6 +137,8 @@ pub fn commit_with_request_at(
         idempotency_key: &[0x55; 16],
         request_hash: &request_hash,
         response: b"response",
+        invite,
+        passphrase,
         now,
         receipt_expires_at: now + 1_000_000,
     };

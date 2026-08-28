@@ -20,11 +20,8 @@ impl Maintenance {
             match receiver.recv_timeout(INTERVAL) {
                 Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => {
-                    let Ok(now) = clock.now_micros() else {
-                        continue;
-                    };
-                    let cutoff = now.saturating_sub(ABANDONED_UPLOAD_AGE_MICROS);
-                    let _ = writer.call(move |database| {
+                    let _ = writer.call_with_current_time(Arc::clone(&clock), |database, now| {
+                        let cutoff = now.saturating_sub(ABANDONED_UPLOAD_AGE_MICROS);
                         database.run_maintenance(now, cutoff)?;
                         database.checkpoint()?;
                         Ok(())

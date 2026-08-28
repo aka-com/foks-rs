@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser as _, ValueEnum};
 use foks_client_app::{
     derive_vault_key, AccountVault, CheckedProfileSession, ClientCredentials, CredentialBackend,
-    Profile, ProfileRegistry, ProfileSession, ProtocolPolicy, TrustRoot,
+    Passphrase, Profile, ProfileRegistry, ProfileSession, ProtocolPolicy, TrustRoot,
 };
 use foks_keystore::EncryptedFileSecretStore;
 use zeroize::Zeroizing;
@@ -40,6 +40,8 @@ enum Command {
     Device(DeviceCommand),
     #[command(subcommand)]
     Recovery(RecoveryCommand),
+    #[command(subcommand)]
+    Passphrase(PassphraseCommand),
     #[command(subcommand)]
     Team(TeamCommand),
 }
@@ -256,6 +258,40 @@ struct AccountCreate {
     device_name: String,
     #[arg(long, default_value = "")]
     email: String,
+    /// Signup invite. Standard codes start with `s.`; other values are multi-use codes.
+    #[arg(long, default_value = "")]
+    invite: String,
+    /// Private UTF-8 file containing the passphrase (one trailing newline is ignored).
+    #[arg(long, requires = "passphrase_confirmation_file")]
+    passphrase_file: Option<PathBuf>,
+    /// A second private file that must contain the same passphrase.
+    #[arg(long, requires = "passphrase_file")]
+    passphrase_confirmation_file: Option<PathBuf>,
+}
+
+#[derive(clap::Subcommand)]
+enum PassphraseCommand {
+    Set(PassphraseChange),
+    Change(PassphraseChange),
+    Verify(PassphraseVerify),
+}
+
+#[derive(clap::Args)]
+struct PassphraseChange {
+    profile: String,
+    alias: String,
+    #[arg(long)]
+    passphrase_file: PathBuf,
+    #[arg(long)]
+    passphrase_confirmation_file: PathBuf,
+}
+
+#[derive(clap::Args)]
+struct PassphraseVerify {
+    profile: String,
+    alias: String,
+    #[arg(long)]
+    passphrase_file: PathBuf,
 }
 
 fn main() {
@@ -279,6 +315,9 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
         Command::Device(command) => device_command(&arguments.state_dir, arguments.json, command),
         Command::Recovery(command) => {
             recovery_command(&arguments.state_dir, arguments.json, command)
+        }
+        Command::Passphrase(command) => {
+            passphrase_command(&arguments.state_dir, arguments.json, command)
         }
         Command::Team(command) => team_command(&arguments.state_dir, arguments.json, command),
     }
@@ -415,11 +454,23 @@ fn account_command(
         AccountCommand::Create(arguments) => {
             let session = ProfileSession::open(&registry, &arguments.profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
+                let passphrase = match (
+                    arguments.passphrase_file.as_deref(),
+                    arguments.passphrase_confirmation_file.as_deref(),
+                ) {
+                    (Some(passphrase), Some(confirmation)) => {
+                        Some(confirmed_passphrase(passphrase, confirmation)?)
+                    }
+                    (None, None) => None,
+                    _ => return Err("both passphrase files are required".into()),
+                };
                 let report = session.create_account(
                     &arguments.alias,
                     &arguments.username,
                     &arguments.device_name,
                     &arguments.email,
+                    &arguments.invite,
+                    passphrase,
                     vault,
                     master,
                 )?;
@@ -438,6 +489,46 @@ fn account_command(
             with_vault(state_dir, &session, |session, vault, _| {
                 let report = session.sync_account(&alias, vault)?;
                 output(json, &report, "account synchronized")
+            })
+        }
+    }
+}
+
+fn passphrase_command(
+    state_dir: &Path,
+    json: bool,
+    command: PassphraseCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let registry = ProfileRegistry::open(state_dir)?;
+    match command {
+        PassphraseCommand::Set(arguments) => {
+            let session = ProfileSession::open(&registry, &arguments.profile)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let passphrase = confirmed_passphrase(
+                    &arguments.passphrase_file,
+                    &arguments.passphrase_confirmation_file,
+                )?;
+                let report = session.set_passphrase(&arguments.alias, passphrase, vault)?;
+                output(json, &report, "passphrase configured and verified")
+            })
+        }
+        PassphraseCommand::Change(arguments) => {
+            let session = ProfileSession::open(&registry, &arguments.profile)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let passphrase = confirmed_passphrase(
+                    &arguments.passphrase_file,
+                    &arguments.passphrase_confirmation_file,
+                )?;
+                let report = session.change_passphrase(&arguments.alias, passphrase, vault)?;
+                output(json, &report, "passphrase changed and verified")
+            })
+        }
+        PassphraseCommand::Verify(arguments) => {
+            let session = ProfileSession::open(&registry, &arguments.profile)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let passphrase = Passphrase::new(read_passphrase(&arguments.passphrase_file)?)?;
+                let report = session.verify_passphrase(&arguments.alias, passphrase, vault)?;
+                output(json, &report, "passphrase verified")
             })
         }
     }
@@ -791,6 +882,56 @@ fn read_phrase(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error::Err
     Ok(phrase)
 }
 
+fn confirmed_passphrase(
+    path: &Path,
+    confirmation_path: &Path,
+) -> Result<Passphrase, Box<dyn std::error::Error>> {
+    let passphrase = read_passphrase(path)?;
+    let confirmation = read_passphrase(confirmation_path)?;
+    if passphrase.as_bytes() != confirmation.as_bytes() {
+        return Err("passphrase confirmation does not match".into());
+    }
+    Ok(Passphrase::new(passphrase.as_bytes())?)
+}
+
+fn read_passphrase(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > 1026 {
+        return Err("passphrase file is not a bounded regular file".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("passphrase file permissions allow group or other access".into());
+        }
+    }
+    let mut value = Zeroizing::new(String::new());
+    file.take(1027).read_to_string(&mut value)?;
+    if value.len() > 1026 || value.contains('\0') {
+        return Err("passphrase file is invalid or excessive".into());
+    }
+    if value.ends_with("\r\n") {
+        let length = value.len() - 2;
+        value.truncate(length);
+    } else if value.ends_with('\n') {
+        let length = value.len() - 1;
+        value.truncate(length);
+    }
+    if value.contains(['\r', '\n']) || value.is_empty() || value.len() > 1024 {
+        return Err("passphrase must be one nonempty line of at most 1024 bytes".into());
+    }
+    Ok(value)
+}
+
 fn read_bounded_private_file(
     path: &Path,
     maximum: u64,
@@ -908,5 +1049,27 @@ mod tests {
         assert!(state.join("profiles.toml").is_file());
         assert!(state.join("master.key").is_file());
         assert_eq!(ProfileRegistry::open(&state).unwrap().profiles().len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn passphrase_files_are_private_bounded_and_normalized_once() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("passphrase");
+        std::fs::write(&private, b"correct horse\n").unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(read_passphrase(&private).unwrap().as_str(), "correct horse");
+
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(read_passphrase(&private).is_err());
+
+        let target = directory.path().join("target");
+        std::fs::write(&target, b"secret").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = directory.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(read_passphrase(&link).is_err());
     }
 }

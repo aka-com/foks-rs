@@ -1,6 +1,6 @@
 use rusqlite::{params, OptionalExtension as _};
 
-use crate::{error::sql_integer, Database, Error, ReadDatabase, Result};
+use crate::{error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredCertificate {
@@ -137,6 +137,16 @@ impl ReadDatabase {
     }
 }
 
+impl ReadSnapshot<'_> {
+    pub fn active_credential_owner(
+        &self,
+        uid: &[u8],
+        credential_id: &[u8],
+    ) -> Result<Option<Vec<u8>>> {
+        active_credential_owner(self.connection(), uid, credential_id)
+    }
+}
+
 fn is_active_device(
     connection: &rusqlite::Connection,
     uid: &[u8],
@@ -152,7 +162,7 @@ fn is_active_device(
         .is_some())
 }
 
-fn active_credential_owner(
+pub(crate) fn active_credential_owner(
     connection: &rusqlite::Connection,
     uid: &[u8],
     credential_id: &[u8],
