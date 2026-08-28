@@ -519,6 +519,17 @@ pub fn render_status_codes(merged: &Merged<'_>) -> String {
 pub fn render_routes(merged: &Merged<'_>) -> String {
     let mut output = generated_header("Server services and routes merged with local policy.");
     output.push_str("use super::{RouteSpec, ServiceSpec};\n\n");
+    output.push_str("#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]\n");
+    output.push_str("pub enum RouteId {\n");
+    for route in &merged.routes {
+        writeln!(
+            output,
+            "    {},",
+            route_variant(&route.policy.protocol, &route.policy.method)
+        )
+        .expect("write String");
+    }
+    output.push_str("}\n\n");
     output.push_str("#[rustfmt::skip]\npub const SERVICES: &[ServiceSpec] = &[\n");
     for service in &merged.services {
         output.push_str("    ServiceSpec {\n");
@@ -542,6 +553,12 @@ pub fn render_routes(merged: &Merged<'_>) -> String {
     for route in &merged.routes {
         let policy = route.policy;
         writeln!(output, "    RouteSpec {{").expect("write String");
+        writeln!(
+            output,
+            "        id: RouteId::{},",
+            route_variant(&policy.protocol, &policy.method)
+        )
+        .expect("write String");
         writeln!(
             output,
             "        protocol: {},",
@@ -582,6 +599,29 @@ pub fn render_routes(merged: &Merged<'_>) -> String {
         output.push_str("],\n    },\n");
     }
     output.push_str("];\n");
+    output
+}
+
+fn route_variant(protocol: &str, method: &str) -> String {
+    fn append_identifier(output: &mut String, value: &str) {
+        let mut uppercase_next = true;
+        for character in value.chars() {
+            if character.is_ascii_alphanumeric() {
+                if uppercase_next {
+                    output.push(character.to_ascii_uppercase());
+                    uppercase_next = false;
+                } else {
+                    output.push(character);
+                }
+            } else {
+                uppercase_next = true;
+            }
+        }
+    }
+
+    let mut output = String::with_capacity(protocol.len() + method.len());
+    append_identifier(&mut output, protocol);
+    append_identifier(&mut output, method);
     output
 }
 

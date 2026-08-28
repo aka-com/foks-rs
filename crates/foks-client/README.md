@@ -58,10 +58,11 @@ retry material is committed first through the caller's `ProtectedMutationStore`
 and is fingerprint-bound to the public SQLite row. `Prepared` is the only state
 that may submit; once an operation becomes `Submitting`, recovery only compares
 authenticated server state and never blindly replays an ambiguous request.
-`EncryptedFileMutationStore` is the production local adapter: AKA supplies its
-32-byte master key from the platform vault, while the adapter atomically stores
-individually authenticated XChaCha20-Poly1305 records in a private directory.
-The master key is never written alongside those records.
+`EncryptedFileMutationStore` is the production local adapter: the standalone
+application supplies its 32-byte master key from Keychain or Secret Service,
+while the adapter atomically stores individually authenticated
+XChaCha20-Poly1305 records in a private directory. The master key is never
+written alongside those records.
 
 `FoksScheduler` persists due times, bounded leases, failures, and retry state in
 the public hard-state database for user refresh and ambiguous-mutation
@@ -71,16 +72,20 @@ dispatches each public job identity to its protected account context. Jobs must
 be idempotent because an expired lease is retried after a process crash.
 
 That hard state detects inconsistent modification, rollback relative to the
-database's retained pins, and same-sequence forks. It cannot detect replacement
-of the entire database with an older, completely valid copy. Deployments that
-need that guarantee must retain a newer checkpoint outside SQLite—for example
-in a platform keychain, an external transparency pin, or an independently
-protected backup—and compare it when opening the database.
+database's retained pins, and same-sequence forks. The application layer also
+binds its database ID and monotonic hard-state revision to a native Keychain or
+Secret Service checkpoint, rejecting whole-database rollback and substitution.
+The protocol crate remains usable without that application policy, so embedders
+must supply an equivalent external checkpoint if they open hard state directly.
 
 `create_software_account` implements the narrow non-interactive registration
 slice: one software owner device, its generation-1 owner PUK, verified
 post-signup user loading, public mutation journaling, and initial personal KV
-root creation. The supplied `ProtectedMutationStore` must be a durable encrypted
+root creation. It can also establish a v0.1.9 PPE passphrase in the same signup
+transaction and verify it through the public challenge protocol. It preflights
+optional standard or multi-use invites through
+`Reg.checkInviteCode`; the server still performs authoritative atomic
+redemption during signup. The supplied `ProtectedMutationStore` must be a durable encrypted
 credential store in production; the client records the exact signup request,
 seeds, and self token there before journaling or submission. Those secrets are
 never written to the hard-state database.
@@ -94,11 +99,29 @@ existing software devices. Revocation rotates every PUK visible to the removed
 credential, preserves the encrypted historical seed chain, and waits for the
 exact user-chain transition before reporting success. Callers must durably
 retain every supplied seed before submission. Physically separated
-countersigning/KEX, passphrase annex updates, Yubi/P-256 mutation recipients,
-and self-revocation are not yet exposed by these convenience APIs.
-Any operation that reaches the owner PUK requires an explicit
-`NoPassphraseConfigured` assertion, so omission of the passphrase annex cannot
-be accidental.
+countersigning/KEX, Yubi/P-256 mutation recipients, and self-revocation are not
+yet exposed by these convenience APIs. When an owner PUK rotates, the client
+queries passphrase state and atomically appends the required PPE annex; an
+explicit `NoPassphraseConfigured` token is accepted only after the server
+confirms that no passphrase exists. Rust-to-Go standalone set/change requests
+use the upstream wire methods but do not publish the Go client's separate
+generic user-settings links; PPE annexes on user mutations therefore remain a
+known cross-server compatibility boundary until that chain family is
+implemented.
+
+`set_passphrase`, `change_passphrase`, and `verify_passphrase` implement the
+authenticated PPE lifecycle. V1 Argon2id runs in zeroizing client memory; the
+server receives only public verification material and encrypted boxes. Change
+uses the current owner-PUK backup box, matching v0.1.9, so it does not ask for
+the old passphrase. Verification signs a one-time public registration challenge
+and decrypts the returned SKMWK history locally. This verifies PPE state; it
+does not lock the local credential vault or implement passphrase-only
+new-device recovery. Set/change reconcile a lost or partial post-commit RPC
+response in-process by reading the stored parcel back and requiring an exact
+match. They do not yet journal the intended PPE update in protected durable
+client state: if the client process dies after the server commit, the user must
+inspect or verify the active passphrase before deciding whether to rotate it
+again rather than blindly repeating a change.
 
 `rotate_software_puks` performs the corresponding membership-preserving
 operation. Its input must be a complete ordered role prefix through the

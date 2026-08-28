@@ -11,7 +11,8 @@ v0.1.9 client:
 - NaCl-compatible X25519 precomputation and hybrid SHA3 key swizzling; and
 - XSalsa20-Poly1305 PUK/PTK unboxing with receiver, host, generation, role, and
   public-key binding checks;
-- exact account, device, PUK, and ad-hoc-team mutation construction; and
+- exact account, device, PUK, and ad-hoc-team mutation construction;
+- v0.1.9 Argon2id stretching, PPE enrollment/reboxing, and challenge login; and
 - authenticated KV name, directory-entry, and content encryption.
 
 Higher-level host-chain policy and SQLite pinning live in `foks-verify` and

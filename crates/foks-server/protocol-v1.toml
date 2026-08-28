@@ -10,6 +10,8 @@ upstream_commit = "f07a5816f54120f5fb4985cf980a7c45d74449b1"
 
 [status_codes]
 bad_args = 1030
+bad_invite = 1019
+bad_passphrase = 1011
 device_already_provisioned = 1072
 expired = 1062
 kv_noent = 8016
@@ -18,6 +20,7 @@ locked = 8014
 name_in_use = 1023
 not_found = 1049
 ok = 0
+passphrase_not_found = 1043
 permission_denied = 1013
 quota_exceeded = 1060
 rate_limited = 1012
@@ -127,10 +130,38 @@ listener = "public_services"
 authentication = "signed_signup"
 request = "SoftwareSignupArgument"
 result = "Void"
-statuses = ["ok", "bad_args", "name_in_use", "stale_root", "tx_retry"]
+statuses = ["ok", "bad_args", "bad_invite", "name_in_use", "rate_limited", "stale_root", "tx_retry"]
 max_request_bytes = 1048576
 supported = true
-coverage = ["signup_and_user"]
+coverage = ["passphrases", "signup_and_user"]
+
+[[route]]
+protocol = "Reg"
+protocol_id = 0xf7ab85f3
+method = "getLoginChallenge"
+position = 4
+listener = "public_services"
+authentication = "delegated_tls"
+request = "UID"
+result = "RegistrationChallenge"
+statuses = ["ok", "bad_args", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+coverage = ["passphrases"]
+
+[[route]]
+protocol = "Reg"
+protocol_id = 0xf7ab85f3
+method = "login"
+position = 5
+listener = "public_services"
+authentication = "signed_login_challenge"
+request = "PassphraseLoginArgument"
+result = "PassphraseLoginResult"
+statuses = ["ok", "bad_args", "bad_passphrase", "rate_limited"]
+max_request_bytes = 16384
+supported = true
+coverage = ["passphrases"]
 
 [[route]]
 protocol = "Reg"
@@ -163,6 +194,20 @@ coverage = ["recovery"]
 [[route]]
 protocol = "Reg"
 protocol_id = 0xf7ab85f3
+method = "checkInviteCode"
+position = 8
+listener = "public_services"
+authentication = "delegated_tls"
+request = "InviteCode"
+result = "Void"
+statuses = ["ok", "bad_args", "bad_invite", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+coverage = ["signup_invites"]
+
+[[route]]
+protocol = "Reg"
+protocol_id = 0xf7ab85f3
 method = "selectVHost"
 position = 15
 listener = "public_services"
@@ -173,6 +218,90 @@ statuses = ["ok", "bad_args", "not_found"]
 max_request_bytes = 4096
 supported = true
 coverage = ["probe_and_pin"]
+
+[[route]]
+protocol = "Reg"
+protocol_id = 0xf7ab85f3
+method = "stretchVersion"
+position = 14
+listener = "public_services"
+authentication = "delegated_tls"
+request = "Void"
+result = "StretchVersion"
+statuses = ["ok", "bad_args"]
+max_request_bytes = 1024
+supported = true
+coverage = ["passphrases"]
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "setPassphrase"
+position = 1
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "SetPassphraseArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
+max_request_bytes = 4194304
+supported = true
+coverage = ["passphrases"]
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "changePassphrase"
+position = 2
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "ChangePassphraseArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "passphrase_not_found", "permission_denied", "rate_limited", "tx_retry"]
+max_request_bytes = 4194304
+supported = true
+coverage = ["passphrases"]
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "getSalt"
+position = 3
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "Void"
+result = "PassphraseSalt"
+statuses = ["ok", "bad_args", "passphrase_not_found", "permission_denied"]
+max_request_bytes = 1024
+supported = true
+coverage = ["passphrases"]
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "nextPassphraseGeneration"
+position = 4
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "Void"
+result = "PassphraseGeneration"
+statuses = ["ok", "bad_args", "permission_denied"]
+max_request_bytes = 1024
+supported = true
+coverage = ["passphrases"]
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "stretchVersion"
+position = 5
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "Void"
+result = "StretchVersion"
+statuses = ["ok", "bad_args", "permission_denied"]
+max_request_bytes = 1024
+supported = true
+coverage = ["passphrases"]
 
 [[route]]
 protocol = "User"
@@ -200,7 +329,7 @@ result = "Void"
 statuses = ["ok", "bad_args", "permission_denied", "stale_root", "tx_retry"]
 max_request_bytes = 4194304
 supported = true
-coverage = ["provisioning"]
+coverage = ["passphrases", "provisioning"]
 
 [[route]]
 protocol = "User"
@@ -229,6 +358,20 @@ statuses = ["ok", "bad_args", "not_found", "permission_denied"]
 max_request_bytes = 16384
 supported = true
 coverage = ["signup_and_user"]
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "getPpeParcel"
+position = 15
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "Void"
+result = "PpeParcel"
+statuses = ["ok", "bad_args", "passphrase_not_found", "permission_denied"]
+max_request_bytes = 1024
+supported = true
+coverage = ["passphrases"]
 
 [[route]]
 protocol = "User"

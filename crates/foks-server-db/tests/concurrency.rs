@@ -1,20 +1,20 @@
 mod common;
 
-use foks_server_db::{root_snapshot, RootSnapshot};
+use foks_server_db::{Config, ReadDatabase, RootSnapshot};
 
 #[test]
-fn read_transaction_observes_one_complete_root_snapshot() {
+fn request_snapshot_observes_one_complete_root_state() {
     let mut database = common::TestDatabase::new();
-    let reader = database.database.open_reader().unwrap();
-    reader.execute_batch("BEGIN").unwrap();
-    assert_eq!(root_snapshot(&reader).unwrap(), None);
+    let reader = ReadDatabase::open(&database.path, Config::default()).unwrap();
+    let snapshot = reader.snapshot().unwrap();
+    assert_eq!(snapshot.current_root().unwrap(), None);
 
     database.reserve(1_000_000);
     database.commit(None).unwrap();
-    assert_eq!(root_snapshot(&reader).unwrap(), None);
-    reader.execute_batch("COMMIT").unwrap();
+    assert_eq!(snapshot.current_root().unwrap(), None);
+    drop(snapshot);
     assert!(matches!(
-        root_snapshot(&reader).unwrap(),
+        reader.current_root().unwrap(),
         Some(RootSnapshot { epoch: 1, .. })
     ));
 }

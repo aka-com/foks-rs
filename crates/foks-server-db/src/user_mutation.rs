@@ -6,6 +6,7 @@ use crate::{error::sql_integer, receipts, Database, Error, Result};
 pub enum UserMutationFailurePoint {
     Chain,
     Projection,
+    Passphrase,
     MerkleNodes,
     MerkleRoot,
     Receipt,
@@ -58,6 +59,7 @@ pub struct UserMutation<'a> {
     pub shared_keys: &'a [SharedKeyMutation<'a>],
     pub parcels: &'a [ParcelMutation<'a>],
     pub seed_chain: &'a [SeedChainMutation<'a>],
+    pub passphrase: Option<crate::PassphraseMutation<'a>>,
     pub expected_root_epoch: u64,
     pub expected_root_hash: &'a [u8; 32],
     pub merkle_commit: &'a foks_merkle_store::Commit,
@@ -242,6 +244,20 @@ impl Database {
             }
         }
         inject(failure, UserMutationFailurePoint::Projection)?;
+
+        let owner_generation = mutation
+            .shared_keys
+            .iter()
+            .find(|key| key.role_type == 3 && key.visibility == 0)
+            .map(|key| key.generation);
+        crate::passphrases::apply_owner_rotation(
+            &transaction,
+            &self.config,
+            mutation.uid,
+            owner_generation,
+            mutation.passphrase,
+        )?;
+        inject(failure, UserMutationFailurePoint::Passphrase)?;
 
         for (hash, encoded) in &mutation.merkle_commit.nodes {
             let existing: Option<Vec<u8>> = transaction

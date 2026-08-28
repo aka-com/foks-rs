@@ -3,17 +3,23 @@
 #![forbid(unsafe_code)]
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+mod text_field;
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod supported {
     use std::path::PathBuf;
     use std::sync::Arc;
 
     use clap::Parser as _;
     use foks_agent_client::AgentClient;
-    use foks_desktop::{DesktopModel, Screen};
+    use foks_agent_proto::SecretString;
+    use foks_desktop::{DesktopModel, PassphraseAction, Screen};
     use gpui::{
-        div, prelude::*, px, rgb, size, App, Application, Bounds, Context, SharedString, Window,
-        WindowBounds, WindowOptions,
+        div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, SharedString,
+        Window, WindowBounds, WindowOptions,
     };
+
+    use crate::text_field::TextField;
 
     #[derive(clap::Parser)]
     #[command(name = "foks-desktop")]
@@ -30,6 +36,15 @@ mod supported {
         model: DesktopModel,
         loading: bool,
         request_generation: u64,
+        account_alias: Entity<TextField>,
+        account_username: Entity<TextField>,
+        account_device: Entity<TextField>,
+        account_email: Entity<TextField>,
+        account_invite: Entity<TextField>,
+        account_passphrase: Entity<TextField>,
+        account_passphrase_confirmation: Entity<TextField>,
+        security_passphrase: Entity<TextField>,
+        security_passphrase_confirmation: Entity<TextField>,
     }
 
     impl FoksDesktop {
@@ -38,6 +53,19 @@ mod supported {
                 model: DesktopModel::new(Arc::new(AgentClient::new(socket))),
                 loading: false,
                 request_generation: 0,
+                account_alias: cx.new(|cx| TextField::new("Local alias", false, 64, cx)),
+                account_username: cx.new(|cx| TextField::new("FOKS username", false, 256, cx)),
+                account_device: cx.new(|cx| TextField::new("Device name", false, 256, cx)),
+                account_email: cx.new(|cx| TextField::new("Email (optional)", false, 320, cx)),
+                account_invite: cx
+                    .new(|cx| TextField::new("Signup invite (optional)", true, 4096, cx)),
+                account_passphrase: cx
+                    .new(|cx| TextField::new("Passphrase (optional)", true, 1024, cx)),
+                account_passphrase_confirmation: cx
+                    .new(|cx| TextField::new("Confirm passphrase", true, 1024, cx)),
+                security_passphrase: cx.new(|cx| TextField::new("Passphrase", true, 1024, cx)),
+                security_passphrase_confirmation: cx
+                    .new(|cx| TextField::new("Confirm passphrase", true, 1024, cx)),
             };
             desktop.refresh(cx);
             desktop
@@ -180,6 +208,242 @@ mod supported {
             }
             row.into_any_element()
         }
+
+        fn account_form(&self, cx: &Context<Self>) -> gpui::AnyElement {
+            let field = |label: &'static str, input: Entity<TextField>| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().text_sm().text_color(rgb(0x526178)).child(label))
+                    .child(input)
+            };
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .p_4()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(0xd8dfeb))
+                .bg(rgb(0xf8faff))
+                .child(div().text_lg().child("Create account"))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(0x65738a))
+                        .child("The invite and optional passphrase go only to the private local agent; passphrase fields are consumed when submitted."),
+                )
+                .child(
+                    div()
+                        .grid()
+                        .grid_cols(2)
+                        .gap_3()
+                        .child(field("Local alias", self.account_alias.clone()))
+                        .child(field("Username", self.account_username.clone()))
+                        .child(field("Device", self.account_device.clone()))
+                        .child(field("Email", self.account_email.clone())),
+                )
+                .child(field("Invite", self.account_invite.clone()))
+                .child(
+                    div()
+                        .grid()
+                        .grid_cols(2)
+                        .gap_3()
+                        .child(field("Passphrase (optional)", self.account_passphrase.clone()))
+                        .child(field(
+                            "Confirm passphrase",
+                            self.account_passphrase_confirmation.clone(),
+                        )),
+                )
+                .child(
+                    div()
+                        .id("create-account")
+                        .w(px(160.))
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .bg(rgb(0x2764d8))
+                        .text_color(rgb(0xffffff))
+                        .child(if self.loading {
+                            "Creating…"
+                        } else {
+                            "Create account"
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| this.submit_account(cx))),
+                )
+                .into_any_element()
+        }
+
+        fn submit_account(&mut self, cx: &mut Context<Self>) {
+            if self.loading {
+                return;
+            }
+            let alias = self.account_alias.read(cx).value().to_owned();
+            let username = self.account_username.read(cx).value().to_owned();
+            let device = self.account_device.read(cx).value().to_owned();
+            let email = self.account_email.read(cx).value().to_owned();
+            let invite = self.account_invite.read(cx).value().to_owned();
+            let passphrase = self
+                .account_passphrase
+                .update(cx, |input, cx| input.take_secret(cx));
+            let confirmation = self
+                .account_passphrase_confirmation
+                .update(cx, |input, cx| input.take_secret(cx));
+            let operation = match self.model.create_account_operation(
+                &alias,
+                &username,
+                &device,
+                &email,
+                &invite,
+                Some(SecretString::new(passphrase)),
+                Some(SecretString::new(confirmation)),
+            ) {
+                Ok(operation) => operation,
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                    return;
+                }
+            };
+            let transport = self.model.transport();
+            self.request_generation = self.request_generation.wrapping_add(1);
+            let generation = self.request_generation;
+            self.loading = true;
+            cx.notify();
+            let task = cx
+                .background_executor()
+                .spawn(async move { transport.call(operation) });
+            cx.spawn(async move |this, cx| {
+                let result = task.await;
+                this.update(cx, |this, cx| {
+                    if this.request_generation != generation {
+                        return;
+                    }
+                    this.loading = false;
+                    if result.is_ok() {
+                        this.model.select_account(alias.clone());
+                        for input in [
+                            &this.account_alias,
+                            &this.account_username,
+                            &this.account_device,
+                            &this.account_email,
+                            &this.account_invite,
+                        ] {
+                            input.update(cx, |input, cx| input.clear(cx));
+                        }
+                    }
+                    this.model.accept(result);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
+
+        fn passphrase_form(&self, cx: &Context<Self>) -> gpui::AnyElement {
+            let button = |id: &'static str, label: &'static str, action: PassphraseAction| {
+                div()
+                    .id(id)
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(rgb(0x2764d8))
+                    .text_color(rgb(0xffffff))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, _, cx| this.submit_passphrase(action, cx)))
+            };
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .p_4()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(0xd8dfeb))
+                .bg(rgb(0xf8faff))
+                .child(div().text_lg().child("Account passphrase"))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(0x65738a))
+                        .child("Select an account. Set and change require confirmation; verify performs the public login challenge."),
+                )
+                .child(
+                    div()
+                        .grid()
+                        .grid_cols(2)
+                        .gap_3()
+                        .child(self.security_passphrase.clone())
+                        .child(self.security_passphrase_confirmation.clone()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(button("set-passphrase", "Set", PassphraseAction::Set))
+                        .child(button(
+                            "change-passphrase",
+                            "Change",
+                            PassphraseAction::Change,
+                        ))
+                        .child(button(
+                            "verify-passphrase",
+                            "Verify",
+                            PassphraseAction::Verify,
+                        )),
+                )
+                .into_any_element()
+        }
+
+        fn submit_passphrase(&mut self, action: PassphraseAction, cx: &mut Context<Self>) {
+            if self.loading {
+                return;
+            }
+            let passphrase = SecretString::new(
+                self.security_passphrase
+                    .update(cx, |input, cx| input.take_secret(cx)),
+            );
+            let confirmation = SecretString::new(
+                self.security_passphrase_confirmation
+                    .update(cx, |input, cx| input.take_secret(cx)),
+            );
+            let confirmation = (action != PassphraseAction::Verify).then_some(confirmation);
+            let operation = match self
+                .model
+                .passphrase_operation(action, passphrase, confirmation)
+            {
+                Ok(operation) => operation,
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                    return;
+                }
+            };
+            let transport = self.model.transport();
+            self.request_generation = self.request_generation.wrapping_add(1);
+            let generation = self.request_generation;
+            self.loading = true;
+            cx.notify();
+            let task = cx
+                .background_executor()
+                .spawn(async move { transport.call(operation) });
+            cx.spawn(async move |this, cx| {
+                let result = task.await;
+                this.update(cx, |this, cx| {
+                    if this.request_generation != generation {
+                        return;
+                    }
+                    this.loading = false;
+                    this.model.accept(result);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
     }
 
     impl Render for FoksDesktop {
@@ -207,6 +471,34 @@ mod supported {
                 "Run due jobs"
             } else {
                 "Refresh"
+            };
+
+            let response = div()
+                .id("screen-content")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .p_4()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(0xd8dfeb))
+                .bg(rgb(0xffffff))
+                .font_family("monospace")
+                .text_sm()
+                .child(content);
+            let body = if self.model.screen() == Screen::Accounts {
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(self.account_form(cx))
+                    .child(self.passphrase_form(cx))
+                    .child(response)
+                    .into_any_element()
+            } else {
+                response.into_any_element()
             };
 
             div()
@@ -275,21 +567,7 @@ mod supported {
                                 ),
                         )
                         .child(self.context_selectors(cx))
-                        .child(
-                            div()
-                                .id("screen-content")
-                                .flex_1()
-                                .min_h_0()
-                                .overflow_y_scroll()
-                                .p_4()
-                                .rounded_lg()
-                                .border_1()
-                                .border_color(rgb(0xd8dfeb))
-                                .bg(rgb(0xffffff))
-                                .font_family("monospace")
-                                .text_sm()
-                                .child(content),
-                        ),
+                        .child(body),
                 )
         }
     }
@@ -309,6 +587,7 @@ mod supported {
             foks_desktop::install_crash_reporter(directory.join("crashes"));
         }
         Application::new().run(move |cx: &mut App| {
+            crate::text_field::bind_keys(cx);
             let bounds = Bounds::centered(None, size(px(1100.0), px(720.0)), cx);
             cx.open_window(
                 WindowOptions {

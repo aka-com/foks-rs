@@ -8,11 +8,12 @@ use clap::Parser as _;
 use foks_agent_proto::{ErrorCode, Operation, Request, Response, MAXIMUM_MESSAGE_BYTES};
 use foks_client_app::{
     derive_vault_key, AccountVault, CancellationToken, CheckedProfileSession, ClientCredentials,
-    ProfileRegistry, ProfileSession,
+    Passphrase, ProfileRegistry, ProfileSession,
 };
 use foks_keystore::EncryptedFileSecretStore;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use zeroize::Zeroizing;
 
 const MAXIMUM_REQUESTS_PER_CONNECTION: usize = 128;
 const CANCELLATION_GRACE: Duration = Duration::from_secs(1);
@@ -544,6 +545,86 @@ fn dispatch_result(
                 Ok(serde_json::to_value(vault.aliases()?)?)
             })
         }
+        Operation::CreateAccount {
+            profile,
+            alias,
+            username,
+            device_name,
+            email,
+            invite,
+            passphrase,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            let credentials = ClientCredentials::open(state_dir)?;
+            credentials.with_checked_session(&session, |session| {
+                let master = credentials.master_key()?;
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+                let passphrase = passphrase
+                    .as_ref()
+                    .map(|passphrase| Passphrase::new(passphrase.expose()))
+                    .transpose()?;
+                Ok(serde_json::to_value(session.create_account(
+                    &alias,
+                    &username,
+                    &device_name,
+                    &email,
+                    &invite,
+                    passphrase,
+                    &mut vault,
+                    &master,
+                )?)?)
+            })
+        }
+        Operation::SetPassphrase {
+            profile,
+            alias,
+            passphrase,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(session.set_passphrase(
+                    &alias,
+                    Passphrase::new(passphrase.expose())?,
+                    vault,
+                )?)?)
+            })
+        }
+        Operation::ChangePassphrase {
+            profile,
+            alias,
+            passphrase,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(session.change_passphrase(
+                    &alias,
+                    Passphrase::new(passphrase.expose())?,
+                    vault,
+                )?)?)
+            })
+        }
+        Operation::VerifyPassphrase {
+            profile,
+            alias,
+            passphrase,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(session.verify_passphrase(
+                    &alias,
+                    Passphrase::new(passphrase.expose())?,
+                    vault,
+                )?)?)
+            })
+        }
         Operation::SyncAccount { profile, alias } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
@@ -640,7 +721,7 @@ fn dispatch(state_dir: &Path, request: Request) -> Response {
 #[cfg(unix)]
 async fn read_frame(
     stream: &mut tokio::net::UnixStream,
-) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Option<Zeroizing<Vec<u8>>>, Box<dyn std::error::Error + Send + Sync>> {
     let mut prefix = [0u8; 4];
     match stream.read_exact(&mut prefix).await {
         Ok(_) => {}
@@ -651,7 +732,7 @@ async fn read_frame(
     if length > MAXIMUM_MESSAGE_BYTES {
         return Err("agent frame exceeds the message limit".into());
     }
-    let mut frame = Vec::with_capacity(4 + length);
+    let mut frame = Zeroizing::new(Vec::with_capacity(4 + length));
     frame.extend_from_slice(&prefix);
     frame.resize(4 + length, 0);
     stream.read_exact(&mut frame[4..]).await?;
@@ -729,6 +810,148 @@ mod tests {
             profiles.result,
             foks_agent_proto::ResponseResult::Success { .. }
         ));
+    }
+
+    #[test]
+    fn agent_signup_carries_invites_and_passphrases_across_the_product_boundary() {
+        use foks_client_app::{
+            ClientCredentials, CredentialBackend, Profile, ProtocolPolicy, TrustRoot,
+        };
+        use foks_server_db::InviteRegime;
+        use foks_server_testkit::TestEnvironment;
+
+        let environment = TestEnvironment::new().unwrap();
+        let _server = environment.start_server().unwrap();
+        environment
+            .set_invite_regime(InviteRegime::Required)
+            .unwrap();
+        let invite = environment.issue_standard_invite(None).unwrap();
+        let state = environment.client_path("agent-product", "state").unwrap();
+        let root = environment
+            .client_path("agent-product", "probe-root.der")
+            .unwrap();
+        environment.write_probe_root(&root).unwrap();
+        ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
+        let addresses = environment.addresses().unwrap();
+        let mut registry = ProfileRegistry::open(&state).unwrap();
+        registry
+            .add(Profile {
+                name: "local".to_owned(),
+                probe: format!("localhost:{}", addresses.probe.port()),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::CertificateDer { path: root },
+            })
+            .unwrap();
+
+        let probed = dispatch(
+            &state,
+            Request::new(
+                9,
+                Operation::Probe {
+                    profile: "local".to_owned(),
+                },
+            ),
+        );
+        assert!(
+            matches!(
+                probed.result,
+                foks_agent_proto::ResponseResult::Success { .. }
+            ),
+            "unexpected probe response: {probed:?}"
+        );
+
+        let response = dispatch(
+            &state,
+            Request::new(
+                10,
+                Operation::CreateAccount {
+                    profile: "local".to_owned(),
+                    alias: "personal".to_owned(),
+                    username: "agentinvite".to_owned(),
+                    device_name: "agent laptop".to_owned(),
+                    email: "agent@example.test".to_owned(),
+                    invite: invite.code.clone(),
+                    passphrase: Some(foks_agent_proto::SecretString::new("agent passphrase one")),
+                },
+            ),
+        );
+        assert!(
+            matches!(
+                response.result,
+                foks_agent_proto::ResponseResult::Success { .. }
+            ),
+            "unexpected signup response: {response:?}"
+        );
+        let listed = dispatch(
+            &state,
+            Request::new(
+                11,
+                Operation::ListAccounts {
+                    profile: "local".to_owned(),
+                },
+            ),
+        );
+        assert!(matches!(
+            listed.result,
+            foks_agent_proto::ResponseResult::Success { value }
+                if value == serde_json::json!(["personal"])
+        ));
+
+        let duplicate_set = dispatch(
+            &state,
+            Request::new(
+                12,
+                Operation::SetPassphrase {
+                    profile: "local".to_owned(),
+                    alias: "personal".to_owned(),
+                    passphrase: foks_agent_proto::SecretString::new("unexpected replacement"),
+                },
+            ),
+        );
+        assert!(matches!(
+            duplicate_set.result,
+            foks_agent_proto::ResponseResult::Error { .. }
+        ));
+
+        for (id, operation) in [
+            (
+                13,
+                Operation::VerifyPassphrase {
+                    profile: "local".to_owned(),
+                    alias: "personal".to_owned(),
+                    passphrase: foks_agent_proto::SecretString::new("agent passphrase one"),
+                },
+            ),
+            (
+                14,
+                Operation::ChangePassphrase {
+                    profile: "local".to_owned(),
+                    alias: "personal".to_owned(),
+                    passphrase: foks_agent_proto::SecretString::new("agent passphrase two"),
+                },
+            ),
+            (
+                15,
+                Operation::VerifyPassphrase {
+                    profile: "local".to_owned(),
+                    alias: "personal".to_owned(),
+                    passphrase: foks_agent_proto::SecretString::new("agent passphrase two"),
+                },
+            ),
+        ] {
+            let response = dispatch(&state, Request::new(id, operation));
+            assert!(
+                matches!(
+                    response.result,
+                    foks_agent_proto::ResponseResult::Success { .. }
+                ),
+                "unexpected passphrase response: {response:?}"
+            );
+        }
+
+        let records = environment.invites().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].use_count, 1);
     }
 
     #[test]

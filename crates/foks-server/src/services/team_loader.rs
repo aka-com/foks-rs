@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use foks_proto::{ActivatedTeamView, EntityId, TeamViewChallenge};
 use foks_rpc::RpcStatus;
 
@@ -15,7 +17,7 @@ pub(crate) fn issue_challenge(
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
     keys: &dyn HostKeyProvider,
-    clock: &dyn foks_server_db::Clock,
+    clock: &Arc<dyn foks_server_db::Clock>,
     entropy: &dyn Entropy,
 ) -> Result<Vec<u8>, RpcStatus> {
     principal.require_ordinary_device()?;
@@ -77,14 +79,14 @@ pub(crate) fn issue_challenge(
     let token_hash = team::token_hash(&token);
     let key_generation = key.generation().as_bytes();
     writer
-        .call(move |database| {
+        .call_with_current_time(Arc::clone(clock), move |database, current_time| {
             database.issue_team_view_challenge(
                 &challenge_hash,
                 &token_hash,
                 &authority,
                 &key_generation,
                 expires_at,
-                now,
+                current_time,
             )?;
             Ok(())
         })
@@ -100,7 +102,7 @@ pub(crate) fn activate(
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
     keys: &dyn HostKeyProvider,
-    clock: &dyn foks_server_db::Clock,
+    clock: &Arc<dyn foks_server_db::Clock>,
 ) -> Result<Vec<u8>, RpcStatus> {
     principal.require_ordinary_device()?;
     let activation =
@@ -154,11 +156,8 @@ pub(crate) fn activate(
     let challenge_hash = team::challenge_hash(&exact_challenge);
     const ACTIVATION_TYPE_ID: u64 = 0x6d10_7e4c_464f_4b53;
     let activation_hash = foks_crypto::prefixed_hash(ACTIVATION_TYPE_ID, argument);
-    let now = clock
-        .now_micros()
-        .map_err(|_| RpcStatus::TransactionRetry)?;
     let activated = writer
-        .call(move |database| {
+        .call_with_current_time(Arc::clone(clock), move |database, now| {
             Ok(database.activate_team_view_challenge(&challenge_hash, &activation_hash, now)?)
         })
         .map_err(map_write_error)?
@@ -178,7 +177,7 @@ pub(crate) fn load_chain(
     argument: &[u8],
     principal: &Principal,
     host: &EntityId,
-    reader: &foks_server_db::ReadDatabase,
+    reader: &foks_server_db::ReadSnapshot<'_>,
     clock: &dyn foks_server_db::Clock,
 ) -> Result<Vec<u8>, RpcStatus> {
     principal.require_ordinary_device()?;
@@ -202,7 +201,7 @@ pub(crate) fn load_chain(
 }
 
 fn encode_team_chain(
-    database: &foks_server_db::ReadDatabase,
+    database: &foks_server_db::ReadSnapshot<'_>,
     host: &EntityId,
     request: &foks_rpc::arguments::LoadTeamChainArgument,
     authority: &foks_server_db::TeamViewAuthoritySnapshot,

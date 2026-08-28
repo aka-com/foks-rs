@@ -19,8 +19,14 @@ the profile-pinned Ed25519 signer, exact target and protocol digest, and a
 strictly newer generation before an atomic registry update. Fetch failures
 retain the existing short lease; expiry still revokes, while an authenticated
 drift artifact revokes on the next successful poll.
-The agent does not accept secret-bearing signup, mutation, provisioning, or
-recovery requests.
+The agent accepts software signup, including an optional invite and PPE
+passphrase, so the GPUI desktop can complete onboarding without opening
+credentials or SQLite. It also dispatches passphrase set, change, and public
+challenge verification. It generates device/PUK secrets inside the checked
+profile session and receives invite/passphrase values only over its
+authenticated private Unix socket; serialized request frames and decoded
+secret strings are zeroized. Provisioning and recovery requests remain outside
+the agent protocol.
 
 ```text
 foks-agent --state-dir /private/client

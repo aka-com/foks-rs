@@ -18,8 +18,11 @@ foks-keystore = { workspace = true }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
+foks-server-db = { workspace = true }
+foks-server-testkit = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

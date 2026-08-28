@@ -8,6 +8,7 @@ fn every_user_mutation_publication_boundary_is_atomic() {
     for point in [
         UserMutationFailurePoint::Chain,
         UserMutationFailurePoint::Projection,
+        UserMutationFailurePoint::Passphrase,
         UserMutationFailurePoint::MerkleNodes,
         UserMutationFailurePoint::MerkleRoot,
         UserMutationFailurePoint::Receipt,
@@ -39,6 +40,7 @@ fn every_user_mutation_publication_boundary_is_atomic() {
             shared_keys: &[],
             parcels: &[],
             seed_chain: &[],
+            passphrase: None,
             expected_root_epoch: 1,
             expected_root_hash: &[0x34; 32],
             merkle_commit: &commit,

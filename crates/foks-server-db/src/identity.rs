@@ -4,8 +4,10 @@ use crate::{error::sql_integer, receipts, transaction::inject, Database, Error, 
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FailurePoint {
+    Invite,
     Name,
     User,
+    Passphrase,
     Device,
     Chain,
     MerkleNodes,
@@ -45,6 +47,8 @@ pub struct IdentityMutation<'a> {
     pub idempotency_key: &'a [u8],
     pub request_hash: &'a [u8; 32],
     pub response: &'a [u8],
+    pub invite: crate::InviteConsumption<'a>,
+    pub passphrase: Option<crate::PassphraseMutation<'a>>,
     pub now: u64,
     pub receipt_expires_at: u64,
 }
@@ -78,6 +82,8 @@ impl Database {
         )? {
             return Ok(CommitOutcome::Replayed(receipt.response));
         }
+        let consumed_invite = crate::invites::consume(&transaction, mutation.invite, mutation.now)?;
+        inject(failure, FailurePoint::Invite)?;
         let reservation: Option<(Vec<u8>, i64, i64)> = transaction
             .query_row(
                 "SELECT reservation_token, reservation_sequence, expires_at
@@ -117,7 +123,24 @@ impl Database {
                 sql_integer(mutation.now)?
             ],
         )?;
+        if let Some(invite_id) = consumed_invite {
+            crate::invites::record_redemption(
+                &transaction,
+                &invite_id,
+                mutation.uid,
+                mutation.now,
+            )?;
+        }
         inject(failure, FailurePoint::User)?;
+        if let Some(passphrase) = mutation.passphrase {
+            Database::insert_identity_passphrase(
+                &transaction,
+                &self.config,
+                mutation.uid,
+                passphrase,
+            )?;
+        }
+        inject(failure, FailurePoint::Passphrase)?;
         transaction.execute(
             "INSERT INTO devices
              (device_id, uid, active, role_type, visibility, subkey_id,

@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use foks_client::{KvWriteOptions, SoftwareAccountRequest, SoftwareAccountSecrets};
+use foks_client::{KvWriteOptions, Passphrase, SoftwareAccountRequest, SoftwareAccountSecrets};
 use foks_client_db::HardStateStore;
 use foks_proto::{EntityId, InviteCode, Role, SecretSeed};
 use foks_server_testkit::{TestAccountSpec, TestClient, TestEnvironment, TestFault};
@@ -11,6 +11,7 @@ fn account_request(username: &str) -> SoftwareAccountRequest {
         device_name: format!("{username} device"),
         invite_code: InviteCode::Empty,
         email: format!("{username}@example.test"),
+        passphrase: None,
     }
 }
 
@@ -111,6 +112,59 @@ fn signup_commit_with_lost_or_partial_response_reconciles_without_replay() {
             .is_empty());
         server.shutdown().unwrap();
     }
+}
+
+#[test]
+fn passphrase_updates_reconcile_lost_or_partial_responses_by_exact_readback() {
+    let environment = TestEnvironment::new().unwrap();
+    let server = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "passphrase-fault-client").unwrap();
+    let probe = client.probe_and_pin().unwrap();
+    let created = client
+        .create_account(
+            &probe.pinned,
+            &TestAccountSpec::new("passphrasefault", 0x86),
+        )
+        .unwrap();
+
+    let first = Passphrase::new("fault injected first passphrase").unwrap();
+    let hit_before = environment.arm_fault(TestFault::PassphraseSetAfterCommitBeforeResponse);
+    let enrolled = client
+        .foks()
+        .set_passphrase(&probe.pinned, &created.credential, &first)
+        .unwrap();
+    assert_eq!(enrolled.generation, 1);
+    assert_eq!(environment.fault_hits(), hit_before + 1);
+    assert_eq!(
+        client
+            .foks()
+            .verify_passphrase(&probe.pinned, &created.credential, &first)
+            .unwrap()
+            .generation,
+        1
+    );
+
+    let second = Passphrase::new("fault injected second passphrase").unwrap();
+    let hit_before = environment.arm_fault(TestFault::PassphraseChangeDuringResponseWrite);
+    let changed = client
+        .foks()
+        .change_passphrase(&probe.pinned, &created.credential, &second)
+        .unwrap();
+    assert_eq!(changed.generation, 2);
+    assert_eq!(environment.fault_hits(), hit_before + 1);
+    assert_eq!(
+        client
+            .foks()
+            .verify_passphrase(&probe.pinned, &created.credential, &second)
+            .unwrap()
+            .generation,
+        2
+    );
+    assert!(client
+        .foks()
+        .verify_passphrase(&probe.pinned, &created.credential, &first)
+        .is_err());
+    server.shutdown().unwrap();
 }
 
 #[test]

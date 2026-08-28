@@ -46,6 +46,28 @@ const COVERAGE: &[Coverage] = &[
         ],
     },
     Coverage {
+        name: "signup_invites",
+        run: crate::signup_invites::signup_invites_success,
+        routes: &[("Reg", "checkInviteCode")],
+    },
+    Coverage {
+        name: "passphrases",
+        run: crate::passphrases::signup_set_change_and_public_login_cover_the_passphrase_lifecycle,
+        routes: &[
+            ("Reg", "signup"),
+            ("Reg", "getLoginChallenge"),
+            ("Reg", "login"),
+            ("Reg", "stretchVersion"),
+            ("User", "setPassphrase"),
+            ("User", "changePassphrase"),
+            ("User", "getSalt"),
+            ("User", "nextPassphraseGeneration"),
+            ("User", "stretchVersion"),
+            ("User", "revokeDevice"),
+            ("User", "getPpeParcel"),
+        ],
+    },
+    Coverage {
         name: "authorization",
         run: crate::authorization::authorization_and_unsupported_success,
         routes: &[("User", "getHostConfig")],

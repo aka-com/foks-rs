@@ -9,6 +9,7 @@ use crate::TestClient;
 pub struct TestAccountSpec {
     pub username: String,
     pub seed_byte: u8,
+    pub invite_code: InviteCode,
 }
 
 impl TestAccountSpec {
@@ -16,7 +17,13 @@ impl TestAccountSpec {
         Self {
             username: username.into(),
             seed_byte,
+            invite_code: InviteCode::Empty,
         }
+    }
+
+    pub fn with_invite(mut self, invite_code: InviteCode) -> Self {
+        self.invite_code = invite_code;
+        self
     }
 }
 
@@ -26,6 +33,28 @@ impl TestClient {
         host: &PinnedHost,
         spec: &TestAccountSpec,
     ) -> foks_client::Result<CreatedSoftwareAccount> {
+        self.create_account_with_optional_passphrase(host, spec, None)
+    }
+
+    pub fn create_account_with_passphrase(
+        &self,
+        host: &PinnedHost,
+        spec: &TestAccountSpec,
+        passphrase: &str,
+    ) -> foks_client::Result<CreatedSoftwareAccount> {
+        self.create_account_with_optional_passphrase(
+            host,
+            spec,
+            Some(foks_client::Passphrase::new(passphrase)?),
+        )
+    }
+
+    fn create_account_with_optional_passphrase(
+        &self,
+        host: &PinnedHost,
+        spec: &TestAccountSpec,
+        passphrase: Option<foks_client::Passphrase>,
+    ) -> foks_client::Result<CreatedSoftwareAccount> {
         let mut protected = self
             .open_protected_store()
             .map_err(|error| foks_client::Error::ProtectedMaterial(error.to_string()))?;
@@ -34,8 +63,9 @@ impl TestClient {
             SoftwareAccountRequest {
                 username_utf8: spec.username.clone(),
                 device_name: format!("{} device", spec.username),
-                invite_code: InviteCode::Empty,
+                invite_code: spec.invite_code.clone(),
                 email: format!("{}@example.test", spec.username),
+                passphrase,
             },
             SoftwareAccountSecrets::new(
                 SecretSeed::new([spec.seed_byte; 32]),

@@ -5,6 +5,7 @@ use foks_server_db::{CommitOutcome, FailurePoint};
 #[test]
 fn every_injected_stage_rolls_back_all_authoritative_state() {
     for point in [
+        FailurePoint::Invite,
         FailurePoint::Name,
         FailurePoint::User,
         FailurePoint::Device,

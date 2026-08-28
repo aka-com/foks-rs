@@ -109,6 +109,7 @@ fn user_mutation_requests_match_go_v019() {
             seed_chain: &parcel.seed_chain,
             next_tree_location: chain.locations[2],
             hepks: &chain.hepks,
+            passphrase: None,
         })
         .unwrap(),
         mutation_fixture("revoke-request.frame")
@@ -132,6 +133,7 @@ fn user_mutation_requests_match_go_v019() {
                 .try_into()
                 .unwrap(),
             hepks: &[rotation_hepk],
+            passphrase: None,
         })
         .unwrap(),
         mutation_fixture("rotation-request.frame")
@@ -185,6 +187,21 @@ fn host_config_request_matches_go_v019() {
     assert_eq!(config.team_viewership, ViewershipMode::OpenToAdmin);
     assert_eq!(config.host_type, 4);
     assert_eq!(config.invite_code_regime, 2);
+}
+
+#[test]
+fn passphrase_void_arguments_use_the_canonical_null_encoding() {
+    for frame in [
+        foks_rpc::encode_registration_stretch_version_request().unwrap(),
+        foks_rpc::encode_get_passphrase_salt_request().unwrap(),
+        foks_rpc::encode_next_passphrase_generation_request().unwrap(),
+        foks_rpc::encode_user_stretch_version_request().unwrap(),
+        foks_rpc::encode_get_ppe_parcel_request().unwrap(),
+    ] {
+        let call = read_call(&mut std::io::Cursor::new(frame), DEFAULT_MAX_FRAME_LENGTH).unwrap();
+        assert_eq!(decode(call.argument()).unwrap(), Value::Null);
+        foks_rpc::arguments::decode_void(call.argument()).unwrap();
+    }
 }
 
 #[test]
@@ -473,6 +490,7 @@ fn software_signup_requests_match_go_v019() {
         self_token: signup_fixture("self-token.bin").try_into().unwrap(),
         puk_hepk: &puk.hepk,
         device_hepk: &device.hepk,
+        passphrase: None,
     };
     let actual = encode_signup_request_at(&argument, 1).unwrap();
     let expected = signup_fixture("signup-request.frame");

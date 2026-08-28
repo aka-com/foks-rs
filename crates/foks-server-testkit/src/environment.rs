@@ -168,12 +168,84 @@ impl TestEnvironment {
         Ok(directory.join(name))
     }
 
+    #[doc(hidden)]
+    pub fn write_probe_root(&self, path: impl AsRef<Path>) -> foks_server::Result<()> {
+        let root = self
+            .inner
+            .tls
+            .certificate_chain
+            .last()
+            .ok_or(foks_server::Error::Config("test probe root is missing"))?;
+        std::fs::write(path, root)?;
+        Ok(())
+    }
+
     pub fn advance_clock(&self, microseconds: u64) -> u64 {
         self.inner.clock.advance(microseconds)
     }
 
     pub fn set_clock(&self, microseconds: u64) {
         self.inner.clock.set(microseconds);
+    }
+
+    #[doc(hidden)]
+    pub fn issue_standard_invite(
+        &self,
+        expires_at: Option<u64>,
+    ) -> foks_server::Result<foks_server::invites::IssuedSignupInvite> {
+        foks_server::invites::issue_standard_invite(
+            self.inner.paths.database(),
+            self.inner.database_config.clone(),
+            expires_at,
+            foks_server_db::Clock::now_micros(self.inner.clock.as_ref())?,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn issue_multiuse_invite(
+        &self,
+        code: &str,
+        max_uses: Option<u64>,
+        expires_at: Option<u64>,
+    ) -> foks_server::Result<foks_server::invites::IssuedSignupInvite> {
+        foks_server::invites::issue_multiuse_invite(
+            self.inner.paths.database(),
+            self.inner.database_config.clone(),
+            code,
+            max_uses,
+            expires_at,
+            foks_server_db::Clock::now_micros(self.inner.clock.as_ref())?,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn set_invite_regime(
+        &self,
+        regime: foks_server_db::InviteRegime,
+    ) -> foks_server::Result<()> {
+        foks_server::invites::set_invite_regime(
+            self.inner.paths.database(),
+            self.inner.database_config.clone(),
+            regime,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn disable_invite(&self, code: &str) -> foks_server::Result<bool> {
+        foks_server::invites::disable_invite(
+            self.inner.paths.database(),
+            self.inner.database_config.clone(),
+            code,
+            foks_server_db::Clock::now_micros(self.inner.clock.as_ref())?,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn invites(&self) -> foks_server::Result<Vec<foks_server_db::InviteSnapshot>> {
+        foks_server::invites::list_invites(
+            self.inner.paths.database(),
+            self.inner.database_config.clone(),
+        )
     }
 
     pub fn probe_roots(&self) -> rustls::RootCertStore {
@@ -200,6 +272,16 @@ impl TestEnvironment {
                 foks_server::SessionFaultPoint::DuringResponseWrite,
                 "Reg",
                 "signup",
+            ),
+            TestFault::PassphraseSetAfterCommitBeforeResponse => (
+                foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
+                "User",
+                "setPassphrase",
+            ),
+            TestFault::PassphraseChangeDuringResponseWrite => (
+                foks_server::SessionFaultPoint::DuringResponseWrite,
+                "User",
+                "changePassphrase",
             ),
             TestFault::BetweenLargeFileChunks => (
                 foks_server::SessionFaultPoint::BetweenLargeFileChunks,
@@ -235,6 +317,8 @@ pub enum TestFault {
     SignupBeforeCommit,
     SignupAfterCommitBeforeResponse,
     SignupDuringResponseWrite,
+    PassphraseSetAfterCommitBeforeResponse,
+    PassphraseChangeDuringResponseWrite,
     BetweenLargeFileChunks,
 }
 

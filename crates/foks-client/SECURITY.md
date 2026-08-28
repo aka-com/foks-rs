@@ -108,7 +108,7 @@ identifiers, HEPKs, signatures, ciphertext, and verified history. It never
 stores a device seed or clear PUK seed.
 
 Returned PUK/PTK seed sequences are intentionally live secret material. Their
-caller must move them into the encrypted AKA key store or consume them
+caller must move them into its encrypted credential store or consume them
 promptly; logging, serializing, or placing them in ordinary SQLite rows is
 outside this crate's contract.
 
@@ -126,8 +126,10 @@ protected material. Neither case permits network replay.
 For local deployments, `EncryptedFileMutationStore` implements this contract
 with a caller-supplied 256-bit master key, XChaCha20-Poly1305 records bound to
 their logical key, synced temporary files, and atomic no-replace installation.
-AKA must obtain and retain the master key in its platform keychain or encrypted
-vault; losing or replacing that key makes pending mutations unrecoverable.
+The standalone application obtains and retains the master key in macOS
+Keychain or Linux Secret Service; another embedder must provide an equivalent
+protected source. Losing or replacing that key makes pending mutations
+unrecoverable.
 Protected records are capped at 128 MiB to bound allocation when reading a
 tampered file. On Unix, the adapter creates private files and refuses to follow
 a symbolic link at a record path.
@@ -201,22 +203,36 @@ and generation-1 owner PUK to the current verified Merkle root, constructs the
 official stacked PUK/device eldest signatures and initial hybrid PUK box,
 submits `Reg.signup`, obtains the new mTLS certificate, waits for and verifies
 the Merkle/user-chain projection, seals public hard state, and creates the
-initial personal KV root. It supports only a software eldest credential with
-no passphrase, Yubi parent, SSO, or recovery setup.
+initial personal KV root. It supports a software eldest credential and an
+optional PPE passphrase established atomically at signup. Yubi parent, SSO,
+and passphrase-only recovery setup remain outside this path.
 
 The device-mutation convenience path requires the owner device and new
 software-device seeds in one process so both exact signatures can be built.
 It does not implement FOKS's interactive device-to-device KEX. Revocation
-rejects self-revocation, omits the passphrase annex, and can distribute rotated
-PUKs only to Curve25519 software recipients; accounts whose remaining eligible
-credentials include Yubi/P-256 keys therefore fail closed. A lost provision
-response can be reconciled with the caller-retained seed through the public
-certificate-fetch and authentication methods; mutation secrets are never
-placed in SQLite.
-Because passphrase configuration is not part of the verified user projection,
-an owner-PUK mutation additionally requires the caller to supply the explicit
-`NoPassphraseConfigured` capability. The API cannot construct or post an owner
-rotation when that assertion is omitted.
+rejects self-revocation and can distribute rotated PUKs only to Curve25519
+software recipients; accounts whose remaining eligible credentials include
+Yubi/P-256 keys therefore fail closed. Owner-PUK rotations query server PPE
+state and include the next encrypted passphrase annex in the same mutation. A
+lost provision response can be reconciled with the caller-retained seed through
+the public certificate-fetch and authentication methods; mutation secrets are
+never placed in SQLite. If a caller supplies `NoPassphraseConfigured`, the client
+still confirms absence through `User.getPpeParcel`; a stale assertion fails
+closed rather than orphaning PPE history. Generic user-settings links are not
+part of the verified projection, so Go-server interoperability for PPE annexes
+on user mutations remains narrower than the standalone Rust path.
+
+Passphrase enrollment/change uses the upstream V1 Argon2id and PPE box formats.
+The raw input and stretched credential are redacted and zeroized locally, and
+public login binds a one-time challenge to the expected UID and HostID before
+the encrypted SKMWK history is accepted. This is not a local-vault lock: the
+active device is still needed to fetch PPE metadata, and no passphrase-only
+device provisioning or recovery ceremony is exposed. The client reconciles an
+ambiguous set/change response by exact parcel readback while the process is
+alive. It does not durably journal the intended PPE generation and boxes, so a
+process death in the post-commit response window requires verifying the desired
+passphrase before another change; blindly retrying a change can create another
+PPE generation.
 
 Ad-hoc team creation requires an enrolled software or Yubi owner device and
 the current owner PUK. A software device signs the membership link directly;
@@ -313,9 +329,8 @@ permanent device and every enrolled backup phrase remains unrecoverable.
 Not yet implemented: additional founding members; promotion/addition through
 closed-viewership invitation and remote-join protocols; beacon resolution;
 federated discovery and remote-view-token issuance; CLKR; Git; chat/realtime;
-passphrase-based device recovery; SSO; a production
-encrypted key-store integration; or a FOKS server. These omissions should fail
-by absence, not by permissive fallbacks.
+passphrase-based device recovery; SSO; or a full federated FOKS server. These
+omissions should fail by absence, not by permissive fallbacks.
 
 ## Testing strategy
 

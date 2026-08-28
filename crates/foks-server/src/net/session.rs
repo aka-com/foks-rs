@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-mod dispatch;
+mod handlers;
 
 use foks_proto::{
-    DecodedSoftwareSignupArgument, EntityId, HistoricalMerkleRoots, MerkleRoot, ProbeResponse,
-    SignedBlob, UsernameReservation,
+    DecodedSoftwareSignupArgument, EntityId, HistoricalMerkleRoots, InviteCode, MerkleRoot,
+    ProbeResponse, SignedBlob, UsernameReservation,
 };
 use foks_rpc::{encode_status_response_at, RpcStatus};
 use foks_snowpack::{decode, Value};
@@ -33,6 +33,50 @@ pub(crate) struct ServerData {
     metrics: Arc<crate::ServerMetrics>,
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     execution: Arc<Semaphore>,
+}
+
+pub(crate) struct OwnedPassphraseMutation {
+    verify_key: Vec<u8>,
+    salt: [u8; 16],
+    generation: u64,
+    exact_skmwk_box: Vec<u8>,
+    exact_passphrase_box: Vec<u8>,
+    exact_puk_box: Option<Vec<u8>>,
+    puk_generation: Option<u64>,
+    stretch_version: u64,
+}
+
+impl OwnedPassphraseMutation {
+    pub(crate) fn from_argument(argument: &foks_proto::PassphraseUpdateArgument) -> Result<Self> {
+        Ok(Self {
+            verify_key: argument.verify_key.as_bytes().to_vec(),
+            salt: argument.salt,
+            generation: argument.generation,
+            exact_skmwk_box: foks_snowpack::encode(&argument.skmwk_box.to_value())?,
+            exact_passphrase_box: argument.passphrase_box.encoded()?,
+            exact_puk_box: argument
+                .puk_box
+                .as_ref()
+                .map(foks_proto::PpePukBox::encoded)
+                .transpose()?,
+            puk_generation: argument.puk_box.as_ref().map(|boxed| boxed.puk_generation),
+            stretch_version: argument.stretch_version.protocol_value(),
+        })
+    }
+
+    pub(crate) fn as_database(&self, now: u64) -> foks_server_db::PassphraseMutation<'_> {
+        foks_server_db::PassphraseMutation {
+            verify_key: &self.verify_key,
+            salt: &self.salt,
+            generation: self.generation,
+            exact_skmwk_box: &self.exact_skmwk_box,
+            exact_passphrase_box: &self.exact_passphrase_box,
+            exact_puk_box: self.exact_puk_box.as_deref(),
+            puk_generation: self.puk_generation,
+            stretch_version: self.stretch_version,
+            now,
+        }
+    }
 }
 
 impl ServerData {
@@ -257,6 +301,21 @@ impl ServerData {
                     }
                 })
                 .collect::<Vec<_>>();
+            let passphrase = command
+                .passphrase
+                .as_ref()
+                .map(|argument| {
+                    let current =
+                        database
+                            .passphrase(&command.uid)?
+                            .ok_or(crate::Error::Database(
+                                foks_server_db::Error::PassphraseNotFound,
+                            ))?;
+                    let mut owned = OwnedPassphraseMutation::from_argument(argument)?;
+                    owned.salt = current.salt;
+                    Ok::<_, crate::Error>(owned)
+                })
+                .transpose()?;
             if command.link_hash != idempotency_key {
                 return Err(crate::Error::Signup("user mutation link hash changed"));
             }
@@ -273,6 +332,9 @@ impl ServerData {
                 shared_keys: &shared_keys,
                 parcels: &parcels,
                 seed_chain: &seed_chain,
+                passphrase: passphrase
+                    .as_ref()
+                    .map(|passphrase| passphrase.as_database(now)),
                 expected_root_epoch: command.expected_root_epoch,
                 expected_root_hash: &command.expected_root_hash,
                 merkle_commit: &merkle_commit,
@@ -333,10 +395,13 @@ impl ServerData {
             .checked_add(RESERVATION_LIFETIME_MICROSECONDS)
             .ok_or(RpcStatus::TransactionRetry)?;
         let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
-        let result = writer.call(move |database| {
-            database.reserve_name(&normalized, &token, 1, now, expires_at)?;
-            Ok(())
-        });
+        let result = writer.call_with_current_time(
+            Arc::clone(&self.clock),
+            move |database, current_time| {
+                database.reserve_name(&normalized, &token, 1, current_time, expires_at)?;
+                Ok(())
+            },
+        );
         match result {
             Ok(()) => UsernameReservation {
                 token,
@@ -357,6 +422,18 @@ impl ServerData {
         const SIGNUP_REQUEST_HASH_TYPE_ID: u64 = 0x8f4b_8ab7_464f_4b53;
 
         let request = DecodedSoftwareSignupArgument::decode(argument).map_err(bad_arguments)?;
+        let (invite_hash, invite_kind) = match &request.invite_code {
+            InviteCode::Empty => (None, None),
+            InviteCode::Standard(_) | InviteCode::MultiUse(_) => (
+                Some(crate::services::registration::invite_fingerprint(
+                    &request.invite_code,
+                )?),
+                Some(crate::services::registration::invite_kind(
+                    &request.invite_code,
+                )?),
+            ),
+            _ => return Err(RpcStatus::BadInvite),
+        };
         let idempotency_key = request.self_token;
         let request_hash = foks_crypto::prefixed_hash(SIGNUP_REQUEST_HASH_TYPE_ID, argument);
         let reader = self.read_database()?;
@@ -381,6 +458,12 @@ impl ServerData {
         let host = EntityId::from_bytes(self.host_id.clone()).map_err(bad_arguments)?;
         let validated = validate_software_signup(&request, &host, &current_root, current.root_hash)
             .map_err(|_| bad_arguments("software signup validation failed"))?;
+        let passphrase = request
+            .passphrase
+            .as_ref()
+            .map(OwnedPassphraseMutation::from_argument)
+            .transpose()
+            .map_err(|_| bad_arguments("invalid signup passphrase material"))?;
         let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
         let keys = self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?;
         let keys = Arc::clone(keys);
@@ -484,6 +567,17 @@ impl ServerData {
                 idempotency_key: &idempotency_key,
                 request_hash: &request_hash,
                 response: &[],
+                invite: match (&invite_hash, invite_kind) {
+                    (Some(hash), Some(kind)) => foks_server_db::InviteConsumption::Code {
+                        code_hash: hash,
+                        kind,
+                    },
+                    (None, None) => foks_server_db::InviteConsumption::Empty,
+                    _ => return Err(crate::Error::Signup("invalid invite binding")),
+                },
+                passphrase: passphrase
+                    .as_ref()
+                    .map(|passphrase| passphrase.as_database(now)),
                 now,
                 receipt_expires_at,
             };
@@ -497,6 +591,9 @@ impl ServerData {
             }
             Err(crate::Error::Database(foks_server_db::Error::StaleRoot)) => {
                 Err(RpcStatus::StaleRoot)
+            }
+            Err(crate::Error::Database(foks_server_db::Error::BadInvite)) => {
+                Err(RpcStatus::BadInvite)
             }
             Err(crate::Error::Database(
                 foks_server_db::Error::Reservation | foks_server_db::Error::ReceiptConflict,
@@ -658,11 +755,14 @@ impl ServerData {
             return Err(RpcStatus::Unsupported);
         }
         let database = self.read_database()?;
-        let full = database
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        let full = snapshot
             .roots_at(&full_epochs)
             .map_err(|_| RpcStatus::TransactionRetry)?
             .ok_or_else(|| RpcStatus::NotFound("Merkle root not found".to_owned()))?;
-        let hashes = database
+        let hashes = snapshot
             .roots_at(&hash_epochs)
             .map_err(|_| RpcStatus::TransactionRetry)?
             .ok_or_else(|| RpcStatus::NotFound("Merkle root not found".to_owned()))?;
@@ -860,7 +960,7 @@ pub(crate) async fn serve(
                     Ok(call) => {
                         let protocol = call.route.protocol;
                         let method = call.route.method;
-                        route = Some((protocol, method));
+                        route = Some(call.route);
                         if data.should_disconnect(
                             crate::SessionFaultPoint::BeforeDurableMutation,
                             protocol,
@@ -872,7 +972,7 @@ pub(crate) async fn serve(
                                 disconnect_before_response: true,
                             });
                         }
-                        match data.response(call, principal.as_ref()) {
+                        match handlers::response(data.as_ref(), call, principal.as_ref()) {
                             Ok(response) => response,
                             Err(status) => encode_status_response_at(&status, sequence)?,
                         }
@@ -917,8 +1017,10 @@ pub(crate) async fn serve(
         }
         let response = outcome.response;
         let route = outcome.route;
-        if let Some((protocol, method)) = route {
-            let point = if protocol == "KvStore" && method == "fileUploadChunk" {
+        if let Some(route) = route {
+            let protocol = route.protocol;
+            let method = route.method;
+            let point = if route.id == crate::rpc::RouteId::KvStoreFileUploadChunk {
                 crate::SessionFaultPoint::BetweenLargeFileChunks
             } else {
                 crate::SessionFaultPoint::AfterDurableCommitBeforeResponse
@@ -951,7 +1053,7 @@ pub(crate) async fn serve(
 
 struct RequestOutcome {
     response: Vec<u8>,
-    route: Option<(&'static str, &'static str)>,
+    route: Option<&'static crate::rpc::RouteSpec>,
     disconnect_before_response: bool,
 }
 

@@ -59,6 +59,52 @@ enum Command {
     },
     /// Revokes the prior host signing key after the observation interval.
     CompleteHostKeyRotation(CompleteHostKeyRotationArguments),
+    #[command(subcommand)]
+    Invite(InviteCommand),
+}
+
+#[derive(clap::Subcommand)]
+enum InviteCommand {
+    /// Issues a signup invite while the service is stopped and prints the code once.
+    Issue(InviteIssueArguments),
+    /// Disables a signup invite while the service is stopped.
+    Disable {
+        #[arg(long)]
+        config: PathBuf,
+        code: String,
+    },
+    /// Lists invite metadata; plaintext codes are not stored in SQLite.
+    List {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Selects whether signup requires a code.
+    Policy {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(value_enum)]
+        regime: InviteRegimeArgument,
+    },
+}
+
+#[derive(clap::Args)]
+struct InviteIssueArguments {
+    #[arg(long)]
+    config: PathBuf,
+    /// Omit for a generated standard single-use code; set for a named multi-use code.
+    #[arg(long)]
+    multiuse_code: Option<String>,
+    /// Maximum redemptions for a multi-use code. Omit for no fixed maximum.
+    #[arg(long)]
+    max_uses: Option<u64>,
+    #[arg(long)]
+    expires_in_seconds: Option<u64>,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum InviteRegimeArgument {
+    Required,
+    Optional,
 }
 
 #[derive(clap::Args)]
@@ -190,7 +236,110 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::RotateOperatorRoot(arguments) => rotate_operator_root(arguments),
         Command::BeginHostKeyRotation { config } => rotate_host_key(config),
         Command::CompleteHostKeyRotation(arguments) => complete_host_key_rotation(arguments),
+        Command::Invite(command) => invite_command(command),
     }
+}
+
+fn invite_command(command: InviteCommand) -> Result<(), Box<dyn std::error::Error>> {
+    let now = now_microseconds()?;
+    match command {
+        InviteCommand::Issue(arguments) => {
+            let config = foks_server::installation::load_config(arguments.config)?;
+            foks_server::installation::validate_artifacts(&config)?;
+            let expires_at = arguments
+                .expires_in_seconds
+                .map(|seconds| {
+                    seconds
+                        .checked_mul(1_000_000)
+                        .and_then(|duration| now.checked_add(duration))
+                        .ok_or("invite expiry overflows the supported timestamp")
+                })
+                .transpose()?;
+            let issued = match arguments.multiuse_code {
+                Some(code) => foks_server::invites::issue_multiuse_invite(
+                    &config.database,
+                    foks_server_db::Config::default(),
+                    &code,
+                    arguments.max_uses,
+                    expires_at,
+                    now,
+                )?,
+                None if arguments.max_uses.is_none() => {
+                    foks_server::invites::issue_standard_invite(
+                        &config.database,
+                        foks_server_db::Config::default(),
+                        expires_at,
+                        now,
+                    )?
+                }
+                None => return Err("--max-uses requires --multiuse-code".into()),
+            };
+            println!("{}", issued.code);
+            Ok(())
+        }
+        InviteCommand::Disable { config, code } => {
+            let config = foks_server::installation::load_config(config)?;
+            foks_server::installation::validate_artifacts(&config)?;
+            if !foks_server::invites::disable_invite(
+                &config.database,
+                foks_server_db::Config::default(),
+                &code,
+                now,
+            )? {
+                return Err("invite is unknown or already disabled".into());
+            }
+            println!("invite disabled");
+            Ok(())
+        }
+        InviteCommand::List { config } => {
+            let config = foks_server::installation::load_config(config)?;
+            foks_server::installation::validate_artifacts(&config)?;
+            for invite in foks_server::invites::list_invites(
+                &config.database,
+                foks_server_db::Config::default(),
+            )? {
+                println!(
+                    "id={} kind={:?} active={} uses={}/{} expires_at={}",
+                    encode_hex(&invite.invite_id),
+                    invite.kind,
+                    invite.active,
+                    invite.use_count,
+                    invite
+                        .max_uses
+                        .map_or_else(|| "unlimited".to_owned(), |value| value.to_string()),
+                    invite
+                        .expires_at
+                        .map_or_else(|| "never".to_owned(), |value| value.to_string()),
+                );
+            }
+            Ok(())
+        }
+        InviteCommand::Policy { config, regime } => {
+            let config = foks_server::installation::load_config(config)?;
+            foks_server::installation::validate_artifacts(&config)?;
+            let regime = match regime {
+                InviteRegimeArgument::Required => foks_server_db::InviteRegime::Required,
+                InviteRegimeArgument::Optional => foks_server_db::InviteRegime::Optional,
+            };
+            foks_server::invites::set_invite_regime(
+                &config.database,
+                foks_server_db::Config::default(),
+                regime,
+            )?;
+            println!("signup invite policy set to {regime:?}");
+            Ok(())
+        }
+    }
+}
+
+fn now_microseconds() -> Result<u64, Box<dyn std::error::Error>> {
+    Ok(u64::try_from(
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros(),
+    )?)
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn initialize(arguments: InitArguments) -> Result<(), Box<dyn std::error::Error>> {

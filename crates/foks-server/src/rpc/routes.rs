@@ -8,6 +8,7 @@ pub struct ServiceSpec {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RouteSpec {
+    pub id: RouteId,
     pub protocol: &'static str,
     pub protocol_id: u64,
     pub method: &'static str,
@@ -25,7 +26,7 @@ pub struct RouteSpec {
 #[path = "generated/routes.rs"]
 mod generated;
 
-pub use generated::{ROUTES, SERVICES};
+pub use generated::{RouteId, ROUTES, SERVICES};
 
 /// Resolves a wire dispatch key without allocating or accepting an unknown method.
 pub fn route(protocol_id: u64, position: u64) -> Option<&'static RouteSpec> {

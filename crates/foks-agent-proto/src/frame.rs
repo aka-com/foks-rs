@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::{Request, Response, PROTOCOL_VERSION};
 
@@ -19,13 +20,13 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub fn encode<T: Serialize>(message: &T) -> Result<Vec<u8>> {
-    let payload = serde_json::to_vec(message)?;
+pub fn encode<T: Serialize>(message: &T) -> Result<Zeroizing<Vec<u8>>> {
+    let payload = Zeroizing::new(serde_json::to_vec(message)?);
     if payload.len() > MAXIMUM_MESSAGE_BYTES {
         return Err(Error::TooLarge);
     }
     let length = u32::try_from(payload.len()).map_err(|_| Error::TooLarge)?;
-    let mut frame = Vec::with_capacity(4 + payload.len());
+    let mut frame = Zeroizing::new(Vec::with_capacity(4 + payload.len()));
     frame.extend_from_slice(&length.to_be_bytes());
     frame.extend_from_slice(&payload);
     Ok(frame)

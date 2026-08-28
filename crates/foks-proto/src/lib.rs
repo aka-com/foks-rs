@@ -69,6 +69,7 @@ mod host;
 mod identity;
 mod key_material;
 mod kv;
+mod passphrase;
 mod role;
 mod service;
 
@@ -78,6 +79,7 @@ pub use host::*;
 pub use identity::*;
 pub use key_material::*;
 pub use kv::*;
+pub use passphrase::*;
 pub use role::*;
 pub use service::*;
 

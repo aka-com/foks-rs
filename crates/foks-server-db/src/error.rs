@@ -16,6 +16,16 @@ pub enum Error {
     NameInUse,
     #[error("reservation is missing, expired, or does not match")]
     Reservation,
+    #[error("signup invite is invalid, unavailable, or no longer redeemable")]
+    BadInvite,
+    #[error("passphrase state is not configured")]
+    PassphraseNotFound,
+    #[error("passphrase generation is stale or out of sequence")]
+    PassphraseGeneration,
+    #[error("passphrase login is rate limited")]
+    PassphraseRateLimited,
+    #[error("authenticated credential is no longer active")]
+    AuthorizationChanged,
     #[error("idempotency identity was reused with different request bytes")]
     ReceiptConflict,
     #[error("idempotency receipt expired; mutation outcome requires operator reconciliation")]

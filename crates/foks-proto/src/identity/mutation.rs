@@ -270,7 +270,7 @@ pub enum InviteCode {
 }
 
 impl InviteCode {
-    fn to_value(&self) -> Value {
+    pub fn to_value(&self) -> Value {
         match self {
             Self::None => Value::Array(vec![Value::Unsigned(0), Value::Variant(None)]),
             Self::Standard(code) => Value::Array(vec![
@@ -286,7 +286,7 @@ impl InviteCode {
         }
     }
 
-    fn from_value(value: &Value) -> Result<Self> {
+    pub fn from_value(value: &Value) -> Result<Self> {
         let fields = array(value, 2)?;
         let discriminant = unsigned(&fields[0])?;
         match (discriminant, &fields[1]) {
@@ -317,6 +317,193 @@ impl InviteCode {
             }),
         }
     }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        self.validate()?;
+        Ok(encode(&self.to_value())?)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let code = Self::from_value(&decode(bytes)?)?;
+        code.validate()?;
+        Ok(code)
+    }
+
+    /// Parses the user-facing v0.1.9 representation. Standard one-use codes
+    /// use the `s.` prefix and Keybase's base-62 copy/paste rules; other input
+    /// is a case-insensitive multi-use code.
+    pub fn from_user_input(input: &str, empty_allowed: bool) -> Result<Self> {
+        if input.is_empty() {
+            return if empty_allowed {
+                Ok(Self::Empty)
+            } else {
+                Err(Error::Type {
+                    expected: "invite code",
+                    found: "empty text",
+                })
+            };
+        }
+        let code = if let Some(encoded) = input.strip_prefix("s.") {
+            Self::Standard(decode_base62_invite(encoded)?)
+        } else {
+            Self::MultiUse(input.to_ascii_lowercase().into_bytes())
+        };
+        code.validate()?;
+        Ok(code)
+    }
+
+    pub fn to_user_string(&self) -> Result<String> {
+        self.validate()?;
+        match self {
+            Self::Standard(code) => Ok(format!("s.{}", encode_base62_strict(code))),
+            Self::MultiUse(code) => String::from_utf8(code.clone()).map_err(|_| Error::Utf8),
+            Self::Empty => Ok(String::new()),
+            _ => Err(Error::Type {
+                expected: "displayable invite code",
+                found: "unsupported invite variant",
+            }),
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            Self::Standard(code) if code.len() >= 10 => Ok(()),
+            Self::MultiUse(code)
+                if code.len() >= 5
+                    && code.iter().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'-')
+                    }) =>
+            {
+                Ok(())
+            }
+            Self::Empty => Ok(()),
+            Self::Standard(_) | Self::MultiUse(_) | Self::None | Self::Sso => Err(Error::Type {
+                expected: "supported invite code",
+                found: "invalid invite code",
+            }),
+        }
+    }
+
+    pub fn kind(&self) -> Option<u8> {
+        match self {
+            Self::Standard(_) => Some(1),
+            Self::MultiUse(_) => Some(2),
+            _ => None,
+        }
+    }
+}
+
+const BASE62_ALPHABET: &[u8; 62] =
+    b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+fn encode_base62_strict(input: &[u8]) -> String {
+    let mut encoded = Vec::with_capacity(base62_encoded_len(input.len()));
+    for block in input.chunks(32) {
+        let output_len = base62_encoded_len(block.len());
+        let mut number = block.to_vec();
+        let mut output = vec![b'0'; output_len];
+        for position in (0..output_len).rev() {
+            let mut remainder = 0u16;
+            for byte in &mut number {
+                let value = (remainder << 8) | u16::from(*byte);
+                *byte = u8::try_from(value / 62).expect("base-62 quotient fits a byte");
+                remainder = value % 62;
+            }
+            output[position] = BASE62_ALPHABET[usize::from(remainder)];
+        }
+        encoded.extend_from_slice(&output);
+    }
+    String::from_utf8(encoded).expect("base-62 alphabet is ASCII")
+}
+
+fn decode_base62_invite(input: &str) -> Result<Vec<u8>> {
+    let mut cleaned = Vec::with_capacity(input.len());
+    for byte in input.bytes() {
+        if base62_digit(byte).is_some() {
+            cleaned.push(byte);
+        } else if !matches!(byte, b'\t' | b'\n' | b'\r' | b' ' | b'>') {
+            return Err(Error::Type {
+                expected: "base-62 invite code",
+                found: "non-base-62 text",
+            });
+        }
+    }
+    if cleaned.is_empty() {
+        return Err(Error::Length {
+            kind: "base-62 invite code",
+            expected: 14,
+            found: cleaned.len(),
+        });
+    }
+    let mut decoded = Vec::with_capacity(base62_decoded_len(cleaned.len()));
+    for block in cleaned.chunks(43) {
+        decoded.extend_from_slice(&decode_base62_block(block)?);
+    }
+    Ok(decoded)
+}
+
+fn decode_base62_block(bytes: &[u8]) -> Result<Vec<u8>> {
+    let decoded_len = base62_decoded_len(bytes.len());
+    let prior_len = base62_decoded_len(bytes.len().saturating_sub(1));
+    if decoded_len == prior_len || decoded_len == 0 {
+        return Err(Error::Length {
+            kind: "base-62 invite code",
+            expected: 14,
+            found: bytes.len(),
+        });
+    }
+    let mut number = vec![0u8];
+    for byte in bytes {
+        let digit = base62_digit(*byte).ok_or(Error::Type {
+            expected: "strict base-62 invite code",
+            found: "non-base-62 text",
+        })? as u16;
+        let mut carry = digit;
+        for limb in number.iter_mut().rev() {
+            let value = u16::from(*limb) * 62 + carry;
+            *limb = value as u8;
+            carry = value >> 8;
+        }
+        while carry != 0 {
+            number.insert(0, carry as u8);
+            carry >>= 8;
+        }
+    }
+    if number.len() > decoded_len {
+        return Err(Error::Type {
+            expected: "canonical base-62 invite code",
+            found: "overflowing base-62 text",
+        });
+    }
+    let mut output = vec![0; decoded_len - number.len()];
+    output.extend_from_slice(&number);
+    Ok(output)
+}
+
+fn base62_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'A'..=b'Z' => Some(byte - b'A' + 10),
+        b'a'..=b'z' => Some(byte - b'a' + 36),
+        _ => None,
+    }
+}
+
+fn base62_encoded_len(bytes: usize) -> usize {
+    let blocks = bytes / 32;
+    let remainder = bytes % 32;
+    blocks * 43
+        + if remainder == 0 {
+            0
+        } else {
+            ((remainder as f64 * 8.0) / 62_f64.log2()).ceil() as usize
+        }
+}
+
+fn base62_decoded_len(characters: usize) -> usize {
+    let blocks = characters / 43;
+    let remainder = characters % 43;
+    blocks * 32 + ((remainder as f64 * 62_f64.log2()) / 8.0).floor() as usize
 }
 
 /// Owned, strictly decoded v0.1.9 software-signup request.
@@ -335,6 +522,7 @@ pub struct DecodedSoftwareSignupArgument {
     pub self_token: [u8; 17],
     pub puk_hepk: Hepk,
     pub device_hepk: Hepk,
+    pub passphrase: Option<crate::PassphraseUpdateArgument>,
 }
 
 impl DecodedSoftwareSignupArgument {
@@ -342,7 +530,6 @@ impl DecodedSoftwareSignupArgument {
         let value = decode(bytes)?;
         let fields = array(&value, 16)?;
         require_null(&fields[9], "signup Yubi registration")?;
-        require_null(&fields[10], "signup passphrase stretch")?;
         require_null(&fields[14], "signup subkey")?;
         let host_policy = array(&fields[15], 2)?;
         expect_unsigned(&host_policy[0], "signup host policy", 0)?;
@@ -354,6 +541,8 @@ impl DecodedSoftwareSignupArgument {
         }
         let hepk_outer = array(&fields[13], 1)?;
         let hepks = array(&hepk_outer[0], 2)?;
+        let invite_code = InviteCode::from_value(&fields[7])?;
+        invite_code.validate()?;
         Ok(Self {
             username_utf8: text(&fields[0])?.into_bytes(),
             reservation: UsernameReservation::decode(&encode(&fields[1])?)?,
@@ -362,12 +551,16 @@ impl DecodedSoftwareSignupArgument {
             username_commitment_key: fixed_blob(&fields[4], "username commitment key")?,
             device_name: device_label_name_and_commitment_key(&fields[5])?,
             next_tree_location: fixed_blob(&fields[6], "next tree location")?,
-            invite_code: InviteCode::from_value(&fields[7])?,
+            invite_code,
             email: text(&fields[8])?.into_bytes(),
             subchain_tree_location: fixed_blob(&fields[11], "subchain tree location")?,
             self_token: fixed_blob(&fields[12], "signup self token")?,
             puk_hepk: hepk(&hepks[0])?,
             device_hepk: hepk(&hepks[1])?,
+            passphrase: match &fields[10] {
+                Value::Null => None,
+                value => Some(crate::PassphraseUpdateArgument::from_set_value(value)?),
+            },
         })
     }
 }
@@ -384,7 +577,8 @@ fn require_null(value: &Value, kind: &'static str) -> Result<()> {
 }
 
 /// Narrow v0.1.9 signup argument for a software eldest credential. Optional
-/// Yubi, passphrase, subkey, and SSO fields are intentionally fixed to absent.
+/// Yubi, subkey, and SSO fields are intentionally fixed to absent. The
+/// optional passphrase field carries an exact v0.1.9 set-passphrase request.
 pub struct SoftwareSignupArgument<'a> {
     pub username_utf8: &'a [u8],
     pub reservation: &'a UsernameReservation,
@@ -399,6 +593,7 @@ pub struct SoftwareSignupArgument<'a> {
     pub self_token: [u8; 17],
     pub puk_hepk: &'a Hepk,
     pub device_hepk: &'a Hepk,
+    pub passphrase: Option<&'a crate::PassphraseUpdateArgument>,
 }
 
 impl SoftwareSignupArgument<'_> {
@@ -430,7 +625,8 @@ impl SoftwareSignupArgument<'_> {
             self.invite_code.to_value(),
             Value::Text(self.email.to_vec()),
             Value::Null,
-            Value::Null,
+            self.passphrase
+                .map_or(Value::Null, crate::PassphraseUpdateArgument::to_set_value),
             Value::Binary(self.subchain_tree_location.to_vec()),
             Value::Binary(self.self_token.to_vec()),
             Value::Array(vec![Value::Array(vec![puk_hepk, device_hepk])]),
@@ -1068,6 +1264,7 @@ pub struct RevokeDeviceArgument<'a> {
     pub seed_chain: &'a [SeedChainBox],
     pub next_tree_location: [u8; 32],
     pub hepks: &'a [Hepk],
+    pub passphrase: Option<&'a crate::PassphraseUpdateArgument>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1077,19 +1274,32 @@ pub struct DecodedRevokeDeviceArgument {
     pub seed_chain: Vec<SeedChainBox>,
     pub next_tree_location: [u8; 32],
     pub hepks: Vec<Hepk>,
+    pub passphrase: Option<crate::PassphraseUpdateArgument>,
 }
 
 impl DecodedRevokeDeviceArgument {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
         let fields = array(&value, 6)?;
-        require_null(&fields[4], "revoke optional metadata")?;
+        let passphrase = match &fields[4] {
+            Value::Null => None,
+            value => {
+                let annex = array(value, 2)?;
+                // Go clients repeat their generic user-settings link here.
+                // This protocol slice accepts that canonical value but does
+                // not project the unsupported chain into local state.
+                Some(crate::PassphraseUpdateArgument::from_unbound_change_value(
+                    &annex[0],
+                )?)
+            }
+        };
         Ok(Self {
             link: UserLink::decode(&encode(&fields[0])?)?,
             puk_boxes: SharedKeyBoxSet::decode(&encode(&fields[1])?)?,
             seed_chain: list(&fields[2], |value| SeedChainBox::decode(&encode(value)?))?,
             next_tree_location: fixed_blob(&fields[3], "next tree location")?,
             hepks: decode_hepk_set(&fields[5])?,
+            passphrase,
         })
     }
 }
@@ -1112,7 +1322,9 @@ impl RevokeDeviceArgument<'_> {
                 ])
             })),
             Value::Binary(self.next_tree_location.to_vec()),
-            Value::Null,
+            self.passphrase.map_or(Value::Null, |passphrase| {
+                Value::Array(vec![passphrase.to_change_value(), Value::Null])
+            }),
             Value::Array(vec![Value::Array(hepks)]),
         ]))?)
     }
@@ -1156,4 +1368,52 @@ fn decode_team_edit_common(value: &Value) -> Result<DecodedTeamEditArgument> {
         hepks: decode_hepk_set(&offchain[5])?,
         local_permissions_for: list(&fields[4], entity)?,
     })
+}
+
+#[cfg(test)]
+mod invite_tests {
+    use super::*;
+
+    #[test]
+    fn standard_invite_text_matches_the_v019_base62_encoding() {
+        let first = InviteCode::Standard((0u8..10).collect());
+        assert_eq!(first.to_user_string().unwrap(), "s.000M9ODf6X0ft3");
+        assert_eq!(
+            InviteCode::from_user_input("s.000M9ODf6X0ft3", false).unwrap(),
+            first
+        );
+
+        let second = InviteCode::Standard(vec![
+            0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0x77, 0x66,
+        ]);
+        assert_eq!(second.to_user_string().unwrap(), "s.62cAFRrdMSO7mg");
+    }
+
+    #[test]
+    fn standard_invite_text_uses_v019_blocks_and_copy_whitespace_rules() {
+        let code = InviteCode::Standard(vec![0; 33]);
+        let exported = code.to_user_string().unwrap();
+        assert_eq!(exported, format!("s.{}", "0".repeat(45)));
+        assert_eq!(InviteCode::from_user_input(&exported, false).unwrap(), code);
+        assert_eq!(
+            InviteCode::from_user_input("s.000M9O >Df6X0ft3\n", false).unwrap(),
+            InviteCode::Standard((0u8..10).collect())
+        );
+        assert!(InviteCode::from_user_input("s.000M9O/Df6X0ft3", false).is_err());
+    }
+
+    #[test]
+    fn multiuse_invites_are_normalized_and_validated_like_v019() {
+        assert_eq!(
+            InviteCode::from_user_input("Team+A", false).unwrap(),
+            InviteCode::MultiUse(b"team+a".to_vec())
+        );
+        assert!(InviteCode::from_user_input("abcd", false).is_err());
+        assert!(InviteCode::from_user_input("team code", false).is_err());
+        assert_eq!(
+            InviteCode::from_user_input("", true).unwrap(),
+            InviteCode::Empty
+        );
+        assert!(InviteCode::from_user_input("", false).is_err());
+    }
 }

@@ -17,7 +17,7 @@ pub(crate) fn reserve_name(
     argument: &[u8],
     principal: &Principal,
     writer: &WriterHandle,
-    clock: &dyn foks_server_db::Clock,
+    clock: &Arc<dyn foks_server_db::Clock>,
     entropy: &dyn Entropy,
 ) -> Result<Vec<u8>, RpcStatus> {
     principal.require_ordinary_device()?;
@@ -38,8 +38,8 @@ pub(crate) fn reserve_name(
         expires_at,
     };
     writer
-        .call(move |database| {
-            database.reserve_team_name(&normalized, &token, 1, now, expires_at)?;
+        .call_with_current_time(Arc::clone(clock), move |database, current_time| {
+            database.reserve_team_name(&normalized, &token, 1, current_time, expires_at)?;
             Ok(())
         })
         .map_err(map_write_error)?;
@@ -52,7 +52,7 @@ pub(crate) fn make_inert_token(
     principal: &Principal,
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
-    clock: &dyn foks_server_db::Clock,
+    clock: &Arc<dyn foks_server_db::Clock>,
     entropy: &dyn Entropy,
 ) -> Result<Vec<u8>, RpcStatus> {
     principal.require_ordinary_device()?;
@@ -79,8 +79,8 @@ pub(crate) fn make_inert_token(
         .checked_add(ADMIN_TOKEN_LIFETIME_MICROSECONDS)
         .ok_or_else(|| internal("team-admin token expiry overflow"))?;
     writer
-        .call(move |database| {
-            database.issue_team_admin_token(&token_hash, &authority, expires_at, now)?;
+        .call_with_current_time(Arc::clone(clock), move |database, current_time| {
+            database.issue_team_admin_token(&token_hash, &authority, expires_at, current_time)?;
             Ok(())
         })
         .map_err(map_write_error)?;
@@ -94,7 +94,7 @@ pub(crate) fn activate_token(
     host: &EntityId,
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
-    clock: &dyn foks_server_db::Clock,
+    clock: &Arc<dyn foks_server_db::Clock>,
 ) -> Result<(), RpcStatus> {
     principal.require_ordinary_device()?;
     let activation =
@@ -136,8 +136,8 @@ pub(crate) fn activate_token(
     const ACTIVATION_TYPE_ID: u64 = 0x6d10_7e50_464f_4b53;
     let activation_hash = foks_crypto::prefixed_hash(ACTIVATION_TYPE_ID, argument);
     let activated = writer
-        .call(move |database| {
-            Ok(database.activate_team_admin_token(&token_hash, &activation_hash, now)?)
+        .call_with_current_time(Arc::clone(clock), move |database, current_time| {
+            Ok(database.activate_team_admin_token(&token_hash, &activation_hash, current_time)?)
         })
         .map_err(map_write_error)?
         .ok_or(RpcStatus::Expired)?;
@@ -151,7 +151,7 @@ pub(crate) fn load_removal_box(
     argument: &[u8],
     principal: &Principal,
     host: &EntityId,
-    reader: &foks_server_db::ReadDatabase,
+    reader: &foks_server_db::ReadSnapshot<'_>,
     clock: &dyn foks_server_db::Clock,
 ) -> Result<Vec<u8>, RpcStatus> {
     principal.require_ordinary_device()?;

@@ -55,6 +55,7 @@ pub(crate) struct Command {
     pub shared_keys: Vec<SharedKey>,
     pub parcels: Vec<Parcel>,
     pub seed_chain: Vec<SeedChainBox>,
+    pub passphrase: Option<foks_proto::PassphraseUpdateArgument>,
     pub expected_root_epoch: u64,
     pub expected_root_hash: [u8; 32],
 }
@@ -65,24 +66,27 @@ pub(crate) fn validate(
     principal: &[u8],
     argument: Argument,
 ) -> Result<Command> {
-    let (link, next_tree_location, hepks, boxes, seed_chain, exact_name) = match &argument {
-        Argument::Provision(argument) => (
-            &argument.link,
-            argument.next_tree_location,
-            &argument.hepks,
-            &argument.puk_boxes,
-            Vec::new(),
-            Some(argument.device_name.encoded()?),
-        ),
-        Argument::Revoke(argument) => (
-            &argument.link,
-            argument.next_tree_location,
-            &argument.hepks,
-            &argument.puk_boxes,
-            argument.seed_chain.clone(),
-            None,
-        ),
-    };
+    let (link, next_tree_location, hepks, boxes, seed_chain, exact_name, passphrase) =
+        match &argument {
+            Argument::Provision(argument) => (
+                &argument.link,
+                argument.next_tree_location,
+                &argument.hepks,
+                &argument.puk_boxes,
+                Vec::new(),
+                Some(argument.device_name.encoded()?),
+                None,
+            ),
+            Argument::Revoke(argument) => (
+                &argument.link,
+                argument.next_tree_location,
+                &argument.hepks,
+                &argument.puk_boxes,
+                argument.seed_chain.clone(),
+                None,
+                argument.passphrase.clone(),
+            ),
+        };
     let uid = EntityId::from_bytes(authority.uid.clone())?;
     let devices = authority
         .devices
@@ -195,6 +199,7 @@ pub(crate) fn validate(
         shared_keys: introduced,
         parcels,
         seed_chain,
+        passphrase,
         expected_root_epoch: authority.current_root_epoch,
         expected_root_hash: authority.current_root_hash,
     })

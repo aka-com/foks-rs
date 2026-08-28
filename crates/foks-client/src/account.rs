@@ -1,16 +1,17 @@
 //! Software-account preparation, creation, and reconciliation.
 
 use super::{
-    derive_device_public, derive_shared_verify_key, encode_registration_select_vhost_request,
-    encode_reserve_username_request_at, encode_signup_request_at, fix_device_name,
-    make_software_eldest_link, normalize_device_name, normalize_username, now_microseconds,
-    prefixed_hash, random_bytes, seal_initial_puk_box, AuthenticatedUserOutcome, DeviceCredential,
-    DeviceLabel, DeviceLabelNameAndCommitmentKey, DeviceType, Duration, EntityId, Error,
-    FoksClient, HardStateStore, InitialPukBoxRandomness, InviteCode, KvDirectoryProjection,
-    MutationCoordinator, MutationDraft, MutationKind, MutationOperation, MutationState, Path,
-    PinnedHost, ProtectedMutationStore, Result, Role, SecretSeed, SharedKeyBoxSet,
-    SoftwareEldestInput, SoftwareEldestMaterial, SoftwareSignupArgument, TreeRoot,
-    UsernameReservation, VerifiedMerkleAdvance, Zeroizing, ENTITY_PUK_VERIFY, ENTITY_USER,
+    derive_device_public, derive_shared_verify_key, encode_check_invite_code_request,
+    encode_registration_select_vhost_request, encode_reserve_username_request_at,
+    encode_signup_request_at, fix_device_name, make_software_eldest_link, normalize_device_name,
+    normalize_username, now_microseconds, prefixed_hash, random_bytes, seal_initial_puk_box,
+    AuthenticatedUserOutcome, DeviceCredential, DeviceLabel, DeviceLabelNameAndCommitmentKey,
+    DeviceType, Duration, EntityId, Error, FoksClient, HardStateStore, InitialPukBoxRandomness,
+    InviteCode, KvDirectoryProjection, MutationCoordinator, MutationDraft, MutationKind,
+    MutationOperation, MutationState, PassphraseUpdateArgument, Path, PinnedHost,
+    ProtectedMutationStore, Result, Role, SecretSeed, SharedKeyBoxSet, SoftwareEldestInput,
+    SoftwareEldestMaterial, SoftwareSignupArgument, TreeRoot, UsernameReservation,
+    VerifiedMerkleAdvance, Zeroizing, ENTITY_PUK_VERIFY, ENTITY_USER,
 };
 
 const SIGNUP_REQUEST_HASH_TYPE_ID: u64 = 0x8f4b_8ab7_464f_4b53;
@@ -40,6 +41,7 @@ pub struct SoftwareAccountRequest {
     pub device_name: String,
     pub invite_code: InviteCode,
     pub email: String,
+    pub passphrase: Option<foks_crypto::Passphrase>,
 }
 
 pub struct PreparedSoftwareAccount {
@@ -53,6 +55,7 @@ pub struct PreparedSoftwareAccount {
     pub device_name: DeviceLabelNameAndCommitmentKey,
     pub next_tree_location: [u8; 32],
     pub subchain_tree_location: [u8; 32],
+    pub passphrase: Option<PassphraseUpdateArgument>,
 }
 
 pub struct CreatedSoftwareAccount {
@@ -63,6 +66,16 @@ pub struct CreatedSoftwareAccount {
 }
 
 impl FoksClient {
+    pub fn check_invite_code(&self, host: &PinnedHost, code: &InviteCode) -> Result<()> {
+        code.validate()?;
+        self.call_void_after_vhost_selection(
+            host,
+            &host.registration,
+            &encode_registration_select_vhost_request(host.host_id())?,
+            &encode_check_invite_code_request(code)?,
+        )
+    }
+
     pub fn reserve_username(
         &self,
         host: &PinnedHost,
@@ -150,6 +163,21 @@ impl FoksClient {
                 nonce: random_bytes()?,
             },
         )?;
+        let passphrase = request
+            .passphrase
+            .as_ref()
+            .map(|passphrase| {
+                foks_crypto::create_passphrase_enrollment(
+                    passphrase,
+                    &eldest.uid,
+                    host.host_id(),
+                    &secrets.puk_seed,
+                    1,
+                    foks_proto::StretchVersion::V1,
+                )
+                .map(|update| update.argument())
+            })
+            .transpose()?;
         Ok(PreparedSoftwareAccount {
             operation_id,
             normalized_username,
@@ -161,6 +189,7 @@ impl FoksClient {
             device_name,
             next_tree_location,
             subchain_tree_location,
+            passphrase,
         })
     }
 
@@ -185,6 +214,7 @@ impl FoksClient {
                 self_token,
                 puk_hepk: &prepared.eldest.puk.hepk,
                 device_hepk: &prepared.eldest.device.hepk,
+                passphrase: prepared.passphrase.as_ref(),
             },
             1,
         )?;
@@ -199,6 +229,7 @@ impl FoksClient {
         soft_database_path: &Path,
         protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<CreatedSoftwareAccount> {
+        self.check_invite_code(host, &request.invite_code)?;
         let reservation = self.reserve_username(host, &request.username_utf8)?;
         let (_, merkle) = self.advance_merkle_root(host)?;
         let prepared =
@@ -220,7 +251,7 @@ impl FoksClient {
             },
             material,
         )?;
-        self.submit_or_reconcile_software_account(
+        let created = self.submit_or_reconcile_software_account(
             host,
             operation,
             Some(signup_request),
@@ -228,7 +259,11 @@ impl FoksClient {
             secrets,
             soft_database_path,
             protected_store,
-        )
+        )?;
+        if let Some(passphrase) = request.passphrase.as_ref() {
+            self.verify_passphrase(host, &created.credential, passphrase)?;
+        }
+        Ok(created)
     }
 
     #[allow(clippy::too_many_arguments)]

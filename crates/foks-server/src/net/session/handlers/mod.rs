@@ -1,0 +1,113 @@
+//! Typed RPC family dispatch over narrow operation ports.
+
+mod kv;
+mod probe;
+mod registration;
+mod team;
+mod user;
+
+use foks_rpc::RpcStatus;
+
+use crate::auth::Principal;
+use crate::rpc::{RouteId, RoutedCall};
+
+use super::ServerData;
+
+pub(super) fn response(
+    data: &ServerData,
+    call: RoutedCall,
+    principal: Option<&Principal>,
+) -> Result<Vec<u8>, RpcStatus> {
+    use RouteId::*;
+
+    match call.route.id {
+        ProbeProbe
+        | MerkleQueryGetHistoricalRoots
+        | MerkleQueryGetCurrentRoot
+        | MerkleQuerySelectVHost
+        | RegSelectVHost
+        | KvStoreSelectVHost => probe::response(data, call),
+        RegReserveUsername
+        | RegGetLoginChallenge
+        | RegLogin
+        | RegStretchVersion
+        | RegGetClientCertChain
+        | RegSignup
+        | RegCheckInviteCode
+        | RegGetUIDLookupChallege
+        | RegLookupUIDByDevice => registration::response(data, call),
+        UserSetPassphrase
+        | UserChangePassphrase
+        | UserGetSalt
+        | UserNextPassphraseGeneration
+        | UserStretchVersion
+        | UserGetPpeParcel
+        | UserProvisionDevice
+        | UserRevokeDevice
+        | UserLoadUserChain
+        | UserGetPukForRole
+        | UserGetHostConfig => user::response(data, call, principal),
+        TeamLoaderGetTeamVOBearerTokenChallenge
+        | TeamLoaderActivateTeamVOBearerToken
+        | TeamLoaderLoadTeamChain
+        | TeamAdminReserveTeamname
+        | TeamAdminCreateTeam
+        | TeamAdminEditTeam
+        | TeamAdminMakeInertTeamBearerToken
+        | TeamAdminActivateTeamBearerToken
+        | TeamAdminLoadRemovalKeyBoxForTeamAdmin
+        | TeamAdminCreateTeamAdHoc => team::response(data, call, principal),
+        KvStoreMkdir
+        | KvStorePut
+        | KvStorePutRoot
+        | KvStoreFileUploadInit
+        | KvStoreFileUploadChunk
+        | KvStorePutSmallFileOrSymlink
+        | KvStoreGetRoot
+        | KvStoreGetNode
+        | KvStoreGetEncryptedChunk
+        | KvStoreGetDir
+        | KvStoreCacheCheck
+        | KvStoreList
+        | KvStoreLockAcquire
+        | KvStoreLockRelease => kv::response(data, call, principal),
+        TeamLoaderCheckTeamVOBearerToken
+        | TeamLoaderLoadTeamMembershipChain
+        | TeamLoaderLoadRemovalForMember
+        | TeamLoaderLoadTeamRemoteViewTokens
+        | TeamLoaderGetServerConfig
+        | TeamAdminCheckTeamBearerToken
+        | TeamAdminPutTeamCert
+        | TeamAdminGetCurrentTeamCerts
+        | TeamAdminLoadTeamRemoteJoinReq
+        | TeamAdminPostTeamMembershipLink
+        | TeamAdminPostTeamRemoval
+        | TeamAdminLoadTeamRawInbox
+        | TeamAdminRejectJoinReq
+        | TeamAdminGetTeamConfig => Err(RpcStatus::Unsupported),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn executable_dispatch_does_not_compare_protocol_or_method_names() {
+        let dispatch_sources = [
+            include_str!("mod.rs"),
+            include_str!("kv.rs"),
+            include_str!("probe.rs"),
+            include_str!("registration.rs"),
+            include_str!("team.rs"),
+            include_str!("user.rs"),
+            include_str!("../../../services/kv.rs"),
+        ];
+        let protocol_comparison = ["route.", "protocol =="].concat();
+        let method_comparison = ["route.", "method =="].concat();
+        let method_match = ["match ", "method"].concat();
+        for source in dispatch_sources {
+            assert!(!source.contains(&protocol_comparison));
+            assert!(!source.contains(&method_comparison));
+            assert!(!source.contains(&method_match));
+        }
+    }
+}
