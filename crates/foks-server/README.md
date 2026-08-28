@@ -41,6 +41,32 @@ hostname. Service certificates are generated under the delegated CA committed
 by the hostchain. Every state path and the 32-byte operator root-key file is
 explicit; there is no home-directory or AKA path default.
 
+For a new self-contained installation, initialize once and run the generated
+versioned configuration:
+
+```text
+foks-server init \
+  --directory /var/lib/foks \
+  --canonical-name foks.example.test \
+  --probe-address 0.0.0.0:4430 \
+  --public-address 0.0.0.0:4431 \
+  --authenticated-address 0.0.0.0:4432
+
+foks-server config-check --config /var/lib/foks/server.toml
+foks-server serve-config --config /var/lib/foks/server.toml
+```
+
+Initialization is non-overwriting and creates private data, key, and backup
+directories, an operator root, and a self-signed Ed25519 probe certificate for
+the canonical DNS name. Replace the generated probe certificate/key paths with
+operator-managed material before exposing a public deployment. Use
+`foks-server status` for an offline bootstrap/integrity report and
+`client-bootstrap` to write a post-bootstrap client import bundle. Example
+systemd units and deployment notes are in [`../../packaging`](../../packaging).
+
+The lower-level `serve` command remains available when every artifact and
+listener should be supplied individually:
+
 ```text
 foks-server serve \
   --canonical-name foks.example.test \
@@ -223,3 +249,10 @@ baseline or policy update. The scheduled
 `tools/foks-server/diff-upstream-protocol.sh` audit compares the pinned artifact
 with upstream's immutable current commit, publishes semantic JSON/Markdown
 drift reports, and never edits the baseline or a lockfile.
+
+The standalone direct client, local agent, and desktop backend have a separate
+AKA-dependency and test gate:
+
+```text
+tools/foks-client/check.sh
+```

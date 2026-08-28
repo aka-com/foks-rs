@@ -22,6 +22,10 @@ pub enum Error {
     Merkle(#[from] foks_merkle_store::Error),
     #[error("certificate construction failed: {0}")]
     Certificate(#[from] rcgen::Error),
+    #[error("installation configuration decoding failed: {0}")]
+    TomlDecode(#[from] toml::de::Error),
+    #[error("installation configuration encoding failed: {0}")]
+    TomlEncode(#[from] toml::ser::Error),
     #[error("server thread panicked")]
     Thread,
     #[error("SQLite writer queue is full or closed")]

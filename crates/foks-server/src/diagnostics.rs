@@ -46,6 +46,8 @@ pub(crate) fn classify(error: &Error) -> SessionErrorClass {
             SessionErrorClass::Storage
         }
         Error::Certificate(_)
+        | Error::TomlDecode(_)
+        | Error::TomlEncode(_)
         | Error::Thread
         | Error::Config(_)
         | Error::Key(_)

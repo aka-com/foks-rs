@@ -5,6 +5,13 @@ initial probe uses configured WebPKI roots; delegated services use the active
 TLS CAs authenticated by the hostchain and select the pinned virtual host when
 the upstream protocol requires it.
 
+This crate is the protocol client library. The standalone application
+composition, direct `foks-rs` executable, bounded local agent, and
+toolkit-independent desktop boundary live in `foks-client-app`, `foks-cli`,
+`foks-agent`, and `foks-desktop`. They use explicit state paths and do not
+depend on AKA crates. Run their isolated gate with
+`tools/foks-client/check.sh`.
+
 Delegated RPC connections are pooled by endpoint, authenticated HostID/TLS
 roots, client certificate identity, and virtual-host selection state. RPC
 sequence numbers advance on reuse without rewriting signed protocol arguments;

@@ -1,0 +1,19 @@
+[Unit]
+Description=Standalone FOKS local agent
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/foks-agent --state-dir %h/.local/share/foks-rs
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/foks-rs
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+
+[Install]
+WantedBy=default.target

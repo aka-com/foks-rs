@@ -1,0 +1,64 @@
+name: FOKS hosted compatibility
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: foks-hosted-compat
+  cancel-in-progress: false
+
+jobs:
+  authenticated-canary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Restore dedicated canary state
+        env:
+          FOKS_CANARY_STATE_TAR_B64: ${{ secrets.FOKS_CANARY_STATE_TAR_B64 }}
+          FOKS_CANARY_SIGNING_SEED_B64: ${{ secrets.FOKS_CANARY_SIGNING_SEED_B64 }}
+        run: |
+          set -eu
+          umask 077
+          mkdir -p "$RUNNER_TEMP/foks-canary-state"
+          printf '%s' "$FOKS_CANARY_STATE_TAR_B64" | base64 -d | tar -xz -C "$RUNNER_TEMP/foks-canary-state"
+          printf '%s' "$FOKS_CANARY_SIGNING_SEED_B64" | base64 -d > "$RUNNER_TEMP/foks-canary-signing.seed"
+          test "$(wc -c < "$RUNNER_TEMP/foks-canary-signing.seed")" -eq 32
+      - name: Build isolated client and artifact signer
+        run: cargo build --locked --release -p foks-cli -p foks-compat-artifact
+      - name: Run authenticated mutation/read canary
+        id: canary
+        continue-on-error: true
+        env:
+          FOKS_CANARY_STATE_DIR: ${{ runner.temp }}/foks-canary-state
+          # This dedicated profile deliberately uses the v0.1.9 policy so an
+          # expired lease cannot prevent the canary from testing recovery.
+          FOKS_CANARY_PROFILE: hosted-canary
+          FOKS_CAPABILITY_PROFILE: hosted
+          FOKS_CANARY_ACCOUNT: canary
+          FOKS_CANARY_TARGET: foks.pub:443
+          FOKS_CANARY_SIGNING_KEY_FILE: ${{ runner.temp }}/foks-canary-signing.seed
+          FOKS_CANARY_OUTPUT: ${{ runner.temp }}/foks-hosted-capabilities.json
+        run: tools/foks-client/hosted-canary.sh
+      - name: Upload signed capability lease
+        uses: actions/upload-artifact@v4
+        with:
+          name: foks-hosted-capabilities
+          path: ${{ runner.temp }}/foks-hosted-capabilities.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Attest canary artifact provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ runner.temp }}/foks-hosted-capabilities.json
+      - name: Fail after publishing drift revocation
+        if: steps.canary.outcome != 'success'
+        run: exit 1

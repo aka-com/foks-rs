@@ -1,0 +1,86 @@
+name: FOKS desktop
+
+on:
+  pull_request:
+    paths:
+      - "crates/foks-desktop/**"
+      - "crates/foks-agent/**"
+      - "crates/foks-agent-client/**"
+      - "crates/foks-agent-proto/**"
+      - "packaging/foks-desktop/**"
+      - ".github/workflows/foks-desktop.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  push:
+    tags: ["foks-desktop-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            artifact: macos
+          - os: ubuntu-24.04
+            artifact: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux GPUI build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang libfontconfig1-dev libwayland-dev libxkbcommon-x11-dev libxcb1-dev libvulkan-dev pkg-config
+      - run: cargo test --locked -p foks-desktop
+      - run: cargo clippy --locked -p foks-desktop --all-targets -- -D warnings
+      - name: Import Apple signing certificate
+        if: startsWith(github.ref, 'refs/tags/') && runner.os == 'macOS'
+        env:
+          CERTIFICATE_P12_B64: ${{ secrets.FOKS_APPLE_CERTIFICATE_P12_B64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.FOKS_APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -eu
+          security create-keychain -p "$CERTIFICATE_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$CERTIFICATE_PASSWORD" build.keychain
+          printf '%s' "$CERTIFICATE_P12_B64" | base64 -D > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$CERTIFICATE_PASSWORD" build.keychain
+      - name: Package
+        env:
+          FOKS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
+          FOKS_CODESIGN_IDENTITY: ${{ secrets.FOKS_CODESIGN_IDENTITY }}
+        run: packaging/foks-desktop/package.sh "$RUNNER_TEMP/foks-package"
+      - name: Notarize macOS release
+        if: startsWith(github.ref, 'refs/tags/') && runner.os == 'macOS'
+        env:
+          APPLE_ID: ${{ secrets.FOKS_APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.FOKS_APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.FOKS_APPLE_APP_PASSWORD }}
+        run: |
+          set -eu
+          archive=$(printf '%s\n' "$RUNNER_TEMP"/foks-package/*.zip)
+          xcrun notarytool submit "$archive" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$RUNNER_TEMP/foks-package/FOKS.app"
+          rm "$archive"
+          ditto -c -k --keepParent "$RUNNER_TEMP/foks-package/FOKS.app" "$archive"
+          spctl --assess --type execute --verbose "$RUNNER_TEMP/foks-package/FOKS.app"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: foks-desktop-${{ matrix.artifact }}
+          path: ${{ runner.temp }}/foks-package
+      - name: Attest macOS release artifact
+        if: startsWith(github.ref, 'refs/tags/') && runner.os == 'macOS'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ runner.temp }}/foks-package/*.zip
+      - name: Attest Linux release artifact
+        if: startsWith(github.ref, 'refs/tags/') && runner.os == 'Linux'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ runner.temp }}/foks-package/*.tar.gz

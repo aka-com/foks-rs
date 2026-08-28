@@ -1628,7 +1628,7 @@ impl HardStateStore {
                 stored_seqno,
                 tail,
                 chain,
-                evidence,
+                _evidence,
                 username,
                 username_utf8,
                 username_sequence,
@@ -1674,7 +1674,6 @@ impl HardStateStore {
                         std::cmp::Ordering::Equal => {
                             if root_hash.as_slice() != snapshot.merkle_root_hash
                                 || root_bytes != snapshot.merkle_root_bytes
-                                || evidence != snapshot.evidence_bytes
                             {
                                 return Err(Error::MerkleFork {
                                     epoch: snapshot.merkle_epoch,
@@ -1860,7 +1859,6 @@ impl HardStateStore {
                     std::cmp::Ordering::Equal => {
                         if stored.merkle_root_hash != snapshot.merkle_root_hash
                             || stored.merkle_root_bytes != snapshot.merkle_root_bytes
-                            || stored.evidence_bytes != snapshot.evidence_bytes
                         {
                             return Err(Error::MerkleFork {
                                 epoch: snapshot.merkle_epoch,
@@ -3863,6 +3861,12 @@ mod tests {
             store.accept_user_parts(user.parts()).unwrap(),
             Acceptance::Unchanged
         );
+        let mut alternate_evidence = user.clone();
+        alternate_evidence.evidence_bytes = vec![0x5a; 96];
+        assert_eq!(
+            store.accept_user_parts(alternate_evidence.parts()).unwrap(),
+            Acceptance::Unchanged
+        );
 
         let mut fork = user.clone();
         let mut fork_hash = fork.chain_tail_hash;
@@ -3911,6 +3915,13 @@ mod tests {
         assert_eq!(loaded.evidence_bytes, team.evidence_bytes);
         assert_eq!(loaded.members, team.members);
         assert_eq!(loaded.shared_keys, team.shared_keys);
+
+        let mut alternate_evidence = team.clone();
+        alternate_evidence.evidence_bytes = vec![0xa5; 96];
+        assert_eq!(
+            store.accept_team_parts(alternate_evidence.parts()).unwrap(),
+            Acceptance::Unchanged
+        );
 
         let mut changed = team.clone();
         changed.members[0].hepk_fingerprint[0] ^= 1;
