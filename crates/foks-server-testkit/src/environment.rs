@@ -106,6 +106,48 @@ impl TestEnvironment {
         crate::InProcessServer::start(self.clone())
     }
 
+    #[doc(hidden)]
+    pub fn rotate_host_key(&self) -> foks_server::Result<foks_server::host::HostKeyRotationState> {
+        if *self
+            .inner
+            .running
+            .lock()
+            .expect("test server lifecycle lock")
+        {
+            return Err(foks_server::Error::Config(
+                "test host rotation requires a stopped server",
+            ));
+        }
+        let provider = foks_server::keys::DirectoryKeyProvider::open_for_rotation(
+            self.inner.paths.keys(),
+            self.inner.root_key,
+        )?;
+        let mut database = foks_server_db::Database::open(
+            self.inner.paths.database(),
+            self.inner.database_config.clone(),
+        )?;
+        let published = foks_server::host::begin_host_key_rotation(
+            &mut database,
+            &provider,
+            self.advance_clock(1),
+        )?;
+        foks_server::host::complete_host_key_rotation(
+            &mut database,
+            &provider,
+            published.operation_id,
+            foks_server::host::HostKeyRotationObservation {
+                add_link_seqno: published
+                    .add_link_seqno
+                    .ok_or(foks_server::Error::Config("missing test add-link sequence"))?,
+            },
+            published
+                .observation_not_before
+                .ok_or(foks_server::Error::Config(
+                    "missing test host observation deadline",
+                ))?,
+        )
+    }
+
     pub fn start_probe_override(
         &self,
         probe_response: Vec<u8>,

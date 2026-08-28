@@ -1,7 +1,32 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 13;
+pub(crate) const VERSION: u32 = 14;
+
+pub(crate) const REVISION_TABLES: &[&str] = &[
+    "hosts",
+    "host_lookups",
+    "host_services",
+    "merkle_roots",
+    "merkle_heads",
+    "users",
+    "user_devices",
+    "user_shared_keys",
+    "teams",
+    "team_members",
+    "team_shared_keys",
+    "signup_operations",
+    "adhoc_team_operations",
+    "team_mutation_operations",
+    "mutation_operations",
+    "scheduled_jobs",
+];
 
 pub(crate) const INITIAL: &str = r#"
+CREATE TABLE hard_state_metadata (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    database_id BLOB NOT NULL UNIQUE CHECK (length(database_id) = 16),
+    hard_state_revision INTEGER NOT NULL CHECK (hard_state_revision >= 0)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE hosts (
     host_id BLOB PRIMARY KEY CHECK (length(host_id) > 0),
     canonical_name TEXT NOT NULL CHECK (length(canonical_name) > 0),
@@ -37,7 +62,7 @@ CREATE TABLE merkle_heads (
     host_id BLOB PRIMARY KEY REFERENCES hosts(host_id) ON DELETE CASCADE,
     epoch INTEGER NOT NULL CHECK (epoch >= 0),
     root_hash BLOB NOT NULL CHECK (length(root_hash) = 32),
-    evidence_kind INTEGER NOT NULL CHECK (evidence_kind IN (1, 2)),
+    evidence_kind INTEGER NOT NULL CHECK (evidence_kind IN (1, 2, 3)),
     anchor_epoch INTEGER CHECK (anchor_epoch IS NULL OR anchor_epoch >= 0),
     evidence_bytes BLOB NOT NULL CHECK (length(evidence_bytes) > 0),
     FOREIGN KEY (host_id, epoch) REFERENCES merkle_roots(host_id, epoch)

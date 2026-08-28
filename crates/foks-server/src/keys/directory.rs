@@ -6,7 +6,7 @@ use chacha20poly1305::aead::{Aead as _, KeyInit as _, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use zeroize::Zeroizing;
 
-use super::{HostKeyProvider, KeyPurpose, SecretKey};
+use super::{HostKeyProvider, KeyGenerationId, KeyPurpose, SecretKey};
 use crate::{Error, Result};
 
 const MAGIC: &[u8; 8] = b"FOKSK01\0";
@@ -19,11 +19,26 @@ const NONCE_BYTES: usize = 24;
 pub struct DirectoryKeyProvider {
     directory: PathBuf,
     wrapping_key: Zeroizing<[u8; 32]>,
+    exclusive: bool,
     _process_lock: File,
 }
 
 impl DirectoryKeyProvider {
     pub fn open(directory: impl AsRef<Path>, root_key: [u8; 32]) -> Result<Self> {
+        Self::open_with_lock(directory, root_key, false)
+    }
+
+    /// Opens the key directory exclusively for an offline public-key
+    /// rotation. This fails while a server or backup process has it open.
+    pub fn open_for_rotation(directory: impl AsRef<Path>, root_key: [u8; 32]) -> Result<Self> {
+        Self::open_with_lock(directory, root_key, true)
+    }
+
+    fn open_with_lock(
+        directory: impl AsRef<Path>,
+        root_key: [u8; 32],
+        exclusive: bool,
+    ) -> Result<Self> {
         let root_key = Zeroizing::new(root_key);
         let directory = directory.as_ref().to_path_buf();
         std::fs::create_dir_all(&directory)?;
@@ -35,13 +50,23 @@ impl DirectoryKeyProvider {
             return Err(Error::Key("key directory is a symlink"));
         }
         let process_lock = open_rotation_lock(&directory)?;
-        process_lock
-            .try_lock_shared()
-            .map_err(|_| Error::Config("key directory rotation is active"))?;
+        if exclusive {
+            process_lock
+                .try_lock()
+                .map_err(|_| Error::Config("key directory is in use"))?;
+        } else {
+            process_lock
+                .try_lock_shared()
+                .map_err(|_| Error::Config("key directory rotation is active"))?;
+        }
         let wrapping_key = load_or_create_wrapping_key(&directory, &root_key)?;
+        if exclusive {
+            cleanup_private_temporaries(&directory)?;
+        }
         Ok(Self {
             directory,
             wrapping_key,
+            exclusive,
             _process_lock: process_lock,
         })
     }
@@ -94,6 +119,16 @@ impl DirectoryKeyProvider {
         self.directory.join(format!("{}.key", purpose.label()))
     }
 
+    fn generation_path(&self, purpose: KeyPurpose, generation: KeyGenerationId) -> PathBuf {
+        let generation = generation
+            .as_bytes()
+            .into_iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        self.directory
+            .join(format!("{}.{generation}.key", purpose.label()))
+    }
+
     fn load(&self, path: &Path, purpose: KeyPurpose) -> Result<SecretKey> {
         if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
             return Err(Error::Key("key file is a symlink"));
@@ -139,12 +174,28 @@ impl DirectoryKeyProvider {
     }
 
     fn create(&self, path: &Path, purpose: KeyPurpose) -> Result<SecretKey> {
+        let mut generation = [0; GENERATION_BYTES];
+        getrandom::fill(&mut generation).map_err(|_| Error::Key("operating-system entropy"))?;
+        match self.create_with_generation(path, purpose, KeyGenerationId::from_bytes(generation)) {
+            Ok(key) => Ok(key),
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                self.load(path, purpose)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn create_with_generation(
+        &self,
+        path: &Path,
+        purpose: KeyPurpose,
+        generation: KeyGenerationId,
+    ) -> Result<SecretKey> {
         let mut key = Zeroizing::new([0; 32]);
         getrandom::fill(&mut *key).map_err(|_| Error::Key("operating-system entropy"))?;
         let mut nonce = [0; NONCE_BYTES];
         getrandom::fill(&mut nonce).map_err(|_| Error::Key("operating-system entropy"))?;
-        let mut generation = [0; GENERATION_BYTES];
-        getrandom::fill(&mut generation).map_err(|_| Error::Key("operating-system entropy"))?;
+        let generation = generation.as_bytes();
         let aad = associated_data(purpose, &generation);
         let cipher = XChaCha20Poly1305::new((&*self.wrapping_key).into());
         let ciphertext = cipher
@@ -168,9 +219,6 @@ impl DirectoryKeyProvider {
                 Ok(()) => {
                     sync_directory(&self.directory)?;
                     Ok(SecretKey::new(*key, generation))
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    self.load(path, purpose)
                 }
                 Err(error) => Err(error.into()),
             }
@@ -319,6 +367,110 @@ impl HostKeyProvider for DirectoryKeyProvider {
             Err(error) => Err(error),
         }
     }
+
+    fn load_existing(&self, purpose: KeyPurpose) -> Result<SecretKey> {
+        DirectoryKeyProvider::load_existing(self, purpose)
+    }
+
+    fn create_generation(&self, purpose: KeyPurpose) -> Result<SecretKey> {
+        if !self.exclusive {
+            return Err(Error::Config(
+                "new key generations require an exclusive rotation lock",
+            ));
+        }
+        // The random generation ID is part of the authenticated ciphertext and
+        // the immutable filename. A collision is retried rather than opening
+        // an existing generation whose secret the caller did not create.
+        for _ in 0..8 {
+            let mut generation = [0; GENERATION_BYTES];
+            getrandom::fill(&mut generation).map_err(|_| Error::Key("operating-system entropy"))?;
+            let generation = KeyGenerationId::from_bytes(generation);
+            let path = self.generation_path(purpose, generation);
+            match self.create_with_generation(&path, purpose, generation) {
+                Ok(key) => return Ok(key),
+                Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(Error::Key("repeated key generation collision"))
+    }
+
+    fn load_generation(
+        &self,
+        purpose: KeyPurpose,
+        generation: KeyGenerationId,
+    ) -> Result<SecretKey> {
+        let key = self.load(&self.generation_path(purpose, generation), purpose)?;
+        if key.generation() != generation {
+            return Err(Error::Key("key generation filename mismatch"));
+        }
+        Ok(key)
+    }
+
+    fn list_generations(&self, purpose: KeyPurpose) -> Result<Vec<KeyGenerationId>> {
+        let prefix = format!("{}.", purpose.label());
+        let mut generations = Vec::new();
+        for entry in std::fs::read_dir(&self.directory)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let Some(hex) = name
+                .strip_prefix(&prefix)
+                .and_then(|name| name.strip_suffix(".key"))
+            else {
+                continue;
+            };
+            if hex.len() != 32 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(Error::Key("invalid generation-qualified key filename"));
+            }
+            let mut generation = [0; GENERATION_BYTES];
+            for (index, output) in generation.iter_mut().enumerate() {
+                *output = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16)
+                    .map_err(|_| Error::Key("invalid generation-qualified key filename"))?;
+            }
+            generations.push(KeyGenerationId::from_bytes(generation));
+        }
+        generations.sort();
+        generations.dedup();
+        Ok(generations)
+    }
+
+    fn remove_generation(&self, purpose: KeyPurpose, generation: KeyGenerationId) -> Result<()> {
+        if !self.exclusive {
+            return Err(Error::Config(
+                "key retirement requires an exclusive rotation lock",
+            ));
+        }
+        let generated = self.generation_path(purpose, generation);
+        match self.load(&generated, purpose) {
+            Ok(key) => {
+                if key.generation() != generation {
+                    return Err(Error::Key("key generation filename mismatch"));
+                }
+                std::fs::remove_file(generated)?;
+                sync_directory(&self.directory)?;
+                return Ok(());
+            }
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+
+        // The genesis host generation uses the canonical `host.key` name.
+        // Later generations always use generation-qualified immutable names.
+        let canonical = self.path(purpose);
+        match self.load(&canonical, purpose) {
+            Ok(key) if key.generation() == generation => {
+                std::fs::remove_file(canonical)?;
+                sync_directory(&self.directory)?;
+                Ok(())
+            }
+            Ok(_) => Ok(()),
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -374,3 +526,49 @@ fn validate_file_permissions(_file: &File) -> Result<()> {
 fn sync_directory(path: &Path) -> std::io::Result<()> {
     File::open(path)?.sync_all()
 }
+
+fn cleanup_private_temporaries(directory: &Path) -> Result<()> {
+    let mut removed = false;
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(body) = name
+            .strip_prefix('.')
+            .and_then(|name| name.strip_suffix(".tmp"))
+        else {
+            continue;
+        };
+        let Some((label, random)) = body.rsplit_once('.') else {
+            continue;
+        };
+        let owned_label = MANAGED_TEMPORARY_LABELS.contains(&label);
+        if !owned_label || random.parse::<u64>().is_err() {
+            continue;
+        }
+        let metadata = std::fs::symlink_metadata(entry.path())?;
+        if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+            return Err(Error::Key("invalid private-key temporary file"));
+        }
+        std::fs::remove_file(entry.path())?;
+        removed = true;
+    }
+    if removed {
+        sync_directory(directory)?;
+    }
+    Ok(())
+}
+
+const MANAGED_TEMPORARY_LABELS: &[&str] = &[
+    "host",
+    "metadata",
+    "merkle",
+    "client-ca",
+    "delegated-tls",
+    "recovery",
+    "capability",
+    "operator-root",
+    "key-encryption",
+];

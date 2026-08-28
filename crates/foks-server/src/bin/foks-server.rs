@@ -52,6 +52,13 @@ enum Command {
     Restore(RestoreArguments),
     /// Atomically rewraps installation keys under a new operator root key.
     RotateOperatorRoot(RotateOperatorRootArguments),
+    /// Publishes a new host signing key while retaining the old signer.
+    BeginHostKeyRotation {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Revokes the prior host signing key after the observation interval.
+    CompleteHostKeyRotation(CompleteHostKeyRotationArguments),
 }
 
 #[derive(clap::Args)]
@@ -102,6 +109,10 @@ struct ServeArguments {
     maximum_active_connections: usize,
     #[arg(long, default_value_t = 32)]
     maximum_pending_connections: usize,
+    #[arg(long, default_value_t = 64)]
+    maximum_in_flight_requests: usize,
+    #[arg(long, default_value_t = 30)]
+    request_timeout_seconds: u64,
     #[arg(long, default_value_t = 64)]
     maximum_pending_writes: usize,
     #[arg(long, default_value_t = 512)]
@@ -154,6 +165,18 @@ struct RotateOperatorRootArguments {
     new_root_key_file: PathBuf,
 }
 
+#[derive(clap::Args)]
+struct CompleteHostKeyRotationArguments {
+    #[arg(long)]
+    config: PathBuf,
+    /// The 32-hex-character operation ID returned by begin-host-key-rotation.
+    #[arg(long)]
+    operation_id: String,
+    /// Add-key hostchain sequence observed by an independently syncing client.
+    #[arg(long)]
+    observed_addition_seqno: u64,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     match Arguments::parse().command {
         Command::Init(arguments) => initialize(arguments),
@@ -165,6 +188,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Backup(arguments) => backup(arguments),
         Command::Restore(arguments) => restore(arguments),
         Command::RotateOperatorRoot(arguments) => rotate_operator_root(arguments),
+        Command::BeginHostKeyRotation { config } => rotate_host_key(config),
+        Command::CompleteHostKeyRotation(arguments) => complete_host_key_rotation(arguments),
     }
 }
 
@@ -203,6 +228,8 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         maximum_read_connections: 32,
         maximum_active_connections: 256,
         maximum_pending_connections: 32,
+        maximum_in_flight_requests: 64,
+        request_timeout_seconds: 30,
         maximum_pending_writes: 64,
         connection_rate_burst: 512,
         connections_per_second: 256,
@@ -271,6 +298,8 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
             maximum_read_connections: arguments.maximum_read_connections,
             maximum_active_connections: arguments.maximum_active_connections,
             maximum_pending_connections: arguments.maximum_pending_connections,
+            maximum_in_flight_requests: arguments.maximum_in_flight_requests,
+            request_timeout: std::time::Duration::from_secs(arguments.request_timeout_seconds),
             ..SessionLimits::default()
         },
         rate_limits: foks_server::RateLimitConfig {
@@ -347,6 +376,83 @@ fn rotate_operator_root(
         *new_root_key,
     )?;
     Ok(())
+}
+
+fn rotate_host_key(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let config = foks_server::installation::load_config(config_path)?;
+    foks_server::installation::validate_artifacts(&config)?;
+    let root_key = read_root_key_file(&config.root_key_file)?;
+    let provider = foks_server::keys::DirectoryKeyProvider::open_for_rotation(
+        &config.key_directory,
+        *root_key,
+    )?;
+    let mut database =
+        foks_server_db::Database::open(&config.database, foks_server_db::Config::default())?;
+    let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros())?;
+    let state = foks_server::host::begin_host_key_rotation(&mut database, &provider, now)?;
+    print_host_rotation(&state);
+    Ok(())
+}
+
+fn complete_host_key_rotation(
+    arguments: CompleteHostKeyRotationArguments,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let operation_id = decode_operation_id(&arguments.operation_id)?;
+    let config = foks_server::installation::load_config(arguments.config)?;
+    foks_server::installation::validate_artifacts(&config)?;
+    let root_key = read_root_key_file(&config.root_key_file)?;
+    let provider = foks_server::keys::DirectoryKeyProvider::open_for_rotation(
+        &config.key_directory,
+        *root_key,
+    )?;
+    let mut database =
+        foks_server_db::Database::open(&config.database, foks_server_db::Config::default())?;
+    let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros())?;
+    let state = foks_server::host::complete_host_key_rotation(
+        &mut database,
+        &provider,
+        operation_id,
+        foks_server::host::HostKeyRotationObservation {
+            add_link_seqno: arguments.observed_addition_seqno,
+        },
+        now,
+    )?;
+    print_host_rotation(&state);
+    Ok(())
+}
+
+fn print_host_rotation(state: &foks_server::host::HostKeyRotationState) {
+    let hex = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    println!(
+        "host-key rotation operation={} phase={:?} old_generation={} new_generation={} \
+         old_public_entity={} new_public_entity={} add_seqno={:?} revoke_seqno={:?} \
+         observation_not_before_micros={:?}",
+        hex(&state.operation_id),
+        state.phase,
+        hex(&state.old_generation_id),
+        hex(&state.new_generation_id),
+        hex(&state.old_public_entity_id),
+        hex(&state.new_public_entity_id),
+        state.add_link_seqno,
+        state.revoke_link_seqno,
+        state.observation_not_before,
+    );
+}
+
+fn decode_operation_id(encoded: &str) -> Result<[u8; 16], Box<dyn std::error::Error>> {
+    if encoded.len() != 32 || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("operation ID must contain exactly 32 hexadecimal characters".into());
+    }
+    let mut decoded = [0; 16];
+    for (index, byte) in decoded.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&encoded[index * 2..index * 2 + 2], 16)?;
+    }
+    Ok(decoded)
 }
 
 fn probe_tls(

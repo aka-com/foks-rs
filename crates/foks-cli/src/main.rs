@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser as _, ValueEnum};
 use foks_client_app::{
-    derive_vault_key, AccountVault, ClientCredentials, CredentialBackend, Profile, ProfileRegistry,
-    ProfileSession, ProtocolPolicy, TrustRoot,
+    derive_vault_key, AccountVault, CheckedProfileSession, ClientCredentials, CredentialBackend,
+    Profile, ProfileRegistry, ProfileSession, ProtocolPolicy, TrustRoot,
 };
 use foks_keystore::EncryptedFileSecretStore;
 use zeroize::Zeroizing;
@@ -79,6 +79,12 @@ enum ProfileCommand {
     Probe {
         name: String,
     },
+    /// Destructively discards a profile's rollback checkpoint and hard-state database.
+    ResetHardState {
+        name: String,
+        #[arg(long)]
+        confirm_delete: bool,
+    },
     /// Applies a signed compatibility lease or a fail-closed drift revocation.
     ApplyCanary {
         name: String,
@@ -98,6 +104,9 @@ struct ProfileAdd {
     /// Ed25519 public key (hex) authorized to sign hosted canary leases.
     #[arg(long)]
     canary_public_key: Option<String>,
+    /// Stable HTTPS URL serving the latest signed hosted canary lease.
+    #[arg(long)]
+    canary_url: Option<String>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -313,8 +322,8 @@ fn profile_command(
         ProfileCommand::Add(arguments) => {
             let protocol = match arguments.generation {
                 ProfileGeneration::V019 => {
-                    if arguments.canary_public_key.is_some() {
-                        return Err("v0.1.9 profiles do not take a canary key".into());
+                    if arguments.canary_public_key.is_some() || arguments.canary_url.is_some() {
+                        return Err("v0.1.9 profiles do not take canary configuration".into());
                     }
                     ProtocolPolicy::V019
                 }
@@ -322,6 +331,10 @@ fn profile_command(
                     canary_public_key: arguments
                         .canary_public_key
                         .ok_or("current profiles require --canary-public-key")?,
+                    lease_url: arguments
+                        .canary_url
+                        .ok_or("current profiles require --canary-url")?,
+                    last_artifact: None,
                 },
             };
             let trust = match arguments.ca_der {
@@ -352,21 +365,37 @@ fn profile_command(
         ProfileCommand::Probe { name } => {
             let credentials = ClientCredentials::open(state_dir)?;
             let session = ProfileSession::open(&registry, &name)?;
-            let report = credentials.with_checkpoint(&session, || {
+            let report = credentials.with_checked_session(&session, |session| {
                 session
                     .probe_and_pin()
                     .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
             })?;
             output(json, &report, "host verified and pinned")
         }
+        ProfileCommand::ResetHardState {
+            name,
+            confirm_delete,
+        } => {
+            if !confirm_delete {
+                return Err(
+                    "reset-hard-state requires --confirm-delete because it discards rollback protection, pins, mutation journals, and scheduled jobs"
+                        .into(),
+                );
+            }
+            let credentials = ClientCredentials::open(state_dir)?;
+            let session = ProfileSession::open(&registry, &name)?;
+            credentials.reset_hard_state(&session)?;
+            output(
+                json,
+                &serde_json::json!({ "profile": name, "hard_state_reset": true }),
+                "external checkpoint and hard-state database deleted; probe the profile again before use",
+            )
+        }
         ProfileCommand::ApplyCanary { name, artifact } => {
             let bytes = read_bounded_private_file(&artifact, 1024 * 1024)?;
             let signed: foks_compat_artifact::SignedCanaryArtifact =
                 serde_json::from_slice(&bytes)?;
-            let profile = registry
-                .profile(&name)?
-                .apply_canary(&signed, now_seconds()?)?;
-            registry.replace(profile.clone())?;
+            let profile = registry.apply_canary(&name, &signed, now_seconds()?)?;
             output(json, &profile, "authenticated canary lease applied")
         }
     }
@@ -381,14 +410,14 @@ fn account_command(
     match command {
         AccountCommand::List { profile } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, _| {
+            with_vault(state_dir, &session, |_session, vault, _| {
                 let aliases = vault.aliases()?;
                 output(json, &aliases, &format!("{} account(s)", aliases.len()))
             })
         }
         AccountCommand::Create(arguments) => {
             let session = ProfileSession::open(&registry, &arguments.profile)?;
-            with_vault(state_dir, &session, |vault, master| {
+            with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.create_account(
                     &arguments.alias,
                     &arguments.username,
@@ -402,14 +431,14 @@ fn account_command(
         }
         AccountCommand::Resume { profile, alias } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, master| {
+            with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.resume_account(&alias, vault, master)?;
                 output(json, &report, "account creation reconciled")
             })
         }
         AccountCommand::Sync { profile, alias } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, _| {
+            with_vault(state_dir, &session, |session, vault, _| {
                 let report = session.sync_account(&alias, vault)?;
                 output(json, &report, "account synchronized")
             })
@@ -426,7 +455,7 @@ fn kv_command(
     match command {
         KvCommand::List { profile, alias } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, _| {
+            with_vault(state_dir, &session, |session, vault, _| {
                 let report = session.list_kv(&alias, vault)?;
                 output(
                     json,
@@ -442,7 +471,7 @@ fn kv_command(
             output: destination,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, _| {
+            with_vault(state_dir, &session, |session, vault, _| {
                 let mut options = OpenOptions::new();
                 options.write(true).create_new(true);
                 #[cfg(unix)]
@@ -483,7 +512,7 @@ fn kv_command(
             overwrite,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, master| {
+            with_vault(state_dir, &session, |session, vault, master| {
                 let mut file = File::open(input)?;
                 let report =
                     session.put_kv_file(&alias, &path, &mut file, overwrite, vault, master)?;
@@ -496,7 +525,7 @@ fn kv_command(
             path,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, master| {
+            with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.mkdir_kv(&alias, &path, vault, master)?;
                 output(json, &report, "KV directory committed and synchronized")
             })
@@ -508,7 +537,7 @@ fn kv_command(
             recursive,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, master| {
+            with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.remove_kv(&alias, &path, recursive, vault, master)?;
                 output(json, &report, "KV entry removed and synchronized")
             })
@@ -533,7 +562,7 @@ fn job_command(
                 .ok_or("job interval overflow")?;
             let now = now_microseconds()?;
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, _| {
+            with_vault(state_dir, &session, |session, vault, _| {
                 let id = session.schedule_user_refresh(&alias, interval_micros, now, vault)?;
                 output(
                     json,
@@ -544,7 +573,7 @@ fn job_command(
         }
         JobCommand::RunDue { profile } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, _| {
+            with_vault(state_dir, &session, |session, vault, _| {
                 let report = session.run_due_jobs(now_microseconds()?, vault)?;
                 output(
                     json,
@@ -565,7 +594,7 @@ fn device_command(
     match command {
         DeviceCommand::List { profile, alias } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, _| {
+            with_vault(state_dir, &session, |session, vault, _| {
                 let devices = session.list_devices(&alias, vault)?;
                 output(
                     json,
@@ -582,7 +611,7 @@ fn device_command(
             serial,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, master| {
+            with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.provision_owner_device(
                     &source_alias,
                     &target_alias,
@@ -599,7 +628,7 @@ fn device_command(
             target_alias,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, master| {
+            with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.resume_owner_device_provision(&target_alias, vault, master)?;
                 output(json, &report, "owner device provision reconciled")
             })
@@ -621,7 +650,7 @@ fn recovery_command(
             output: destination,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, _| {
+            with_vault(state_dir, &session, |session, vault, _| {
                 let phrase = session.enroll_owner_backup(&account_alias, &backup_alias, vault)?;
                 write_new_private(&destination, phrase.as_bytes())?;
                 output(
@@ -644,7 +673,7 @@ fn recovery_command(
         } => {
             let phrase = read_phrase(&phrase_file)?;
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, _| {
+            with_vault(state_dir, &session, |session, vault, _| {
                 let report = session.recover_owner_account(
                     &target_alias,
                     phrase,
@@ -663,7 +692,7 @@ fn recovery_command(
         } => {
             let phrase = read_phrase(&phrase_file)?;
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, _| {
+            with_vault(state_dir, &session, |session, vault, _| {
                 let report =
                     session.resume_owner_recovery(&target_alias, phrase, &device_name, vault)?;
                 output(json, &report, "account recovery reconciled")
@@ -681,7 +710,7 @@ fn team_command(
     match command {
         TeamCommand::List { profile } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, _| {
+            with_vault(state_dir, &session, |session, vault, _| {
                 let teams = session.list_teams(vault)?;
                 output(json, &teams, &format!("{} team(s)", teams.len()))
             })
@@ -693,7 +722,7 @@ fn team_command(
             name,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, master| {
+            with_vault(state_dir, &session, |session, vault, master| {
                 let report =
                     session.create_named_team(&account_alias, &team_alias, &name, vault, master)?;
                 output(json, &report, "named team created and synchronized")
@@ -705,7 +734,7 @@ fn team_command(
             team_alias,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, master| {
+            with_vault(state_dir, &session, |session, vault, master| {
                 let report =
                     session.create_adhoc_team(&account_alias, &team_alias, vault, master)?;
                 output(json, &report, "ad-hoc team created and synchronized")
@@ -716,7 +745,7 @@ fn team_command(
             team_alias,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, master| {
+            with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.resume_team_creation(&team_alias, vault, master)?;
                 output(json, &report, "team creation reconciled")
             })
@@ -726,7 +755,7 @@ fn team_command(
             team_alias,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |vault, _| {
+            with_vault(state_dir, &session, |session, vault, _| {
                 let report = session.sync_team(&team_alias, vault)?;
                 output(json, &report, "team and team KV synchronized")
             })
@@ -827,16 +856,20 @@ fn hex(bytes: &[u8]) -> String {
 fn with_vault<T>(
     state_dir: &Path,
     session: &ProfileSession,
-    operation: impl FnOnce(&mut AccountVault<'_>, &[u8; 32]) -> Result<T, Box<dyn std::error::Error>>,
+    operation: impl FnOnce(
+        &CheckedProfileSession<'_>,
+        &mut AccountVault<'_>,
+        &[u8; 32],
+    ) -> Result<T, Box<dyn std::error::Error>>,
 ) -> Result<T, Box<dyn std::error::Error>> {
     let credentials = ClientCredentials::open(state_dir)?;
-    credentials.with_checkpoint(session, || {
+    credentials.with_checked_session(session, |session| {
         let master = credentials.master_key()?;
         let mut store = EncryptedFileSecretStore::open(
             &session.paths().credential_store,
             derive_vault_key(&master),
         )?;
-        operation(&mut AccountVault::new(&mut store), &master)
+        operation(session, &mut AccountVault::new(&mut store), &master)
     })
 }
 
@@ -871,6 +904,7 @@ mod tests {
                 generation: ProfileGeneration::V019,
                 ca_der: Some(state.join("local-ca.der")),
                 canary_public_key: None,
+                canary_url: None,
             }),
         )
         .unwrap();

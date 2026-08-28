@@ -46,7 +46,7 @@ impl KeyGenerationId {
         self.0
     }
 
-    fn new(bytes: [u8; 16]) -> Self {
+    pub fn from_bytes(bytes: [u8; 16]) -> Self {
         Self(bytes)
     }
 }
@@ -68,7 +68,7 @@ impl SecretKey {
     fn new(bytes: [u8; 32], generation: [u8; 16]) -> Self {
         Self {
             bytes: Zeroizing::new(bytes),
-            generation: KeyGenerationId::new(generation),
+            generation: KeyGenerationId::from_bytes(generation),
         }
     }
 }
@@ -81,6 +81,33 @@ impl std::fmt::Debug for SecretKey {
 
 pub trait HostKeyProvider: Send + Sync {
     fn load_or_create(&self, purpose: KeyPurpose) -> crate::Result<SecretKey>;
+
+    /// Loads a canonical bootstrap-purpose key without creating replacement
+    /// material when durable state already exists.
+    fn load_existing(&self, purpose: KeyPurpose) -> crate::Result<SecretKey>;
+
+    /// Creates a new immutable key generation. It is not selected for use
+    /// until the database generation ledger is advanced separately.
+    fn create_generation(&self, purpose: KeyPurpose) -> crate::Result<SecretKey>;
+
+    fn load_generation(
+        &self,
+        purpose: KeyPurpose,
+        generation: KeyGenerationId,
+    ) -> crate::Result<SecretKey>;
+
+    /// Lists generation-qualified immutable key files owned by this provider.
+    /// Canonical bootstrap-purpose files are intentionally excluded.
+    fn list_generations(&self, purpose: KeyPurpose) -> crate::Result<Vec<KeyGenerationId>>;
+
+    /// Removes an immutable generation after the database has durably marked
+    /// it revoked. Implementations must make this idempotent: a missing
+    /// generation means a previous retirement completed successfully.
+    fn remove_generation(
+        &self,
+        purpose: KeyPurpose,
+        generation: KeyGenerationId,
+    ) -> crate::Result<()>;
 }
 
 pub fn read_secret_file(

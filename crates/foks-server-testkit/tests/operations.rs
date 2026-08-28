@@ -22,11 +22,20 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
         "foks_requests_started_total",
         "foks_active_connections",
         "foks_writer_pending",
+        "foks_writer_queue_wait_seconds_count",
+        "foks_writer_execution_duration_seconds_count",
+        "foks_request_duration_seconds_count",
+        "foks_handler_duration_seconds_count",
+        "foks_database_bytes",
+        "foks_wal_bytes",
         "foks_rate_limited_requests_total",
         "foks_backup_successes_total",
+        "foks_backup_duration_seconds_count",
     ] {
         assert!(metrics.contains(name));
     }
+    assert!(metric(&metrics, "foks_database_bytes") > 0.0);
+    assert_eq!(metric(&metrics, "foks_storage_sample_failures_total"), 0.0);
     assert!(!metrics.contains(environment.root().to_string_lossy().as_ref()));
     assert!(get(address, "/missing").starts_with("HTTP/1.1 404 Not Found\r\n"));
     server.shutdown().unwrap();
@@ -54,6 +63,16 @@ fn request_rate_limit_returns_typed_status_and_counts_rejection() {
         Err(RpcError::RemoteStatus { code: 1012, .. })
     ));
     assert_eq!(server.metrics().rate_limited_requests, 1);
+    let duration_deadline = Instant::now() + Duration::from_secs(2);
+    while server.metrics().request_duration_observations < 3 {
+        assert!(
+            Instant::now() < duration_deadline,
+            "request duration observation did not complete"
+        );
+        std::thread::yield_now();
+    }
+    assert_eq!(server.metrics().request_duration_observations, 3);
+    assert_eq!(server.metrics().handler_duration_observations, 2);
     let held = (0..20)
         .map(|_| TcpStream::connect(server.addresses().public_services).unwrap())
         .collect::<Vec<_>>();
@@ -82,6 +101,18 @@ fn automatic_backups_are_complete_and_retained() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(server.metrics().backup_failures, 0);
+    let duration_deadline = Instant::now() + Duration::from_secs(2);
+    while server.metrics().backup_duration_observations < server.metrics().backup_successes {
+        assert!(
+            Instant::now() < duration_deadline,
+            "backup duration observation did not complete"
+        );
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        server.metrics().backup_duration_observations,
+        server.metrics().backup_successes
+    );
     server.shutdown().unwrap();
 
     let backup_root = environment.root().join("backup/automatic");
@@ -118,6 +149,15 @@ fn get(address: std::net::SocketAddr, path: &str) -> String {
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     response
+}
+
+fn metric(response: &str, name: &str) -> f64 {
+    response
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{name} ")))
+        .unwrap_or_else(|| panic!("missing metric {name}"))
+        .parse()
+        .unwrap()
 }
 
 fn connect_public(

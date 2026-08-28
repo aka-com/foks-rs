@@ -42,9 +42,10 @@ post-rotation backup needs the new root.
 
 ## Host-key rotation
 
-Status: protocol and durability design fixed; mutation command intentionally
-not exposed until the generation ledger and atomic host-state transaction below
-are implemented and compatibility-tested against upstream FOKS.
+Status: implemented for the public host signing key by
+`begin-host-key-rotation` and `complete-host-key-rotation`. The commands are
+offline and mutually exclusive with a running server or backup. Delegated-key
+rotation remains design-only.
 
 The immutable host ID remains the genesis `ENTITY_HOST`. Rotating signing
 authority adds a new `ENTITY_HOST` key to the hostchain; it does not invent a
@@ -62,8 +63,8 @@ host_key_generations
 
 host_rotation_operations
   operation_id, purpose, old_generation_id, new_generation_id,
-  phase(staged|published|activated|retired|complete),
-  add_link_seqno, revoke_link_seqno, created_at, updated_at
+  phase(staged|published|complete), add_link_seqno, add_published_at,
+  revoke_link_seqno, created_at, updated_at
 ```
 
 The current generation is selected by the database ledger, not by a mutable
@@ -90,12 +91,23 @@ online signer:
    then by the current host signer.
 3. Publish a Merkle root committing to the add-key hostchain tail and serve the
    full hostchain in probe and authenticated Merkle responses.
-4. Keep both host signers active for a configured observation interval and
-   verify mainline clients have synchronized through the add-key root.
+4. Keep both host signers active for at least 24 hours. Completion requires an
+   explicit acknowledgement of the exact add-link sequence observed by a
+   separately pinned client or canary.
 5. Append a separate `Revoke(old_host_entity)` link signed by the new active
    host key, then publish another bound Merkle root.
-6. Mark the old generation revoked. Retain its encrypted file in backups for
-   historical/audit verification; never use it for new signatures.
+6. Mark the old generation revoked in the same database transaction. After
+   commit, remove and directory-sync its encrypted private-key file. A retry
+   completes this idempotent cleanup after a crash. Public generation IDs,
+   entities, and exact hostchain bytes remain in SQLite for historical audit;
+   revoked private-key files are not required at startup or copied to backups.
+
+The rotation root advances from the latest authoritative Merkle head, even
+when user, team, or KV publications occurred after the previous probe root.
+Clients persist the later signed probe as a signed refresh that retains and
+revalidates the prior Merkle evidence needed by existing user/team snapshots.
+They update the hostchain pin from probe before requesting a current root whose
+hostchain tail contains the new add/revoke links.
 
 Rollback before step 2 deletes only a staged generation. After step 2, rollback
 is another hostchain operation, never database or file restoration. Once an
@@ -123,21 +135,31 @@ Recovery and capability keys rotate with versioned envelopes and dual-read,
 single-write semantics. Existing recovery boxes or capability tokens remain
 readable until their explicit expiry/reencryption completion gate.
 
-### Required gates before exposing the command
+### Enforced release gates
 
-- Exact v0.1.9 hostchain add/revoke fixtures accepted by both Rust verification
-  and the pinned Go oracle.
-- Crash injection before staging, before/after the SQLite commit, and before the
-  response; restart must resume one operation ID without duplicating a link.
-- Existing pinned clients synchronize across add and revoke roots without
-  repinning, including clients offline for the entire overlap interval.
-- Backup/restore succeeds at every durable phase and rejects a generation file,
-  ledger, hostchain, probe, or Merkle-root mismatch.
-- Concurrent rotation requests serialize per host and purpose; attempts to
-  retire the last active host, metadata, Merkle, or TLS key fail closed.
-- Operator audit output contains operation/generation IDs and public entities,
-  never root keys, KEKs, private keys, recovery material, or bearer tokens.
-
-Until these gates pass, host-key files are immutable after bootstrap and an
-operator needing a different public host identity must create a new
-installation and explicitly repin clients.
+- `run-host-rotation-compat.sh` generates exact Rust add/revoke probes and has
+  the checksum-pinned Go v0.1.9 implementation replay the chains, verify all
+  signatures, verify the public zone and Merkle root, and check the committed
+  hostchain tail.
+- Restart tests cover staged state, committed add publication, and the crash
+  window after the revoke commit but before private-key removal. Every retry
+  returns the same operation ID and hostchain sequences without duplicate
+  links. Opening the next exclusive rotation also removes private temporary
+  files and generation-qualified files left by a crash before database staging.
+- Client hard-state tests advance an existing pin through add and revoke. A
+  client offline for the entire overlap advances directly from genesis to the
+  complete chain without repinning. End-to-end coverage rotates after an
+  account publication, reconstructs the client connection pool, advances the
+  hostchain first, then proves Merkle and authenticated-user continuity.
+- Backup/restore tests cover staged, published, and complete state. Startup
+  rejects modified required secrets and mismatched generation ledger,
+  hostchain table, probe, or Merkle-root bytes. Complete backups exclude the
+  revoked private key.
+- The key-directory lock serializes rotations with the server, backups, and
+  other rotation processes. Database uniqueness constraints admit one active
+  signer and one in-progress host rotation; the only revoke construction first
+  activates and signs with the replacement.
+- CLI audit output is intentionally limited to operation/generation IDs,
+  public entities, link sequences, phase, and observation deadline. Secret-key
+  debug output is redacted, and root keys, KEKs, recovery material, and bearer
+  tokens are not reachable from the rotation state.

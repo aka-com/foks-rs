@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::io::{Read as _, Write as _};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -7,7 +8,7 @@ use foks_server_db::Database;
 use zeroize::Zeroizing;
 
 use crate::host::{load_or_bootstrap, BootstrapEndpoints, BootstrapInput, BootstrapState};
-use crate::keys::DirectoryKeyProvider;
+use crate::keys::{DirectoryKeyProvider, HostKeyProvider as _};
 use crate::maintenance::Maintenance;
 use crate::net::{bind_addresses, RunningServer, ServerAddresses};
 use crate::pki::build_host_tls;
@@ -77,6 +78,12 @@ pub struct BackupArtifacts {
     pub key_manifest: PathBuf,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HostKeyBackupFiles {
+    include_genesis: bool,
+    generated: Vec<String>,
+}
+
 /// Validates a completed backup and installs its database and encrypted keys
 /// into an empty standalone-server installation. The operator-provided root
 /// key is deliberately not part of the backup and is checked at startup.
@@ -119,12 +126,16 @@ pub fn restore_backup(
     if stored.key_manifest != manifest {
         return Err(crate::Error::Key("backup key manifest mismatch"));
     }
+    let host_key_files = host_key_backup_files(&backup)?;
     drop(backup);
 
     let wrapping_key = artifacts.key_directory.join(crate::keys::WRAPPING_KEY_FILE);
     regular_file_metadata(&wrapping_key)?;
 
     for purpose in crate::keys::MANIFEST_PURPOSES {
+        if purpose == crate::keys::KeyPurpose::Host && !host_key_files.include_genesis {
+            continue;
+        }
         let expected = decoded_manifest
             .generation(purpose)
             .ok_or(crate::Error::Key("incomplete backup key manifest"))?;
@@ -137,6 +148,10 @@ pub fn restore_backup(
         // set of files that may be restored.
         let _ = expected;
     }
+    for name in &host_key_files.generated {
+        regular_file_metadata(&artifacts.key_directory.join(name))?;
+    }
+    validate_backup_key_directory(&artifacts.key_directory, &host_key_files)?;
 
     if let Some(parent) = database_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -156,7 +171,16 @@ pub fn restore_backup(
         &key_directory.join(crate::keys::WRAPPING_KEY_FILE),
     )?;
     for purpose in crate::keys::MANIFEST_PURPOSES {
+        if purpose == crate::keys::KeyPurpose::Host && !host_key_files.include_genesis {
+            continue;
+        }
         let name = format!("{}.key", purpose.label());
+        copy_new_file(
+            &artifacts.key_directory.join(&name),
+            &key_directory.join(name),
+        )?;
+    }
+    for name in host_key_files.generated {
         copy_new_file(
             &artifacts.key_directory.join(&name),
             &key_directory.join(name),
@@ -180,6 +204,32 @@ fn regular_file_metadata(path: &Path) -> Result<std::fs::Metadata> {
         return Err(crate::Error::Key("backup artifact is not a regular file"));
     }
     Ok(metadata)
+}
+
+fn validate_backup_key_directory(
+    directory: &Path,
+    host_key_files: &HostKeyBackupFiles,
+) -> Result<()> {
+    let mut expected = BTreeSet::from([crate::keys::WRAPPING_KEY_FILE.to_owned()]);
+    for purpose in crate::keys::MANIFEST_PURPOSES {
+        if purpose == crate::keys::KeyPurpose::Host && !host_key_files.include_genesis {
+            continue;
+        }
+        expected.insert(format!("{}.key", purpose.label()));
+    }
+    expected.extend(host_key_files.generated.iter().cloned());
+    let found = std::fs::read_dir(directory)?
+        .map(|entry| {
+            entry?
+                .file_name()
+                .into_string()
+                .map_err(|_| crate::Error::Key("backup key filename is not UTF-8"))
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    if found != expected {
+        return Err(crate::Error::Key("backup key file set mismatch"));
+    }
+    Ok(())
 }
 
 fn copy_new_file(source: &Path, destination: &Path) -> Result<()> {
@@ -230,7 +280,11 @@ pub fn backup_standalone_installation(
         ));
     }
     let provider = crate::keys::DirectoryKeyProvider::open(&key_directory, root_key)?;
+    let host_key_files = host_key_backup_files(&source)?;
     for purpose in crate::keys::MANIFEST_PURPOSES {
+        if purpose == crate::keys::KeyPurpose::Host && !host_key_files.include_genesis {
+            continue;
+        }
         if provider.load_existing(purpose)?.generation()
             != manifest.generation(purpose).ok_or(crate::Error::Key(
                 "incomplete source key generation manifest",
@@ -239,10 +293,32 @@ pub fn backup_standalone_installation(
             return Err(crate::Error::Key("source key generation mismatch"));
         }
     }
+    for generation in source.host_key_generations()? {
+        if generation.state == foks_server_db::HostKeyGenerationState::Revoked {
+            continue;
+        }
+        let key = if generation.encrypted_file_name == "host.key" {
+            provider.load_existing(crate::keys::KeyPurpose::Host)?
+        } else {
+            provider.load_generation(
+                crate::keys::KeyPurpose::Host,
+                crate::keys::KeyGenerationId::from_bytes(generation.generation_id),
+            )?
+        };
+        let mut public_entity = Vec::with_capacity(33);
+        public_entity.push(foks_proto::ENTITY_HOST);
+        public_entity.extend_from_slice(&foks_crypto::ed25519_public_key(key.expose()));
+        if key.generation().as_bytes() != generation.generation_id
+            || public_entity != generation.public_entity_id
+        {
+            return Err(crate::Error::Key("source host key generation mismatch"));
+        }
+    }
     create_backup(
         destination.as_ref(),
         key_directory.as_ref(),
         &stored.key_manifest,
+        &host_key_files,
         database_config,
         |backup_database| {
             source.online_backup(backup_database)?;
@@ -255,6 +331,7 @@ pub(crate) fn create_backup(
     destination: &Path,
     source_key_directory: &Path,
     manifest: &[u8],
+    host_key_files: &HostKeyBackupFiles,
     database_config: foks_server_db::Config,
     backup_database: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<BackupArtifacts> {
@@ -269,8 +346,16 @@ pub(crate) fn create_backup(
         &key_directory.join(crate::keys::WRAPPING_KEY_FILE),
     )?;
     for purpose in crate::keys::MANIFEST_PURPOSES {
+        if purpose == crate::keys::KeyPurpose::Host && !host_key_files.include_genesis {
+            continue;
+        }
         let name = format!("{}.key", purpose.label());
         let source = source_key_directory.join(&name);
+        regular_file_metadata(&source)?;
+        copy_new_file(&source, &key_directory.join(name))?;
+    }
+    for name in &host_key_files.generated {
+        let source = source_key_directory.join(name);
         regular_file_metadata(&source)?;
         copy_new_file(&source, &key_directory.join(name))?;
     }
@@ -364,10 +449,12 @@ impl RunningStandaloneServer {
         let manifest = self.bootstrap.key_manifest.encode();
         let source =
             foks_server_db::ReadDatabase::open(&self.database_path, self.database_config.clone())?;
+        let host_key_files = host_key_backup_files(&source)?;
         create_backup(
             destination.as_ref(),
             &self.key_directory,
             &manifest,
+            &host_key_files,
             self.database_config.clone(),
             |backup_database| {
                 source.online_backup(backup_database)?;
@@ -388,14 +475,82 @@ impl RunningStandaloneServer {
     }
 }
 
+pub(crate) fn host_key_backup_files(
+    database: &foks_server_db::ReadDatabase,
+) -> Result<HostKeyBackupFiles> {
+    let generations = database.host_key_generations()?;
+    let operation = database.active_host_rotation()?;
+    let active = generations
+        .iter()
+        .filter(|generation| generation.state == foks_server_db::HostKeyGenerationState::Active)
+        .collect::<Vec<_>>();
+    let staged = generations
+        .iter()
+        .filter(|generation| generation.state == foks_server_db::HostKeyGenerationState::Staged)
+        .collect::<Vec<_>>();
+    let retiring = generations
+        .iter()
+        .filter(|generation| generation.state == foks_server_db::HostKeyGenerationState::Retiring)
+        .collect::<Vec<_>>();
+    let states_match = match (active.as_slice(), &operation) {
+        ([_], None) => staged.is_empty() && retiring.is_empty(),
+        ([active], Some(operation))
+            if operation.phase == foks_server_db::HostRotationPhase::Staged =>
+        {
+            staged.len() == 1
+                && retiring.is_empty()
+                && active.generation_id == operation.old_generation_id
+                && staged[0].generation_id == operation.new_generation_id
+        }
+        ([active], Some(operation))
+            if operation.phase == foks_server_db::HostRotationPhase::Published =>
+        {
+            staged.is_empty()
+                && retiring.len() == 1
+                && active.generation_id == operation.new_generation_id
+                && retiring[0].generation_id == operation.old_generation_id
+        }
+        _ => false,
+    };
+    if active.len() != 1
+        || !states_match
+        || generations
+            .iter()
+            .filter(|generation| generation.encrypted_file_name == "host.key")
+            .count()
+            != 1
+    {
+        return Err(crate::Error::Key("invalid host generation ledger"));
+    }
+    let mut include_genesis = false;
+    let mut generated = Vec::new();
+    for generation in generations {
+        if generation.encrypted_file_name == "host.key" {
+            include_genesis = generation.state != foks_server_db::HostKeyGenerationState::Revoked;
+            continue;
+        }
+        let expected = crate::host::generation_file_name(generation.generation_id);
+        if generation.encrypted_file_name != expected {
+            return Err(crate::Error::Key("invalid host generation filename"));
+        }
+        if generation.state != foks_server_db::HostKeyGenerationState::Revoked {
+            generated.push(expected);
+        }
+    }
+    Ok(HostKeyBackupFiles {
+        include_genesis,
+        generated,
+    })
+}
+
 pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneServer> {
     config.limits.validate()?;
+    crate::operations::ManagementServer::validate_address(config.management_address)?;
     let key_directory = config.key_directory.clone();
     let keys = Arc::new(DirectoryKeyProvider::open(
         &config.key_directory,
         *config.root_key,
     )?);
-    let tls = build_host_tls(keys.as_ref(), &config.canonical_name)?;
     let listeners = bind_addresses(
         config.probe_address,
         config.public_address,
@@ -423,6 +578,10 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     let mut database = Database::open(&config.database_path, config.database.clone())?;
     let bootstrap = load_or_bootstrap(&mut database, keys.as_ref(), &input)?;
     drop(database);
+    // Existing durable state is validated before PKI helpers can call their
+    // create-on-first-bootstrap key APIs. A missing persisted purpose key must
+    // fail closed rather than leave replacement material behind.
+    let tls = build_host_tls(keys.as_ref(), &input.canonical_name)?;
     let database_config = config.database;
     let writer = Writer::start(
         config.database_path.clone(),
@@ -475,6 +634,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     let management = crate::operations::ManagementServer::start(
         config.management_address,
         writer_handle,
+        config.database_path.clone(),
         Arc::clone(&metrics),
         server.liveness(),
     )?;

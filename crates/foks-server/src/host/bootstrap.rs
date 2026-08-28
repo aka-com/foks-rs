@@ -169,6 +169,7 @@ pub fn bootstrap(
         canonical_name: input.canonical_name.clone(),
         probe_response: probe_response.clone(),
         key_manifest: manifest.encode(),
+        host_key_generation: host_key.generation().as_bytes(),
         hostchain_link_hash: hostchain_hash,
         exact_hostchain_link: exact_hostchain,
         services,
@@ -202,10 +203,17 @@ pub fn load_or_bootstrap(
     };
     validate_input(input)?;
 
-    let manifest = KeyGenerationManifest::load_or_create(provider)?;
-    if stored.key_manifest != manifest.encode() || stored.canonical_name != input.canonical_name {
+    let manifest = KeyGenerationManifest::decode(&stored.key_manifest)?;
+    if stored.canonical_name != input.canonical_name {
         return Err(crate::Error::Config("stored host bootstrap configuration"));
     }
+    let generations = database.host_key_generations()?;
+    let require_genesis_host = generations.iter().any(|generation| {
+        generation.encrypted_file_name == "host.key"
+            && generation.state != foks_server_db::HostKeyGenerationState::Revoked
+    });
+    manifest.validate_existing(provider, require_genesis_host)?;
+    super::rotation::validate_host_key_generations(database, provider)?;
     let verified = foks_verify::verify_public_host(&input.canonical_name, &stored.probe_response)?;
     if verified.snapshot.host_id() != stored.host_id
         || verified.public_zone.ttl_seconds != input.ttl_seconds
@@ -218,6 +226,50 @@ pub fn load_or_bootstrap(
     {
         return Err(crate::Error::Config("stored host bootstrap configuration"));
     }
+    let probe = ProbeResponse::decode(&stored.probe_response)?;
+    validate_generation_ledger_against_probe(&generations, &stored.host_id, &probe)?;
+    let wire_root = MerkleRoot::decode(&probe.merkle_root.inner)?;
+    let probe_root = database
+        .roots_at(&[wire_root.epoch])?
+        .and_then(|mut roots| roots.pop())
+        .ok_or(crate::Error::Config(
+            "stored probe Merkle root is absent from the database",
+        ))?;
+    let current_root = database
+        .current_root()?
+        .ok_or(crate::Error::Config("stored host has no Merkle root"))?;
+    if probe_root.epoch != wire_root.epoch
+        || probe_root.root_node != wire_root.root_node
+        || probe_root.exact_root != probe.merkle_root.inner
+        || probe_root.exact_signed_root != probe.merkle_root.encoded()?
+        || probe_root.root_hash
+            != foks_crypto::prefixed_hash(MERKLE_ROOT_TYPE_ID, &probe_root.exact_root)
+        || current_root.epoch < probe_root.epoch
+        || wire_root.hostchain.seqno != verified.snapshot.chain_seqno()
+        || wire_root.hostchain.hash != verified.snapshot.chain_tail_hash()
+    {
+        return Err(crate::Error::Config(
+            "stored probe and Merkle database history disagree",
+        ));
+    }
+    let stored_links = database.hostchain_links()?;
+    if stored_links.len() != probe.hostchain.len() {
+        return Err(crate::Error::Config(
+            "stored probe and hostchain database disagree",
+        ));
+    }
+    for (index, (stored_link, wire_link)) in stored_links.iter().zip(&probe.hostchain).enumerate() {
+        let exact = wire_link.encoded()?;
+        if stored_link.seqno != u64::try_from(index + 1).unwrap_or(u64::MAX)
+            || stored_link.exact_link != exact
+            || stored_link.link_hash
+                != foks_crypto::prefixed_hash(HOSTCHAIN_LINK_OUTER_TYPE_ID, &exact)
+        {
+            return Err(crate::Error::Config(
+                "stored probe and hostchain database disagree",
+            ));
+        }
+    }
 
     let parts = verified.snapshot.parts();
     let identity = foks_verify::restore_public_host_identity(
@@ -228,7 +280,7 @@ pub fn load_or_bootstrap(
         parts.chain_bytes,
         parts.public_zone_bytes,
     )?;
-    let delegated_key = provider.load_or_create(KeyPurpose::DelegatedTls)?;
+    let delegated_key = provider.load_existing(KeyPurpose::DelegatedTls)?;
     let delegated_tls_ca =
         crate::pki::host_tls::delegated_tls_ca_der(&delegated_key, &input.canonical_name)?;
     if !identity
@@ -253,6 +305,78 @@ fn entity(entity_type: u8, key: &SecretKey) -> Result<EntityId> {
     bytes.push(entity_type);
     bytes.extend_from_slice(&foks_crypto::ed25519_public_key(key.expose()));
     Ok(EntityId::from_bytes(bytes)?)
+}
+
+fn validate_generation_ledger_against_probe(
+    generations: &[foks_server_db::HostKeyGeneration],
+    stored_host_id: &[u8],
+    probe: &ProbeResponse,
+) -> Result<()> {
+    let mut additions = Vec::new();
+    let mut revocations = Vec::new();
+    for link in &probe.hostchain {
+        let change = link.decode_change()?;
+        for item in change.changes {
+            match item {
+                HostchainChangeItem::Key(entity) if entity.as_bytes()[0] == ENTITY_HOST => {
+                    additions.push((change.chainer.seqno, entity.as_bytes().to_vec()));
+                }
+                HostchainChangeItem::Revoke(entity) if entity.as_bytes()[0] == ENTITY_HOST => {
+                    revocations.push(entity.as_bytes().to_vec());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    for generation in generations {
+        let is_genesis = generation.encrypted_file_name == "host.key";
+        let addition_count = additions
+            .iter()
+            .filter(|(_, entity)| entity == &generation.public_entity_id)
+            .count();
+        let revoke_count = revocations
+            .iter()
+            .filter(|entity| *entity == &generation.public_entity_id)
+            .count();
+        let activation_matches = if is_genesis {
+            generation.public_entity_id == stored_host_id
+                && generation.activated_hostchain_seqno == Some(1)
+                && addition_count == 0
+        } else if generation.state == foks_server_db::HostKeyGenerationState::Staged {
+            generation.activated_hostchain_seqno.is_none() && addition_count == 0
+        } else {
+            generation.activated_hostchain_seqno.is_some_and(|seqno| {
+                additions.iter().any(|(added_at, entity)| {
+                    *added_at == seqno && entity == &generation.public_entity_id
+                })
+            }) && addition_count == 1
+        };
+        let revocation_matches =
+            if generation.state == foks_server_db::HostKeyGenerationState::Revoked {
+                revoke_count == 1
+            } else {
+                revoke_count == 0
+            };
+        if !activation_matches || !revocation_matches {
+            return Err(crate::Error::Config(
+                "stored host generation ledger and hostchain disagree",
+            ));
+        }
+    }
+    let non_genesis_generations = generations
+        .iter()
+        .filter(|generation| {
+            generation.encrypted_file_name != "host.key"
+                && generation.state != foks_server_db::HostKeyGenerationState::Staged
+        })
+        .count();
+    if additions.len() != non_genesis_generations {
+        return Err(crate::Error::Config(
+            "stored host generation ledger and hostchain disagree",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_input(input: &BootstrapInput) -> Result<()> {

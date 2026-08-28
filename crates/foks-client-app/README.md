@@ -11,7 +11,17 @@ credential directory. Profiles can trust WebPKI or an explicitly supplied DER
 root. Protocol policy defaults to the implemented v0.1.9 surface. A current
 server can be probed without enabling mutations. Non-probe features require a
 signed, target-bound, expiring compatibility artifact; drift artifacts and
-lease expiry fail closed.
+lease expiry fail closed. Current profiles also pin the stable HTTPS lease URL
+and signer. A lease grants only when its signed protocol digest exactly equals
+the v0.1.9 metadata embedded in this client. Higher-generation drift,
+unrecognized-capability, or metadata-mismatch artifacts immediately return the
+profile to probe-only; older or conflicting same-generation artifacts are
+rejected as replay.
+
+Registry mutations reload and merge under a state-root cross-process lock, so
+independent CLI and agent processes cannot publish stale snapshots over one
+another. Profile operations use separate checked operation and scheduler locks;
+periodic scheduling uses nonblocking acquisition and skips contended profiles.
 
 The implemented application slice covers:
 

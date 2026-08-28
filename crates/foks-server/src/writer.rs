@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use foks_server_db::Database;
 
@@ -15,6 +16,8 @@ trait Task: Send {
 struct Call<F, T> {
     operation: F,
     response: SyncSender<Result<T>>,
+    queued_at: Instant,
+    timing: Arc<WriterTiming>,
 }
 
 impl<F, T> Task for Call<F, T>
@@ -26,8 +29,14 @@ where
         let Self {
             operation,
             response,
+            queued_at,
+            timing,
         } = *self;
-        let _ = response.send(operation(database));
+        timing.observe_queue_wait(queued_at.elapsed());
+        let started = Instant::now();
+        let result = operation(database);
+        timing.observe_execution(started.elapsed());
+        let _ = response.send(result);
     }
 }
 
@@ -53,6 +62,37 @@ struct WriterQueue {
     accepted: AtomicU64,
     rejected: AtomicU64,
     pending: AtomicU64,
+    timing: Arc<WriterTiming>,
+}
+
+#[derive(Default)]
+struct WriterTiming {
+    queue_wait_observations: AtomicU64,
+    queue_wait_microseconds_total: AtomicU64,
+    queue_wait_microseconds_max: AtomicU64,
+    execution_observations: AtomicU64,
+    execution_microseconds_total: AtomicU64,
+    execution_microseconds_max: AtomicU64,
+}
+
+impl WriterTiming {
+    fn observe_queue_wait(&self, duration: std::time::Duration) {
+        observe_duration(
+            duration,
+            &self.queue_wait_observations,
+            &self.queue_wait_microseconds_total,
+            &self.queue_wait_microseconds_max,
+        );
+    }
+
+    fn observe_execution(&self, duration: std::time::Duration) {
+        observe_duration(
+            duration,
+            &self.execution_observations,
+            &self.execution_microseconds_total,
+            &self.execution_microseconds_max,
+        );
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -60,6 +100,12 @@ pub struct WriterMetrics {
     pub accepted: u64,
     pub rejected: u64,
     pub pending: u64,
+    pub queue_wait_observations: u64,
+    pub queue_wait_microseconds_total: u64,
+    pub queue_wait_microseconds_max: u64,
+    pub execution_observations: u64,
+    pub execution_microseconds_total: u64,
+    pub execution_microseconds_max: u64,
 }
 
 impl Writer {
@@ -106,6 +152,7 @@ impl Writer {
                         accepted: AtomicU64::new(0),
                         rejected: AtomicU64::new(0),
                         pending: AtomicU64::new(0),
+                        timing: Arc::new(WriterTiming::default()),
                     }),
                 },
                 thread: Some(thread),
@@ -179,6 +226,8 @@ impl WriterHandle {
             .try_send(Message::Task(Box::new(Call {
                 operation,
                 response,
+                queued_at: Instant::now(),
+                timing: Arc::clone(&self.queue.timing),
             })))
             .is_err()
         {
@@ -194,10 +243,21 @@ impl WriterHandle {
     }
 
     pub fn metrics(&self) -> WriterMetrics {
+        let timing = &self.queue.timing;
         WriterMetrics {
             accepted: self.queue.accepted.load(Ordering::Relaxed),
             rejected: self.queue.rejected.load(Ordering::Relaxed),
             pending: self.queue.pending.load(Ordering::Acquire),
+            queue_wait_observations: timing.queue_wait_observations.load(Ordering::Relaxed),
+            queue_wait_microseconds_total: timing
+                .queue_wait_microseconds_total
+                .load(Ordering::Relaxed),
+            queue_wait_microseconds_max: timing.queue_wait_microseconds_max.load(Ordering::Relaxed),
+            execution_observations: timing.execution_observations.load(Ordering::Relaxed),
+            execution_microseconds_total: timing
+                .execution_microseconds_total
+                .load(Ordering::Relaxed),
+            execution_microseconds_max: timing.execution_microseconds_max.load(Ordering::Relaxed),
         }
     }
 }
@@ -215,4 +275,16 @@ fn run(database: &mut Database, receiver: &Receiver<Message>) {
             Message::Shutdown => break,
         }
     }
+}
+
+fn observe_duration(
+    duration: std::time::Duration,
+    observations: &AtomicU64,
+    total: &AtomicU64,
+    maximum: &AtomicU64,
+) {
+    let microseconds = u64::try_from(duration.as_micros()).unwrap_or(u64::MAX);
+    observations.fetch_add(1, Ordering::Relaxed);
+    total.fetch_add(microseconds, Ordering::Relaxed);
+    maximum.fetch_max(microseconds, Ordering::Relaxed);
 }

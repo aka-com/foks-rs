@@ -31,6 +31,31 @@ impl KeyGenerationManifest {
         self.generations.get(&purpose).copied()
     }
 
+    /// Validates the immutable bootstrap manifest without recreating a
+    /// retired genesis host key. All other bootstrap-purpose keys remain
+    /// required because their public-key rotations are not implemented.
+    pub(crate) fn validate_existing(
+        &self,
+        provider: &dyn HostKeyProvider,
+        require_genesis_host: bool,
+    ) -> Result<()> {
+        for purpose in MANIFEST_PURPOSES {
+            if purpose == KeyPurpose::Host && !require_genesis_host {
+                continue;
+            }
+            if provider.load_existing(purpose)?.generation()
+                != self
+                    .generations
+                    .get(&purpose)
+                    .copied()
+                    .ok_or(Error::Key("incomplete stored key generation manifest"))?
+            {
+                return Err(Error::Key("stored key generation mismatch"));
+            }
+        }
+        Ok(())
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         let mut encoded = b"foks-key-manifest-v1\n".to_vec();
         for purpose in MANIFEST_PURPOSES {
@@ -66,7 +91,7 @@ impl KeyGenerationManifest {
                     .map_err(|_| Error::Key("invalid key manifest generation"))?;
             }
             if generations
-                .insert(purpose, KeyGenerationId::new(generation))
+                .insert(purpose, KeyGenerationId::from_bytes(generation))
                 .is_some()
             {
                 return Err(Error::Key("duplicate key manifest entry"));

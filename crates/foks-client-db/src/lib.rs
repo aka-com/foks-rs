@@ -25,7 +25,9 @@ use foks_verify::{
     VerifiedTeamSnapshot, VerifiedTeamSnapshotParts, VerifiedUserSnapshot,
     VerifiedUserSnapshotParts,
 };
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension as _, TransactionBehavior};
+use rusqlite::{
+    params, Connection, OpenFlags, OptionalExtension as _, Transaction, TransactionBehavior,
+};
 use thiserror::Error;
 
 use schema::{APPLICATION_ID, INITIAL as SCHEMA, VERSION as SCHEMA_VERSION};
@@ -42,6 +44,12 @@ pub struct StoredHostSnapshot {
     pub public_zone_bytes: Vec<u8>,
     pub services: Vec<HostService>,
     pub merkle_root: StoredMerkleRoot,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HardStateMetadata {
+    pub database_id: [u8; 16],
+    pub revision: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -495,6 +503,10 @@ pub enum Error {
     InvalidMutationOperation(&'static str),
     #[error("invalid scheduled job: {0}")]
     InvalidScheduledJob(&'static str),
+    #[error("OS randomness is unavailable")]
+    Randomness,
+    #[error("hard-state revision metadata is malformed")]
+    InvalidHardStateMetadata,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -538,6 +550,31 @@ impl HardStateStore {
         connection.pragma_update(None, "synchronous", "FULL")?;
         initialize_or_verify(&mut connection)?;
         Ok(Self { connection })
+    }
+
+    pub fn metadata(&self) -> Result<HardStateMetadata> {
+        self.connection
+            .query_row(
+                "SELECT database_id, hard_state_revision
+                 FROM hard_state_metadata WHERE singleton = 1",
+                [],
+                |row| {
+                    let database_id = row.get::<_, Vec<u8>>(0)?;
+                    let revision = row.get::<_, i64>(1)?;
+                    Ok((database_id, revision))
+                },
+            )
+            .map_err(Error::from)
+            .and_then(|(database_id, revision)| {
+                let database_id = database_id
+                    .try_into()
+                    .map_err(|_| Error::InvalidHardStateMetadata)?;
+                let revision = stored_unsigned("hard-state revision", revision)?;
+                Ok(HardStateMetadata {
+                    database_id,
+                    revision,
+                })
+            })
     }
 
     /// Durably records a mutation before any network submission. Protected
@@ -2054,8 +2091,16 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
                 expected: APPLICATION_ID,
             });
         }
+        let mut database_id = [0u8; 16];
+        getrandom::fill(&mut database_id).map_err(|_| Error::Randomness)?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute_batch(SCHEMA)?;
+        transaction.execute(
+            "INSERT INTO hard_state_metadata (singleton, database_id, hard_state_revision)
+             VALUES (1, ?1, 0)",
+            [database_id.as_slice()],
+        )?;
+        install_revision_triggers(&transaction)?;
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
         transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         transaction.commit()?;
@@ -2072,6 +2117,23 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
             found: version,
             supported: SCHEMA_VERSION,
         });
+    }
+    Ok(())
+}
+
+fn install_revision_triggers(transaction: &Transaction<'_>) -> Result<()> {
+    for table in schema::REVISION_TABLES {
+        for operation in ["insert", "update", "delete"] {
+            transaction.execute_batch(&format!(
+                "CREATE TRIGGER hard_state_revision_{table}_{operation}
+                 AFTER {operation} ON {table}
+                 BEGIN
+                   UPDATE hard_state_metadata
+                   SET hard_state_revision = hard_state_revision + 1
+                   WHERE singleton = 1;
+                 END;"
+            ))?;
+        }
     }
     Ok(())
 }
@@ -2792,13 +2854,22 @@ fn accept_merkle_root(
     validate_merkle_root(root)?;
     let stored = connection
         .query_row(
-            "SELECT epoch, root_hash FROM merkle_heads WHERE host_id = ?1",
+            "SELECT epoch, root_hash, evidence_kind, anchor_epoch, evidence_bytes
+             FROM merkle_heads WHERE host_id = ?1",
             [host_id],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                ))
+            },
         )
         .optional()?;
-    if let Some((stored_epoch, stored_hash)) = stored {
-        let stored_epoch = stored_unsigned("Merkle epoch", stored_epoch)?;
+    if let Some((stored_epoch, stored_hash, _, _, _)) = &stored {
+        let stored_epoch = stored_unsigned("Merkle epoch", *stored_epoch)?;
         match root.epoch.cmp(&stored_epoch) {
             std::cmp::Ordering::Less => {
                 return Err(Error::MerkleRollback {
@@ -2815,7 +2886,7 @@ fn accept_merkle_root(
                     params![host_id, epoch],
                     |row| row.get::<_, Option<Vec<u8>>>(0),
                 )?;
-                if stored_hash != root.root_hash
+                if stored_hash.as_slice() != root.root_hash
                     || stored_root_bytes.as_deref() != Some(root.root_bytes)
                 {
                     return Err(Error::MerkleFork { epoch: root.epoch });
@@ -2828,7 +2899,28 @@ fn accept_merkle_root(
     }
 
     accept_authenticated_roots(connection, host_id, root.authenticated_roots)?;
-    let (evidence_kind, anchor_epoch, evidence_bytes) = encode_evidence(root.evidence)?;
+    let refreshed_evidence;
+    let evidence = if let Some((stored_epoch, _, kind, anchor, bytes)) = &stored {
+        let stored_epoch = stored_unsigned("Merkle epoch", *stored_epoch)?;
+        if root.epoch > stored_epoch
+            && matches!(root.evidence, MerkleRootEvidence::SignedBootstrap(_))
+        {
+            refreshed_evidence = MerkleRootEvidence::SignedRefresh {
+                signed_root: match root.evidence {
+                    MerkleRootEvidence::SignedBootstrap(bytes) => bytes.clone(),
+                    _ => unreachable!(),
+                },
+                prior_epoch: stored_epoch,
+                prior: Box::new(decode_evidence(*kind, *anchor, bytes.clone())?),
+            };
+            &refreshed_evidence
+        } else {
+            root.evidence
+        }
+    } else {
+        root.evidence
+    };
+    let (evidence_kind, anchor_epoch, evidence_bytes) = encode_evidence(evidence)?;
     connection.execute(
         "INSERT INTO merkle_heads \
          (host_id, epoch, root_hash, evidence_kind, anchor_epoch, evidence_bytes) \
@@ -2921,6 +3013,15 @@ fn validate_merkle_root(root: VerifiedMerkleRootParts<'_>) -> Result<()> {
         MerkleRootEvidence::SignedBootstrap(bytes) if bytes.is_empty() => {
             Err(Error::InvalidSnapshot("signed Merkle evidence is empty"))
         }
+        MerkleRootEvidence::SignedRefresh { signed_root, .. } if signed_root.is_empty() => {
+            Err(Error::InvalidSnapshot("signed Merkle evidence is empty"))
+        }
+        MerkleRootEvidence::SignedRefresh {
+            prior_epoch, prior, ..
+        } if *prior_epoch < root.epoch => validate_evidence_order(prior, *prior_epoch),
+        MerkleRootEvidence::SignedRefresh { .. } => Err(Error::InvalidSnapshot(
+            "Merkle evidence anchors must strictly descend",
+        )),
         MerkleRootEvidence::SkipPath {
             anchor_epoch,
             historical_response,
@@ -3007,6 +3108,16 @@ fn validate_evidence_order(evidence: &MerkleRootEvidence, upper: u64) -> Result<
             Err(Error::InvalidSnapshot("signed Merkle evidence is empty"))
         }
         MerkleRootEvidence::SignedBootstrap(_) => Ok(()),
+        MerkleRootEvidence::SignedRefresh {
+            signed_root,
+            prior_epoch,
+            prior,
+        } if !signed_root.is_empty() && *prior_epoch < upper => {
+            validate_evidence_order(prior, *prior_epoch)
+        }
+        MerkleRootEvidence::SignedRefresh { .. } => Err(Error::InvalidSnapshot(
+            "Merkle evidence anchors must strictly descend",
+        )),
         MerkleRootEvidence::SkipPath {
             anchor_epoch,
             historical_response,
@@ -3023,6 +3134,9 @@ fn validate_evidence_order(evidence: &MerkleRootEvidence, upper: u64) -> Result<
 fn encode_evidence(evidence: &MerkleRootEvidence) -> Result<(i64, Option<i64>, Vec<u8>)> {
     let (kind, anchor) = match evidence {
         MerkleRootEvidence::SignedBootstrap(_) => (1, None),
+        MerkleRootEvidence::SignedRefresh { prior_epoch, .. } => {
+            (3, Some(sqlite_integer("Merkle prior epoch", *prior_epoch)?))
+        }
         MerkleRootEvidence::SkipPath { anchor_epoch, .. } => (
             2,
             Some(sqlite_integer("Merkle anchor epoch", *anchor_epoch)?),
@@ -3036,6 +3150,16 @@ fn evidence_value(evidence: &MerkleRootEvidence) -> Value {
         MerkleRootEvidence::SignedBootstrap(bytes) => {
             Value::Array(vec![Value::Unsigned(0), Value::Binary(bytes.clone())])
         }
+        MerkleRootEvidence::SignedRefresh {
+            signed_root,
+            prior_epoch,
+            prior,
+        } => Value::Array(vec![
+            Value::Unsigned(2),
+            Value::Binary(signed_root.clone()),
+            Value::Unsigned(*prior_epoch),
+            evidence_value(prior),
+        ]),
         MerkleRootEvidence::SkipPath {
             anchor_epoch,
             historical_response,
@@ -3057,6 +3181,11 @@ fn decode_evidence(
     let evidence = evidence_from_value(&decode(&bytes)?, 0)?;
     match (&evidence, kind, anchor_epoch) {
         (MerkleRootEvidence::SignedBootstrap(_), 1, None) => Ok(evidence),
+        (MerkleRootEvidence::SignedRefresh { prior_epoch, .. }, 3, Some(stored_prior))
+            if *prior_epoch == stored_unsigned("Merkle prior epoch", stored_prior)? =>
+        {
+            Ok(evidence)
+        }
         (MerkleRootEvidence::SkipPath { anchor_epoch, .. }, 2, Some(stored_anchor))
             if *anchor_epoch == stored_unsigned("Merkle anchor epoch", stored_anchor)? =>
         {
@@ -3082,6 +3211,13 @@ fn evidence_from_value(value: &Value, depth: usize) -> Result<MerkleRootEvidence
     match fields.as_slice() {
         [Value::Unsigned(0), Value::Binary(bytes)] => {
             Ok(MerkleRootEvidence::SignedBootstrap(bytes.clone()))
+        }
+        [Value::Unsigned(2), Value::Binary(signed_root), Value::Unsigned(prior_epoch), prior] => {
+            Ok(MerkleRootEvidence::SignedRefresh {
+                signed_root: signed_root.clone(),
+                prior_epoch: *prior_epoch,
+                prior: Box::new(evidence_from_value(prior, depth + 1)?),
+            })
         }
         [Value::Unsigned(1), Value::Unsigned(anchor_epoch), Value::Binary(historical_response), prior] => {
             Ok(MerkleRootEvidence::SkipPath {
@@ -3264,6 +3400,106 @@ mod tests {
                 value: -1
             })
         ));
+    }
+
+    #[test]
+    fn database_identity_and_revision_cover_jobs_and_mutation_journals() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hard.db");
+        let mut store = HardStateStore::open(&path).unwrap();
+        let host = snapshot();
+        let initial = store.metadata().unwrap();
+        store.accept_host_parts(host.parts()).unwrap();
+        let pinned = store.metadata().unwrap();
+        assert_eq!(initial.database_id, pinned.database_id);
+        assert!(pinned.revision > initial.revision);
+
+        store
+            .register_scheduled_job(&ScheduledJob {
+                job_id: [5; 16],
+                kind: ScheduledJobKind::UserRefresh,
+                host_id: host.host_id.clone(),
+                scope_id: vec![7; 33],
+                interval_micros: 1_000,
+                next_run_at: 100,
+                failure_count: 0,
+                lease_until: None,
+                last_completed_at: None,
+                last_error: None,
+                updated_at: 90,
+            })
+            .unwrap();
+        let scheduled = store.metadata().unwrap();
+        assert!(scheduled.revision > pinned.revision);
+
+        store
+            .record_mutation(&MutationOperation {
+                operation_id: [6; 16],
+                kind: MutationKind::DeviceProvision,
+                host_id: host.host_id,
+                scope_id: vec![1; 33],
+                subject_id: vec![2; 33],
+                expected_version: Some(2),
+                request_hash: [3; 32],
+                material_ref: b"credential/device/6".to_vec(),
+                material_hash: [4; 32],
+                state: MutationState::Prepared,
+                attempt_count: 0,
+                created_at: 100,
+                updated_at: 100,
+            })
+            .unwrap();
+        let journaled = store.metadata().unwrap();
+        assert!(journaled.revision > scheduled.revision);
+
+        let other = HardStateStore::open(&directory.path().join("other.db"))
+            .unwrap()
+            .metadata()
+            .unwrap();
+        assert_ne!(journaled.database_id, other.database_id);
+    }
+
+    #[test]
+    fn every_hard_state_table_has_revision_triggers() {
+        use std::collections::BTreeSet;
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = HardStateStore::open(&directory.path().join("hard.db")).unwrap();
+        let tables = {
+            let mut statement = store
+                .connection
+                .prepare(
+                    "SELECT name FROM sqlite_schema
+                     WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                     ORDER BY name",
+                )
+                .unwrap();
+            statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<std::result::Result<BTreeSet<_>, _>>()
+                .unwrap()
+        };
+        let mut expected = schema::REVISION_TABLES
+            .iter()
+            .map(|table| (*table).to_owned())
+            .collect::<BTreeSet<_>>();
+        expected.insert("hard_state_metadata".to_owned());
+        assert_eq!(tables, expected);
+
+        for table in schema::REVISION_TABLES {
+            let count: i64 = store
+                .connection
+                .query_row(
+                    "SELECT count(*) FROM sqlite_schema
+                     WHERE type = 'trigger' AND tbl_name = ?1
+                       AND name LIKE 'hard_state_revision_%'",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 3, "revision trigger coverage changed for {table}");
+        }
     }
 
     #[test]
@@ -3762,6 +3998,23 @@ mod tests {
             store.accept_host_parts(direct.parts()).unwrap(),
             Acceptance::Unchanged
         );
+    }
+
+    #[test]
+    fn signed_refresh_evidence_must_descend_to_a_prior_anchor() {
+        let (_directory, mut store) = store();
+        let mut invalid = snapshot();
+        invalid.merkle_root.evidence = MerkleRootEvidence::SignedRefresh {
+            signed_root: vec![0x55; 96],
+            prior_epoch: invalid.merkle_root.epoch,
+            prior: Box::new(MerkleRootEvidence::SignedBootstrap(vec![0x44; 96])),
+        };
+        assert!(matches!(
+            store.accept_host_parts(invalid.parts()),
+            Err(Error::InvalidSnapshot(
+                "Merkle evidence anchors must strictly descend"
+            ))
+        ));
     }
 
     #[test]

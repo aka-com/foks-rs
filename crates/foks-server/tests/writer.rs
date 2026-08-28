@@ -117,7 +117,12 @@ fn bounded_writer_queue_rejects_promptly_and_recovers_after_drain() {
     release_sender.send(()).unwrap();
     blocker.join().unwrap().unwrap();
     queued.join().unwrap().unwrap();
-    assert_eq!(writer.handle().metrics().pending, 0);
+    let metrics = writer.handle().metrics();
+    assert_eq!(metrics.pending, 0);
+    assert_eq!(metrics.queue_wait_observations, 2);
+    assert_eq!(metrics.execution_observations, 2);
+    assert!(metrics.queue_wait_microseconds_max > 0);
+    assert!(metrics.execution_microseconds_max > 0);
     writer.call(|_| Ok(())).unwrap();
     Arc::into_inner(writer).unwrap().shutdown().unwrap();
 }

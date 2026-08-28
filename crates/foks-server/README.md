@@ -31,8 +31,8 @@ from that merge. Normal builds need no Go toolchain or upstream source.
 
 Key-at-rest and public hostchain rotation have different failure and
 compatibility models. See [KEY_ROTATION.md](KEY_ROTATION.md) before creating a
-durable installation; operator-root rewrapping is implemented, while public
-host-key mutation remains gated on the listed upstream compatibility tests.
+durable installation. Operator-root rewrapping and the two-link public host-key
+rotation are implemented; delegated-purpose key rotation remains design-only.
 
 ## Running
 
@@ -83,10 +83,14 @@ foks-server serve \
 
 The separate management listener defaults to `127.0.0.1:9090` and serves
 `/healthz`, `/readyz`, and Prometheus text at `/metrics`. It is plaintext HTTP
-and must remain loopback-only or sit behind operator authentication and a
-firewall. Readiness requires both completed startup and a bounded round trip
-through the SQLite writer. Metrics use fixed, non-user-derived names and never
-export paths, identities, request values, or key material.
+and the server rejects every non-loopback bind address. A reverse proxy that
+needs remote access must connect to this loopback listener and provide its own
+authenticated transport. Readiness requires both completed startup and a
+bounded round trip through the SQLite writer. Metrics cover end-to-end request
+and actual handler duration (including work that outlives a client deadline),
+writer queue wait and execution duration, database and WAL bytes, backup
+duration, saturation, and backup outcomes. They use fixed, non-user-derived
+names and never export paths, identities, request values, or key material.
 
 Connection and request token buckets are enforced per source IP with bounded
 tracking memory. CLI flags set their refill rates, bursts, and maximum tracked
@@ -107,6 +111,28 @@ hidden staging directory. Only complete `backup-*` directories count toward
 retention; unrelated paths are never removed. Operators should monitor backup
 failure and last-success metrics and regularly restore a backup in isolation.
 
+Public host-key rotation is an offline, two-command operation. Stop the server,
+run `begin-host-key-rotation`, allow at least 24 hours for a separately pinned
+client or canary to observe the printed add-link sequence, then acknowledge
+that exact sequence when completing:
+
+```text
+foks-server begin-host-key-rotation --config /var/lib/foks/server.toml
+foks-server complete-host-key-rotation \
+  --config /var/lib/foks/server.toml \
+  --operation-id <printed-operation-id> \
+  --observed-addition-seqno <printed-add-seqno>
+```
+
+Both commands are idempotent. Completion fails before the printed observation
+deadline or when the acknowledged sequence differs. The revoke transaction is
+committed before the old encrypted private key is removed; a retry finishes
+cleanup after a crash. Revoked public IDs and hostchain bytes remain in SQLite,
+but revoked private keys are neither startup dependencies nor backup contents.
+Rotation advances from the latest application Merkle head; client hard state
+retains the independently authenticated evidence for older roots while using
+the new signed probe root as its current anchor.
+
 Root-key and private-key files must be regular, non-symlink files with no group
 or other permissions. `SIGINT` and `SIGTERM` stop accepts, cancel idle
 sessions, drain accepted writer work, stop maintenance, and join all threads.
@@ -116,8 +142,12 @@ sessions, drain accepted writer work, stop maintenance, and join all threads.
 One bounded writer actor owns every authoritative SQLite mutation. Network
 reads use read-only connections from bounded asynchronous sessions; the default
 limits are four async runtime workers, 256 active and 32 pending connections per
-listener, 4,096 requests per connection, 64 pending writes in the executable, a
-15-second I/O timeout, and a 16 MiB frame ceiling.
+listener, 64 request handlers shared across listeners, 4,096 requests per
+connection, 64 pending writes in the executable, a 15-second I/O timeout, a
+30-second request-execution timeout, and a 16 MiB frame ceiling. A timed-out
+handler closes its connection without claiming that a durable mutation was
+cancelled; any surviving synchronous work retains its execution permit until
+it exits, keeping resource use bounded.
 This intentionally favors a simple total order and predictable overload
 behavior over write parallelism. A future partition can move opaque chunks
 first and then independent KV namespaces; identity/name publication and the
@@ -168,8 +198,9 @@ cost before quoting capacity.
 ## Backup, restore, and integrity
 
 `RunningStandaloneServer::backup` creates a new backup directory containing an
-online SQLite snapshot, the five immutable encrypted key files, and a canonical
-key-generation manifest. It never copies the operator root key. Protect that
+online SQLite snapshot, the encrypted keys required by the current durable
+generation ledger, and a canonical bootstrap-generation manifest. It excludes
+revoked host private keys and never copies the operator root key. Protect that
 root key separately; neither the encrypted key snapshot nor the database is
 recoverable without it.
 

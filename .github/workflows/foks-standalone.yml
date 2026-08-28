@@ -37,8 +37,25 @@ jobs:
           rustup default stable
       - name: Fetch the locked dependency graph
         run: cargo fetch --locked
+      - name: Install isolated Linux Secret Service
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring
       - name: Test the isolated AKA-free client graph
         run: tools/foks-client/check.sh
+      - name: Test macOS Keychain integration
+        if: runner.os == 'macOS'
+        run: cargo test --locked -p foks-keystore --test native_credential_store -- --ignored
+      - name: Test Linux Secret Service integration
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            export XDG_RUNTIME_DIR="$RUNNER_TEMP/foks-secret-service-runtime"
+            mkdir -m 700 "$XDG_RUNTIME_DIR"
+            mkdir -p "$HOME/.local/share/keyrings"
+            printf "%s" "foks-ci-keyring" | gnome-keyring-daemon --unlock --components=secrets
+            cargo test --locked -p foks-keystore --test native_credential_store -- --ignored
+          '
 
   server:
     name: server (Linux x86_64)
@@ -51,6 +68,10 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal --component clippy,rustfmt
           rustup default stable
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: tools/foks-v019-oracle/go.sum
       - name: Fetch the locked dependency graph
         run: cargo fetch --locked
       - name: Check generated protocol metadata
@@ -61,3 +82,5 @@ jobs:
         run: tools/foks-server/test-client-server.sh
       - name: Test small-team, restart, capacity, and backup behavior
         run: tools/foks-server/test-small-team.sh
+      - name: Verify host-key rotation with pinned Go v0.1.9
+        run: tools/foks-v019-oracle/run-host-rotation-compat.sh

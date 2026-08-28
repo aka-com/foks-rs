@@ -6,27 +6,31 @@
 
 #![forbid(unsafe_code)]
 
+mod runtime;
+
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+pub use foks_client::CancellationToken;
 use foks_client::{
-    AdHocTeamSecrets, DeviceCredential, EncryptedFileMutationStore, FoksClient, FoksScheduler,
-    KvWriteOptions, NamedTeamSecrets, NewSoftwareDeviceSecrets, ProbeTarget,
-    ScheduledJobRegistration, SchedulerConfig, SoftwareAccountRequest, SoftwareAccountSecrets,
-    SoftwareDeviceProvisionRequest,
+    AdHocTeamSecrets, DeviceCredential, EncryptedFileMutationStore, FoksClient, KvWriteOptions,
+    NamedTeamSecrets, NewSoftwareDeviceSecrets, ProbeTarget, SoftwareAccountRequest,
+    SoftwareAccountSecrets, SoftwareDeviceProvisionRequest,
 };
-use foks_client_db::{
-    HardStateStore, KvDirectoryProjection, MutationKind, ScheduledJobKind, SoftStateStore,
-};
+#[cfg(test)]
+use foks_client_db::ScheduledJobKind;
+use foks_client_db::{HardStateStore, KvDirectoryProjection, MutationKind, SoftStateStore};
 use foks_compat_artifact::{Outcome as CanaryOutcome, SignedCanaryArtifact};
 use foks_crypto::{derive_device_public, derive_shared_verify_key, prefixed_hash, BackupKey};
 use foks_keystore::SecretStore;
 use foks_proto::{
     EntityId, InviteCode, KvNodeId, KvNodeType, Role, SecretSeed, ENTITY_PUK_VERIFY, ENTITY_USER,
 };
-use fs2::FileExt as _;
 use rustls::pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -36,13 +40,15 @@ const CONFIG_VERSION: u32 = 1;
 const CREDENTIAL_VERSION: u32 = 1;
 const VAULT_KEY_TYPE_ID: u64 = 0x43cc_5eca_5249_22a1;
 const MUTATION_KEY_TYPE_ID: u64 = 0x5e4b_52ca_d668_dd1d;
-const USER_REFRESH_JOB_TYPE_ID: u64 = 0xb1a8_c09a_d2b9_4de7;
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_CERTIFICATES: usize = 8;
 const MAX_CERTIFICATE_BYTES: usize = 1024 * 1024;
 const STATE_CONFIG_VERSION: u32 = 1;
 const STATE_CONFIG_FILE: &str = "client-state.toml";
 const MASTER_KEY_RECORD: &str = "master-key-v1";
+const REGISTRY_LOCK_FILE: &str = ".profiles.lock";
+pub const PINNED_PROTOCOL_METADATA_SHA256: &str =
+    "071c2548f30b9a7f20e06eb71d99b92c47d845453b8a832651631ade7ede2ef1";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -52,6 +58,8 @@ pub enum Error {
     ProfileExists,
     #[error("FOKS profile is missing")]
     ProfileMissing,
+    #[error("FOKS profile registry changed concurrently; reload and retry")]
+    ProfileRegistryChanged,
     #[error("FOKS profile does not permit {0:?}")]
     CapabilityDenied(Capability),
     #[error("FOKS account already exists")]
@@ -94,9 +102,19 @@ pub enum Error {
     Verify(#[from] foks_verify::Error),
     #[error("FOKS hard-state rollback or fork detected: {0}")]
     RollbackDetected(&'static str),
+    #[error(
+        "FOKS external rollback checkpoint rejected profile {profile}: {reason}. To deliberately discard both the checkpoint and hard-state database, run `foks-rs --state-dir <STATE_DIR> profile reset-hard-state {profile} --confirm-delete` using this state directory: {state_dir:?}"
+    )]
+    CheckpointResetRequired {
+        profile: String,
+        state_dir: PathBuf,
+        reason: &'static str,
+    },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+pub use runtime::{JobRun, JobRunReport};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -209,23 +227,52 @@ impl ClientCredentials {
         }
     }
 
-    /// Serializes security-sensitive use across CLI and agent processes, checks
-    /// the external watermark before the operation, and only advances it after
-    /// the operation succeeds.
-    pub fn with_checkpoint<T, E>(
+    /// Serializes security-sensitive use per profile across CLI and agent
+    /// processes, verifies the external watermark before the operation, and
+    /// republishes it afterward even when the operation reports an error.
+    pub fn with_checked_session<T, E>(
         &self,
         session: &ProfileSession,
-        operation: impl FnOnce() -> std::result::Result<T, E>,
+        operation: impl FnOnce(&CheckedProfileSession<'_>) -> std::result::Result<T, E>,
     ) -> std::result::Result<T, E>
     where
         E: From<Error>,
     {
-        let lock = self.checkpoint_lock().map_err(E::from)?;
+        self.ensure_session_root(session).map_err(E::from)?;
+        let lock = runtime::ProfileLock::operation(session.paths()).map_err(E::from)?;
         self.verify_checkpoint(session).map_err(E::from)?;
-        let result = operation()?;
-        self.advance_checkpoint(session).map_err(E::from)?;
-        lock.unlock().map_err(Error::from).map_err(E::from)?;
-        Ok(result)
+        let checked = CheckedProfileSession { session };
+        let result = operation(&checked);
+        let checkpoint = self.advance_checkpoint(session);
+        let unlock = lock.release();
+        checkpoint.map_err(E::from)?;
+        unlock.map_err(E::from)?;
+        result
+    }
+
+    /// Attempts the checked-session sequence without waiting for another
+    /// process using the profile. Periodic work uses this to skip contention.
+    pub fn try_with_checked_session<T, E>(
+        &self,
+        session: &ProfileSession,
+        operation: impl FnOnce(&CheckedProfileSession<'_>) -> std::result::Result<T, E>,
+    ) -> std::result::Result<Option<T>, E>
+    where
+        E: From<Error>,
+    {
+        self.ensure_session_root(session).map_err(E::from)?;
+        let Some(lock) = runtime::ProfileLock::try_operation(session.paths()).map_err(E::from)?
+        else {
+            return Ok(None);
+        };
+        self.verify_checkpoint(session).map_err(E::from)?;
+        let checked = CheckedProfileSession { session };
+        let result = operation(&checked);
+        let checkpoint = self.advance_checkpoint(session);
+        let unlock = lock.release();
+        checkpoint.map_err(E::from)?;
+        unlock.map_err(E::from)?;
+        result.map(Some)
     }
 
     fn verify_checkpoint(&self, session: &ProfileSession) -> Result<()> {
@@ -234,42 +281,168 @@ impl ClientCredentials {
         }
         let key = rollback_record_key(&session.profile.name)?;
         let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-        match native.get(&key) {
+        self.verify_checkpoint_with_store(session, &key, &mut native)
+    }
+
+    fn verify_checkpoint_with_store(
+        &self,
+        session: &ProfileSession,
+        key: &str,
+        store: &mut impl CheckpointStore,
+    ) -> Result<()> {
+        match store.get(key) {
             Ok(bytes) => {
-                let previous: RollbackCheckpoint = serde_json::from_slice(&bytes)?;
+                let previous: RollbackCheckpoint =
+                    serde_json::from_slice(&bytes).map_err(|_| {
+                        self.checkpoint_reset_error(session, "external checkpoint is invalid")
+                    })?;
                 let current = session.rollback_checkpoint()?;
-                current.verify_descends_from(&previous)?;
+                let reconciliation = current.reconciliation(&previous).map_err(|error| {
+                    self.checkpoint_reset_error(session, rollback_reason(&error))
+                })?;
+                if reconciliation == CheckpointReconciliation::AdvanceExternal {
+                    store.put(key, &serde_json::to_vec(&current)?)?;
+                }
             }
-            Err(foks_keystore::Error::Missing) => {}
+            Err(foks_keystore::Error::Missing) => {
+                if hard_state_artifacts_exist(&session.paths.hard_database)? {
+                    return Err(
+                        self.checkpoint_reset_error(session, "external checkpoint is missing")
+                    );
+                }
+                let current = session.rollback_checkpoint()?;
+                store.put(key, &serde_json::to_vec(&current)?)?;
+            }
             Err(error) => return Err(error.into()),
         }
         Ok(())
+    }
+
+    fn checkpoint_reset_error(&self, session: &ProfileSession, reason: &'static str) -> Error {
+        Error::CheckpointResetRequired {
+            profile: session.profile.name.clone(),
+            state_dir: self.root.clone(),
+            reason,
+        }
     }
 
     fn advance_checkpoint(&self, session: &ProfileSession) -> Result<()> {
         if self.backend != CredentialBackend::Native {
             return Ok(());
         }
-        let current = session.rollback_checkpoint()?;
         let key = rollback_record_key(&session.profile.name)?;
         let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-        native.put(&key, &serde_json::to_vec(&current)?)?;
+        self.verify_checkpoint_with_store(session, &key, &mut native)
+    }
+
+    /// Deliberately removes a profile's external rollback watermark and local
+    /// hard-state database. The next checked operation enrolls a new database.
+    pub fn reset_hard_state(&self, session: &ProfileSession) -> Result<()> {
+        self.ensure_session_root(session)?;
+        let operation = runtime::ProfileLock::operation(session.paths())?;
+        let scheduler = runtime::ProfileLock::scheduler(session.paths())?;
+        let result = self.reset_hard_state_locked(session);
+        let scheduler_release = scheduler.release();
+        let operation_release = operation.release();
+        result?;
+        scheduler_release?;
+        operation_release
+    }
+
+    fn ensure_session_root(&self, session: &ProfileSession) -> Result<()> {
+        let expected = self
+            .root
+            .join("profiles")
+            .join(session.profile.name.as_str());
+        if session.paths.directory != expected {
+            return Err(Error::InvalidConfig(
+                "profile session belongs to a different client state",
+            ));
+        }
         Ok(())
     }
 
-    fn checkpoint_lock(&self) -> Result<File> {
-        let path = self.root.join(".rollback-checkpoint.lock");
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    fn reset_hard_state_locked(&self, session: &ProfileSession) -> Result<()> {
+        if self.backend == CredentialBackend::Native {
+            let key = rollback_record_key(&session.profile.name)?;
+            let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
+            native.remove(&key)?;
         }
-        let file = options.open(path)?;
-        file.lock_exclusive()?;
-        Ok(file)
+        remove_hard_state_artifacts(&session.paths.hard_database)?;
+        if let Some(parent) = session.paths.hard_database.parent() {
+            File::open(parent)?.sync_all()?;
+        }
+        Ok(())
     }
+}
+
+trait CheckpointStore {
+    fn put(&mut self, key: &str, value: &[u8]) -> foks_keystore::Result<()>;
+    fn get(&mut self, key: &str) -> foks_keystore::Result<Zeroizing<Vec<u8>>>;
+}
+
+impl CheckpointStore for foks_keystore::NativeCredentialStore {
+    fn put(&mut self, key: &str, value: &[u8]) -> foks_keystore::Result<()> {
+        foks_keystore::NativeCredentialStore::put(self, key, value)
+    }
+
+    fn get(&mut self, key: &str) -> foks_keystore::Result<Zeroizing<Vec<u8>>> {
+        foks_keystore::NativeCredentialStore::get(self, key)
+    }
+}
+
+#[cfg(test)]
+impl CheckpointStore for foks_keystore::MemorySecretStore {
+    fn put(&mut self, key: &str, value: &[u8]) -> foks_keystore::Result<()> {
+        foks_keystore::SecretStore::put(self, key, value)
+    }
+
+    fn get(&mut self, key: &str) -> foks_keystore::Result<Zeroizing<Vec<u8>>> {
+        foks_keystore::SecretStore::get(self, key)
+    }
+}
+
+fn rollback_reason(error: &Error) -> &'static str {
+    match error {
+        Error::RollbackDetected(reason) => reason,
+        _ => "external checkpoint is invalid",
+    }
+}
+
+fn hard_state_artifact_paths(database: &Path) -> [PathBuf; 4] {
+    let sidecar = |suffix: &str| {
+        let mut path = OsString::from(database.as_os_str());
+        path.push(suffix);
+        PathBuf::from(path)
+    };
+    [
+        database.to_owned(),
+        sidecar("-wal"),
+        sidecar("-shm"),
+        sidecar("-journal"),
+    ]
+}
+
+fn hard_state_artifacts_exist(database: &Path) -> Result<bool> {
+    for path in hard_state_artifact_paths(database) {
+        match fs::symlink_metadata(path) {
+            Ok(_) => return Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(false)
+}
+
+fn remove_hard_state_artifacts(database: &Path) -> Result<()> {
+    for path in hard_state_artifact_paths(database) {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
 }
 
 fn rollback_record_key(profile: &str) -> Result<String> {
@@ -280,6 +453,13 @@ fn rollback_record_key(profile: &str) -> Result<String> {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RollbackCheckpoint {
     profile: String,
+    database_id: [u8; 16],
+    hard_state_revision: u64,
+    host: Option<RollbackHostCheckpoint>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct RollbackHostCheckpoint {
     host_id: Vec<u8>,
     host_chain_sequence: u64,
     host_chain_tail: [u8; 32],
@@ -291,27 +471,63 @@ pub struct RollbackCheckpoint {
     authenticated_roots: BTreeMap<u64, [u8; 32]>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CheckpointReconciliation {
+    Current,
+    AdvanceExternal,
+}
+
 impl RollbackCheckpoint {
     pub fn verify_descends_from(&self, previous: &Self) -> Result<()> {
-        if self.profile != previous.profile || self.host_id != previous.host_id {
+        self.reconciliation(previous).map(|_| ())
+    }
+
+    fn reconciliation(&self, previous: &Self) -> Result<CheckpointReconciliation> {
+        if self.profile != previous.profile {
+            return Err(Error::RollbackDetected("checkpoint profile changed"));
+        }
+        if self.database_id != previous.database_id {
+            return Err(Error::RollbackDetected(
+                "hard-state database identity changed",
+            ));
+        }
+        if self.hard_state_revision < previous.hard_state_revision {
+            return Err(Error::RollbackDetected("hard-state revision rolled back"));
+        }
+        let previous_hard_state_revision = previous.hard_state_revision;
+        let Some(previous) = previous.host.as_ref() else {
+            return Ok(if self.hard_state_revision > previous_hard_state_revision {
+                CheckpointReconciliation::AdvanceExternal
+            } else {
+                CheckpointReconciliation::Current
+            });
+        };
+        let Some(current) = self.host.as_ref() else {
+            return Err(Error::RollbackDetected("pinned host is absent"));
+        };
+        if current.host_id != previous.host_id {
             return Err(Error::RollbackDetected("host identity changed"));
         }
-        if self.host_chain_sequence < previous.host_chain_sequence
+        if current.host_chain_sequence < previous.host_chain_sequence
             || !foks_verify::hostchain_contains_tail(
-                &self.host_chain_bytes,
+                &current.host_chain_bytes,
                 previous.host_chain_sequence,
                 previous.host_chain_tail,
             )?
         {
             return Err(Error::RollbackDetected("hostchain checkpoint is absent"));
         }
-        if self.merkle_epoch < previous.merkle_epoch
-            || self.authenticated_roots.get(&previous.merkle_epoch)
+        if current.merkle_epoch < previous.merkle_epoch
+            || current.authenticated_roots.get(&previous.merkle_epoch)
                 != Some(&previous.merkle_root_hash)
         {
             return Err(Error::RollbackDetected("Merkle checkpoint is absent"));
         }
-        Ok(())
+        Ok(if self.hard_state_revision > previous_hard_state_revision {
+            CheckpointReconciliation::AdvanceExternal
+        } else {
+            CheckpointReconciliation::Current
+        })
     }
 }
 
@@ -333,10 +549,15 @@ pub enum ProtocolPolicy {
     /// The checked and fixture-pinned upstream v0.1.9 surface.
     V019,
     /// Current mainline or hosted service, public probing only.
-    CurrentProbeOnly { canary_public_key: String },
+    CurrentProbeOnly {
+        canary_public_key: String,
+        lease_url: String,
+        last_artifact: Option<Box<SignedCanaryArtifact>>,
+    },
     /// Current service after an external authenticated compatibility run.
     CurrentValidated {
         canary_public_key: String,
+        lease_url: String,
         artifact: Box<SignedCanaryArtifact>,
     },
 }
@@ -360,10 +581,29 @@ impl ProtocolPolicy {
     fn canary_public_key(&self) -> Option<&str> {
         match self {
             Self::V019 => None,
-            Self::CurrentProbeOnly { canary_public_key }
+            Self::CurrentProbeOnly {
+                canary_public_key, ..
+            }
             | Self::CurrentValidated {
                 canary_public_key, ..
             } => Some(canary_public_key),
+        }
+    }
+
+    fn lease_url(&self) -> Option<&str> {
+        match self {
+            Self::V019 => None,
+            Self::CurrentProbeOnly { lease_url, .. } | Self::CurrentValidated { lease_url, .. } => {
+                Some(lease_url)
+            }
+        }
+    }
+
+    fn last_artifact(&self) -> Option<&SignedCanaryArtifact> {
+        match self {
+            Self::V019 => None,
+            Self::CurrentProbeOnly { last_artifact, .. } => last_artifact.as_deref(),
+            Self::CurrentValidated { artifact, .. } => Some(artifact),
         }
     }
 }
@@ -390,22 +630,31 @@ impl Profile {
         if let Some(key) = self.protocol.canary_public_key() {
             let decoded = foks_compat_artifact::decode_public_key(key)
                 .map_err(|_| Error::InvalidProfile("canary public key is invalid"))?;
-            if let ProtocolPolicy::CurrentValidated { artifact, .. } = &self.protocol {
-                artifact
-                    .verify(&decoded)
-                    .map_err(|_| Error::InvalidProfile("canary signature is invalid"))?;
-                if artifact.artifact.target != self.probe
-                    || artifact.artifact.outcome != CanaryOutcome::Compatible
-                    || artifact
-                        .artifact
-                        .capabilities
-                        .iter()
-                        .any(|capability| capability_from_canary(capability).is_err())
+            validate_lease_url(
+                self.protocol
+                    .lease_url()
+                    .ok_or(Error::InvalidProfile("canary lease URL is missing"))?,
+            )?;
+            if let Some(artifact) = self.protocol.last_artifact() {
+                verify_canary_for_target(artifact, &decoded, &self.probe)?;
+            }
+            match &self.protocol {
+                ProtocolPolicy::CurrentValidated { artifact, .. }
+                    if !canary_grants_this_client(artifact) =>
                 {
                     return Err(Error::InvalidProfile(
                         "persisted canary lease is not a compatible grant for this target",
                     ));
                 }
+                ProtocolPolicy::CurrentProbeOnly {
+                    last_artifact: Some(artifact),
+                    ..
+                } if canary_grants_this_client(artifact) => {
+                    return Err(Error::InvalidProfile(
+                        "compatible canary is persisted as probe-only",
+                    ));
+                }
+                _ => {}
             }
         }
         if let TrustRoot::CertificateDer { path } = &self.trust {
@@ -430,6 +679,7 @@ impl Profile {
     }
 
     pub fn apply_canary(&self, signed: &SignedCanaryArtifact, now: u64) -> Result<Self> {
+        self.validate()?;
         let public_key = self
             .protocol
             .canary_public_key()
@@ -449,13 +699,36 @@ impl Profile {
                 "canary target or validity interval is invalid",
             ));
         }
+        if let Some(previous) = self.protocol.last_artifact() {
+            if signed.artifact.generation < previous.artifact.generation {
+                return Err(Error::InvalidProfile("canary generation rolled back"));
+            }
+            if signed.artifact.generation == previous.artifact.generation {
+                return if signed == previous {
+                    Ok(self.clone())
+                } else {
+                    Err(Error::InvalidProfile("canary generation was reused"))
+                };
+            }
+        }
         let canary_public_key = public_key.to_owned();
-        let protocol = match signed.artifact.outcome {
-            CanaryOutcome::Drift => ProtocolPolicy::CurrentProbeOnly { canary_public_key },
-            CanaryOutcome::Compatible => ProtocolPolicy::CurrentValidated {
+        let lease_url = self
+            .protocol
+            .lease_url()
+            .ok_or(Error::InvalidProfile("canary lease URL is missing"))?
+            .to_owned();
+        let protocol = if canary_grants_this_client(signed) {
+            ProtocolPolicy::CurrentValidated {
                 canary_public_key,
+                lease_url,
                 artifact: Box::new(signed.clone()),
-            },
+            }
+        } else {
+            ProtocolPolicy::CurrentProbeOnly {
+                canary_public_key,
+                lease_url,
+                last_artifact: Some(Box::new(signed.clone())),
+            }
         };
         let updated = Self {
             protocol,
@@ -464,6 +737,57 @@ impl Profile {
         updated.validate()?;
         Ok(updated)
     }
+
+    pub fn compatibility_lease_url(&self) -> Option<&str> {
+        self.protocol.lease_url()
+    }
+}
+
+fn verify_canary_for_target(
+    signed: &SignedCanaryArtifact,
+    public_key: &[u8; 32],
+    target: &str,
+) -> Result<()> {
+    signed
+        .verify(public_key)
+        .map_err(|_| Error::InvalidProfile("canary signature is invalid"))?;
+    if signed.artifact.target != target {
+        return Err(Error::InvalidProfile(
+            "persisted canary lease targets a different service",
+        ));
+    }
+    Ok(())
+}
+
+fn canary_grants_this_client(signed: &SignedCanaryArtifact) -> bool {
+    signed.artifact.outcome == CanaryOutcome::Compatible
+        && signed.artifact.protocol_metadata_sha256 == PINNED_PROTOCOL_METADATA_SHA256
+        && signed
+            .artifact
+            .capabilities
+            .iter()
+            .all(|capability| capability_from_canary(capability).is_ok())
+}
+
+fn validate_lease_url(value: &str) -> Result<()> {
+    if value.is_empty() || value.len() > 2048 {
+        return Err(Error::InvalidProfile("canary lease URL is invalid"));
+    }
+    let parsed =
+        url::Url::parse(value).map_err(|_| Error::InvalidProfile("canary lease URL is invalid"))?;
+    if parsed.scheme() != "https"
+        || parsed.cannot_be_a_base()
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(Error::InvalidProfile(
+            "canary lease URL must be an HTTPS URL without credentials, query, or fragment",
+        ));
+    }
+    Ok(())
 }
 
 fn capability_from_canary(value: &str) -> Result<Capability> {
@@ -521,26 +845,7 @@ pub struct ProfileRegistry {
 impl ProfileRegistry {
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
         let root = prepare_private_directory(root.as_ref())?;
-        let path = root.join("profiles.toml");
-        let profiles = match read_private_file_optional(&path, MAX_CONFIG_BYTES)? {
-            Some(bytes) => {
-                if bytes.len() as u64 > MAX_CONFIG_BYTES {
-                    return Err(Error::InvalidConfig("profile registry is too large"));
-                }
-                let file: RegistryFile = toml::from_slice(&bytes)?;
-                if file.version != CONFIG_VERSION {
-                    return Err(Error::InvalidConfig("unsupported profile registry version"));
-                }
-                for (name, profile) in &file.profiles {
-                    if name != &profile.name {
-                        return Err(Error::InvalidConfig("profile map key does not match name"));
-                    }
-                    profile.validate()?;
-                }
-                file.profiles
-            }
-            None => BTreeMap::new(),
-        };
+        let profiles = load_registry(&root)?;
         Ok(Self { root, profiles })
     }
 
@@ -554,10 +859,12 @@ impl ProfileRegistry {
 
     pub fn add(&mut self, profile: Profile) -> Result<()> {
         profile.validate()?;
-        if self.profiles.contains_key(&profile.name) {
+        let _lock = RegistryMutationLock::acquire(&self.root)?;
+        let current = load_registry(&self.root)?;
+        if current.contains_key(&profile.name) {
             return Err(Error::ProfileExists);
         }
-        let mut next = self.profiles.clone();
+        let mut next = current;
         next.insert(profile.name.clone(), profile);
         self.save(&next)?;
         self.profiles = next;
@@ -566,19 +873,39 @@ impl ProfileRegistry {
 
     pub fn replace(&mut self, profile: Profile) -> Result<()> {
         profile.validate()?;
-        if !self.profiles.contains_key(&profile.name) {
+        let _lock = RegistryMutationLock::acquire(&self.root)?;
+        let current = load_registry(&self.root)?;
+        if !current.contains_key(&profile.name) {
             return Err(Error::ProfileMissing);
         }
-        let mut next = self.profiles.clone();
+        if current.get(&profile.name) != self.profiles.get(&profile.name) {
+            return Err(Error::ProfileRegistryChanged);
+        }
+        let mut next = current;
         next.insert(profile.name.clone(), profile);
         self.save(&next)?;
         self.profiles = next;
         Ok(())
     }
 
+    pub fn apply_canary(
+        &mut self,
+        name: &str,
+        signed: &SignedCanaryArtifact,
+        now: u64,
+    ) -> Result<Profile> {
+        let current = self.profile(name)?.clone();
+        let updated = current.apply_canary(signed, now)?;
+        if updated != current {
+            self.replace(updated.clone())?;
+        }
+        Ok(updated)
+    }
+
     pub fn remove(&mut self, name: &str) -> Result<bool> {
         validate_name(name)?;
-        let mut next = self.profiles.clone();
+        let _lock = RegistryMutationLock::acquire(&self.root)?;
+        let mut next = load_registry(&self.root)?;
         let removed = next.remove(name).is_some();
         if removed {
             self.save(&next)?;
@@ -614,6 +941,50 @@ impl ProfileRegistry {
     }
 }
 
+struct RegistryMutationLock(File);
+
+impl RegistryMutationLock {
+    fn acquire(root: &Path) -> Result<Self> {
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options.open(root.join(REGISTRY_LOCK_FILE))?;
+        fs2::FileExt::lock_exclusive(&file)?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for RegistryMutationLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
+fn load_registry(root: &Path) -> Result<BTreeMap<String, Profile>> {
+    let path = root.join("profiles.toml");
+    let Some(bytes) = read_private_file_optional(&path, MAX_CONFIG_BYTES)? else {
+        return Ok(BTreeMap::new());
+    };
+    if bytes.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(Error::InvalidConfig("profile registry is too large"));
+    }
+    let file: RegistryFile = toml::from_slice(&bytes)?;
+    if file.version != CONFIG_VERSION {
+        return Err(Error::InvalidConfig("unsupported profile registry version"));
+    }
+    for (name, profile) in &file.profiles {
+        if name != &profile.name {
+            return Err(Error::InvalidConfig("profile map key does not match name"));
+        }
+        profile.validate()?;
+    }
+    Ok(file.profiles)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProbeReport {
     pub lookup_name: String,
@@ -641,6 +1012,21 @@ impl ProfileSession {
         })
     }
 
+    pub fn open_with_control(
+        registry: &ProfileRegistry,
+        name: &str,
+        timeout: Duration,
+        cancellation: CancellationToken,
+    ) -> Result<Self> {
+        if timeout.is_zero() {
+            return Err(Error::InvalidConfig("zero profile operation timeout"));
+        }
+        let mut session = Self::open(registry, name)?;
+        session.client.set_timeout(timeout);
+        session.client = session.client.with_cancellation_token(cancellation);
+        Ok(session)
+    }
+
     pub fn profile(&self) -> &Profile {
         &self.profile
     }
@@ -649,6 +1035,54 @@ impl ProfileSession {
         &self.paths
     }
 
+    fn rollback_checkpoint(&self) -> Result<RollbackCheckpoint> {
+        rollback_checkpoint(self)
+    }
+}
+
+/// A profile capability handle that only exists while its operation lock is
+/// held and its external rollback checkpoint has been verified.
+pub struct CheckedProfileSession<'a> {
+    session: &'a ProfileSession,
+}
+
+impl Deref for CheckedProfileSession<'_> {
+    type Target = ProfileSession;
+
+    fn deref(&self) -> &Self::Target {
+        self.session
+    }
+}
+
+fn rollback_checkpoint(session: &ProfileSession) -> Result<RollbackCheckpoint> {
+    let target = ProbeTarget::parse(&session.profile.probe)?;
+    let store = HardStateStore::open(&session.paths.hard_database)?;
+    let metadata = store.metadata()?;
+    let host = store
+        .host_for_lookup(target.hostname())?
+        .map(|snapshot| RollbackHostCheckpoint {
+            host_id: snapshot.host_id,
+            host_chain_sequence: snapshot.chain_seqno,
+            host_chain_tail: snapshot.chain_tail_hash,
+            host_chain_bytes: snapshot.chain_bytes,
+            merkle_epoch: snapshot.merkle_root.epoch,
+            merkle_root_hash: snapshot.merkle_root.root_hash,
+            authenticated_roots: snapshot
+                .merkle_root
+                .authenticated_roots
+                .iter()
+                .map(|root| (root.epoch(), root.root_hash()))
+                .collect(),
+        });
+    Ok(RollbackCheckpoint {
+        profile: session.profile.name.clone(),
+        database_id: metadata.database_id,
+        hard_state_revision: metadata.revision,
+        host,
+    })
+}
+
+impl CheckedProfileSession<'_> {
     pub fn probe_and_pin(&self) -> Result<ProbeReport> {
         self.profile.require(Capability::Probe)?;
         let target = ProbeTarget::parse(&self.profile.probe)?;
@@ -669,30 +1103,6 @@ impl ProfileSession {
         self.client
             .pinned_host(target.hostname(), &self.paths.hard_database)
             .map_err(Into::into)
-    }
-
-    pub fn rollback_checkpoint(&self) -> Result<RollbackCheckpoint> {
-        let target = ProbeTarget::parse(&self.profile.probe)?;
-        let store = HardStateStore::open(&self.paths.hard_database)?;
-        let snapshot = store
-            .host_for_lookup(target.hostname())?
-            .ok_or(Error::RollbackDetected("pinned host is absent"))?;
-        let authenticated_roots = snapshot
-            .merkle_root
-            .authenticated_roots
-            .iter()
-            .map(|root| (root.epoch(), root.root_hash()))
-            .collect();
-        Ok(RollbackCheckpoint {
-            profile: self.profile.name.clone(),
-            host_id: snapshot.host_id,
-            host_chain_sequence: snapshot.chain_seqno,
-            host_chain_tail: snapshot.chain_tail_hash,
-            host_chain_bytes: snapshot.chain_bytes,
-            merkle_epoch: snapshot.merkle_root.epoch,
-            merkle_root_hash: snapshot.merkle_root.root_hash,
-            authenticated_roots,
-        })
     }
 
     pub fn create_account(
@@ -1349,80 +1759,6 @@ impl ProfileSession {
         Ok(KvWriteReport::from_tree(path, version, &tree))
     }
 
-    pub fn schedule_user_refresh(
-        &self,
-        alias: &str,
-        interval_micros: u64,
-        first_run_at: u64,
-        vault: &mut AccountVault<'_>,
-    ) -> Result<[u8; 16]> {
-        self.profile.require(Capability::UserSync)?;
-        if interval_micros == 0 {
-            return Err(Error::InvalidConfig("job interval is zero"));
-        }
-        let loaded = vault.account(alias)?;
-        let host = self.pinned_host()?;
-        let mut binding = Vec::with_capacity(66);
-        binding.extend_from_slice(host.host_id().as_bytes());
-        binding.extend_from_slice(loaded.credential.uid.as_bytes());
-        let digest = prefixed_hash(USER_REFRESH_JOB_TYPE_ID, &binding);
-        let job_id = digest[..16]
-            .try_into()
-            .expect("hash prefix has fixed length");
-        FoksScheduler::new(&self.paths.hard_database, SchedulerConfig::default())?.register(
-            ScheduledJobRegistration {
-                job_id,
-                kind: ScheduledJobKind::UserRefresh,
-                host_id: host.host_id().as_bytes().to_vec(),
-                scope_id: loaded.credential.uid.as_bytes().to_vec(),
-                interval_micros,
-                first_run_at,
-                registered_at: now_microseconds()?,
-            },
-        )?;
-        Ok(job_id)
-    }
-
-    pub fn run_due_jobs(&self, now: u64, vault: &mut AccountVault<'_>) -> Result<JobRunReport> {
-        self.profile.require(Capability::UserSync)?;
-        let scheduler = FoksScheduler::new(&self.paths.hard_database, SchedulerConfig::default())?;
-        let report = scheduler.run_due(now, |job| {
-            if job.kind != ScheduledJobKind::UserRefresh {
-                return Err("unsupported application job kind".to_owned());
-            }
-            let aliases = vault.aliases().map_err(|error| error.to_string())?;
-            let alias = aliases
-                .into_iter()
-                .find(|alias| {
-                    vault
-                        .account(alias)
-                        .is_ok_and(|account| account.credential.uid.as_bytes() == job.scope_id)
-                })
-                .ok_or_else(|| "scheduled account credential is unavailable".to_owned())?;
-            self.sync_account(&alias, vault)
-                .map(|_| ())
-                .map_err(|error| error.to_string())
-        })?;
-        Ok(JobRunReport {
-            runs: report
-                .runs
-                .into_iter()
-                .map(|run| {
-                    let (completed, error) = match run.status {
-                        foks_client::ScheduledRunStatus::Completed => (true, None),
-                        foks_client::ScheduledRunStatus::Failed { error } => (false, Some(error)),
-                    };
-                    JobRun {
-                        job_id_hex: hex(&run.job_id),
-                        completed,
-                        error,
-                        next_run_at: run.next_run_at,
-                    }
-                })
-                .collect(),
-        })
-    }
-
     fn authenticated_tree(
         &self,
         alias: &str,
@@ -1509,19 +1845,6 @@ impl KvWriteReport {
             entries: tree.iter().map(|directory| directory.entries.len()).sum(),
         }
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct JobRunReport {
-    pub runs: Vec<JobRun>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct JobRun {
-    pub job_id_hex: String,
-    pub completed: bool,
-    pub error: Option<String>,
-    pub next_run_at: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -2539,6 +2862,8 @@ mod tests {
     fn probe_only() -> ProtocolPolicy {
         ProtocolPolicy::CurrentProbeOnly {
             canary_public_key: CANARY_KEY.to_owned(),
+            lease_url: "https://updates.example.test/foks/canary.json".to_owned(),
+            last_artifact: None,
         }
     }
 
@@ -2565,6 +2890,103 @@ mod tests {
     }
 
     #[test]
+    fn registry_mutations_merge_across_processes() {
+        const ROOT_ENV: &str = "FOKS_REGISTRY_TEST_ROOT";
+        const NAME_ENV: &str = "FOKS_REGISTRY_TEST_NAME";
+        const START_ENV: &str = "FOKS_REGISTRY_TEST_START";
+
+        if let (Ok(root), Ok(name), Ok(start)) = (
+            std::env::var(ROOT_ENV),
+            std::env::var(NAME_ENV),
+            std::env::var(START_ENV),
+        ) {
+            let mut registry = ProfileRegistry::open(root).unwrap();
+            std::fs::write(format!("{start}.{name}.ready"), b"ready").unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !Path::new(&start).exists() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "parent did not release registry child"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            registry.add(profile(&name, ProtocolPolicy::V019)).unwrap();
+            return;
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        ProfileRegistry::open(&root).unwrap();
+        let start = temporary.path().join("start");
+        let executable = std::env::current_exe().unwrap();
+        let spawn = |name: &str| {
+            std::process::Command::new(&executable)
+                .args([
+                    "--exact",
+                    "tests::registry_mutations_merge_across_processes",
+                    "--nocapture",
+                ])
+                .env(ROOT_ENV, &root)
+                .env(NAME_ENV, name)
+                .env(START_ENV, &start)
+                .spawn()
+                .unwrap()
+        };
+        let mut first = spawn("child_a");
+        let mut second = spawn("child_b");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        for name in ["child_a", "child_b"] {
+            let ready = PathBuf::from(format!("{}.{name}.ready", start.display()));
+            while !ready.exists() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "registry child did not become ready"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        std::fs::write(&start, b"start").unwrap();
+        assert!(first.wait().unwrap().success());
+        assert!(second.wait().unwrap().success());
+
+        let registry = ProfileRegistry::open(&root).unwrap();
+        let names = registry
+            .profiles()
+            .map(|profile| profile.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["child_a", "child_b"]);
+    }
+
+    #[test]
+    fn stale_profile_replacement_is_rejected_instead_of_losing_an_update() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let mut initial = ProfileRegistry::open(&root).unwrap();
+        initial.add(profile("local", ProtocolPolicy::V019)).unwrap();
+        let mut first = ProfileRegistry::open(&root).unwrap();
+        let mut stale = ProfileRegistry::open(&root).unwrap();
+
+        let mut updated = first.profile("local").unwrap().clone();
+        updated.probe = "first.example".to_owned();
+        first.replace(updated).unwrap();
+
+        let mut conflicting = stale.profile("local").unwrap().clone();
+        conflicting.probe = "stale.example".to_owned();
+        assert!(matches!(
+            stale.replace(conflicting),
+            Err(Error::ProfileRegistryChanged)
+        ));
+        assert_eq!(
+            ProfileRegistry::open(&root)
+                .unwrap()
+                .profile("local")
+                .unwrap()
+                .probe,
+            "first.example"
+        );
+    }
+
+    #[test]
     fn explicit_private_file_credentials_round_trip_without_native_services() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("state");
@@ -2582,6 +3004,98 @@ mod tests {
     }
 
     #[test]
+    fn native_checkpoint_enrolls_only_before_hard_state_exists() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(profile("local", ProtocolPolicy::V019))
+            .unwrap();
+        let session = ProfileSession::open(&registry, "local").unwrap();
+        let credentials = ClientCredentials {
+            root: root.canonicalize().unwrap(),
+            state_id: "test-state".to_owned(),
+            backend: CredentialBackend::Native,
+        };
+        let key = rollback_record_key("local").unwrap();
+        let mut external = MemorySecretStore::default();
+
+        credentials
+            .verify_checkpoint_with_store(&session, &key, &mut external)
+            .unwrap();
+        assert!(session.paths().hard_database.is_file());
+        assert!(SecretStore::get(&mut external, &key).is_ok());
+
+        SecretStore::remove(&mut external, &key).unwrap();
+        let error = credentials
+            .verify_checkpoint_with_store(&session, &key, &mut external)
+            .unwrap_err();
+        assert!(matches!(
+            &error,
+            Error::CheckpointResetRequired {
+                reason: "external checkpoint is missing",
+                ..
+            }
+        ));
+        let message = error.to_string();
+        assert!(message.contains("reset-hard-state local --confirm-delete"));
+        assert!(message.contains(&root.display().to_string()));
+
+        SecretStore::put(&mut external, &key, b"not a checkpoint").unwrap();
+        assert!(matches!(
+            credentials.verify_checkpoint_with_store(&session, &key, &mut external),
+            Err(Error::CheckpointResetRequired {
+                reason: "external checkpoint is invalid",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn checked_session_rejects_credentials_from_another_state_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let first_root = temporary.path().join("first");
+        let second_root = temporary.path().join("second");
+        let credentials =
+            ClientCredentials::initialize(&first_root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&second_root).unwrap();
+        registry
+            .add(profile("local", ProtocolPolicy::V019))
+            .unwrap();
+        let session = ProfileSession::open(&registry, "local").unwrap();
+
+        assert!(matches!(
+            credentials.with_checked_session(&session, |_| Ok::<(), Error>(())),
+            Err(Error::InvalidConfig(
+                "profile session belongs to a different client state"
+            ))
+        ));
+    }
+
+    #[test]
+    fn explicit_hard_state_reset_removes_database_and_sidecars() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let credentials =
+            ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(profile("local", ProtocolPolicy::V019))
+            .unwrap();
+        let session = ProfileSession::open(&registry, "local").unwrap();
+        HardStateStore::open(&session.paths().hard_database).unwrap();
+        for sidecar in hard_state_artifact_paths(&session.paths().hard_database)[1..].iter() {
+            std::fs::write(sidecar, b"test sidecar").unwrap();
+        }
+
+        credentials.reset_hard_state(&session).unwrap();
+
+        assert!(hard_state_artifact_paths(&session.paths().hard_database)
+            .iter()
+            .all(|path| !path.exists()));
+    }
+
+    #[test]
     fn rollback_checkpoint_requires_both_authenticated_histories() {
         let public = foks_verify::verify_public_host(
             "foks.app",
@@ -2593,18 +3107,22 @@ mod tests {
         let snapshot = public.snapshot;
         let checkpoint = RollbackCheckpoint {
             profile: "hosted".to_owned(),
-            host_id: snapshot.host_id().to_vec(),
-            host_chain_sequence: snapshot.chain_seqno(),
-            host_chain_tail: snapshot.chain_tail_hash(),
-            host_chain_bytes: snapshot.chain_bytes().to_vec(),
-            merkle_epoch: snapshot.merkle_root().epoch(),
-            merkle_root_hash: snapshot.merkle_root().root_hash(),
-            authenticated_roots: snapshot
-                .merkle_root()
-                .authenticated_roots()
-                .iter()
-                .map(|root| (root.epoch(), root.root_hash()))
-                .collect(),
+            database_id: [7; 16],
+            hard_state_revision: 12,
+            host: Some(RollbackHostCheckpoint {
+                host_id: snapshot.host_id().to_vec(),
+                host_chain_sequence: snapshot.chain_seqno(),
+                host_chain_tail: snapshot.chain_tail_hash(),
+                host_chain_bytes: snapshot.chain_bytes().to_vec(),
+                merkle_epoch: snapshot.merkle_root().epoch(),
+                merkle_root_hash: snapshot.merkle_root().root_hash(),
+                authenticated_roots: snapshot
+                    .merkle_root()
+                    .authenticated_roots()
+                    .iter()
+                    .map(|root| (root.epoch(), root.root_hash()))
+                    .collect(),
+            }),
         };
         assert!(checkpoint.verify_descends_from(&checkpoint).is_ok());
         let external = serde_json::to_vec(&checkpoint).unwrap();
@@ -2613,18 +3131,125 @@ mod tests {
         assert!(!String::from_utf8_lossy(&external).contains("authenticated_roots"));
 
         let mut missing_merkle_history = checkpoint.clone();
-        missing_merkle_history.authenticated_roots.clear();
+        missing_merkle_history
+            .host
+            .as_mut()
+            .unwrap()
+            .authenticated_roots
+            .clear();
         assert!(matches!(
             missing_merkle_history.verify_descends_from(&checkpoint),
             Err(Error::RollbackDetected("Merkle checkpoint is absent"))
         ));
 
         let mut forked_hostchain = checkpoint.clone();
-        forked_hostchain.host_chain_tail[0] ^= 1;
+        forked_hostchain.host.as_mut().unwrap().host_chain_tail[0] ^= 1;
         assert!(matches!(
             checkpoint.verify_descends_from(&forked_hostchain),
             Err(Error::RollbackDetected("hostchain checkpoint is absent"))
         ));
+
+        let mut restored_database = checkpoint.clone();
+        restored_database.hard_state_revision -= 1;
+        assert!(matches!(
+            restored_database.verify_descends_from(&checkpoint),
+            Err(Error::RollbackDetected("hard-state revision rolled back"))
+        ));
+
+        let mut substituted_database = checkpoint.clone();
+        substituted_database.database_id[0] ^= 1;
+        assert!(matches!(
+            substituted_database.verify_descends_from(&checkpoint),
+            Err(Error::RollbackDetected(
+                "hard-state database identity changed"
+            ))
+        ));
+
+        let mut committed_before_external_update = checkpoint.clone();
+        committed_before_external_update.hard_state_revision += 1;
+        assert_eq!(
+            committed_before_external_update
+                .reconciliation(&checkpoint)
+                .unwrap(),
+            CheckpointReconciliation::AdvanceExternal
+        );
+    }
+
+    #[test]
+    fn database_checkpoint_rejects_restores_before_jobs_and_mutation_journals() {
+        use foks_client_db::{MutationOperation, MutationState, ScheduledJob};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(profile("local", ProtocolPolicy::V019))
+            .unwrap();
+        let session = ProfileSession::open(&registry, "local").unwrap();
+        let verified = foks_verify::verify_public_host(
+            "foks.app",
+            include_bytes!(
+                "../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp"
+            ),
+        )
+        .unwrap();
+        let host_id = verified.snapshot.host_id().to_vec();
+        let mut store = HardStateStore::open(&session.paths().hard_database).unwrap();
+        store.accept_verified_host(&verified.snapshot).unwrap();
+        drop(store);
+        let before_job = session.rollback_checkpoint().unwrap();
+
+        let mut store = HardStateStore::open(&session.paths().hard_database).unwrap();
+        store
+            .register_scheduled_job(&ScheduledJob {
+                job_id: [1; 16],
+                kind: ScheduledJobKind::UserRefresh,
+                host_id: host_id.clone(),
+                scope_id: vec![2; 33],
+                interval_micros: 1_000,
+                next_run_at: 100,
+                failure_count: 0,
+                lease_until: None,
+                last_completed_at: None,
+                last_error: None,
+                updated_at: 90,
+            })
+            .unwrap();
+        drop(store);
+        let after_job = session.rollback_checkpoint().unwrap();
+        assert!(matches!(
+            before_job.reconciliation(&after_job),
+            Err(Error::RollbackDetected("hard-state revision rolled back"))
+        ));
+
+        let mut store = HardStateStore::open(&session.paths().hard_database).unwrap();
+        store
+            .record_mutation(&MutationOperation {
+                operation_id: [3; 16],
+                kind: MutationKind::DeviceProvision,
+                host_id,
+                scope_id: vec![4; 33],
+                subject_id: vec![5; 33],
+                expected_version: Some(1),
+                request_hash: [6; 32],
+                material_ref: b"mutation-material".to_vec(),
+                material_hash: [7; 32],
+                state: MutationState::Prepared,
+                attempt_count: 0,
+                created_at: 100,
+                updated_at: 100,
+            })
+            .unwrap();
+        drop(store);
+        let after_mutation = session.rollback_checkpoint().unwrap();
+        assert!(matches!(
+            after_job.reconciliation(&after_mutation),
+            Err(Error::RollbackDetected("hard-state revision rolled back"))
+        ));
+        assert_eq!(
+            after_mutation.reconciliation(&after_job).unwrap(),
+            CheckpointReconciliation::AdvanceExternal
+        );
     }
 
     #[test]
@@ -2660,11 +3285,12 @@ mod tests {
         ];
         let mut artifact = foks_compat_artifact::CanaryArtifact {
             schema_version: foks_compat_artifact::SCHEMA_VERSION,
+            generation: 1,
             target: "foks.app".to_owned(),
             run_id: "run-1".to_owned(),
             generated_at: 100,
             expires_at: 200,
-            protocol_metadata_sha256: "11".repeat(32),
+            protocol_metadata_sha256: PINNED_PROTOCOL_METADATA_SHA256.to_owned(),
             mutation_digest: "22".repeat(32),
             read_digest: "33".repeat(32),
             outcome: CanaryOutcome::Compatible,
@@ -2674,6 +3300,17 @@ mod tests {
         let initial = profile("hosted", probe_only());
         let signed = SignedCanaryArtifact::sign(artifact.clone(), &seed).unwrap();
         let granted = initial.apply_canary(&signed, 101).unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let mut registry = ProfileRegistry::open(temporary.path()).unwrap();
+        registry.add(initial.clone()).unwrap();
+        assert_eq!(
+            registry.apply_canary("hosted", &signed, 101).unwrap(),
+            granted
+        );
+        drop(registry);
+        let mut registry = ProfileRegistry::open(temporary.path()).unwrap();
+        assert_eq!(registry.profile("hosted").unwrap(), &granted);
+        assert_eq!(granted.apply_canary(&signed, 101).unwrap(), granted);
         assert!(granted.require_at(Capability::Kv, 199).is_ok());
         assert!(matches!(
             granted.require_at(Capability::Kv, 200),
@@ -2690,10 +3327,19 @@ mod tests {
         ));
 
         artifact.outcome = CanaryOutcome::Drift;
+        artifact.generation = 2;
         artifact.capabilities.clear();
         artifact.drift_reason = "read-back mismatch".to_owned();
         let drift = SignedCanaryArtifact::sign(artifact, &seed).unwrap();
         let revoked = granted.apply_canary(&drift, 102).unwrap();
+        assert_eq!(
+            registry.apply_canary("hosted", &drift, 102).unwrap(),
+            revoked
+        );
+        assert!(registry.apply_canary("hosted", &signed, 102).is_err());
+        drop(registry);
+        let registry = ProfileRegistry::open(temporary.path()).unwrap();
+        assert_eq!(registry.profile("hosted").unwrap(), &revoked);
         assert!(matches!(
             revoked.require_at(Capability::Kv, 102),
             Err(Error::CapabilityDenied(Capability::Kv))
@@ -2702,6 +3348,55 @@ mod tests {
             revoked.protocol,
             ProtocolPolicy::CurrentProbeOnly { .. }
         ));
+        assert!(matches!(
+            revoked.apply_canary(&signed, 102),
+            Err(Error::InvalidProfile("canary generation rolled back"))
+        ));
+
+        artifact = drift.artifact.clone();
+        artifact.generation = 3;
+        artifact.outcome = CanaryOutcome::Compatible;
+        artifact.capabilities = BTreeSet::from(["kv".to_owned()]);
+        artifact.drift_reason.clear();
+        artifact.protocol_metadata_sha256 = "44".repeat(32);
+        let mismatched = SignedCanaryArtifact::sign(artifact, &seed).unwrap();
+        let still_revoked = revoked.apply_canary(&mismatched, 103).unwrap();
+        assert!(matches!(
+            still_revoked.protocol,
+            ProtocolPolicy::CurrentProbeOnly { .. }
+        ));
+        assert!(matches!(
+            still_revoked.require_at(Capability::Kv, 103),
+            Err(Error::CapabilityDenied(Capability::Kv))
+        ));
+    }
+
+    #[test]
+    fn pinned_canary_digest_matches_the_embedded_v019_metadata() {
+        use sha2::{Digest as _, Sha256};
+
+        let digest = Sha256::digest(include_bytes!(
+            "../../foks-server/protocol/upstream-v0.1.9.json"
+        ));
+        assert_eq!(hex(&digest), PINNED_PROTOCOL_METADATA_SHA256);
+    }
+
+    #[test]
+    fn hosted_lease_urls_are_https_and_do_not_carry_credentials() {
+        for invalid in [
+            "http://updates.example.test/lease.json",
+            "https://user@updates.example.test/lease.json",
+            "https://updates.example.test/lease.json?token=secret",
+            "https://updates.example.test/lease.json#current",
+        ] {
+            let mut invalid_profile = profile("hosted", probe_only());
+            if let ProtocolPolicy::CurrentProbeOnly { lease_url, .. } =
+                &mut invalid_profile.protocol
+            {
+                *lease_url = invalid.to_owned();
+            }
+            assert!(invalid_profile.validate().is_err());
+        }
     }
 
     #[test]

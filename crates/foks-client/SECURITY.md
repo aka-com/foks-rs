@@ -30,21 +30,31 @@ The client trusts:
 - the caller's encrypted key store to supply the right device seed; and
 - the local process and operating system while plaintext secrets are in use.
 
-SQLite is durable security state, but it is not a source of protocol truth.
-An attacker who can roll back both the database and every external backup can
-present an old, internally consistent view. Detecting that requires a newer
-pin retained outside the rolled-back state.
+SQLite is durable security state, but it is not the only rollback boundary.
+Native standalone profiles publish the database's random identity and monotonic
+hard-state revision to macOS Keychain or Linux Secret Service. Every checked
+profile operation holds a cross-process profile lock, compares that external
+watermark before use, and republishes it after the operation even when the
+operation reports an error. A database behind the external revision or with a
+different identity is rejected; a database ahead of it represents a crash
+after SQLite commit and is repaired by advancing the external checkpoint.
 
-Hard-state durability is therefore conditional on retaining the database (or
-one of its backups) across runs. Arbitrary row modification is detected: host
-identity and service projections are reproduced from the stored hostchain and
-signed public zone; Merkle evidence is replayed recursively to its signed
-bootstrap; and persisted user and team projections are reproduced from their
-authenticated chain evidence. The accepted projection and its authenticating
-pin are committed in one SQLite transaction. There is currently no second pin
-in a platform keychain, transparency witness, or remote backup, so replacement
-of the complete database with an older valid copy remains indistinguishable
-from restoring that copy intentionally.
+A missing external checkpoint is accepted only when no hard-state database or
+SQLite sidecar exists, which is the initial enrollment case. Missing or
+inconsistent state otherwise fails closed and reports the explicit
+`profile reset-hard-state --confirm-delete` command. That command deliberately
+removes both the native checkpoint and hard-state database; deleting only one
+must never be used as recovery. Raw network/state operations are exposed only
+through `CheckedProfileSession`, so standalone frontends cannot bypass the
+lock/checkpoint sequence.
+
+Arbitrary row modification is detected independently: host identity and
+service projections are reproduced from the stored hostchain and signed public
+zone; Merkle evidence is replayed recursively to its signed bootstrap; and
+persisted user and team projections are reproduced from their authenticated
+chain evidence. Selectively rewriting SQLite plus its monotonic metadata, or
+compromising both the local database and the native credential service, is
+outside this minimal whole-database-rollback threat model.
 
 ## Invariant ownership
 

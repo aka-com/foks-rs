@@ -15,6 +15,16 @@ metadata="$root/crates/foks-server/protocol/upstream-v0.1.9.json"
 run_id=${GITHUB_RUN_ID:-manual}-$(date -u +%s)
 generated_at=$(date -u +%s)
 expires_at=$((generated_at + 172800))
+generation_base=${GITHUB_RUN_NUMBER:-$generated_at}
+generation_attempt=${GITHUB_RUN_ATTEMPT:-0}
+case "$generation_base:$generation_attempt" in
+    *[!0-9:]*|:*|*:) echo "canary generation inputs must be unsigned integers" >&2; exit 1 ;;
+esac
+if [ "$generation_attempt" -ge 1000 ]; then
+    echo "canary run attempt exceeds the generation allocation" >&2
+    exit 1
+fi
+generation=$((generation_base * 1000 + generation_attempt))
 temporary=$(mktemp -d)
 input="$temporary/input"
 output="$temporary/output"
@@ -64,6 +74,7 @@ fi
 
 protocol_digest=$(shasum -a 256 "$metadata" | awk '{print $1}')
 set -- sign \
+    --generation "$generation" \
     --target "${FOKS_CANARY_TARGET:-foks.pub:443}" \
     --run-id "$run_id" \
     --generated-at "$generated_at" \
