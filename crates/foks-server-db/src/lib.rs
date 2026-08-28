@@ -9,6 +9,7 @@ mod config;
 mod connection;
 mod error;
 mod host;
+mod host_rotation;
 mod identity;
 mod kv;
 mod maintenance;
@@ -31,6 +32,10 @@ pub use config::Config;
 pub use connection::{Database, Pragmas, ReadDatabase};
 pub use error::{Error, Result};
 pub use host::{BootstrapService, HostBootstrap, StoredHostBootstrap};
+pub use host_rotation::{
+    HostKeyGeneration, HostKeyGenerationState, HostRotationOperation, HostRotationPhase,
+    HostRotationPublication,
+};
 pub use identity::{CommitOutcome, FailurePoint, IdentityMutation};
 pub use kv::{
     KvDirectoryMutation, KvDirentMutation, KvFileChunkMutation, KvNodeMutation, KvRootMutation,

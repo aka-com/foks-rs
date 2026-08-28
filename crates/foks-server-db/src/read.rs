@@ -658,7 +658,8 @@ pub fn root_snapshot(connection: &Connection) -> Result<Option<RootSnapshot>> {
     let row: Option<StoredRoot> = connection
         .query_row(
             "SELECT r.epoch, r.root_hash, r.root_node, r.exact_root, r.exact_signed_root
-             FROM merkle_root_heads h JOIN merkle_roots r ON r.epoch = h.epoch
+             FROM merkle_root_heads h
+             JOIN merkle_roots r ON r.epoch = h.epoch AND r.root_hash = h.root_hash
              WHERE h.singleton = 1",
             [],
             |row| {

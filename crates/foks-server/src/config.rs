@@ -41,7 +41,9 @@ pub struct SessionLimits {
     pub maximum_read_connections: usize,
     pub maximum_active_connections: usize,
     pub maximum_pending_connections: usize,
+    pub maximum_in_flight_requests: usize,
     pub io_timeout: Duration,
+    pub request_timeout: Duration,
 }
 
 impl Default for SessionLimits {
@@ -53,7 +55,9 @@ impl Default for SessionLimits {
             maximum_read_connections: 32,
             maximum_active_connections: 256,
             maximum_pending_connections: 32,
+            maximum_in_flight_requests: 64,
             io_timeout: Duration::from_secs(15),
+            request_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -66,10 +70,33 @@ impl SessionLimits {
             || self.maximum_read_connections == 0
             || self.maximum_active_connections == 0
             || self.maximum_pending_connections == 0
+            || self.maximum_in_flight_requests == 0
+            || self.maximum_active_connections > tokio::sync::Semaphore::MAX_PERMITS
+            || self.maximum_in_flight_requests > tokio::sync::Semaphore::MAX_PERMITS
             || self.io_timeout.is_zero()
+            || self.request_timeout.is_zero()
         {
             return Err(crate::Error::Config("zero session limit"));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn semaphore_limits_are_rejected_before_runtime_construction() {
+        let active = SessionLimits {
+            maximum_active_connections: tokio::sync::Semaphore::MAX_PERMITS + 1,
+            ..SessionLimits::default()
+        };
+        assert!(active.validate().is_err());
+        let execution = SessionLimits {
+            maximum_in_flight_requests: tokio::sync::Semaphore::MAX_PERMITS + 1,
+            ..SessionLimits::default()
+        };
+        assert!(execution.validate().is_err());
     }
 }

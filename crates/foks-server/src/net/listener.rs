@@ -81,7 +81,7 @@ impl RunningServer {
         let (startup, started) = std::sync::mpsc::sync_channel(1);
         let thread = thread::spawn(move || {
             let _liveness = LivenessGuard(Arc::clone(&thread_live));
-            runtime.block_on(run_server(
+            let result = runtime.block_on(run_server(
                 probe,
                 public,
                 authenticated,
@@ -98,7 +98,9 @@ impl RunningServer {
                 stop_receiver,
                 thread_live,
                 startup,
-            ))
+            ));
+            runtime.shutdown_timeout(limits.request_timeout);
+            result
         });
         match started.recv() {
             Ok(Ok(())) => {}

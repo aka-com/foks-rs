@@ -25,6 +25,8 @@ enum Command {
 #[derive(clap::Args)]
 struct Sign {
     #[arg(long)]
+    generation: u64,
+    #[arg(long)]
     target: String,
     #[arg(long)]
     run_id: String,
@@ -83,6 +85,7 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
             key.zeroize();
             let artifact = CanaryArtifact {
                 schema_version: SCHEMA_VERSION,
+                generation: arguments.generation,
                 target: arguments.target,
                 run_id: arguments.run_id,
                 generated_at: arguments.generated_at,

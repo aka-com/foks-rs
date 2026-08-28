@@ -1,22 +1,21 @@
 use std::sync::Arc;
 
+mod dispatch;
+
 use foks_proto::{
     DecodedSoftwareSignupArgument, EntityId, HistoricalMerkleRoots, MerkleRoot, ProbeResponse,
     SignedBlob, UsernameReservation,
 };
-use foks_rpc::{
-    encode_status_response_at, encode_success_response_at, encode_void_success_response_at,
-    RpcStatus,
-};
+use foks_rpc::{encode_status_response_at, RpcStatus};
 use foks_snowpack::{decode, Value};
 use rustls::pki_types::CertificateDer;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::sync::watch;
+use tokio::sync::{watch, Semaphore};
 
 use crate::auth::Principal;
 use crate::identity::validate_software_signup;
 use crate::keys::{HostKeyProvider, KeyPurpose};
-use crate::rpc::{route_call, Listener, RouteError, RoutedCall};
+use crate::rpc::{route_call, Listener, RouteError};
 use crate::{Entropy, Result, SessionLimits, WriterHandle};
 
 pub(crate) struct ServerData {
@@ -33,6 +32,7 @@ pub(crate) struct ServerData {
     session_faults: Option<Arc<crate::SessionFaults>>,
     metrics: Arc<crate::ServerMetrics>,
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
+    execution: Arc<Semaphore>,
 }
 
 impl ServerData {
@@ -75,251 +75,8 @@ impl ServerData {
             session_faults: config.session_faults.clone(),
             metrics: Arc::clone(&config.metrics),
             rate_limiter,
+            execution: Arc::new(Semaphore::new(config.limits.maximum_in_flight_requests)),
         })
-    }
-
-    fn response(
-        &self,
-        call: RoutedCall,
-        principal: Option<&Principal>,
-    ) -> std::result::Result<Vec<u8>, RpcStatus> {
-        let sequence = call.call.sequence();
-        match (call.route.protocol, call.route.method) {
-            ("Probe", "probe") => {
-                self.validate_probe(call.call.argument())?;
-                encode_success_response_at(&self.current_probe_response()?, sequence)
-                    .map_err(|_| RpcStatus::Unsupported)
-            }
-            ("Reg" | "MerkleQuery" | "KvStore", "selectVHost") => {
-                self.validate_host_argument(call.call.argument())?;
-                encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("MerkleQuery", "getCurrentRoot") => {
-                self.validate_host_argument(call.call.argument())?;
-                let root = self.current_root()?;
-                encode_success_response_at(&root, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("MerkleQuery", "getHistoricalRoots") => {
-                let response = self.historical_roots(call.call.argument())?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("Reg", "reserveUsername") => {
-                let response = self.reserve_username(call.call.argument())?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("Reg", "signup") => {
-                self.signup(call.call.argument())?;
-                encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("Reg", "getClientCertChain") => {
-                let response = self.client_certificate_chain(call.call.argument())?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("Reg", "getUIDLookupChallege") => {
-                let response = crate::services::registration::issue_uid_lookup_challenge(
-                    call.call.argument(),
-                    &self.host()?,
-                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
-                    self.key_provider.as_deref().ok_or(RpcStatus::Unsupported)?,
-                    self.clock.as_ref(),
-                    self.entropy.as_ref(),
-                )?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("Reg", "lookupUIDByDevice") => {
-                let response = crate::services::registration::lookup_uid_by_device(
-                    call.call.argument(),
-                    &self.host()?,
-                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
-                    self.key_provider.as_deref().ok_or(RpcStatus::Unsupported)?,
-                    self.clock.as_ref(),
-                )?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("User", "loadUserChain") => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                let database = self.read_database()?;
-                let response = crate::services::user::load_user_chain(
-                    &database,
-                    &self.host()?,
-                    call.call.argument(),
-                    principal,
-                )?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("User", "getPukForRole") => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                let database = self.read_database()?;
-                let response = crate::services::user::puk_for_role(
-                    &database,
-                    call.call.argument(),
-                    principal,
-                )?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("User", "provisionDevice") => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                self.user_mutation(call.call.argument(), principal, true)?;
-                encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("User", "revokeDevice") => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                principal.require_ordinary_device()?;
-                self.user_mutation(call.call.argument(), principal, false)?;
-                encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("User", "getHostConfig") => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                let database = self.read_database()?;
-                let response = crate::services::user::host_config(&database, principal)?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("TeamLoader", "getTeamVOBearerTokenChallenge") => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                let database = self.read_database()?;
-                let response = crate::services::team_loader::issue_challenge(
-                    call.call.argument(),
-                    principal,
-                    &self.host()?,
-                    &database,
-                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
-                    self.key_provider.as_deref().ok_or(RpcStatus::Unsupported)?,
-                    self.clock.as_ref(),
-                    self.entropy.as_ref(),
-                )?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("TeamLoader", "activateTeamVOBearerToken") => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                let database = self.read_database()?;
-                let response = crate::services::team_loader::activate(
-                    call.call.argument(),
-                    principal,
-                    &self.host()?,
-                    &database,
-                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
-                    self.key_provider.as_deref().ok_or(RpcStatus::Unsupported)?,
-                    self.clock.as_ref(),
-                )?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("TeamLoader", "loadTeamChain") => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                let database = self.read_database()?;
-                let response = crate::services::team_loader::load_chain(
-                    call.call.argument(),
-                    principal,
-                    &self.host()?,
-                    &database,
-                    self.clock.as_ref(),
-                )?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("TeamAdmin", "reserveTeamname") => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                let response = crate::services::team_admin::reserve_name(
-                    call.call.argument(),
-                    principal,
-                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
-                    self.clock.as_ref(),
-                    self.entropy.as_ref(),
-                )?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("TeamAdmin", "createTeam" | "createTeamAdHoc") => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                let database = self.read_database()?;
-                crate::services::team_admin::create(
-                    call.call.argument(),
-                    call.route.method == "createTeam",
-                    principal,
-                    &self.host()?,
-                    &database,
-                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
-                    self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
-                    &self.clock,
-                    &self.hostchain_tail,
-                )?;
-                encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("TeamAdmin", "editTeam") => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                let database = self.read_database()?;
-                let response = crate::services::team_admin::edit(
-                    call.call.argument(),
-                    principal,
-                    &self.host()?,
-                    &database,
-                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
-                    self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
-                    &self.clock,
-                    &self.hostchain_tail,
-                )?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("TeamAdmin", "makeInertTeamBearerToken") => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                let database = self.read_database()?;
-                let response = crate::services::team_admin::make_inert_token(
-                    call.call.argument(),
-                    principal,
-                    &database,
-                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
-                    self.clock.as_ref(),
-                    self.entropy.as_ref(),
-                )?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("TeamAdmin", "activateTeamBearerToken") => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                let database = self.read_database()?;
-                crate::services::team_admin::activate_token(
-                    call.call.argument(),
-                    principal,
-                    &self.host()?,
-                    &database,
-                    self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
-                    self.clock.as_ref(),
-                )?;
-                encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("TeamAdmin", "loadRemovalKeyBoxForTeamAdmin") => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                let database = self.read_database()?;
-                let response = crate::services::team_admin::load_removal_box(
-                    call.call.argument(),
-                    principal,
-                    &self.host()?,
-                    &database,
-                    self.clock.as_ref(),
-                )?;
-                encode_success_response_at(&response, sequence).map_err(|_| RpcStatus::Unsupported)
-            }
-            ("KvStore", method) => {
-                let principal = principal.ok_or_else(permission_denied)?;
-                principal.require_ordinary_device()?;
-                let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
-                let database = self.read_database()?;
-                match crate::services::kv::dispatch(
-                    method,
-                    call.call.argument(),
-                    principal,
-                    &database,
-                    writer,
-                    &self.clock,
-                )? {
-                    crate::services::kv::Response::Data(response) => {
-                        encode_success_response_at(&response, sequence)
-                            .map_err(|_| RpcStatus::Unsupported)
-                    }
-                    crate::services::kv::Response::Void => {
-                        encode_void_success_response_at(sequence)
-                            .map_err(|_| RpcStatus::Unsupported)
-                    }
-                }
-            }
-            _ => Err(RpcStatus::Unsupported),
-        }
     }
 
     fn user_mutation(
@@ -1062,6 +819,7 @@ pub(crate) async fn serve(
             Ok(Err(error)) => return Err(error.into()),
         };
         service_data.metrics.request_started();
+        let _request_timer = crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
         if !service_data.rate_limiter.allow_request(peer_ip) {
             service_data.metrics.request_rate_limited();
             let response = encode_status_response_at(&RpcStatus::RateLimited, call.sequence())?;
@@ -1072,64 +830,88 @@ pub(crate) async fn serve(
         let sequence = call.sequence();
         let data = Arc::clone(service_data);
         let certificate = peer_certificate.clone();
-        let outcome = tokio::task::spawn_blocking(move || -> Result<RequestOutcome> {
-            let principal = if listener == Listener::Authenticated {
-                let certificate = CertificateDer::from(certificate.ok_or(crate::Error::Config(
-                    "authenticated TLS session has no client certificate",
-                ))?);
-                let now = data.clock.now_micros()?;
-                let database = match data.read_database() {
-                    Ok(database) => database,
-                    Err(status) => {
-                        return Ok(RequestOutcome {
-                            response: encode_status_response_at(&status, sequence)?,
-                            route: None,
-                            disconnect_before_response: false,
-                        });
+        let outcome = match execute_bounded(
+            Arc::clone(&service_data.execution),
+            limits.request_timeout,
+            &mut stop,
+            move || -> Result<RequestOutcome> {
+                let _handler_timer = crate::ServerMetrics::handler_timer(Arc::clone(&data.metrics));
+                let principal = if listener == Listener::Authenticated {
+                    let certificate = CertificateDer::from(certificate.ok_or(
+                        crate::Error::Config("authenticated TLS session has no client certificate"),
+                    )?);
+                    let now = data.clock.now_micros()?;
+                    let database = match data.read_database() {
+                        Ok(database) => database,
+                        Err(status) => {
+                            return Ok(RequestOutcome {
+                                response: encode_status_response_at(&status, sequence)?,
+                                route: None,
+                                disconnect_before_response: false,
+                            });
+                        }
+                    };
+                    Some(Principal::authenticate(&certificate, &database, now)?)
+                } else {
+                    None
+                };
+                let mut route = None;
+                let response = match route_call(call, listener) {
+                    Ok(call) => {
+                        let protocol = call.route.protocol;
+                        let method = call.route.method;
+                        route = Some((protocol, method));
+                        if data.should_disconnect(
+                            crate::SessionFaultPoint::BeforeDurableMutation,
+                            protocol,
+                            method,
+                        ) {
+                            return Ok(RequestOutcome {
+                                response: Vec::new(),
+                                route,
+                                disconnect_before_response: true,
+                            });
+                        }
+                        match data.response(call, principal.as_ref()) {
+                            Ok(response) => response,
+                            Err(status) => encode_status_response_at(&status, sequence)?,
+                        }
+                    }
+                    Err(RouteError::RequestTooLarge { .. }) => encode_status_response_at(
+                        &RpcStatus::BadArguments("request exceeds the method limit".to_owned()),
+                        sequence,
+                    )?,
+                    Err(RouteError::Unknown { .. } | RouteError::WrongListener) => {
+                        encode_status_response_at(&RpcStatus::Unsupported, sequence)?
                     }
                 };
-                Some(Principal::authenticate(&certificate, &database, now)?)
-            } else {
-                None
-            };
-            let mut route = None;
-            let response = match route_call(call, listener) {
-                Ok(call) => {
-                    let protocol = call.route.protocol;
-                    let method = call.route.method;
-                    route = Some((protocol, method));
-                    if data.should_disconnect(
-                        crate::SessionFaultPoint::BeforeDurableMutation,
-                        protocol,
-                        method,
-                    ) {
-                        return Ok(RequestOutcome {
-                            response: Vec::new(),
-                            route,
-                            disconnect_before_response: true,
-                        });
-                    }
-                    match data.response(call, principal.as_ref()) {
-                        Ok(response) => response,
-                        Err(status) => encode_status_response_at(&status, sequence)?,
-                    }
-                }
-                Err(RouteError::RequestTooLarge { .. }) => encode_status_response_at(
-                    &RpcStatus::BadArguments("request exceeds the method limit".to_owned()),
-                    sequence,
-                )?,
-                Err(RouteError::Unknown { .. } | RouteError::WrongListener) => {
-                    encode_status_response_at(&RpcStatus::Unsupported, sequence)?
-                }
-            };
-            Ok(RequestOutcome {
-                response,
-                route,
-                disconnect_before_response: false,
-            })
-        })
-        .await
-        .map_err(|_| crate::Error::Thread)??;
+                Ok(RequestOutcome {
+                    response,
+                    route,
+                    disconnect_before_response: false,
+                })
+            },
+        )
+        .await?
+        {
+            BoundedExecution::Completed(outcome) => outcome?,
+            BoundedExecution::Saturated => {
+                service_data.metrics.request_rate_limited();
+                let response = encode_status_response_at(&RpcStatus::RateLimited, sequence)?;
+                write_response(&mut stream, &response, limits.io_timeout).await?;
+                service_data.metrics.response_completed();
+                return Ok(());
+            }
+            BoundedExecution::TimedOut => {
+                // A durable mutation may still be reconciling in the bounded
+                // blocking pool. Close without a protocol response so clients
+                // preserve the operation's ambiguous outcome semantics.
+                return Err(crate::Error::Io(timeout_error(
+                    "request execution timed out",
+                )));
+            }
+            BoundedExecution::Stopped => break,
+        };
         if outcome.disconnect_before_response {
             return Ok(());
         }
@@ -1171,6 +953,44 @@ struct RequestOutcome {
     response: Vec<u8>,
     route: Option<(&'static str, &'static str)>,
     disconnect_before_response: bool,
+}
+
+enum BoundedExecution<T> {
+    Completed(T),
+    Saturated,
+    TimedOut,
+    Stopped,
+}
+
+async fn execute_bounded<T>(
+    execution: Arc<Semaphore>,
+    timeout: std::time::Duration,
+    stop: &mut watch::Receiver<bool>,
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> Result<BoundedExecution<T>>
+where
+    T: Send + 'static,
+{
+    let Ok(permit) = execution.try_acquire_owned() else {
+        return Ok(BoundedExecution::Saturated);
+    };
+    let mut task = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        operation()
+    });
+    tokio::select! {
+        result = stop.changed() => {
+            let _ = result;
+            Ok(BoundedExecution::Stopped)
+        }
+        result = tokio::time::timeout(timeout, &mut task) => {
+            match result {
+                Ok(Ok(value)) => Ok(BoundedExecution::Completed(value)),
+                Ok(Err(_)) => Err(crate::Error::Thread),
+                Err(_) => Ok(BoundedExecution::TimedOut),
+            }
+        }
+    }
 }
 
 async fn read_call_async<R: AsyncRead + Unpin>(
@@ -1291,5 +1111,54 @@ fn endpoint_host(endpoint: &str) -> Option<&str> {
     } else {
         let (host, port) = endpoint.rsplit_once(':')?;
         (!host.is_empty() && port.parse::<u16>().is_ok()).then_some(host)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn timed_out_execution_remains_bounded_until_work_finishes() {
+        let execution = Arc::new(Semaphore::new(1));
+        let (_stop, mut receiver) = watch::channel(false);
+        let (entered_sender, entered_receiver) = std::sync::mpsc::sync_channel(1);
+        let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+
+        let first = execute_bounded(
+            Arc::clone(&execution),
+            std::time::Duration::from_millis(20),
+            &mut receiver,
+            move || {
+                entered_sender.send(()).unwrap();
+                release_receiver.recv().unwrap();
+                1_u8
+            },
+        );
+        let result = first.await.unwrap();
+        entered_receiver.recv().unwrap();
+        assert!(matches!(result, BoundedExecution::TimedOut));
+        assert_eq!(execution.available_permits(), 0);
+
+        assert!(matches!(
+            execute_bounded(
+                Arc::clone(&execution),
+                std::time::Duration::from_secs(1),
+                &mut receiver,
+                || 2_u8,
+            )
+            .await
+            .unwrap(),
+            BoundedExecution::Saturated
+        ));
+
+        release_sender.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while execution.available_permits() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
 }

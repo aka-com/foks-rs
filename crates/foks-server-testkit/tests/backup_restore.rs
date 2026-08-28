@@ -14,6 +14,34 @@ fn options() -> KvWriteOptions {
 }
 
 #[test]
+fn host_rotation_after_application_roots_preserves_existing_client_pins() {
+    let environment = TestEnvironment::new().unwrap();
+    let server = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "post-write-host-rotation").unwrap();
+    let initial = client.probe_and_pin().unwrap();
+    let account = client
+        .create_account(
+            &initial.pinned,
+            &TestAccountSpec::new("rotateafterwrite", 0x69),
+        )
+        .unwrap();
+    server.shutdown().unwrap();
+    environment.rotate_host_key().unwrap();
+
+    let restarted = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "post-write-host-rotation").unwrap();
+    let advanced = client.probe_and_pin().unwrap();
+    assert_eq!(advanced.pinned.host_id(), initial.pinned.host_id());
+    assert_eq!(advanced.verified.snapshot.chain_seqno(), 3);
+    client.foks().advance_merkle_root(&advanced.pinned).unwrap();
+    client
+        .foks()
+        .authenticate_and_pin(&advanced.pinned, &account.credential)
+        .unwrap();
+    restarted.shutdown().unwrap();
+}
+
+#[test]
 fn operator_root_rotation_preserves_client_pins_and_post_rotation_backups() {
     let source = TestEnvironment::new().unwrap();
     let server = source.start_server().unwrap();

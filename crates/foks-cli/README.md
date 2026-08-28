@@ -17,12 +17,30 @@ external hard-state rollback checkpoint. Isolated tests and explicitly
 protected headless automation can request `--key-backend private-file`; that
 mode deliberately has no external rollback detection.
 
+If the native checkpoint is missing or disagrees with an existing hard-state
+database, every checked operation fails closed and prints the exact reset
+command form and state directory. That destructive command requires
+`--confirm-delete`, removes both the
+external checkpoint and hard-state database, and requires the profile to be
+probed again. It is not a way to preserve an existing rollback trust history.
+
 Use `--json` for automation. `profile`, `account`, `kv`, `jobs`, `device`,
 `recovery`, and `team` each provide their own `--help`. Output destinations for
 KV downloads and recovery phrases must be new private files; existing files,
 symlinks, and permissive secret inputs are rejected.
 
-Current hosted profiles require an Ed25519 canary public key. `profile
-apply-canary` verifies and persists the complete signed, expiring artifact;
-drift artifacts revoke every non-probe capability and expired leases fail
-closed.
+Current hosted profiles require an Ed25519 canary public key and the stable
+HTTPS URL polled by the agent:
+
+```text
+foks-rs --state-dir /private/client profile add hosted foks.pub:443 \
+  --generation current-probe-only \
+  --canary-public-key <64-lowercase-hex-characters> \
+  --canary-url https://github.com/OWNER/REPOSITORY/releases/download/foks-hosted-compat-current/foks-hosted-capabilities.json
+```
+
+`profile apply-canary` remains available for an audited manual refresh. Both
+paths verify and persist the complete signed, expiring artifact. Grants require
+the exact embedded protocol-metadata digest and a monotonic generation; drift,
+metadata mismatch, and unknown capability artifacts revoke every non-probe
+capability, while expiry is the fetch-failure fallback.

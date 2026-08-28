@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
   attestations: write
 
@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - name: Restore dedicated canary state
         env:
@@ -59,6 +61,34 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: ${{ runner.temp }}/foks-hosted-capabilities.json
+      - name: Publish current signed lease at a stable URL
+        env:
+          GH_REPO: ${{ vars.FOKS_CANARY_PUBLISH_REPOSITORY || github.repository }}
+          GH_TOKEN: ${{ secrets.FOKS_CANARY_PUBLISH_TOKEN || github.token }}
+        run: |
+          set -eu
+          tag=foks-hosted-compat-current
+          if [ "$(gh repo view "$GH_REPO" --json visibility --jq .visibility)" != PUBLIC ]; then
+            echo "compatibility leases must be published to a public repository" >&2
+            exit 1
+          fi
+          if ! gh release view "$tag" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --repo "$GH_REPO" \
+              --title "Current FOKS hosted compatibility lease" \
+              --notes "Machine-consumed signed compatibility lease. This is not an application release." \
+              --prerelease
+          fi
+          gh release upload "$tag" \
+            --repo "$GH_REPO" \
+            "$RUNNER_TEMP/foks-hosted-capabilities.json" --clobber
+          published=$(mktemp -d)
+          gh release download "$tag" \
+            --repo "$GH_REPO" \
+            --pattern foks-hosted-capabilities.json \
+            --dir "$published"
+          cmp "$RUNNER_TEMP/foks-hosted-capabilities.json" \
+            "$published/foks-hosted-capabilities.json"
       - name: Fail after publishing drift revocation
         if: steps.canary.outcome != 'success'
         run: exit 1

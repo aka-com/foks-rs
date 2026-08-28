@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use crate::{BackupSchedule, Error, Result, ServerMetrics};
 
@@ -58,11 +59,12 @@ impl BackupScheduler {
                         }
                         sequence = sequence.wrapping_add(1);
                         metrics.backup_attempted();
+                        let started = Instant::now();
                         let result =
                             run_backup(&schedule, &source, sequence, thread_cancelled.as_ref());
                         match result {
-                            Ok(now) => metrics.backup_succeeded(now / 1_000_000),
-                            Err(_) => metrics.backup_failed(),
+                            Ok(now) => metrics.backup_succeeded(now / 1_000_000, started.elapsed()),
+                            Err(_) => metrics.backup_failed(started.elapsed()),
                         }
                     }
                 }
@@ -107,10 +109,12 @@ fn run_backup(
     let staging = schedule.directory.join(format!(".{name}.tmp"));
     let database =
         foks_server_db::ReadDatabase::open(&source.database_path, source.database_config.clone())?;
+    let host_key_files = crate::standalone::host_key_backup_files(&database)?;
     let created = crate::standalone::create_backup(
         &staging,
         &source.key_directory,
         &source.manifest,
+        &host_key_files,
         source.database_config.clone(),
         |backup_database| {
             database.online_backup_until(backup_database, || cancelled.load(Ordering::Acquire))?;

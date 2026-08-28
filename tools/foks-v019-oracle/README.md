@@ -38,6 +38,17 @@ go run . \
 This uses the same official host-chain, signature, canonicalization, and hash
 code as live capture.
 
+The Rust server's two-link host-key rotation has a dedicated differential
+gate. It generates fresh add and revoke probe blobs locally and asks this
+pinned oracle to replay and verify each complete chain:
+
+```sh
+./run-host-rotation-compat.sh
+```
+
+The command needs no network service or account. It does require the locked Go
+module dependencies and is run by the standalone FOKS CI workflow.
+
 The same command can generate a self-contained authenticated-user fixture set
 without an account, browser, or running server:
 

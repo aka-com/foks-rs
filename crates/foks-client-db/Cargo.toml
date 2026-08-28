@@ -9,6 +9,7 @@ description = "Durable hard and soft SQLite state for a native FOKS client"
 foks-verify = { workspace = true }
 foks-proto = { workspace = true }
 foks-snowpack = { workspace = true }
+getrandom = { workspace = true }
 rusqlite = { workspace = true }
 thiserror = { workspace = true }
 

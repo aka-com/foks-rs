@@ -10,6 +10,15 @@ use crate::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MerkleRootEvidence {
     SignedBootstrap(Vec<u8>),
+    /// A later independently signed public-probe root plus the evidence that
+    /// authenticated the prior durable head. Host-key rotation produces a new
+    /// signed probe anchor without invalidating roots used by persisted user
+    /// and team snapshots.
+    SignedRefresh {
+        signed_root: Vec<u8>,
+        prior_epoch: u64,
+        prior: Box<MerkleRootEvidence>,
+    },
     SkipPath {
         anchor_epoch: u64,
         historical_response: Vec<u8>,
@@ -498,6 +507,64 @@ fn restore_merkle_evidence(
                     root_hash,
                     root_bytes: Some(root_bytes.to_vec()),
                 }],
+            })
+        }
+        MerkleRootEvidence::SignedRefresh {
+            signed_root,
+            prior_epoch,
+            prior,
+        } => {
+            if *prior_epoch >= epoch {
+                return Err(Error::PersistedMerkleEvidence);
+            }
+            let signed = SignedBlob::decode(signed_root)?;
+            if signed.inner != root_bytes {
+                return Err(Error::PersistedMerkleEvidence);
+            }
+            verify_with_delegated_blob_key(
+                &chain,
+                ENTITY_HOST_MERKLE_SIGNER,
+                "Merkle signer",
+                &signed.signature,
+                MERKLE_ROOT_BLOB_TYPE_ID,
+                &signed.inner,
+            )?;
+            let prior_root = authenticated_roots
+                .iter()
+                .find(|candidate| candidate.epoch == *prior_epoch)
+                .ok_or(Error::PersistedMerkleEvidence)?;
+            let prior_bytes = prior_root
+                .root_bytes
+                .as_deref()
+                .ok_or(Error::PersistedMerkleEvidence)?;
+            let restored_prior = restore_merkle_evidence(
+                prior_root.epoch,
+                prior_root.root_hash,
+                prior_bytes,
+                prior,
+                authenticated_roots,
+                hostchain,
+                depth + 1,
+            )?;
+            let mut roots = restored_prior
+                .authenticated_roots
+                .into_iter()
+                .map(|root| (root.epoch, root))
+                .collect::<BTreeMap<_, _>>();
+            roots.insert(
+                epoch,
+                AuthenticatedMerkleRoot {
+                    epoch,
+                    root_hash,
+                    root_bytes: Some(root_bytes.to_vec()),
+                },
+            );
+            Ok(VerifiedMerkleRoot {
+                epoch,
+                root_hash,
+                root_bytes: root_bytes.to_vec(),
+                evidence: evidence.clone(),
+                authenticated_roots: roots.into_values().collect(),
             })
         }
         MerkleRootEvidence::SkipPath {

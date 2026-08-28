@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: u32 = 1;
-const SIGNATURE_DOMAIN: &[u8] = b"foks-hosted-compat-canary-v1\0";
+pub const SCHEMA_VERSION: u32 = 2;
+const SIGNATURE_DOMAIN: &[u8] = b"foks-hosted-compat-canary-v2\0";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -23,6 +23,8 @@ pub enum Outcome {
 #[serde(deny_unknown_fields)]
 pub struct CanaryArtifact {
     pub schema_version: u32,
+    /// Strictly increasing publication generation for this signing key.
+    pub generation: u64,
     pub target: String,
     pub run_id: String,
     pub generated_at: u64,
@@ -62,6 +64,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 impl CanaryArtifact {
     pub fn validate(&self) -> Result<()> {
         if self.schema_version != SCHEMA_VERSION
+            || self.generation == 0
             || self.target.is_empty()
             || self.target.len() > 512
             || self.run_id.is_empty()
@@ -74,13 +77,15 @@ impl CanaryArtifact {
         {
             return Err(Error::Invalid("identity, lifetime, or digest is malformed"));
         }
-        if self.capabilities.iter().any(|capability| {
-            capability.is_empty()
-                || capability.len() > 64
-                || !capability
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
-        }) {
+        if self.capabilities.len() > 32
+            || self.capabilities.iter().any(|capability| {
+                capability.is_empty()
+                    || capability.len() > 64
+                    || !capability
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
+            })
+        {
             return Err(Error::Invalid("capability is malformed"));
         }
         match self.outcome {
@@ -150,7 +155,10 @@ fn signing_bytes(artifact: &CanaryArtifact) -> Result<Vec<u8>> {
 }
 
 fn is_digest(input: &str) -> bool {
-    input.len() == 64 && input.bytes().all(|byte| byte.is_ascii_hexdigit())
+    input.len() == 64
+        && input
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn decode_hex(input: &str) -> Result<Vec<u8>> {
@@ -181,6 +189,7 @@ mod tests {
     fn artifact(outcome: Outcome) -> CanaryArtifact {
         CanaryArtifact {
             schema_version: SCHEMA_VERSION,
+            generation: 42,
             target: "foks.pub:443".to_owned(),
             run_id: "run-42".to_owned(),
             generated_at: 100,
@@ -203,12 +212,18 @@ mod tests {
     }
 
     #[test]
-    fn signature_binds_every_capability_and_outcome() {
+    fn signature_binds_generation_capabilities_and_outcome() {
         let key = [7; 32];
         let signed = SignedCanaryArtifact::sign(artifact(Outcome::Compatible), &key).unwrap();
         signed
             .verify(SigningKey::from_bytes(&key).verifying_key().as_bytes())
             .unwrap();
+        let mut tampered = signed.clone();
+        tampered.artifact.generation += 1;
+        assert!(matches!(
+            tampered.verify(SigningKey::from_bytes(&key).verifying_key().as_bytes()),
+            Err(Error::Verification)
+        ));
         let mut tampered = signed;
         tampered.artifact.capabilities.insert("teams".to_owned());
         assert!(matches!(
@@ -222,5 +237,18 @@ mod tests {
         let mut drift = artifact(Outcome::Drift);
         drift.capabilities.insert("kv".to_owned());
         assert!(drift.validate().is_err());
+    }
+
+    #[test]
+    fn generations_and_digests_are_canonical() {
+        let mut value = artifact(Outcome::Compatible);
+        value.generation = 0;
+        assert!(value.validate().is_err());
+        value.generation = 1;
+        value.protocol_metadata_sha256 = "AA".repeat(32);
+        assert!(value.validate().is_err());
+        value.protocol_metadata_sha256 = "11".repeat(32);
+        value.capabilities = (1..=33).map(|length| "a".repeat(length)).collect();
+        assert!(value.validate().is_err());
     }
 }

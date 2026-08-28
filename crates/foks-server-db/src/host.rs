@@ -18,6 +18,7 @@ pub struct HostBootstrap {
     pub canonical_name: String,
     pub probe_response: Vec<u8>,
     pub key_manifest: Vec<u8>,
+    pub host_key_generation: [u8; 16],
     pub hostchain_link_hash: [u8; 32],
     pub exact_hostchain_link: Vec<u8>,
     pub services: Vec<BootstrapService>,
@@ -61,6 +62,17 @@ impl Database {
                 bootstrap.canonical_name,
                 bootstrap.probe_response,
                 bootstrap.key_manifest
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO host_key_generations
+             (generation_id, purpose, encrypted_file_name, public_entity_id, state,
+              created_at, activated_hostchain_seqno)
+             VALUES (?1, 1, 'host.key', ?2, 2, ?3, 1)",
+            params![
+                bootstrap.host_key_generation,
+                bootstrap.host_id,
+                sql_integer(bootstrap.created_at)?
             ],
         )?;
         transaction.execute(
@@ -138,6 +150,7 @@ fn validate(bootstrap: &HostBootstrap, maximum_blob_bytes: usize) -> Result<()> 
         || bootstrap.canonical_name.len() > 255
         || bootstrap.root_node != [0; 32]
         || bootstrap.root_epoch != 1
+        || bootstrap.host_key_generation == [0; 16]
         || bootstrap.exact_hostchain_link.is_empty()
         || bootstrap.services.len() != 6
         || bootstrap.services.iter().any(|service| {
@@ -271,10 +284,25 @@ fn bootstrap_matches(transaction: &Transaction<'_>, bootstrap: &HostBootstrap) -
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
+    let generation: Option<(Vec<u8>, Vec<u8>, i64, i64)> = transaction
+        .query_row(
+            "SELECT generation_id, public_entity_id, state, activated_hostchain_seqno
+             FROM host_key_generations WHERE purpose = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
     Ok(services == expected
         && head
             == Some((
                 sql_integer(bootstrap.root_epoch)?,
                 bootstrap.root_hash.to_vec(),
+            ))
+        && generation
+            == Some((
+                bootstrap.host_key_generation.to_vec(),
+                bootstrap.host_id.clone(),
+                2,
+                1,
             )))
 }
