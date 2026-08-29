@@ -314,7 +314,7 @@ pub(crate) fn user_member_hepk_matches(entity: &EntityId, hepk: &Hepk) -> bool {
         foks_proto::ENTITY_DEVICE
         | foks_proto::ENTITY_BACKUP_KEY
         | foks_proto::ENTITY_BOT_TOKEN_KEY => hepk.curve25519().is_some(),
-        foks_proto::ENTITY_YUBI => hepk.p256().is_some(),
+        foks_proto::ENTITY_YUBI => entity.p256_key().ok().as_ref() == hepk.p256(),
         _ => false,
     }
 }
@@ -500,5 +500,30 @@ mod tests {
                 .unwrap();
         assert!(user_member_hepk_matches(&backup_id, &backup_hepk));
         assert!(!user_member_hepk_matches(&backup_id, &yubi_hepk));
+    }
+
+    #[test]
+    fn yubi_members_require_the_entitys_exact_p256_key() {
+        let yubi_id = match foks_snowpack::decode(
+            &std::fs::read(format!("{USER_DIR}/yubi/yubi-id.snowp")).unwrap(),
+        )
+        .unwrap()
+        {
+            foks_snowpack::Value::Binary(bytes) => EntityId::from_bytes(bytes).unwrap(),
+            _ => panic!("Yubi fixture must contain an EntityID"),
+        };
+        let yubi_hepk =
+            Hepk::decode(&std::fs::read(format!("{USER_DIR}/yubi/yubi-hepk.snowp")).unwrap())
+                .unwrap();
+        assert!(user_member_hepk_matches(&yubi_id, &yubi_hepk));
+
+        let mut different_key = *yubi_hepk.p256().unwrap();
+        different_key[0] = match different_key[0] {
+            2 => 3,
+            3 => 2,
+            _ => panic!("compressed P-256 fixture has an invalid prefix"),
+        };
+        let different_hepk = Hepk::yubi(different_key, yubi_hepk.mlkem768().to_vec()).unwrap();
+        assert!(!user_member_hepk_matches(&yubi_id, &different_hepk));
     }
 }

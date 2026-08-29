@@ -162,6 +162,8 @@ impl FoksClient {
             next_tree_location,
             self_token: random_bytes()?,
             hepks: &[backup_public.hepk],
+            subkey_box: None,
+            yubi_pq_hint: None,
         })?;
         let post_error = self.call_void(host, &host.user, &encoded, existing).err();
         let authenticated = match self.wait_for_user_transition(host, existing, |user| {
@@ -438,6 +440,8 @@ impl FoksClient {
             next_tree_location,
             self_token: *secrets.self_token,
             hepks: &[new_device.hepk],
+            subkey_box: None,
+            yubi_pq_hint: None,
         })?;
         let post_error = self
             .call_void_with_pkcs8_material(

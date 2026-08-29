@@ -16,6 +16,7 @@ use foks_proto::{
     RegistrationChallenge, RemoveTeamMemberArgument, RevokeDeviceArgument, Role, Signature,
     SoftwareSignupArgument, TeamBearerToken, TeamBearerTokenChallenge, TeamEditResult,
     TeamNameReservation, TeamRemovalKeyBox, TeamViewChallenge, TeamViewRequest,
+    YubiEncryptedManagementKey, YubiSignupArgument,
 };
 use foks_snowpack::{decode, encode, Value};
 use thiserror::Error;
@@ -278,6 +279,46 @@ pub fn encode_signup_request_at(
     )
 }
 
+pub fn encode_yubi_signup_request_at(
+    argument: &YubiSignupArgument<'_>,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_SIGNUP_METHOD_POSITION,
+        &argument.encoded()?,
+        sequence,
+    )
+}
+
+pub fn encode_get_subkey_box_challenge_request(parent: &EntityId) -> Result<Vec<u8>> {
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_GET_SUBKEY_BOX_CHALLENGE_METHOD_POSITION,
+        &encode(&Value::Array(vec![Value::Binary(
+            parent.as_bytes().to_vec(),
+        )]))?,
+        0,
+    )
+}
+
+pub fn encode_load_subkey_box_request(
+    parent: &EntityId,
+    challenge: &RegistrationChallenge,
+    signature: &Signature,
+) -> Result<Vec<u8>> {
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_LOAD_SUBKEY_BOX_METHOD_POSITION,
+        &encode(&Value::Array(vec![
+            Value::Binary(parent.as_bytes().to_vec()),
+            decode(&challenge.encoded()?)?,
+            signature.to_value(),
+        ]))?,
+        0,
+    )
+}
+
 pub fn encode_check_invite_code_request(code: &InviteCode) -> Result<Vec<u8>> {
     encode_call(
         REG_PROTOCOL_ID,
@@ -427,6 +468,32 @@ pub fn encode_next_passphrase_generation_request() -> Result<Vec<u8>> {
 
 pub fn encode_user_stretch_version_request() -> Result<Vec<u8>> {
     encode_user_void_request(USER_STRETCH_VERSION_METHOD_POSITION)
+}
+
+pub fn encode_put_yubi_management_key_request(
+    value: &YubiEncryptedManagementKey,
+) -> Result<Vec<u8>> {
+    encode_call(
+        USER_PROTOCOL_ID,
+        USER_PUT_YUBI_MANAGEMENT_KEY_METHOD_POSITION,
+        &encode(&Value::Array(vec![value.to_value()?]))?,
+        0,
+    )
+}
+
+pub fn encode_get_yubi_management_key_request(parent: &EntityId) -> Result<Vec<u8>> {
+    encode_call(
+        USER_PROTOCOL_ID,
+        USER_GET_YUBI_MANAGEMENT_KEY_METHOD_POSITION,
+        &encode(&Value::Array(vec![Value::Binary(
+            parent.as_bytes().to_vec(),
+        )]))?,
+        0,
+    )
+}
+
+pub fn encode_get_all_yubi_management_keys_request() -> Result<Vec<u8>> {
+    encode_user_void_request(USER_GET_ALL_YUBI_MANAGEMENT_KEYS_METHOD_POSITION)
 }
 
 pub fn encode_get_ppe_parcel_request() -> Result<Vec<u8>> {

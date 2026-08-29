@@ -73,6 +73,32 @@ pub(crate) fn issue_uid_lookup_challenge(
         .map_err(bad_arguments)?
         .require_type(foks_proto::ENTITY_BACKUP_KEY)
         .map_err(bad_arguments)?;
+    issue_recovery_challenge(entity, host, writer, keys, clock, entropy)
+}
+
+pub(crate) fn issue_subkey_challenge(
+    argument: &[u8],
+    host: &EntityId,
+    writer: &WriterHandle,
+    keys: &dyn HostKeyProvider,
+    clock: &Arc<dyn foks_server_db::Clock>,
+    entropy: &dyn Entropy,
+) -> Result<Vec<u8>, RpcStatus> {
+    let entity = foks_rpc::arguments::decode_subkey_box_challenge(argument)
+        .map_err(bad_arguments)?
+        .require_type(foks_proto::ENTITY_YUBI)
+        .map_err(bad_arguments)?;
+    issue_recovery_challenge(entity, host, writer, keys, clock, entropy)
+}
+
+fn issue_recovery_challenge(
+    entity: EntityId,
+    host: &EntityId,
+    writer: &WriterHandle,
+    keys: &dyn HostKeyProvider,
+    clock: &Arc<dyn foks_server_db::Clock>,
+    entropy: &dyn Entropy,
+) -> Result<Vec<u8>, RpcStatus> {
     let key = keys
         .load_or_create(KeyPurpose::Recovery)
         .map_err(|_| RpcStatus::TransactionRetry)?;
@@ -123,6 +149,65 @@ pub(crate) fn issue_uid_lookup_challenge(
         })
         .map_err(map_write_error)?;
     Ok(exact)
+}
+
+pub(crate) fn load_subkey_box(
+    argument: &[u8],
+    host: &EntityId,
+    writer: &WriterHandle,
+    keys: &dyn HostKeyProvider,
+    clock: &Arc<dyn foks_server_db::Clock>,
+) -> Result<Vec<u8>, RpcStatus> {
+    let request = foks_rpc::arguments::decode_load_subkey_box(argument).map_err(bad_arguments)?;
+    if request.challenge.payload.entity != request.parent || request.challenge.payload.host != *host
+    {
+        return Err(permission_denied());
+    }
+    let key = keys
+        .load_or_create(KeyPurpose::Recovery)
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    if request.challenge.payload.hmac_key_id != key.generation().as_bytes() {
+        return Err(RpcStatus::Expired);
+    }
+    let payload = request
+        .challenge
+        .payload
+        .encoded()
+        .map_err(|_| permission_denied())?;
+    foks_crypto::verify_capability_mac(
+        key.expose(),
+        foks_proto::REG_CHALLENGE_PAYLOAD_TYPE_ID,
+        &payload,
+        &request.challenge.mac,
+    )
+    .map_err(|_| permission_denied())?;
+    foks_crypto::verify_typed(
+        &request.parent,
+        &request.signature,
+        foks_proto::REG_CHALLENGE_PAYLOAD_TYPE_ID,
+        &payload,
+    )
+    .map_err(|_| permission_denied())?;
+    let exact = request
+        .challenge
+        .encoded()
+        .map_err(|_| permission_denied())?;
+    let hash = challenge_hash(&exact);
+    let parent = request.parent.into_bytes();
+    let host = host.as_bytes().to_vec();
+    let generation = key.generation().as_bytes();
+    match writer
+        .call_with_current_time(Arc::clone(clock), move |database, now| {
+            Ok(database.consume_subkey_challenge(&hash, &parent, &host, &generation, now)?)
+        })
+        .map_err(map_write_error)?
+    {
+        foks_server_db::SubkeyChallengeResult::Found(exact) => Ok(exact),
+        foks_server_db::SubkeyChallengeResult::Expired => Err(RpcStatus::Expired),
+        foks_server_db::SubkeyChallengeResult::NotFound => Err(RpcStatus::NotFound(
+            "YubiKey subkey box not found".to_owned(),
+        )),
+    }
 }
 
 pub(crate) fn issue_login_challenge(
@@ -372,6 +457,10 @@ fn challenge_hash(exact: &[u8]) -> [u8; 32] {
 
 fn lookup_failed() -> RpcStatus {
     RpcStatus::NotFound("credential lookup failed".to_owned())
+}
+
+fn permission_denied() -> RpcStatus {
+    RpcStatus::PermissionDenied("YubiKey challenge verification failed".to_owned())
 }
 
 fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {

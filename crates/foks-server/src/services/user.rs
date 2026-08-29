@@ -137,6 +137,101 @@ pub(crate) fn ppe_parcel(
     .map_err(|_| RpcStatus::TransactionRetry)
 }
 
+pub(crate) fn put_yubi_management_key(
+    writer: &WriterHandle,
+    clock: &Arc<dyn foks_server_db::Clock>,
+    argument: &[u8],
+    principal: &Principal,
+) -> Result<(), RpcStatus> {
+    let value =
+        foks_rpc::arguments::decode_put_yubi_management_key(argument).map_err(bad_arguments)?;
+    let exact_box = value
+        .secret_box
+        .encoded()
+        .map_err(|_| bad_arguments("invalid Yubi management-key box"))?;
+    let (role_type, visibility) = role_parts(value.role);
+    let snapshot = foks_server_db::YubiManagementKeySnapshot {
+        parent_id: value.yubi_id.into_bytes(),
+        exact_box,
+        generation: value.generation,
+        role_type,
+        visibility,
+    };
+    let uid = principal.uid().to_vec();
+    let credential = principal.device_id().to_vec();
+    writer
+        .call_with_current_time(Arc::clone(clock), move |database, now| {
+            database.put_yubi_management_key(&uid, &credential, &snapshot, now)?;
+            Ok(())
+        })
+        .map_err(map_yubi_write_error)
+}
+
+pub(crate) fn get_yubi_management_key(
+    database: &foks_server_db::ReadSnapshot<'_>,
+    argument: &[u8],
+    principal: &Principal,
+) -> Result<Vec<u8>, RpcStatus> {
+    let parent =
+        foks_rpc::arguments::decode_get_yubi_management_key(argument).map_err(bad_arguments)?;
+    let snapshot = database
+        .yubi_management_key_for_credential(
+            principal.uid(),
+            principal.device_id(),
+            parent.as_bytes(),
+        )
+        .map_err(map_yubi_database_error)?
+        .ok_or_else(|| RpcStatus::NotFound("Yubi management key not found".to_owned()))?;
+    yubi_management_value(snapshot)?
+        .encoded()
+        .map_err(|_| RpcStatus::TransactionRetry)
+}
+
+pub(crate) fn get_all_yubi_management_keys(
+    database: &foks_server_db::ReadSnapshot<'_>,
+    argument: &[u8],
+    principal: &Principal,
+) -> Result<Vec<u8>, RpcStatus> {
+    foks_rpc::arguments::decode_void(argument).map_err(bad_arguments)?;
+    let values = database
+        .all_yubi_management_keys_for_credential(principal.uid(), principal.device_id())
+        .map_err(map_yubi_database_error)?
+        .into_iter()
+        .map(yubi_management_value)
+        .collect::<Result<Vec<_>, _>>()?;
+    foks_snowpack::encode(&Value::Array(
+        values
+            .iter()
+            .map(foks_proto::YubiEncryptedManagementKey::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| RpcStatus::TransactionRetry)?,
+    ))
+    .map_err(|_| RpcStatus::TransactionRetry)
+}
+
+fn yubi_management_value(
+    snapshot: foks_server_db::YubiManagementKeySnapshot,
+) -> Result<foks_proto::YubiEncryptedManagementKey, RpcStatus> {
+    Ok(foks_proto::YubiEncryptedManagementKey {
+        yubi_id: EntityId::from_bytes(snapshot.parent_id)
+            .map_err(|_| RpcStatus::TransactionRetry)?,
+        secret_box: foks_proto::SecretBox::decode(&snapshot.exact_box)
+            .map_err(|_| RpcStatus::TransactionRetry)?,
+        generation: snapshot.generation,
+        role: stored_role(snapshot.role_type, snapshot.visibility)
+            .ok_or(RpcStatus::TransactionRetry)?,
+    })
+}
+
+fn stored_role(kind: u64, visibility: i64) -> Option<foks_proto::Role> {
+    match kind {
+        1 => i16::try_from(visibility).ok().map(foks_proto::Role::member),
+        2 if visibility == 0 => Some(foks_proto::Role::ADMIN),
+        3 if visibility == 0 => Some(foks_proto::Role::OWNER),
+        _ => None,
+    }
+}
+
 fn authorize(
     database: &foks_server_db::ReadSnapshot<'_>,
     principal: &Principal,
@@ -171,6 +266,26 @@ fn map_passphrase_write_error(error: crate::Error) -> RpcStatus {
             RpcStatus::BadArguments("passphrase generation is stale".to_owned())
         }
         crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::RateLimited,
+        _ => RpcStatus::TransactionRetry,
+    }
+}
+
+fn map_yubi_write_error(error: crate::Error) -> RpcStatus {
+    match error {
+        crate::Error::AuthorizationChanged
+        | crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => {
+            permission_denied()
+        }
+        crate::Error::WriterQueue
+        | crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::RateLimited,
+        crate::Error::Database(foks_server_db::Error::Invalid(message)) => bad_arguments(message),
+        _ => RpcStatus::TransactionRetry,
+    }
+}
+
+fn map_yubi_database_error(error: foks_server_db::Error) -> RpcStatus {
+    match error {
+        foks_server_db::Error::AuthorizationChanged => permission_denied(),
         _ => RpcStatus::TransactionRetry,
     }
 }
@@ -396,7 +511,11 @@ pub(crate) fn puk_for_role(
     if role == foks_proto::Role::NONE {
         return Err(bad_arguments("PUK role cannot be none"));
     }
-    if device.as_slice() != principal.device_id() {
+    let parent = database
+        .active_credential_owner(principal.uid(), principal.device_id())
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or_else(permission_denied)?;
+    if device.as_slice() != parent {
         return Err(permission_denied());
     }
     let identity = database
@@ -405,7 +524,7 @@ pub(crate) fn puk_for_role(
         .ok_or_else(permission_denied)?;
     let (role_type, visibility) = role_parts(role);
     let material = database
-        .puk_material(&identity.uid, principal.device_id(), role_type, visibility)
+        .puk_material(&identity.uid, &parent, role_type, visibility)
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or_else(|| RpcStatus::NotFound("PUK parcel not found".to_owned()))?;
     let set = foks_proto::SharedKeyBoxSet::decode(&material.exact_box_set)
@@ -413,9 +532,7 @@ pub(crate) fn puk_for_role(
     let index = set
         .boxes
         .iter()
-        .position(|boxed| {
-            boxed.target.entity.as_bytes() == principal.device_id() && boxed.role == role
-        })
+        .position(|boxed| boxed.target.entity.as_bytes() == parent && boxed.role == role)
         .ok_or_else(|| RpcStatus::NotFound("PUK parcel target not found".to_owned()))?;
     let sender =
         EntityId::from_bytes(material.sender_id).map_err(|_| RpcStatus::TransactionRetry)?;

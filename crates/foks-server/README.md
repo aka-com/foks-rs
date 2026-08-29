@@ -11,7 +11,9 @@ signup invites (standard single-use and named multi-use), software-device
 signup, device certificate issuance, current and historical Merkle roots,
 authenticated user-chain and PUK reads, device provisioning/revocation,
 backup-key enrollment and recovery, passphrase enrollment/change and public
-challenge login, atomic PPE reboxing during owner-PUK rotation, named and
+challenge login, atomic PPE reboxing during owner-PUK rotation, YubiKey signup
+and provisioning, delegated-subkey recovery, encrypted PIV management-key
+storage, named and
 ad-hoc team creation, local team
 membership edits and removals, PTK rotation/history, removal-key retrieval,
 and personal/team KV. KV covers roots, directories, optimistic dirent writes,
@@ -19,7 +21,7 @@ small files, symlinks, chunked files, pagination, cache checks, and expiring
 locks. Public-client tests exercise these paths without server test hooks.
 
 Federation, remote users/teams, passphrase-only device provisioning/recovery,
-YubiKey enrollment, team nesting, team-member/guest services, realtime
+team nesting, team-member/guest services, realtime
 services, and cross-host operation are intentionally unsupported. Ad-hoc teams
 are immutable after creation. This v0.1.9-compatible slice is not a replacement
 for the full Go server. The executable contract is
@@ -46,6 +48,15 @@ passphrase exists. Generic user-settings links sent by Go clients are accepted
 as interoperability inputs but are not projected because this slice does not
 implement that separate chain. Public passphrase login does not by itself
 provision a device or expose the upstream interactive recovery workflow.
+
+YubiKey support matches the non-interactive v0.1.9 lifecycle slice: the server
+validates P-256 parent signatures and PQ-slot hints, stores an encrypted
+delegated Ed25519 mTLS subkey, burns one-time hardware recovery challenges, and
+stores PUK-encrypted PIV management-key envelopes with monotonic generations.
+The server never talks to PC/SC and never receives a PIN, PUK, management key,
+or private hardware key. Client-side hardware support is macOS/Linux only.
+Interactive cross-device KEX and rotation to another already-enrolled Yubi
+recipient remain outside this slice.
 
 Protocol IDs, method positions, status codes, and service numbers are extracted
 from the checksum-pinned go-foks v0.1.9 module into

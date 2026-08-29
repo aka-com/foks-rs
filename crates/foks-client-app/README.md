@@ -31,12 +31,17 @@ The implemented application slice covers:
 - personal KV list/read/write/mkdir/remove with streamed file I/O;
 - durable refresh jobs and bounded retry state;
 - owner software-device provisioning and resume;
+- YubiKey-backed signup and software-owner provisioning, exact-card sync,
+  delegated-subkey recovery, PIN/PUK/retry administration, crash-safe PIV
+  management-key rotation and recovery, scheduled envelope refresh, and
+  software-owner revocation;
 - backup enrollment and owner recovery with pre-submit durable secrets; and
 - named/ad-hoc team creation, resume, PTK-protected local records, team sync,
   and team-KV root creation.
 
 Most provisioning and recovery inputs that contain long-lived secrets stay in
-the direct application/CLI boundary. Software signup and the PPE passphrase
+the direct application/CLI boundary. Software and YubiKey signup, hardware
+lifecycle operations, and the PPE passphrase
 lifecycle deliberately cross the private local-agent protocol: their framed
 buffers and secret strings are zeroized, and the agent generates or opens
 long-term credential material inside the checked session so the desktop never
@@ -59,8 +64,10 @@ The workspace builds these crates with stable Rust/Cargo (the current gate was
 run with Rust 1.95). The FOKS client graph builds bundled SQLite and AWS-LC, so
 a native C toolchain and CMake are build prerequisites even though neither is a
 runtime shared-library dependency. Normal builds require no Go, Node, webview,
-system SQLite, or AKA toolchain. Go is used only by the optional pinned-upstream
-protocol/oracle audits.
+system SQLite, or AKA toolchain. Native YubiKey binaries additionally link the
+platform PC/SC stack: macOS provides it, while Linux needs pcsc-lite
+development headers at build time and the PC/SC daemon at runtime. Go is used
+only by the optional pinned-upstream protocol/oracle audits.
 
 The direct application, CLI, agent, and GPUI desktop are exercised on macOS and
 Linux. Windows is not a release target. macOS uses Keychain and runtime Metal

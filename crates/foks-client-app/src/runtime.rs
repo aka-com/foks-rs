@@ -140,22 +140,37 @@ impl CheckedProfileSession<'_> {
 
     fn run_due_jobs_locked(&self, now: u64, vault: &mut AccountVault<'_>) -> Result<JobRunReport> {
         let scheduler = FoksScheduler::new(&self.paths.hard_database, SchedulerConfig::default())?;
-        let report = scheduler.run_due(now, |job| {
-            if job.kind != ScheduledJobKind::UserRefresh {
-                return Err("unsupported application job kind".to_owned());
+        let report = scheduler.run_due(now, |job| match job.kind {
+            ScheduledJobKind::UserRefresh => {
+                let aliases = vault.aliases().map_err(|error| error.to_string())?;
+                let alias = aliases
+                    .into_iter()
+                    .find(|alias| {
+                        vault
+                            .account(alias)
+                            .is_ok_and(|account| account.credential.uid.as_bytes() == job.scope_id)
+                    })
+                    .ok_or_else(|| "scheduled account credential is unavailable".to_owned())?;
+                self.sync_account(&alias, vault)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
             }
-            let aliases = vault.aliases().map_err(|error| error.to_string())?;
-            let alias = aliases
-                .into_iter()
-                .find(|alias| {
-                    vault
-                        .account(alias)
-                        .is_ok_and(|account| account.credential.uid.as_bytes() == job.scope_id)
-                })
-                .ok_or_else(|| "scheduled account credential is unavailable".to_owned())?;
-            self.sync_account(&alias, vault)
-                .map(|_| ())
+            ScheduledJobKind::YubiManagementRefresh => {
+                self.profile
+                    .require(Capability::DeviceAdministration)
+                    .map_err(|error| error.to_string())?;
+                let scope: super::yubi::YubiRefreshScope = serde_json::from_slice(&job.scope_id)
+                    .map_err(|_| "scheduled Yubi refresh scope is invalid".to_owned())?;
+                self.refresh_yubi_management_envelope(
+                    &scope.yubi_alias,
+                    &scope.software_alias,
+                    vault,
+                )
                 .map_err(|error| error.to_string())
+            }
+            ScheduledJobKind::MutationReconcile => {
+                Err("mutation reconciliation is driven by explicit resume flows".to_owned())
+            }
         })?;
         Ok(JobRunReport {
             runs: report

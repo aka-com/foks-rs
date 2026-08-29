@@ -22,6 +22,7 @@ foks-client-db = { workspace = true }
 foks-crypto = { workspace = true }
 foks-rpc = { workspace = true }
 foks-snowpack = { workspace = true }
+foks-yubi = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 

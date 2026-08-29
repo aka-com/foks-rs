@@ -86,6 +86,17 @@ const COVERAGE: &[Coverage] = &[
         ],
     },
     Coverage {
+        name: "yubikey_lifecycle",
+        run: crate::yubikey::software_owner_provisions_recovers_manages_and_revokes_yubikey,
+        routes: &[
+            ("Reg", "getSubkeyBoxChallenge"),
+            ("Reg", "loadSubkeyBox"),
+            ("User", "putYubiManagementKey"),
+            ("User", "getYubiManagementKey"),
+            ("User", "getAllYubiManagementKeys"),
+        ],
+    },
+    Coverage {
         name: "team_create_edit_and_kv",
         run: crate::team_create::public_client_creates_and_loads_named_and_adhoc_teams,
         routes: &[

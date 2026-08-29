@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod runtime;
+mod yubi;
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -22,9 +23,10 @@ use foks_client::{
     NamedTeamSecrets, NewSoftwareDeviceSecrets, ProbeTarget, SoftwareAccountRequest,
     SoftwareAccountSecrets, SoftwareDeviceProvisionRequest,
 };
-#[cfg(test)]
 use foks_client_db::ScheduledJobKind;
-use foks_client_db::{HardStateStore, KvDirectoryProjection, MutationKind, SoftStateStore};
+use foks_client_db::{
+    HardStateStore, KvDirectoryProjection, MutationKind, MutationState, SoftStateStore,
+};
 use foks_compat_artifact::{Outcome as CanaryOutcome, SignedCanaryArtifact};
 pub use foks_crypto::Passphrase;
 use foks_crypto::{derive_device_public, derive_shared_verify_key, prefixed_hash, BackupKey};
@@ -83,6 +85,8 @@ pub enum Error {
     Protocol(#[from] foks_proto::Error),
     #[error("FOKS cryptography failed: {0}")]
     Crypto(#[from] foks_crypto::Error),
+    #[error("FOKS YubiKey operation failed: {0}")]
+    Yubi(#[from] foks_yubi::Error),
     #[error("FOKS backup phrase failed: {0}")]
     Backup(#[from] foks_crypto::BackupPhraseError),
     #[error("FOKS application I/O failed: {0}")]
@@ -116,6 +120,10 @@ pub enum Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub use runtime::{JobRun, JobRunReport};
+pub use yubi::{
+    LoadedYubiAccount, YubiAccountReport, YubiCardSummary, YubiLifecycleReport, YubiPinStatus,
+    YubiProvisionInput, YubiRevocationReport, YubiSignupInput, YubiSubkeyRecoveryReport,
+};
 
 mod account;
 mod checkpoint;
@@ -932,6 +940,35 @@ mod tests {
         let loaded = vault.account("personal").unwrap();
         assert_eq!(loaded.username, "alice");
         assert_eq!(loaded.credential.seed.as_slice(), &[9; 32]);
+    }
+
+    #[test]
+    fn credential_aliases_are_type_specific_and_pending_records_reserve_names() {
+        let mut store = MemorySecretStore::default();
+        for key in [
+            pending_key("software-pending"),
+            pending_device_key("device-pending"),
+            pending_recovery_key("recovery-pending"),
+            yubi::pending_yubi_key("yubi-pending"),
+            yubi::yubi_account_key("yubi-ready"),
+        ] {
+            store.put(&key, b"reserved").unwrap();
+        }
+        let mut vault = AccountVault::new(&mut store);
+        assert!(vault.aliases().unwrap().is_empty());
+        assert_eq!(
+            vault.yubi_aliases().unwrap(),
+            vec!["yubi-pending", "yubi-ready"]
+        );
+        for alias in [
+            "software-pending",
+            "device-pending",
+            "recovery-pending",
+            "yubi-pending",
+            "yubi-ready",
+        ] {
+            assert!(vault.contains(alias).unwrap(), "{alias} was not reserved");
+        }
     }
 
     #[test]

@@ -11,8 +11,13 @@ use super::{
     MutationOperation, MutationState, PassphraseUpdateArgument, PinnedHost, ProtectedMutationStore,
     ProvisionDeviceArgument, PukBoxRandomness, PukRotation, Result, RevokeDeviceArgument, Role,
     SecretSeed, SoftwareProvisionInput, SoftwarePukBoxInput, UserMutationBase, VerifiedUserState,
-    Zeroizing, ENTITY_PUK_VERIFY,
+    YubiCredential, YubiDevice, Zeroizing, ENTITY_PUK_VERIFY,
 };
+use foks_crypto::{
+    derive_subkey_id, make_yubi_provision_link, seal_software_puk_box_to_yubi,
+    seal_yubi_subkey_box, YubiPukBoxInput, YubiPukBoxRandomness, YubiSubkeyBoxRandomness,
+};
+use foks_proto::YubiSlotAndPqKeyId;
 
 const USER_MUTATION_REQUEST_HASH_TYPE_ID: u64 = 0xc530_72ae_e24c_91d4;
 
@@ -46,6 +51,35 @@ pub struct SoftwareDeviceProvisionRequest {
 
 pub struct ProvisionedSoftwareDevice {
     pub credential: DeviceCredential,
+    pub authenticated: AuthenticatedUserOutcome,
+}
+
+/// Caller-durable secret material for a Yubi credential. The subkey and the
+/// provider locator that reopens `parent` must be committed to native
+/// credential storage before provisioning is submitted.
+pub struct NewYubiDeviceSecrets {
+    pub subkey_seed: SecretSeed,
+    pub(crate) self_token: Zeroizing<[u8; 17]>,
+}
+
+impl NewYubiDeviceSecrets {
+    pub fn new(subkey_seed: SecretSeed, self_token: [u8; 17]) -> Self {
+        Self {
+            subkey_seed,
+            self_token: Zeroizing::new(self_token),
+        }
+    }
+}
+
+pub struct YubiDeviceProvisionRequest {
+    pub role: Role,
+    pub device_name: String,
+    pub serial: u64,
+    pub pq_hint: YubiSlotAndPqKeyId,
+}
+
+pub struct ProvisionedYubiDevice<'a> {
+    pub credential: YubiCredential<'a>,
     pub authenticated: AuthenticatedUserOutcome,
 }
 
@@ -213,6 +247,8 @@ impl FoksClient {
             next_tree_location,
             self_token: *secrets.self_token,
             hepks: &hepks,
+            subkey_box: None,
+            yubi_pq_hint: None,
         })?);
         let operation_id = self.prepare_user_mutation(
             host,
@@ -243,6 +279,251 @@ impl FoksClient {
         })?;
         MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
         Ok(ProvisionedSoftwareDevice {
+            credential,
+            authenticated,
+        })
+    }
+
+    /// Provisions a Yubi parent with an encrypted delegated mTLS subkey.
+    /// Provisioning currently targets a role that already has a PUK; this
+    /// avoids producing a partial mixed-curve distribution for a new role.
+    pub fn provision_yubi_device<'a>(
+        &self,
+        host: &PinnedHost,
+        existing: &DeviceCredential,
+        parent: &'a dyn YubiDevice,
+        request: YubiDeviceProvisionRequest,
+        secrets: NewYubiDeviceSecrets,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<ProvisionedYubiDevice<'a>> {
+        if request.role == Role::NONE
+            || request.serial == 0
+            || parent.entity_id().entity_type() != foks_proto::ENTITY_YUBI
+            || request.pq_hint.id != parent.pq_key_id()
+        {
+            return Err(Error::AccountRequest("invalid Yubi provisioning request"));
+        }
+        let authenticated = self.authenticate_and_pin(host, existing)?;
+        let signer = derive_device_public(&existing.seed)?;
+        let enrolled_signer = authenticated
+            .verified
+            .devices()
+            .iter()
+            .find(|device| device.id == signer.id)
+            .ok_or(Error::UserBinding("signing device is not enrolled"))?;
+        if enrolled_signer.role != Role::OWNER {
+            return Err(Error::AccountRequest(
+                "Yubi provisioning requires an owner signer",
+            ));
+        }
+        let role_key =
+            authenticated
+                .verified
+                .shared_key(request.role)
+                .ok_or(Error::AccountRequest(
+                    "Yubi provisioning requires an existing role PUK",
+                ))?;
+        let loaded =
+            self.load_puks_for_role(host, existing, &authenticated.verified, request.role)?;
+        let puk = loaded
+            .iter()
+            .find(|key| key.role == request.role && key.generation == role_key.generation)
+            .ok_or(Error::KeyBinding("current Yubi-role PUK is not loaded"))?;
+        if authenticated
+            .verified
+            .devices()
+            .iter()
+            .any(|device| device.id == *parent.entity_id())
+        {
+            return Err(Error::AccountRequest("Yubi credential is already enrolled"));
+        }
+
+        let display_name = fix_device_name(&request.device_name);
+        let normalized_name = normalize_device_name(display_name.as_bytes())
+            .ok_or(Error::AccountRequest("invalid Yubi device name"))?;
+        let device_name = DeviceLabelNameAndCommitmentKey {
+            label: DeviceLabel {
+                device_type: DeviceType::YubiKey,
+                normalized_name,
+                serial: request.serial,
+            },
+            normalization_version: 0,
+            display_name: display_name.into_bytes(),
+            commitment_key: random_bytes()?,
+        };
+        let next_tree_location = random_bytes()?;
+        let material = make_yubi_provision_link(
+            &SoftwareProvisionInput {
+                base: UserMutationBase {
+                    uid: authenticated.verified.uid(),
+                    host: authenticated.verified.host(),
+                    seqno: authenticated
+                        .verified
+                        .chain_seqno()
+                        .checked_add(1)
+                        .ok_or(Error::AccountRequest("user sequence overflow"))?,
+                    previous: authenticated.verified.chain_tail_hash(),
+                    root: &authenticated.verified.tree_root(),
+                    time: now_microseconds()?,
+                    next_tree_location,
+                },
+                role: request.role,
+                device_label: &device_name.label,
+                device_name_commitment_key: device_name.commitment_key,
+            },
+            &existing.seed,
+            parent,
+            &secrets.subkey_seed,
+            None,
+        )?;
+        let subkey_box = seal_yubi_subkey_box(
+            parent,
+            &secrets.subkey_seed,
+            YubiSubkeyBoxRandomness {
+                kem_message: random_bytes()?,
+                nonce: random_bytes()?,
+            },
+        )?;
+        let puk_boxes = seal_software_puk_box_to_yubi(
+            host.host_id(),
+            &existing.seed,
+            random_bytes()?,
+            &YubiPukBoxInput {
+                seed: &puk.seed,
+                generation: puk.generation,
+                role: puk.role,
+                receiver: &material.device,
+            },
+            YubiPukBoxRandomness {
+                ephemeral_secret: random_nonzero_p256_secret()?,
+                kem_message: random_bytes()?,
+                nonce: random_bytes()?,
+                time: now_microseconds()?,
+            },
+        )?;
+        let encoded = Zeroizing::new(encode_provision_device_request(&ProvisionDeviceArgument {
+            link: &material.link,
+            puk_boxes: &puk_boxes,
+            device_name: &device_name,
+            next_tree_location,
+            self_token: *secrets.self_token,
+            hepks: std::slice::from_ref(&material.device.hepk),
+            subkey_box: Some(&subkey_box),
+            yubi_pq_hint: Some(&request.pq_hint),
+        })?);
+        let operation_id = self.prepare_user_mutation(
+            host,
+            MutationKind::DeviceProvision,
+            authenticated.verified.uid(),
+            &material.device.id,
+            authenticated.verified.chain_seqno() + 1,
+            &encoded,
+            protected_store,
+        )?;
+        let post_error =
+            self.submit_user_mutation(host, existing, operation_id, &encoded, protected_store)?;
+        let certificate_chain =
+            match self.fetch_subkey_certificate_chain(host, &existing.uid, &secrets.subkey_seed) {
+                Ok(chain) => chain,
+                Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
+                Err(error) => return Err(error),
+            };
+        let credential = YubiCredential {
+            uid: existing.uid.clone(),
+            parent,
+            subkey_seed: secrets.subkey_seed,
+            certificate_chain,
+        };
+        let authenticated = self.wait_for_yubi_transition(host, &credential, |user| {
+            user.devices().iter().any(|device| {
+                device.id == material.device.id
+                    && device.subkey.as_ref() == Some(&material.subkey.id)
+                    && device.role == request.role
+            })
+        })?;
+        MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
+        Ok(ProvisionedYubiDevice {
+            credential,
+            authenticated,
+        })
+    }
+
+    /// Reconciles a Yubi provision from application-durable locator and
+    /// subkey material. A verified terminal journal is accepted because the
+    /// core can erase its retry request before the application commits the
+    /// final credential record.
+    #[allow(clippy::too_many_arguments)]
+    pub fn resume_yubi_device_provision<'a>(
+        &self,
+        host: &PinnedHost,
+        existing: &DeviceCredential,
+        parent: &'a dyn YubiDevice,
+        operation_id: [u8; 16],
+        subkey_seed: SecretSeed,
+        role: Role,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<ProvisionedYubiDevice<'a>> {
+        let operation = HardStateStore::open(&host.database_path)?
+            .mutation(&operation_id)?
+            .ok_or(Error::OperationBinding(
+                "Yubi provision mutation is not recorded",
+            ))?;
+        if operation.kind != MutationKind::DeviceProvision
+            || operation.host_id != host.host_id().as_bytes()
+            || operation.scope_id != existing.uid.as_bytes()
+            || operation.subject_id != parent.entity_id().as_bytes()
+            || operation.expected_version.is_none()
+        {
+            return Err(Error::OperationBinding(
+                "Yubi provision journal binding changed",
+            ));
+        }
+        let already_verified = operation.state == MutationState::Verified;
+        let post_error = match operation.state {
+            MutationState::Verified => None,
+            MutationState::Prepared
+            | MutationState::Submitting
+            | MutationState::SubmissionUnknown => {
+                let operation = self.bound_user_mutation(
+                    host,
+                    operation_id,
+                    MutationKind::DeviceProvision,
+                    &existing.uid,
+                    protected_store,
+                )?;
+                self.resume_user_mutation_submission(host, existing, &operation, protected_store)?
+            }
+            MutationState::Rejected => {
+                return Err(Error::OperationBinding(
+                    "Yubi provision mutation was rejected",
+                ));
+            }
+        };
+        let subkey = derive_subkey_id(&subkey_seed)?;
+        let certificate_chain =
+            match self.fetch_subkey_certificate_chain(host, &existing.uid, &subkey_seed) {
+                Ok(chain) => chain,
+                Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
+                Err(error) => return Err(error),
+            };
+        let credential = YubiCredential {
+            uid: existing.uid.clone(),
+            parent,
+            subkey_seed,
+            certificate_chain,
+        };
+        let authenticated = self.wait_for_yubi_transition(host, &credential, |user| {
+            user.devices().iter().any(|device| {
+                device.id == *parent.entity_id()
+                    && device.subkey.as_ref() == Some(&subkey)
+                    && device.role == role
+            })
+        })?;
+        if !already_verified {
+            MutationCoordinator::new(&host.database_path, protected_store)
+                .verified(&operation_id)?;
+        }
+        Ok(ProvisionedYubiDevice {
             credential,
             authenticated,
         })
@@ -1016,5 +1297,40 @@ impl FoksClient {
             }
         }
         Err(last_error.expect("transition loop executes at least once"))
+    }
+
+    pub(crate) fn wait_for_yubi_transition(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        accepted: impl Fn(&VerifiedUserState) -> bool,
+    ) -> Result<AuthenticatedUserOutcome> {
+        let mut last_error = None;
+        for attempt in 0..40 {
+            match self.authenticate_yubi_and_pin(host, credential) {
+                Ok(outcome) if accepted(&outcome.verified) => return Ok(outcome),
+                Ok(_) => {
+                    last_error = Some(Error::TransitionNotObserved("user state did not advance"));
+                }
+                Err(error) => last_error = Some(error),
+            }
+            if attempt != 39 {
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        }
+        Err(last_error.expect("transition loop executes at least once"))
+    }
+}
+
+fn random_nonzero_p256_secret() -> Result<[u8; 32]> {
+    loop {
+        let mut bytes: [u8; 32] = random_bytes()?;
+        // Any nonzero value below 2^255 is a valid P-256 scalar. Sacrificing
+        // one bit avoids a platform-version-dependent rejection loop in the
+        // public cryptographic API while retaining 255 bits of entropy.
+        bytes[0] &= 0x7f;
+        if bytes != [0; 32] {
+            return Ok(bytes);
+        }
     }
 }

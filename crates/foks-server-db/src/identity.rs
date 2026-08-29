@@ -27,6 +27,9 @@ pub struct IdentityMutation<'a> {
     pub device_hepk_fingerprint: &'a [u8; 32],
     pub exact_device_hepk: &'a [u8],
     pub exact_device_name: &'a [u8],
+    pub subkey_id: Option<&'a [u8]>,
+    pub exact_subkey_box: Option<&'a [u8]>,
+    pub yubi_pq_hint: Option<(u8, &'a [u8; 32])>,
     pub link_hash: &'a [u8; 32],
     pub exact_link: &'a [u8],
     pub tree_location: &'a [u8; 32],
@@ -145,14 +148,23 @@ impl Database {
             "INSERT INTO devices
              (device_id, uid, active, role_type, visibility, subkey_id,
               hepk_fingerprint, exact_hepk, exact_name)
-             VALUES (?1, ?2, 1, 3, 0, NULL, ?3, ?4, ?5)",
+             VALUES (?1, ?2, 1, 3, 0, ?3, ?4, ?5, ?6)",
             params![
                 mutation.device_id,
                 mutation.uid,
+                mutation.subkey_id,
                 mutation.device_hepk_fingerprint,
                 mutation.exact_device_hepk,
-                mutation.exact_device_name
+                mutation.exact_device_name,
             ],
+        )?;
+        insert_yubi_projection(
+            &transaction,
+            mutation.device_id,
+            mutation.subkey_id,
+            mutation.exact_subkey_box,
+            mutation.yubi_pq_hint,
+            mutation.now,
         )?;
         inject(failure, FailurePoint::Device)?;
 
@@ -291,7 +303,7 @@ impl Database {
 }
 
 fn validate(database: &Database, mutation: &IdentityMutation<'_>) -> Result<()> {
-    let blobs = [
+    let mut blobs = vec![
         mutation.username_utf8,
         mutation.exact_device_hepk,
         mutation.exact_device_name,
@@ -301,6 +313,25 @@ fn validate(database: &Database, mutation: &IdentityMutation<'_>) -> Result<()> 
         mutation.exact_root,
         mutation.exact_signed_root,
     ];
+    if let Some(boxed) = mutation.exact_subkey_box {
+        blobs.push(boxed);
+    }
+    let is_yubi = mutation.device_id.first() == Some(&foks_proto::ENTITY_YUBI);
+    let valid_yubi = match (
+        mutation.subkey_id,
+        mutation.exact_subkey_box,
+        mutation.yubi_pq_hint,
+    ) {
+        (Some(subkey), Some(boxed), Some((slot, _))) => {
+            is_yubi
+                && subkey.len() == 33
+                && subkey.first() == Some(&foks_proto::ENTITY_SUBKEY)
+                && !boxed.is_empty()
+                && (0x82..=0x95).contains(&slot)
+        }
+        (None, None, None) => !is_yubi,
+        _ => false,
+    };
     if mutation.uid.len() != 33
         || !matches!(mutation.device_id.len(), 33 | 34)
         || !matches!(mutation.shared_verify_key.len(), 33 | 34)
@@ -318,6 +349,7 @@ fn validate(database: &Database, mutation: &IdentityMutation<'_>) -> Result<()> 
         || mutation.reservation_expires_at <= mutation.now
         || mutation.receipt_expires_at <= mutation.now
         || mutation.merkle_commit.root == [0; 32]
+        || !valid_yubi
     {
         return Err(Error::Invalid("identity mutation"));
     }
@@ -357,4 +389,30 @@ fn validate(database: &Database, mutation: &IdentityMutation<'_>) -> Result<()> 
         return Err(Error::Invalid("Merkle back-pointer sequence"));
     }
     Ok(())
+}
+
+pub(crate) fn insert_yubi_projection(
+    transaction: &rusqlite::Transaction<'_>,
+    parent_id: &[u8],
+    subkey_id: Option<&[u8]>,
+    exact_subkey_box: Option<&[u8]>,
+    yubi_pq_hint: Option<(u8, &[u8; 32])>,
+    now: u64,
+) -> Result<()> {
+    match (subkey_id, exact_subkey_box, yubi_pq_hint) {
+        (None, None, None) => Ok(()),
+        (Some(subkey), Some(boxed), Some((slot, pq_key_id))) => {
+            transaction.execute(
+                "INSERT INTO yubi_subkey_boxes(parent_id, subkey_id, exact_box, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![parent_id, subkey, boxed, sql_integer(now)?],
+            )?;
+            transaction.execute(
+                "INSERT INTO yubi_pq_hints(parent_id, slot, pq_key_id) VALUES (?1, ?2, ?3)",
+                params![parent_id, i64::from(slot), pq_key_id],
+            )?;
+            Ok(())
+        }
+        _ => Err(Error::Invalid("incomplete Yubi projection")),
+    }
 }

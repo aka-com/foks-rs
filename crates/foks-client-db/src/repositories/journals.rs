@@ -185,6 +185,44 @@ impl HardStateStore {
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Error::from)
     }
+
+    /// Finds the newest operation for an application-owned pending record,
+    /// including terminal state. Applications need the verified row to close
+    /// the small durability window between core verification and committing
+    /// their final credential record.
+    pub fn latest_mutation_for_binding(
+        &self,
+        host_id: &[u8],
+        kind: MutationKind,
+        scope_id: &[u8],
+        subject_id: &[u8],
+    ) -> Result<Option<MutationOperation>> {
+        self.connection
+            .query_row(
+                "SELECT operation_id, operation_kind, host_id, scope_id, subject_id,
+                        expected_version, request_hash, material_ref, material_hash, state,
+                        attempt_count, created_at, updated_at
+                 FROM mutation_operations
+                 WHERE host_id = ?1 AND operation_kind = ?2
+                   AND scope_id = ?3 AND subject_id = ?4
+                 ORDER BY created_at DESC, operation_id DESC LIMIT 1",
+                params![host_id, kind as u8, scope_id, subject_id],
+                |row| {
+                    let operation_id = row.get::<_, Vec<u8>>(0)?;
+                    let operation_id: [u8; 16] = operation_id.try_into().map_err(|_| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            16,
+                            rusqlite::types::Type::Blob,
+                            "invalid mutation operation ID".into(),
+                        )
+                    })?;
+                    mutation_operation_from_offset(operation_id, row, 1)
+                },
+            )
+            .optional()?
+            .map(Ok)
+            .transpose()
+    }
     /// Records only the public fingerprint of a prepared signup. The caller's
     /// encrypted credential store remains authoritative for retry material.
     pub fn record_signup_operation(&mut self, operation: &SignupOperation) -> Result<()> {

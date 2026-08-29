@@ -26,6 +26,8 @@ pub(crate) struct AddedCredential {
     pub exact_name: Vec<u8>,
     pub role: Role,
     pub subkey_id: Option<Vec<u8>>,
+    pub exact_subkey_box: Option<Vec<u8>>,
+    pub yubi_pq_hint: Option<(u8, [u8; 32])>,
 }
 
 pub(crate) struct SharedKey {
@@ -66,27 +68,53 @@ pub(crate) fn validate(
     principal: &[u8],
     argument: Argument,
 ) -> Result<Command> {
-    let (link, next_tree_location, hepks, boxes, seed_chain, exact_name, passphrase) =
-        match &argument {
-            Argument::Provision(argument) => (
-                &argument.link,
-                argument.next_tree_location,
-                &argument.hepks,
-                &argument.puk_boxes,
-                Vec::new(),
-                Some(argument.device_name.encoded()?),
-                None,
-            ),
-            Argument::Revoke(argument) => (
-                &argument.link,
-                argument.next_tree_location,
-                &argument.hepks,
-                &argument.puk_boxes,
-                argument.seed_chain.clone(),
-                None,
-                argument.passphrase.clone(),
-            ),
-        };
+    let (
+        link,
+        next_tree_location,
+        hepks,
+        boxes,
+        seed_chain,
+        exact_name,
+        passphrase,
+        subkey_box,
+        yubi_pq_hint,
+    ) = match &argument {
+        Argument::Provision(argument) => (
+            &argument.link,
+            argument.next_tree_location,
+            &argument.hepks,
+            &argument.puk_boxes,
+            Vec::new(),
+            Some(argument.device_name.encoded()?),
+            None,
+            argument
+                .subkey_box
+                .as_ref()
+                .map(foks_proto::HybridBox::encoded)
+                .transpose()?,
+            argument
+                .yubi_pq_hint
+                .as_ref()
+                .map(|hint| -> Result<(u8, [u8; 32])> {
+                    Ok((
+                        u8::try_from(hint.slot).map_err(|_| Error::Signup("Yubi PQ slot range"))?,
+                        hint.id,
+                    ))
+                })
+                .transpose()?,
+        ),
+        Argument::Revoke(argument) => (
+            &argument.link,
+            argument.next_tree_location,
+            &argument.hepks,
+            &argument.puk_boxes,
+            argument.seed_chain.clone(),
+            None,
+            argument.passphrase.clone(),
+            None,
+            None,
+        ),
+    };
     let uid = EntityId::from_bytes(authority.uid.clone())?;
     let devices = authority
         .devices
@@ -155,6 +183,8 @@ pub(crate) fn validate(
                     exact_name,
                     role: member.role,
                     subkey_id: subkey.as_ref().map(|subkey| subkey.as_bytes().to_vec()),
+                    exact_subkey_box: subkey_box.clone(),
+                    yubi_pq_hint,
                 }),
                 None,
             )

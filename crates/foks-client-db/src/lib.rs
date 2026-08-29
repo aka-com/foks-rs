@@ -139,6 +139,7 @@ pub struct StoredTeamSnapshot {
 pub enum ScheduledJobKind {
     UserRefresh = 1,
     MutationReconcile = 2,
+    YubiManagementRefresh = 3,
 }
 
 impl ScheduledJobKind {
@@ -146,6 +147,7 @@ impl ScheduledJobKind {
         match value {
             1 => Ok(Self::UserRefresh),
             2 => Ok(Self::MutationReconcile),
+            3 => Ok(Self::YubiManagementRefresh),
             _ => Err(Error::InvalidScheduledJob("unknown scheduled job kind")),
         }
     }
@@ -641,7 +643,7 @@ fn validate_signup_operation(operation: &SignupOperation) -> Result<()> {
 
 fn validate_mutation_operation(operation: &MutationOperation) -> Result<()> {
     if operation.host_id.len() != 33
-        || !matches!(operation.scope_id.len(), 0 | 16 | 33)
+        || !matches!(operation.scope_id.len(), 0 | 16 | 33 | 34)
         || !matches!(operation.subject_id.len(), 0 | 16 | 33 | 34)
         || operation.material_ref.is_empty()
         || operation.material_ref.len() > 255
@@ -655,10 +657,7 @@ fn validate_mutation_operation(operation: &MutationOperation) -> Result<()> {
 }
 
 fn validate_scheduled_job(job: &ScheduledJob) -> Result<()> {
-    if job.host_id.len() != 33
-        || !matches!(job.scope_id.len(), 0 | 16 | 33 | 34)
-        || job.interval_micros == 0
-    {
+    if job.host_id.len() != 33 || job.scope_id.len() > 1024 || job.interval_micros == 0 {
         return Err(Error::InvalidScheduledJob(
             "scheduled job fields are malformed",
         ));
@@ -1999,6 +1998,87 @@ mod tests {
             reopened.mutation(&[6; 16]).unwrap().unwrap().attempt_count,
             1
         );
+    }
+
+    #[test]
+    fn application_binding_lookup_includes_only_the_latest_exact_operation() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = HardStateStore::open(&directory.path().join("hard.db")).unwrap();
+        let host = snapshot();
+        let host_id = host.host_id.clone();
+        store.accept_host_parts(host.parts()).unwrap();
+        let scope_id = vec![2; 33];
+        let subject_id = vec![3; 33];
+
+        for (operation_id, kind, host, scope, subject, created_at) in [
+            (
+                [1; 16],
+                MutationKind::DeviceProvision,
+                host_id.clone(),
+                scope_id.clone(),
+                subject_id.clone(),
+                100,
+            ),
+            (
+                [2; 16],
+                MutationKind::DeviceProvision,
+                host_id.clone(),
+                scope_id.clone(),
+                subject_id.clone(),
+                200,
+            ),
+            (
+                [3; 16],
+                MutationKind::Signup,
+                host_id.clone(),
+                scope_id.clone(),
+                subject_id.clone(),
+                300,
+            ),
+        ] {
+            store
+                .record_mutation(&MutationOperation {
+                    operation_id,
+                    kind,
+                    host_id: host,
+                    scope_id: scope,
+                    subject_id: subject,
+                    expected_version: None,
+                    request_hash: [5; 32],
+                    material_ref: operation_id.to_vec(),
+                    material_hash: [6; 32],
+                    state: MutationState::Prepared,
+                    attempt_count: 0,
+                    created_at,
+                    updated_at: created_at,
+                })
+                .unwrap();
+        }
+        store.begin_mutation_submission(&[2; 16], 201).unwrap();
+        store
+            .advance_mutation(&[2; 16], MutationState::Verified, 202)
+            .unwrap();
+
+        let loaded = store
+            .latest_mutation_for_binding(
+                &host_id,
+                MutationKind::DeviceProvision,
+                &scope_id,
+                &subject_id,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.operation_id, [2; 16]);
+        assert_eq!(loaded.state, MutationState::Verified);
+        assert!(store
+            .latest_mutation_for_binding(
+                &host_id,
+                MutationKind::DeviceProvision,
+                &scope_id,
+                &[7; 33],
+            )
+            .unwrap()
+            .is_none());
     }
 
     #[test]

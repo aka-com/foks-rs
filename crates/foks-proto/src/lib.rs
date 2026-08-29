@@ -22,6 +22,8 @@ pub const HEPK_TYPE_ID: u64 = 0x9c58_1bee_d36c_7e0c;
 pub const HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID: u64 = 0x8a9e_3276_4726_2289;
 pub const TEMP_DH_KEY_SIG_TEMPLATE_TYPE_ID: u64 = 0xd51b_5d99_0285_023e;
 pub const SUBKEY_SEED_TYPE_ID: u64 = 0x9bfc_a0e8_fc32_288f;
+pub const ECDSA_COMPRESSED_PUBLIC_KEY_TYPE_ID: u64 = 0xf3bc_edcb_d7b6_754e;
+pub const YUBI_MANAGEMENT_KEY_BOX_PAYLOAD_TYPE_ID: u64 = 0xc939_af74_e014_7c7a;
 pub const MERKLE_TREE_RF_INPUT_TYPE_ID: u64 = 0xb0e2_68f3_88ac_c97a;
 pub const MERKLE_NODE_TYPE_ID: u64 = 0xe941_750d_c5b9_6783;
 pub const MERKLE_BACK_POINTERS_TYPE_ID: u64 = 0x8c7c_4b85_5fba_9000;
@@ -72,6 +74,7 @@ mod kv;
 mod passphrase;
 mod role;
 mod service;
+mod yubi;
 
 pub use entity::*;
 pub use error::*;
@@ -82,6 +85,7 @@ pub use kv::*;
 pub use passphrase::*;
 pub use role::*;
 pub use service::*;
+pub use yubi::*;
 
 pub(crate) use codec::{
     array, binary, boolean, device_entity, entity, expect_unsigned, fixed_blob, integer, list,

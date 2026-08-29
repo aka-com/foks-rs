@@ -48,6 +48,32 @@ impl Hepk {
     pub fn mlkem768(&self) -> &[u8] {
         &self.mlkem768
     }
+
+    /// Constructs the exact v0.1.9 P-256 + ML-KEM-768 HEPK used by a Yubi
+    /// credential. Both public keys are validated by decoding the canonical
+    /// representation before it is returned.
+    pub fn yubi(p256: [u8; 33], mlkem768: Vec<u8>) -> Result<Self> {
+        let value = Value::Array(vec![
+            Value::Unsigned(1),
+            Value::Variant(Some((
+                b"1".to_vec(),
+                Box::new(Value::Array(vec![
+                    Value::Array(vec![
+                        Value::Unsigned(2),
+                        Value::Variant(Some((
+                            b"1".to_vec(),
+                            Box::new(Value::Binary(p256.to_vec())),
+                        ))),
+                    ]),
+                    Value::Array(vec![
+                        Value::Unsigned(1),
+                        Value::Variant(Some((b"1".to_vec(), Box::new(Value::Binary(mlkem768))))),
+                    ]),
+                ])),
+            ))),
+        ]);
+        hepk(&value)
+    }
 }
 
 pub(crate) fn hepk(value: &Value) -> Result<Hepk> {

@@ -1,5 +1,5 @@
 use foks_proto::{
-    ChangeMetadata, DecodedSoftwareSignupArgument, EntityId, InviteCode, MerkleRoot, Role,
+    ChangeMetadata, DecodedSignupArgument, EntityId, InviteCode, MerkleRoot, Role,
     DEVICE_LABEL_TYPE_ID, ENTITY_DEVICE, ENTITY_USER, LINK_OUTER_TYPE_ID, LINK_OUTER_V1_TYPE_ID,
     NAME_COMMITMENT_TYPE_ID, TREE_LOCATION_TYPE_ID,
 };
@@ -16,6 +16,9 @@ pub(crate) struct ValidatedSignup {
     pub device_hepk_fingerprint: [u8; 32],
     pub exact_device_hepk: Vec<u8>,
     pub exact_device_name: Vec<u8>,
+    pub subkey_id: Option<EntityId>,
+    pub exact_subkey_box: Option<Vec<u8>>,
+    pub yubi_pq_hint: Option<(u8, [u8; 32])>,
     pub link_hash: [u8; 32],
     pub exact_link: Vec<u8>,
     pub next_tree_location: [u8; 32],
@@ -25,8 +28,8 @@ pub(crate) struct ValidatedSignup {
     pub leaves: [([u8; 32], [u8; 32]); 2],
 }
 
-pub(crate) fn validate_software_signup(
-    request: &DecodedSoftwareSignupArgument,
+pub(crate) fn validate_signup(
+    request: &DecodedSignupArgument,
     expected_host: &EntityId,
     current_root: &MerkleRoot,
     current_root_hash: [u8; 32],
@@ -41,16 +44,37 @@ pub(crate) fn validate_software_signup(
     }
     let normalized_name = foks_verify::normalize_username(&request.username_utf8)
         .ok_or(Error::Signup("invalid username"))?;
+    let eldest = request.link.decode_eldest()?;
+    let is_yubi = eldest.member.entity_type() == foks_proto::ENTITY_YUBI;
+    let expected_device_type = if is_yubi {
+        foks_proto::DeviceType::YubiKey
+    } else {
+        foks_proto::DeviceType::Computer
+    };
     if request.device_name.normalization_version != 0
-        || request.device_name.label.device_type != foks_proto::DeviceType::Computer
+        || request.device_name.label.device_type != expected_device_type
         || request.device_name.label.serial != 1
         || foks_verify::normalize_device_name(&request.device_name.display_name).as_deref()
             != Some(request.device_name.label.normalized_name.as_slice())
     {
-        return Err(Error::Signup("invalid software device disclosure"));
+        return Err(Error::Signup("invalid signup device disclosure"));
     }
 
-    let eldest = request.link.decode_eldest()?;
+    let expected_signatures = if is_yubi { 3 } else { 2 };
+    let valid_yubi_fields = match (
+        is_yubi,
+        eldest.member_subkey.as_ref(),
+        request.subkey_box.as_ref(),
+        request.yubi_pq_hint.as_ref(),
+    ) {
+        (true, Some(subkey), Some(boxed), Some(_)) => {
+            subkey.entity_type() == foks_proto::ENTITY_SUBKEY
+                && boxed.dh_type == 2
+                && boxed.sender_dh.is_none()
+        }
+        (false, None, None, None) => true,
+        _ => false,
+    };
     if eldest.seqno != 1
         || eldest.previous.is_some()
         || eldest.root.epoch != current_root.epoch
@@ -58,15 +82,18 @@ pub(crate) fn validate_software_signup(
         || &eldest.host != expected_host
         || eldest.signer != eldest.member
         || eldest.member != eldest.member_verify_key
-        || eldest.member.entity_type() != ENTITY_DEVICE
+        || !matches!(
+            eldest.member.entity_type(),
+            ENTITY_DEVICE | foks_proto::ENTITY_YUBI
+        )
         || eldest.member_role != Role::OWNER
         || eldest.member_source_role != Role::NONE
         || eldest.member_scoped_host.is_some()
-        || eldest.member_subkey.is_some()
         || eldest.puk_generation != 1
-        || request.link.signatures().len() != 2
+        || request.link.signatures().len() != expected_signatures
+        || !valid_yubi_fields
     {
-        return Err(Error::Signup("invalid software eldest link"));
+        return Err(Error::Signup("invalid signup eldest link"));
     }
     let mut uid_bytes = eldest.puk_verify_key.as_bytes().to_vec();
     uid_bytes[0] = ENTITY_USER;
@@ -81,17 +108,31 @@ pub(crate) fn validate_software_signup(
         LINK_OUTER_V1_TYPE_ID,
         &request.link.signing_bytes(0)?,
     )?;
+    if let Some(subkey) = &eldest.member_subkey {
+        foks_crypto::verify_typed(
+            subkey,
+            &request.link.signatures()[1],
+            LINK_OUTER_V1_TYPE_ID,
+            &request.link.signing_bytes(1)?,
+        )?;
+    }
+    let member_signature = expected_signatures - 1;
     foks_crypto::verify_typed(
         &eldest.member,
-        &request.link.signatures()[1],
+        &request.link.signatures()[member_signature],
         LINK_OUTER_V1_TYPE_ID,
-        &request.link.signing_bytes(1)?,
+        &request.link.signing_bytes(member_signature)?,
     )?;
     let device_hepk_fingerprint = foks_crypto::hepk_fingerprint(&request.device_hepk)?;
     let puk_hepk_fingerprint = foks_crypto::hepk_fingerprint(&request.puk_hepk)?;
+    let valid_device_hepk = if is_yubi {
+        request.device_hepk.p256().copied() == Some(eldest.member.p256_key()?)
+    } else {
+        request.device_hepk.curve25519().is_some()
+    };
     if eldest.member_hepk_fingerprint != device_hepk_fingerprint
         || eldest.puk_hepk_fingerprint != puk_hepk_fingerprint
-        || request.device_hepk.curve25519().is_none()
+        || !valid_device_hepk
         || request.puk_hepk.curve25519().is_none()
     {
         return Err(Error::Signup("HEPK binding mismatch"));
@@ -154,6 +195,22 @@ pub(crate) fn validate_software_signup(
         device_hepk_fingerprint,
         exact_device_hepk: request.device_hepk.encoded()?,
         exact_device_name: request.device_name.encoded()?,
+        subkey_id: eldest.member_subkey,
+        exact_subkey_box: request
+            .subkey_box
+            .as_ref()
+            .map(foks_proto::HybridBox::encoded)
+            .transpose()?,
+        yubi_pq_hint: request
+            .yubi_pq_hint
+            .as_ref()
+            .map(|hint| -> Result<(u8, [u8; 32])> {
+                Ok((
+                    u8::try_from(hint.slot).map_err(|_| Error::Signup("Yubi PQ slot range"))?,
+                    hint.id,
+                ))
+            })
+            .transpose()?,
         link_hash,
         exact_link,
         next_tree_location: request.next_tree_location,
@@ -182,13 +239,13 @@ mod tests {
         "../../../foks-snowpack/tests/fixtures/foks-v0.1.9/signup/signup-request.frame"
     );
 
-    fn request() -> DecodedSoftwareSignupArgument {
+    fn request() -> DecodedSignupArgument {
         let call = foks_rpc::read_call(
             &mut std::io::Cursor::new(SIGNUP),
             foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
         )
         .unwrap();
-        DecodedSoftwareSignupArgument::decode(call.argument()).unwrap()
+        DecodedSignupArgument::decode(call.argument()).unwrap()
     }
 
     #[test]
@@ -205,15 +262,15 @@ mod tests {
                 hash: [0; 32],
             },
         };
-        validate_software_signup(&request, &eldest.host, &root, eldest.root.hash).unwrap();
+        validate_signup(&request, &eldest.host, &root, eldest.root.hash).unwrap();
 
         request.next_tree_location[0] ^= 1;
-        assert!(validate_software_signup(&request, &eldest.host, &root, eldest.root.hash).is_err());
+        assert!(validate_signup(&request, &eldest.host, &root, eldest.root.hash).is_err());
         request.next_tree_location[0] ^= 1;
 
         let mut link = request.link.encoded().unwrap();
         *link.last_mut().unwrap() ^= 1;
         request.link = foks_proto::UserLink::decode(&link).unwrap();
-        assert!(validate_software_signup(&request, &eldest.host, &root, eldest.root.hash).is_err());
+        assert!(validate_signup(&request, &eldest.host, &root, eldest.root.hash).is_err());
     }
 }

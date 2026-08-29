@@ -222,6 +222,34 @@ coverage = ["probe_and_pin"]
 [[route]]
 protocol = "Reg"
 protocol_id = 0xf7ab85f3
+method = "getSubkeyBoxChallenge"
+position = 12
+listener = "public_services"
+authentication = "delegated_tls"
+request = "EntityId"
+result = "RegistrationChallenge"
+statuses = ["ok", "bad_args", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+coverage = ["yubikey_lifecycle"]
+
+[[route]]
+protocol = "Reg"
+protocol_id = 0xf7ab85f3
+method = "loadSubkeyBox"
+position = 13
+listener = "public_services"
+authentication = "signed_subkey_challenge"
+request = "LoadSubkeyBoxArgument"
+result = "HybridBox"
+statuses = ["ok", "bad_args", "expired", "not_found", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+coverage = ["yubikey_lifecycle"]
+
+[[route]]
+protocol = "Reg"
+protocol_id = 0xf7ab85f3
 method = "stretchVersion"
 position = 14
 listener = "public_services"
@@ -386,6 +414,48 @@ statuses = ["ok", "permission_denied"]
 max_request_bytes = 1024
 supported = true
 coverage = ["authorization"]
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "putYubiManagementKey"
+position = 27
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "YubiEncryptedManagementKey"
+result = "Void"
+statuses = ["ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
+max_request_bytes = 65536
+supported = true
+coverage = ["yubikey_lifecycle"]
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "getYubiManagementKey"
+position = 28
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "EntityId"
+result = "YubiEncryptedManagementKey"
+statuses = ["ok", "bad_args", "not_found", "permission_denied"]
+max_request_bytes = 4096
+supported = true
+coverage = ["yubikey_lifecycle"]
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "getAllYubiManagementKeys"
+position = 29
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "Void"
+result = "YubiEncryptedManagementKeyList"
+statuses = ["ok", "bad_args", "permission_denied"]
+max_request_bytes = 1024
+supported = true
+coverage = ["yubikey_lifecycle"]
 
 [[route]]
 protocol = "TeamLoader"

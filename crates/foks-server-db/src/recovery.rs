@@ -21,7 +21,7 @@ impl Database {
         expires_at: u64,
         now: u64,
     ) -> Result<()> {
-        if entity_id.len() != 33 || host_id.len() != 33 || expires_at <= now {
+        if !matches!(entity_id.len(), 33 | 34) || host_id.len() != 33 || expires_at <= now {
             return Err(Error::Invalid("recovery challenge"));
         }
         let transaction = self

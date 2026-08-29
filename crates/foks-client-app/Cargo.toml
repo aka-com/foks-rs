@@ -12,6 +12,7 @@ foks-crypto = { workspace = true }
 foks-keystore = { workspace = true }
 foks-proto = { workspace = true }
 foks-verify = { workspace = true }
+foks-yubi = { workspace = true }
 fs2 = { workspace = true }
 getrandom = { workspace = true }
 libc = { workspace = true }
@@ -25,6 +26,7 @@ url = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+foks-server-testkit = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
 

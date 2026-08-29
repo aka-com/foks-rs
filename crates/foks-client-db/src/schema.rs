@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 14;
+pub(crate) const VERSION: u32 = 15;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -233,7 +233,7 @@ CREATE TABLE mutation_operations (
     operation_id BLOB PRIMARY KEY CHECK (length(operation_id) = 16),
     operation_kind INTEGER NOT NULL CHECK (operation_kind BETWEEN 1 AND 7),
     host_id BLOB NOT NULL REFERENCES hosts(host_id) ON DELETE RESTRICT,
-    scope_id BLOB NOT NULL CHECK (length(scope_id) IN (0, 16, 33)),
+    scope_id BLOB NOT NULL CHECK (length(scope_id) IN (0, 16, 33, 34)),
     subject_id BLOB NOT NULL CHECK (length(subject_id) IN (0, 16, 33, 34)),
     expected_version INTEGER CHECK (expected_version IS NULL OR expected_version >= 0),
     request_hash BLOB NOT NULL CHECK (length(request_hash) = 32),
@@ -254,9 +254,9 @@ WHERE state IN (1, 2, 3);
 -- application-owned account or reconciliation target.
 CREATE TABLE scheduled_jobs (
     job_id BLOB PRIMARY KEY CHECK (length(job_id) = 16),
-    job_kind INTEGER NOT NULL CHECK (job_kind IN (1, 2)),
+    job_kind INTEGER NOT NULL CHECK (job_kind IN (1, 2, 3)),
     host_id BLOB NOT NULL REFERENCES hosts(host_id) ON DELETE CASCADE,
-    scope_id BLOB NOT NULL CHECK (length(scope_id) IN (0, 16, 33, 34)),
+    scope_id BLOB NOT NULL CHECK (length(scope_id) BETWEEN 0 AND 1024),
     interval_micros INTEGER NOT NULL CHECK (interval_micros > 0),
     next_run_at INTEGER NOT NULL CHECK (next_run_at >= 0),
     failure_count INTEGER NOT NULL CHECK (failure_count >= 0),

@@ -24,6 +24,21 @@ pub(super) trait Operations {
     fn stretch_version(&self, argument: &[u8], principal: &Principal)
         -> Result<Vec<u8>, RpcStatus>;
     fn ppe_parcel(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus>;
+    fn put_yubi_management_key(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<(), RpcStatus>;
+    fn get_yubi_management_key(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus>;
+    fn get_all_yubi_management_keys(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus>;
 }
 
 impl Operations for ServerData {
@@ -129,6 +144,43 @@ impl Operations for ServerData {
             .map_err(|_| RpcStatus::TransactionRetry)?;
         crate::services::user::ppe_parcel(&snapshot, argument, principal)
     }
+
+    fn put_yubi_management_key(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<(), RpcStatus> {
+        crate::services::user::put_yubi_management_key(
+            self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+            &self.clock,
+            argument,
+            principal,
+        )
+    }
+
+    fn get_yubi_management_key(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        crate::services::user::get_yubi_management_key(&snapshot, argument, principal)
+    }
+
+    fn get_all_yubi_management_keys(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        crate::services::user::get_all_yubi_management_keys(&snapshot, argument, principal)
+    }
 }
 
 pub(super) fn response(
@@ -189,6 +241,20 @@ pub(super) fn response(
             encode_success_response_at(&operations.host_config(principal)?, sequence)
                 .map_err(|_| RpcStatus::Unsupported)
         }
+        RouteId::UserPutYubiManagementKey => {
+            operations.put_yubi_management_key(call.call.argument(), principal)?;
+            encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
+        }
+        RouteId::UserGetYubiManagementKey => encode_success_response_at(
+            &operations.get_yubi_management_key(call.call.argument(), principal)?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
+        RouteId::UserGetAllYubiManagementKeys => encode_success_response_at(
+            &operations.get_all_yubi_management_keys(call.call.argument(), principal)?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
         _ => Err(RpcStatus::Unsupported),
     }
 }

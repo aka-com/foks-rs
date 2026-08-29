@@ -874,7 +874,8 @@ fn identity_snapshot_filtered(
              JOIN parcels p ON p.uid = u.uid AND p.device_id = d.device_id
                  AND p.role_type = s.role_type AND p.visibility = s.visibility
                  AND p.generation = s.generation
-            WHERE (?1 IS NULL OR u.uid = ?1) AND (?2 IS NULL OR d.device_id = ?2)",
+            WHERE (?1 IS NULL OR u.uid = ?1)
+              AND (?2 IS NULL OR d.device_id = ?2 OR d.subkey_id = ?2)",
             rusqlite::params![uid, device_id],
             |row| {
                 Ok((

@@ -8,9 +8,10 @@ use clap::Parser as _;
 use foks_agent_proto::{ErrorCode, Operation, Request, Response, MAXIMUM_MESSAGE_BYTES};
 use foks_client_app::{
     derive_vault_key, AccountVault, CancellationToken, CheckedProfileSession, ClientCredentials,
-    Passphrase, ProfileRegistry, ProfileSession,
+    Passphrase, ProfileRegistry, ProfileSession, YubiProvisionInput, YubiSignupInput,
 };
 use foks_keystore::EncryptedFileSecretStore;
+use foks_yubi::{CardId, HardwareYubiProvider, Pin, SlotId, YubiProvider as _};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use zeroize::Zeroizing;
@@ -632,6 +633,297 @@ fn dispatch_result(
                 Ok(serde_json::to_value(session.sync_account(&alias, vault)?)?)
             })
         }
+        Operation::ListYubiCards { profile } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, _vault| {
+                Ok(serde_json::to_value(
+                    session.list_yubi_cards(&HardwareYubiProvider::new())?,
+                )?)
+            })
+        }
+        Operation::ListYubiAccounts { profile } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |_session, vault| {
+                Ok(serde_json::to_value(vault.yubi_aliases()?)?)
+            })
+        }
+        Operation::CreateYubiAccount {
+            profile,
+            alias,
+            username,
+            device_name,
+            email,
+            invite,
+            passphrase,
+            card_serial,
+            signing_slot,
+            pq_slot,
+            pin,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                let provider = HardwareYubiProvider::new();
+                let card = yubi_card(&provider, card_serial)?;
+                let passphrase = passphrase
+                    .as_ref()
+                    .map(|passphrase| Passphrase::new(passphrase.expose()))
+                    .transpose()?;
+                Ok(serde_json::to_value(session.create_yubi_account(
+                    YubiSignupInput {
+                        alias,
+                        username,
+                        device_name,
+                        email,
+                        invite: invite.expose().to_owned(),
+                        passphrase,
+                        card,
+                        signing_slot: SlotId::new(signing_slot)?,
+                        pq_slot: SlotId::new(pq_slot)?,
+                    },
+                    Pin::new(pin.expose())?,
+                    &provider,
+                    vault,
+                    master,
+                )?)?)
+            })
+        }
+        Operation::ResumeYubiAccount {
+            profile,
+            alias,
+            pin,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                Ok(serde_json::to_value(session.resume_yubi_account(
+                    &alias,
+                    Pin::new(pin.expose())?,
+                    &HardwareYubiProvider::new(),
+                    vault,
+                    master,
+                )?)?)
+            })
+        }
+        Operation::ProvisionYubiDevice {
+            profile,
+            source_alias,
+            target_alias,
+            device_name,
+            serial,
+            card_serial,
+            signing_slot,
+            pq_slot,
+            pin,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                let provider = HardwareYubiProvider::new();
+                let card = yubi_card(&provider, card_serial)?;
+                Ok(serde_json::to_value(session.provision_yubi_device(
+                    YubiProvisionInput {
+                        source_alias,
+                        target_alias,
+                        device_name,
+                        serial,
+                        card,
+                        signing_slot: SlotId::new(signing_slot)?,
+                        pq_slot: SlotId::new(pq_slot)?,
+                    },
+                    Pin::new(pin.expose())?,
+                    &provider,
+                    vault,
+                    master,
+                )?)?)
+            })
+        }
+        Operation::SyncYubiAccount {
+            profile,
+            alias,
+            pin,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(session.sync_yubi_account(
+                    &alias,
+                    Pin::new(pin.expose())?,
+                    &HardwareYubiProvider::new(),
+                    vault,
+                )?)?)
+            })
+        }
+        Operation::YubiPinStatus { profile, alias } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(session.yubi_pin_status(
+                    &alias,
+                    &HardwareYubiProvider::new(),
+                    vault,
+                )?)?)
+            })
+        }
+        Operation::ChangeYubiPin {
+            profile,
+            alias,
+            old_pin,
+            new_pin,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(session.change_yubi_pin(
+                    &alias,
+                    Pin::new(old_pin.expose())?,
+                    Pin::new(new_pin.expose())?,
+                    &HardwareYubiProvider::new(),
+                    vault,
+                )?)?)
+            })
+        }
+        Operation::ChangeYubiPuk {
+            profile,
+            alias,
+            old_puk,
+            new_puk,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                session.change_yubi_puk(
+                    &alias,
+                    Pin::new(old_puk.expose())?,
+                    Pin::new(new_puk.expose())?,
+                    &HardwareYubiProvider::new(),
+                    vault,
+                )?;
+                Ok(serde_json::json!({ "alias": alias, "changed": true }))
+            })
+        }
+        Operation::UnblockYubiPin {
+            profile,
+            alias,
+            puk,
+            new_pin,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(session.unblock_yubi_pin(
+                    &alias,
+                    Pin::new(puk.expose())?,
+                    Pin::new(new_pin.expose())?,
+                    &HardwareYubiProvider::new(),
+                    vault,
+                )?)?)
+            })
+        }
+        Operation::ConfigureYubiRetries {
+            profile,
+            alias,
+            pin,
+            puk,
+            pin_attempts,
+            puk_attempts,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(session.configure_yubi_retries(
+                    &alias,
+                    Pin::new(pin.expose())?,
+                    Pin::new(puk.expose())?,
+                    pin_attempts,
+                    puk_attempts,
+                    &HardwareYubiProvider::new(),
+                    vault,
+                )?)?)
+            })
+        }
+        Operation::RotateYubiManagementKey {
+            profile,
+            alias,
+            pin,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(session.rotate_yubi_management_key(
+                    &alias,
+                    Pin::new(pin.expose())?,
+                    &HardwareYubiProvider::new(),
+                    vault,
+                )?)?)
+            })
+        }
+        Operation::ResumeYubiManagementKey {
+            profile,
+            alias,
+            pin,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                let pin = pin.as_ref().map(|pin| Pin::new(pin.expose())).transpose()?;
+                Ok(serde_json::to_value(session.resume_yubi_management_key(
+                    &alias,
+                    pin,
+                    &HardwareYubiProvider::new(),
+                    vault,
+                )?)?)
+            })
+        }
+        Operation::RecoverYubiManagementKey {
+            profile,
+            yubi_alias,
+            software_alias,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(session.recover_yubi_management_key(
+                    &yubi_alias,
+                    &software_alias,
+                    vault,
+                )?)?)
+            })
+        }
+        Operation::RecoverYubiSubkey {
+            profile,
+            alias,
+            pin,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(session.recover_yubi_subkey(
+                    &alias,
+                    Pin::new(pin.expose())?,
+                    &HardwareYubiProvider::new(),
+                    vault,
+                )?)?)
+            })
+        }
+        Operation::RevokeYubiDevice {
+            profile,
+            yubi_alias,
+            software_alias,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                Ok(serde_json::to_value(session.revoke_yubi_device(
+                    &software_alias,
+                    &yubi_alias,
+                    vault,
+                    master,
+                )?)?)
+            })
+        }
         Operation::ListKv { profile, alias } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
@@ -687,6 +979,42 @@ fn with_vault(
         )?;
         operation(session, &mut AccountVault::new(&mut store))
     })
+}
+
+fn with_vault_and_master(
+    state_dir: &Path,
+    session: &ProfileSession,
+    operation: impl FnOnce(
+        &CheckedProfileSession<'_>,
+        &mut AccountVault<'_>,
+        &[u8; 32],
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error>>,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let credentials = ClientCredentials::open(state_dir)?;
+    credentials.with_checked_session(session, |session| {
+        let master = credentials.master_key()?;
+        let mut store = EncryptedFileSecretStore::open(
+            &session.paths().credential_store,
+            derive_vault_key(&master),
+        )?;
+        operation(session, &mut AccountVault::new(&mut store), &master)
+    })
+}
+
+fn yubi_card(
+    provider: &HardwareYubiProvider,
+    serial: u32,
+) -> Result<CardId, Box<dyn std::error::Error>> {
+    let matches = provider
+        .cards()?
+        .into_iter()
+        .filter(|card| card.serial == serial)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [card] => Ok(card.clone()),
+        [] => Err(format!("YubiKey serial {serial} is not connected").into()),
+        _ => Err(format!("YubiKey serial {serial} is ambiguous").into()),
+    }
 }
 
 fn try_with_vault<T>(
