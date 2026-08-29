@@ -5,90 +5,301 @@ on:
     - cron: "17 6 * * *"
   workflow_dispatch:
 
-permissions:
-  contents: write
-  id-token: write
-  attestations: write
+permissions: {}
 
 concurrency:
   group: foks-hosted-compat
   cancel-in-progress: false
 
 jobs:
-  authenticated-canary:
+  build_tools:
+    name: Build isolated canary tools
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 25
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Build and stage the client and signer
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p foks-cli -p foks-compat-artifact
+          root="$RUNNER_TEMP/foks-canary-tools"
+          mkdir -p "$root/target/release" \
+            "$root/tools/foks-client" \
+            "$root/crates/foks-server/protocol"
+          cp target/release/foks-rs target/release/foks-compat-artifact \
+            "$root/target/release/"
+          cp tools/foks-client/hosted-canary.sh "$root/tools/foks-client/"
+          cp crates/foks-server/protocol/upstream-v0.1.9.json \
+            "$root/crates/foks-server/protocol/"
+          cd "$root"
+          sha256sum target/release/foks-rs \
+            target/release/foks-compat-artifact \
+            tools/foks-client/hosted-canary.sh \
+            crates/foks-server/protocol/upstream-v0.1.9.json \
+            > SHA256SUMS
+      - name: Transfer public canary tools
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: foks-canary-tools
+          path: ${{ runner.temp }}/foks-canary-tools
+          if-no-files-found: error
+          retention-days: 1
+
+  authenticated_canary:
+    name: Authenticate and sign canary
+    needs: build_tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      artifact_b64: ${{ steps.canary.outputs.artifact_b64 }}
+      compatible: ${{ steps.canary.outputs.compatible }}
+      publishable: ${{ steps.canary.outputs.publishable }}
+      previous_digest: ${{ steps.previous.outputs.digest }}
+    steps:
+      - name: Restore the audited canary tools
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/foks-canary-tools"
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name foks-canary-tools --dir "$root"
+          cd "$root"
+          sha256sum -c SHA256SUMS
+          chmod 700 target/release/foks-rs \
+            target/release/foks-compat-artifact \
+            tools/foks-client/hosted-canary.sh
+      - name: Fetch the current stable lease
+        id: previous
+        env:
+          GH_REPO: ${{ vars.FOKS_CANARY_PUBLISH_REPOSITORY || github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=foks-hosted-compat-current
+          asset=foks-hosted-capabilities.json
+          repo=$(gh repo view "$GH_REPO" --json nameWithOwner,visibility \
+            --jq 'select(.visibility == "PUBLIC") | .nameWithOwner')
+          if [ -z "$repo" ]; then
+            echo "compatibility leases must be published to a public repository" >&2
+            exit 1
+          fi
+          state_file="$RUNNER_TEMP/foks-release-state"
+          error_file="$RUNNER_TEMP/foks-release-view-error"
+          set +e
+          gh api "repos/$repo/releases/tags/$tag" \
+            --jq 'if ([.assets[] | select(.name == "foks-hosted-capabilities.json")] | length) == 1 then "present" elif (.assets | length) == 0 then "empty" else "invalid" end' \
+            >"$state_file" 2>"$error_file"
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            case "$(cat "$state_file")" in
+              present)
+                previous="$RUNNER_TEMP/foks-previous-canary"
+                mkdir -p "$previous"
+                gh release download "$tag" --repo "$repo" \
+                  --pattern "$asset" --dir "$previous"
+                test -f "$previous/$asset"
+                test "$(wc -c < "$previous/$asset")" -le 1048576
+                echo "artifact=$previous/$asset" >>"$GITHUB_OUTPUT"
+                echo "digest=$(sha256sum "$previous/$asset" | awk '{print $1}')" \
+                  >>"$GITHUB_OUTPUT"
+                ;;
+              empty)
+                echo "digest=empty" >>"$GITHUB_OUTPUT"
+                ;;
+              *)
+                echo "the stable release has an invalid canary asset set" >&2
+                exit 1
+                ;;
+            esac
+          elif grep -Fq '(HTTP 404)' "$error_file"; then
+            echo "digest=missing" >>"$GITHUB_OUTPUT"
+          else
+            cat "$error_file" >&2
+            exit "$status"
+          fi
       - name: Restore dedicated canary state
         env:
           FOKS_CANARY_STATE_TAR_B64: ${{ secrets.FOKS_CANARY_STATE_TAR_B64 }}
           FOKS_CANARY_SIGNING_SEED_B64: ${{ secrets.FOKS_CANARY_SIGNING_SEED_B64 }}
         run: |
-          set -eu
+          set -euo pipefail
           umask 077
           mkdir -p "$RUNNER_TEMP/foks-canary-state"
           printf '%s' "$FOKS_CANARY_STATE_TAR_B64" | base64 -d | tar -xz -C "$RUNNER_TEMP/foks-canary-state"
           printf '%s' "$FOKS_CANARY_SIGNING_SEED_B64" | base64 -d > "$RUNNER_TEMP/foks-canary-signing.seed"
           test "$(wc -c < "$RUNNER_TEMP/foks-canary-signing.seed")" -eq 32
-      - name: Build isolated client and artifact signer
-        run: cargo build --locked --release -p foks-cli -p foks-compat-artifact
       - name: Run authenticated mutation/read canary
         id: canary
-        continue-on-error: true
         env:
           FOKS_CANARY_STATE_DIR: ${{ runner.temp }}/foks-canary-state
+          FOKS_CANARY_ROOT: ${{ runner.temp }}/foks-canary-tools
           # This dedicated profile deliberately uses the v0.1.9 policy so an
           # expired lease cannot prevent the canary from testing recovery.
           FOKS_CANARY_PROFILE: hosted-canary
           FOKS_CAPABILITY_PROFILE: hosted
           FOKS_CANARY_ACCOUNT: canary
-          FOKS_CANARY_TARGET: foks.pub:443
+          FOKS_CANARY_EXPECTED_TARGET: foks.pub:443
+          FOKS_CANARY_PREVIOUS_ARTIFACT: ${{ steps.previous.outputs.artifact }}
+          FOKS_CANARY_RUN_NUMBER: ${{ github.run_number }}
+          FOKS_CANARY_RUN_ATTEMPT: ${{ github.run_attempt }}
           FOKS_CANARY_SIGNING_KEY_FILE: ${{ runner.temp }}/foks-canary-signing.seed
           FOKS_CANARY_OUTPUT: ${{ runner.temp }}/foks-hosted-capabilities.json
-        run: tools/foks-client/hosted-canary.sh
+        run: |
+          set -uo pipefail
+          set +e
+          "$FOKS_CANARY_ROOT/tools/foks-client/hosted-canary.sh"
+          status=$?
+          set -e
+          if [ ! -f "$FOKS_CANARY_OUTPUT" ]; then
+            echo "canary did not produce an applied artifact" >&2
+            if [ "$status" -eq 0 ]; then
+              exit 1
+            fi
+            exit "$status"
+          fi
+          if [ "$status" -eq 0 ]; then
+            compatible=true
+          elif [ "$status" -eq 1 ]; then
+            compatible=false
+          else
+            echo "canary returned an unexpected status after applying its artifact" >&2
+            exit "$status"
+          fi
+          test "$(wc -c < "$FOKS_CANARY_OUTPUT")" -le 1048576
+          artifact_b64=$(base64 -w 0 < "$FOKS_CANARY_OUTPUT")
+          {
+            echo "artifact_b64=$artifact_b64"
+            echo "compatible=$compatible"
+            echo "publishable=true"
+          } >>"$GITHUB_OUTPUT"
+
+  publish:
+    name: Attest and publish canary
+    needs: authenticated_canary
+    if: needs.authenticated_canary.result == 'success' && needs.authenticated_canary.outputs.publishable == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Restore the public signed artifact
+        env:
+          FOKS_CANARY_ARTIFACT_B64: ${{ needs.authenticated_canary.outputs.artifact_b64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$FOKS_CANARY_ARTIFACT_B64" | base64 -d \
+            > "$RUNNER_TEMP/foks-hosted-capabilities.json"
+          test "$(wc -c < "$RUNNER_TEMP/foks-hosted-capabilities.json")" -le 1048576
       - name: Upload signed capability lease
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: foks-hosted-capabilities
           path: ${{ runner.temp }}/foks-hosted-capabilities.json
           if-no-files-found: error
           retention-days: 14
       - name: Attest canary artifact provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: ${{ runner.temp }}/foks-hosted-capabilities.json
       - name: Publish current signed lease at a stable URL
         env:
+          EXPECTED_PREVIOUS_DIGEST: ${{ needs.authenticated_canary.outputs.previous_digest }}
           GH_REPO: ${{ vars.FOKS_CANARY_PUBLISH_REPOSITORY || github.repository }}
           GH_TOKEN: ${{ secrets.FOKS_CANARY_PUBLISH_TOKEN || github.token }}
         run: |
-          set -eu
+          set -euo pipefail
           tag=foks-hosted-compat-current
-          if [ "$(gh repo view "$GH_REPO" --json visibility --jq .visibility)" != PUBLIC ]; then
+          asset=foks-hosted-capabilities.json
+          repo=$(gh repo view "$GH_REPO" --json nameWithOwner,visibility \
+            --jq 'select(.visibility == "PUBLIC") | .nameWithOwner')
+          if [ -z "$repo" ]; then
             echo "compatibility leases must be published to a public repository" >&2
             exit 1
           fi
-          if ! gh release view "$tag" --repo "$GH_REPO" >/dev/null 2>&1; then
-            gh release create "$tag" \
-              --repo "$GH_REPO" \
+          state_file="$RUNNER_TEMP/foks-release-state"
+          error_file="$RUNNER_TEMP/foks-release-view-error"
+          set +e
+          gh api "repos/$repo/releases/tags/$tag" \
+            --jq 'if ([.assets[] | select(.name == "foks-hosted-capabilities.json")] | length) == 1 then "present" elif (.assets | length) == 0 then "empty" else "invalid" end' \
+            >"$state_file" 2>"$error_file"
+          status=$?
+          set -e
+          if [ "$EXPECTED_PREVIOUS_DIGEST" = missing ]; then
+            if [ "$status" -eq 0 ]; then
+              echo "stable canary state changed after generation allocation" >&2
+              exit 1
+            fi
+            if ! grep -Fq '(HTTP 404)' "$error_file"; then
+              cat "$error_file" >&2
+              exit "$status"
+            fi
+            gh release create "$tag" --repo "$repo" \
               --title "Current FOKS hosted compatibility lease" \
               --notes "Machine-consumed signed compatibility lease. This is not an application release." \
               --prerelease
+          elif [ "$EXPECTED_PREVIOUS_DIGEST" = empty ]; then
+            if [ "$status" -ne 0 ] || [ "$(cat "$state_file")" != empty ]; then
+              echo "stable canary state changed after generation allocation" >&2
+              cat "$error_file" >&2
+              exit 1
+            fi
+          else
+            if [ "$status" -ne 0 ] || [ "$(cat "$state_file")" != present ]; then
+              echo "stable canary state changed after generation allocation" >&2
+              cat "$error_file" >&2
+              exit 1
+            fi
+            current="$RUNNER_TEMP/foks-current-canary"
+            mkdir -p "$current"
+            gh release download "$tag" --repo "$repo" \
+              --pattern "$asset" --dir "$current"
+            test -f "$current/$asset"
+            test "$(wc -c < "$current/$asset")" -le 1048576
+            current_digest=$(sha256sum "$current/$asset" | awk '{print $1}')
+            if [ "$current_digest" != "$EXPECTED_PREVIOUS_DIGEST" ]; then
+              echo "stable canary state changed after generation allocation" >&2
+              exit 1
+            fi
           fi
-          gh release upload "$tag" \
-            --repo "$GH_REPO" \
+          gh release upload "$tag" --repo "$repo" \
             "$RUNNER_TEMP/foks-hosted-capabilities.json" --clobber
           published=$(mktemp -d)
-          gh release download "$tag" \
-            --repo "$GH_REPO" \
-            --pattern foks-hosted-capabilities.json \
-            --dir "$published"
+          gh release download "$tag" --repo "$repo" \
+            --pattern "$asset" --dir "$published"
           cmp "$RUNNER_TEMP/foks-hosted-capabilities.json" \
             "$published/foks-hosted-capabilities.json"
-      - name: Fail after publishing drift revocation
-        if: steps.canary.outcome != 'success'
-        run: exit 1
+
+  result:
+    name: Report canary result
+    needs: [authenticated_canary, publish]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require publication and compatibility
+        env:
+          AUTHENTICATED_RESULT: ${{ needs.authenticated_canary.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          COMPATIBLE: ${{ needs.authenticated_canary.outputs.compatible }}
+        run: |
+          set -euo pipefail
+          test "$AUTHENTICATED_RESULT" = success
+          test "$PUBLISH_RESULT" = success
+          if [ "$COMPATIBLE" != true ]; then
+            echo "published a fail-closed drift revocation" >&2
+            exit 1
+          fi

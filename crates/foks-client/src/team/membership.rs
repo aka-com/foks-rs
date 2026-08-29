@@ -676,14 +676,6 @@ impl FoksClient {
                     )?;
                     None
                 }
-                Some(error @ Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) => {
-                    hard_store.advance_team_mutation(
-                        &operation_id,
-                        TeamMutationState::Rejected,
-                        now_microseconds()?,
-                    )?;
-                    return Err(error);
-                }
                 Some(error) => {
                     hard_store.advance_team_mutation(
                         &operation_id,
@@ -951,13 +943,15 @@ impl FoksClient {
         if let Some(saga_id) = federation_saga_id {
             hard_store.prepare_federation_local_mutation(saga_id, &operation, created_at)?;
         } else {
-            hard_store.record_team_mutation(&operation)?;
+            hard_store.record_and_begin_team_mutation(&operation, now_microseconds()?)?;
         }
-        hard_store.advance_team_mutation(
-            &operation_id,
-            TeamMutationState::Submitting,
-            now_microseconds()?,
-        )?;
+        if federation_saga_id.is_some() {
+            hard_store.advance_team_mutation(
+                &operation_id,
+                TeamMutationState::Submitting,
+                now_microseconds()?,
+            )?;
+        }
         let post = || {
             let response = self.call_with_material(
                 host,
@@ -983,17 +977,6 @@ impl FoksClient {
                 TeamMutationState::Submitted,
                 now_microseconds()?,
             )?;
-        }
-        if matches!(
-            &post_error,
-            Some(Error::Rpc(foks_rpc::Error::RemoteStatus { .. }))
-        ) {
-            hard_store.advance_team_mutation(
-                &operation_id,
-                TeamMutationState::Rejected,
-                now_microseconds()?,
-            )?;
-            return Err(post_error.expect("matched above"));
         }
         if post_error.is_some() {
             hard_store.advance_team_mutation(

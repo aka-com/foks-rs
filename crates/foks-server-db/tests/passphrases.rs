@@ -225,6 +225,17 @@ fn signup_passphrase_rolls_back_with_the_identity_transaction() {
 }
 
 #[test]
+fn signup_passphrase_requires_owner_puk_generation_one() {
+    let mut test = common::TestDatabase::new();
+    test.reserve(1_000_000);
+    assert!(matches!(
+        common::commit_with_passphrase(&mut test.database, None, mutation_for_puk(1, 2, 1_000_000)),
+        Err(Error::PassphraseGeneration)
+    ));
+    assert!(test.database.identity(&UID).unwrap().is_none());
+}
+
+#[test]
 fn login_challenges_are_one_time_and_bad_attempts_are_bounded() {
     let mut test = common::TestDatabase::with_config(Config {
         maximum_bad_passphrase_attempts: 2,

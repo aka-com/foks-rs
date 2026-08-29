@@ -77,6 +77,12 @@ pub enum Error {
     RemoteStatus { code: u64, detail: StatusDetail },
     #[error("FOKS KV cache is stale")]
     KvStaleCache(KvPathVersionVector),
+    #[error("RPC {kind} count {received} exceeds limit {maximum}")]
+    CollectionTooLarge {
+        kind: &'static str,
+        received: usize,
+        maximum: usize,
+    },
     #[error("unsupported FOKS compatibility header")]
     Compatibility,
     #[error("invalid probe hostname")]
@@ -1676,6 +1682,17 @@ fn named_path_version_vector(bytes: &[u8]) -> Result<KvPathVersionVector> {
 fn named_directory_versions(bytes: &[u8]) -> Result<Vec<foks_proto::KvDirectoryVersion>> {
     let mut cursor = Cursor::new(bytes);
     let length = array_length(&mut cursor)?;
+    if length > foks_proto::MAXIMUM_KV_DIRECTORIES {
+        return Err(Error::CollectionTooLarge {
+            kind: "cached directory",
+            received: length,
+            maximum: foks_proto::MAXIMUM_KV_DIRECTORIES,
+        });
+    }
+    if length > cursor.remaining() {
+        return Err(Error::Truncated);
+    }
+    let mut total_dirents = 0usize;
     let mut output = Vec::with_capacity(length);
     for _ in 0..length {
         let value = cursor.value()?;
@@ -1695,7 +1712,10 @@ fn named_directory_versions(bytes: &[u8]) -> Result<Vec<foks_proto::KvDirectoryV
                 b"Id" if id.is_none() => id = Some(fixed_16(fields.value()?)?),
                 b"Vers" if version.is_none() => version = Some(unsigned(fields.value()?)?),
                 b"De" if entries.is_none() => {
-                    entries = Some(named_dirent_versions(fields.value()?)?)
+                    entries = Some(named_dirent_versions_counted(
+                        fields.value()?,
+                        &mut total_dirents,
+                    )?)
                 }
                 _ => {
                     return Err(Error::Envelope {
@@ -1735,9 +1755,34 @@ fn named_directory_versions(bytes: &[u8]) -> Result<Vec<foks_proto::KvDirectoryV
     Ok(output)
 }
 
+#[cfg(test)]
 fn named_dirent_versions(bytes: &[u8]) -> Result<Vec<foks_proto::KvDirentVersion>> {
+    let mut total = 0;
+    named_dirent_versions_counted(bytes, &mut total)
+}
+
+fn named_dirent_versions_counted(
+    bytes: &[u8],
+    total: &mut usize,
+) -> Result<Vec<foks_proto::KvDirentVersion>> {
     let mut cursor = Cursor::new(bytes);
     let length = array_length(&mut cursor)?;
+    let next_total = total.checked_add(length).ok_or(Error::CollectionTooLarge {
+        kind: "cached dirent",
+        received: usize::MAX,
+        maximum: foks_proto::MAXIMUM_KV_DIRENTS,
+    })?;
+    if next_total > foks_proto::MAXIMUM_KV_DIRENTS {
+        return Err(Error::CollectionTooLarge {
+            kind: "cached dirent",
+            received: next_total,
+            maximum: foks_proto::MAXIMUM_KV_DIRENTS,
+        });
+    }
+    if length > cursor.remaining() {
+        return Err(Error::Truncated);
+    }
+    *total = next_total;
     let mut output = Vec::with_capacity(length);
     for _ in 0..length {
         let value = cursor.value()?;
@@ -1960,6 +2005,10 @@ impl<'a> Cursor<'a> {
         Self { bytes, position: 0 }
     }
 
+    fn remaining(&self) -> usize {
+        self.bytes.len().saturating_sub(self.position)
+    }
+
     fn done(&self) -> bool {
         self.position == self.bytes.len()
     }
@@ -2149,6 +2198,26 @@ mod tests {
         assert!(matches!(
             resequence_call(&trailing, 1, 1024),
             Err(Error::Envelope { .. })
+        ));
+    }
+
+    #[test]
+    fn stale_cache_array_lengths_are_bounded_before_allocation() {
+        // array32(u32::MAX) with no following elements.
+        let huge = [0xdd, 0xff, 0xff, 0xff, 0xff];
+        assert!(matches!(
+            super::named_directory_versions(&huge),
+            Err(Error::CollectionTooLarge { .. })
+        ));
+        assert!(matches!(
+            super::named_dirent_versions(&huge),
+            Err(Error::CollectionTooLarge { .. })
+        ));
+
+        let mut total = foks_proto::MAXIMUM_KV_DIRENTS;
+        assert!(matches!(
+            super::named_dirent_versions_counted(&[0x91, 0x80], &mut total),
+            Err(Error::CollectionTooLarge { .. })
         ));
     }
 }

@@ -575,7 +575,7 @@ fn list(
     let [cursor, Value::Unsigned(number), Value::Bool(load_small)] = pagination.as_slice() else {
         return Err(bad_arguments("KV pagination has the wrong shape"));
     };
-    if *number == 0 || *number > 1000 {
+    if *number == 0 || *number > foks_proto::MAXIMUM_KV_LIST_PAGE_ENTRIES as u64 {
         return Err(bad_arguments("KV pagination count is out of range"));
     }
     let after = list_cursor(cursor)?;

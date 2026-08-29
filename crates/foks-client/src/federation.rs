@@ -335,6 +335,8 @@ impl FoksClient {
 
     /// Loads and verifies a remote user's chain through the public
     /// registration service using an explicitly granted bearer token.
+    /// `host` must be the viewee host; a chain bound to any other host is
+    /// rejected before it is pinned.
     pub fn load_remote_user_and_pin(
         &self,
         host: &PinnedHost,
@@ -378,6 +380,11 @@ impl FoksClient {
                 &merkle.root().hostchain,
             )?,
         };
+        if verified.host() != host.host_id() {
+            return Err(Error::UserBinding(
+                "remote user chain host does not match the pinned host",
+            ));
+        }
         let mut store = HardStateStore::open(&host.database_path)?;
         let acceptance = store.accept_verified_user(&verified.hard_state_snapshot()?)?;
         Ok(RemoteUserOutcome {
@@ -442,7 +449,7 @@ impl FoksClient {
 
     /// Loads a remote team through a permission token, verifies its Merkle
     /// evidence, and persists only authenticated public hard state. Remote
-    /// loads never accept PTK parcels.
+    /// loads never accept PTK parcels. `host` must be the viewee host.
     pub fn load_remote_team_and_pin(
         &self,
         host: &PinnedHost,
@@ -515,6 +522,11 @@ impl FoksClient {
                 &merkle.root().hostchain,
             )?,
         };
+        if verified.host() != host.host_id() {
+            return Err(Error::TeamBinding(
+                "remote team chain host does not match the pinned host",
+            ));
+        }
         let mut store = HardStateStore::open(&host.database_path)?;
         let acceptance = store.accept_verified_team(&verified.hard_state_snapshot()?)?;
         Ok(RemoteTeamOutcome {

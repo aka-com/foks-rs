@@ -70,7 +70,7 @@ pub(crate) fn software_owner_provisions_recovers_manages_and_revokes_yubikey() {
         )
         .unwrap()
         .unwrap();
-    assert_eq!(operation.state, MutationState::Verified);
+    assert_eq!(operation.state, MutationState::RemoteVerified);
     drop(provisioned);
     let provisioned = fixture
         .client
@@ -108,6 +108,18 @@ pub(crate) fn software_owner_provisions_recovers_manages_and_revokes_yubikey() {
         .foks()
         .put_yubi_management_key_yubi(fixture.host(), &provisioned.credential, &envelope)
         .unwrap();
+    fixture
+        .client
+        .foks()
+        .put_yubi_management_key_yubi(fixture.host(), &provisioned.credential, &envelope)
+        .unwrap();
+    let mut downgraded_envelope = envelope.clone();
+    downgraded_envelope.role = Role::ADMIN;
+    assert!(fixture
+        .client
+        .foks()
+        .put_yubi_management_key(fixture.host(), &software.credential, &downgraded_envelope)
+        .is_err());
     let all_envelopes = fixture
         .client
         .foks()

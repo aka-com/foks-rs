@@ -48,6 +48,7 @@ impl Database {
         let mut connection = Connection::open_with_flags(&path, flags)?;
         configure(&connection, &config)?;
         schema::initialize(&mut connection)?;
+        crate::kv::validate_kv_tree_capacity(&connection, &config)?;
         Ok(Self {
             connection,
             config,
@@ -64,6 +65,7 @@ impl Database {
         let connection = Connection::open_with_flags(&path, flags)?;
         configure(&connection, &config)?;
         schema::validate_connection(&connection)?;
+        crate::kv::validate_kv_tree_capacity(&connection, &config)?;
         Ok(Self {
             connection,
             config,
@@ -107,6 +109,7 @@ impl ReadDatabase {
         let connection = Connection::open_with_flags(path, flags)?;
         configure_reader(&connection, &config)?;
         schema::validate_connection(&connection)?;
+        crate::kv::validate_kv_tree_capacity(&connection, &config)?;
         Ok(Self { connection })
     }
 
@@ -180,6 +183,9 @@ fn configure(connection: &Connection, config: &Config) -> Result<()> {
         || config.maximum_kv_namespace_bytes == 0
         || config.maximum_kv_namespace_objects == 0
         || config.maximum_kv_node_bytes == 0
+        || config.maximum_kv_dirent_bytes == 0
+        || config.maximum_kv_directories == 0
+        || config.maximum_kv_dirents == 0
         || config.maximum_active_credentials_per_user == 0
         || config.maximum_backup_credentials_per_user == 0
         || config.maximum_user_chain_links == 0
@@ -206,6 +212,15 @@ fn configure(connection: &Connection, config: &Config) -> Result<()> {
         || config.maximum_active_remote_team_view_permissions == 0
     {
         return Err(crate::Error::Invalid("zero database capacity limit"));
+    }
+    if config.maximum_kv_node_bytes > foks_proto::MAXIMUM_KV_NODE_BYTES
+        || config.maximum_kv_dirent_bytes > foks_proto::MAXIMUM_KV_DIRENT_BYTES
+        || config.maximum_kv_directories > foks_proto::MAXIMUM_KV_DIRECTORIES as u64
+        || config.maximum_kv_dirents > foks_proto::MAXIMUM_KV_DIRENTS as u64
+    {
+        return Err(crate::Error::Invalid(
+            "KV capacity exceeds the client synchronization limits",
+        ));
     }
     connection.pragma_update(None, "foreign_keys", true)?;
     connection.pragma_update(None, "journal_mode", "WAL")?;

@@ -10,7 +10,7 @@ use foks_rpc::{encode_status_response_at, RpcStatus};
 use foks_snowpack::{decode, Value};
 use rustls::pki_types::CertificateDer;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{watch, Semaphore};
+use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore};
 
 use crate::auth::Principal;
 use crate::identity::validate_signup;
@@ -33,6 +33,7 @@ pub(crate) struct ServerData {
     metrics: Arc<crate::ServerMetrics>,
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     execution: Arc<Semaphore>,
+    request_memory: Arc<Semaphore>,
 }
 
 pub(crate) struct OwnedPassphraseMutation {
@@ -100,7 +101,7 @@ impl ServerData {
             probe_response,
             host_id,
             canonical_name,
-            current_root: probe.merkle_root.inner,
+            current_root: probe.merkle_root.encoded()?,
             read_database: config
                 .read_database
                 .clone()
@@ -120,6 +121,7 @@ impl ServerData {
             metrics: Arc::clone(&config.metrics),
             rate_limiter,
             execution: Arc::new(Semaphore::new(config.limits.maximum_in_flight_requests)),
+            request_memory: Arc::new(Semaphore::new(config.limits.maximum_request_memory_bytes)),
         })
     }
 
@@ -723,7 +725,12 @@ impl ServerData {
             .map_err(|_| RpcStatus::TransactionRetry)?
             .ok_or_else(|| RpcStatus::NotFound("Merkle root not found".to_owned()))?;
         validated_root(&root)?;
-        Ok(root.exact_root)
+        let signed =
+            SignedBlob::decode(&root.exact_signed_root).map_err(|_| RpcStatus::TransactionRetry)?;
+        if signed.inner != root.exact_root {
+            return Err(RpcStatus::TransactionRetry);
+        }
+        Ok(root.exact_signed_root)
     }
 
     fn current_probe_response(&self) -> std::result::Result<Vec<u8>, RpcStatus> {
@@ -907,7 +914,48 @@ pub(crate) async fn serve(
             }
             result = tokio::time::timeout(
                 limits.io_timeout,
-                read_call_async(&mut stream, limits.maximum_frame_bytes),
+                read_frame_length_async(&mut stream, limits.maximum_frame_bytes),
+            ) => result,
+        };
+        let length = match read {
+            Err(_) => break,
+            Ok(Ok(length)) => length,
+            Ok(Err(foks_rpc::Error::Io(error)))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::UnexpectedEof
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                break;
+            }
+            Ok(Err(error)) => return Err(error.into()),
+        };
+        if !service_data.rate_limiter.allow_request(peer_ip) {
+            service_data.metrics.request_started();
+            let _request_timer =
+                crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
+            service_data.metrics.request_rate_limited();
+            let response = encode_status_response_at(&RpcStatus::RateLimited, 0)?;
+            write_response(&mut stream, &response, limits.io_timeout).await?;
+            service_data.metrics.response_completed();
+            return Ok(());
+        }
+        let read = tokio::select! {
+            result = stop.changed() => {
+                let _ = result;
+                break;
+            }
+            result = tokio::time::timeout(
+                limits.io_timeout,
+                read_call_body_async(
+                    &mut stream,
+                    length,
+                    limits.maximum_frame_bytes,
+                    Arc::clone(&service_data.request_memory),
+                ),
             ) => result,
         };
         let call = match read {
@@ -926,15 +974,9 @@ pub(crate) async fn serve(
             }
             Ok(Err(error)) => return Err(error.into()),
         };
+        let (call, request_memory) = call;
         service_data.metrics.request_started();
         let _request_timer = crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
-        if !service_data.rate_limiter.allow_request(peer_ip) {
-            service_data.metrics.request_rate_limited();
-            let response = encode_status_response_at(&RpcStatus::RateLimited, call.sequence())?;
-            write_response(&mut stream, &response, limits.io_timeout).await?;
-            service_data.metrics.response_completed();
-            return Ok(());
-        }
         let sequence = call.sequence();
         let data = Arc::clone(service_data);
         let certificate = peer_certificate.clone();
@@ -943,6 +985,9 @@ pub(crate) async fn serve(
             limits.request_timeout,
             &mut stop,
             move || -> Result<RequestOutcome> {
+                // A timed-out blocking handler can still own decoded request
+                // memory, so keep its reservation in the same closure.
+                let _request_memory = request_memory;
                 let _handler_timer = crate::ServerMetrics::handler_timer(Arc::clone(&data.metrics));
                 let principal = if listener == Listener::Authenticated {
                     let certificate = CertificateDer::from(certificate.ok_or(
@@ -1103,10 +1148,10 @@ where
     }
 }
 
-async fn read_call_async<R: AsyncRead + Unpin>(
+async fn read_frame_length_async<R: AsyncRead + Unpin>(
     reader: &mut R,
     maximum: usize,
-) -> foks_rpc::Result<foks_rpc::DecodedCall> {
+) -> foks_rpc::Result<usize> {
     let marker = read_byte_async(reader).await?;
     let length = match marker {
         0x00..=0x7f => usize::from(marker),
@@ -1144,9 +1189,37 @@ async fn read_call_async<R: AsyncRead + Unpin>(
             maximum,
         });
     }
+    Ok(length)
+}
+
+async fn read_call_body_async<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    length: usize,
+    maximum: usize,
+    request_memory: Arc<Semaphore>,
+) -> foks_rpc::Result<(foks_rpc::DecodedCall, OwnedSemaphorePermit)> {
+    let reserved = length
+        .checked_mul(2)
+        .ok_or(foks_rpc::Error::FrameTooLarge {
+            received: length,
+            maximum,
+        })?;
+    let reserved = u32::try_from(reserved).map_err(|_| foks_rpc::Error::FrameTooLarge {
+        received: length,
+        maximum,
+    })?;
+    let permit = request_memory
+        .acquire_many_owned(reserved)
+        .await
+        .map_err(|_| {
+            foks_rpc::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "request memory budget closed",
+            ))
+        })?;
     let mut content = vec![0; length];
     reader.read_exact(&mut content).await?;
-    foks_rpc::decode_call(&content)
+    Ok((foks_rpc::decode_call(&content)?, permit))
 }
 
 async fn read_byte_async<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<u8> {
@@ -1270,5 +1343,60 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_frame_memory_is_globally_bounded_before_allocation() {
+        let argument = foks_snowpack::encode(&Value::Binary(vec![0x41; 300])).unwrap();
+        let request = foks_rpc::encode_call(17, 23, &argument, 0).unwrap();
+        assert_eq!(request[0], 0xcd);
+        let content_length = foks_rpc::read_frame(
+            &mut std::io::Cursor::new(&request),
+            foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
+        )
+        .unwrap()
+        .len();
+        let budget = Arc::new(Semaphore::new(content_length * 2));
+        let (mut sender_one, mut reader_one) = tokio::io::duplex(request.len());
+        let (mut sender_two, mut reader_two) = tokio::io::duplex(request.len());
+        sender_one.write_all(&request).await.unwrap();
+        sender_two.write_all(&request).await.unwrap();
+
+        let first_length =
+            read_frame_length_async(&mut reader_one, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)
+                .await
+                .unwrap();
+        let first = read_call_body_async(
+            &mut reader_one,
+            first_length,
+            foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
+            Arc::clone(&budget),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.0.argument(), argument);
+        assert_eq!(budget.available_permits(), 0);
+
+        let second_length =
+            read_frame_length_async(&mut reader_two, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)
+                .await
+                .unwrap();
+        let mut second = Box::pin(read_call_body_async(
+            &mut reader_two,
+            second_length,
+            foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
+            Arc::clone(&budget),
+        ));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut second)
+                .await
+                .is_err()
+        );
+        drop(first);
+        let second = tokio::time::timeout(std::time::Duration::from_secs(1), second)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.0.argument(), argument);
     }
 }

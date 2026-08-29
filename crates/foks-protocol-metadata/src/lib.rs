@@ -397,6 +397,30 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
                 ));
             }
         }
+        let principal_bound = route.authentication.starts_with("active_")
+            || route.authentication.starts_with("current_");
+        let public_team_chain = route.protocol == "TeamLoader"
+            && route.method == "loadTeamChain"
+            && route.authentication == "active_team_or_remote_view_token";
+        if principal_bound {
+            let expected_listeners: &[&str] = if public_team_chain {
+                &["public_services", "authenticated"]
+            } else {
+                &["authenticated"]
+            };
+            if route
+                .listeners
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                != expected_listeners
+            {
+                return invalid(format!(
+                    "principal-bound route {}.{} has invalid listeners",
+                    route.protocol, route.method
+                ));
+            }
+        }
         if route.authentication.is_empty()
             || route.request.is_empty()
             || route.result.is_empty()

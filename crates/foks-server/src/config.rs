@@ -36,6 +36,9 @@ pub struct ReadDatabaseConfig {
 #[derive(Clone, Copy, Debug)]
 pub struct SessionLimits {
     pub maximum_frame_bytes: usize,
+    /// Shared across all listeners. Each frame reserves twice its encoded
+    /// length for the input buffer and decoded request representation.
+    pub maximum_request_memory_bytes: usize,
     pub maximum_requests: usize,
     pub worker_threads: usize,
     pub maximum_read_connections: usize,
@@ -50,6 +53,7 @@ impl Default for SessionLimits {
     fn default() -> Self {
         Self {
             maximum_frame_bytes: foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
+            maximum_request_memory_bytes: 64 * 1024 * 1024,
             maximum_requests: 4096,
             worker_threads: 4,
             maximum_read_connections: 32,
@@ -64,7 +68,15 @@ impl Default for SessionLimits {
 
 impl SessionLimits {
     pub(crate) fn validate(self) -> crate::Result<()> {
+        let Some(maximum_frame_memory) = self.maximum_frame_bytes.checked_mul(2) else {
+            return Err(crate::Error::Config("invalid session limit"));
+        };
+        let maximum_reservable = usize::try_from(u32::MAX)
+            .unwrap_or(usize::MAX)
+            .min(tokio::sync::Semaphore::MAX_PERMITS);
         if self.maximum_frame_bytes == 0
+            || self.maximum_request_memory_bytes < maximum_frame_memory
+            || self.maximum_request_memory_bytes > maximum_reservable
             || self.maximum_requests == 0
             || self.worker_threads == 0
             || self.maximum_read_connections == 0
@@ -76,7 +88,7 @@ impl SessionLimits {
             || self.io_timeout.is_zero()
             || self.request_timeout.is_zero()
         {
-            return Err(crate::Error::Config("zero session limit"));
+            return Err(crate::Error::Config("invalid session limit"));
         }
         Ok(())
     }
@@ -98,5 +110,10 @@ mod tests {
             ..SessionLimits::default()
         };
         assert!(execution.validate().is_err());
+        let memory = SessionLimits {
+            maximum_request_memory_bytes: 2 * foks_rpc::DEFAULT_MAX_FRAME_LENGTH - 1,
+            ..SessionLimits::default()
+        };
+        assert!(memory.validate().is_err());
     }
 }

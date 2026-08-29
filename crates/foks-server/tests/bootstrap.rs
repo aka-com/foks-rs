@@ -1,5 +1,5 @@
 use foks_server::host::{bootstrap, load_or_bootstrap, BootstrapEndpoints, BootstrapInput};
-use foks_server::keys::DirectoryKeyProvider;
+use foks_server::keys::{DirectoryKeyProvider, HostKeyProvider, KeyPurpose};
 use foks_server_db::{Config, Database};
 
 #[test]
@@ -97,4 +97,37 @@ fn bootstrap_rejects_a_different_key_generation() {
         &database.host_bootstrap().unwrap().unwrap().probe_response
     )
     .is_ok());
+}
+
+#[test]
+fn fresh_database_rejects_a_populated_key_directory() {
+    let temporary = tempfile::tempdir().unwrap();
+    let key_path = temporary.path().join("keys");
+    let provider = DirectoryKeyProvider::open(&key_path, [0x55; 32]).unwrap();
+    let existing = provider.load_or_create(KeyPurpose::Metadata).unwrap();
+    let mut database = Database::open(
+        temporary.path().join("fresh-server.sqlite"),
+        Config::default(),
+    )
+    .unwrap();
+    let input = BootstrapInput {
+        canonical_name: "localhost".to_owned(),
+        endpoints: BootstrapEndpoints {
+            probe: "localhost:4430".to_owned(),
+            public_services: "localhost:4431".to_owned(),
+            authenticated: "localhost:4432".to_owned(),
+        },
+        ttl_seconds: 60,
+        now_microseconds: 1,
+    };
+    let error = load_or_bootstrap(&mut database, &provider, &input).unwrap_err();
+    assert!(error.to_string().contains("pristine key provider"));
+    assert!(database.host_bootstrap().unwrap().is_none());
+    assert_eq!(
+        provider
+            .load_existing(KeyPurpose::Metadata)
+            .unwrap()
+            .generation(),
+        existing.generation()
+    );
 }

@@ -28,6 +28,7 @@ CREATE TABLE federation_team_view_permissions (
     token_ciphertext BLOB NOT NULL CHECK (length(token_ciphertext) = 33),
     key_generation BLOB NOT NULL REFERENCES capability_key_generations(generation_id)
         CHECK (length(key_generation) = 16),
+    grantor_party_id BLOB NOT NULL CHECK (length(grantor_party_id) = 33),
     state INTEGER NOT NULL CHECK (state IN (0, 1)),
     issued_at INTEGER NOT NULL CHECK (issued_at >= 0),
     updated_at INTEGER NOT NULL CHECK (updated_at >= issued_at),

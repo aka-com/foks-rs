@@ -249,8 +249,12 @@ impl MerkleRoot {
         expect_unsigned(&fields[0], "Merkle root version", 1)?;
         let v1 = array(variant(&fields[1], "1")?, 5)?;
         let tail = array(&v1[4], 2)?;
+        let epoch = unsigned(&v1[0])?;
+        if epoch == 0 {
+            return Err(Error::IntegerRange("Merkle epoch"));
+        }
         Ok(Self {
-            epoch: unsigned(&v1[0])?,
+            epoch,
             time: unsigned(&v1[1])?,
             back_pointers: fixed_blob(&v1[2], "Merkle back-pointer hash")?,
             root_node: fixed_blob(&v1[3], "Merkle root node")?,

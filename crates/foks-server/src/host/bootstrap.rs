@@ -41,6 +41,11 @@ pub fn bootstrap(
     input: &BootstrapInput,
 ) -> Result<BootstrapState> {
     validate_input(input)?;
+    if database.host_bootstrap()?.is_none() && !provider.is_pristine()? {
+        return Err(crate::Error::Key(
+            "fresh database requires a pristine key provider",
+        ));
+    }
     let manifest = KeyGenerationManifest::load_or_create(provider)?;
     let host_key = provider.load_or_create(KeyPurpose::Host)?;
     let metadata_key = provider.load_or_create(KeyPurpose::Metadata)?;

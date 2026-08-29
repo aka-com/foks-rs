@@ -279,9 +279,9 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let authorized: Option<Vec<u8>> = transaction
+        let authorized: Option<(Vec<u8>, Vec<u8>)> = transaction
             .query_row(
-                "SELECT k.verify_key
+                "SELECT k.verify_key, d.uid
                  FROM devices d
                  JOIN team_members m ON m.party_id = d.uid
                  JOIN teams t ON t.team_id = m.team_id
@@ -301,10 +301,13 @@ impl Database {
                     authority.visibility,
                     sql_integer(authority.generation)?
                 ],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        if authorized.as_deref() != Some(authority.verify_key) {
+        let Some((verify_key, grantor_party_id)) = authorized else {
+            return Err(Error::AuthorizationChanged);
+        };
+        if verify_key.as_slice() != authority.verify_key {
             return Err(Error::AuthorizationChanged);
         }
         crate::capability_keys::require_active_generation(&transaction, &grant.key_generation)?;
@@ -324,7 +327,7 @@ impl Database {
                 transaction.execute(
                     "UPDATE federation_team_view_permissions SET
                          token_nonce = ?4, token_ciphertext = ?5, key_generation = ?6,
-                         updated_at = ?7, expires_at = ?8
+                         grantor_party_id = ?9, updated_at = ?7, expires_at = ?8
                      WHERE target_team_id = ?1 AND viewer_party_id = ?2
                        AND viewer_host_id = ?3 AND state = 1",
                     params![
@@ -336,6 +339,7 @@ impl Database {
                         grant.key_generation,
                         sql_integer(now)?,
                         sql_integer(grant.expires_at)?,
+                        grantor_party_id,
                     ],
                 )?;
                 let renewed = team_permission_for_scope(
@@ -393,9 +397,9 @@ impl Database {
         transaction.execute(
             "INSERT INTO federation_team_view_permissions
                  (target_team_id, viewer_party_id, viewer_host_id, token_hash,
-                  token_nonce, token_ciphertext, key_generation, state, issued_at,
-                  updated_at, expires_at, revoked_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8, ?9, NULL)
+                  token_nonce, token_ciphertext, key_generation, grantor_party_id,
+                  state, issued_at, updated_at, expires_at, revoked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?9, ?10, NULL)
              ON CONFLICT(target_team_id, viewer_party_id, viewer_host_id) DO NOTHING",
             params![
                 target_team_id,
@@ -405,6 +409,7 @@ impl Database {
                 grant.token_nonce,
                 grant.token_ciphertext,
                 grant.key_generation,
+                grantor_party_id,
                 sql_integer(now)?,
                 sql_integer(grant.expires_at)?
             ],
@@ -737,9 +742,13 @@ fn token_is_current(
     }
     Ok(connection
         .query_row(
-            "SELECT 1 FROM federation_user_view_permissions
-             WHERE token_hash = ?1 AND target_user_id = ?2
-               AND state = 1 AND expires_at > ?3",
+            "SELECT 1 FROM federation_user_view_permissions p
+             WHERE p.token_hash = ?1 AND p.target_user_id = ?2
+               AND p.state = 1 AND p.expires_at > ?3
+               AND EXISTS (
+                 SELECT 1 FROM devices d
+                 WHERE d.uid = p.target_user_id AND d.active = 1
+               )",
             params![token_hash, target_user_id, sql_integer(now)?],
             |row| row.get::<_, i64>(0),
         )
@@ -811,9 +820,12 @@ fn team_token_is_current(
     }
     Ok(connection
         .query_row(
-            "SELECT 1 FROM federation_team_view_permissions
-             WHERE token_hash = ?1 AND target_team_id = ?2
-               AND state = 1 AND expires_at > ?3",
+            "SELECT 1 FROM federation_team_view_permissions p
+             JOIN team_members m ON m.team_id = p.target_team_id
+               AND m.party_id = p.grantor_party_id
+               AND m.scoped_host_id IS NULL AND m.role_type >= 2
+             WHERE p.token_hash = ?1 AND p.target_team_id = ?2
+               AND p.state = 1 AND p.expires_at > ?3",
             params![token_hash, target_team_id, sql_integer(now)?],
             |row| row.get::<_, i64>(0),
         )
@@ -991,6 +1003,17 @@ mod tests {
         assert!(database
             .remote_user_view_token_is_current(&[5; 32], &uid, 199)
             .unwrap());
+        database
+            .connection
+            .execute("UPDATE devices SET active = 0 WHERE uid = ?1", [&uid])
+            .unwrap();
+        assert!(!database
+            .remote_user_view_token_is_current(&[5; 32], &uid, 199)
+            .unwrap());
+        database
+            .connection
+            .execute("UPDATE devices SET active = 1 WHERE uid = ?1", [&uid])
+            .unwrap();
         assert!(!database
             .remote_user_view_token_is_current(&[5; 32], &uid, 200)
             .unwrap());
@@ -1141,6 +1164,26 @@ mod tests {
             inserted,
             RemoteTeamViewPermissionOutcome::Inserted(_)
         ));
+        assert!(database
+            .remote_team_view_token_is_current(&[13; 32], &team, 50)
+            .unwrap());
+        database
+            .connection
+            .execute(
+                "UPDATE team_members SET role_type = 1 WHERE team_id = ?1 AND party_id = ?2",
+                params![team, uid],
+            )
+            .unwrap();
+        assert!(!database
+            .remote_team_view_token_is_current(&[13; 32], &team, 50)
+            .unwrap());
+        database
+            .connection
+            .execute(
+                "UPDATE team_members SET role_type = 3 WHERE team_id = ?1 AND party_id = ?2",
+                params![team, uid],
+            )
+            .unwrap();
         let mut competing = grant(14, 200);
         competing.key_generation = [13; 16];
         let repeated = database

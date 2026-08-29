@@ -7,7 +7,8 @@ use foks_client_db::{KvDirectoryProjection, KvLargeFileStage, KvProjectedEntry, 
 use foks_crypto::{derive_subkey_id, open_kv_chunk, open_kv_dirent_name};
 use foks_proto::{
     KvDirectoryPair, KvDirectoryStatus, KvEncryptedChunk, KvListResponse, KvNode, KvNodeType,
-    KvParty, KvRoot, KvSmallFilePlaintext, SecretSeed,
+    KvParty, KvRoot, KvSmallFilePlaintext, SecretSeed, MAXIMUM_KV_DIRECTORIES, MAXIMUM_KV_DIRENTS,
+    MAXIMUM_KV_LIST_PAGE_ENTRIES, MAXIMUM_KV_LIST_RESPONSE_BYTES,
 };
 use foks_rpc::{KvAuth, KvListCursor};
 use foks_verify::VerifiedUserState;
@@ -339,11 +340,9 @@ impl FoksClient {
     where
         F: FnMut(KvAuth<'_>, &KvRequest) -> Result<Vec<u8>>,
     {
-        const PAGE_SIZE: u64 = 100;
-        const MAX_DIRECTORIES: usize = 4096;
+        const PAGE_SIZE: u64 = MAXIMUM_KV_LIST_PAGE_ENTRIES as u64;
         const MAX_PAGES_PER_DIRECTORY: usize = 4096;
         const MAX_FILE_CHUNKS: usize = 4096;
-        const MAX_ENTRIES: usize = 100_000;
         const MAX_TOTAL_CONTENT_BYTES: usize = 512 * 1024 * 1024;
 
         for _ in 0..3 {
@@ -419,7 +418,7 @@ impl FoksClient {
                     if !visited.insert(directory_id) {
                         continue;
                     }
-                    if visited.len() > MAX_DIRECTORIES {
+                    if visited.len() > MAXIMUM_KV_DIRECTORIES {
                         return Err(Error::KvResponse("directory traversal limit exceeded"));
                     }
                     let directory_bytes = fetch(auth, &KvRequest::Directory(directory_id))?;
@@ -462,7 +461,15 @@ impl FoksClient {
                                 load_small_files: true,
                             },
                         )?;
+                        if list_bytes.len() > MAXIMUM_KV_LIST_RESPONSE_BYTES {
+                            return Err(Error::KvResponse("KV list response is too large"));
+                        }
                         let listing = KvListResponse::decode(&list_bytes)?;
+                        if listing.entries.len() > MAXIMUM_KV_LIST_PAGE_ENTRIES
+                            || listing.extended.len() > listing.entries.len()
+                        {
+                            return Err(Error::KvResponse("KV list response exceeds page limits"));
+                        }
                         if !listing.final_page && listing.entries.is_empty() {
                             return Err(Error::KvResponse("non-final KV list page is empty"));
                         }
@@ -482,7 +489,7 @@ impl FoksClient {
                             total_entries = total_entries
                                 .checked_add(1)
                                 .ok_or(Error::KvResponse("entry count overflow"))?;
-                            if total_entries > MAX_ENTRIES {
+                            if total_entries > MAXIMUM_KV_DIRENTS {
                                 return Err(Error::KvResponse("entry traversal limit exceeded"));
                             }
                             entry.bind_list_parent(directory_id)?;

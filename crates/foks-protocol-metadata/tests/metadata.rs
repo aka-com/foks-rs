@@ -101,3 +101,17 @@ fn route_listeners_must_be_nonempty_unique_and_known() {
         ));
     }
 }
+
+#[test]
+fn principal_bound_routes_must_use_the_authenticated_listener() {
+    let artifact = parse_artifact(ARTIFACT).unwrap();
+    let malformed = POLICY.replace(
+        "authentication = \"public\"",
+        "authentication = \"active_device_mtls\"",
+    );
+    let policy = parse_policy(&malformed).unwrap();
+    assert!(matches!(
+        merge(&artifact, &policy),
+        Err(MetadataError::Invalid(_))
+    ));
+}

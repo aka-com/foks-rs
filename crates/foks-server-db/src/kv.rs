@@ -187,6 +187,7 @@ impl Database {
             mutation.exact.len(),
             1,
         )?;
+        ensure_kv_tree_capacity(&transaction, &self.config, mutation.uid, 1, 0)?;
         transaction.execute(
             "INSERT INTO kv_directories
              (uid, directory_id, version, key_role, key_visibility, key_generation,
@@ -223,8 +224,10 @@ impl Database {
         if !self.ensure_kv_namespace(mutation.uid)? {
             return Err(Error::Invalid("unknown KV namespace"));
         }
-        let existing: Option<Vec<u8>> = self
+        let transaction = self
             .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing: Option<Vec<u8>> = transaction
             .query_row(
                 "SELECT exact_node FROM kv_nodes WHERE uid = ?1 AND node_id = ?2",
                 params![mutation.uid, mutation.id],
@@ -236,13 +239,13 @@ impl Database {
             Some(_) => Err(Error::KvConflict),
             None => {
                 ensure_kv_capacity(
-                    &self.connection,
+                    &transaction,
                     &self.config,
                     mutation.uid,
                     mutation.exact.len(),
                     1,
                 )?;
-                self.connection.execute(
+                transaction.execute(
                     "INSERT INTO kv_nodes(uid, node_id, node_type, exact_node)
                      VALUES (?1, ?2, ?3, ?4)",
                     params![
@@ -252,6 +255,7 @@ impl Database {
                         mutation.exact
                     ],
                 )?;
+                transaction.commit()?;
                 Ok(())
             }
         }
@@ -272,6 +276,7 @@ impl Database {
                 || mutation.directory_version == 0
                 || mutation.exact.is_empty()
                 || mutation.exact.len() > self.config.maximum_blob_bytes
+                || mutation.exact.len() > self.config.maximum_kv_dirent_bytes
                 || !keys.insert((*mutation.parent, *mutation.id))
             {
                 return Err(Error::Invalid("KV dirent mutation"));
@@ -325,6 +330,17 @@ impl Database {
             uid,
             added_bytes,
             u64::try_from(mutations.len()).map_err(|_| Error::IntegerRange)?,
+        )?;
+        let added_dirents = existing_heads
+            .iter()
+            .filter(|stored| stored.is_none())
+            .count();
+        ensure_kv_tree_capacity(
+            &transaction,
+            &self.config,
+            uid,
+            0,
+            u64::try_from(added_dirents).map_err(|_| Error::IntegerRange)?,
         )?;
         for (mutation, existing) in mutations.iter().zip(existing_heads) {
             let directory_exists = transaction
@@ -1083,6 +1099,63 @@ fn ensure_kv_capacity(
     if next_bytes > config.maximum_kv_namespace_bytes
         || next_objects > config.maximum_kv_namespace_objects
     {
+        return Err(Error::QuotaExceeded);
+    }
+    Ok(())
+}
+
+fn ensure_kv_tree_capacity(
+    connection: &rusqlite::Connection,
+    config: &crate::Config,
+    uid: &[u8],
+    added_directories: u64,
+    added_dirents: u64,
+) -> Result<()> {
+    let (directories, dirents): (i64, i64) = connection.query_row(
+        "SELECT
+           (SELECT count(*) FROM kv_directory_heads WHERE uid = ?1),
+           (SELECT count(*) FROM kv_dirent_heads WHERE uid = ?1)",
+        [uid],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let next_directories = crate::error::unsigned(directories)?
+        .checked_add(added_directories)
+        .ok_or(Error::IntegerRange)?;
+    let next_dirents = crate::error::unsigned(dirents)?
+        .checked_add(added_dirents)
+        .ok_or(Error::IntegerRange)?;
+    if next_directories > config.maximum_kv_directories || next_dirents > config.maximum_kv_dirents
+    {
+        return Err(Error::QuotaExceeded);
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_kv_tree_capacity(
+    connection: &rusqlite::Connection,
+    config: &crate::Config,
+) -> Result<()> {
+    let invalid: i64 = connection.query_row(
+        "SELECT EXISTS(
+             SELECT uid FROM kv_directory_heads
+             GROUP BY uid HAVING count(*) > ?1
+         ) OR EXISTS(
+             SELECT uid FROM kv_dirent_heads
+             GROUP BY uid HAVING count(*) > ?2
+         ) OR EXISTS(
+             SELECT 1 FROM kv_nodes WHERE length(exact_node) > ?3
+         ) OR EXISTS(
+             SELECT 1 FROM kv_dirents WHERE length(exact_dirent) > ?4
+         )",
+        params![
+            sql_integer(config.maximum_kv_directories)?,
+            sql_integer(config.maximum_kv_dirents)?,
+            i64::try_from(config.maximum_kv_node_bytes).map_err(|_| Error::IntegerRange)?,
+            i64::try_from(config.maximum_kv_dirent_bytes).map_err(|_| Error::IntegerRange)?,
+        ],
+        |row| row.get(0),
+    )?;
+    if invalid != 0 {
         return Err(Error::QuotaExceeded);
     }
     Ok(())

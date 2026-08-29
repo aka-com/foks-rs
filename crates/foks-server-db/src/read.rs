@@ -612,31 +612,43 @@ fn puk_material_inner(
     role_type: u64,
     visibility: i64,
 ) -> Result<Option<PukMaterialSnapshot>> {
-    let parcel: Option<(Vec<u8>, Vec<u8>)> = connection
+    let parcel: Option<(Vec<u8>, Vec<u8>, i64)> = connection
         .query_row(
-            "SELECT exact_parcel, sender_id FROM parcels
-             WHERE uid = ?1 AND device_id = ?2 AND role_type = ?3 AND visibility = ?4
-             ORDER BY generation DESC LIMIT 1",
+            "SELECT p.exact_parcel, p.sender_id, p.generation FROM parcels p
+             JOIN (
+                 SELECT role_type, visibility, max(generation) AS generation
+                 FROM shared_keys
+                 WHERE uid = ?1 AND role_type = ?3 AND visibility = ?4
+             ) current
+               ON current.role_type = p.role_type
+              AND current.visibility = p.visibility
+              AND current.generation = p.generation
+             WHERE p.uid = ?1 AND p.device_id = ?2 AND p.role_type = ?3 AND p.visibility = ?4",
             rusqlite::params![
                 uid,
                 device_id,
                 crate::error::sql_integer(role_type)?,
                 visibility
             ],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    let Some((exact_box_set, sender_id)) = parcel else {
+    let Some((exact_box_set, sender_id, generation)) = parcel else {
         return Ok(None);
     };
     let mut statement = connection.prepare(
         "SELECT exact_box FROM seed_chain_boxes
-         WHERE uid = ?1 AND role_type = ?2 AND visibility = ?3
+         WHERE uid = ?1 AND role_type = ?2 AND visibility = ?3 AND generation < ?4
          ORDER BY generation",
     )?;
     let exact_seed_chain = statement
         .query_map(
-            rusqlite::params![uid, crate::error::sql_integer(role_type)?, visibility],
+            rusqlite::params![
+                uid,
+                crate::error::sql_integer(role_type)?,
+                visibility,
+                generation
+            ],
             |row| row.get(0),
         )?
         .collect::<std::result::Result<Vec<Vec<u8>>, _>>()?;

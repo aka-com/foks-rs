@@ -60,18 +60,12 @@ impl CheckedProfileSession<'_> {
             let loaded = vault.account(alias)?;
             let device = derive_device_public(&loaded.credential.seed)?;
             if let Some(operation) = HardStateStore::open(&self.paths.hard_database)?
-                .latest_mutation_for_binding(
+                .latest_finalizable_mutation_for_binding(
                     self.pinned_host()?.host_id().as_bytes(),
                     MutationKind::Signup,
                     device.id.as_bytes(),
                     loaded.credential.uid.as_bytes(),
                 )?
-                .filter(|operation| {
-                    matches!(
-                        operation.state,
-                        MutationState::RemoteVerified | MutationState::Finalized
-                    )
-                })
             {
                 let mut mutations = EncryptedFileMutationStore::open(
                     &self.paths.protected_mutations,
@@ -193,18 +187,12 @@ impl CheckedProfileSession<'_> {
             let host = self.pinned_host()?;
             let device = derive_device_public(&target.credential.seed)?;
             if let Some(operation) = HardStateStore::open(&self.paths.hard_database)?
-                .latest_mutation_for_binding(
+                .latest_finalizable_mutation_for_binding(
                     host.host_id().as_bytes(),
                     MutationKind::DeviceProvision,
                     target.credential.uid.as_bytes(),
                     device.id.as_bytes(),
                 )?
-                .filter(|operation| {
-                    matches!(
-                        operation.state,
-                        MutationState::RemoteVerified | MutationState::Finalized
-                    )
-                })
             {
                 let mut mutations = EncryptedFileMutationStore::open(
                     &self.paths.protected_mutations,

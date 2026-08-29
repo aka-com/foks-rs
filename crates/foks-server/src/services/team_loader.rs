@@ -379,7 +379,14 @@ fn encode_team_chain(
         ),
         _ => None,
     };
-    let remote_view_tokens = if authority.is_some() && request.load_remote_view_tokens {
+    let remote_view_tokens = if request.load_remote_view_tokens
+        && authority.is_some_and(|authority| {
+            team::stored_role(
+                authority.effective_role_type,
+                authority.effective_visibility,
+            )
+            .is_some_and(|role| role >= foks_proto::Role::member(0))
+        }) {
         database
             .remote_member_view_tokens(request.team.as_bytes())
             .map_err(|_| RpcStatus::TransactionRetry)?

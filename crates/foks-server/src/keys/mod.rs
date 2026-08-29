@@ -86,6 +86,11 @@ impl std::fmt::Debug for SecretKey {
 }
 
 pub trait HostKeyProvider: Send + Sync {
+    /// Returns true only when no canonical or generation-qualified purpose
+    /// keys exist. Provider metadata such as an empty wrapping-key envelope
+    /// and process lock does not make a new installation non-pristine.
+    fn is_pristine(&self) -> crate::Result<bool>;
+
     fn load_or_create(&self, purpose: KeyPurpose) -> crate::Result<SecretKey>;
 
     /// Loads a canonical bootstrap-purpose key without creating replacement
