@@ -183,7 +183,7 @@ pub(crate) fn validate_signup(
     }
 
     let exact_link = request.link.encoded()?;
-    let link_hash = foks_crypto::prefixed_hash(LINK_OUTER_TYPE_ID, &exact_link);
+    let link_hash = foks_crypto::prefixed_hash_signable(LINK_OUTER_TYPE_ID, &exact_link)?;
     let user_key = foks_merkle_store::chain_key(0, &uid, 1, None)?;
     let name_key = foks_merkle_store::username_key(&normalized_name, expected_host, 1)?;
     Ok(ValidatedSignup {
@@ -225,10 +225,10 @@ pub(crate) fn validate_signup(
 }
 
 fn location_commitment(location: &[u8; 32]) -> Result<[u8; 32]> {
-    Ok(foks_crypto::prefixed_hash(
+    Ok(foks_crypto::prefixed_hash_signable(
         TREE_LOCATION_TYPE_ID,
         &encode(&Value::Binary(location.to_vec()))?,
-    ))
+    )?)
 }
 
 #[cfg(test)]

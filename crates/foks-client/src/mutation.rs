@@ -467,7 +467,10 @@ mod tests {
             )
             .unwrap();
         let material_present = |protected: &MemoryProtectedStore| {
-            protected.0.get(operation.material_ref.as_slice()).map(Vec::as_slice)
+            protected
+                .0
+                .get(operation.material_ref.as_slice())
+                .map(Vec::as_slice)
                 == Some(b"application-owned retry material".as_slice())
         };
 

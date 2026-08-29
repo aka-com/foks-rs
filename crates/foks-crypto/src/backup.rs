@@ -9,7 +9,7 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::{
-    derive_public_material, open_puk_parcel_with_for_role, prefixed_hash, sign_seed_typed,
+    derive_public_material, open_puk_parcel_with_for_role, prefixed_hash_signable, sign_seed_typed,
     software_dh_shared, software_mlkem_decapsulate, DevicePublicMaterial, HybridSecretDecapsulator,
     Result, SharedKeySeed,
 };
@@ -175,7 +175,10 @@ impl BackupKey {
         encoded[0] = 0xc4;
         encoded[1] = BACKUP_SEED_BYTES as u8;
         encoded[2..].copy_from_slice(self.0.as_slice());
-        SecretSeed::new(prefixed_hash(BACKUP_SEED_TYPE_ID, encoded.as_slice()))
+        SecretSeed::new(
+            prefixed_hash_signable(BACKUP_SEED_TYPE_ID, encoded.as_slice())
+                .expect("fixed bin8 backup seed is signable Snowpack"),
+        )
     }
 
     pub fn public_material(&self) -> BackupResult<DevicePublicMaterial> {

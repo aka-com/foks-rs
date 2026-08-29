@@ -167,7 +167,7 @@ pub fn verify_team_transition(
         || change.team != *expected_team
         || change.host != *expected_host
         || change.root != expected_root
-        || prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire) != change.next_location_commitment
+        || prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire)? != change.next_location_commitment
     {
         return Err(Error::TeamChainContinuity);
     }
@@ -204,7 +204,7 @@ pub fn verify_team_transition(
         keys.insert(key.role, key.clone());
     }
     Ok(VerifiedTeamTransition {
-        link_hash: prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?),
+        link_hash: prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?)?,
         members: members.into_values().collect(),
         shared_keys: keys.into_values().collect(),
         introduced_keys: introduced,
@@ -229,7 +229,7 @@ pub fn verify_team_founding(
         || change.team != *expected_team
         || change.host != *expected_host
         || change.root != expected_root
-        || prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire) != change.next_location_commitment
+        || prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire)? != change.next_location_commitment
     {
         return Err(Error::TeamChainContinuity);
     }
@@ -238,7 +238,7 @@ pub fn verify_team_founding(
     let mut members = BTreeMap::new();
     verify_team_eldest(link, &change, expected_team, &shared_keys, &mut members)?;
     Ok(VerifiedTeamFounding {
-        link_hash: prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?),
+        link_hash: prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?)?,
         members: members.into_values().collect(),
         shared_keys,
     })
@@ -367,7 +367,7 @@ pub fn verify_team_chain(
         return Err(Error::TeamBinding);
     }
     let root_bytes = chain.merkle.encoded_root()?;
-    let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes);
+    let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes)?;
     if authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
         || &chain.merkle.root().hostchain != trusted_hostchain
     {
@@ -409,12 +409,13 @@ pub fn verify_team_chain(
             return Err(Error::TeamChainContinuity);
         }
         let location_wire = encode(&Value::Binary(location.to_vec()))?;
-        if prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire) != change.next_location_commitment {
+        if prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire)? != change.next_location_commitment
+        {
             return Err(Error::TeamChainContinuity);
         }
         let location_for_key = index.checked_sub(1).map(|prior| &chain.locations[prior]);
         let merkle_key = chain_merkle_key(3, expected_team, sequence, location_for_key)?;
-        let link_hash = prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?);
+        let link_hash = prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?)?;
         verify_merkle_path(
             path,
             &merkle_key,
@@ -494,7 +495,7 @@ pub fn verify_team_chain_increment(
         return Err(Error::TeamChainContinuity);
     }
     let root_bytes = chain.merkle.encoded_root()?;
-    let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes);
+    let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes)?;
     if authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
         || &chain.merkle.root().hostchain != trusted_hostchain
     {
@@ -551,11 +552,12 @@ pub fn verify_team_chain_increment(
             return Err(Error::TeamChainContinuity);
         }
         let location_wire = encode(&Value::Binary(locations[1].to_vec()))?;
-        if prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire) != change.next_location_commitment {
+        if prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire)? != change.next_location_commitment
+        {
             return Err(Error::TeamChainContinuity);
         }
         let merkle_key = chain_merkle_key(3, expected_team, sequence, Some(&locations[0]))?;
-        let link_hash = prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?);
+        let link_hash = prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?)?;
         verify_merkle_path(
             path,
             &merkle_key,

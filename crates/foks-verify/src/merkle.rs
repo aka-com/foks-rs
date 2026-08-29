@@ -192,7 +192,7 @@ pub fn authenticate_historical_roots_from_latest(
         }
         let target_root = full.get(&target).ok_or(Error::MerkleHistoryShape)?;
         let target_bytes = target_root.encoded()?;
-        let target_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &target_bytes);
+        let target_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &target_bytes)?;
         let requirements = merkle_history_requirements(latest.root.epoch, target)?;
         let tailored = HistoricalMerkleRoots {
             roots: requirements
@@ -322,7 +322,7 @@ pub fn verify_merkle_advance(
     let pinned_epoch = pinned.epoch;
     let pinned_hash_value = pinned.root_hash;
     let pinned_root = MerkleRoot::decode(&pinned.root_bytes)?;
-    let pinned_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &pinned_root.encoded()?);
+    let pinned_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &pinned_root.encoded()?)?;
     if pinned_root.epoch != pinned_epoch || pinned_hash != pinned_hash_value {
         return Err(Error::MerkleFork(pinned_epoch));
     }
@@ -334,7 +334,7 @@ pub fn verify_merkle_advance(
         });
     }
     verify_root_hostchain(&latest, trusted_hostchain)?;
-    let latest_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &latest.encoded()?);
+    let latest_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &latest.encoded()?)?;
     if latest.epoch == pinned_epoch {
         if latest_hash != pinned_hash_value {
             return Err(Error::MerkleFork(latest.epoch));
@@ -383,7 +383,7 @@ pub fn verify_merkle_advance(
         }
         hashes.insert(
             root.epoch,
-            prefixed_hash(MERKLE_ROOT_TYPE_ID, &root.encoded()?),
+            prefixed_hash(MERKLE_ROOT_TYPE_ID, &root.encoded()?)?,
         );
         roots.insert(root.epoch, root);
     }
@@ -521,7 +521,7 @@ fn restore_merkle_evidence(
     }
     let root = MerkleRoot::decode(root_bytes)?;
     let chain = verify_hostchain_at_tail(hostchain, &root.hostchain)?;
-    if root.epoch != epoch || prefixed_hash(MERKLE_ROOT_TYPE_ID, &root.encoded()?) != root_hash {
+    if root.epoch != epoch || prefixed_hash(MERKLE_ROOT_TYPE_ID, &root.encoded()?)? != root_hash {
         return Err(Error::PersistedMerkleEvidence);
     }
     match evidence {
@@ -754,8 +754,5 @@ fn hash_back_pointers(pointers: &[(u64, [u8; 32])]) -> Result<[u8; 32]> {
                 .collect(),
         )
     };
-    Ok(prefixed_hash(
-        MERKLE_BACK_POINTERS_TYPE_ID,
-        &encode(&value)?,
-    ))
+    prefixed_hash(MERKLE_BACK_POINTERS_TYPE_ID, &encode(&value)?)
 }

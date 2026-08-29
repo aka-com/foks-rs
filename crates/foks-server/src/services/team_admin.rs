@@ -120,11 +120,11 @@ pub(crate) fn activate_token(
         .map_err(internal)?
         .ok_or_else(permission_denied)?;
     let verify_key = EntityId::from_bytes(authority.ptk_verify_key).map_err(internal)?;
-    foks_crypto::verify_typed(
+    foks_crypto::verify_blob(
         &verify_key,
         &activation.signature,
         foks_proto::TEAM_BEARER_TOKEN_CHALLENGE_BLOB_TYPE_ID,
-        &challenge.encoded_blob().map_err(bad_arguments)?,
+        &challenge.encoded_payload().map_err(bad_arguments)?,
     )
     .map_err(|_| permission_denied())?;
     let now = clock.now_micros().map_err(internal)?;
@@ -227,7 +227,9 @@ pub(crate) fn create(
         Argument::AdHoc(argument) => argument.link.encoded(),
     }
     .map_err(bad_arguments)?;
-    let idempotency_key = foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, &exact_link);
+    let idempotency_key =
+        foks_crypto::prefixed_hash_signable(foks_proto::LINK_OUTER_TYPE_ID, &exact_link)
+            .map_err(bad_arguments)?;
     const REQUEST_TYPE_ID: u64 = 0x6d10_7e4d_464f_4b53;
     let request_hash = foks_crypto::prefixed_hash(REQUEST_TYPE_ID, argument);
     let receipt_now = clock.now_micros().map_err(internal)?;
@@ -321,15 +323,14 @@ pub(crate) fn create(
             };
             let exact_root = root.encoded()?;
             let root_hash =
-                foks_crypto::prefixed_hash(foks_proto::MERKLE_ROOT_TYPE_ID, &exact_root);
-            let root_blob = foks_snowpack::encode(&Value::Binary(exact_root.clone()))?;
+                foks_crypto::prefixed_hash_signable(foks_proto::MERKLE_ROOT_TYPE_ID, &exact_root)?;
             let merkle_key = keys.load_or_create(KeyPurpose::Merkle)?;
             let exact_signed_root = SignedBlob {
                 inner: exact_root.clone(),
-                signature: foks_crypto::sign_ed25519_typed(
+                signature: foks_crypto::sign_ed25519_blob(
                     merkle_key.expose(),
                     foks_proto::MERKLE_ROOT_BLOB_TYPE_ID,
-                    &root_blob,
+                    &exact_root,
                 )?,
             }
             .encoded()?;
@@ -455,7 +456,9 @@ pub(crate) fn edit(
     principal.require_ordinary_device()?;
     let decoded = foks_rpc::arguments::decode_team_edit(argument).map_err(bad_arguments)?;
     let exact_link = decoded.link.encoded().map_err(bad_arguments)?;
-    let idempotency_key = foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, &exact_link);
+    let idempotency_key =
+        foks_crypto::prefixed_hash_signable(foks_proto::LINK_OUTER_TYPE_ID, &exact_link)
+            .map_err(bad_arguments)?;
     const REQUEST_TYPE_ID: u64 = 0x6d10_7e4e_464f_4b53;
     let request_hash = foks_crypto::prefixed_hash(REQUEST_TYPE_ID, argument);
     let response = foks_proto::TeamEditResult {
@@ -552,15 +555,14 @@ pub(crate) fn edit(
             };
             let exact_root = next_root.encoded()?;
             let root_hash =
-                foks_crypto::prefixed_hash(foks_proto::MERKLE_ROOT_TYPE_ID, &exact_root);
-            let root_blob = foks_snowpack::encode(&Value::Binary(exact_root.clone()))?;
+                foks_crypto::prefixed_hash_signable(foks_proto::MERKLE_ROOT_TYPE_ID, &exact_root)?;
             let merkle_key = keys.load_or_create(KeyPurpose::Merkle)?;
             let exact_signed_root = SignedBlob {
                 inner: exact_root.clone(),
-                signature: foks_crypto::sign_ed25519_typed(
+                signature: foks_crypto::sign_ed25519_blob(
                     merkle_key.expose(),
                     foks_proto::MERKLE_ROOT_BLOB_TYPE_ID,
-                    &root_blob,
+                    &exact_root,
                 )?,
             }
             .encoded()?;
@@ -763,7 +765,8 @@ fn map_edit_error(error: crate::Error) -> RpcStatus {
 
 fn decode_root(root: &foks_server_db::RootSnapshot) -> crate::Result<MerkleRoot> {
     let decoded = MerkleRoot::decode(&root.exact_root)?;
-    let hash = foks_crypto::prefixed_hash(foks_proto::MERKLE_ROOT_TYPE_ID, &root.exact_root);
+    let hash =
+        foks_crypto::prefixed_hash_signable(foks_proto::MERKLE_ROOT_TYPE_ID, &root.exact_root)?;
     if decoded.epoch != root.epoch || decoded.root_node != root.root_node || hash != root.root_hash
     {
         return Err(crate::Error::Signup("stored Merkle root binding mismatch"));

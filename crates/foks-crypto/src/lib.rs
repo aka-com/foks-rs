@@ -362,7 +362,7 @@ pub fn seal_kv_chunk(
         Value::Unsigned(offset),
         Value::Bool(final_chunk),
     ]))?;
-    let hash = prefixed_hash(KV_CHUNK_NONCE_PAYLOAD_TYPE_ID, &nonce_value);
+    let hash = prefixed_hash_signable(KV_CHUNK_NONCE_PAYLOAD_TYPE_ID, &nonce_value)?;
     let nonce: [u8; 24] = hash[..24].try_into().expect("slice length is fixed");
     let cipher = XSalsa20Poly1305::new(file_seed.as_bytes().into());
     let ciphertext = cipher
@@ -432,7 +432,7 @@ pub fn open_kv_chunk(
         Value::Unsigned(requested_offset),
         Value::Bool(chunk.final_chunk),
     ]))?;
-    let hash = prefixed_hash(KV_CHUNK_NONCE_PAYLOAD_TYPE_ID, &nonce_value);
+    let hash = prefixed_hash_signable(KV_CHUNK_NONCE_PAYLOAD_TYPE_ID, &nonce_value)?;
     let nonce: [u8; 24] = hash[..24].try_into().expect("slice length is fixed");
     let cipher = XSalsa20Poly1305::new(file_seed.as_bytes().into());
     let plaintext = Zeroizing::new(
@@ -576,12 +576,33 @@ fn decode_with_redacted_trailing_seed(plaintext: &[u8]) -> Result<(Value, Secret
     Ok((decode(&redacted)?, seed))
 }
 
-/// SHA-512/256 over the 8-byte big-endian type ID and canonical object bytes.
-pub fn prefixed_hash(type_id: u64, canonical_object: &[u8]) -> [u8; 32] {
+/// SHA-512/256 over the 8-byte big-endian type ID and arbitrary bytes.
+///
+/// This primitive does not validate that `object` is a signable Snowpack
+/// encoding. Protocol objects must use [`prefixed_hash_signable`] so hashes
+/// cannot cross the Go/Rust canonicalization boundary.
+pub fn prefixed_hash(type_id: u64, object: &[u8]) -> [u8; 32] {
     let mut hash = Sha512_256::new();
     hash.update(type_id.to_be_bytes());
-    hash.update(canonical_object);
+    hash.update(object);
     hash.finalize().into()
+}
+
+/// SHA-512/256 over a typed, signable Snowpack object.
+///
+/// go-foks rejects `array16` values of length 16 through 31 before hashing.
+/// Apply the same recursive check here so a protocol object cannot acquire a
+/// Rust-only hash identity.
+pub fn prefixed_hash_signable(type_id: u64, canonical_object: &[u8]) -> Result<[u8; 32]> {
+    foks_snowpack::validate_signable(canonical_object)?;
+    Ok(prefixed_hash(type_id, canonical_object))
+}
+
+fn tree_location_commitment(location: &[u8; 32]) -> Result<[u8; 32]> {
+    prefixed_hash_signable(
+        TREE_LOCATION_TYPE_ID,
+        &encode(&Value::Binary(location.to_vec()))?,
+    )
 }
 
 /// One-way storage and journal identity for a remote-view bearer token.
@@ -597,18 +618,27 @@ pub fn ed25519_public_key(seed: &[u8; 32]) -> [u8; 32] {
 /// Signs a canonical object using the FOKS typed Ed25519 message format.
 ///
 /// This low-level primitive is intended for host keys whose persistence and
-/// lifetime are managed outside the client-oriented [`SecretSeed`] type.
+/// lifetime are managed outside the client-oriented [`SecretSeed`] type. Use
+/// [`sign_ed25519_blob`] for `Future(T)` so the inner object is also checked.
 pub fn sign_ed25519_typed(
     seed: &[u8; 32],
     type_id: u64,
     canonical_object: &[u8],
 ) -> Result<Signature> {
-    foks_snowpack::validate(canonical_object)?;
+    foks_snowpack::validate_signable(canonical_object)?;
     let signing = SigningKey::from_bytes(seed);
     let mut message = Vec::with_capacity(8 + canonical_object.len());
     message.extend_from_slice(&type_id.to_be_bytes());
     message.extend_from_slice(canonical_object);
     Ok(Signature::Ed25519(signing.sign(&message).to_bytes()))
+}
+
+/// Signs a Snowpack `Future(T)` blob after validating both its inner object
+/// and the binary wrapper covered by the signature.
+pub fn sign_ed25519_blob(seed: &[u8; 32], blob_type_id: u64, inner: &[u8]) -> Result<Signature> {
+    foks_snowpack::validate_signable(inner)?;
+    let encoded_blob = encode(&Value::Binary(inner.to_vec()))?;
+    sign_ed25519_typed(seed, blob_type_id, &encoded_blob)
 }
 
 /// Computes the exact v0.1.9 commitment authenticated by named-team member
@@ -621,7 +651,7 @@ pub fn team_removal_key_commitment(removal_key: &SecretSeed) -> Result<[u8; 32]>
     encoded[0] = 0xc4;
     encoded[1] = 32;
     encoded[2..].copy_from_slice(removal_key.as_bytes());
-    Ok(prefixed_hash(TEAM_REMOVAL_KEY_TYPE_ID, encoded.as_slice()))
+    prefixed_hash_signable(TEAM_REMOVAL_KEY_TYPE_ID, encoded.as_slice())
 }
 
 /// HMAC-SHA-512/256 commitment used by FOKS for disclosed chain metadata.
@@ -634,13 +664,14 @@ pub fn commitment(type_id: u64, canonical_object: &[u8], key: &[u8]) -> [u8; 32]
 }
 
 /// Signs an exact canonical object with a PUK/PTK seed using FOKS's typed
-/// Ed25519 message format.
+/// Ed25519 message format. Use [`sign_shared_key_blob`] for `Future(T)` so the
+/// inner object is also checked.
 pub fn sign_shared_key_typed(
     seed: &SecretSeed,
     type_id: u64,
     canonical_object: &[u8],
 ) -> Result<Signature> {
-    foks_snowpack::validate(canonical_object)?;
+    foks_snowpack::validate_signable(canonical_object)?;
     let signing_seed = derive_key(seed, 0, None)?;
     let signing = SigningKey::from_bytes(signing_seed.as_bytes());
     let mut message = Vec::with_capacity(8 + canonical_object.len());
@@ -649,16 +680,28 @@ pub fn sign_shared_key_typed(
     Ok(Signature::Ed25519(signing.sign(&message).to_bytes()))
 }
 
+/// Signs a Snowpack `Future(T)` blob with a PUK/PTK seed after validating both
+/// its inner object and the binary wrapper covered by the signature.
+pub fn sign_shared_key_blob(
+    seed: &SecretSeed,
+    blob_type_id: u64,
+    inner: &[u8],
+) -> Result<Signature> {
+    foks_snowpack::validate_signable(inner)?;
+    let encoded_blob = encode(&Value::Binary(inner.to_vec()))?;
+    sign_shared_key_typed(seed, blob_type_id, &encoded_blob)
+}
+
 /// Signs the exact `Future(TeamBearerTokenChallengePayload)` blob expected by
 /// TeamAdmin.activateTeamBearerToken.
 pub fn sign_team_bearer_token_challenge(
     seed: &SecretSeed,
     challenge: &foks_proto::TeamBearerTokenChallenge,
 ) -> Result<Signature> {
-    sign_shared_key_typed(
+    sign_shared_key_blob(
         seed,
         foks_proto::TEAM_BEARER_TOKEN_CHALLENGE_BLOB_TYPE_ID,
-        &challenge.encoded_blob()?,
+        &challenge.encoded_payload()?,
     )
 }
 
@@ -929,10 +972,7 @@ fn make_single_owner_adhoc_team_with_signer(
         previous: None,
         root: input.root.clone(),
         time: input.time,
-        next_location_commitment: prefixed_hash(
-            TREE_LOCATION_TYPE_ID,
-            &encode(&Value::Binary(input.next_tree_location.to_vec()))?,
-        ),
+        next_location_commitment: tree_location_commitment(&input.next_tree_location)?,
         team: team.clone(),
         host: input.host.clone(),
         signer,
@@ -956,10 +996,9 @@ fn make_single_owner_adhoc_team_with_signer(
         shared_keys,
         metadata: vec![
             ChangeMetadata::Eldest {
-                subchain_location_commitment: prefixed_hash(
-                    TREE_LOCATION_TYPE_ID,
-                    &encode(&Value::Binary(input.subchain_tree_location.to_vec()))?,
-                ),
+                subchain_location_commitment: tree_location_commitment(
+                    &input.subchain_tree_location,
+                )?,
             },
             ChangeMetadata::TeamIndexRange(foks_proto::RationalRange {
                 low: foks_proto::Rational {
@@ -1001,10 +1040,9 @@ fn make_single_owner_adhoc_team_with_signer(
             previous: None,
             root: input.root,
             time: 0,
-            next_location_commitment: prefixed_hash(
-                TREE_LOCATION_TYPE_ID,
-                &encode(&Value::Binary(input.membership_next_tree_location.to_vec()))?,
-            ),
+            next_location_commitment: tree_location_commitment(
+                &input.membership_next_tree_location,
+            )?,
             team: &team,
             source_role: Role::OWNER,
             destination_role: Role::OWNER,
@@ -1129,10 +1167,7 @@ fn make_single_owner_named_team_with_signer(
         previous: None,
         root: input.root.clone(),
         time: input.time,
-        next_location_commitment: prefixed_hash(
-            TREE_LOCATION_TYPE_ID,
-            &encode(&Value::Binary(input.next_tree_location.to_vec()))?,
-        ),
+        next_location_commitment: tree_location_commitment(&input.next_tree_location)?,
         team: team.clone(),
         host: input.host.clone(),
         signer,
@@ -1157,10 +1192,9 @@ fn make_single_owner_named_team_with_signer(
         metadata: vec![
             ChangeMetadata::TeamName(name_commitment),
             ChangeMetadata::Eldest {
-                subchain_location_commitment: prefixed_hash(
-                    TREE_LOCATION_TYPE_ID,
-                    &encode(&Value::Binary(input.subchain_tree_location.to_vec()))?,
-                ),
+                subchain_location_commitment: tree_location_commitment(
+                    &input.subchain_tree_location,
+                )?,
             },
             ChangeMetadata::TeamIndexRange(foks_proto::RationalRange {
                 low: foks_proto::Rational {
@@ -1201,10 +1235,9 @@ fn make_single_owner_named_team_with_signer(
             previous: None,
             root: input.root,
             time: 0,
-            next_location_commitment: prefixed_hash(
-                TREE_LOCATION_TYPE_ID,
-                &encode(&Value::Binary(input.membership_next_tree_location.to_vec()))?,
-            ),
+            next_location_commitment: tree_location_commitment(
+                &input.membership_next_tree_location,
+            )?,
             team: &team,
             source_role: Role::OWNER,
             destination_role: Role::OWNER,
@@ -1257,10 +1290,7 @@ pub fn make_add_local_team_member_link(
         previous: Some(input.previous),
         root: input.root.clone(),
         time: input.time,
-        next_location_commitment: prefixed_hash(
-            TREE_LOCATION_TYPE_ID,
-            &encode(&Value::Binary(input.next_tree_location.to_vec()))?,
-        ),
+        next_location_commitment: tree_location_commitment(&input.next_tree_location)?,
         team: input.team.clone(),
         host: input.host.clone(),
         signer,
@@ -1338,10 +1368,7 @@ pub fn make_add_remote_team_member_link(
         previous: Some(input.previous),
         root: input.root.clone(),
         time: input.time,
-        next_location_commitment: prefixed_hash(
-            TREE_LOCATION_TYPE_ID,
-            &encode(&Value::Binary(input.next_tree_location.to_vec()))?,
-        ),
+        next_location_commitment: tree_location_commitment(&input.next_tree_location)?,
         team: input.team.clone(),
         host: input.host.clone(),
         signer: actor_public.verify_key,
@@ -1471,10 +1498,7 @@ pub fn make_change_team_member_link(
         previous: Some(input.previous),
         root: input.root.clone(),
         time: input.time,
-        next_location_commitment: prefixed_hash(
-            TREE_LOCATION_TYPE_ID,
-            &encode(&Value::Binary(input.next_tree_location.to_vec()))?,
-        ),
+        next_location_commitment: tree_location_commitment(&input.next_tree_location)?,
         team: input.team.clone(),
         host: input.host.clone(),
         signer: actor.verify_key,
@@ -1642,10 +1666,7 @@ pub fn make_yubi_provision_link(
         previous: Some(input.base.previous),
         root: input.base.root.clone(),
         time: input.base.time,
-        next_location_commitment: prefixed_hash(
-            TREE_LOCATION_TYPE_ID,
-            &encode(&Value::Binary(input.base.next_tree_location.to_vec()))?,
-        ),
+        next_location_commitment: tree_location_commitment(&input.base.next_tree_location)?,
         uid: input.base.uid.clone(),
         host: input.base.host.clone(),
         signer: existing.id,
@@ -1802,10 +1823,7 @@ fn make_provision_link(
         previous: Some(input.base.previous),
         root: input.base.root.clone(),
         time: input.base.time,
-        next_location_commitment: prefixed_hash(
-            TREE_LOCATION_TYPE_ID,
-            &encode(&Value::Binary(input.base.next_tree_location.to_vec()))?,
-        ),
+        next_location_commitment: tree_location_commitment(&input.base.next_tree_location)?,
         uid: input.base.uid.clone(),
         host: input.base.host.clone(),
         signer: existing.id,
@@ -1967,10 +1985,7 @@ fn make_software_puk_change_link(
         previous: Some(base.previous),
         root: base.root.clone(),
         time: base.time,
-        next_location_commitment: prefixed_hash(
-            TREE_LOCATION_TYPE_ID,
-            &encode(&Value::Binary(base.next_tree_location.to_vec()))?,
-        ),
+        next_location_commitment: tree_location_commitment(&base.next_tree_location)?,
         uid: base.uid.clone(),
         host: base.host.clone(),
         signer: signer.id,
@@ -2577,10 +2592,7 @@ pub fn make_software_eldest_link(
         puk_hepk_fingerprint,
         root: input.root,
         time: input.time,
-        next_location_commitment: prefixed_hash(
-            TREE_LOCATION_TYPE_ID,
-            &encode(&Value::Binary(input.next_tree_location.to_vec()))?,
-        ),
+        next_location_commitment: tree_location_commitment(&input.next_tree_location)?,
         username_commitment: commitment(
             NAME_COMMITMENT_TYPE_ID,
             &username_object,
@@ -2591,10 +2603,7 @@ pub fn make_software_eldest_link(
             &device_label_object,
             &input.device_name.commitment_key,
         ),
-        subchain_location_commitment: prefixed_hash(
-            TREE_LOCATION_TYPE_ID,
-            &encode(&Value::Binary(input.subchain_tree_location.to_vec()))?,
-        ),
+        subchain_location_commitment: tree_location_commitment(&input.subchain_tree_location)?,
     };
     let unsigned = UnsignedUserLink::software_eldest(&public)?;
     let puk_signature = sign_seed_typed(
@@ -2662,10 +2671,7 @@ pub fn make_yubi_eldest_link(
         puk_hepk_fingerprint: hepk_fingerprint(&puk.hepk)?,
         root: input.root,
         time: input.time,
-        next_location_commitment: prefixed_hash(
-            TREE_LOCATION_TYPE_ID,
-            &encode(&Value::Binary(input.next_tree_location.to_vec()))?,
-        ),
+        next_location_commitment: tree_location_commitment(&input.next_tree_location)?,
         username_commitment: commitment(
             NAME_COMMITMENT_TYPE_ID,
             &username_object,
@@ -2676,10 +2682,7 @@ pub fn make_yubi_eldest_link(
             &device_label_object,
             &input.device_name.commitment_key,
         ),
-        subchain_location_commitment: prefixed_hash(
-            TREE_LOCATION_TYPE_ID,
-            &encode(&Value::Binary(input.subchain_tree_location.to_vec()))?,
-        ),
+        subchain_location_commitment: tree_location_commitment(&input.subchain_tree_location)?,
     })?;
     let puk_signature = sign_seed_typed(
         puk_seed,
@@ -2715,7 +2718,7 @@ pub fn derive_shared_public(seed: &SecretSeed, entity_type: u8) -> Result<Shared
 }
 
 pub fn hepk_fingerprint(hepk: &Hepk) -> Result<[u8; 32]> {
-    Ok(prefixed_hash(HEPK_TYPE_ID, &hepk.encoded()?))
+    prefixed_hash_signable(HEPK_TYPE_ID, &hepk.encoded()?)
 }
 
 /// Seals the first owner PUK to its software eldest device using the exact
@@ -2868,10 +2871,7 @@ pub struct YubiPublicMaterial {
 /// compressed public key in the second PIV slot.
 pub fn yubi_pq_key_id(compressed_public_key: &[u8; 33]) -> Result<[u8; 32]> {
     let encoded = encode(&Value::Binary(compressed_public_key.to_vec()))?;
-    Ok(prefixed_hash(
-        foks_proto::ECDSA_COMPRESSED_PUBLIC_KEY_TYPE_ID,
-        &encoded,
-    ))
+    prefixed_hash_signable(foks_proto::ECDSA_COMPRESSED_PUBLIC_KEY_TYPE_ID, &encoded)
 }
 
 /// Builds the exact P-256 + ML-KEM HEPK used by v0.1.9. `pq_self_secret` is
@@ -3584,13 +3584,21 @@ fn encode_hepk(classical: &[u8; 32], mlkem768: &[u8]) -> Result<Vec<u8>> {
     ]))?)
 }
 
-/// Verifies a FOKS Ed25519 signature over an already encoded typed object.
+/// Verifies a FOKS signature over an already encoded typed object.
+///
+/// Use [`verify_blob`] for `Future(T)` so the inner object, rather than only
+/// its binary wrapper, is checked for Go-compatible canonicality.
 pub fn verify_typed(
     signer: &EntityId,
     signature: &Signature,
     type_id: u64,
     canonical_object: &[u8],
 ) -> Result<()> {
+    // go-foks Verify2 rejects a signature whose signed object is not canonical
+    // before checking the signature itself, so a peer cannot present a
+    // non-canonical encoding (e.g. array16 with 16..=31 elements) that one
+    // implementation would accept and another reject.
+    foks_snowpack::validate_signable(canonical_object)?;
     let mut message = Vec::with_capacity(8 + canonical_object.len());
     message.extend(type_id.to_be_bytes());
     message.extend(canonical_object);
@@ -3636,6 +3644,10 @@ pub fn verify_blob(
     blob_type_id: u64,
     inner: &[u8],
 ) -> Result<()> {
+    // Verify2 checks the Future's decoded inner bytes for canonicality before
+    // it checks the signature. Checking only the bin wrapper would allow every
+    // byte string, including Rust-only array16(16..=31) encodings.
+    foks_snowpack::validate_signable(inner)?;
     let encoded_blob = encode(&Value::Binary(inner.to_vec()))?;
     verify_typed(signer, signature, blob_type_id, &encoded_blob)
 }
@@ -3665,6 +3677,52 @@ mod tests {
 
     fn mutation_fixture(name: &str) -> Vec<u8> {
         std::fs::read(format!("{MUTATION_DIR}/{name}")).unwrap()
+    }
+
+    #[test]
+    fn signing_and_verification_reject_a_non_canonical_signable_object() {
+        // array16 with 16..=31 elements is canonical for RPC arguments (the
+        // signup argument is array16(16)) but not for signed, verified, or
+        // hashed objects, matching go-foks's AssertCanonicalMsgpack. Both the
+        // signer and the verifier reject it before any signature operation.
+        let mut non_canonical = vec![0xdc, 0x00, 0x10];
+        non_canonical.extend(std::iter::repeat_n(0xc0, 16));
+        let signer =
+            EntityId::from_bytes([vec![ENTITY_PUK_VERIFY], vec![0x11; 32]].concat()).unwrap();
+        assert!(matches!(
+            sign_ed25519_typed(&[0u8; 32], 1, &non_canonical).unwrap_err(),
+            Error::Snowpack(_)
+        ));
+        assert!(matches!(
+            verify_typed(&signer, &Signature::Ed25519([0; 64]), 1, &non_canonical).unwrap_err(),
+            Error::Snowpack(_)
+        ));
+        assert!(matches!(
+            sign_ed25519_blob(&[0u8; 32], 1, &non_canonical).unwrap_err(),
+            Error::Snowpack(_)
+        ));
+        assert!(matches!(
+            sign_shared_key_blob(&SecretSeed::new([0; 32]), 1, &non_canonical).unwrap_err(),
+            Error::Snowpack(_)
+        ));
+        assert!(matches!(
+            verify_blob(&signer, &Signature::Ed25519([0; 64]), 1, &non_canonical,).unwrap_err(),
+            Error::Snowpack(_)
+        ));
+        assert!(matches!(
+            prefixed_hash_signable(1, &non_canonical).unwrap_err(),
+            Error::Snowpack(_)
+        ));
+
+        // A fixarray-shaped signed object is still accepted by the signer (the
+        // error path is specific to the disallowed array16 form).
+        let canonical = vec![0x91, 0xc0];
+        assert!(sign_ed25519_typed(&[0u8; 32], 1, &canonical).is_ok());
+        assert!(sign_ed25519_blob(&[0u8; 32], 1, &canonical).is_ok());
+        assert_eq!(
+            prefixed_hash_signable(1, &canonical).unwrap(),
+            prefixed_hash(1, &canonical)
+        );
     }
 
     #[test]

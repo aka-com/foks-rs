@@ -336,7 +336,7 @@ pub fn verify_user_chain(
     }
     let root_bytes = chain.merkle.encoded_root()?;
     let authenticated_chain_bytes = authenticated_user_chain_bytes(&chain.links)?;
-    let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes);
+    let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes)?;
     if authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
         || &chain.merkle.root().hostchain != trusted_hostchain
     {
@@ -379,12 +379,13 @@ pub fn verify_user_chain(
             return Err(Error::UserChainContinuity);
         }
         let location_wire = encode(&Value::Binary(location.to_vec()))?;
-        if prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire) != change.next_location_commitment {
+        if prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire)? != change.next_location_commitment
+        {
             return Err(Error::UserChainContinuity);
         }
         let location_for_key = index.checked_sub(1).map(|prior| &chain.locations[prior]);
         let merkle_key = user_merkle_key(expected_uid, sequence, location_for_key)?;
-        let link_hash = prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?);
+        let link_hash = prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?)?;
         verify_merkle_path(
             path,
             &merkle_key,
@@ -522,7 +523,7 @@ pub fn verify_user_chain_increment(
         return Err(Error::UserChainContinuity);
     }
     let root_bytes = chain.merkle.encoded_root()?;
-    let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes);
+    let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes)?;
     if authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
         || &chain.merkle.root().hostchain != trusted_hostchain
     {
@@ -563,11 +564,12 @@ pub fn verify_user_chain_increment(
             return Err(Error::UserChainContinuity);
         }
         let location_wire = encode(&Value::Binary(locations[1].to_vec()))?;
-        if prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire) != change.next_location_commitment {
+        if prefixed_hash(TREE_LOCATION_TYPE_ID, &location_wire)? != change.next_location_commitment
+        {
             return Err(Error::UserChainContinuity);
         }
         let merkle_key = user_merkle_key(expected_uid, sequence, Some(&locations[0]))?;
-        let link_hash = prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?);
+        let link_hash = prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?)?;
         verify_merkle_path(
             path,
             &merkle_key,
@@ -1037,14 +1039,14 @@ pub(crate) fn username_merkle_key(
     ]))?;
     let mut name_entity = Vec::with_capacity(33);
     name_entity.push(9);
-    name_entity.extend_from_slice(&prefixed_hash(NAME_HASH_PREIMAGE_TYPE_ID, &preimage));
+    name_entity.extend_from_slice(&prefixed_hash(NAME_HASH_PREIMAGE_TYPE_ID, &preimage)?);
     let input = encode(&Value::Array(vec![
         Value::Unsigned(1),
         Value::Binary(name_entity),
         Value::Unsigned(sequence),
         Value::Null,
     ]))?;
-    Ok(prefixed_hash(MERKLE_TREE_RF_INPUT_TYPE_ID, &input))
+    prefixed_hash(MERKLE_TREE_RF_INPUT_TYPE_ID, &input)
 }
 
 pub(crate) fn username_merkle_leaf(uid: &EntityId) -> Result<[u8; 32]> {
@@ -1055,7 +1057,7 @@ pub(crate) fn username_merkle_leaf(uid: &EntityId) -> Result<[u8; 32]> {
             Box::new(Value::Binary(uid.as_bytes().to_vec())),
         ))),
     ]))?;
-    Ok(prefixed_hash(ENTITY_ID_MERKLE_VALUE_TYPE_ID, &value))
+    prefixed_hash(ENTITY_ID_MERKLE_VALUE_TYPE_ID, &value)
 }
 
 fn persistent_user_id(verify_key: &EntityId) -> Result<EntityId> {
@@ -1088,15 +1090,12 @@ fn verify_eldest_bindings(
 }
 
 pub(crate) fn find_hepk(hepks: &[Hepk], fingerprint: [u8; 32]) -> Result<Hepk> {
-    hepks
-        .iter()
-        .find(|hepk| {
-            hepk.encoded()
-                .map(|bytes| prefixed_hash(HEPK_TYPE_ID, &bytes) == fingerprint)
-                .unwrap_or(false)
-        })
-        .cloned()
-        .ok_or(Error::MissingHepk)
+    for hepk in hepks {
+        if prefixed_hash(HEPK_TYPE_ID, &hepk.encoded()?)? == fingerprint {
+            return Ok(hepk.clone());
+        }
+    }
+    Err(Error::MissingHepk)
 }
 
 fn user_merkle_key(uid: &EntityId, seqno: u64, location: Option<&[u8; 32]>) -> Result<[u8; 32]> {
@@ -1115,7 +1114,7 @@ pub(crate) fn chain_merkle_key(
         Value::Unsigned(seqno),
         location.map_or(Value::Null, |value| Value::Binary(value.to_vec())),
     ]))?;
-    Ok(prefixed_hash(MERKLE_TREE_RF_INPUT_TYPE_ID, &encoded))
+    prefixed_hash(MERKLE_TREE_RF_INPUT_TYPE_ID, &encoded)
 }
 
 #[cfg(test)]
@@ -1215,7 +1214,8 @@ mod incremental_tests {
             },
         );
         let (devices, shared_keys, shared_key_history) = replay.into_parts();
-        let first_hash = prefixed_hash(LINK_OUTER_TYPE_ID, &chain.links[0].encoded().unwrap());
+        let first_hash =
+            prefixed_hash(LINK_OUTER_TYPE_ID, &chain.links[0].encoded().unwrap()).unwrap();
         let prior = VerifiedUserState {
             uid: uid.clone(),
             host: host.clone(),

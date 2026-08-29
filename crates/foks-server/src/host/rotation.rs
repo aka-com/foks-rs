@@ -1,3 +1,5 @@
+use crate::keys::{HostKeyProvider, KeyGenerationId, KeyPurpose, SecretKey};
+use crate::{Error, Result};
 use foks_proto::{
     BaseChainer, EntityId, HostchainChange, HostchainChangeItem, HostchainLink, HostchainTail,
     MerkleRoot, ProbeResponse, SignedBlob, TreeRoot, ENTITY_HOST, HOSTCHAIN_LINK_OUTER_TYPE_ID,
@@ -7,10 +9,6 @@ use foks_server_db::{
     Database, HostKeyGeneration, HostKeyGenerationState, HostRotationOperation, HostRotationPhase,
     HostRotationPublication,
 };
-use foks_snowpack::{encode, Value};
-
-use crate::keys::{HostKeyProvider, KeyGenerationId, KeyPurpose, SecretKey};
-use crate::{Error, Result};
 
 pub const MINIMUM_HOST_KEY_OBSERVATION_MICROS: u64 = 24 * 60 * 60 * 1_000_000;
 
@@ -250,7 +248,10 @@ fn construct_publication(
         || stored_probe_root.exact_root != probe.merkle_root.inner
         || stored_probe_root.exact_signed_root != probe.merkle_root.encoded()?
         || stored_probe_root.root_hash
-            != foks_crypto::prefixed_hash(MERKLE_ROOT_TYPE_ID, &stored_probe_root.exact_root)
+            != foks_crypto::prefixed_hash_signable(
+                MERKLE_ROOT_TYPE_ID,
+                &stored_probe_root.exact_root,
+            )?
         || current_root.epoch < probe_root.epoch
         || probe_root.hostchain.seqno
             != u64::try_from(probe.hostchain.len())
@@ -266,7 +267,7 @@ fn construct_publication(
         || current_wire_root.root_node != current_root.root_node
         || current_wire_root.hostchain != probe_root.hostchain
         || current_signed_root.inner != current_root.exact_root
-        || foks_crypto::prefixed_hash(MERKLE_ROOT_TYPE_ID, &current_root.exact_root)
+        || foks_crypto::prefixed_hash_signable(MERKLE_ROOT_TYPE_ID, &current_root.exact_root)?
             != current_root.root_hash
     {
         return Err(Error::Config("current Merkle database head is invalid"));
@@ -313,7 +314,7 @@ fn construct_publication(
     }
     let exact_hostchain_link = link.encoded()?;
     let hostchain_link_hash =
-        foks_crypto::prefixed_hash(HOSTCHAIN_LINK_OUTER_TYPE_ID, &exact_hostchain_link);
+        foks_crypto::prefixed_hash_signable(HOSTCHAIN_LINK_OUTER_TYPE_ID, &exact_hostchain_link)?;
     probe.hostchain.push(link);
 
     let root_epoch = current_root
@@ -339,14 +340,13 @@ fn construct_publication(
         },
     };
     let exact_root = root.encoded()?;
-    let root_hash = foks_crypto::prefixed_hash(MERKLE_ROOT_TYPE_ID, &exact_root);
-    let root_blob = encode(&Value::Binary(exact_root.clone()))?;
+    let root_hash = foks_crypto::prefixed_hash_signable(MERKLE_ROOT_TYPE_ID, &exact_root)?;
     let merkle_key = provider.load_existing(KeyPurpose::Merkle)?;
     let signed_root = SignedBlob {
-        signature: foks_crypto::sign_ed25519_typed(
+        signature: foks_crypto::sign_ed25519_blob(
             merkle_key.expose(),
             MERKLE_ROOT_BLOB_TYPE_ID,
-            &root_blob,
+            &exact_root,
         )?,
         inner: exact_root.clone(),
     };

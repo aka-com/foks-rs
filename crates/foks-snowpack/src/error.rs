@@ -19,6 +19,9 @@ pub enum ErrorKind {
     InvalidVariantTag,
     EmptyArray,
     NonMinimal(&'static str),
+    /// A form the general codec accepts but a signable (signed, verified, or
+    /// hashed) encoding forbids, to match go-foks's stricter canonical rules.
+    NonCanonicalSignable(&'static str),
     NonNegativeSignedInteger,
     LengthOverflow,
     DepthLimit,
@@ -70,6 +73,9 @@ impl fmt::Display for Error {
             ErrorKind::InvalidVariantTag => write!(formatter, "invalid variant tag"),
             ErrorKind::EmptyArray => write!(formatter, "empty arrays must be null"),
             ErrorKind::NonMinimal(which) => write!(formatter, "non-minimal {which} encoding"),
+            ErrorKind::NonCanonicalSignable(which) => {
+                write!(formatter, "{which} is not allowed in a signable encoding")
+            }
             ErrorKind::NonNegativeSignedInteger => {
                 write!(formatter, "signed integer encoding is not negative")
             }
@@ -107,6 +113,10 @@ mod tests {
             (
                 ErrorKind::NonMinimal("integer"),
                 "non-minimal integer encoding",
+            ),
+            (
+                ErrorKind::NonCanonicalSignable("array16"),
+                "array16 is not allowed in a signable encoding",
             ),
             (
                 ErrorKind::NonNegativeSignedInteger,

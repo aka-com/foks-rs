@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use foks_crypto::{device_signing_key_pkcs8, prefixed_hash};
 use foks_proto::SecretSeed;
 use foks_rpc::{
+    call_protocol_id, is_headerless_protocol, read_bare_response, read_bare_void_response,
     read_probe_response, read_response, read_void_response, resequence_call, write_probe_request,
     DEFAULT_MAX_FRAME_LENGTH,
 };
@@ -238,16 +239,32 @@ impl PooledConnection {
             .ok_or(Error::Transport("pooled connection is absent"))?;
         let sequence = connection.next_sequence;
         let request = resequence_call(request, sequence, self.maximum_frame_length)?;
+        // Team and Kex protocols exchange bare arguments and results with no
+        // DataWrap envelope, so select the matching response decoder from the
+        // protocol the request targets.
+        let headerless = is_headerless_protocol(
+            call_protocol_id(&request, self.maximum_frame_length).map_err(map_rpc_error)?,
+        );
         connection
             .stream
             .write_all(&request)
             .map_err(map_io_error)?;
         connection.stream.flush().map_err(map_io_error)?;
-        let response = if is_void {
-            read_void_response(&mut connection.stream, self.maximum_frame_length, sequence)
-                .map(|()| Vec::new())
-        } else {
-            read_response(&mut connection.stream, self.maximum_frame_length, sequence)
+        let response = match (is_void, headerless) {
+            (true, false) => {
+                read_void_response(&mut connection.stream, self.maximum_frame_length, sequence)
+                    .map(|()| Vec::new())
+            }
+            (true, true) => {
+                read_bare_void_response(&mut connection.stream, self.maximum_frame_length, sequence)
+                    .map(|()| Vec::new())
+            }
+            (false, false) => {
+                read_response(&mut connection.stream, self.maximum_frame_length, sequence)
+            }
+            (false, true) => {
+                read_bare_response(&mut connection.stream, self.maximum_frame_length, sequence)
+            }
         }
         .map_err(map_rpc_error)?;
         connection.next_sequence = sequence

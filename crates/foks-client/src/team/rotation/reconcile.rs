@@ -10,7 +10,7 @@ use super::{
     finish_team_mutation_journal, rotation_operation_id, validate_rotation_change,
     validate_rotation_operation, validate_rotation_transition, AuthenticatedTeamOutcome,
     ChangeTeamMemberRequest, FoksClient, RemoveLocalTeamMemberRequest, RotatedTeamPtks,
-    RotationBinding, TeamPtkRotationSeed,
+    RotationBinding, RotationOutcome, TeamPtkRotationSeed,
 };
 use crate::{AuthenticatedUserOutcome, Error, PinnedHost, Result, UserPrivateKey};
 
@@ -256,5 +256,43 @@ impl FoksClient {
             }
         }
         Err(last_error.expect("team transition loop executes at least once"))
+    }
+
+    /// One authoritative reconciliation of a pending PTK rotation against the
+    /// current authenticated team chain, distinguishing our committed rotation, a
+    /// conflicting transition at the seqno, or a not-yet-observable position.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn authenticated_rotation_outcome(
+        &self,
+        host: &PinnedHost,
+        uid: &EntityId,
+        auth_seed: &SecretSeed,
+        certificate_chain: &[Vec<u8>],
+        actor_user: &AuthenticatedUserOutcome,
+        actor_puk_seed: &SecretSeed,
+        team: &EntityId,
+        binding: &RotationBinding,
+        _rotations: &[TeamPtkRotationSeed<'_>],
+    ) -> Result<RotationOutcome> {
+        let authenticated = self.load_and_pin_team_with_material(
+            host,
+            uid,
+            auth_seed,
+            certificate_chain,
+            &actor_user.verified,
+            actor_puk_seed,
+            team,
+        )?;
+        if authenticated.verified.chain_seqno() < binding.expected_seqno {
+            return Ok(RotationOutcome::Unresolved);
+        }
+        // A committed rotation at our seqno carries our freshly generated PTK
+        // verify key, which validate_rotation_transition checks against the
+        // binding — so an Ok result proves the on-chain rotation is ours.
+        match validate_rotation_transition(&authenticated.verified, binding) {
+            Ok(()) => Ok(RotationOutcome::Committed(Box::new(authenticated))),
+            Err(Error::OperationBinding(_)) => Ok(RotationOutcome::Conflict),
+            Err(error) => Err(error),
+        }
     }
 }

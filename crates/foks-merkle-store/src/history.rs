@@ -1,9 +1,8 @@
-use foks_crypto::prefixed_hash;
 use foks_proto::MERKLE_BACK_POINTERS_TYPE_ID;
 use foks_snowpack::{encode, Value};
 use std::collections::BTreeSet;
 
-use crate::Result;
+use crate::{prefixed_hash_signable, Result};
 
 pub fn back_pointer_sequence(epoch: u64) -> Vec<u64> {
     match epoch {
@@ -38,10 +37,7 @@ pub fn back_pointer_hash(pointers: &[(u64, [u8; 32])]) -> Result<[u8; 32]> {
                 .collect(),
         )
     };
-    Ok(prefixed_hash(
-        MERKLE_BACK_POINTERS_TYPE_ID,
-        &encode(&value)?,
-    ))
+    prefixed_hash_signable(MERKLE_BACK_POINTERS_TYPE_ID, &encode(&value)?)
 }
 
 /// Returns the v0.1.9 skip path and the root hashes needed alongside it.

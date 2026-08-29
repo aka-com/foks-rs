@@ -31,7 +31,13 @@ pub enum TeamChainAuthorization {
 }
 
 pub fn decode_team_view_request(bytes: &[u8]) -> Result<TeamViewRequest> {
-    Ok(TeamViewRequest::decode(bytes)?)
+    let Value::Array(fields) = decode(bytes)? else {
+        return Err(shape("team-view challenge argument"));
+    };
+    let [request] = fields.as_slice() else {
+        return Err(shape("team-view challenge fields"));
+    };
+    Ok(TeamViewRequest::decode(&encode(request)?)?)
 }
 
 pub fn decode_activate_team_view(bytes: &[u8]) -> Result<ActivateTeamViewArgument> {

@@ -45,6 +45,11 @@ pub fn decode_change_passphrase(bytes: &[u8], salt: [u8; 16]) -> Result<Passphra
 }
 
 pub fn decode_void(bytes: &[u8]) -> Result<()> {
+    // Generated Go zero-field argument structs encode as the otherwise
+    // non-canonical empty array. Rust-native callers use Snowpack null.
+    if bytes == [0x90] {
+        return Ok(());
+    }
     match decode(bytes)? {
         Value::Null => Ok(()),
         _ => Err(shape("empty argument struct")),

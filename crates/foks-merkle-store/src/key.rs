@@ -1,11 +1,10 @@
-use foks_crypto::prefixed_hash;
 use foks_proto::{
     EntityId, ENTITY_ID_MERKLE_VALUE_TYPE_ID, MERKLE_TREE_RF_INPUT_TYPE_ID,
     NAME_HASH_PREIMAGE_TYPE_ID,
 };
 use foks_snowpack::{encode, Value};
 
-use crate::Result;
+use crate::{prefixed_hash_signable, Result};
 
 pub fn chain_key(
     chain_type: u64,
@@ -19,10 +18,7 @@ pub fn chain_key(
         Value::Unsigned(sequence),
         location.map_or(Value::Null, |location| Value::Binary(location.to_vec())),
     ]);
-    Ok(prefixed_hash(
-        MERKLE_TREE_RF_INPUT_TYPE_ID,
-        &encode(&value)?,
-    ))
+    prefixed_hash_signable(MERKLE_TREE_RF_INPUT_TYPE_ID, &encode(&value)?)
 }
 
 pub fn username_key(name: &[u8], host: &EntityId, sequence: u64) -> Result<[u8; 32]> {
@@ -32,17 +28,17 @@ pub fn username_key(name: &[u8], host: &EntityId, sequence: u64) -> Result<[u8; 
     ]))?;
     let mut name_entity = Vec::with_capacity(33);
     name_entity.push(9);
-    name_entity.extend_from_slice(&prefixed_hash(NAME_HASH_PREIMAGE_TYPE_ID, &preimage));
+    name_entity.extend_from_slice(&prefixed_hash_signable(
+        NAME_HASH_PREIMAGE_TYPE_ID,
+        &preimage,
+    )?);
     let input = Value::Array(vec![
         Value::Unsigned(1),
         Value::Binary(name_entity),
         Value::Unsigned(sequence),
         Value::Null,
     ]);
-    Ok(prefixed_hash(
-        MERKLE_TREE_RF_INPUT_TYPE_ID,
-        &encode(&input)?,
-    ))
+    prefixed_hash_signable(MERKLE_TREE_RF_INPUT_TYPE_ID, &encode(&input)?)
 }
 
 pub fn username_leaf(entity: &EntityId) -> Result<[u8; 32]> {
@@ -53,8 +49,5 @@ pub fn username_leaf(entity: &EntityId) -> Result<[u8; 32]> {
             Box::new(Value::Binary(entity.as_bytes().to_vec())),
         ))),
     ]);
-    Ok(prefixed_hash(
-        ENTITY_ID_MERKLE_VALUE_TYPE_ID,
-        &encode(&value)?,
-    ))
+    prefixed_hash_signable(ENTITY_ID_MERKLE_VALUE_TYPE_ID, &encode(&value)?)
 }

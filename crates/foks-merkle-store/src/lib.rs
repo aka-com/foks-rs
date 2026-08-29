@@ -23,3 +23,8 @@ pub use store::{NodeReader, NodeWriter};
 pub use tree::prepare;
 
 pub const EMPTY_ROOT: [u8; 32] = [0; 32];
+
+fn prefixed_hash_signable(type_id: u64, canonical_object: &[u8]) -> Result<[u8; 32]> {
+    foks_snowpack::validate_signable(canonical_object)?;
+    Ok(foks_crypto::prefixed_hash(type_id, canonical_object))
+}

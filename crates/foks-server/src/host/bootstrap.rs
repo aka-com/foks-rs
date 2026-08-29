@@ -94,7 +94,8 @@ pub fn bootstrap(
         )?);
     }
     let exact_hostchain = hostchain.encoded()?;
-    let hostchain_hash = foks_crypto::prefixed_hash(HOSTCHAIN_LINK_OUTER_TYPE_ID, &exact_hostchain);
+    let hostchain_hash =
+        foks_crypto::prefixed_hash_signable(HOSTCHAIN_LINK_OUTER_TYPE_ID, &exact_hostchain)?;
 
     let services = PublicServices {
         probe: input.endpoints.probe.clone(),
@@ -109,12 +110,11 @@ pub fn bootstrap(
         services,
     };
     let public_zone_inner = public_zone.encoded()?;
-    let public_zone_blob = encode(&Value::Binary(public_zone_inner.clone()))?;
     let signed_public_zone = SignedBlob {
-        signature: foks_crypto::sign_ed25519_typed(
+        signature: foks_crypto::sign_ed25519_blob(
             metadata_key.expose(),
             PUBLIC_ZONE_BLOB_TYPE_ID,
-            &public_zone_blob,
+            &public_zone_inner,
         )?,
         inner: public_zone_inner,
     };
@@ -123,10 +123,10 @@ pub fn bootstrap(
     let merkle_root = MerkleRoot {
         epoch: 1,
         time: input.now_microseconds,
-        back_pointers: foks_crypto::prefixed_hash(
+        back_pointers: foks_crypto::prefixed_hash_signable(
             MERKLE_BACK_POINTERS_TYPE_ID,
             &empty_back_pointers,
-        ),
+        )?,
         root_node: [0; 32],
         hostchain: HostchainTail {
             seqno: 1,
@@ -134,13 +134,12 @@ pub fn bootstrap(
         },
     };
     let exact_root = merkle_root.encoded()?;
-    let root_hash = foks_crypto::prefixed_hash(MERKLE_ROOT_TYPE_ID, &exact_root);
-    let root_blob = encode(&Value::Binary(exact_root.clone()))?;
+    let root_hash = foks_crypto::prefixed_hash_signable(MERKLE_ROOT_TYPE_ID, &exact_root)?;
     let signed_root = SignedBlob {
-        signature: foks_crypto::sign_ed25519_typed(
+        signature: foks_crypto::sign_ed25519_blob(
             merkle_key.expose(),
             MERKLE_ROOT_BLOB_TYPE_ID,
-            &root_blob,
+            &exact_root,
         )?,
         inner: exact_root.clone(),
     };
@@ -256,7 +255,7 @@ pub fn load_or_bootstrap(
         || probe_root.exact_root != probe.merkle_root.inner
         || probe_root.exact_signed_root != probe.merkle_root.encoded()?
         || probe_root.root_hash
-            != foks_crypto::prefixed_hash(MERKLE_ROOT_TYPE_ID, &probe_root.exact_root)
+            != foks_crypto::prefixed_hash_signable(MERKLE_ROOT_TYPE_ID, &probe_root.exact_root)?
         || current_root.epoch < probe_root.epoch
         || wire_root.hostchain.seqno != verified.snapshot.chain_seqno()
         || wire_root.hostchain.hash != verified.snapshot.chain_tail_hash()
@@ -276,7 +275,7 @@ pub fn load_or_bootstrap(
         if stored_link.seqno != u64::try_from(index + 1).unwrap_or(u64::MAX)
             || stored_link.exact_link != exact
             || stored_link.link_hash
-                != foks_crypto::prefixed_hash(HOSTCHAIN_LINK_OUTER_TYPE_ID, &exact)
+                != foks_crypto::prefixed_hash_signable(HOSTCHAIN_LINK_OUTER_TYPE_ID, &exact)?
         {
             return Err(crate::Error::Config(
                 "stored probe and hostchain database disagree",

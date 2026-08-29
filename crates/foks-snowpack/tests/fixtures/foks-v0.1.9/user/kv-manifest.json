@@ -17,7 +17,7 @@
     { "file": "kv-small-node.snowp", "bytes": 66, "sha256": "ae066d0f79090958d5fe2d92f4b320366120a3726565a2973748577f2e22ce61" },
     { "file": "kv-symlink-box.snowp", "bytes": 61, "sha256": "18f35ac9684f2f2cd3a9f78751e4e476f67fda64dfe9e8bc517d7f2ca7f87da8" },
     { "file": "kv-symlink-node.snowp", "bytes": 66, "sha256": "923ffdbd62d917a7cb50a7ce8d94b6a973b793f31bf71e0dcbf0070cad32f9e9" },
-    { "file": "kv-stale-cache-response.frame", "bytes": 167, "sha256": "fb9c6bbb44a500d084f7daf39ec35259d87458552698d0946bb7bc744c91903c" },
+    { "file": "kv-stale-cache-response.frame", "bytes": 96, "sha256": "e4958e2fb4882c4d8ab7aedb4e5e2d1576b766b16fbdbc99855687d889c5d5c0" },
     { "file": "kv-file-seed.bin", "bytes": 32, "sha256": "ec071e0a0136c837c051cee6a7713edbaea6936712d1a3ca37e84fee3226e61d" },
     { "file": "kv-get-dir-request.frame", "bytes": 79, "sha256": "76fda73fed03dcbb05e85f19ba17d3e1e69ddc5b294a941bcad72809a87ea4fd" },
     { "file": "kv-get-large-chunk-request.frame", "bytes": 80, "sha256": "a4d65300b82503b265a395150a82e5856036a461e7bcbb0616b1919fd7cbcc2d" },

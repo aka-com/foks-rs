@@ -2,8 +2,8 @@
 
 use crate::{
     array, binary, decode, encode, entity, expect_unsigned, fixed_blob, integer, list, option,
-    text, unsigned, variant, EntityId, Error, Result, ServiceType, Signature, SignedBlob, Value,
-    ENTITY_HOST, ENTITY_HOST_TLS_CA,
+    text, type_error, unsigned, variant, EntityId, Error, Result, ServiceType, Signature,
+    SignedBlob, Value, ENTITY_HOST, ENTITY_HOST_TLS_CA,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -194,7 +194,24 @@ impl PublicZone {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
         let fields = array(&wire, 2)?;
-        let services = array(&fields[1], 6)?;
+        // Snowpack evolves structs by appending fields, so tolerate a services
+        // array that predates `realtime` (real v0.1.9 vhosts still serve five
+        // entries) or that appends future services. The zone's signature is
+        // verified over these raw bytes before decode, so tolerating the arity
+        // here cannot forge trust; the five load-bearing endpoints are required.
+        let Value::Array(services) = &fields[1] else {
+            return Err(type_error("public zone services array", &fields[1]));
+        };
+        if services.len() < 5 {
+            return Err(Error::FieldCount {
+                expected: 5,
+                found: services.len(),
+            });
+        }
+        let realtime = match services.get(5) {
+            Some(value) => text(value)?,
+            None => String::new(),
+        };
         Ok(Self {
             ttl_seconds: integer(&fields[0])?,
             services: PublicServices {
@@ -203,7 +220,7 @@ impl PublicZone {
                 user: text(&services[2])?,
                 merkle_query: text(&services[3])?,
                 kv_store: text(&services[4])?,
-                realtime: text(&services[5])?,
+                realtime,
             },
         })
     }

@@ -39,7 +39,10 @@ pub fn verify_user_transition(
         || change.previous != Some(expected_previous)
         || change.root != expected_root
         || change.next_location_commitment
-            != foks_crypto::prefixed_hash(foks_proto::TREE_LOCATION_TYPE_ID, &location_wire)
+            != foks_crypto::prefixed_hash_signable(
+                foks_proto::TREE_LOCATION_TYPE_ID,
+                &location_wire,
+            )?
     {
         return Err(Error::UserChainContinuity);
     }
