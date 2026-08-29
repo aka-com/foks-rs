@@ -250,6 +250,34 @@ coverage = ["probe_and_pin"]
 
 [[route]]
 protocol = "Reg"
+method = "getSubkeyBoxChallenge"
+position_constant = "REG_GET_SUBKEY_BOX_CHALLENGE_METHOD_POSITION"
+listener = "public_services"
+authentication = "delegated_tls"
+request = "EntityId"
+result = "RegistrationChallenge"
+statuses = ["ok", "bad_args", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+coverage = ["yubikey_lifecycle"]
+
+
+[[route]]
+protocol = "Reg"
+method = "loadSubkeyBox"
+position_constant = "REG_LOAD_SUBKEY_BOX_METHOD_POSITION"
+listener = "public_services"
+authentication = "signed_subkey_challenge"
+request = "LoadSubkeyBoxArgument"
+result = "HybridBox"
+statuses = ["ok", "bad_args", "expired", "not_found", "permission_denied"]
+max_request_bytes = 16384
+supported = true
+coverage = ["yubikey_lifecycle"]
+
+
+[[route]]
+protocol = "Reg"
 method = "stretchVersion"
 position_constant = "REG_STRETCH_VERSION_METHOD_POSITION"
 listener = "public_services"
@@ -415,6 +443,48 @@ statuses = ["ok", "permission_denied"]
 max_request_bytes = 1024
 supported = true
 coverage = ["authorization"]
+
+
+[[route]]
+protocol = "User"
+method = "putYubiManagementKey"
+position_constant = "USER_PUT_YUBI_MANAGEMENT_KEY_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "YubiEncryptedManagementKey"
+result = "Void"
+statuses = ["ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
+max_request_bytes = 65536
+supported = true
+coverage = ["yubikey_lifecycle"]
+
+
+[[route]]
+protocol = "User"
+method = "getYubiManagementKey"
+position_constant = "USER_GET_YUBI_MANAGEMENT_KEY_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "EntityId"
+result = "YubiEncryptedManagementKey"
+statuses = ["ok", "bad_args", "not_found", "permission_denied"]
+max_request_bytes = 4096
+supported = true
+coverage = ["yubikey_lifecycle"]
+
+
+[[route]]
+protocol = "User"
+method = "getAllYubiManagementKeys"
+position_constant = "USER_GET_ALL_YUBI_MANAGEMENT_KEYS_METHOD_POSITION"
+listener = "authenticated"
+authentication = "active_device_mtls"
+request = "Void"
+result = "YubiEncryptedManagementKeyList"
+statuses = ["ok", "bad_args", "permission_denied"]
+max_request_bytes = 1024
+supported = true
+coverage = ["yubikey_lifecycle"]
 
 
 [[route]]

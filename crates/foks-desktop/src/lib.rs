@@ -14,6 +14,7 @@ pub enum Screen {
     Status,
     Profiles,
     Accounts,
+    YubiKeys,
     PersonalKv,
     Teams,
     Jobs,
@@ -26,11 +27,25 @@ pub enum PassphraseAction {
     Verify,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum YubiAction {
+    ListCards,
+    ResumeAccount,
+    Sync,
+    PinStatus,
+    RotateManagementKey,
+    ResumeManagementKey,
+    RecoverManagementKey,
+    RecoverSubkey,
+    Revoke,
+}
+
 impl Screen {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Status,
         Self::Profiles,
         Self::Accounts,
+        Self::YubiKeys,
         Self::PersonalKv,
         Self::Teams,
         Self::Jobs,
@@ -41,6 +56,7 @@ impl Screen {
             Self::Status => "Status",
             Self::Profiles => "Profiles",
             Self::Accounts => "Accounts",
+            Self::YubiKeys => "YubiKeys",
             Self::PersonalKv => "Personal KV",
             Self::Teams => "Teams",
             Self::Jobs => "Scheduled work",
@@ -143,6 +159,9 @@ impl DesktopModel {
             Screen::Accounts => Ok(Operation::ListAccounts {
                 profile: profile()?,
             }),
+            Screen::YubiKeys => Ok(Operation::ListYubiAccounts {
+                profile: profile()?,
+            }),
             Screen::PersonalKv => Ok(Operation::ListKv {
                 profile: profile()?,
                 alias: account()?,
@@ -234,6 +253,220 @@ impl DesktopModel {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_yubi_account_operation(
+        &self,
+        alias: &str,
+        username: &str,
+        device_name: &str,
+        email: &str,
+        invite: SecretString,
+        passphrase: Option<SecretString>,
+        confirmation: Option<SecretString>,
+        card_serial: u32,
+        signing_slot: u8,
+        pq_slot: u8,
+        pin: SecretString,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        if alias.trim().is_empty() || username.trim().is_empty() || device_name.trim().is_empty() {
+            return Err("alias, username, and device name are required");
+        }
+        validate_yubi_inputs(card_serial, signing_slot, pq_slot, pin.expose())?;
+        Ok(Operation::CreateYubiAccount {
+            profile,
+            alias: alias.to_owned(),
+            username: username.to_owned(),
+            device_name: device_name.to_owned(),
+            email: email.to_owned(),
+            invite,
+            passphrase: confirmed_optional_passphrase(passphrase, confirmation)?,
+            card_serial,
+            signing_slot,
+            pq_slot,
+            pin,
+        })
+    }
+
+    pub fn yubi_action_operation(
+        &self,
+        action: YubiAction,
+        alias: &str,
+        pin: Option<SecretString>,
+        software_alias: Option<&str>,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        match action {
+            YubiAction::ListCards => Ok(Operation::ListYubiCards { profile }),
+            _ if alias.trim().is_empty() => Err("enter a YubiKey account alias"),
+            YubiAction::ResumeAccount => Ok(Operation::ResumeYubiAccount {
+                profile,
+                alias: alias.to_owned(),
+                pin: required_pin(pin)?,
+            }),
+            YubiAction::PinStatus => Ok(Operation::YubiPinStatus {
+                profile,
+                alias: alias.to_owned(),
+            }),
+            YubiAction::Sync => Ok(Operation::SyncYubiAccount {
+                profile,
+                alias: alias.to_owned(),
+                pin: required_pin(pin)?,
+            }),
+            YubiAction::RotateManagementKey => Ok(Operation::RotateYubiManagementKey {
+                profile,
+                alias: alias.to_owned(),
+                pin: required_pin(pin)?,
+            }),
+            YubiAction::ResumeManagementKey => Ok(Operation::ResumeYubiManagementKey {
+                profile,
+                alias: alias.to_owned(),
+                pin: Some(required_pin(pin)?),
+            }),
+            YubiAction::RecoverManagementKey => Ok(Operation::RecoverYubiManagementKey {
+                profile,
+                yubi_alias: alias.to_owned(),
+                software_alias: software_alias
+                    .filter(|alias| !alias.trim().is_empty())
+                    .ok_or("enter a software account alias")?
+                    .to_owned(),
+            }),
+            YubiAction::RecoverSubkey => Ok(Operation::RecoverYubiSubkey {
+                profile,
+                alias: alias.to_owned(),
+                pin: required_pin(pin)?,
+            }),
+            YubiAction::Revoke => Ok(Operation::RevokeYubiDevice {
+                profile,
+                yubi_alias: alias.to_owned(),
+                software_alias: software_alias
+                    .filter(|alias| !alias.trim().is_empty())
+                    .ok_or("enter a software account alias")?
+                    .to_owned(),
+            }),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn provision_yubi_operation(
+        &self,
+        source_alias: &str,
+        target_alias: &str,
+        device_name: &str,
+        serial: u64,
+        card_serial: u32,
+        signing_slot: u8,
+        pq_slot: u8,
+        pin: SecretString,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        if source_alias.trim().is_empty()
+            || target_alias.trim().is_empty()
+            || device_name.trim().is_empty()
+            || serial == 0
+        {
+            return Err("source alias, target alias, device name, and serial are required");
+        }
+        validate_yubi_inputs(card_serial, signing_slot, pq_slot, pin.expose())?;
+        Ok(Operation::ProvisionYubiDevice {
+            profile,
+            source_alias: source_alias.to_owned(),
+            target_alias: target_alias.to_owned(),
+            device_name: device_name.to_owned(),
+            serial,
+            card_serial,
+            signing_slot,
+            pq_slot,
+            pin,
+        })
+    }
+
+    pub fn change_yubi_pin_operation(
+        &self,
+        alias: &str,
+        old_pin: SecretString,
+        new_pin: SecretString,
+    ) -> Result<Operation, &'static str> {
+        validate_pin(old_pin.expose())?;
+        validate_pin(new_pin.expose())?;
+        Ok(Operation::ChangeYubiPin {
+            profile: self.selected_yubi_profile()?,
+            alias: required_alias(alias)?,
+            old_pin,
+            new_pin,
+        })
+    }
+
+    pub fn change_yubi_puk_operation(
+        &self,
+        alias: &str,
+        old_puk: SecretString,
+        new_puk: SecretString,
+    ) -> Result<Operation, &'static str> {
+        validate_pin(old_puk.expose())?;
+        validate_pin(new_puk.expose())?;
+        Ok(Operation::ChangeYubiPuk {
+            profile: self.selected_yubi_profile()?,
+            alias: required_alias(alias)?,
+            old_puk,
+            new_puk,
+        })
+    }
+
+    pub fn unblock_yubi_pin_operation(
+        &self,
+        alias: &str,
+        puk: SecretString,
+        new_pin: SecretString,
+    ) -> Result<Operation, &'static str> {
+        validate_pin(puk.expose())?;
+        validate_pin(new_pin.expose())?;
+        Ok(Operation::UnblockYubiPin {
+            profile: self.selected_yubi_profile()?,
+            alias: required_alias(alias)?,
+            puk,
+            new_pin,
+        })
+    }
+
+    pub fn configure_yubi_retries_operation(
+        &self,
+        alias: &str,
+        pin: SecretString,
+        puk: SecretString,
+        pin_attempts: u8,
+        puk_attempts: u8,
+    ) -> Result<Operation, &'static str> {
+        validate_pin(pin.expose())?;
+        validate_pin(puk.expose())?;
+        if !(1..=15).contains(&pin_attempts) || !(1..=15).contains(&puk_attempts) {
+            return Err("PIN and PUK retries must each be from 1 through 15");
+        }
+        Ok(Operation::ConfigureYubiRetries {
+            profile: self.selected_yubi_profile()?,
+            alias: required_alias(alias)?,
+            pin,
+            puk,
+            pin_attempts,
+            puk_attempts,
+        })
+    }
+
+    fn selected_yubi_profile(&self) -> Result<String, &'static str> {
+        self.selected_profile
+            .clone()
+            .ok_or("select a profile first")
+    }
+
     pub fn accept(&mut self, result: Result<Value, String>) {
         match result {
             Ok(value) => {
@@ -260,6 +493,48 @@ impl DesktopModel {
                 self.error = Some(error);
             }
         }
+    }
+}
+
+fn validate_yubi_inputs(
+    card_serial: u32,
+    signing_slot: u8,
+    pq_slot: u8,
+    pin: &str,
+) -> Result<(), &'static str> {
+    if card_serial == 0 {
+        return Err("select a nonzero YubiKey serial");
+    }
+    if !(0x82..=0x95).contains(&signing_slot)
+        || !(0x82..=0x95).contains(&pq_slot)
+        || signing_slot == pq_slot
+    {
+        return Err("use two distinct PIV retired-key slots from 0x82 through 0x95");
+    }
+    if !(6..=8).contains(&pin.len()) || !pin.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err("PIN must contain six to eight printable ASCII characters");
+    }
+    Ok(())
+}
+
+fn required_pin(pin: Option<SecretString>) -> Result<SecretString, &'static str> {
+    let pin = pin.ok_or("enter the YubiKey PIN")?;
+    validate_pin(pin.expose())?;
+    Ok(pin)
+}
+
+fn validate_pin(pin: &str) -> Result<(), &'static str> {
+    if !(6..=8).contains(&pin.len()) || !pin.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err("PIN or PUK must contain six to eight printable ASCII characters");
+    }
+    Ok(())
+}
+
+fn required_alias(alias: &str) -> Result<String, &'static str> {
+    if alias.trim().is_empty() {
+        Err("enter a YubiKey account alias")
+    } else {
+        Ok(alias.to_owned())
     }
 }
 
@@ -526,6 +801,117 @@ mod tests {
                 Some(SecretString::new("second passphrase")),
             ),
             Err("verification does not take a confirmation")
+        );
+    }
+
+    #[test]
+    fn yubikey_screen_binds_hardware_and_recovery_operations_to_the_profile() {
+        let transport = Arc::new(MockTransport {
+            operations: Mutex::new(Vec::new()),
+        });
+        let mut model = DesktopModel::new(transport);
+        model.select_profile("local");
+        model.navigate(Screen::YubiKeys);
+        assert_eq!(
+            model.operation().unwrap(),
+            Operation::ListYubiAccounts {
+                profile: "local".to_owned(),
+            }
+        );
+        assert_eq!(
+            model.yubi_action_operation(YubiAction::ListCards, "", None, None),
+            Ok(Operation::ListYubiCards {
+                profile: "local".to_owned(),
+            })
+        );
+        assert_eq!(
+            model
+                .create_yubi_account_operation(
+                    "hardware",
+                    "rae",
+                    "primary key",
+                    "",
+                    SecretString::new("s.invite"),
+                    None,
+                    None,
+                    42,
+                    0x82,
+                    0x83,
+                    SecretString::new("123456"),
+                )
+                .unwrap(),
+            Operation::CreateYubiAccount {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                username: "rae".to_owned(),
+                device_name: "primary key".to_owned(),
+                email: String::new(),
+                invite: SecretString::new("s.invite"),
+                passphrase: None,
+                card_serial: 42,
+                signing_slot: 0x82,
+                pq_slot: 0x83,
+                pin: SecretString::new("123456"),
+            }
+        );
+        assert_eq!(
+            model.yubi_action_operation(
+                YubiAction::RecoverManagementKey,
+                "hardware",
+                None,
+                Some("personal"),
+            ),
+            Ok(Operation::RecoverYubiManagementKey {
+                profile: "local".to_owned(),
+                yubi_alias: "hardware".to_owned(),
+                software_alias: "personal".to_owned(),
+            })
+        );
+        assert_eq!(
+            model.yubi_action_operation(YubiAction::Sync, "hardware", None, None),
+            Err("enter the YubiKey PIN")
+        );
+        assert_eq!(
+            model.yubi_action_operation(
+                YubiAction::ResumeAccount,
+                "hardware",
+                Some(SecretString::new("123456")),
+                None,
+            ),
+            Ok(Operation::ResumeYubiAccount {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                pin: SecretString::new("123456"),
+            })
+        );
+        assert_eq!(
+            model.yubi_action_operation(
+                YubiAction::ResumeManagementKey,
+                "hardware",
+                Some(SecretString::new("123456")),
+                None,
+            ),
+            Ok(Operation::ResumeYubiManagementKey {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                pin: Some(SecretString::new("123456")),
+            })
+        );
+        assert_eq!(
+            model.create_yubi_account_operation(
+                "hardware",
+                "rae",
+                "primary key",
+                "",
+                SecretString::new(""),
+                None,
+                None,
+                42,
+                0x82,
+                0x82,
+                SecretString::new("123456"),
+            ),
+            Err("use two distinct PIV retired-key slots from 0x82 through 0x95")
         );
     }
 

@@ -12,6 +12,11 @@ use super::{
     HardStateStore, HostchainTail, PinnedHost, PukParcel, Result, Role, SecretSeed, Value,
     VerifiedMerkleAdvance, VerifiedUserState, YubiDevice, ENTITY_USER,
 };
+use foks_crypto::{open_subkey_box, sign_yubi_typed};
+use foks_proto::{RegistrationChallenge, ENTITY_SUBKEY, REG_CHALLENGE_PAYLOAD_TYPE_ID};
+use foks_rpc::{encode_get_subkey_box_challenge_request, encode_load_subkey_box_request};
+
+const YUBI_CHALLENGE_WINDOW_MILLISECONDS: u64 = 15 * 60 * 1_000;
 
 /// Device credential material used for mTLS. The master seed is never written
 /// by this crate; callers should source it from the encrypted local key store.
@@ -73,6 +78,58 @@ fn user_chain_cursor(prior: Option<&VerifiedUserState>) -> Result<UserChainCurso
 }
 
 impl FoksClient {
+    /// Recovers the delegated software subkey from the server using a fresh
+    /// challenge signed by the hardware parent. `expected_subkey` is durable
+    /// locator metadata and prevents a server from substituting another key.
+    pub fn recover_yubi_credential<'a>(
+        &self,
+        host: &PinnedHost,
+        uid: EntityId,
+        expected_subkey: &EntityId,
+        parent: &'a dyn YubiDevice,
+    ) -> Result<YubiCredential<'a>> {
+        if uid.entity_type() != ENTITY_USER
+            || expected_subkey.entity_type() != ENTITY_SUBKEY
+            || parent.entity_id().entity_type() != foks_proto::ENTITY_YUBI
+        {
+            return Err(Error::CredentialBinding(
+                "invalid Yubi recovery credential types",
+            ));
+        }
+        let challenge_bytes = self.call_after_vhost_selection(
+            host,
+            &host.registration,
+            &encode_registration_select_vhost_request(host.host_id())?,
+            &encode_get_subkey_box_challenge_request(parent.entity_id())?,
+        )?;
+        let challenge = RegistrationChallenge::decode(&challenge_bytes)?;
+        let now = current_milliseconds()?;
+        if challenge.payload.entity != *parent.entity_id()
+            || challenge.payload.host != *host.host_id()
+            || challenge.payload.time.abs_diff(now) > YUBI_CHALLENGE_WINDOW_MILLISECONDS
+        {
+            return Err(Error::CredentialBinding(
+                "Yubi challenge is not bound to the selected card and host",
+            ));
+        }
+        let payload = challenge.payload.encoded()?;
+        let signature = sign_yubi_typed(parent, REG_CHALLENGE_PAYLOAD_TYPE_ID, &payload)?;
+        let boxed = self.call_after_vhost_selection(
+            host,
+            &host.registration,
+            &encode_registration_select_vhost_request(host.host_id())?,
+            &encode_load_subkey_box_request(parent.entity_id(), &challenge, &signature)?,
+        )?;
+        let subkey_seed = open_subkey_box(&boxed, parent, expected_subkey)?;
+        let certificate_chain = self.fetch_subkey_certificate_chain(host, &uid, &subkey_seed)?;
+        Ok(YubiCredential {
+            uid,
+            parent,
+            subkey_seed,
+            certificate_chain,
+        })
+    }
+
     /// Requests the X.509 certificate chain for an already enrolled device.
     /// This registration call is intentionally unauthenticated; possession of
     /// the matching Ed25519 private key is proved by the subsequent mTLS
@@ -495,4 +552,12 @@ impl FoksClient {
             puks,
         })
     }
+}
+
+fn current_milliseconds() -> Result<u64> {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| Error::CredentialBinding("system clock precedes Unix epoch"))?;
+    u64::try_from(elapsed.as_millis())
+        .map_err(|_| Error::CredentialBinding("system clock timestamp overflow"))
 }

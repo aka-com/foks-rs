@@ -11,6 +11,8 @@ pub(super) trait Operations {
     fn client_certificate_chain(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn uid_lookup_challenge(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn lookup_uid_by_device(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+    fn subkey_box_challenge(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+    fn load_subkey_box(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn login_challenge(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn passphrase_login(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn stretch_version(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
@@ -47,6 +49,27 @@ impl Operations for ServerData {
 
     fn lookup_uid_by_device(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
         crate::services::registration::lookup_uid_by_device(
+            argument,
+            &self.host()?,
+            self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+            self.key_provider.as_deref().ok_or(RpcStatus::Unsupported)?,
+            &self.clock,
+        )
+    }
+
+    fn subkey_box_challenge(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        crate::services::registration::issue_subkey_challenge(
+            argument,
+            &self.host()?,
+            self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+            self.key_provider.as_deref().ok_or(RpcStatus::Unsupported)?,
+            &self.clock,
+            self.entropy.as_ref(),
+        )
+    }
+
+    fn load_subkey_box(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        crate::services::registration::load_subkey_box(
             argument,
             &self.host()?,
             self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
@@ -128,6 +151,15 @@ pub(super) fn response(
             sequence,
         )
         .map_err(|_| RpcStatus::Unsupported),
+        RouteId::RegGetSubkeyBoxChallenge => encode_success_response_at(
+            &operations.subkey_box_challenge(call.call.argument())?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
+        RouteId::RegLoadSubkeyBox => {
+            encode_success_response_at(&operations.load_subkey_box(call.call.argument())?, sequence)
+                .map_err(|_| RpcStatus::Unsupported)
+        }
         _ => Err(RpcStatus::Unsupported),
     }
 }

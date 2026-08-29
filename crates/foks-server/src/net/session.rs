@@ -3,8 +3,8 @@ use std::sync::Arc;
 mod handlers;
 
 use foks_proto::{
-    DecodedSoftwareSignupArgument, EntityId, HistoricalMerkleRoots, InviteCode, MerkleRoot,
-    ProbeResponse, SignedBlob, UsernameReservation,
+    DecodedSignupArgument, EntityId, HistoricalMerkleRoots, InviteCode, MerkleRoot, ProbeResponse,
+    SignedBlob, UsernameReservation,
 };
 use foks_rpc::{encode_status_response_at, RpcStatus};
 use foks_snowpack::{decode, Value};
@@ -13,7 +13,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{watch, Semaphore};
 
 use crate::auth::Principal;
-use crate::identity::validate_software_signup;
+use crate::identity::validate_signup;
 use crate::keys::{HostKeyProvider, KeyPurpose};
 use crate::rpc::{route_call, Listener, RouteError};
 use crate::{Entropy, Result, SessionLimits, WriterHandle};
@@ -167,7 +167,7 @@ impl ServerData {
         let clock = Arc::clone(&self.clock);
         let host = self.host().map_err(|_| RpcStatus::TransactionRetry)?;
         let hostchain_tail = self.hostchain_tail.clone();
-        let signer = principal.device_id().to_vec();
+        let signer = identity.device_id.clone();
         let result = writer.call(move |database| {
             let now = clock.now_micros()?;
             let receipt_expires_at = now
@@ -249,6 +249,8 @@ impl ServerData {
                     role_type,
                     visibility,
                     subkey_id: added.subkey_id.as_deref(),
+                    exact_subkey_box: added.exact_subkey_box.as_deref(),
+                    yubi_pq_hint: added.yubi_pq_hint.as_ref().map(|(slot, id)| (*slot, id)),
                 }
             });
             let shared_keys = command
@@ -421,7 +423,7 @@ impl ServerData {
         const RECEIPT_LIFETIME_MICROSECONDS: u64 = 24 * 60 * 60 * 1_000_000;
         const SIGNUP_REQUEST_HASH_TYPE_ID: u64 = 0x8f4b_8ab7_464f_4b53;
 
-        let request = DecodedSoftwareSignupArgument::decode(argument).map_err(bad_arguments)?;
+        let request = DecodedSignupArgument::decode(argument).map_err(bad_arguments)?;
         let (invite_hash, invite_kind) = match &request.invite_code {
             InviteCode::Empty => (None, None),
             InviteCode::Standard(_) | InviteCode::MultiUse(_) => (
@@ -456,7 +458,7 @@ impl ServerData {
             .ok_or_else(|| RpcStatus::NotFound("Merkle root not found".to_owned()))?;
         let current_root = validated_root(&current)?;
         let host = EntityId::from_bytes(self.host_id.clone()).map_err(bad_arguments)?;
-        let validated = validate_software_signup(&request, &host, &current_root, current.root_hash)
+        let validated = validate_signup(&request, &host, &current_root, current.root_hash)
             .map_err(|_| bad_arguments("software signup validation failed"))?;
         let passphrase = request
             .passphrase
@@ -547,6 +549,12 @@ impl ServerData {
                 device_hepk_fingerprint: &validated.device_hepk_fingerprint,
                 exact_device_hepk: &validated.exact_device_hepk,
                 exact_device_name: &validated.exact_device_name,
+                subkey_id: validated.subkey_id.as_ref().map(EntityId::as_bytes),
+                exact_subkey_box: validated.exact_subkey_box.as_deref(),
+                yubi_pq_hint: validated
+                    .yubi_pq_hint
+                    .as_ref()
+                    .map(|(slot, id)| (*slot, id)),
                 link_hash: &validated.link_hash,
                 exact_link: &validated.exact_link,
                 tree_location: &validated.next_tree_location,

@@ -8,8 +8,10 @@ use clap::{Parser as _, ValueEnum};
 use foks_client_app::{
     derive_vault_key, AccountVault, CheckedProfileSession, ClientCredentials, CredentialBackend,
     Passphrase, Profile, ProfileRegistry, ProfileSession, ProtocolPolicy, TrustRoot,
+    YubiProvisionInput, YubiSignupInput,
 };
 use foks_keystore::EncryptedFileSecretStore;
+use foks_yubi::{CardId, HardwareYubiProvider, Pin, SlotId, YubiProvider as _};
 use zeroize::Zeroizing;
 
 #[derive(clap::Parser)]
@@ -44,6 +46,8 @@ enum Command {
     Passphrase(PassphraseCommand),
     #[command(subcommand)]
     Team(TeamCommand),
+    #[command(subcommand)]
+    Yubi(YubiCommand),
 }
 
 #[derive(clap::Args)]
@@ -276,6 +280,146 @@ enum PassphraseCommand {
     Verify(PassphraseVerify),
 }
 
+#[derive(clap::Subcommand)]
+enum YubiCommand {
+    List {
+        profile: String,
+    },
+    Cards {
+        profile: String,
+    },
+    Create(YubiCreate),
+    ResumeAccount {
+        profile: String,
+        alias: String,
+        #[arg(long)]
+        pin_file: PathBuf,
+    },
+    Provision(YubiProvision),
+    Sync {
+        profile: String,
+        alias: String,
+        #[arg(long)]
+        pin_file: PathBuf,
+    },
+    PinStatus {
+        profile: String,
+        alias: String,
+    },
+    ChangePin {
+        profile: String,
+        alias: String,
+        #[arg(long)]
+        old_pin_file: PathBuf,
+        #[arg(long)]
+        new_pin_file: PathBuf,
+    },
+    ChangePuk {
+        profile: String,
+        alias: String,
+        #[arg(long)]
+        old_puk_file: PathBuf,
+        #[arg(long)]
+        new_puk_file: PathBuf,
+    },
+    UnblockPin {
+        profile: String,
+        alias: String,
+        #[arg(long)]
+        puk_file: PathBuf,
+        #[arg(long)]
+        new_pin_file: PathBuf,
+    },
+    ConfigureRetries {
+        profile: String,
+        alias: String,
+        /// Current PIN to verify and preserve after PIV resets it.
+        #[arg(long)]
+        pin_file: PathBuf,
+        /// PUK to restore immediately after PIV resets it.
+        #[arg(long)]
+        puk_file: PathBuf,
+        #[arg(long)]
+        pin_attempts: u8,
+        #[arg(long)]
+        puk_attempts: u8,
+    },
+    RotateManagementKey {
+        profile: String,
+        alias: String,
+        #[arg(long)]
+        pin_file: PathBuf,
+    },
+    ResumeManagementKey {
+        profile: String,
+        alias: String,
+        #[arg(long)]
+        pin_file: Option<PathBuf>,
+    },
+    RecoverManagementKey {
+        profile: String,
+        yubi_alias: String,
+        software_alias: String,
+    },
+    RecoverSubkey {
+        profile: String,
+        alias: String,
+        #[arg(long)]
+        pin_file: PathBuf,
+    },
+    Revoke {
+        profile: String,
+        yubi_alias: String,
+        software_alias: String,
+    },
+}
+
+#[derive(clap::Args)]
+struct YubiCreate {
+    profile: String,
+    alias: String,
+    #[arg(long)]
+    username: String,
+    #[arg(long)]
+    device_name: String,
+    #[arg(long, default_value = "")]
+    email: String,
+    /// Private one-line file containing a signup invite.
+    #[arg(long)]
+    invite_file: Option<PathBuf>,
+    #[arg(long)]
+    card_serial: u32,
+    #[arg(long, default_value = "0x82", value_parser = parse_slot)]
+    signing_slot: u8,
+    #[arg(long, default_value = "0x83", value_parser = parse_slot)]
+    pq_slot: u8,
+    #[arg(long)]
+    pin_file: PathBuf,
+    #[arg(long, requires = "passphrase_confirmation_file")]
+    passphrase_file: Option<PathBuf>,
+    #[arg(long, requires = "passphrase_file")]
+    passphrase_confirmation_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct YubiProvision {
+    profile: String,
+    source_alias: String,
+    target_alias: String,
+    #[arg(long)]
+    device_name: String,
+    #[arg(long, default_value_t = 1)]
+    serial: u64,
+    #[arg(long)]
+    card_serial: u32,
+    #[arg(long, default_value = "0x82", value_parser = parse_slot)]
+    signing_slot: u8,
+    #[arg(long, default_value = "0x83", value_parser = parse_slot)]
+    pq_slot: u8,
+    #[arg(long)]
+    pin_file: PathBuf,
+}
+
 #[derive(clap::Args)]
 struct PassphraseChange {
     profile: String,
@@ -320,6 +464,7 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
             passphrase_command(&arguments.state_dir, arguments.json, command)
         }
         Command::Team(command) => team_command(&arguments.state_dir, arguments.json, command),
+        Command::Yubi(command) => yubi_command(&arguments.state_dir, arguments.json, command),
     }
 }
 
@@ -789,6 +934,335 @@ fn recovery_command(
     }
 }
 
+fn yubi_command(
+    state_dir: &Path,
+    json: bool,
+    command: YubiCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let registry = ProfileRegistry::open(state_dir)?;
+    let provider = HardwareYubiProvider::new();
+    match command {
+        YubiCommand::List { profile } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |_session, vault, _| {
+                let aliases = vault.yubi_aliases()?;
+                output(
+                    json,
+                    &aliases,
+                    &format!("{} Yubi credential(s)", aliases.len()),
+                )
+            })
+        }
+        YubiCommand::Cards { profile } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, _vault, _| {
+                let cards = session.list_yubi_cards(&provider)?;
+                output(json, &cards, &format!("{} YubiKey(s)", cards.len()))
+            })
+        }
+        YubiCommand::Create(arguments) => {
+            let session = ProfileSession::open(&registry, &arguments.profile)?;
+            let card = yubi_card(&provider, arguments.card_serial)?;
+            let pin = read_pin(&arguments.pin_file)?;
+            let invite = arguments
+                .invite_file
+                .as_deref()
+                .map(read_invite)
+                .transpose()?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let passphrase = match (
+                    arguments.passphrase_file.as_deref(),
+                    arguments.passphrase_confirmation_file.as_deref(),
+                ) {
+                    (Some(passphrase), Some(confirmation)) => {
+                        Some(confirmed_passphrase(passphrase, confirmation)?)
+                    }
+                    (None, None) => None,
+                    _ => return Err("both passphrase files are required".into()),
+                };
+                let report = session.create_yubi_account(
+                    YubiSignupInput {
+                        alias: arguments.alias,
+                        username: arguments.username,
+                        device_name: arguments.device_name,
+                        email: arguments.email,
+                        invite: invite
+                            .as_ref()
+                            .map_or_else(String::new, |value| value.as_str().to_owned()),
+                        passphrase,
+                        card,
+                        signing_slot: SlotId::new(arguments.signing_slot)?,
+                        pq_slot: SlotId::new(arguments.pq_slot)?,
+                    },
+                    pin,
+                    &provider,
+                    vault,
+                    master,
+                )?;
+                output(json, &report, "YubiKey account created and synchronized")
+            })
+        }
+        YubiCommand::ResumeAccount {
+            profile,
+            alias,
+            pin_file,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            let pin = read_pin(&pin_file)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report = session.resume_yubi_account(&alias, pin, &provider, vault, master)?;
+                output(json, &report, "YubiKey account creation reconciled")
+            })
+        }
+        YubiCommand::Provision(arguments) => {
+            let session = ProfileSession::open(&registry, &arguments.profile)?;
+            let card = yubi_card(&provider, arguments.card_serial)?;
+            let pin = read_pin(&arguments.pin_file)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report = session.provision_yubi_device(
+                    YubiProvisionInput {
+                        source_alias: arguments.source_alias,
+                        target_alias: arguments.target_alias,
+                        device_name: arguments.device_name,
+                        serial: arguments.serial,
+                        card,
+                        signing_slot: SlotId::new(arguments.signing_slot)?,
+                        pq_slot: SlotId::new(arguments.pq_slot)?,
+                    },
+                    pin,
+                    &provider,
+                    vault,
+                    master,
+                )?;
+                output(json, &report, "YubiKey device provisioned")
+            })
+        }
+        YubiCommand::Sync {
+            profile,
+            alias,
+            pin_file,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            let pin = read_pin(&pin_file)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let report = session.sync_yubi_account(&alias, pin, &provider, vault)?;
+                output(json, &report, "YubiKey account synchronized")
+            })
+        }
+        YubiCommand::PinStatus { profile, alias } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let status = session.yubi_pin_status(&alias, &provider, vault)?;
+                output(json, &status, "YubiKey PIN status read")
+            })
+        }
+        YubiCommand::ChangePin {
+            profile,
+            alias,
+            old_pin_file,
+            new_pin_file,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            let old_pin = read_pin(&old_pin_file)?;
+            let new_pin = read_pin(&new_pin_file)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let status = session.change_yubi_pin(&alias, old_pin, new_pin, &provider, vault)?;
+                output(json, &status, "YubiKey PIN changed")
+            })
+        }
+        YubiCommand::ChangePuk {
+            profile,
+            alias,
+            old_puk_file,
+            new_puk_file,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            let old_puk = read_pin(&old_puk_file)?;
+            let new_puk = read_pin(&new_puk_file)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                session.change_yubi_puk(&alias, old_puk, new_puk, &provider, vault)?;
+                output(
+                    json,
+                    &serde_json::json!({ "alias": alias, "changed": true }),
+                    "YubiKey PUK changed",
+                )
+            })
+        }
+        YubiCommand::UnblockPin {
+            profile,
+            alias,
+            puk_file,
+            new_pin_file,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            let puk = read_pin(&puk_file)?;
+            let new_pin = read_pin(&new_pin_file)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let status = session.unblock_yubi_pin(&alias, puk, new_pin, &provider, vault)?;
+                output(json, &status, "YubiKey PIN unblocked")
+            })
+        }
+        YubiCommand::ConfigureRetries {
+            profile,
+            alias,
+            pin_file,
+            puk_file,
+            pin_attempts,
+            puk_attempts,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            let pin = read_pin(&pin_file)?;
+            let puk = read_pin(&puk_file)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let status = session.configure_yubi_retries(
+                    &alias,
+                    pin,
+                    puk,
+                    pin_attempts,
+                    puk_attempts,
+                    &provider,
+                    vault,
+                )?;
+                output(json, &status, "YubiKey retry policy changed")
+            })
+        }
+        YubiCommand::RotateManagementKey {
+            profile,
+            alias,
+            pin_file,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            let pin = read_pin(&pin_file)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let report = session.rotate_yubi_management_key(&alias, pin, &provider, vault)?;
+                output(json, &report, "YubiKey management key rotated")
+            })
+        }
+        YubiCommand::ResumeManagementKey {
+            profile,
+            alias,
+            pin_file,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            let pin = pin_file.as_deref().map(read_pin).transpose()?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let report = session.resume_yubi_management_key(&alias, pin, &provider, vault)?;
+                output(json, &report, "YubiKey management-key rotation reconciled")
+            })
+        }
+        YubiCommand::RecoverManagementKey {
+            profile,
+            yubi_alias,
+            software_alias,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let report =
+                    session.recover_yubi_management_key(&yubi_alias, &software_alias, vault)?;
+                output(json, &report, "YubiKey management key recovered")
+            })
+        }
+        YubiCommand::RecoverSubkey {
+            profile,
+            alias,
+            pin_file,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            let pin = read_pin(&pin_file)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let report = session.recover_yubi_subkey(&alias, pin, &provider, vault)?;
+                output(json, &report, "YubiKey delegated subkey recovered")
+            })
+        }
+        YubiCommand::Revoke {
+            profile,
+            yubi_alias,
+            software_alias,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report =
+                    session.revoke_yubi_device(&software_alias, &yubi_alias, vault, master)?;
+                output(
+                    json,
+                    &report,
+                    "YubiKey device revoked and local credential removed",
+                )
+            })
+        }
+    }
+}
+
+fn yubi_card(
+    provider: &HardwareYubiProvider,
+    serial: u32,
+) -> Result<CardId, Box<dyn std::error::Error>> {
+    let matches = provider
+        .cards()?
+        .into_iter()
+        .filter(|card| card.serial == serial)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [card] => Ok(card.clone()),
+        [] => Err(format!("YubiKey serial {serial} is not connected").into()),
+        _ => Err(format!("YubiKey serial {serial} is ambiguous").into()),
+    }
+}
+
+fn read_pin(path: &Path) -> Result<Pin, Box<dyn std::error::Error>> {
+    let value = read_passphrase(path)?;
+    Ok(Pin::new(value.as_str())?)
+}
+
+fn read_invite(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > 4098 {
+        return Err("invite file is not a bounded regular file".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("invite file permissions allow group or other access".into());
+        }
+    }
+    let mut value = Zeroizing::new(String::new());
+    file.take(4099).read_to_string(&mut value)?;
+    if value.ends_with("\r\n") {
+        let length = value.len() - 2;
+        value.truncate(length);
+    } else if value.ends_with('\n') {
+        let length = value.len() - 1;
+        value.truncate(length);
+    }
+    if value.is_empty() || value.len() > 4096 || value.contains(['\0', '\r', '\n']) {
+        return Err("invite must be one nonempty line of at most 4096 bytes".into());
+    }
+    Ok(value)
+}
+
+fn parse_slot(value: &str) -> Result<u8, String> {
+    let value = value.trim();
+    let parsed = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .map_or_else(
+            || value.parse::<u8>(),
+            |value| u8::from_str_radix(value, 16),
+        )
+        .map_err(|_| "slot must be an 8-bit decimal or 0x-prefixed value".to_owned())?;
+    SlotId::new(parsed).map_err(|error| error.to_string())?;
+    Ok(parsed)
+}
+
 fn team_command(
     state_dir: &Path,
     json: bool,
@@ -1053,7 +1527,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn passphrase_files_are_private_bounded_and_normalized_once() {
+    fn secret_input_files_are_private_bounded_and_normalized_once() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let directory = tempfile::tempdir().unwrap();
@@ -1071,5 +1545,12 @@ mod tests {
         let link = directory.path().join("link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(read_passphrase(&link).is_err());
+
+        std::fs::write(&private, b"s.private-invite\n").unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(read_invite(&private).unwrap().as_str(), "s.private-invite");
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_invite(&private).is_err());
+        assert!(read_invite(&link).is_err());
     }
 }

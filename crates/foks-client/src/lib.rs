@@ -69,6 +69,8 @@ mod recovery;
 mod scheduler;
 mod team;
 mod transport;
+mod yubi_account;
+mod yubi_management;
 
 pub use account::*;
 pub use auth::*;
@@ -83,6 +85,8 @@ pub use recovery::*;
 pub use scheduler::*;
 pub use team::*;
 pub use transport::*;
+pub use yubi_account::*;
+pub use yubi_management::*;
 
 fn fix_device_name(name: &str) -> String {
     name.split_whitespace()

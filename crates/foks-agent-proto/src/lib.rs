@@ -147,4 +147,114 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn every_yubikey_operation_redacts_pin_puk_and_signup_secrets() {
+        let operations = [
+            Operation::CreateYubiAccount {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                username: "rae".to_owned(),
+                device_name: "key".to_owned(),
+                email: String::new(),
+                invite: SecretString::new("s.yubi-invite"),
+                passphrase: Some(SecretString::new("yubi-passphrase")),
+                card_serial: 7,
+                signing_slot: 0x82,
+                pq_slot: 0x83,
+                pin: SecretString::new("123456"),
+            },
+            Operation::ResumeYubiAccount {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                pin: SecretString::new("resume-pin"),
+            },
+            Operation::ProvisionYubiDevice {
+                profile: "local".to_owned(),
+                source_alias: "personal".to_owned(),
+                target_alias: "hardware".to_owned(),
+                device_name: "key".to_owned(),
+                serial: 2,
+                card_serial: 7,
+                signing_slot: 0x82,
+                pq_slot: 0x83,
+                pin: SecretString::new("provision-pin"),
+            },
+            Operation::SyncYubiAccount {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                pin: SecretString::new("sync-pin"),
+            },
+            Operation::ChangeYubiPin {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                old_pin: SecretString::new("234567"),
+                new_pin: SecretString::new("345678"),
+            },
+            Operation::ChangeYubiPuk {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                old_puk: SecretString::new("456789"),
+                new_puk: SecretString::new("567890"),
+            },
+            Operation::UnblockYubiPin {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                puk: SecretString::new("789012"),
+                new_pin: SecretString::new("890123"),
+            },
+            Operation::ConfigureYubiRetries {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                pin: SecretString::new("901234"),
+                puk: SecretString::new("01234567"),
+                pin_attempts: 5,
+                puk_attempts: 7,
+            },
+            Operation::RotateYubiManagementKey {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                pin: SecretString::new("rotate-pin"),
+            },
+            Operation::ResumeYubiManagementKey {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                pin: Some(SecretString::new("management-resume-pin")),
+            },
+            Operation::RecoverYubiSubkey {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                pin: SecretString::new("678901"),
+            },
+        ];
+        for operation in operations {
+            let decoded = decode_request(&encode(&Request::new(12, operation.clone())).unwrap())
+                .unwrap()
+                .operation;
+            assert_eq!(decoded, operation);
+            let debug = format!("{operation:?}");
+            assert!(debug.contains("<redacted>"));
+            for secret in [
+                "s.yubi-invite",
+                "yubi-passphrase",
+                "123456",
+                "resume-pin",
+                "provision-pin",
+                "sync-pin",
+                "234567",
+                "345678",
+                "456789",
+                "567890",
+                "678901",
+                "789012",
+                "890123",
+                "901234",
+                "01234567",
+                "rotate-pin",
+                "management-resume-pin",
+            ] {
+                assert!(!debug.contains(secret));
+            }
+        }
+    }
 }

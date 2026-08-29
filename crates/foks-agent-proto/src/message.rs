@@ -85,6 +85,101 @@ pub enum Operation {
         profile: String,
         alias: String,
     },
+    ListYubiCards {
+        profile: String,
+    },
+    ListYubiAccounts {
+        profile: String,
+    },
+    CreateYubiAccount {
+        profile: String,
+        alias: String,
+        username: String,
+        device_name: String,
+        email: String,
+        invite: SecretString,
+        passphrase: Option<SecretString>,
+        card_serial: u32,
+        signing_slot: u8,
+        pq_slot: u8,
+        pin: SecretString,
+    },
+    ResumeYubiAccount {
+        profile: String,
+        alias: String,
+        pin: SecretString,
+    },
+    ProvisionYubiDevice {
+        profile: String,
+        source_alias: String,
+        target_alias: String,
+        device_name: String,
+        serial: u64,
+        card_serial: u32,
+        signing_slot: u8,
+        pq_slot: u8,
+        pin: SecretString,
+    },
+    SyncYubiAccount {
+        profile: String,
+        alias: String,
+        pin: SecretString,
+    },
+    YubiPinStatus {
+        profile: String,
+        alias: String,
+    },
+    ChangeYubiPin {
+        profile: String,
+        alias: String,
+        old_pin: SecretString,
+        new_pin: SecretString,
+    },
+    ChangeYubiPuk {
+        profile: String,
+        alias: String,
+        old_puk: SecretString,
+        new_puk: SecretString,
+    },
+    UnblockYubiPin {
+        profile: String,
+        alias: String,
+        puk: SecretString,
+        new_pin: SecretString,
+    },
+    ConfigureYubiRetries {
+        profile: String,
+        alias: String,
+        pin: SecretString,
+        puk: SecretString,
+        pin_attempts: u8,
+        puk_attempts: u8,
+    },
+    RotateYubiManagementKey {
+        profile: String,
+        alias: String,
+        pin: SecretString,
+    },
+    ResumeYubiManagementKey {
+        profile: String,
+        alias: String,
+        pin: Option<SecretString>,
+    },
+    RecoverYubiManagementKey {
+        profile: String,
+        yubi_alias: String,
+        software_alias: String,
+    },
+    RecoverYubiSubkey {
+        profile: String,
+        alias: String,
+        pin: SecretString,
+    },
+    RevokeYubiDevice {
+        profile: String,
+        yubi_alias: String,
+        software_alias: String,
+    },
     ListKv {
         profile: String,
         alias: String,
@@ -154,6 +249,189 @@ impl std::fmt::Debug for Operation {
                 .debug_struct("SyncAccount")
                 .field("profile", profile)
                 .field("alias", alias)
+                .finish(),
+            Self::ListYubiCards { profile } => formatter
+                .debug_struct("ListYubiCards")
+                .field("profile", profile)
+                .finish(),
+            Self::ListYubiAccounts { profile } => formatter
+                .debug_struct("ListYubiAccounts")
+                .field("profile", profile)
+                .finish(),
+            Self::CreateYubiAccount {
+                profile,
+                alias,
+                username,
+                device_name,
+                email,
+                invite: _,
+                passphrase: _,
+                card_serial,
+                signing_slot,
+                pq_slot,
+                pin: _,
+            } => formatter
+                .debug_struct("CreateYubiAccount")
+                .field("profile", profile)
+                .field("alias", alias)
+                .field("username", username)
+                .field("device_name", device_name)
+                .field("email", email)
+                .field("invite", &"<redacted>")
+                .field("passphrase", &"<redacted>")
+                .field("card_serial", card_serial)
+                .field("signing_slot", signing_slot)
+                .field("pq_slot", pq_slot)
+                .field("pin", &"<redacted>")
+                .finish(),
+            Self::ResumeYubiAccount {
+                profile,
+                alias,
+                pin: _,
+            } => formatter
+                .debug_struct("ResumeYubiAccount")
+                .field("profile", profile)
+                .field("alias", alias)
+                .field("pin", &"<redacted>")
+                .finish(),
+            Self::ProvisionYubiDevice {
+                profile,
+                source_alias,
+                target_alias,
+                device_name,
+                serial,
+                card_serial,
+                signing_slot,
+                pq_slot,
+                pin: _,
+            } => formatter
+                .debug_struct("ProvisionYubiDevice")
+                .field("profile", profile)
+                .field("source_alias", source_alias)
+                .field("target_alias", target_alias)
+                .field("device_name", device_name)
+                .field("serial", serial)
+                .field("card_serial", card_serial)
+                .field("signing_slot", signing_slot)
+                .field("pq_slot", pq_slot)
+                .field("pin", &"<redacted>")
+                .finish(),
+            Self::SyncYubiAccount {
+                profile,
+                alias,
+                pin: _,
+            } => formatter
+                .debug_struct("SyncYubiAccount")
+                .field("profile", profile)
+                .field("alias", alias)
+                .field("pin", &"<redacted>")
+                .finish(),
+            Self::YubiPinStatus { profile, alias } => formatter
+                .debug_struct("YubiPinStatus")
+                .field("profile", profile)
+                .field("alias", alias)
+                .finish(),
+            Self::ChangeYubiPin {
+                profile,
+                alias,
+                old_pin: _,
+                new_pin: _,
+            } => formatter
+                .debug_struct("ChangeYubiPin")
+                .field("profile", profile)
+                .field("alias", alias)
+                .field("old_pin", &"<redacted>")
+                .field("new_pin", &"<redacted>")
+                .finish(),
+            Self::ChangeYubiPuk {
+                profile,
+                alias,
+                old_puk: _,
+                new_puk: _,
+            } => formatter
+                .debug_struct("ChangeYubiPuk")
+                .field("profile", profile)
+                .field("alias", alias)
+                .field("old_puk", &"<redacted>")
+                .field("new_puk", &"<redacted>")
+                .finish(),
+            Self::UnblockYubiPin {
+                profile,
+                alias,
+                puk: _,
+                new_pin: _,
+            } => formatter
+                .debug_struct("UnblockYubiPin")
+                .field("profile", profile)
+                .field("alias", alias)
+                .field("puk", &"<redacted>")
+                .field("new_pin", &"<redacted>")
+                .finish(),
+            Self::ConfigureYubiRetries {
+                profile,
+                alias,
+                pin: _,
+                puk: _,
+                pin_attempts,
+                puk_attempts,
+            } => formatter
+                .debug_struct("ConfigureYubiRetries")
+                .field("profile", profile)
+                .field("alias", alias)
+                .field("pin", &"<redacted>")
+                .field("puk", &"<redacted>")
+                .field("pin_attempts", pin_attempts)
+                .field("puk_attempts", puk_attempts)
+                .finish(),
+            Self::RotateYubiManagementKey {
+                profile,
+                alias,
+                pin: _,
+            } => formatter
+                .debug_struct("RotateYubiManagementKey")
+                .field("profile", profile)
+                .field("alias", alias)
+                .field("pin", &"<redacted>")
+                .finish(),
+            Self::ResumeYubiManagementKey {
+                profile,
+                alias,
+                pin: _,
+            } => formatter
+                .debug_struct("ResumeYubiManagementKey")
+                .field("profile", profile)
+                .field("alias", alias)
+                .field("pin", &"<redacted>")
+                .finish(),
+            Self::RecoverYubiManagementKey {
+                profile,
+                yubi_alias,
+                software_alias,
+            } => formatter
+                .debug_struct("RecoverYubiManagementKey")
+                .field("profile", profile)
+                .field("yubi_alias", yubi_alias)
+                .field("software_alias", software_alias)
+                .finish(),
+            Self::RecoverYubiSubkey {
+                profile,
+                alias,
+                pin: _,
+            } => formatter
+                .debug_struct("RecoverYubiSubkey")
+                .field("profile", profile)
+                .field("alias", alias)
+                .field("pin", &"<redacted>")
+                .finish(),
+            Self::RevokeYubiDevice {
+                profile,
+                yubi_alias,
+                software_alias,
+            } => formatter
+                .debug_struct("RevokeYubiDevice")
+                .field("profile", profile)
+                .field("yubi_alias", yubi_alias)
+                .field("software_alias", software_alias)
                 .finish(),
             Self::ListKv { profile, alias } => formatter
                 .debug_struct("ListKv")

@@ -53,6 +53,25 @@ pub struct SoftwareEldestPublic<'a> {
     pub subchain_location_commitment: [u8; 32],
 }
 
+/// Public inputs committed by a Yubi parent and its delegated Ed25519 mTLS
+/// subkey. The wire shape is the same eldest group change as a software
+/// device, with the member key's optional subkey populated.
+pub struct YubiEldestPublic<'a> {
+    pub host: &'a EntityId,
+    pub uid: &'a EntityId,
+    pub device: &'a EntityId,
+    pub subkey: &'a EntityId,
+    pub device_hepk_fingerprint: [u8; 32],
+    pub puk_verify_key: &'a EntityId,
+    pub puk_hepk_fingerprint: [u8; 32],
+    pub root: &'a TreeRoot,
+    pub time: u64,
+    pub next_location_commitment: [u8; 32],
+    pub username_commitment: [u8; 32],
+    pub device_name_commitment: [u8; 32],
+    pub subchain_location_commitment: [u8; 32],
+}
+
 /// Exact unsigned `LinkOuterV1` state used by FOKS stacked signatures.
 pub struct UnsignedUserLink {
     inner: Vec<u8>,
@@ -63,24 +82,84 @@ impl UnsignedUserLink {
         input.host.clone().require_type(ENTITY_HOST)?;
         input.uid.clone().require_type(ENTITY_USER)?;
         input.device.clone().require_type(ENTITY_DEVICE)?;
-        input
-            .puk_verify_key
-            .clone()
-            .require_type(ENTITY_PUK_VERIFY)?;
+        Self::eldest(
+            input.host,
+            input.uid,
+            input.device,
+            None,
+            input.device_hepk_fingerprint,
+            input.puk_verify_key,
+            input.puk_hepk_fingerprint,
+            input.root,
+            input.time,
+            input.next_location_commitment,
+            input.username_commitment,
+            input.device_name_commitment,
+            input.subchain_location_commitment,
+        )
+    }
+
+    pub fn yubi_eldest(input: &YubiEldestPublic<'_>) -> Result<Self> {
+        input.device.clone().require_type(ENTITY_YUBI)?;
+        input.subkey.clone().require_type(crate::ENTITY_SUBKEY)?;
+        Self::eldest(
+            input.host,
+            input.uid,
+            input.device,
+            Some(input.subkey),
+            input.device_hepk_fingerprint,
+            input.puk_verify_key,
+            input.puk_hepk_fingerprint,
+            input.root,
+            input.time,
+            input.next_location_commitment,
+            input.username_commitment,
+            input.device_name_commitment,
+            input.subchain_location_commitment,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn eldest(
+        host: &EntityId,
+        uid: &EntityId,
+        device: &EntityId,
+        subkey: Option<&EntityId>,
+        device_hepk_fingerprint: [u8; 32],
+        puk_verify_key: &EntityId,
+        puk_hepk_fingerprint: [u8; 32],
+        root: &TreeRoot,
+        time: u64,
+        next_location_commitment: [u8; 32],
+        username_commitment: [u8; 32],
+        device_name_commitment: [u8; 32],
+        subchain_location_commitment: [u8; 32],
+    ) -> Result<Self> {
+        host.clone().require_type(ENTITY_HOST)?;
+        uid.clone().require_type(ENTITY_USER)?;
+        if !matches!(device.entity_type(), ENTITY_DEVICE | ENTITY_YUBI) {
+            return Err(Error::WrongEntityType {
+                expected: ENTITY_DEVICE,
+                found: device.entity_type(),
+            });
+        }
+        if let Some(subkey) = subkey {
+            subkey.clone().require_type(crate::ENTITY_SUBKEY)?;
+        }
+        puk_verify_key.clone().require_type(ENTITY_PUK_VERIFY)?;
 
         let member = Value::Array(vec![
-            Value::Array(vec![
-                Value::Binary(input.device.as_bytes().to_vec()),
-                Value::Null,
-            ]),
+            Value::Array(vec![Value::Binary(device.as_bytes().to_vec()), Value::Null]),
             Role::NONE.to_value(),
             Value::Array(vec![
                 Value::Unsigned(1),
                 Value::Variant(Some((
                     b"1".to_vec(),
                     Box::new(Value::Array(vec![
-                        Value::Binary(input.device_hepk_fingerprint.to_vec()),
-                        Value::Null,
+                        Value::Binary(device_hepk_fingerprint.to_vec()),
+                        subkey.map_or(Value::Null, |subkey| {
+                            Value::Binary(subkey.as_bytes().to_vec())
+                        }),
                     ])),
                 ))),
             ]),
@@ -91,42 +170,39 @@ impl UnsignedUserLink {
                     Value::Unsigned(1),
                     Value::Null,
                     Value::Array(vec![
-                        Value::Unsigned(input.root.epoch),
-                        Value::Binary(input.root.hash.to_vec()),
+                        Value::Unsigned(root.epoch),
+                        Value::Binary(root.hash.to_vec()),
                     ]),
-                    Value::Unsigned(input.time),
+                    Value::Unsigned(time),
                 ]),
-                Value::Binary(input.next_location_commitment.to_vec()),
+                Value::Binary(next_location_commitment.to_vec()),
             ]),
             Value::Array(vec![
-                Value::Binary(input.uid.as_bytes().to_vec()),
-                Value::Binary(input.host.as_bytes().to_vec()),
+                Value::Binary(uid.as_bytes().to_vec()),
+                Value::Binary(host.as_bytes().to_vec()),
             ]),
-            Value::Array(vec![
-                Value::Binary(input.device.as_bytes().to_vec()),
-                Value::Null,
-            ]),
+            Value::Array(vec![Value::Binary(device.as_bytes().to_vec()), Value::Null]),
             Value::Array(vec![Value::Array(vec![Role::OWNER.to_value(), member])]),
             Value::Null,
             Value::Array(vec![Value::Array(vec![
                 Value::Unsigned(1),
                 Role::OWNER.to_value(),
-                Value::Binary(input.puk_verify_key.as_bytes().to_vec()),
-                Value::Binary(input.puk_hepk_fingerprint.to_vec()),
+                Value::Binary(puk_verify_key.as_bytes().to_vec()),
+                Value::Binary(puk_hepk_fingerprint.to_vec()),
             ])]),
             Value::Array(vec![
                 Value::Array(vec![
                     Value::Unsigned(1),
                     Value::Variant(Some((
                         b"0".to_vec(),
-                        Box::new(Value::Binary(input.username_commitment.to_vec())),
+                        Box::new(Value::Binary(username_commitment.to_vec())),
                     ))),
                 ]),
                 Value::Array(vec![
                     Value::Unsigned(0),
                     Value::Variant(Some((
                         b"0".to_vec(),
-                        Box::new(Value::Binary(input.device_name_commitment.to_vec())),
+                        Box::new(Value::Binary(device_name_commitment.to_vec())),
                     ))),
                 ]),
                 Value::Array(vec![
@@ -134,7 +210,7 @@ impl UnsignedUserLink {
                     Value::Variant(Some((
                         b"1".to_vec(),
                         Box::new(Value::Array(vec![Value::Binary(
-                            input.subchain_location_commitment.to_vec(),
+                            subchain_location_commitment.to_vec(),
                         )])),
                     ))),
                 ]),

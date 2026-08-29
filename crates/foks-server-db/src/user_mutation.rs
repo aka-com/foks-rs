@@ -20,6 +20,8 @@ pub struct AddedCredential<'a> {
     pub role_type: u64,
     pub visibility: i64,
     pub subkey_id: Option<&'a [u8]>,
+    pub exact_subkey_box: Option<&'a [u8]>,
+    pub yubi_pq_hint: Option<(u8, &'a [u8; 32])>,
 }
 
 pub struct SharedKeyMutation<'a> {
@@ -181,6 +183,14 @@ impl Database {
                     added.exact_hepk,
                     added.exact_name
                 ],
+            )?;
+            crate::identity::insert_yubi_projection(
+                &transaction,
+                added.device_id,
+                added.subkey_id,
+                added.exact_subkey_box,
+                added.yubi_pq_hint,
+                mutation.now,
             )?;
         }
         if let Some(revoked) = mutation.revoked_device_id {
@@ -356,6 +366,24 @@ fn validate(database: &Database, mutation: &UserMutation<'_>) -> Result<()> {
         .ne(expected)
     {
         return Err(Error::Invalid("Merkle back-pointer sequence"));
+    }
+    if let Some(added) = &mutation.added_credential {
+        let is_yubi = added.device_id.first() == Some(&foks_proto::ENTITY_YUBI);
+        let valid = match (added.subkey_id, added.exact_subkey_box, added.yubi_pq_hint) {
+            (Some(subkey), Some(boxed), Some((slot, _))) => {
+                is_yubi
+                    && subkey.len() == 33
+                    && subkey.first() == Some(&foks_proto::ENTITY_SUBKEY)
+                    && !boxed.is_empty()
+                    && boxed.len() <= database.config.maximum_blob_bytes
+                    && (0x82..=0x95).contains(&slot)
+            }
+            (None, None, None) => !is_yubi,
+            _ => false,
+        };
+        if !valid {
+            return Err(Error::Invalid("Yubi credential projection"));
+        }
     }
     for (hash, encoded) in &mutation.merkle_commit.nodes {
         if encoded.len() > database.config.maximum_blob_bytes {

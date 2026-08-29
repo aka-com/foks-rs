@@ -16,7 +16,9 @@ use foks_rpc::{
     encode_user_stretch_version_request,
 };
 
-use crate::{current_owner_puk, DeviceCredential, Error, FoksClient, PinnedHost, Result};
+use crate::{
+    current_owner_puk, DeviceCredential, Error, FoksClient, PinnedHost, Result, YubiCredential,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PassphraseMetadata {
@@ -117,6 +119,26 @@ impl FoksClient {
         passphrase: &Passphrase,
     ) -> Result<PassphraseVerification> {
         let parcel = self.fetch_ppe_parcel(host, credential)?;
+        self.verify_passphrase_against_parcel(host, &credential.uid, passphrase, &parcel)
+    }
+
+    pub fn verify_passphrase_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        passphrase: &Passphrase,
+    ) -> Result<PassphraseVerification> {
+        let parcel = self.fetch_ppe_parcel_yubi(host, credential)?;
+        self.verify_passphrase_against_parcel(host, &credential.uid, passphrase, &parcel)
+    }
+
+    fn verify_passphrase_against_parcel(
+        &self,
+        host: &PinnedHost,
+        uid: &foks_proto::EntityId,
+        passphrase: &Passphrase,
+        parcel: &PpeParcel,
+    ) -> Result<PassphraseVerification> {
         let public_stretch = self.registration_stretch_version(host)?;
         if public_stretch != parcel.stretch_version {
             return Err(Error::CredentialBinding(
@@ -128,10 +150,10 @@ impl FoksClient {
             host,
             &host.registration,
             &encode_registration_select_vhost_request(host.host_id())?,
-            &encode_get_login_challenge_request(&credential.uid)?,
+            &encode_get_login_challenge_request(uid)?,
         )?;
         let challenge = RegistrationChallenge::decode(&challenge_bytes)?;
-        if challenge.payload.entity != credential.uid || challenge.payload.host != *host.host_id() {
+        if challenge.payload.entity != *uid || challenge.payload.host != *host.host_id() {
             return Err(Error::CredentialBinding(
                 "passphrase challenge identity changed",
             ));
@@ -141,10 +163,10 @@ impl FoksClient {
             host,
             &host.registration,
             &encode_registration_select_vhost_request(host.host_id())?,
-            &encode_passphrase_login_request(&credential.uid, &challenge, &signature)?,
+            &encode_passphrase_login_request(uid, &challenge, &signature)?,
         )?;
         let result = PassphraseLoginResult::decode(&login_bytes)?;
-        let keyring = login.unlock(&credential.uid, host.host_id(), &result)?;
+        let keyring = login.unlock(uid, host.host_id(), &result)?;
         if keyring.generation() != parcel.generation || result.generation != parcel.generation {
             return Err(Error::CredentialBinding(
                 "passphrase login returned a stale PPE generation",
@@ -162,6 +184,23 @@ impl FoksClient {
     ) -> Result<PassphraseMetadata> {
         self.fetch_ppe_parcel(host, credential)
             .map(|parcel| metadata(&parcel))
+    }
+
+    /// Reports whether the account has a passphrase annex while preserving
+    /// every other transport or authorization failure.
+    pub fn passphrase_is_configured(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+    ) -> Result<bool> {
+        match self.passphrase_metadata(host, credential) {
+            Ok(_) => Ok(true),
+            Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_PASSPHRASE_NOT_FOUND_ERROR,
+                ..
+            })) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     pub fn passphrase_salt(
@@ -188,6 +227,21 @@ impl FoksClient {
             &host.user,
             &encode_get_ppe_parcel_request()?,
             Some(credential),
+        )?;
+        Ok(PpeParcel::decode(&response)?)
+    }
+
+    pub(crate) fn fetch_ppe_parcel_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+    ) -> Result<PpeParcel> {
+        let response = self.call_with_material(
+            host,
+            &host.user,
+            &encode_get_ppe_parcel_request()?,
+            &credential.subkey_seed,
+            &credential.certificate_chain,
         )?;
         Ok(PpeParcel::decode(&response)?)
     }

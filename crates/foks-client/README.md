@@ -109,6 +109,17 @@ generic user-settings links; PPE annexes on user mutations therefore remain a
 known cross-server compatibility boundary until that chain family is
 implemented.
 
+`create_yubi_account` and `provision_yubi_device` build the corresponding
+P-256 parent plus delegated Ed25519 mTLS credential. A fresh, host-bound,
+single-use parent signature recovers the server-held encrypted subkey, while
+PUK-encrypted management-key envelopes let an alternate software owner restore
+PIV administration after local loss or PIN lockout. The application crate
+adds exact-card locators, crash-safe management-key replacement, PIN/PUK/retry
+administration, scheduled envelope refresh, and the supported revocation
+sequence. Rotating a PUK to another already-enrolled Yubi recipient remains
+unsupported by the software-signer convenience API; revoke the old YubiKey
+before provisioning its replacement.
+
 `set_passphrase`, `change_passphrase`, and `verify_passphrase` implement the
 authenticated PPE lifecycle. V1 Argon2id runs in zeroizing client memory; the
 server receives only public verification material and encrypted boxes. Change

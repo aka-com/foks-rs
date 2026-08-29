@@ -34,6 +34,8 @@ pub(super) fn response(
         | RegGetClientCertChain
         | RegSignup
         | RegCheckInviteCode
+        | RegGetSubkeyBoxChallenge
+        | RegLoadSubkeyBox
         | RegGetUIDLookupChallege
         | RegLookupUIDByDevice => registration::response(data, call),
         UserSetPassphrase
@@ -46,6 +48,9 @@ pub(super) fn response(
         | UserRevokeDevice
         | UserLoadUserChain
         | UserGetPukForRole
+        | UserPutYubiManagementKey
+        | UserGetYubiManagementKey
+        | UserGetAllYubiManagementKeys
         | UserGetHostConfig => user::response(data, call, principal),
         TeamLoaderGetTeamVOBearerTokenChallenge
         | TeamLoaderActivateTeamVOBearerToken

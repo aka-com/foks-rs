@@ -604,11 +604,14 @@ impl<'a> AccountVault<'a> {
 
     pub fn contains(&mut self, alias: &str) -> Result<bool> {
         validate_name(alias)?;
-        Ok(self
-            .store
-            .keys()?
-            .iter()
-            .any(|key| key == &account_key(alias)))
+        Ok(self.store.keys()?.iter().any(|key| {
+            key == &account_key(alias)
+                || key == &pending_key(alias)
+                || key == &pending_device_key(alias)
+                || key == &pending_recovery_key(alias)
+                || key == &super::yubi::yubi_account_key(alias)
+                || key == &super::yubi::pending_yubi_key(alias)
+        }))
     }
     pub fn account(&mut self, alias: &str) -> Result<LoadedAccount> {
         validate_name(alias)?;
@@ -819,7 +822,7 @@ fn validate_pending_recovery(pending: &PendingRecovery) -> Result<()> {
     validate_name(&pending.target_alias)
 }
 
-fn validate_certificates(certificates: &[Vec<u8>]) -> Result<()> {
+pub(super) fn validate_certificates(certificates: &[Vec<u8>]) -> Result<()> {
     if certificates.is_empty()
         || certificates.len() > MAX_CERTIFICATES
         || certificates

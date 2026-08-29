@@ -1,13 +1,12 @@
 use foks_proto::{
     AdHocTeamCreateArgument, AddTeamMemberArgument, DecodedAdHocTeamCreateArgument,
     DecodedNamedTeamCreateArgument, DecodedProvisionDeviceArgument, DecodedRevokeDeviceArgument,
-    DecodedSoftwareSignupArgument, DecodedTeamEditArgument, DeviceLabel,
-    DeviceLabelNameAndCommitmentKey, DeviceType, EntityId, HostConfig, InviteCode,
-    NamedTeamCreateArgument, ProvisionDeviceArgument, PukParcel, RegistrationChallenge,
-    RemoveTeamMemberArgument, RevokeDeviceArgument, Role, SecretSeed, SeedChainBox,
-    SharedKeyBoxSet, SoftwareSignupArgument, TeamBearerTokenChallenge, TeamChain,
-    TeamRemovalAndCommitment, TeamRemovalBoxData, TeamViewChallenge, TeamViewRequest, UserChain,
-    UserLink, UsernameReservation, ViewershipMode, TEAM_VIEW_CHALLENGE_TYPE_ID,
+    DecodedSignupArgument, DecodedTeamEditArgument, DeviceLabel, DeviceLabelNameAndCommitmentKey,
+    DeviceType, EntityId, HostConfig, InviteCode, NamedTeamCreateArgument, ProvisionDeviceArgument,
+    PukParcel, RegistrationChallenge, RemoveTeamMemberArgument, RevokeDeviceArgument, Role,
+    SecretSeed, SeedChainBox, SharedKeyBoxSet, SoftwareSignupArgument, TeamBearerTokenChallenge,
+    TeamChain, TeamRemovalAndCommitment, TeamRemovalBoxData, TeamViewChallenge, TeamViewRequest,
+    UserChain, UserLink, UsernameReservation, ViewershipMode, TEAM_VIEW_CHALLENGE_TYPE_ID,
 };
 use foks_rpc::{
     decode_team_bearer_token, decode_team_edit_result, decode_team_removal_key_box,
@@ -90,6 +89,8 @@ fn user_mutation_requests_match_go_v019() {
         next_tree_location: chain.locations[1],
         self_token: mutation_fixture("self-token.bin").try_into().unwrap(),
         hepks: &chain.hepks,
+        subkey_box: None,
+        yubi_pq_hint: None,
     })
     .unwrap();
     let expected = mutation_fixture("provision-request.frame");
@@ -509,7 +510,7 @@ fn software_signup_requests_match_go_v019() {
         foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
     )
     .unwrap();
-    let decoded = DecodedSoftwareSignupArgument::decode(call.argument()).unwrap();
+    let decoded = DecodedSignupArgument::decode(call.argument()).unwrap();
     assert_eq!(decoded.username_utf8, b"signupfixture");
     assert_eq!(decoded.reservation, reservation);
     assert_eq!(decoded.link, link);
@@ -629,6 +630,8 @@ fn backup_provision_requests_match_go_v019() {
                 .try_into()
                 .unwrap(),
             hepks: &[backup_hepk],
+            subkey_box: None,
+            yubi_pq_hint: None,
         })
         .unwrap(),
         mutation_fixture("backup-enroll-request.frame")
@@ -666,6 +669,8 @@ fn backup_provision_requests_match_go_v019() {
                 .try_into()
                 .unwrap(),
             hepks: &[replacement.hepk],
+            subkey_box: None,
+            yubi_pq_hint: None,
         })
         .unwrap(),
         mutation_fixture("backup-recover-request.frame")

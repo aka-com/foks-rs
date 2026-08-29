@@ -28,3 +28,5 @@ mod team_create;
 mod team_kv;
 #[path = "conformance/trust_and_registration.rs"]
 mod trust_and_registration;
+#[path = "conformance/yubikey.rs"]
+mod yubikey;

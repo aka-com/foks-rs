@@ -203,9 +203,12 @@ and generation-1 owner PUK to the current verified Merkle root, constructs the
 official stacked PUK/device eldest signatures and initial hybrid PUK box,
 submits `Reg.signup`, obtains the new mTLS certificate, waits for and verifies
 the Merkle/user-chain projection, seals public hard state, and creates the
-initial personal KV root. It supports a software eldest credential and an
-optional PPE passphrase established atomically at signup. Yubi parent, SSO,
-and passphrase-only recovery setup remain outside this path.
+initial personal KV root. The software path supports an Ed25519 eldest and an
+optional PPE passphrase established atomically at signup. The parallel Yubi
+path builds the v0.1.9 P-256 eldest and encrypted delegated Ed25519 mTLS
+subkey, binds both retired-key slots and their public keys to application
+durable state, and supports the same optional signup passphrase. SSO and
+passphrase-only device recovery setup remain outside this slice.
 
 The device-mutation convenience path requires the owner device and new
 software-device seeds in one process so both exact signatures can be built.

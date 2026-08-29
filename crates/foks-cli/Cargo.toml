@@ -14,6 +14,7 @@ clap = { workspace = true }
 foks-client-app = { workspace = true }
 foks-compat-artifact = { workspace = true }
 foks-keystore = { workspace = true }
+foks-yubi = { workspace = true, features = ["hardware"] }
 libc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

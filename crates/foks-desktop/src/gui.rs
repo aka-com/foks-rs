@@ -13,7 +13,7 @@ mod supported {
     use clap::Parser as _;
     use foks_agent_client::AgentClient;
     use foks_agent_proto::SecretString;
-    use foks_desktop::{DesktopModel, PassphraseAction, Screen};
+    use foks_desktop::{DesktopModel, PassphraseAction, Screen, YubiAction};
     use gpui::{
         div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, SharedString,
         Window, WindowBounds, WindowOptions,
@@ -45,6 +45,25 @@ mod supported {
         account_passphrase_confirmation: Entity<TextField>,
         security_passphrase: Entity<TextField>,
         security_passphrase_confirmation: Entity<TextField>,
+        yubi_alias: Entity<TextField>,
+        yubi_username: Entity<TextField>,
+        yubi_device: Entity<TextField>,
+        yubi_email: Entity<TextField>,
+        yubi_invite: Entity<TextField>,
+        yubi_passphrase: Entity<TextField>,
+        yubi_passphrase_confirmation: Entity<TextField>,
+        yubi_card_serial: Entity<TextField>,
+        yubi_signing_slot: Entity<TextField>,
+        yubi_pq_slot: Entity<TextField>,
+        yubi_pin: Entity<TextField>,
+        yubi_software_alias: Entity<TextField>,
+        yubi_revoke_confirmation: Entity<TextField>,
+        yubi_device_serial: Entity<TextField>,
+        yubi_new_pin: Entity<TextField>,
+        yubi_puk: Entity<TextField>,
+        yubi_new_puk: Entity<TextField>,
+        yubi_pin_attempts: Entity<TextField>,
+        yubi_puk_attempts: Entity<TextField>,
     }
 
     impl FoksDesktop {
@@ -66,6 +85,30 @@ mod supported {
                 security_passphrase: cx.new(|cx| TextField::new("Passphrase", true, 1024, cx)),
                 security_passphrase_confirmation: cx
                     .new(|cx| TextField::new("Confirm passphrase", true, 1024, cx)),
+                yubi_alias: cx.new(|cx| TextField::new("Local Yubi alias", false, 64, cx)),
+                yubi_username: cx.new(|cx| TextField::new("FOKS username", false, 256, cx)),
+                yubi_device: cx.new(|cx| TextField::new("YubiKey device name", false, 256, cx)),
+                yubi_email: cx.new(|cx| TextField::new("Email (optional)", false, 320, cx)),
+                yubi_invite: cx
+                    .new(|cx| TextField::new("Signup invite (optional)", true, 4096, cx)),
+                yubi_passphrase: cx
+                    .new(|cx| TextField::new("Passphrase (optional)", true, 1024, cx)),
+                yubi_passphrase_confirmation: cx
+                    .new(|cx| TextField::new("Confirm passphrase", true, 1024, cx)),
+                yubi_card_serial: cx.new(|cx| TextField::new("Card serial", false, 10, cx)),
+                yubi_signing_slot: cx.new(|cx| TextField::new("0x82", false, 4, cx)),
+                yubi_pq_slot: cx.new(|cx| TextField::new("0x83", false, 4, cx)),
+                yubi_pin: cx.new(|cx| TextField::new("PIN", true, 8, cx)),
+                yubi_software_alias: cx
+                    .new(|cx| TextField::new("Software recovery alias", false, 64, cx)),
+                yubi_revoke_confirmation: cx
+                    .new(|cx| TextField::new("Type Yubi alias to revoke", false, 64, cx)),
+                yubi_device_serial: cx.new(|cx| TextField::new("2", false, 20, cx)),
+                yubi_new_pin: cx.new(|cx| TextField::new("New PIN", true, 8, cx)),
+                yubi_puk: cx.new(|cx| TextField::new("Current PUK", true, 8, cx)),
+                yubi_new_puk: cx.new(|cx| TextField::new("New PUK", true, 8, cx)),
+                yubi_pin_attempts: cx.new(|cx| TextField::new("3", false, 2, cx)),
+                yubi_puk_attempts: cx.new(|cx| TextField::new("3", false, 2, cx)),
             };
             desktop.refresh(cx);
             desktop
@@ -444,6 +487,543 @@ mod supported {
             })
             .detach();
         }
+
+        fn yubi_form(&self, cx: &Context<Self>) -> gpui::AnyElement {
+            let field = |label: &'static str, input: Entity<TextField>| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().text_sm().text_color(rgb(0x526178)).child(label))
+                    .child(input)
+            };
+            let action_button = |id: &'static str, label: &'static str, action: YubiAction| {
+                div()
+                    .id(id)
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(rgb(0x2764d8))
+                    .text_color(rgb(0xffffff))
+                    .child(label)
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.submit_yubi_action(action, cx)),
+                    )
+            };
+            div()
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .p_4()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(rgb(0xd8dfeb))
+                        .bg(rgb(0xf8faff))
+                        .child(div().text_lg().child("Create YubiKey account"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(0x65738a))
+                                .child("The agent generates keys only in empty retired-key slots. PIN, invite, and passphrase values are consumed locally and redacted from IPC diagnostics."),
+                        )
+                        .child(
+                            div()
+                                .grid()
+                                .grid_cols(2)
+                                .gap_3()
+                                .child(field("Local alias", self.yubi_alias.clone()))
+                                .child(field("Username", self.yubi_username.clone()))
+                                .child(field("Device name", self.yubi_device.clone()))
+                                .child(field("Email", self.yubi_email.clone()))
+                                .child(field("Card serial", self.yubi_card_serial.clone()))
+                                .child(field("PIN", self.yubi_pin.clone()))
+                                .child(field("Device serial", self.yubi_device_serial.clone()))
+                                .child(field("Signing slot", self.yubi_signing_slot.clone()))
+                                .child(field("PQ slot", self.yubi_pq_slot.clone())),
+                        )
+                        .child(field("Invite", self.yubi_invite.clone()))
+                        .child(
+                            div()
+                                .grid()
+                                .grid_cols(2)
+                                .gap_3()
+                                .child(field("Passphrase (optional)", self.yubi_passphrase.clone()))
+                                .child(field(
+                                    "Confirm passphrase",
+                                    self.yubi_passphrase_confirmation.clone(),
+                                )),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .id("create-yubi-account")
+                                        .px_3()
+                                        .py_2()
+                                        .rounded_md()
+                                        .cursor_pointer()
+                                        .bg(rgb(0x2764d8))
+                                        .text_color(rgb(0xffffff))
+                                        .child("Create YubiKey account")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.submit_yubi_account(cx)
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id("provision-yubi-device")
+                                        .px_3()
+                                        .py_2()
+                                        .rounded_md()
+                                        .cursor_pointer()
+                                        .bg(rgb(0x2764d8))
+                                        .text_color(rgb(0xffffff))
+                                        .child("Provision from software alias")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.submit_yubi_provision(cx)
+                                        })),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .p_4()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(rgb(0xd8dfeb))
+                        .bg(rgb(0xf8faff))
+                        .child(div().text_lg().child("YubiKey lifecycle"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(0x65738a))
+                                .child("Use the alias and PIN above for sync or rotation. Retry changes internally reset PIV credentials, so enter the PIN and current PUK to restore them immediately. Management-key recovery uses the software alias and does not require the card PIN."),
+                        )
+                        .child(field(
+                            "Software recovery alias",
+                            self.yubi_software_alias.clone(),
+                        ))
+                        .child(field(
+                            "Revocation confirmation",
+                            self.yubi_revoke_confirmation.clone(),
+                        ))
+                        .child(
+                            div()
+                                .grid()
+                                .grid_cols(2)
+                                .gap_3()
+                                .child(field("New PIN", self.yubi_new_pin.clone()))
+                                .child(field("Current PUK", self.yubi_puk.clone()))
+                                .child(field("New PUK", self.yubi_new_puk.clone()))
+                                .child(field("PIN retries", self.yubi_pin_attempts.clone()))
+                                .child(field("PUK retries", self.yubi_puk_attempts.clone())),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .flex_wrap()
+                                .child(action_button("yubi-sync", "Sync", YubiAction::Sync))
+                                .child(action_button(
+                                    "yubi-list-cards",
+                                    "List connected cards",
+                                    YubiAction::ListCards,
+                                ))
+                                .child(action_button(
+                                    "yubi-resume-account",
+                                    "Resume enrollment",
+                                    YubiAction::ResumeAccount,
+                                ))
+                                .child(action_button(
+                                    "yubi-pin-status",
+                                    "PIN status",
+                                    YubiAction::PinStatus,
+                                ))
+                                .child(action_button(
+                                    "yubi-rotate-management",
+                                    "Rotate management key",
+                                    YubiAction::RotateManagementKey,
+                                ))
+                                .child(action_button(
+                                    "yubi-resume-management",
+                                    "Resume management rotation",
+                                    YubiAction::ResumeManagementKey,
+                                ))
+                                .child(action_button(
+                                    "yubi-recover-management",
+                                    "Recover management key",
+                                    YubiAction::RecoverManagementKey,
+                                ))
+                                .child(action_button(
+                                    "yubi-recover-subkey",
+                                    "Recover subkey",
+                                    YubiAction::RecoverSubkey,
+                                ))
+                                .child(action_button(
+                                    "yubi-revoke",
+                                    "Revoke YubiKey",
+                                    YubiAction::Revoke,
+                                ))
+                                .child(
+                                    div()
+                                        .id("yubi-change-pin")
+                                        .px_3()
+                                        .py_2()
+                                        .rounded_md()
+                                        .cursor_pointer()
+                                        .bg(rgb(0x2764d8))
+                                        .text_color(rgb(0xffffff))
+                                        .child("Change PIN")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.submit_yubi_pin_change(cx)
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id("yubi-change-puk")
+                                        .px_3()
+                                        .py_2()
+                                        .rounded_md()
+                                        .cursor_pointer()
+                                        .bg(rgb(0x2764d8))
+                                        .text_color(rgb(0xffffff))
+                                        .child("Change PUK")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.submit_yubi_puk_change(cx)
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id("yubi-retries")
+                                        .px_3()
+                                        .py_2()
+                                        .rounded_md()
+                                        .cursor_pointer()
+                                        .bg(rgb(0x2764d8))
+                                        .text_color(rgb(0xffffff))
+                                        .child("Set retry policy")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.submit_yubi_retries(cx)
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id("yubi-unblock-pin")
+                                        .px_3()
+                                        .py_2()
+                                        .rounded_md()
+                                        .cursor_pointer()
+                                        .bg(rgb(0x2764d8))
+                                        .text_color(rgb(0xffffff))
+                                        .child("Unblock PIN")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.submit_yubi_unblock(cx)
+                                        })),
+                                ),
+                        ),
+                )
+                .into_any_element()
+        }
+
+        fn submit_yubi_account(&mut self, cx: &mut Context<Self>) {
+            if self.loading {
+                return;
+            }
+            let card_serial = match self.yubi_card_serial.read(cx).value().parse::<u32>() {
+                Ok(serial) => serial,
+                Err(_) => {
+                    self.model
+                        .accept(Err("enter a numeric card serial".to_owned()));
+                    cx.notify();
+                    return;
+                }
+            };
+            let signing_slot = match parse_slot(self.yubi_signing_slot.read(cx).value()) {
+                Ok(slot) => slot,
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                    return;
+                }
+            };
+            let pq_slot = match parse_slot(self.yubi_pq_slot.read(cx).value()) {
+                Ok(slot) => slot,
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                    return;
+                }
+            };
+            let passphrase = self
+                .yubi_passphrase
+                .update(cx, |input, cx| input.take_secret(cx));
+            let confirmation = self
+                .yubi_passphrase_confirmation
+                .update(cx, |input, cx| input.take_secret(cx));
+            let pin = self.yubi_pin.update(cx, |input, cx| input.take_secret(cx));
+            let invite = self
+                .yubi_invite
+                .update(cx, |input, cx| input.take_secret(cx));
+            let operation = self.model.create_yubi_account_operation(
+                self.yubi_alias.read(cx).value(),
+                self.yubi_username.read(cx).value(),
+                self.yubi_device.read(cx).value(),
+                self.yubi_email.read(cx).value(),
+                SecretString::new(invite),
+                Some(SecretString::new(passphrase)),
+                Some(SecretString::new(confirmation)),
+                card_serial,
+                signing_slot,
+                pq_slot,
+                SecretString::new(pin),
+            );
+            match operation {
+                Ok(operation) => self.start_operation(operation, cx),
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                }
+            }
+        }
+
+        fn submit_yubi_provision(&mut self, cx: &mut Context<Self>) {
+            if self.loading {
+                return;
+            }
+            let parsed = (|| {
+                Ok::<_, &'static str>((
+                    self.yubi_device_serial
+                        .read(cx)
+                        .value()
+                        .parse::<u64>()
+                        .map_err(|_| "enter a numeric device serial")?,
+                    self.yubi_card_serial
+                        .read(cx)
+                        .value()
+                        .parse::<u32>()
+                        .map_err(|_| "enter a numeric card serial")?,
+                    parse_slot(self.yubi_signing_slot.read(cx).value())?,
+                    parse_slot(self.yubi_pq_slot.read(cx).value())?,
+                ))
+            })();
+            let (serial, card_serial, signing_slot, pq_slot) = match parsed {
+                Ok(values) => values,
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                    return;
+                }
+            };
+            let pin = self.yubi_pin.update(cx, |input, cx| input.take_secret(cx));
+            let operation = self.model.provision_yubi_operation(
+                self.yubi_software_alias.read(cx).value(),
+                self.yubi_alias.read(cx).value(),
+                self.yubi_device.read(cx).value(),
+                serial,
+                card_serial,
+                signing_slot,
+                pq_slot,
+                SecretString::new(pin),
+            );
+            match operation {
+                Ok(operation) => self.start_operation(operation, cx),
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                }
+            }
+        }
+
+        fn submit_yubi_pin_change(&mut self, cx: &mut Context<Self>) {
+            if self.loading {
+                return;
+            }
+            let old_pin = self.yubi_pin.update(cx, |input, cx| input.take_secret(cx));
+            let new_pin = self
+                .yubi_new_pin
+                .update(cx, |input, cx| input.take_secret(cx));
+            let operation = self.model.change_yubi_pin_operation(
+                self.yubi_alias.read(cx).value(),
+                SecretString::new(old_pin),
+                SecretString::new(new_pin),
+            );
+            match operation {
+                Ok(operation) => self.start_operation(operation, cx),
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                }
+            }
+        }
+
+        fn submit_yubi_puk_change(&mut self, cx: &mut Context<Self>) {
+            if self.loading {
+                return;
+            }
+            let old_puk = self.yubi_puk.update(cx, |input, cx| input.take_secret(cx));
+            let new_puk = self
+                .yubi_new_puk
+                .update(cx, |input, cx| input.take_secret(cx));
+            let operation = self.model.change_yubi_puk_operation(
+                self.yubi_alias.read(cx).value(),
+                SecretString::new(old_puk),
+                SecretString::new(new_puk),
+            );
+            match operation {
+                Ok(operation) => self.start_operation(operation, cx),
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                }
+            }
+        }
+
+        fn submit_yubi_retries(&mut self, cx: &mut Context<Self>) {
+            if self.loading {
+                return;
+            }
+            let pin = self.yubi_pin.update(cx, |input, cx| input.take_secret(cx));
+            let puk = self.yubi_puk.update(cx, |input, cx| input.take_secret(cx));
+            let attempts = (|| {
+                Ok::<_, &'static str>((
+                    self.yubi_pin_attempts
+                        .read(cx)
+                        .value()
+                        .parse::<u8>()
+                        .map_err(|_| "enter numeric PIN retries")?,
+                    self.yubi_puk_attempts
+                        .read(cx)
+                        .value()
+                        .parse::<u8>()
+                        .map_err(|_| "enter numeric PUK retries")?,
+                ))
+            })();
+            let (pin_attempts, puk_attempts) = match attempts {
+                Ok(attempts) => attempts,
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                    return;
+                }
+            };
+            let operation = self.model.configure_yubi_retries_operation(
+                self.yubi_alias.read(cx).value(),
+                SecretString::new(pin),
+                SecretString::new(puk),
+                pin_attempts,
+                puk_attempts,
+            );
+            match operation {
+                Ok(operation) => self.start_operation(operation, cx),
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                }
+            }
+        }
+
+        fn submit_yubi_unblock(&mut self, cx: &mut Context<Self>) {
+            if self.loading {
+                return;
+            }
+            let puk = self.yubi_puk.update(cx, |input, cx| input.take_secret(cx));
+            let new_pin = self
+                .yubi_new_pin
+                .update(cx, |input, cx| input.take_secret(cx));
+            let operation = self.model.unblock_yubi_pin_operation(
+                self.yubi_alias.read(cx).value(),
+                SecretString::new(puk),
+                SecretString::new(new_pin),
+            );
+            match operation {
+                Ok(operation) => self.start_operation(operation, cx),
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                }
+            }
+        }
+
+        fn submit_yubi_action(&mut self, action: YubiAction, cx: &mut Context<Self>) {
+            if self.loading {
+                return;
+            }
+            let pin = if matches!(
+                action,
+                YubiAction::ResumeAccount
+                    | YubiAction::Sync
+                    | YubiAction::RotateManagementKey
+                    | YubiAction::ResumeManagementKey
+                    | YubiAction::RecoverSubkey
+            ) {
+                let pin = self.yubi_pin.update(cx, |input, cx| input.take_secret(cx));
+                Some(SecretString::new(pin))
+            } else {
+                None
+            };
+            let alias = self.yubi_alias.read(cx).value().to_owned();
+            if action == YubiAction::Revoke
+                && self.yubi_revoke_confirmation.read(cx).value() != alias
+            {
+                self.model.accept(Err(
+                    "type the exact Yubi alias in the revocation confirmation field".to_owned(),
+                ));
+                cx.notify();
+                return;
+            }
+            let operation = self.model.yubi_action_operation(
+                action,
+                &alias,
+                pin,
+                Some(self.yubi_software_alias.read(cx).value()),
+            );
+            match operation {
+                Ok(operation) => self.start_operation(operation, cx),
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                }
+            }
+        }
+
+        fn start_operation(
+            &mut self,
+            operation: foks_agent_proto::Operation,
+            cx: &mut Context<Self>,
+        ) {
+            let transport = self.model.transport();
+            self.request_generation = self.request_generation.wrapping_add(1);
+            let generation = self.request_generation;
+            self.loading = true;
+            cx.notify();
+            let task = cx
+                .background_executor()
+                .spawn(async move { transport.call(operation) });
+            cx.spawn(async move |this, cx| {
+                let result = task.await;
+                this.update(cx, |this, cx| {
+                    if this.request_generation != generation {
+                        return;
+                    }
+                    this.loading = false;
+                    this.model.accept(result);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
     }
 
     impl Render for FoksDesktop {
@@ -495,6 +1075,18 @@ mod supported {
                     .gap_4()
                     .child(self.account_form(cx))
                     .child(self.passphrase_form(cx))
+                    .child(response)
+                    .into_any_element()
+            } else if self.model.screen() == Screen::YubiKeys {
+                div()
+                    .id("yubi-body")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(self.yubi_form(cx))
                     .child(response)
                     .into_any_element()
             } else {
@@ -570,6 +1162,23 @@ mod supported {
                         .child(body),
                 )
         }
+    }
+
+    fn parse_slot(value: &str) -> Result<u8, &'static str> {
+        let value = value.trim();
+        let parsed = if let Some(value) = value
+            .strip_prefix("0x")
+            .or_else(|| value.strip_prefix("0X"))
+        {
+            u8::from_str_radix(value, 16)
+        } else {
+            value.parse::<u8>()
+        }
+        .map_err(|_| "enter a decimal or 0x-prefixed PIV slot")?;
+        if !(0x82..=0x95).contains(&parsed) {
+            return Err("PIV slot must be from 0x82 through 0x95");
+        }
+        Ok(parsed)
     }
 
     pub fn main() {

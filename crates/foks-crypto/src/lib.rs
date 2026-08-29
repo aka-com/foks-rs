@@ -24,8 +24,8 @@ use foks_proto::{
     TeamMemberKeys, TeamRemovalAndCommitment, TeamRemovalBoxData, TeamRemovalKeyBox,
     TeamRemovalKeyMetadata, TeamRemovalKeyPayload, TeamRemovalMacPayload, TeamRemovalProof,
     TreeRoot, UnsignedUserLink, UserGroupChange, UserLink, UserMemberChange, UserMemberKeys,
-    UserSharedKey, APP_KEY_DERIVATION_TYPE_ID, DEVICE_LABEL_TYPE_ID, HEPK_TYPE_ID,
-    HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID, KV_CHUNK_NONCE_PAYLOAD_TYPE_ID,
+    UserSharedKey, YubiEldestPublic, APP_KEY_DERIVATION_TYPE_ID, DEVICE_LABEL_TYPE_ID,
+    HEPK_TYPE_ID, HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID, KV_CHUNK_NONCE_PAYLOAD_TYPE_ID,
     KV_DIRENT_BINDING_PAYLOAD_TYPE_ID, KV_DIRENT_NAME_PAYLOAD_TYPE_ID, KV_FILE_KEY_PAYLOAD_TYPE_ID,
     KV_KEY_DERIVATION_TYPE_ID, KV_ROOT_BINDING_PAYLOAD_TYPE_ID, LINK_OUTER_V1_TYPE_ID,
     NAME_COMMITMENT_TYPE_ID, SHARED_KEY_SEED_TYPE_ID, SUBKEY_SEED_TYPE_ID,
@@ -38,6 +38,10 @@ use ml_kem::{ml_kem_768, Decapsulate as _, KeyExport as _, TryKeyInit as _};
 use p256::ecdsa::{
     signature::hazmat::PrehashVerifier as _, Signature as P256Signature,
     VerifyingKey as P256VerifyingKey,
+};
+use p256::{
+    ecdh::diffie_hellman as p256_diffie_hellman, elliptic_curve::sec1::ToEncodedPoint as _,
+    PublicKey as P256PublicKey, SecretKey as P256SecretKey,
 };
 use salsa20::{cipher::consts::U10, hsalsa};
 use sha2::{Digest as _, Sha512_256};
@@ -666,6 +670,15 @@ pub struct SharedPublicMaterial {
 pub struct SoftwareEldestMaterial {
     pub uid: EntityId,
     pub device: DevicePublicMaterial,
+    pub puk: SharedPublicMaterial,
+    pub link: UserLink,
+}
+
+/// Complete public result of constructing a Yubi-parent eldest link.
+pub struct YubiEldestMaterial {
+    pub uid: EntityId,
+    pub device: DevicePublicMaterial,
+    pub subkey: DevicePublicMaterial,
     pub puk: SharedPublicMaterial,
     pub link: UserLink,
 }
@@ -1449,6 +1462,15 @@ pub struct SoftwareProvisionMaterial {
     pub next_tree_location: [u8; 32],
 }
 
+pub struct YubiProvisionMaterial {
+    pub link: UserLink,
+    pub device: DevicePublicMaterial,
+    pub subkey: DevicePublicMaterial,
+    pub introduced_puk: Option<SharedPublicMaterial>,
+    pub device_name_commitment_key: [u8; 16],
+    pub next_tree_location: [u8; 32],
+}
+
 /// Constructs a complete software-device provision link. If the requested
 /// role has no PUK yet, `introduced_puk` supplies generation 1 and signs first.
 /// The new device countersigns before the existing owner device.
@@ -1466,6 +1488,110 @@ pub fn make_software_provision_link(
         new_device_seed,
         introduced_puk,
     )
+}
+
+/// Constructs a provisioning link for a hardware Yubi parent and its
+/// delegated Ed25519 mTLS subkey. The new PUK (when present), subkey, parent,
+/// and existing software owner sign the stack in that order.
+pub fn make_yubi_provision_link(
+    input: &SoftwareProvisionInput<'_>,
+    existing_device_seed: &SecretSeed,
+    parent: &dyn YubiDevice,
+    subkey_seed: &SecretSeed,
+    introduced_puk: Option<&SecretSeed>,
+) -> Result<YubiProvisionMaterial> {
+    if input.device_label.device_type != foks_proto::DeviceType::YubiKey
+        || input.role == Role::NONE
+        || parent.entity_id().entity_type() != foks_proto::ENTITY_YUBI
+        || parent.hepk().p256().is_none()
+    {
+        return Err(Error::DeviceKey);
+    }
+    let existing = derive_device_public(existing_device_seed)?;
+    let device = DevicePublicMaterial {
+        id: parent.entity_id().clone(),
+        hepk: parent.hepk().clone(),
+    };
+    let subkey = derive_public_material(subkey_seed, foks_proto::ENTITY_SUBKEY)?;
+    let introduced = introduced_puk
+        .map(|seed| derive_shared_public(seed, foks_proto::ENTITY_PUK_VERIFY))
+        .transpose()?;
+    let label = input.device_label;
+    let label_bytes = encode(&Value::Array(vec![
+        Value::Unsigned(label.device_type.protocol_value()),
+        Value::Text(label.normalized_name.clone()),
+        Value::Unsigned(label.serial),
+    ]))?;
+    let shared_keys = match introduced.as_ref() {
+        Some(key) => vec![UserSharedKey {
+            generation: 1,
+            role: input.role,
+            verify_key: key.verify_key.clone(),
+            hepk_fingerprint: hepk_fingerprint(&key.hepk)?,
+        }],
+        None => Vec::new(),
+    };
+    let change = UserGroupChange {
+        seqno: input.base.seqno,
+        previous: Some(input.base.previous),
+        root: input.base.root.clone(),
+        time: input.base.time,
+        next_location_commitment: prefixed_hash(
+            TREE_LOCATION_TYPE_ID,
+            &encode(&Value::Binary(input.base.next_tree_location.to_vec()))?,
+        ),
+        uid: input.base.uid.clone(),
+        host: input.base.host.clone(),
+        signer: existing.id,
+        changes: vec![UserMemberChange {
+            role: input.role,
+            entity: device.id.clone(),
+            scoped_host: None,
+            source_role: Role::NONE,
+            keys: UserMemberKeys::User {
+                hepk_fingerprint: hepk_fingerprint(&device.hepk)?,
+                subkey: Some(subkey.id.clone()),
+            },
+        }],
+        shared_keys,
+        metadata: vec![ChangeMetadata::DeviceName(commitment(
+            DEVICE_LABEL_TYPE_ID,
+            &label_bytes,
+            &input.device_name_commitment_key,
+        ))],
+    };
+    let unsigned = UnsignedUserLink::user_group_change(&change)?;
+    let mut signatures = Vec::with_capacity(if introduced_puk.is_some() { 4 } else { 3 });
+    if let Some(seed) = introduced_puk {
+        signatures.push(sign_seed_typed(
+            seed,
+            LINK_OUTER_V1_TYPE_ID,
+            &unsigned.signing_bytes(&signatures)?,
+        )?);
+    }
+    signatures.push(sign_seed_typed(
+        subkey_seed,
+        LINK_OUTER_V1_TYPE_ID,
+        &unsigned.signing_bytes(&signatures)?,
+    )?);
+    signatures.push(sign_yubi_typed(
+        parent,
+        LINK_OUTER_V1_TYPE_ID,
+        &unsigned.signing_bytes(&signatures)?,
+    )?);
+    signatures.push(sign_seed_typed(
+        existing_device_seed,
+        LINK_OUTER_V1_TYPE_ID,
+        &unsigned.signing_bytes(&signatures)?,
+    )?);
+    Ok(YubiProvisionMaterial {
+        link: unsigned.finish(signatures)?,
+        device,
+        subkey,
+        introduced_puk: introduced,
+        device_name_commitment_key: input.device_name_commitment_key,
+        next_tree_location: input.base.next_tree_location,
+    })
 }
 
 /// Constructs the same provision link with a FOKS backup key as the new
@@ -1787,6 +1913,20 @@ pub struct PukBoxRandomness {
     pub nonce: [u8; 16],
 }
 
+pub struct YubiPukBoxRandomness {
+    pub ephemeral_secret: [u8; 32],
+    pub kem_message: [u8; 32],
+    pub nonce: [u8; 16],
+    pub time: u64,
+}
+
+pub struct YubiPukBoxInput<'a> {
+    pub seed: &'a SecretSeed,
+    pub generation: u64,
+    pub role: Role,
+    pub receiver: &'a DevicePublicMaterial,
+}
+
 pub struct SoftwarePukBoxInput<'a> {
     pub seed: &'a SecretSeed,
     pub generation: u64,
@@ -1839,6 +1979,97 @@ pub fn seal_software_puk_boxes(
         &generic,
         randomness,
     )
+}
+
+/// Seals one PUK from an existing software device to a P-256 Yubi recipient.
+/// The authenticated temporary P-256 key is required by v0.1.9 whenever the
+/// sender and receiver use different classical curves.
+pub fn seal_software_puk_box_to_yubi(
+    host: &EntityId,
+    sender_seed: &SecretSeed,
+    box_id: [u8; 16],
+    input: &YubiPukBoxInput<'_>,
+    randomness: YubiPukBoxRandomness,
+) -> Result<SharedKeyBoxSet> {
+    if input.generation == 0
+        || input.role == Role::NONE
+        || input.receiver.id.entity_type() != foks_proto::ENTITY_YUBI
+    {
+        return Err(Error::WrongReceiver);
+    }
+    let sender = derive_device_public(sender_seed)?;
+    let receiver_dh = input.receiver.hepk.p256().ok_or(Error::HybridBox)?;
+    let ephemeral =
+        P256SecretKey::from_slice(&randomness.ephemeral_secret).map_err(|_| Error::HybridBox)?;
+    let ephemeral_public = ephemeral.public_key().to_encoded_point(true);
+    let ephemeral_public: [u8; 33] = ephemeral_public
+        .as_bytes()
+        .try_into()
+        .map_err(|_| Error::HybridBox)?;
+    let receiver_public =
+        P256PublicKey::from_sec1_bytes(receiver_dh).map_err(|_| Error::HybridBox)?;
+    let dh_shared = p256_diffie_hellman(ephemeral.to_nonzero_scalar(), receiver_public.as_affine());
+    let receiver_mlkem =
+        ml_kem_768::EncapsulationKey::new_from_slice(input.receiver.hepk.mlkem768())
+            .map_err(|_| Error::MlKem)?;
+    let (kem_ciphertext, kem_shared) =
+        receiver_mlkem.encapsulate_deterministic(&ml_kem::B32::from(randomness.kem_message));
+    let sender_dh = DhPublicKey::P256(ephemeral_public);
+    let derivation = hybrid_key_derivation_payload(
+        kem_shared.as_slice(),
+        dh_shared.raw_secret_bytes().as_slice(),
+        &input.receiver.hepk,
+        &sender_dh,
+    )?;
+    let mut hash = <Sha3_256 as Sha3Digest>::new();
+    hash.update(HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID.to_be_bytes());
+    hash.update(derivation.as_slice());
+    let key = Zeroizing::new(<[u8; 32]>::from(hash.finalize()));
+    let cleartext = shared_key_seed_plaintext(
+        &input.receiver.id,
+        host,
+        input.generation,
+        input.role,
+        input.seed,
+    )?;
+    let mut nonce = [0u8; 24];
+    nonce[..8].copy_from_slice(&SHARED_KEY_SEED_TYPE_ID.to_be_bytes());
+    nonce[8..].copy_from_slice(&randomness.nonce);
+    let ciphertext = XSalsa20Poly1305::new(key.as_slice().into())
+        .encrypt((&nonce).into(), cleartext.as_slice())
+        .map_err(|_| Error::Decryption)?;
+    let mut temporary = foks_proto::TempDhKeySigned {
+        key: sender_dh,
+        time: randomness.time,
+        signature: Signature::Ed25519([0; 64]),
+    };
+    temporary.signature = sign_seed_typed(
+        sender_seed,
+        TEMP_DH_KEY_SIG_TEMPLATE_TYPE_ID,
+        &temporary.signing_bytes(&box_id, &sender.id, host)?,
+    )?;
+    SharedKeyBoxSet::new(
+        box_id,
+        vec![SharedKeyBox {
+            generation: input.generation,
+            role: input.role,
+            hybrid: HybridBox {
+                kem_ciphertext: kem_ciphertext.as_slice().to_vec(),
+                dh_type: 2,
+                sender_dh: None,
+                nonce: randomness.nonce,
+                ciphertext,
+            },
+            target: SharedKeyBoxTarget {
+                entity: input.receiver.id.clone(),
+                host: None,
+                role: Role::NONE,
+                generation: 0,
+            },
+        }],
+        Some(temporary),
+    )
+    .map_err(Into::into)
 }
 
 /// Boxes PUKs from an ephemeral backup key to newly provisioned software
@@ -2279,6 +2510,96 @@ pub fn make_software_eldest_link(
     })
 }
 
+/// Constructs the exact v0.1.9 eldest stack for a Yubi parent: owner PUK,
+/// delegated Ed25519 subkey, then the P-256 parent signature.
+pub fn make_yubi_eldest_link(
+    input: &SoftwareEldestInput<'_>,
+    device: &dyn YubiDevice,
+    subkey_seed: &SecretSeed,
+    puk_seed: &SecretSeed,
+) -> Result<YubiEldestMaterial> {
+    if input.normalized_username.is_empty()
+        || !input.normalized_username.is_ascii()
+        || input.username_sequence == 0
+        || device.entity_id().entity_type() != foks_proto::ENTITY_YUBI
+        || device.hepk().p256().is_none()
+    {
+        return Err(Error::DeviceKey);
+    }
+    let host = input.host.clone().require_type(foks_proto::ENTITY_HOST)?;
+    let parent = DevicePublicMaterial {
+        id: device.entity_id().clone(),
+        hepk: device.hepk().clone(),
+    };
+    let subkey = derive_public_material(subkey_seed, foks_proto::ENTITY_SUBKEY)?;
+    let puk = derive_shared_public(puk_seed, foks_proto::ENTITY_PUK_VERIFY)?;
+    let mut uid_bytes = puk.verify_key.as_bytes().to_vec();
+    uid_bytes[0] = foks_proto::ENTITY_USER;
+    let uid = EntityId::from_bytes(uid_bytes)?;
+    let username_object = encode(&Value::Array(vec![
+        Value::Text(input.normalized_username.to_vec()),
+        Value::Unsigned(input.username_sequence),
+    ]))?;
+    let label = &input.device_name.label;
+    let device_label_object = encode(&Value::Array(vec![
+        Value::Unsigned(label.device_type.protocol_value()),
+        Value::Text(label.normalized_name.clone()),
+        Value::Unsigned(label.serial),
+    ]))?;
+    let unsigned = UnsignedUserLink::yubi_eldest(&YubiEldestPublic {
+        host: &host,
+        uid: &uid,
+        device: &parent.id,
+        subkey: &subkey.id,
+        device_hepk_fingerprint: hepk_fingerprint(&parent.hepk)?,
+        puk_verify_key: &puk.verify_key,
+        puk_hepk_fingerprint: hepk_fingerprint(&puk.hepk)?,
+        root: input.root,
+        time: input.time,
+        next_location_commitment: prefixed_hash(
+            TREE_LOCATION_TYPE_ID,
+            &encode(&Value::Binary(input.next_tree_location.to_vec()))?,
+        ),
+        username_commitment: commitment(
+            NAME_COMMITMENT_TYPE_ID,
+            &username_object,
+            &input.username_commitment_key,
+        ),
+        device_name_commitment: commitment(
+            DEVICE_LABEL_TYPE_ID,
+            &device_label_object,
+            &input.device_name.commitment_key,
+        ),
+        subchain_location_commitment: prefixed_hash(
+            TREE_LOCATION_TYPE_ID,
+            &encode(&Value::Binary(input.subchain_tree_location.to_vec()))?,
+        ),
+    })?;
+    let puk_signature = sign_seed_typed(
+        puk_seed,
+        LINK_OUTER_V1_TYPE_ID,
+        &unsigned.signing_bytes(&[])?,
+    )?;
+    let subkey_signature = sign_seed_typed(
+        subkey_seed,
+        LINK_OUTER_V1_TYPE_ID,
+        &unsigned.signing_bytes(std::slice::from_ref(&puk_signature))?,
+    )?;
+    let prefix = [puk_signature, subkey_signature];
+    let parent_signature = sign_yubi_typed(
+        device,
+        LINK_OUTER_V1_TYPE_ID,
+        &unsigned.signing_bytes(&prefix)?,
+    )?;
+    Ok(YubiEldestMaterial {
+        uid,
+        device: parent,
+        subkey,
+        puk,
+        link: unsigned.finish(vec![prefix[0].clone(), prefix[1].clone(), parent_signature])?,
+    })
+}
+
 pub fn derive_shared_public(seed: &SecretSeed, entity_type: u8) -> Result<SharedPublicMaterial> {
     let device = derive_public_material(seed, entity_type)?;
     Ok(SharedPublicMaterial {
@@ -2339,6 +2660,65 @@ pub fn seal_initial_puk_box(
     .map_err(Into::into)
 }
 
+/// Seals the initial owner PUK to a Yubi parent using its P-256 self-DH and
+/// host-derived ML-KEM key. No parent private key leaves the provider.
+pub fn seal_initial_yubi_puk_box(
+    host: &EntityId,
+    parent: &dyn YubiDevice,
+    puk_seed: &SecretSeed,
+    randomness: InitialPukBoxRandomness,
+) -> Result<SharedKeyBoxSet> {
+    let host = host.clone().require_type(foks_proto::ENTITY_HOST)?;
+    if parent.entity_id().entity_type() != foks_proto::ENTITY_YUBI {
+        return Err(Error::WrongReceiver);
+    }
+    let receiver_mlkem = ml_kem_768::EncapsulationKey::new_from_slice(parent.hepk().mlkem768())
+        .map_err(|_| Error::MlKem)?;
+    let (kem_ciphertext, kem_shared) =
+        receiver_mlkem.encapsulate_deterministic(&ml_kem::B32::from(randomness.kem_message));
+    let sender_dh = parent.hepk().p256().copied().ok_or(Error::HybridBox)?;
+    let dh_shared = parent.derive_dh_shared(&DhPublicKey::P256(sender_dh))?;
+    let payload = hybrid_key_derivation_payload(
+        kem_shared.as_slice(),
+        dh_shared.as_slice(),
+        parent.hepk(),
+        &DhPublicKey::P256(sender_dh),
+    )?;
+    let mut hash = <Sha3_256 as Sha3Digest>::new();
+    hash.update(HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID.to_be_bytes());
+    hash.update(payload.as_slice());
+    let key = Zeroizing::new(<[u8; 32]>::from(hash.finalize()));
+    let cleartext = shared_key_seed_plaintext(parent.entity_id(), &host, 1, Role::OWNER, puk_seed)?;
+    let mut nonce = [0u8; 24];
+    nonce[..8].copy_from_slice(&SHARED_KEY_SEED_TYPE_ID.to_be_bytes());
+    nonce[8..].copy_from_slice(&randomness.nonce);
+    let ciphertext = XSalsa20Poly1305::new(key.as_slice().into())
+        .encrypt((&nonce).into(), cleartext.as_slice())
+        .map_err(|_| Error::Decryption)?;
+    SharedKeyBoxSet::new(
+        randomness.box_id,
+        vec![SharedKeyBox {
+            generation: 1,
+            role: Role::OWNER,
+            hybrid: HybridBox {
+                kem_ciphertext: kem_ciphertext.as_slice().to_vec(),
+                dh_type: 2,
+                sender_dh: None,
+                nonce: randomness.nonce,
+                ciphertext,
+            },
+            target: SharedKeyBoxTarget {
+                entity: parent.entity_id().clone(),
+                host: None,
+                role: Role::NONE,
+                generation: 0,
+            },
+        }],
+        None,
+    )
+    .map_err(Into::into)
+}
+
 /// Public material deterministically derived by FOKS v0.1.9 from a device's
 /// 32-byte master seed.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2349,8 +2729,9 @@ pub struct DevicePublicMaterial {
 
 /// Hardware boundary required to decrypt FOKS hybrid boxes.
 ///
-/// Yubi implementations retain the P-256 and ML-KEM private keys. Only the
-/// resulting 32-byte shared secrets cross this interface.
+/// A v0.1.9 Yubi implementation retains its P-256 private keys on-card. Its
+/// ML-KEM key is deterministically derived in host memory from a P-256
+/// self-DH secret; only the derived shared secrets cross this interface.
 pub trait HybridSecretDecapsulator {
     fn entity_id(&self) -> &EntityId;
     fn hepk(&self) -> &Hepk;
@@ -2362,12 +2743,153 @@ pub trait HybridSecretDecapsulator {
 ///
 /// `sign_sha512_256` receives the already hashed 32-byte FOKS signature
 /// payload and returns an ASN.1 DER P-256 ECDSA signature. Implementations
-/// should keep the P-256 and ML-KEM private keys inside the hardware provider.
+/// must keep the P-256 private key inside the hardware provider. The v0.1.9
+/// compatibility construction necessarily materializes derived ML-KEM state
+/// in the process and must not be described as hardware-native PQ security.
 pub trait YubiDevice: HybridSecretDecapsulator {
+    fn pq_key_id(&self) -> [u8; 32];
     fn sign_sha512_256(&self, digest: &[u8; 32]) -> Result<Vec<u8>>;
 }
 
-fn sign_yubi_typed(
+/// Public v0.1.9 material for one two-slot Yubi credential.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct YubiPublicMaterial {
+    pub device: DevicePublicMaterial,
+    pub pq_key_id: [u8; 32],
+}
+
+/// Derives the v0.1.9 `YubiPQKeyID`, a SHA-512/256 typed hash of the
+/// compressed public key in the second PIV slot.
+pub fn yubi_pq_key_id(compressed_public_key: &[u8; 33]) -> Result<[u8; 32]> {
+    let encoded = encode(&Value::Binary(compressed_public_key.to_vec()))?;
+    Ok(prefixed_hash(
+        foks_proto::ECDSA_COMPRESSED_PUBLIC_KEY_TYPE_ID,
+        &encoded,
+    ))
+}
+
+/// Builds the exact P-256 + ML-KEM HEPK used by v0.1.9. `pq_self_secret` is
+/// the raw 32-byte x-coordinate produced by ECDH of the PQ slot with itself.
+pub fn derive_yubi_public_material(
+    signing_public_key: [u8; 33],
+    pq_public_key: [u8; 33],
+    pq_self_secret: [u8; 32],
+) -> Result<YubiPublicMaterial> {
+    P256VerifyingKey::from_sec1_bytes(&signing_public_key).map_err(|_| Error::PublicKey)?;
+    P256VerifyingKey::from_sec1_bytes(&pq_public_key).map_err(|_| Error::PublicKey)?;
+    let mut id = Vec::with_capacity(34);
+    id.push(foks_proto::ENTITY_YUBI);
+    id.extend_from_slice(&signing_public_key);
+    let id = EntityId::from_bytes(id)?;
+    let seed = SecretSeed::new(pq_self_secret);
+    let mlkem_seed = Zeroizing::new(derive_mlkem_seed(&seed)?);
+    let kem_seed = ml_kem::Seed::try_from(mlkem_seed.as_slice()).map_err(|_| Error::DeviceKey)?;
+    let decapsulation = ml_kem_768::DecapsulationKey::from_seed(kem_seed);
+    let hepk = Hepk::yubi(
+        signing_public_key,
+        decapsulation.encapsulation_key().to_bytes().to_vec(),
+    )?;
+    Ok(YubiPublicMaterial {
+        device: DevicePublicMaterial { id, hepk },
+        pq_key_id: yubi_pq_key_id(&pq_public_key)?,
+    })
+}
+
+/// Decapsulates the host-derived ML-KEM key for a v0.1.9 Yubi credential.
+pub fn yubi_mlkem_decapsulate(
+    pq_self_secret: [u8; 32],
+    ciphertext: &[u8],
+) -> Result<Zeroizing<[u8; 32]>> {
+    software_mlkem_decapsulate(&SecretSeed::new(pq_self_secret), ciphertext)
+}
+
+/// Caller-controlled randomness for a Yubi subkey recovery box.
+pub struct YubiSubkeyBoxRandomness {
+    pub kem_message: [u8; 32],
+    pub nonce: [u8; 16],
+}
+
+/// Seals the delegated Ed25519 subkey to the Yubi parent. The parent performs
+/// P-256 self-DH while ML-KEM encapsulation uses only public material.
+pub fn seal_yubi_subkey_box(
+    parent: &dyn YubiDevice,
+    subkey_seed: &SecretSeed,
+    randomness: YubiSubkeyBoxRandomness,
+) -> Result<HybridBox> {
+    let subkey = derive_subkey_id(subkey_seed)?;
+    let receiver_mlkem = ml_kem_768::EncapsulationKey::new_from_slice(parent.hepk().mlkem768())
+        .map_err(|_| Error::MlKem)?;
+    let (kem_ciphertext, kem_shared) =
+        receiver_mlkem.encapsulate_deterministic(&ml_kem::B32::from(randomness.kem_message));
+    let sender = parent.hepk().p256().copied().ok_or(Error::HybridBox)?;
+    let dh_shared = parent.derive_dh_shared(&DhPublicKey::P256(sender))?;
+    let payload = hybrid_key_derivation_payload(
+        kem_shared.as_slice(),
+        dh_shared.as_slice(),
+        parent.hepk(),
+        &DhPublicKey::P256(sender),
+    )?;
+    let mut hash = <Sha3_256 as Sha3Digest>::new();
+    hash.update(HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID.to_be_bytes());
+    hash.update(payload.as_slice());
+    let key = Zeroizing::new(<[u8; 32]>::from(hash.finalize()));
+    let cleartext = Zeroizing::new(encode(&Value::Array(vec![
+        Value::Binary(parent.entity_id().as_bytes().to_vec()),
+        Value::Binary(subkey.as_bytes().to_vec()),
+        Value::Binary(subkey_seed.as_slice().to_vec()),
+    ]))?);
+    let mut nonce = [0u8; 24];
+    nonce[..8].copy_from_slice(&SUBKEY_SEED_TYPE_ID.to_be_bytes());
+    nonce[8..].copy_from_slice(&randomness.nonce);
+    let ciphertext = XSalsa20Poly1305::new(key.as_slice().into())
+        .encrypt((&nonce).into(), cleartext.as_slice())
+        .map_err(|_| Error::Decryption)?;
+    Ok(HybridBox {
+        kem_ciphertext: kem_ciphertext.as_slice().to_vec(),
+        dh_type: 2,
+        sender_dh: None,
+        nonce: randomness.nonce,
+        ciphertext,
+    })
+}
+
+/// Encrypts a Yubi PIV management key under the current FOKS PUK. The
+/// generation and role travel beside the box and must be checked by callers
+/// against the PUK used here.
+pub fn seal_yubi_management_key(
+    puk_seed: &SecretSeed,
+    payload: &foks_proto::YubiManagementKeyBoxPayload,
+    nonce: [u8; 16],
+) -> Result<SecretBox> {
+    let key = derive_key(puk_seed, 2, None)?;
+    let cleartext = Zeroizing::new(payload.encoded()?);
+    Ok(SecretBox {
+        nonce,
+        ciphertext: seal_typed_secretbox(
+            key.as_bytes(),
+            foks_proto::YUBI_MANAGEMENT_KEY_BOX_PAYLOAD_TYPE_ID,
+            &nonce,
+            cleartext.as_slice(),
+            false,
+        )?,
+    })
+}
+
+pub fn open_yubi_management_key(
+    puk_seed: &SecretSeed,
+    boxed: &SecretBox,
+) -> Result<foks_proto::YubiManagementKeyBoxPayload> {
+    let key = derive_key(puk_seed, 2, None)?;
+    let cleartext = open_typed_secretbox(
+        key.as_bytes(),
+        foks_proto::YUBI_MANAGEMENT_KEY_BOX_PAYLOAD_TYPE_ID,
+        &boxed.nonce,
+        &boxed.ciphertext,
+    )?;
+    foks_proto::YubiManagementKeyBoxPayload::decode(&cleartext).map_err(Into::into)
+}
+
+pub fn sign_yubi_typed(
     signer: &dyn YubiDevice,
     type_id: u64,
     canonical_object: &[u8],
@@ -3797,6 +4319,10 @@ mod tests {
         }
 
         impl YubiDevice for FixtureYubi {
+            fn pq_key_id(&self) -> [u8; 32] {
+                [0; 32]
+            }
+
             fn sign_sha512_256(&self, digest: &[u8; 32]) -> Result<Vec<u8>> {
                 let signature: P256Signature = self
                     .signing

@@ -25,6 +25,7 @@ mod team;
 mod team_names;
 mod transaction;
 mod user_mutation;
+mod yubi;
 
 pub use capabilities::TeamAdminAuthoritySnapshot;
 pub use capabilities::TeamViewAuthoritySnapshot;
@@ -65,3 +66,4 @@ pub use user_mutation::{
     AddedCredential, ParcelMutation, SeedChainMutation, SharedKeyMutation, UserMutation,
     UserMutationFailurePoint,
 };
+pub use yubi::{SubkeyChallengeResult, YubiManagementKeySnapshot};

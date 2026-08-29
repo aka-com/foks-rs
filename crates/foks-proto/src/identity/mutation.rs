@@ -5,8 +5,9 @@ use super::{
 };
 use crate::{
     array, boolean, decode, encode, entity, expect_unsigned, fixed_blob, list, list_or_null, role,
-    text, unsigned, EntityId, Error, Result, Role, SecretSeed, SeedChainBox, SharedKeyBoxSet,
-    TeamRemovalKeyBox, Value, ENTITY_AD_HOC_TEAM, ENTITY_HOST, ENTITY_NAMED_TEAM, ENTITY_USER,
+    text, unsigned, EntityId, Error, HybridBox, Result, Role, SecretSeed, SeedChainBox,
+    SharedKeyBoxSet, TeamRemovalKeyBox, Value, ENTITY_AD_HOC_TEAM, ENTITY_HOST, ENTITY_NAMED_TEAM,
+    ENTITY_USER,
 };
 use zeroize::Zeroizing;
 
@@ -508,7 +509,7 @@ fn base62_decoded_len(characters: usize) -> usize {
 
 /// Owned, strictly decoded v0.1.9 software-signup request.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DecodedSoftwareSignupArgument {
+pub struct DecodedSignupArgument {
     pub username_utf8: Vec<u8>,
     pub reservation: UsernameReservation,
     pub link: UserLink,
@@ -523,14 +524,14 @@ pub struct DecodedSoftwareSignupArgument {
     pub puk_hepk: Hepk,
     pub device_hepk: Hepk,
     pub passphrase: Option<crate::PassphraseUpdateArgument>,
+    pub subkey_box: Option<HybridBox>,
+    pub yubi_pq_hint: Option<crate::YubiSlotAndPqKeyId>,
 }
 
-impl DecodedSoftwareSignupArgument {
+impl DecodedSignupArgument {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
         let fields = array(&value, 16)?;
-        require_null(&fields[9], "signup Yubi registration")?;
-        require_null(&fields[14], "signup subkey")?;
         let host_policy = array(&fields[15], 2)?;
         expect_unsigned(&host_policy[0], "signup host policy", 0)?;
         if !matches!(host_policy[1], Value::Variant(None)) {
@@ -561,6 +562,14 @@ impl DecodedSoftwareSignupArgument {
                 Value::Null => None,
                 value => Some(crate::PassphraseUpdateArgument::from_set_value(value)?),
             },
+            subkey_box: match &fields[9] {
+                Value::Null => None,
+                value => Some(HybridBox::decode(&encode(value)?)?),
+            },
+            yubi_pq_hint: match &fields[14] {
+                Value::Null => None,
+                value => Some(crate::YubiSlotAndPqKeyId::from_value(value)?),
+            },
         })
     }
 }
@@ -577,7 +586,7 @@ fn require_null(value: &Value, kind: &'static str) -> Result<()> {
 }
 
 /// Narrow v0.1.9 signup argument for a software eldest credential. Optional
-/// Yubi, subkey, and SSO fields are intentionally fixed to absent. The
+/// Yubi and subkey fields are fixed to absent. The
 /// optional passphrase field carries an exact v0.1.9 set-passphrase request.
 pub struct SoftwareSignupArgument<'a> {
     pub username_utf8: &'a [u8],
@@ -596,45 +605,127 @@ pub struct SoftwareSignupArgument<'a> {
     pub passphrase: Option<&'a crate::PassphraseUpdateArgument>,
 }
 
+/// Exact v0.1.9 signup argument for a Yubi parent with an encrypted delegated
+/// subkey and its second-slot PQ derivation hint.
+pub struct YubiSignupArgument<'a> {
+    pub username_utf8: &'a [u8],
+    pub reservation: &'a UsernameReservation,
+    pub link: &'a UserLink,
+    pub puk_box: &'a SharedKeyBoxSet,
+    pub username_commitment_key: [u8; 16],
+    pub device_name: &'a DeviceLabelNameAndCommitmentKey,
+    pub next_tree_location: [u8; 32],
+    pub invite_code: &'a InviteCode,
+    pub email: &'a [u8],
+    pub subkey_box: &'a HybridBox,
+    pub passphrase: Option<&'a crate::PassphraseUpdateArgument>,
+    pub subchain_tree_location: [u8; 32],
+    pub self_token: [u8; 17],
+    pub puk_hepk: &'a Hepk,
+    pub device_hepk: &'a Hepk,
+    pub yubi_pq_hint: &'a crate::YubiSlotAndPqKeyId,
+}
+
+impl YubiSignupArgument<'_> {
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        signup_value(
+            self.username_utf8,
+            self.reservation,
+            self.link,
+            self.puk_box,
+            self.username_commitment_key,
+            self.device_name,
+            self.next_tree_location,
+            self.invite_code,
+            self.email,
+            Some(self.subkey_box),
+            self.passphrase,
+            self.subchain_tree_location,
+            self.self_token,
+            self.puk_hepk,
+            self.device_hepk,
+            Some(self.yubi_pq_hint),
+        )
+    }
+}
+
 impl SoftwareSignupArgument<'_> {
     pub fn encoded(&self) -> Result<Vec<u8>> {
-        let link = decode(&self.link.encoded()?)?;
-        let puk_box = decode(&self.puk_box.encoded())?;
-        let puk_hepk = decode(&self.puk_hepk.encoded()?)?;
-        let device_hepk = decode(&self.device_hepk.encoded()?)?;
-        let label = &self.device_name.label;
-        let fields = vec![
-            Value::Text(self.username_utf8.to_vec()),
-            self.reservation.to_value(),
-            link,
-            puk_box,
-            Value::Binary(self.username_commitment_key.to_vec()),
+        signup_value(
+            self.username_utf8,
+            self.reservation,
+            self.link,
+            self.puk_box,
+            self.username_commitment_key,
+            self.device_name,
+            self.next_tree_location,
+            self.invite_code,
+            self.email,
+            None,
+            self.passphrase,
+            self.subchain_tree_location,
+            self.self_token,
+            self.puk_hepk,
+            self.device_hepk,
+            None,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn signup_value(
+    username_utf8: &[u8],
+    reservation: &UsernameReservation,
+    link: &UserLink,
+    puk_box: &SharedKeyBoxSet,
+    username_commitment_key: [u8; 16],
+    device_name: &DeviceLabelNameAndCommitmentKey,
+    next_tree_location: [u8; 32],
+    invite_code: &InviteCode,
+    email: &[u8],
+    subkey_box: Option<&HybridBox>,
+    passphrase: Option<&crate::PassphraseUpdateArgument>,
+    subchain_tree_location: [u8; 32],
+    self_token: [u8; 17],
+    puk_hepk: &Hepk,
+    device_hepk: &Hepk,
+    yubi_pq_hint: Option<&crate::YubiSlotAndPqKeyId>,
+) -> Result<Vec<u8>> {
+    let link = decode(&link.encoded()?)?;
+    let puk_box = decode(&puk_box.encoded())?;
+    let puk_hepk = decode(&puk_hepk.encoded()?)?;
+    let device_hepk = decode(&device_hepk.encoded()?)?;
+    let label = &device_name.label;
+    let fields = vec![
+        Value::Text(username_utf8.to_vec()),
+        reservation.to_value(),
+        link,
+        puk_box,
+        Value::Binary(username_commitment_key.to_vec()),
+        Value::Array(vec![
             Value::Array(vec![
                 Value::Array(vec![
-                    Value::Array(vec![
-                        Value::Unsigned(label.device_type.protocol_value()),
-                        Value::Text(label.normalized_name.clone()),
-                        Value::Unsigned(label.serial),
-                    ]),
-                    Value::Unsigned(self.device_name.normalization_version),
-                    Value::Text(self.device_name.display_name.clone()),
+                    Value::Unsigned(label.device_type.protocol_value()),
+                    Value::Text(label.normalized_name.clone()),
+                    Value::Unsigned(label.serial),
                 ]),
-                Value::Binary(self.device_name.commitment_key.to_vec()),
+                Value::Unsigned(device_name.normalization_version),
+                Value::Text(device_name.display_name.clone()),
             ]),
-            Value::Binary(self.next_tree_location.to_vec()),
-            self.invite_code.to_value(),
-            Value::Text(self.email.to_vec()),
-            Value::Null,
-            self.passphrase
-                .map_or(Value::Null, crate::PassphraseUpdateArgument::to_set_value),
-            Value::Binary(self.subchain_tree_location.to_vec()),
-            Value::Binary(self.self_token.to_vec()),
-            Value::Array(vec![Value::Array(vec![puk_hepk, device_hepk])]),
-            Value::Null,
-            Value::Array(vec![Value::Unsigned(0), Value::Variant(None)]),
-        ];
-        Ok(encode(&Value::Array(fields))?)
-    }
+            Value::Binary(device_name.commitment_key.to_vec()),
+        ]),
+        Value::Binary(next_tree_location.to_vec()),
+        invite_code.to_value(),
+        Value::Text(email.to_vec()),
+        subkey_box.map_or(Value::Null, HybridBox::to_value),
+        passphrase.map_or(Value::Null, crate::PassphraseUpdateArgument::to_set_value),
+        Value::Binary(subchain_tree_location.to_vec()),
+        Value::Binary(self_token.to_vec()),
+        Value::Array(vec![Value::Array(vec![puk_hepk, device_hepk])]),
+        yubi_pq_hint.map_or(Value::Null, crate::YubiSlotAndPqKeyId::to_value),
+        Value::Array(vec![Value::Unsigned(0), Value::Variant(None)]),
+    ];
+    Ok(encode(&Value::Array(fields))?)
 }
 
 pub struct ProvisionDeviceArgument<'a> {
@@ -644,6 +735,8 @@ pub struct ProvisionDeviceArgument<'a> {
     pub next_tree_location: [u8; 32],
     pub self_token: [u8; 17],
     pub hepks: &'a [Hepk],
+    pub subkey_box: Option<&'a HybridBox>,
+    pub yubi_pq_hint: Option<&'a crate::YubiSlotAndPqKeyId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -654,14 +747,15 @@ pub struct DecodedProvisionDeviceArgument {
     pub next_tree_location: [u8; 32],
     pub self_token: [u8; 17],
     pub hepks: Vec<Hepk>,
+    pub subkey_box: Option<HybridBox>,
+    pub yubi_pq_hint: Option<crate::YubiSlotAndPqKeyId>,
 }
 
 impl DecodedProvisionDeviceArgument {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
         let fields = array(&value, 15)?;
-        require_null(&fields[4], "provisioning KEX state")?;
-        for field in &fields[7..15] {
+        for field in &fields[7..14] {
             require_null(field, "unsupported provisioning field")?;
         }
         Ok(Self {
@@ -671,6 +765,14 @@ impl DecodedProvisionDeviceArgument {
             next_tree_location: fixed_blob(&fields[3], "next tree location")?,
             self_token: fixed_blob(&fields[5], "provisioning self token")?,
             hepks: decode_hepk_set(&fields[6])?,
+            subkey_box: match &fields[4] {
+                Value::Null => None,
+                value => Some(HybridBox::decode(&encode(value)?)?),
+            },
+            yubi_pq_hint: match &fields[14] {
+                Value::Null => None,
+                value => Some(crate::YubiSlotAndPqKeyId::from_value(value)?),
+            },
         })
     }
 }
@@ -1240,7 +1342,7 @@ impl ProvisionDeviceArgument<'_> {
                 Value::Binary(self.device_name.commitment_key.to_vec()),
             ]),
             Value::Binary(self.next_tree_location.to_vec()),
-            Value::Null,
+            self.subkey_box.map_or(Value::Null, HybridBox::to_value),
             Value::Binary(self.self_token.to_vec()),
             Value::Array(vec![Value::Array(hepks)]),
             // Positions 7 through 13 are retained by the v0.1.9 wire
@@ -1253,7 +1355,8 @@ impl ProvisionDeviceArgument<'_> {
             Value::Null,
             Value::Null,
             // Position 14 is the optional YubiKey PQ hint.
-            Value::Null,
+            self.yubi_pq_hint
+                .map_or(Value::Null, crate::YubiSlotAndPqKeyId::to_value),
         ]))?)
     }
 }
