@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 17;
+pub(crate) const VERSION: u32 = 18;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -215,7 +215,7 @@ CREATE TABLE team_mutation_operations (
     team_id BLOB NOT NULL CHECK (length(team_id) = 33),
     expected_seqno INTEGER NOT NULL CHECK (expected_seqno > 0),
     request_hash BLOB NOT NULL CHECK (length(request_hash) = 32),
-    state INTEGER NOT NULL CHECK (state BETWEEN 1 AND 5),
+    state INTEGER NOT NULL CHECK (state BETWEEN 1 AND 7),
     created_at INTEGER NOT NULL CHECK (created_at >= 0),
     updated_at INTEGER NOT NULL CHECK (updated_at >= created_at)
 ) STRICT, WITHOUT ROWID;
@@ -225,7 +225,7 @@ CREATE TABLE team_mutation_operations (
 -- preventing a corrected mutation against the still-current head.
 CREATE UNIQUE INDEX team_mutation_reserved_position
 ON team_mutation_operations (host_id, team_id, expected_seqno)
-WHERE state IN (1, 2, 3);
+WHERE state IN (1, 2, 3, 4, 5);
 
 -- Generic public write-ahead journal shared by all client mutations. Exact
 -- retry material is referenced by an opaque key and must live in a separate
@@ -240,7 +240,7 @@ CREATE TABLE mutation_operations (
     request_hash BLOB NOT NULL CHECK (length(request_hash) = 32),
     material_ref BLOB NOT NULL CHECK (length(material_ref) BETWEEN 1 AND 255),
     material_hash BLOB NOT NULL CHECK (length(material_hash) = 32),
-    state INTEGER NOT NULL CHECK (state BETWEEN 1 AND 5),
+    state INTEGER NOT NULL CHECK (state BETWEEN 1 AND 6),
     attempt_count INTEGER NOT NULL CHECK (attempt_count >= 0),
     created_at INTEGER NOT NULL CHECK (created_at >= 0),
     updated_at INTEGER NOT NULL CHECK (updated_at >= created_at)
@@ -248,7 +248,7 @@ CREATE TABLE mutation_operations (
 
 CREATE INDEX mutation_operations_pending
 ON mutation_operations (host_id, state, updated_at)
-WHERE state IN (1, 2, 3);
+WHERE state IN (1, 2, 3, 4);
 
 -- Cross-host coordination contains only public identities, capability hashes,
 -- and local journal references. Bearer tokens and removal keys remain in the

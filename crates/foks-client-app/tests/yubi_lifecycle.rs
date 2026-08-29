@@ -5,7 +5,7 @@ use foks_client_app::{
 };
 use foks_keystore::EncryptedFileSecretStore;
 use foks_server_testkit::TestEnvironment;
-use foks_yubi::{MockYubiProvider, Pin, SlotId, YubiProvider as _};
+use foks_yubi::{MockYubiProvider, Pin, PinRetryConfiguration, SlotId, YubiProvider as _};
 
 #[test]
 fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocation() {
@@ -71,6 +71,7 @@ fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocat
                     card: signup_card,
                     signing_slot: SlotId::new(0x82)?,
                     pq_slot: SlotId::new(0x83)?,
+                    retry_configuration: None,
                 },
                 Pin::new("123456")?,
                 &signup_provider,
@@ -84,6 +85,24 @@ fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocat
                 &signup_provider,
                 &mut vault,
             )?;
+            let changed = Passphrase::new("hardware-only rotated recovery phrase")?;
+            let report = session.change_yubi_passphrase(
+                "hardware-signup",
+                Pin::new("123456")?,
+                changed,
+                &signup_provider,
+                &mut vault,
+            )?;
+            assert_eq!(report.generation, 2);
+            assert!(report.verified);
+            let verified = session.verify_yubi_passphrase(
+                "hardware-signup",
+                Pin::new("123456")?,
+                Passphrase::new("hardware-only rotated recovery phrase")?,
+                &signup_provider,
+                &mut vault,
+            )?;
+            assert_eq!(verified.generation, 2);
             let resumed_signup = session.resume_yubi_account(
                 "hardware-signup",
                 Pin::new("123456")?,
@@ -101,6 +120,11 @@ fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocat
                     card,
                     signing_slot: SlotId::new(0x82)?,
                     pq_slot: SlotId::new(0x83)?,
+                    retry_configuration: Some(PinRetryConfiguration::new(
+                        Pin::new("12345678")?,
+                        5,
+                        4,
+                    )?),
                 },
                 Pin::new("123456")?,
                 &provider,
@@ -124,7 +148,7 @@ fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocat
                 session
                     .yubi_pin_status("hardware", &provider, &mut vault)?
                     .remaining,
-                3
+                5
             );
             session.sync_yubi_account("hardware", Pin::new("123456")?, &provider, &mut vault)?;
             let recovered = session.recover_yubi_subkey(
@@ -144,20 +168,6 @@ fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocat
                         &mut vault,
                     )?
                     .management_enrolled
-            );
-            assert_eq!(
-                session
-                    .configure_yubi_retries(
-                        "hardware",
-                        Pin::new("123456")?,
-                        Pin::new("12345678")?,
-                        5,
-                        4,
-                        &provider,
-                        &mut vault,
-                    )?
-                    .remaining,
-                5
             );
             assert_eq!(
                 session

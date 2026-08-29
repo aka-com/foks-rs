@@ -21,11 +21,15 @@ pub enum Error {
     #[error("YubiKey management policy rejected the operation: {0}")]
     Policy(&'static str),
     #[error(
-        "YubiKey retry counts changed but the PIN could not be restored; PIN and PUK remain at their factory defaults"
+        "YubiKey retry-count update outcome is unknown; PIN and PUK may be at their factory defaults and no FOKS keys were generated"
+    )]
+    RetryUpdateUnknown,
+    #[error(
+        "YubiKey retry counts changed but PIN restoration could not be confirmed; PIN and PUK may remain at their factory defaults and no FOKS keys were generated"
     )]
     RetryPinRestore,
     #[error(
-        "YubiKey retry counts and PIN changed but the PUK could not be restored; the PUK remains at its factory default"
+        "YubiKey retry counts and PIN changed but PUK restoration could not be confirmed; the PUK may remain at its factory default and no FOKS keys were generated"
     )]
     RetryPukRestore,
     #[error("YubiKey provider failed: {0}")]

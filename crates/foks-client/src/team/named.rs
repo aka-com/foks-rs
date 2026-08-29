@@ -279,20 +279,7 @@ impl FoksClient {
             &normalized,
             secrets,
         )?;
-        if operation.state == TeamMutationState::Prepared {
-            hard_store.advance_team_mutation(
-                &operation_id,
-                TeamMutationState::Submitted,
-                now_microseconds()?,
-            )?;
-        }
-        if operation.state != TeamMutationState::Verified {
-            hard_store.advance_team_mutation(
-                &operation_id,
-                TeamMutationState::Verified,
-                now_microseconds()?,
-            )?;
-        }
+        super::membership::finish_team_mutation_journal(&mut hard_store, &operation_id)?;
         Ok(CreatedNamedTeam {
             operation_id,
             team,
@@ -493,6 +480,11 @@ impl FoksClient {
         };
         let mut hard_store = HardStateStore::open(&host.database_path)?;
         hard_store.record_team_mutation(&operation)?;
+        hard_store.advance_team_mutation(
+            &operation_id,
+            TeamMutationState::Submitting,
+            now_microseconds()?,
+        )?;
         let post = || {
             self.call_void_with_material(host, &host.user, &request, auth_seed, certificate_chain)
         };
@@ -512,7 +504,7 @@ impl FoksClient {
             )?;
         }
         if matches!(
-            post_error,
+            &post_error,
             Some(Error::Rpc(foks_rpc::Error::RemoteStatus { .. }))
         ) {
             hard_store.advance_team_mutation(
@@ -521,6 +513,13 @@ impl FoksClient {
                 now_microseconds()?,
             )?;
             return Err(post_error.expect("matched above"));
+        }
+        if post_error.is_some() {
+            hard_store.advance_team_mutation(
+                &operation_id,
+                TeamMutationState::SubmissionUnknown,
+                now_microseconds()?,
+            )?;
         }
         let authenticated = match self.wait_for_named_team(
             host,
@@ -537,23 +536,7 @@ impl FoksClient {
             Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
             Err(error) => return Err(error),
         };
-        let persisted = hard_store
-            .team_mutation(&operation_id)?
-            .ok_or(Error::OperationBinding(
-                "named-team operation disappeared after submission",
-            ))?;
-        if persisted.state == TeamMutationState::Prepared {
-            hard_store.advance_team_mutation(
-                &operation_id,
-                TeamMutationState::Submitted,
-                now_microseconds()?,
-            )?;
-        }
-        hard_store.advance_team_mutation(
-            &operation_id,
-            TeamMutationState::Verified,
-            now_microseconds()?,
-        )?;
+        super::membership::finish_team_mutation_journal(&mut hard_store, &operation_id)?;
         Ok(CreatedNamedTeam {
             operation_id,
             team: material.team,

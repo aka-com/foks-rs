@@ -25,8 +25,9 @@ external checkpoint and hard-state database, and requires the profile to be
 probed again. It is not a way to preserve an existing rollback trust history.
 
 Use `--json` for automation. `profile`, `account`, `passphrase`, `kv`, `jobs`,
-`device`, `recovery`, and `team` each provide their own `--help`. Signup can
-take matching `--passphrase-file` and `--passphrase-confirmation-file` inputs;
+`device`, `recovery`, and `team` each provide their own `--help`. Signup takes
+an optional private `--invite-file` and can take matching `--passphrase-file`
+and `--passphrase-confirmation-file` inputs;
 the `passphrase` command exposes set, change, and verify. Passphrase inputs must
 be private regular files containing one bounded UTF-8 line. Output destinations
 for KV downloads and recovery phrases must be new private files; existing

@@ -1,13 +1,12 @@
 //! Software-device provisioning, revocation, and PUK rotation.
 
 use super::{
-    derive_device_public, derive_shared_verify_key, encode_provision_device_request,
-    encode_revoke_device_request, fix_device_name, make_software_provision_link,
-    make_software_puk_rotation_link, make_software_revoke_link, normalize_device_name,
-    now_microseconds, random_bytes, seal_puk_seed_chain_box, seal_software_puk_boxes,
-    AuthenticatedUserOutcome, BTreeSet, DeviceCredential, DeviceLabel,
-    DeviceLabelNameAndCommitmentKey, DevicePublicMaterial, DeviceType, Duration, EntityId, Error,
-    FoksClient, HardStateStore, MutationCoordinator, MutationDraft, MutationKind,
+    derive_device_public, encode_provision_device_request, encode_revoke_device_request,
+    fix_device_name, make_software_provision_link, make_software_puk_rotation_link,
+    make_software_revoke_link, normalize_device_name, now_microseconds, random_bytes,
+    seal_puk_seed_chain_box, seal_software_puk_boxes, AuthenticatedUserOutcome, DeviceCredential,
+    DeviceLabel, DeviceLabelNameAndCommitmentKey, DevicePublicMaterial, DeviceType, Duration,
+    EntityId, Error, FoksClient, HardStateStore, MutationCoordinator, MutationDraft, MutationKind,
     MutationOperation, MutationState, PassphraseUpdateArgument, PinnedHost, ProtectedMutationStore,
     ProvisionDeviceArgument, PukBoxRandomness, PukRotation, Result, RevokeDeviceArgument, Role,
     SecretSeed, SoftwareProvisionInput, SoftwarePukBoxInput, UserMutationBase, VerifiedUserState,
@@ -50,6 +49,7 @@ pub struct SoftwareDeviceProvisionRequest {
 }
 
 pub struct ProvisionedSoftwareDevice {
+    pub operation_id: Option<[u8; 16]>,
     pub credential: DeviceCredential,
     pub authenticated: AuthenticatedUserOutcome,
 }
@@ -79,6 +79,7 @@ pub struct YubiDeviceProvisionRequest {
 }
 
 pub struct ProvisionedYubiDevice<'a> {
+    pub operation_id: [u8; 16],
     pub credential: YubiCredential<'a>,
     pub authenticated: AuthenticatedUserOutcome,
 }
@@ -96,6 +97,30 @@ pub struct UserPukRotation {
 /// passphrase annex. The client still confirms the absence with the server so
 /// a stale assertion cannot orphan configured passphrase recovery material.
 pub struct NoPassphraseConfigured;
+
+fn validate_fresh_puk_seeds<'a>(
+    verified: &VerifiedUserState,
+    seeds: impl IntoIterator<Item = &'a SecretSeed>,
+) -> Result<()> {
+    let mut proposed = Vec::new();
+    for seed in seeds {
+        let public = foks_crypto::derive_shared_public(seed, ENTITY_PUK_VERIFY)?;
+        if verified.shared_key_history().iter().any(|historical| {
+            historical.verify_key == public.verify_key || historical.hepk == public.hepk
+        }) || proposed
+            .iter()
+            .any(|other: &foks_crypto::SharedPublicMaterial| {
+                other.verify_key == public.verify_key || other.hepk == public.hepk
+            })
+        {
+            return Err(Error::AccountRequest(
+                "replacement PUK reuses current or historical key material",
+            ));
+        }
+        proposed.push(public);
+    }
+    Ok(())
+}
 
 impl FoksClient {
     /// Provisions one software device through the exact v0.1.9 user-chain
@@ -149,7 +174,7 @@ impl FoksClient {
                 .ok_or(Error::AccountRequest(
                     "new role requires a generation-1 PUK",
                 ))?;
-            let _ = derive_shared_verify_key(seed, ENTITY_PUK_VERIFY)?;
+            validate_fresh_puk_seeds(&authenticated.verified, std::iter::once(seed))?;
             (seed, 1)
         };
         let display_name = fix_device_name(&request.device_name);
@@ -277,8 +302,10 @@ impl FoksClient {
                 .iter()
                 .any(|device| device.id == new_device.id && device.role == request.role)
         })?;
-        MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
+        MutationCoordinator::new(&host.database_path, protected_store)
+            .remote_verified(&operation_id)?;
         Ok(ProvisionedSoftwareDevice {
+            operation_id: Some(operation_id),
             credential,
             authenticated,
         })
@@ -441,17 +468,18 @@ impl FoksClient {
                     && device.role == request.role
             })
         })?;
-        MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
+        MutationCoordinator::new(&host.database_path, protected_store)
+            .remote_verified(&operation_id)?;
         Ok(ProvisionedYubiDevice {
+            operation_id,
             credential,
             authenticated,
         })
     }
 
     /// Reconciles a Yubi provision from application-durable locator and
-    /// subkey material. A verified terminal journal is accepted because the
-    /// core can erase its retry request before the application commits the
-    /// final credential record.
+    /// subkey material. A remotely verified journal remains recoverable until
+    /// the application stores the final credential and acknowledges it.
     #[allow(clippy::too_many_arguments)]
     pub fn resume_yubi_device_provision<'a>(
         &self,
@@ -478,9 +506,12 @@ impl FoksClient {
                 "Yubi provision journal binding changed",
             ));
         }
-        let already_verified = operation.state == MutationState::Verified;
+        let already_verified = matches!(
+            operation.state,
+            MutationState::RemoteVerified | MutationState::Finalized
+        );
         let post_error = match operation.state {
-            MutationState::Verified => None,
+            MutationState::RemoteVerified | MutationState::Finalized => None,
             MutationState::Prepared
             | MutationState::Submitting
             | MutationState::SubmissionUnknown => {
@@ -521,9 +552,10 @@ impl FoksClient {
         })?;
         if !already_verified {
             MutationCoordinator::new(&host.database_path, protected_store)
-                .verified(&operation_id)?;
+                .remote_verified(&operation_id)?;
         }
         Ok(ProvisionedYubiDevice {
+            operation_id,
             credential,
             authenticated,
         })
@@ -591,11 +623,13 @@ impl FoksClient {
                     rotation.role != *role
                         || authenticated.verified.shared_key(*role).is_none_or(|key| {
                             rotation.previous_generation != key.generation
-                                || derive_shared_verify_key(
+                                || foks_crypto::derive_shared_public(
                                     &rotation.previous_seed,
                                     ENTITY_PUK_VERIFY,
                                 )
-                                .map_or(true, |verify| verify != key.verify_key)
+                                .map_or(true, |public| {
+                                    public.verify_key != key.verify_key || public.hepk != key.hepk
+                                })
                         })
                 })
         {
@@ -603,6 +637,10 @@ impl FoksClient {
                 "revocation PUK rotation set is incomplete",
             ));
         }
+        validate_fresh_puk_seeds(
+            &authenticated.verified,
+            rotations.iter().map(|rotation| &rotation.new_seed),
+        )?;
         let passphrase_annex = self.owner_passphrase_rotation_annex(
             host,
             signer_credential,
@@ -740,12 +778,14 @@ impl FoksClient {
             Err(error) => return Err(error),
         };
         for rotation in rotations {
-            let verify = derive_shared_verify_key(&rotation.new_seed, ENTITY_PUK_VERIFY)?;
+            let public = foks_crypto::derive_shared_public(&rotation.new_seed, ENTITY_PUK_VERIFY)?;
             if updated
                 .verified
                 .shared_key(rotation.role)
                 .is_none_or(|key| {
-                    key.generation != rotation.previous_generation + 1 || key.verify_key != verify
+                    key.generation != rotation.previous_generation + 1
+                        || key.verify_key != public.verify_key
+                        || key.hepk != public.hepk
                 })
             {
                 return Err(Error::UserBinding(
@@ -757,7 +797,8 @@ impl FoksClient {
             let stored = self.fetch_ppe_parcel(host, signer_credential)?;
             crate::passphrase::validate_committed_update(&stored, expected)?;
         }
-        MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
+        MutationCoordinator::new(&host.database_path, protected_store)
+            .remote_verified_and_finalize(&operation_id)?;
         Ok(updated)
     }
 
@@ -805,7 +846,6 @@ impl FoksClient {
                 "PUK rotation must be a complete ordered role prefix",
             ));
         }
-        let mut new_verify_keys = BTreeSet::new();
         for rotation in rotations {
             let current =
                 authenticated
@@ -814,17 +854,19 @@ impl FoksClient {
                     .ok_or(Error::UserBinding(
                         "PUK role is missing from the user chain",
                     ))?;
-            let previous_verify =
-                derive_shared_verify_key(&rotation.previous_seed, ENTITY_PUK_VERIFY)?;
-            let new_verify = derive_shared_verify_key(&rotation.new_seed, ENTITY_PUK_VERIFY)?;
+            let previous =
+                foks_crypto::derive_shared_public(&rotation.previous_seed, ENTITY_PUK_VERIFY)?;
             if rotation.previous_generation != current.generation
-                || previous_verify != current.verify_key
-                || new_verify == current.verify_key
-                || !new_verify_keys.insert(new_verify.as_bytes().to_vec())
+                || previous.verify_key != current.verify_key
+                || previous.hepk != current.hepk
             {
                 return Err(Error::AccountRequest("invalid replacement PUK material"));
             }
         }
+        validate_fresh_puk_seeds(
+            &authenticated.verified,
+            rotations.iter().map(|rotation| &rotation.new_seed),
+        )?;
         let passphrase_annex = self.owner_passphrase_rotation_annex(
             host,
             signer_credential,
@@ -959,13 +1001,15 @@ impl FoksClient {
                 let Some(expected_generation) = rotation.previous_generation.checked_add(1) else {
                     return false;
                 };
-                let Ok(expected_verify) =
-                    derive_shared_verify_key(&rotation.new_seed, ENTITY_PUK_VERIFY)
+                let Ok(expected) =
+                    foks_crypto::derive_shared_public(&rotation.new_seed, ENTITY_PUK_VERIFY)
                 else {
                     return false;
                 };
                 user.shared_key(rotation.role).is_some_and(|key| {
-                    key.generation == expected_generation && key.verify_key == expected_verify
+                    key.generation == expected_generation
+                        && key.verify_key == expected.verify_key
+                        && key.hepk == expected.hepk
                 })
             })
         }) {
@@ -977,7 +1021,8 @@ impl FoksClient {
             let stored = self.fetch_ppe_parcel(host, signer_credential)?;
             crate::passphrase::validate_committed_update(&stored, expected)?;
         }
-        MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
+        MutationCoordinator::new(&host.database_path, protected_store)
+            .remote_verified_and_finalize(&operation_id)?;
         Ok(updated)
     }
 
@@ -1073,8 +1118,10 @@ impl FoksClient {
                 .iter()
                 .any(|device| device.id == new_device.id && device.role == role)
         })?;
-        MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
+        MutationCoordinator::new(&host.database_path, protected_store)
+            .remote_verified(&operation_id)?;
         Ok(ProvisionedSoftwareDevice {
+            operation_id: Some(operation_id),
             credential,
             authenticated,
         })
@@ -1109,20 +1156,24 @@ impl FoksClient {
                     let Some(generation) = rotation.previous_generation.checked_add(1) else {
                         return false;
                     };
-                    let Ok(verify) =
-                        derive_shared_verify_key(&rotation.new_seed, ENTITY_PUK_VERIFY)
+                    let Ok(public) =
+                        foks_crypto::derive_shared_public(&rotation.new_seed, ENTITY_PUK_VERIFY)
                     else {
                         return false;
                     };
-                    user.shared_key(rotation.role)
-                        .is_some_and(|key| key.generation == generation && key.verify_key == verify)
+                    user.shared_key(rotation.role).is_some_and(|key| {
+                        key.generation == generation
+                            && key.verify_key == public.verify_key
+                            && key.hepk == public.hepk
+                    })
                 })
         }) {
             Ok(updated) => updated,
             Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
             Err(error) => return Err(error),
         };
-        MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
+        MutationCoordinator::new(&host.database_path, protected_store)
+            .remote_verified_and_finalize(&operation_id)?;
         Ok(updated)
     }
 
@@ -1148,19 +1199,24 @@ impl FoksClient {
                 let Some(generation) = rotation.previous_generation.checked_add(1) else {
                     return false;
                 };
-                let Ok(verify) = derive_shared_verify_key(&rotation.new_seed, ENTITY_PUK_VERIFY)
+                let Ok(public) =
+                    foks_crypto::derive_shared_public(&rotation.new_seed, ENTITY_PUK_VERIFY)
                 else {
                     return false;
                 };
-                user.shared_key(rotation.role)
-                    .is_some_and(|key| key.generation == generation && key.verify_key == verify)
+                user.shared_key(rotation.role).is_some_and(|key| {
+                    key.generation == generation
+                        && key.verify_key == public.verify_key
+                        && key.hepk == public.hepk
+                })
             })
         }) {
             Ok(updated) => updated,
             Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
             Err(error) => return Err(error),
         };
-        MutationCoordinator::new(&host.database_path, protected_store).verified(&operation_id)?;
+        MutationCoordinator::new(&host.database_path, protected_store)
+            .remote_verified_and_finalize(&operation_id)?;
         Ok(updated)
     }
 
@@ -1215,8 +1271,10 @@ impl FoksClient {
                     protected_store,
                 )
             }
-            MutationState::Submitting | MutationState::SubmissionUnknown => Ok(None),
-            MutationState::Verified | MutationState::Rejected => {
+            MutationState::Submitting
+            | MutationState::SubmissionUnknown
+            | MutationState::RemoteVerified => Ok(None),
+            MutationState::Finalized | MutationState::Rejected => {
                 Err(Error::OperationBinding("user mutation is terminal"))
             }
         }

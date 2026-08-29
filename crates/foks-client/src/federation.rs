@@ -66,7 +66,77 @@ pub struct FederatedTeamAdmissionOutcome {
     pub added: AddedRemoteTeamMember,
 }
 
+/// Durable identities needed to refresh an already-admitted remote team's
+/// view capability without re-entering the admission saga.
+pub struct FederatedTeamRefreshRequest<'a> {
+    pub remote_host: &'a PinnedHost,
+    pub remote_credential: &'a DeviceCredential,
+    pub remote_team: &'a EntityId,
+    pub local_host: &'a PinnedHost,
+    pub local_credential: &'a DeviceCredential,
+    pub local_team: &'a EntityId,
+}
+
 impl FoksClient {
+    /// Renews the existing remote-view bearer and proves that the local team
+    /// still stores that same capability. This never creates or resumes a
+    /// federation admission saga and never edits the local team chain.
+    pub fn refresh_federated_team_capability(
+        &self,
+        request: &FederatedTeamRefreshRequest<'_>,
+    ) -> Result<RemoteTeamOutcome> {
+        if request.remote_host.host_id() == request.local_host.host_id()
+            || request.remote_team == request.local_team
+        {
+            return Err(Error::TeamRequest(
+                "federation refresh hosts or parties are invalid",
+            ));
+        }
+        request
+            .local_team
+            .clone()
+            .require_type(foks_proto::ENTITY_NAMED_TEAM)?;
+        if !matches!(
+            request.remote_team.entity_type(),
+            foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+        ) {
+            return Err(Error::TeamRequest("remote federation party is not a team"));
+        }
+        let viewer = FqParty::new(
+            request.local_team.clone(),
+            request.local_host.host_id().clone(),
+        )?;
+        let permission = self.grant_remote_team_view(
+            request.remote_host,
+            request.remote_credential,
+            request.remote_team,
+            viewer,
+        )?;
+        let remote =
+            self.load_remote_team_and_pin(request.remote_host, request.remote_team, &permission)?;
+        let member = FqParty::new(
+            request.remote_team.clone(),
+            request.remote_host.host_id().clone(),
+        )?;
+        let recovered = self.load_remote_member_view_permissions(
+            request.local_host,
+            request.local_credential,
+            request.local_team,
+            std::slice::from_ref(&member),
+        )?;
+        let [recovered] = recovered.as_slice() else {
+            return Err(Error::OperationBinding(
+                "local team did not return the admitted remote permission",
+            ));
+        };
+        if recovered.member != member || recovered.permission != permission {
+            return Err(Error::OperationBinding(
+                "refreshed permission differs from the admitted capability",
+            ));
+        }
+        Ok(remote)
+    }
+
     /// Runs or resumes the durable cross-host admission saga. A retry first
     /// reobtains the idempotent live permission, then reconciles the local
     /// mutation journal without blindly replaying a possibly committed edit.
@@ -123,7 +193,6 @@ impl FoksClient {
             store.advance_federation_saga(
                 &operation_id,
                 FederationSagaState::RemoteVerified,
-                None,
                 now_microseconds()?,
             )?;
             saga = store
@@ -163,7 +232,6 @@ impl FoksClient {
                         store.advance_federation_saga(
                             &operation_id,
                             FederationSagaState::Rejected,
-                            None,
                             now_microseconds()?,
                         )?;
                         return Err(Error::OperationBinding(
@@ -207,7 +275,6 @@ impl FoksClient {
             store.advance_federation_saga(
                 &operation_id,
                 FederationSagaState::LocalVerified,
-                None,
                 now_microseconds()?,
             )?;
         }
@@ -235,7 +302,6 @@ impl FoksClient {
         store.advance_federation_saga(
             &operation_id,
             FederationSagaState::Completed,
-            None,
             now_microseconds()?,
         )?;
         match protected_store.remove(&crate::team::remote_addition_material_key(

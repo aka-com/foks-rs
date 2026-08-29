@@ -869,13 +869,19 @@ fn identity_snapshot_filtered(
              JOIN user_chain_heads h ON h.uid = u.uid
              JOIN user_chain_links l ON l.uid = h.uid AND l.seqno = h.seqno
              JOIN tree_locations t ON t.uid = h.uid AND t.seqno = h.seqno
-             JOIN shared_keys s ON s.uid = u.uid AND s.role_type = 3
-                 AND s.visibility = 0 AND s.generation = 1
+             JOIN shared_keys s ON s.uid = u.uid AND s.role_type = d.role_type
+                 AND s.visibility = d.visibility
+                 AND s.generation = (
+                     SELECT max(current.generation) FROM shared_keys current
+                     WHERE current.uid = d.uid AND current.role_type = d.role_type
+                       AND current.visibility = d.visibility)
              JOIN parcels p ON p.uid = u.uid AND p.device_id = d.device_id
                  AND p.role_type = s.role_type AND p.visibility = s.visibility
                  AND p.generation = s.generation
             WHERE (?1 IS NULL OR u.uid = ?1)
-              AND (?2 IS NULL OR d.device_id = ?2 OR d.subkey_id = ?2)",
+              AND (?2 IS NULL OR d.device_id = ?2 OR d.subkey_id = ?2)
+            ORDER BY d.role_type DESC, d.visibility DESC, d.device_id
+            LIMIT 1",
             rusqlite::params![uid, device_id],
             |row| {
                 Ok((

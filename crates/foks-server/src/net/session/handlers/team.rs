@@ -13,7 +13,11 @@ pub(super) trait Operations {
     ) -> Result<Vec<u8>, RpcStatus>;
     fn activate_loader(&self, argument: &[u8], principal: &Principal)
         -> Result<Vec<u8>, RpcStatus>;
-    fn load_chain(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+    fn load_chain(
+        &self,
+        argument: &[u8],
+        principal: Option<&Principal>,
+    ) -> Result<Vec<u8>, RpcStatus>;
     fn load_remote_view_tokens(
         &self,
         argument: &[u8],
@@ -76,13 +80,18 @@ impl Operations for ServerData {
         )
     }
 
-    fn load_chain(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+    fn load_chain(
+        &self,
+        argument: &[u8],
+        principal: Option<&Principal>,
+    ) -> Result<Vec<u8>, RpcStatus> {
         let database = self.read_database()?;
         let snapshot = database
             .snapshot()
             .map_err(|_| RpcStatus::TransactionRetry)?;
         crate::services::team_loader::load_chain(
             argument,
+            principal,
             &self.host()?,
             &snapshot,
             self.clock.as_ref(),
@@ -226,7 +235,9 @@ pub(super) fn response(
             call.call.argument(),
             principal.ok_or_else(permission_denied)?,
         )?),
-        RouteId::TeamLoaderLoadTeamChain => Some(operations.load_chain(call.call.argument())?),
+        RouteId::TeamLoaderLoadTeamChain => {
+            Some(operations.load_chain(call.call.argument(), principal)?)
+        }
         RouteId::TeamLoaderLoadTeamRemoteViewTokens => Some(operations.load_remote_view_tokens(
             call.call.argument(),
             principal.ok_or_else(permission_denied)?,

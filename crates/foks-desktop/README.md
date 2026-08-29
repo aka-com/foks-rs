@@ -3,7 +3,9 @@
 `foks-desktop` is a GPUI application for status, profile/account selection and
 software-account onboarding, personal KV, teams, federation, and scheduled work. Agent
 calls run off the render thread. The account form accepts optional standard or
-multi-use signup invites and an optional confirmed passphrase. The account
+multi-use signup invites and an optional confirmed passphrase. The scriptable
+backend accepts invites only through a private `--invite-file`, never process
+arguments. The account
 security form exposes passphrase set, change, and public-challenge verify; all
 secret fields are masked, non-copying, bounded to 1,024 bytes, zeroized when
 replaced or dropped, and consumed before an agent request.

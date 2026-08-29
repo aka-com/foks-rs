@@ -95,6 +95,41 @@ impl fmt::Debug for Pin {
     }
 }
 
+/// Optional retry policy applied only while preparing an unenrolled card.
+/// The PUK is retained solely long enough to restore it after the PIV retry
+/// command resets both credentials to their factory values.
+pub struct PinRetryConfiguration {
+    pub(crate) puk: Pin,
+    pub(crate) pin_attempts: u8,
+    pub(crate) puk_attempts: u8,
+}
+
+impl PinRetryConfiguration {
+    pub fn new(puk: Pin, pin_attempts: u8, puk_attempts: u8) -> Result<Self> {
+        if !(1..=15).contains(&pin_attempts) || !(1..=15).contains(&puk_attempts) {
+            return Err(crate::Error::Policy(
+                "PIN/PUK retries must be between one and fifteen",
+            ));
+        }
+        Ok(Self {
+            puk,
+            pin_attempts,
+            puk_attempts,
+        })
+    }
+}
+
+impl fmt::Debug for PinRetryConfiguration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PinRetryConfiguration")
+            .field("puk", &"<redacted>")
+            .field("pin_attempts", &self.pin_attempts)
+            .field("puk_attempts", &self.puk_attempts)
+            .finish()
+    }
+}
+
 pub struct ManagementKey([u8; 24]);
 
 impl Drop for ManagementKey {
@@ -134,15 +169,20 @@ impl fmt::Debug for ManagementKey {
 pub trait YubiProvider: Send + Sync {
     fn cards(&self) -> Result<Vec<CardId>>;
 
-    /// Generates two distinct P-256 keys. The operation may partially change
-    /// the card, so callers must durably record the returned public locator
-    /// before beginning any server mutation.
+    /// Generates two distinct P-256 keys. When retry configuration is
+    /// requested, implementations must first prove that every PIV key slot is
+    /// empty, apply and restore the PIN/PUK retry policy, and only then
+    /// generate either key. The operation may partially change the card, so
+    /// callers must durably record the returned public locator before
+    /// beginning any server mutation.
+    #[allow(clippy::too_many_arguments)]
     fn prepare(
         &self,
         card: &CardId,
         signing_slot: SlotId,
         pq_slot: SlotId,
         pin: &Pin,
+        retry_configuration: Option<&PinRetryConfiguration>,
         pin_policy: PivPolicy,
         touch_policy: PivPolicy,
     ) -> Result<PreparedYubiDevice>;

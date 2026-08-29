@@ -65,7 +65,7 @@ XChaCha20-Poly1305 records in a private directory. The master key is never
 written alongside those records.
 
 `FoksScheduler` persists due times, bounded leases, failures, and retry state in
-the public hard-state database for user refresh, federation reconciliation, and ambiguous-mutation
+the public hard-state database for user refresh, federation capability refresh, and ambiguous-mutation
 reconciliation. It deliberately owns neither an async runtime nor credentials:
 the application timer invokes `run_due` on its blocking storage worker and
 dispatches each public job identity to its protected account context. Jobs must

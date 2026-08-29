@@ -29,6 +29,24 @@ impl Drop for SecretString {
     }
 }
 
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+pub struct YubiRetryConfiguration {
+    pub puk: SecretString,
+    pub pin_attempts: u8,
+    pub puk_attempts: u8,
+}
+
+impl std::fmt::Debug for YubiRetryConfiguration {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("YubiRetryConfiguration")
+            .field("puk", &"<redacted>")
+            .field("pin_attempts", &self.pin_attempts)
+            .field("puk_attempts", &self.puk_attempts)
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Request {
     pub version: u32,
@@ -71,7 +89,7 @@ pub enum Operation {
         username: String,
         device_name: String,
         email: String,
-        invite: String,
+        invite: SecretString,
         passphrase: Option<SecretString>,
     },
     SetPassphrase {
@@ -111,6 +129,7 @@ pub enum Operation {
         signing_slot: u8,
         pq_slot: u8,
         pin: SecretString,
+        retry_configuration: Option<YubiRetryConfiguration>,
     },
     ResumeYubiAccount {
         profile: String,
@@ -127,6 +146,7 @@ pub enum Operation {
         signing_slot: u8,
         pq_slot: u8,
         pin: SecretString,
+        retry_configuration: Option<YubiRetryConfiguration>,
     },
     SyncYubiAccount {
         profile: String,
@@ -154,14 +174,6 @@ pub enum Operation {
         alias: String,
         puk: SecretString,
         new_pin: SecretString,
-    },
-    ConfigureYubiRetries {
-        profile: String,
-        alias: String,
-        pin: SecretString,
-        puk: SecretString,
-        pin_attempts: u8,
-        puk_attempts: u8,
     },
     RotateYubiManagementKey {
         profile: String,
@@ -290,6 +302,7 @@ impl std::fmt::Debug for Operation {
                 signing_slot,
                 pq_slot,
                 pin: _,
+                retry_configuration,
             } => formatter
                 .debug_struct("CreateYubiAccount")
                 .field("profile", profile)
@@ -303,6 +316,7 @@ impl std::fmt::Debug for Operation {
                 .field("signing_slot", signing_slot)
                 .field("pq_slot", pq_slot)
                 .field("pin", &"<redacted>")
+                .field("retry_configuration", retry_configuration)
                 .finish(),
             Self::ResumeYubiAccount {
                 profile,
@@ -324,6 +338,7 @@ impl std::fmt::Debug for Operation {
                 signing_slot,
                 pq_slot,
                 pin: _,
+                retry_configuration,
             } => formatter
                 .debug_struct("ProvisionYubiDevice")
                 .field("profile", profile)
@@ -335,6 +350,7 @@ impl std::fmt::Debug for Operation {
                 .field("signing_slot", signing_slot)
                 .field("pq_slot", pq_slot)
                 .field("pin", &"<redacted>")
+                .field("retry_configuration", retry_configuration)
                 .finish(),
             Self::SyncYubiAccount {
                 profile,
@@ -386,22 +402,6 @@ impl std::fmt::Debug for Operation {
                 .field("alias", alias)
                 .field("puk", &"<redacted>")
                 .field("new_pin", &"<redacted>")
-                .finish(),
-            Self::ConfigureYubiRetries {
-                profile,
-                alias,
-                pin: _,
-                puk: _,
-                pin_attempts,
-                puk_attempts,
-            } => formatter
-                .debug_struct("ConfigureYubiRetries")
-                .field("profile", profile)
-                .field("alias", alias)
-                .field("pin", &"<redacted>")
-                .field("puk", &"<redacted>")
-                .field("pin_attempts", pin_attempts)
-                .field("puk_attempts", puk_attempts)
                 .finish(),
             Self::RotateYubiManagementKey {
                 profile,

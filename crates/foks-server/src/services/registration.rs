@@ -304,6 +304,13 @@ pub(crate) fn passphrase_login(
     )
     .map_err(|_| RpcStatus::BadPassphrase)?;
     let uid = request.uid.as_bytes().to_vec();
+    let exact = request
+        .challenge
+        .encoded()
+        .map_err(|_| RpcStatus::BadPassphrase)?;
+    let hash = challenge_hash(&exact);
+    let host_bytes = host.as_bytes().to_vec();
+    let generation = key.generation().as_bytes();
     let state = writer
         .call_with_current_time(Arc::clone(clock), {
             let uid = uid.clone();
@@ -311,7 +318,7 @@ pub(crate) fn passphrase_login(
         })
         .map_err(map_passphrase_write_error)?;
     let Some(state) = state else {
-        record_bad_login(writer, clock, uid)?;
+        consume_failed_login(writer, clock, hash, uid, host_bytes, generation)?;
         return Err(RpcStatus::BadPassphrase);
     };
     let verify_key =
@@ -324,22 +331,15 @@ pub(crate) fn passphrase_login(
     )
     .is_err()
     {
-        record_bad_login(writer, clock, uid)?;
+        consume_failed_login(writer, clock, hash, uid, host_bytes, generation)?;
         return Err(RpcStatus::BadPassphrase);
     }
-    let exact = request
-        .challenge
-        .encoded()
-        .map_err(|_| RpcStatus::BadPassphrase)?;
-    let hash = challenge_hash(&exact);
-    let host = host.as_bytes().to_vec();
-    let generation = key.generation().as_bytes();
     let authenticated = writer
         .call_with_current_time(Arc::clone(clock), move |database, now| {
             Ok(database.consume_passphrase_challenge(
                 &hash,
                 &uid,
-                &host,
+                &host_bytes,
                 &generation,
                 verify_key.as_bytes(),
                 now,
@@ -358,14 +358,17 @@ pub(crate) fn passphrase_login(
     .map_err(|_| RpcStatus::TransactionRetry)
 }
 
-fn record_bad_login(
+fn consume_failed_login(
     writer: &WriterHandle,
     clock: &Arc<dyn foks_server_db::Clock>,
+    hash: [u8; 32],
     uid: Vec<u8>,
+    host: Vec<u8>,
+    generation: [u8; 16],
 ) -> Result<(), RpcStatus> {
     writer
         .call_with_current_time(Arc::clone(clock), move |database, now| {
-            database.record_bad_passphrase(&uid, now)?;
+            database.consume_failed_passphrase_challenge(&hash, &uid, &host, &generation, now)?;
             Ok(())
         })
         .map_err(map_passphrase_write_error)

@@ -19,7 +19,8 @@ pub use device::{ManagedYubiDevice, PinRetries, PreparedYubiDevice, YubiAdminist
 pub use error::{Error, Result};
 pub use mock::MockYubiProvider;
 pub use provider::{
-    CardId, ManagementKey, Pin, PivPolicy, SlotId, YubiDeviceLocator, YubiProvider,
+    CardId, ManagementKey, Pin, PinRetryConfiguration, PivPolicy, SlotId, YubiDeviceLocator,
+    YubiProvider,
 };
 
 #[cfg(feature = "hardware")]

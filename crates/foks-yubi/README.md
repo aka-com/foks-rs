@@ -9,17 +9,20 @@ The provider generates two P-256 keys in distinct empty retired-key slots,
 returns a locator bound to the card name, serial, slots, both public keys, and
 the derived PQ key ID, and revalidates that complete tuple on every reopen.
 Crypto handles require a PIN when the slot policy does. A separate
-administrative handle supports retry inspection, PIN/PUK changes, retry-policy
-changes, and management-key replacement even when the PIN is blocked. PINs,
+administrative handle supports retry inspection, PIN/PUK changes, and
+management-key replacement even when the PIN is blocked. PINs,
 PUKs, management keys, and mock-card secrets are zeroized and redacted from
 debug output.
 
 Changing PIV retry counters necessarily resets the card PIN and PUK to their
-factory values. The provider therefore verifies the supplied PIN and
-management key before the destructive command, holds the process-wide card
-lock, and restores the supplied PIN and PUK before reporting success. A card
-removal or power loss in that narrow window can leave one or both factory
-values active; the returned error identifies which recovery state applies.
+factory values. Retry configuration is therefore accepted only as part of
+initial preparation, after the provider proves every PIV key slot is empty and
+before it generates either FOKS key. The provider verifies the supplied PIN and
+factory management key, holds the process-wide card lock, and restores the
+supplied PIN and PUK before key generation. A card removal or power loss in
+that narrow window can leave one or both factory values active, but cannot
+expose an enrolled PIV credential; the returned error identifies the recovery
+state. No administrative API can change retry counts after enrollment.
 
 Hardware operations are serialized process-wide because PC/SC APDUs are
 stateful. A partially failed two-slot preparation can leave one slot

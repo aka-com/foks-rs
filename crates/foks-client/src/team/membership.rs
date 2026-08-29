@@ -568,34 +568,115 @@ impl FoksClient {
             team,
             expected_seqno,
         )?;
-        if operation.state == TeamMutationState::Prepared {
-            let material = protected_store
-                .get(&remote_addition_material_key(&operation_id))
-                .map_err(protected_material_error)?;
-            if prefixed_hash(TEAM_MUTATION_REQUEST_HASH_TYPE_ID, &material)
-                != operation.request_hash
-            {
-                return Err(Error::OperationBinding(
-                    "protected remote-team request changed",
-                ));
+        if matches!(
+            operation.state,
+            TeamMutationState::Rejected | TeamMutationState::Superseded
+        ) {
+            return Err(Error::OperationBinding("remote-team addition is terminal"));
+        }
+        if operation.state == TeamMutationState::Verified {
+            let authenticated = self.wait_for_addition(
+                host,
+                &credential.uid,
+                &credential.seed,
+                &credential.certificate_chain,
+                &authenticated_user,
+                &owner.seed,
+                team,
+                &binding,
+            )?;
+            return Ok(AddedRemoteTeamMember {
+                operation_id,
+                expected_seqno,
+                authenticated,
+            });
+        }
+
+        // A non-prepared row may represent a request whose response was lost.
+        // Reconcile the authenticated chain before replaying its exact bytes.
+        if operation.state != TeamMutationState::Prepared {
+            match self.wait_for_addition(
+                host,
+                &credential.uid,
+                &credential.seed,
+                &credential.certificate_chain,
+                &authenticated_user,
+                &owner.seed,
+                team,
+                &binding,
+            ) {
+                Ok(authenticated) => {
+                    finish_team_mutation_journal(&mut hard_store, &operation_id)?;
+                    return Ok(AddedRemoteTeamMember {
+                        operation_id,
+                        expected_seqno,
+                        authenticated,
+                    });
+                }
+                Err(error @ Error::OperationBinding(_)) => {
+                    if self.authenticated_addition_conflicts(
+                        host,
+                        &credential.uid,
+                        &credential.seed,
+                        &credential.certificate_chain,
+                        &authenticated_user,
+                        &owner.seed,
+                        team,
+                        &binding,
+                    )? {
+                        hard_store.advance_team_mutation(
+                            &operation_id,
+                            TeamMutationState::Superseded,
+                            now_microseconds()?,
+                        )?;
+                    }
+                    return Err(error);
+                }
+                Err(Error::TransitionNotObserved(_)) => {}
+                Err(error) => return Err(error),
             }
-            let response = self.call_with_material(
+        }
+
+        let material = protected_store
+            .get(&remote_addition_material_key(&operation_id))
+            .map_err(protected_material_error)?;
+        if prefixed_hash(TEAM_MUTATION_REQUEST_HASH_TYPE_ID, &material) != operation.request_hash {
+            return Err(Error::OperationBinding(
+                "protected remote-team request changed",
+            ));
+        }
+        let first_submission = operation.state == TeamMutationState::Prepared;
+        if first_submission {
+            hard_store.advance_team_mutation(
+                &operation_id,
+                TeamMutationState::Submitting,
+                now_microseconds()?,
+            )?;
+        }
+        let post_error = self
+            .call_with_material(
                 host,
                 &host.user,
                 &material,
                 &credential.seed,
                 &credential.certificate_chain,
-            );
-            match response.and_then(|response| {
+            )
+            .and_then(|response| {
                 decode_team_edit_result(&response)?;
                 Ok(())
-            }) {
-                Ok(()) => hard_store.advance_team_mutation(
-                    &operation_id,
-                    TeamMutationState::Submitted,
-                    now_microseconds()?,
-                )?,
-                Err(error @ Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) => {
+            })
+            .err();
+        let post_error = if first_submission {
+            match post_error {
+                None => {
+                    hard_store.advance_team_mutation(
+                        &operation_id,
+                        TeamMutationState::Submitted,
+                        now_microseconds()?,
+                    )?;
+                    None
+                }
+                Some(error @ Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) => {
                     hard_store.advance_team_mutation(
                         &operation_id,
                         TeamMutationState::Rejected,
@@ -603,10 +684,27 @@ impl FoksClient {
                     )?;
                     return Err(error);
                 }
-                Err(_) => {}
+                Some(error) => {
+                    hard_store.advance_team_mutation(
+                        &operation_id,
+                        TeamMutationState::SubmissionUnknown,
+                        now_microseconds()?,
+                    )?;
+                    Some(error)
+                }
             }
-        }
-        let authenticated = self.wait_for_addition(
+        } else {
+            if post_error.is_none() {
+                hard_store.advance_team_mutation(
+                    &operation_id,
+                    TeamMutationState::Submitted,
+                    now_microseconds()?,
+                )?;
+            }
+            post_error
+        };
+
+        let authenticated = match self.wait_for_addition(
             host,
             &credential.uid,
             &credential.seed,
@@ -615,7 +713,30 @@ impl FoksClient {
             &owner.seed,
             team,
             &binding,
-        )?;
+        ) {
+            Ok(authenticated) => authenticated,
+            Err(error @ Error::OperationBinding(_)) => {
+                if self.authenticated_addition_conflicts(
+                    host,
+                    &credential.uid,
+                    &credential.seed,
+                    &credential.certificate_chain,
+                    &authenticated_user,
+                    &owner.seed,
+                    team,
+                    &binding,
+                )? {
+                    hard_store.advance_team_mutation(
+                        &operation_id,
+                        TeamMutationState::Superseded,
+                        now_microseconds()?,
+                    )?;
+                }
+                return Err(error);
+            }
+            Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
+            Err(error) => return Err(error),
+        };
         finish_team_mutation_journal(&mut hard_store, &operation_id)?;
         Ok(AddedRemoteTeamMember {
             operation_id,
@@ -828,14 +949,15 @@ impl FoksClient {
         };
         let mut hard_store = HardStateStore::open(&host.database_path)?;
         if let Some(saga_id) = federation_saga_id {
-            hard_store.advance_federation_saga(
-                saga_id,
-                foks_client_db::FederationSagaState::LocalPrepared,
-                Some((binding.expected_seqno, operation_id)),
-                created_at,
-            )?;
+            hard_store.prepare_federation_local_mutation(saga_id, &operation, created_at)?;
+        } else {
+            hard_store.record_team_mutation(&operation)?;
         }
-        hard_store.record_team_mutation(&operation)?;
+        hard_store.advance_team_mutation(
+            &operation_id,
+            TeamMutationState::Submitting,
+            now_microseconds()?,
+        )?;
         let post = || {
             let response = self.call_with_material(
                 host,
@@ -863,7 +985,7 @@ impl FoksClient {
             )?;
         }
         if matches!(
-            post_error,
+            &post_error,
             Some(Error::Rpc(foks_rpc::Error::RemoteStatus { .. }))
         ) {
             hard_store.advance_team_mutation(
@@ -872,6 +994,13 @@ impl FoksClient {
                 now_microseconds()?,
             )?;
             return Err(post_error.expect("matched above"));
+        }
+        if post_error.is_some() {
+            hard_store.advance_team_mutation(
+                &operation_id,
+                TeamMutationState::SubmissionUnknown,
+                now_microseconds()?,
+            )?;
         }
         let authenticated = match self.wait_for_addition(
             host,
@@ -985,6 +1114,37 @@ impl FoksClient {
             }
         }
         Err(last_error.expect("team transition loop executes at least once"))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn authenticated_addition_conflicts(
+        &self,
+        host: &PinnedHost,
+        uid: &EntityId,
+        auth_seed: &SecretSeed,
+        certificate_chain: &[Vec<u8>],
+        actor_user: &AuthenticatedUserOutcome,
+        actor_puk_seed: &SecretSeed,
+        team: &EntityId,
+        binding: &AdditionBinding<'_>,
+    ) -> Result<bool> {
+        let authenticated = self.load_and_pin_team_with_material(
+            host,
+            uid,
+            auth_seed,
+            certificate_chain,
+            &actor_user.verified,
+            actor_puk_seed,
+            team,
+        )?;
+        if authenticated.verified.chain_seqno() < binding.expected_seqno {
+            return Ok(false);
+        }
+        match validate_addition_transition(&authenticated.verified, binding) {
+            Ok(()) => Ok(false),
+            Err(Error::OperationBinding(_)) => Ok(true),
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -1255,19 +1415,25 @@ pub(super) fn finish_team_mutation_journal(
         .ok_or(Error::OperationBinding(
             "team mutation disappeared during reconciliation",
         ))?;
-    if operation.state == TeamMutationState::Prepared {
-        store.advance_team_mutation(
-            operation_id,
-            TeamMutationState::Submitted,
-            now_microseconds()?,
-        )?;
-    }
-    if operation.state != TeamMutationState::Verified {
-        store.advance_team_mutation(
+    match operation.state {
+        TeamMutationState::Verified => {}
+        TeamMutationState::Submitting
+        | TeamMutationState::SubmissionUnknown
+        | TeamMutationState::Submitted => store.advance_team_mutation(
             operation_id,
             TeamMutationState::Verified,
             now_microseconds()?,
-        )?;
+        )?,
+        TeamMutationState::Prepared => {
+            return Err(Error::OperationBinding(
+                "prepared team mutation was never submitted",
+            ));
+        }
+        TeamMutationState::Rejected | TeamMutationState::Superseded => {
+            return Err(Error::OperationBinding(
+                "terminal team mutation cannot be verified",
+            ));
+        }
     }
     Ok(())
 }

@@ -168,7 +168,7 @@ impl HardStateStore {
                     expected_version, request_hash, material_ref, material_hash, state,
                     attempt_count, created_at, updated_at
              FROM mutation_operations
-             WHERE host_id = ?1 AND state IN (1, 2, 3)
+             WHERE host_id = ?1 AND state IN (1, 2, 3, 4)
              ORDER BY created_at, operation_id",
         )?;
         let rows = statement.query_map([host_id], |row| {
@@ -187,9 +187,9 @@ impl HardStateStore {
     }
 
     /// Finds the newest operation for an application-owned pending record,
-    /// including terminal state. Applications need the verified row to close
-    /// the small durability window between core verification and committing
-    /// their final credential record.
+    /// including final state. Applications use `RemoteVerified` to close the
+    /// durability boundary between core verification and committing their
+    /// final credential record, and may revisit `Finalized` to clean an orphan.
     pub fn latest_mutation_for_binding(
         &self,
         host_id: &[u8],
@@ -598,46 +598,7 @@ impl HardStateStore {
     }
 
     pub fn team_mutation(&self, operation_id: &[u8; 16]) -> Result<Option<TeamMutationOperation>> {
-        self.connection
-            .query_row(
-                "SELECT operation_kind, host_id, actor_id, device_id, team_id,
-                        expected_seqno, request_hash, state, created_at, updated_at
-                 FROM team_mutation_operations WHERE operation_id = ?1",
-                [operation_id.as_slice()],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, Vec<u8>>(1)?,
-                        row.get::<_, Vec<u8>>(2)?,
-                        row.get::<_, Vec<u8>>(3)?,
-                        row.get::<_, Vec<u8>>(4)?,
-                        row.get::<_, i64>(5)?,
-                        row.get::<_, Vec<u8>>(6)?,
-                        row.get::<_, i64>(7)?,
-                        row.get::<_, i64>(8)?,
-                        row.get::<_, i64>(9)?,
-                    ))
-                },
-            )
-            .optional()?
-            .map(|row| {
-                Ok(TeamMutationOperation {
-                    operation_id: *operation_id,
-                    kind: TeamMutationKind::from_sql(row.0)?,
-                    host_id: row.1,
-                    actor_id: row.2,
-                    device_id: row.3,
-                    team_id: row.4,
-                    expected_seqno: stored_unsigned("team mutation sequence", row.5)?,
-                    request_hash: row.6.try_into().map_err(|_| {
-                        Error::InvalidTeamMutation("stored request hash has the wrong length")
-                    })?,
-                    state: TeamMutationState::from_sql(row.7)?,
-                    created_at: stored_unsigned("team mutation created time", row.8)?,
-                    updated_at: stored_unsigned("team mutation updated time", row.9)?,
-                })
-            })
-            .transpose()
+        team_mutation_from_connection(&self.connection, operation_id)
     }
 
     /// Finds the unique journal row occupying one authenticated team-chain
@@ -656,8 +617,8 @@ impl HardStateStore {
                 "SELECT operation_id FROM team_mutation_operations
                  WHERE host_id = ?1 AND team_id = ?2 AND expected_seqno = ?3
                  ORDER BY CASE
-                              WHEN state IN (1, 2) THEN 0
-                              WHEN state = 3 THEN 1
+                              WHEN state IN (1, 2, 3, 4) THEN 0
+                              WHEN state = 5 THEN 1
                               ELSE 2
                           END,
                           updated_at DESC, operation_id DESC
@@ -678,4 +639,50 @@ impl HardStateStore {
             .transpose()
             .map(Option::flatten)
     }
+}
+
+pub(crate) fn team_mutation_from_connection(
+    connection: &rusqlite::Connection,
+    operation_id: &[u8; 16],
+) -> Result<Option<TeamMutationOperation>> {
+    connection
+        .query_row(
+            "SELECT operation_kind, host_id, actor_id, device_id, team_id,
+                    expected_seqno, request_hash, state, created_at, updated_at
+             FROM team_mutation_operations WHERE operation_id = ?1",
+            [operation_id.as_slice()],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, Vec<u8>>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                ))
+            },
+        )
+        .optional()?
+        .map(|row| {
+            Ok(TeamMutationOperation {
+                operation_id: *operation_id,
+                kind: TeamMutationKind::from_sql(row.0)?,
+                host_id: row.1,
+                actor_id: row.2,
+                device_id: row.3,
+                team_id: row.4,
+                expected_seqno: stored_unsigned("team mutation sequence", row.5)?,
+                request_hash: row.6.try_into().map_err(|_| {
+                    Error::InvalidTeamMutation("stored request hash has the wrong length")
+                })?,
+                state: TeamMutationState::from_sql(row.7)?,
+                created_at: stored_unsigned("team mutation created time", row.8)?,
+                updated_at: stored_unsigned("team mutation updated time", row.9)?,
+            })
+        })
+        .transpose()
 }

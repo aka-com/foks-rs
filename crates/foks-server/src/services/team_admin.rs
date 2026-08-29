@@ -135,15 +135,23 @@ pub(crate) fn activate_token(
     let token_hash = crate::auth::team::admin_token_hash(&challenge.token);
     const ACTIVATION_TYPE_ID: u64 = 0x6d10_7e50_464f_4b53;
     let activation_hash = foks_crypto::prefixed_hash(ACTIVATION_TYPE_ID, argument);
-    let activated = writer
+    let team_id = challenge.team.as_bytes().to_vec();
+    let member_id = principal.uid().to_vec();
+    let ptk_generation = challenge.generation;
+    writer
         .call_with_current_time(Arc::clone(clock), move |database, current_time| {
-            Ok(database.activate_team_admin_token(&token_hash, &activation_hash, current_time)?)
+            Ok(database.activate_team_admin_token(
+                &token_hash,
+                &activation_hash,
+                current_time,
+                &team_id,
+                &member_id,
+                role_type,
+                ptk_generation,
+            )?)
         })
         .map_err(map_write_error)?
         .ok_or(RpcStatus::Expired)?;
-    if activated.member_id.as_slice() != principal.uid() {
-        return Err(permission_denied());
-    }
     Ok(())
 }
 

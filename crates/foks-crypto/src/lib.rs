@@ -3092,6 +3092,8 @@ pub fn open_puk_parcel(
     device_seed: &SecretSeed,
     sender_hepk: &Hepk,
     expected_puk_verify_key: &EntityId,
+    expected_puk_hepk: &Hepk,
+    expected_puk_generation: u64,
     expected_host: &EntityId,
 ) -> Result<SharedKeySeed> {
     open_puk_parcel_for_role(
@@ -3099,6 +3101,8 @@ pub fn open_puk_parcel(
         device_seed,
         sender_hepk,
         expected_puk_verify_key,
+        expected_puk_hepk,
+        expected_puk_generation,
         expected_host,
         Role::OWNER,
     )
@@ -3109,6 +3113,8 @@ pub fn open_puk_parcel_for_role(
     device_seed: &SecretSeed,
     sender_hepk: &Hepk,
     expected_puk_verify_key: &EntityId,
+    expected_puk_hepk: &Hepk,
+    expected_puk_generation: u64,
     expected_host: &EntityId,
     expected_role: Role,
 ) -> Result<SharedKeySeed> {
@@ -3118,6 +3124,8 @@ pub fn open_puk_parcel_for_role(
         &receiver,
         sender_hepk,
         expected_puk_verify_key,
+        expected_puk_hepk,
+        expected_puk_generation,
         expected_host,
         expected_role,
     )
@@ -3129,6 +3137,8 @@ pub fn open_puk_parcel_with(
     receiver: &dyn HybridSecretDecapsulator,
     sender_hepk: &Hepk,
     expected_puk_verify_key: &EntityId,
+    expected_puk_hepk: &Hepk,
+    expected_puk_generation: u64,
     expected_host: &EntityId,
 ) -> Result<SharedKeySeed> {
     open_puk_parcel_with_for_role(
@@ -3136,6 +3146,8 @@ pub fn open_puk_parcel_with(
         receiver,
         sender_hepk,
         expected_puk_verify_key,
+        expected_puk_hepk,
+        expected_puk_generation,
         expected_host,
         Role::OWNER,
     )
@@ -3146,6 +3158,8 @@ pub fn open_puk_parcel_with_for_role(
     receiver: &dyn HybridSecretDecapsulator,
     sender_hepk: &Hepk,
     expected_puk_verify_key: &EntityId,
+    expected_puk_hepk: &Hepk,
+    expected_puk_generation: u64,
     expected_host: &EntityId,
     expected_role: Role,
 ) -> Result<SharedKeySeed> {
@@ -3154,6 +3168,8 @@ pub fn open_puk_parcel_with_for_role(
         receiver,
         sender_hepk,
         expected_puk_verify_key,
+        expected_puk_hepk,
+        expected_puk_generation,
         expected_host,
         Role::NONE,
         0,
@@ -3221,13 +3237,18 @@ pub fn open_shared_key_parcel_with(
     receiver: &dyn HybridSecretDecapsulator,
     sender_hepk: &Hepk,
     expected_verify_key: &EntityId,
+    expected_shared_hepk: &Hepk,
+    expected_shared_generation: u64,
     expected_host: &EntityId,
     expected_receiver_role: Role,
     expected_receiver_generation: u64,
     expected_role: Role,
     expected_verify_key_type: u8,
 ) -> Result<SharedKeySeed> {
-    if parcel.role != expected_role || parcel.hybrid.sender_dh.is_some() {
+    if parcel.role != expected_role
+        || parcel.generation != expected_shared_generation
+        || parcel.hybrid.sender_dh.is_some()
+    {
         return Err(Error::HybridBox);
     }
     if &parcel.target != receiver.entity_id()
@@ -3252,8 +3273,8 @@ pub fn open_shared_key_parcel_with(
     {
         return Err(Error::PukBinding);
     }
-    let derived = derive_shared_verify_key(&shared.seed, expected_verify_key_type)?;
-    if &derived != expected_verify_key {
+    let derived = derive_shared_public(&shared.seed, expected_verify_key_type)?;
+    if &derived.verify_key != expected_verify_key || &derived.hepk != expected_shared_hepk {
         return Err(Error::PukBinding);
     }
     Ok(shared)
@@ -3897,6 +3918,8 @@ mod tests {
                 &receiver,
                 &owner_public.hepk,
                 &material.ptks[index].verify_key,
+                &material.ptks[index].hepk,
+                shared.generation,
                 &change.host,
                 Role::OWNER,
                 owner.keys.as_ref().unwrap().generation,
@@ -4393,6 +4416,8 @@ mod tests {
                 &receiver,
                 &actor_public.hepk,
                 &material.ptks[index].verify_key,
+                &material.ptks[index].hepk,
+                shared.generation,
                 &change.host,
                 Role::OWNER,
                 2,
@@ -4621,6 +4646,8 @@ mod tests {
             &receiver_seed,
             &sender.hepk,
             &current_public.verify_key,
+            &current_public.hepk,
+            parcel.generation,
             &eldest.host,
             Role::OWNER,
         )
@@ -4662,6 +4689,8 @@ mod tests {
             &device_seed,
             &device.hepk,
             &puk.verify_key,
+            &puk.hepk,
+            parcel.generation,
             &opened.host,
             Role::OWNER,
         )
@@ -4721,11 +4750,40 @@ mod tests {
             &device_seed,
             &device.hepk,
             &puk.verify_key,
+            &puk.hepk,
+            parcel.generation,
             &host,
             Role::OWNER,
         )
         .unwrap();
         assert_eq!(opened.seed.as_bytes(), &puk_bytes);
+
+        let wrong_puk =
+            derive_shared_public(&SecretSeed::new([0x55; 32]), ENTITY_PUK_VERIFY).unwrap();
+        assert!(matches!(
+            open_puk_parcel_for_role(
+                &parcel,
+                &device_seed,
+                &device.hepk,
+                &puk.verify_key,
+                &wrong_puk.hepk,
+                parcel.generation,
+                &host,
+                Role::OWNER,
+            ),
+            Err(Error::PukBinding)
+        ));
+        assert!(open_puk_parcel_for_role(
+            &parcel,
+            &device_seed,
+            &device.hepk,
+            &puk.verify_key,
+            &puk.hepk,
+            parcel.generation + 1,
+            &host,
+            Role::OWNER,
+        )
+        .is_err());
 
         let mut tampered = parcel;
         tampered.hybrid.ciphertext[0] ^= 1;
@@ -4734,6 +4792,8 @@ mod tests {
             &device_seed,
             &device.hepk,
             &puk.verify_key,
+            &puk.hepk,
+            tampered.generation,
             &host,
             Role::OWNER,
         )
@@ -4805,9 +4865,13 @@ mod tests {
         let chain = UserChain::decode(&user_fixture("user-chain.snowp")).unwrap();
         assert!(chain.hepks.iter().any(|hepk| hepk == &derived.hepk));
         let eldest = chain.links[0].decode_eldest().unwrap();
-        let rotated = chain.links[2].decode_group_change().unwrap().shared_keys[0]
-            .verify_key
-            .clone();
+        let rotated = chain.links[2].decode_group_change().unwrap().shared_keys[0].clone();
+        let rotated_public = derive_shared_public(
+            &SecretSeed::new(user_fixture("puk-seed.bin").try_into().unwrap()),
+            ENTITY_PUK_VERIFY,
+        )
+        .unwrap();
+        assert_eq!(rotated_public.verify_key, rotated.verify_key);
         let mut parcel = PukParcel::decode(&user_fixture("puk-parcel.snowp")).unwrap();
         let (hybrid_key, payload) =
             derive_hybrid_key(&parcel, &seed, derived.hepk.classical(), &derived.hepk).unwrap();
@@ -4816,7 +4880,16 @@ mod tests {
             hybrid_key.as_slice(),
             user_fixture("hybrid-secretbox-key.bin")
         );
-        let clear = open_puk_parcel(&parcel, &seed, &derived.hepk, &rotated, &eldest.host).unwrap();
+        let clear = open_puk_parcel(
+            &parcel,
+            &seed,
+            &derived.hepk,
+            &rotated.verify_key,
+            &rotated_public.hepk,
+            rotated.generation,
+            &eldest.host,
+        )
+        .unwrap();
         assert_eq!(clear.seed.as_slice(), user_fixture("puk-seed.bin"));
         let puks = open_puk_seed_chain(clear, &parcel, &eldest.uid, &eldest.host).unwrap();
         assert_eq!(puks.len(), 2);
@@ -4833,13 +4906,24 @@ mod tests {
             &wrong_generation,
             &seed,
             &derived.hepk,
-            &rotated,
+            &rotated.verify_key,
+            &rotated_public.hepk,
+            rotated.generation,
             &eldest.host,
         )
         .unwrap();
         assert!(open_puk_seed_chain(clear, &wrong_generation, &eldest.uid, &eldest.host).is_err());
         parcel.seed_chain[0].secret_box.ciphertext[0] ^= 1;
-        let clear = open_puk_parcel(&parcel, &seed, &derived.hepk, &rotated, &eldest.host).unwrap();
+        let clear = open_puk_parcel(
+            &parcel,
+            &seed,
+            &derived.hepk,
+            &rotated.verify_key,
+            &rotated_public.hepk,
+            rotated.generation,
+            &eldest.host,
+        )
+        .unwrap();
         assert!(open_puk_seed_chain(clear, &parcel, &eldest.uid, &eldest.host).is_err());
     }
 
@@ -4876,11 +4960,19 @@ mod tests {
             assert_eq!(parcel.target_role, member.source_role);
             assert_eq!(parcel.target_generation, member_keys.generation);
             assert!(parcel.target_host.is_none());
+            let expected_public = derive_shared_public(
+                &SecretSeed::new(user_fixture(seed_file).try_into().unwrap()),
+                ENTITY_PTK_VERIFY,
+            )
+            .unwrap();
+            assert_eq!(expected_public.verify_key, key.verify_key);
             let clear = open_shared_key_parcel_with(
                 parcel,
                 &receiver,
                 receiver.hepk(),
                 &key.verify_key,
+                &expected_public.hepk,
+                key.generation,
                 &change.host,
                 member.source_role,
                 member_keys.generation,
@@ -5112,13 +5204,24 @@ mod tests {
         let derived = derive_device_public(&seed).unwrap();
         let chain = UserChain::decode(&user_fixture("user-chain.snowp")).unwrap();
         let eldest = chain.links[0].decode_eldest().unwrap();
-        let rotated = chain.links[2].decode_group_change().unwrap().shared_keys[0]
-            .verify_key
-            .clone();
+        let rotated = chain.links[2].decode_group_change().unwrap().shared_keys[0].clone();
+        let rotated_public = derive_shared_public(
+            &SecretSeed::new(user_fixture("puk-seed.bin").try_into().unwrap()),
+            ENTITY_PUK_VERIFY,
+        )
+        .unwrap();
         let mut parcel = PukParcel::decode(&user_fixture("puk-parcel.snowp")).unwrap();
         parcel.hybrid.ciphertext[0] ^= 1;
         assert!(matches!(
-            open_puk_parcel(&parcel, &seed, &derived.hepk, &rotated, &eldest.host,),
+            open_puk_parcel(
+                &parcel,
+                &seed,
+                &derived.hepk,
+                &rotated.verify_key,
+                &rotated_public.hepk,
+                rotated.generation,
+                &eldest.host,
+            ),
             Err(Error::Decryption)
         ));
     }
@@ -5184,11 +5287,18 @@ mod tests {
         assert!(parcel.temp_dh_key.is_some());
         let link = UserLink::decode(&user_fixture("yubi/yubi-eldest-link.snowp")).unwrap();
         let eldest = link.decode_eldest().unwrap();
+        let expected_puk = derive_shared_public(
+            &SecretSeed::new(user_fixture("yubi/puk-seed.bin").try_into().unwrap()),
+            ENTITY_PUK_VERIFY,
+        )
+        .unwrap();
         let clear = open_puk_parcel(
             &parcel,
             &seed,
             &sender_hepk,
             &eldest.puk_verify_key,
+            &expected_puk.hepk,
+            parcel.generation,
             &eldest.host,
         )
         .unwrap();
@@ -5209,6 +5319,8 @@ mod tests {
             &seed,
             &sender_hepk,
             &eldest.puk_verify_key,
+            &expected_puk.hepk,
+            tampered.generation,
             &eldest.host,
         )
         .is_err());
@@ -5245,15 +5357,20 @@ mod tests {
         };
         let chain = UserChain::decode(&user_fixture("user-chain.snowp")).unwrap();
         let eldest = chain.links[0].decode_eldest().unwrap();
-        let rotated = chain.links[2].decode_group_change().unwrap().shared_keys[0]
-            .verify_key
-            .clone();
+        let rotated = chain.links[2].decode_group_change().unwrap().shared_keys[0].clone();
+        let rotated_public = derive_shared_public(
+            &SecretSeed::new(user_fixture("puk-seed.bin").try_into().unwrap()),
+            ENTITY_PUK_VERIFY,
+        )
+        .unwrap();
         let parcel = PukParcel::decode(&user_fixture("puk-parcel.snowp")).unwrap();
         let clear = open_puk_parcel_with(
             &parcel,
             &hardware,
             &hardware.public.hepk,
-            &rotated,
+            &rotated.verify_key,
+            &rotated_public.hepk,
+            rotated.generation,
             &eldest.host,
         )
         .unwrap();
@@ -5372,13 +5489,15 @@ mod tests {
             seed_chain: Vec::new(),
         };
         let expected_seed = SecretSeed::new(user_fixture("puk-seed.bin").try_into().unwrap());
-        let verify = derive_shared_verify_key(&expected_seed, ENTITY_PUK_VERIFY).unwrap();
+        let expected = derive_shared_public(&expected_seed, ENTITY_PUK_VERIFY).unwrap();
         let receiver = backup.key_material().unwrap();
         let opened = open_puk_parcel_with_for_role(
             &parcel,
             &receiver,
             &sender.hepk,
-            &verify,
+            &expected.verify_key,
+            &expected.hepk,
+            parcel.generation,
             &expected_enroll_host(),
             Role::OWNER,
         )

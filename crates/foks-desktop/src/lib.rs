@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::{fs, path::PathBuf};
 
 use foks_agent_client::AgentClient;
-use foks_agent_proto::{FederationRole, Operation, ResponseResult, SecretString};
+use foks_agent_proto::{
+    FederationRole, Operation, ResponseResult, SecretString, YubiRetryConfiguration,
+};
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -182,7 +184,7 @@ impl DesktopModel {
         username: &str,
         device_name: &str,
         email: &str,
-        invite: &str,
+        invite: SecretString,
         passphrase: Option<SecretString>,
         confirmation: Option<SecretString>,
     ) -> Result<Operation, &'static str> {
@@ -200,7 +202,7 @@ impl DesktopModel {
             username: username.to_owned(),
             device_name: device_name.to_owned(),
             email: email.to_owned(),
-            invite: invite.to_owned(),
+            invite,
             passphrase,
         })
     }
@@ -316,6 +318,7 @@ impl DesktopModel {
         signing_slot: u8,
         pq_slot: u8,
         pin: SecretString,
+        retry_configuration: Option<YubiRetryConfiguration>,
     ) -> Result<Operation, &'static str> {
         let profile = self
             .selected_profile
@@ -325,6 +328,7 @@ impl DesktopModel {
             return Err("alias, username, and device name are required");
         }
         validate_yubi_inputs(card_serial, signing_slot, pq_slot, pin.expose())?;
+        validate_retry_configuration(retry_configuration.as_ref())?;
         Ok(Operation::CreateYubiAccount {
             profile,
             alias: alias.to_owned(),
@@ -337,6 +341,7 @@ impl DesktopModel {
             signing_slot,
             pq_slot,
             pin,
+            retry_configuration,
         })
     }
 
@@ -413,6 +418,7 @@ impl DesktopModel {
         signing_slot: u8,
         pq_slot: u8,
         pin: SecretString,
+        retry_configuration: Option<YubiRetryConfiguration>,
     ) -> Result<Operation, &'static str> {
         let profile = self
             .selected_profile
@@ -426,6 +432,7 @@ impl DesktopModel {
             return Err("source alias, target alias, device name, and serial are required");
         }
         validate_yubi_inputs(card_serial, signing_slot, pq_slot, pin.expose())?;
+        validate_retry_configuration(retry_configuration.as_ref())?;
         Ok(Operation::ProvisionYubiDevice {
             profile,
             source_alias: source_alias.to_owned(),
@@ -436,6 +443,7 @@ impl DesktopModel {
             signing_slot,
             pq_slot,
             pin,
+            retry_configuration,
         })
     }
 
@@ -484,29 +492,6 @@ impl DesktopModel {
             alias: required_alias(alias)?,
             puk,
             new_pin,
-        })
-    }
-
-    pub fn configure_yubi_retries_operation(
-        &self,
-        alias: &str,
-        pin: SecretString,
-        puk: SecretString,
-        pin_attempts: u8,
-        puk_attempts: u8,
-    ) -> Result<Operation, &'static str> {
-        validate_pin(pin.expose())?;
-        validate_pin(puk.expose())?;
-        if !(1..=15).contains(&pin_attempts) || !(1..=15).contains(&puk_attempts) {
-            return Err("PIN and PUK retries must each be from 1 through 15");
-        }
-        Ok(Operation::ConfigureYubiRetries {
-            profile: self.selected_yubi_profile()?,
-            alias: required_alias(alias)?,
-            pin,
-            puk,
-            pin_attempts,
-            puk_attempts,
         })
     }
 
@@ -575,6 +560,19 @@ fn required_pin(pin: Option<SecretString>) -> Result<SecretString, &'static str>
 fn validate_pin(pin: &str) -> Result<(), &'static str> {
     if !(6..=8).contains(&pin.len()) || !pin.bytes().all(|byte| byte.is_ascii_graphic()) {
         return Err("PIN or PUK must contain six to eight printable ASCII characters");
+    }
+    Ok(())
+}
+
+fn validate_retry_configuration(
+    retry: Option<&YubiRetryConfiguration>,
+) -> Result<(), &'static str> {
+    let Some(retry) = retry else {
+        return Ok(());
+    };
+    validate_pin(retry.puk.expose())?;
+    if !(1..=15).contains(&retry.pin_attempts) || !(1..=15).contains(&retry.puk_attempts) {
+        return Err("PIN and PUK retries must each be from 1 through 15");
     }
     Ok(())
 }
@@ -729,7 +727,15 @@ mod tests {
         });
         let mut model = DesktopModel::new(transport);
         assert_eq!(
-            model.create_account_operation("personal", "rae", "laptop", "", "invite", None, None,),
+            model.create_account_operation(
+                "personal",
+                "rae",
+                "laptop",
+                "",
+                SecretString::new("invite"),
+                None,
+                None,
+            ),
             Err("select a profile first")
         );
         model.select_profile("local");
@@ -740,7 +746,7 @@ mod tests {
                     "rae",
                     "laptop",
                     "rae@example.test",
-                    "small-team+launch",
+                    SecretString::new("small-team+launch"),
                     None,
                     None,
                 )
@@ -751,7 +757,7 @@ mod tests {
                 username: "rae".to_owned(),
                 device_name: "laptop".to_owned(),
                 email: "rae@example.test".to_owned(),
-                invite: "small-team+launch".to_owned(),
+                invite: SecretString::new("small-team+launch"),
                 passphrase: None,
             }
         );
@@ -772,7 +778,7 @@ mod tests {
                     "rae",
                     "laptop",
                     "",
-                    "s.invite",
+                    SecretString::new("s.invite"),
                     Some(SecretString::new("signup passphrase")),
                     Some(SecretString::new("signup passphrase")),
                 )
@@ -783,7 +789,7 @@ mod tests {
                 username: "rae".to_owned(),
                 device_name: "laptop".to_owned(),
                 email: String::new(),
-                invite: "s.invite".to_owned(),
+                invite: SecretString::new("s.invite"),
                 passphrase: Some(SecretString::new("signup passphrase")),
             }
         );
@@ -793,7 +799,7 @@ mod tests {
                 "rae",
                 "laptop",
                 "",
-                "",
+                SecretString::new(""),
                 Some(SecretString::new("one")),
                 Some(SecretString::new("two")),
             ),
@@ -952,6 +958,11 @@ mod tests {
                     0x82,
                     0x83,
                     SecretString::new("123456"),
+                    Some(YubiRetryConfiguration {
+                        puk: SecretString::new("12345678"),
+                        pin_attempts: 5,
+                        puk_attempts: 4,
+                    }),
                 )
                 .unwrap(),
             Operation::CreateYubiAccount {
@@ -966,6 +977,11 @@ mod tests {
                 signing_slot: 0x82,
                 pq_slot: 0x83,
                 pin: SecretString::new("123456"),
+                retry_configuration: Some(YubiRetryConfiguration {
+                    puk: SecretString::new("12345678"),
+                    pin_attempts: 5,
+                    puk_attempts: 4,
+                }),
             }
         );
         assert_eq!(
@@ -1024,6 +1040,7 @@ mod tests {
                 0x82,
                 0x82,
                 SecretString::new("123456"),
+                None,
             ),
             Err("use two distinct PIV retired-key slots from 0x82 through 0x95")
         );

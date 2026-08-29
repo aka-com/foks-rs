@@ -88,14 +88,11 @@ impl Database {
                )",
             params![sql_integer(abandon_uploads_before)?],
         )?;
-        let federation_user_permissions = transaction.execute(
-            "DELETE FROM federation_user_view_permissions WHERE expires_at <= ?1",
-            [sql_integer(now)?],
-        )?;
-        let federation_team_permissions = transaction.execute(
-            "DELETE FROM federation_team_view_permissions WHERE expires_at <= ?1",
-            [sql_integer(now)?],
-        )?;
+        // Active federation rows are renewable capability envelopes even
+        // after bearer expiry; revoked rows are retained as non-resurrection
+        // tombstones. Neither class is ordinary expiry garbage.
+        let federation_user_permissions = 0;
+        let federation_team_permissions = 0;
         transaction.commit()?;
         Ok(MaintenanceReport {
             challenges: u64::try_from(challenges).map_err(|_| Error::IntegerRange)?,

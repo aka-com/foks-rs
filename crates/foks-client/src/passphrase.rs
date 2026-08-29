@@ -66,6 +66,39 @@ impl FoksClient {
         Ok(metadata(&stored))
     }
 
+    pub fn set_passphrase_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        passphrase: &Passphrase,
+    ) -> Result<PassphraseMetadata> {
+        let authenticated = self.authenticate_yubi_and_pin(host, credential)?;
+        let owner = current_owner_puk(&authenticated)?;
+        let stretch = self.authenticated_stretch_version_yubi(host, credential)?;
+        let next = self.next_passphrase_generation_yubi(host, credential)?;
+        if next != 1 {
+            return Err(Error::CredentialBinding(
+                "passphrase is already configured or generation is invalid",
+            ));
+        }
+        let update = create_passphrase_enrollment(
+            passphrase,
+            &credential.uid,
+            host.host_id(),
+            &owner.seed,
+            owner.generation,
+            stretch,
+        )?;
+        let argument = update.argument();
+        let stored = self.submit_passphrase_update_yubi(
+            host,
+            credential,
+            encode_set_passphrase_request(&argument)?,
+            &argument,
+        )?;
+        Ok(metadata(&stored))
+    }
+
     pub fn change_passphrase(
         &self,
         host: &PinnedHost,
@@ -101,6 +134,49 @@ impl FoksClient {
             ));
         }
         let stored = self.submit_passphrase_update(
+            host,
+            credential,
+            encode_change_passphrase_request(&argument)?,
+            &argument,
+        )?;
+        Ok(metadata(&stored))
+    }
+
+    pub fn change_passphrase_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        new_passphrase: &Passphrase,
+    ) -> Result<PassphraseMetadata> {
+        let authenticated = self.authenticate_yubi_and_pin(host, credential)?;
+        let owner = current_owner_puk(&authenticated)?;
+        let current = self.fetch_ppe_parcel_yubi(host, credential)?;
+        let next = self.next_passphrase_generation_yubi(host, credential)?;
+        if current
+            .generation
+            .checked_add(1)
+            .is_none_or(|expected| expected != next)
+        {
+            return Err(Error::CredentialBinding(
+                "server returned a stale passphrase generation",
+            ));
+        }
+        let update = change_passphrase_with_puk(
+            new_passphrase,
+            &credential.uid,
+            host.host_id(),
+            &current,
+            &owner.seed,
+            &owner.seed,
+            owner.generation,
+        )?;
+        let argument = update.argument();
+        if argument.generation != next {
+            return Err(Error::CredentialBinding(
+                "local passphrase generation does not match the server",
+            ));
+        }
+        let stored = self.submit_passphrase_update_yubi(
             host,
             credential,
             encode_change_passphrase_request(&argument)?,
@@ -186,6 +262,15 @@ impl FoksClient {
             .map(|parcel| metadata(&parcel))
     }
 
+    pub fn passphrase_metadata_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+    ) -> Result<PassphraseMetadata> {
+        self.fetch_ppe_parcel_yubi(host, credential)
+            .map(|parcel| metadata(&parcel))
+    }
+
     /// Reports whether the account has a passphrase annex while preserving
     /// every other transport or authorization failure.
     pub fn passphrase_is_configured(
@@ -268,6 +353,34 @@ impl FoksClient {
         Ok(stored)
     }
 
+    fn submit_passphrase_update_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        request: Vec<u8>,
+        expected: &foks_proto::PassphraseUpdateArgument,
+    ) -> Result<PpeParcel> {
+        let submission_error = match self.call_void_with_material(
+            host,
+            &host.user,
+            &request,
+            &credential.subkey_seed,
+            &credential.certificate_chain,
+        ) {
+            Ok(()) => None,
+            Err(error @ Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) => return Err(error),
+            Err(error) => Some(error),
+        };
+        let stored = match self.fetch_ppe_parcel_yubi(host, credential) {
+            Ok(stored) => stored,
+            Err(read_error) => return Err(submission_error.unwrap_or(read_error)),
+        };
+        if let Err(binding_error) = validate_committed_update(&stored, expected) {
+            return Err(submission_error.unwrap_or(binding_error));
+        }
+        Ok(stored)
+    }
+
     fn next_passphrase_generation(
         &self,
         host: &PinnedHost,
@@ -282,6 +395,21 @@ impl FoksClient {
         Ok(decode_generation(&response)?)
     }
 
+    fn next_passphrase_generation_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+    ) -> Result<u64> {
+        let response = self.call_with_material(
+            host,
+            &host.user,
+            &encode_next_passphrase_generation_request()?,
+            &credential.subkey_seed,
+            &credential.certificate_chain,
+        )?;
+        Ok(decode_generation(&response)?)
+    }
+
     fn authenticated_stretch_version(
         &self,
         host: &PinnedHost,
@@ -292,6 +420,22 @@ impl FoksClient {
             &host.user,
             &encode_user_stretch_version_request()?,
             Some(credential),
+        )?;
+        let version = decode_stretch_version(&response)?;
+        require_production_stretch(version)
+    }
+
+    fn authenticated_stretch_version_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+    ) -> Result<StretchVersion> {
+        let response = self.call_with_material(
+            host,
+            &host.user,
+            &encode_user_stretch_version_request()?,
+            &credential.subkey_seed,
+            &credential.certificate_chain,
         )?;
         let version = decode_stretch_version(&response)?;
         require_production_stretch(version)

@@ -289,6 +289,10 @@ impl Database {
         token_hash: &[u8; 32],
         activation_hash: &[u8; 32],
         now: u64,
+        expected_team_id: &[u8],
+        expected_member_id: &[u8],
+        expected_ptk_role_type: u64,
+        expected_ptk_generation: u64,
     ) -> Result<Option<TeamAdminAuthoritySnapshot>> {
         let transaction = self
             .connection
@@ -296,6 +300,13 @@ impl Database {
         let Some(authority) = admin_token_query(&transaction, token_hash, now, false)? else {
             return Ok(None);
         };
+        if authority.team_id != expected_team_id
+            || authority.member_id != expected_member_id
+            || authority.ptk_role_type != expected_ptk_role_type
+            || authority.ptk_generation != expected_ptk_generation
+        {
+            return Ok(None);
+        }
         ensure_current_admin_authority(&transaction, &authority)?;
         let stored: Option<Vec<u8>> = transaction.query_row(
             "SELECT activation_hash FROM team_admin_tokens WHERE token_hash = ?1",
@@ -469,7 +480,11 @@ fn admin_authority_query(
                ON k.team_id = m.team_id AND k.role_type = ?3 AND k.visibility = 0
               AND k.generation = ?4
              WHERE m.team_id = ?1 AND m.party_id = ?2 AND m.scoped_host_id IS NULL
-               AND m.role_type >= 2 AND ?3 >= 2 AND ?3 <= m.role_type",
+               AND m.role_type >= 2 AND ?3 >= 2 AND ?3 <= m.role_type
+               AND k.generation = (
+                 SELECT max(k2.generation) FROM team_shared_keys k2
+                 WHERE k2.team_id = k.team_id AND k2.role_type = k.role_type
+                   AND k2.visibility = k.visibility)",
             params![
                 team_id,
                 member_id,

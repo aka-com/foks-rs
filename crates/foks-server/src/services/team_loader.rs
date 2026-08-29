@@ -182,6 +182,7 @@ pub(crate) fn activate(
 
 pub(crate) fn load_chain(
     argument: &[u8],
+    principal: Option<&Principal>,
     host: &EntityId,
     reader: &foks_server_db::ReadSnapshot<'_>,
     clock: &dyn foks_server_db::Clock,
@@ -195,11 +196,19 @@ pub(crate) fn load_chain(
         .map_err(|_| RpcStatus::TransactionRetry)?;
     let authority = match &request.authorization {
         foks_rpc::arguments::TeamChainAuthorization::LocalView(token) => {
+            let principal = principal.ok_or_else(permission_denied)?;
+            principal.require_ordinary_device()?;
             let authority = reader
                 .resolve_team_view_token(&team::token_hash(token), now)
                 .map_err(|_| RpcStatus::TransactionRetry)?
                 .ok_or(RpcStatus::Expired)?;
-            if authority.team_id != request.team.as_bytes() {
+            if authority.team_id != request.team.as_bytes()
+                || authority.member_id != principal.uid()
+                || reader
+                    .active_credential_owner(principal.uid(), principal.device_id())
+                    .map_err(|_| RpcStatus::TransactionRetry)?
+                    .is_none()
+            {
                 return Err(permission_denied());
             }
             Some(authority)

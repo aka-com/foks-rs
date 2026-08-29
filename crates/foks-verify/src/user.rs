@@ -193,6 +193,7 @@ pub struct VerifiedUserState {
     username_sequence: u64,
     devices: Vec<VerifiedDevice>,
     shared_keys: Vec<VerifiedSharedKey>,
+    shared_key_history: Vec<VerifiedSharedKey>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -264,6 +265,13 @@ impl VerifiedUserState {
 
     pub fn shared_key(&self, role: Role) -> Option<&VerifiedSharedKey> {
         self.shared_keys.iter().find(|key| key.role == role)
+    }
+
+    /// Every authenticated PUK generation observed while replaying the user
+    /// chain, including the current keys. Rotation code uses this to prevent
+    /// reintroducing previously retired key material.
+    pub fn shared_key_history(&self) -> &[VerifiedSharedKey] {
+        &self.shared_key_history
     }
 
     pub fn hard_state_snapshot(&self) -> Result<VerifiedUserSnapshot> {
@@ -464,7 +472,7 @@ pub fn verify_user_chain(
             rule: UserTransitionRule::EmptyResult,
         });
     }
-    let (devices, shared_keys) = replay_state.into_parts();
+    let (devices, shared_keys, shared_key_history) = replay_state.into_parts();
     Ok(VerifiedUserState {
         uid: expected_uid.clone(),
         host: expected_host.clone(),
@@ -481,6 +489,7 @@ pub fn verify_user_chain(
         username_sequence,
         devices,
         shared_keys,
+        shared_key_history,
     })
 }
 
@@ -516,7 +525,11 @@ pub fn verify_user_chain_increment(
         verify_incremental_user_disclosures(&chain, prior, expected_uid, expected_host)?;
     let path_offset =
         usize::try_from(chain.num_username_links).map_err(|_| Error::UserMerkleProof)?;
-    let mut replay_state = UserReplayState::from_verified(&prior.devices, &prior.shared_keys);
+    let mut replay_state = UserReplayState::from_verified(
+        &prior.devices,
+        &prior.shared_keys,
+        &prior.shared_key_history,
+    );
     let mut previous_hash = prior.chain_tail_hash;
     let start_sequence = prior
         .chain_seqno
@@ -583,7 +596,7 @@ pub fn verify_user_chain_increment(
     {
         return Ok(prior.clone());
     }
-    let (devices, shared_keys) = replay_state.into_parts();
+    let (devices, shared_keys, shared_key_history) = replay_state.into_parts();
     Ok(VerifiedUserState {
         uid: expected_uid.clone(),
         host: expected_host.clone(),
@@ -603,6 +616,7 @@ pub fn verify_user_chain_increment(
         username_sequence,
         devices,
         shared_keys,
+        shared_key_history,
     })
 }
 
@@ -1193,7 +1207,7 @@ mod incremental_tests {
                 hepk: find_hepk(&chain.hepks, eldest.puk_hepk_fingerprint).unwrap(),
             },
         );
-        let (devices, shared_keys) = replay.into_parts();
+        let (devices, shared_keys, shared_key_history) = replay.into_parts();
         let first_hash = prefixed_hash(LINK_OUTER_TYPE_ID, &chain.links[0].encoded().unwrap());
         let prior = VerifiedUserState {
             uid: uid.clone(),
@@ -1211,6 +1225,7 @@ mod incremental_tests {
             username_sequence: final_state.username_sequence,
             devices,
             shared_keys,
+            shared_key_history,
         };
         let suffix = suffix_after_eldest(&chain);
         assert_eq!(UserChain::decode(&suffix).unwrap().links.len(), 2);

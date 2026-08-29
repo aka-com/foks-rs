@@ -48,8 +48,9 @@ pub struct MutationDraft {
 }
 
 /// Coordinates the required ordering between two durability domains:
-/// protected material first, then SQLite WAL. Terminal SQLite state is
-/// committed before protected retry material is erased.
+/// protected material first, then SQLite WAL. Remote verification remains
+/// nonterminal until the application acknowledges its own durable commit;
+/// terminal SQLite state is committed before protected material is erased.
 pub struct MutationCoordinator<'a, S: ProtectedMutationStore + ?Sized> {
     hard_database: &'a Path,
     protected: &'a mut S,
@@ -111,16 +112,35 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
         Ok(())
     }
 
-    pub fn verified(&mut self, operation_id: &[u8; 16]) -> Result<()> {
+    pub fn remote_verified(&mut self, operation_id: &[u8; 16]) -> Result<()> {
+        let operation = self.operation(operation_id)?;
+        self.load_bound_material(&operation)?;
+        HardStateStore::open(self.hard_database)?.advance_mutation(
+            operation_id,
+            MutationState::RemoteVerified,
+            now_microseconds()?,
+        )?;
+        Ok(())
+    }
+
+    /// Acknowledges that the consumer of a remotely verified mutation has
+    /// durably committed its application-owned state. This is the only
+    /// successful path that erases protected mutation material.
+    pub fn finalize(&mut self, operation_id: &[u8; 16]) -> Result<()> {
         let operation = self.operation(operation_id)?;
         HardStateStore::open(self.hard_database)?.advance_mutation(
             operation_id,
-            MutationState::Verified,
+            MutationState::Finalized,
             now_microseconds()?,
         )?;
         // A crash or backend failure here leaves only an orphaned protected
         // record. The authoritative journal is already terminal.
         remove_terminal_material(self.protected, &operation.material_ref)
+    }
+
+    pub fn remote_verified_and_finalize(&mut self, operation_id: &[u8; 16]) -> Result<()> {
+        self.remote_verified(operation_id)?;
+        self.finalize(operation_id)
     }
 
     pub fn rejected(&mut self, operation_id: &[u8; 16]) -> Result<()> {
@@ -347,7 +367,7 @@ mod tests {
         ));
         if endpoint.observed(&operation) {
             MutationCoordinator::new(database, protected)
-                .verified(&operation_id)
+                .remote_verified(&operation_id)
                 .unwrap();
             true
         } else {
@@ -415,8 +435,20 @@ mod tests {
             .unwrap()
             .begin_mutation_submission(&operation.operation_id, u64::MAX / 2)
             .is_err());
-        restarted.verified(&operation.operation_id).unwrap();
-        restarted.verified(&operation.operation_id).unwrap();
+        restarted.remote_verified(&operation.operation_id).unwrap();
+        restarted.remote_verified(&operation.operation_id).unwrap();
+        let awaiting = restarted.pending(&host_id).unwrap();
+        assert_eq!(awaiting.len(), 1);
+        assert_eq!(awaiting[0].state, MutationState::RemoteVerified);
+        assert_eq!(
+            restarted
+                .load_bound_material(&awaiting[0])
+                .unwrap()
+                .as_slice(),
+            b"encrypted retry material"
+        );
+        restarted.finalize(&operation.operation_id).unwrap();
+        restarted.finalize(&operation.operation_id).unwrap();
         assert!(restarted.pending(&host_id).unwrap().is_empty());
     }
 
@@ -580,9 +612,9 @@ mod tests {
             assert_eq!(endpoint.submissions, 1);
         }
 
-        // Crash or key-store failure after the terminal SQLite commit leaves
-        // an orphaned protected record. Repeating terminalization performs
-        // cleanup without changing or replaying the operation.
+        // Remote verification retains the protected record. A crash or
+        // key-store failure after the application-acknowledged terminal
+        // SQLite commit leaves an orphan that repeating finalization cleans.
         {
             let (_temporary, database, host_id) = initialized_database();
             let mut protected = FailRemoveOnceStore {
@@ -598,8 +630,12 @@ mod tests {
             MutationCoordinator::new(&database, &mut protected)
                 .begin_submission(&operation.operation_id)
                 .unwrap();
+            MutationCoordinator::new(&database, &mut protected)
+                .remote_verified(&operation.operation_id)
+                .unwrap();
+            assert!(!protected.inner.0.is_empty());
             assert!(MutationCoordinator::new(&database, &mut protected)
-                .verified(&operation.operation_id)
+                .finalize(&operation.operation_id)
                 .is_err());
             assert_eq!(
                 HardStateStore::open(&database)
@@ -608,10 +644,10 @@ mod tests {
                     .unwrap()
                     .unwrap()
                     .state,
-                MutationState::Verified
+                MutationState::Finalized
             );
             MutationCoordinator::new(&database, &mut protected)
-                .verified(&operation.operation_id)
+                .finalize(&operation.operation_id)
                 .unwrap();
             assert!(protected.inner.0.is_empty());
         }

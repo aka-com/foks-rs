@@ -128,7 +128,6 @@ impl CheckedProfileSession<'_> {
             }
         };
 
-        let now = now_microseconds()?;
         let scheduled_job_id = federation_job_id(
             local_host.host_id(),
             &local_team_id,
@@ -136,23 +135,6 @@ impl CheckedProfileSession<'_> {
             &remote_team_id,
             &removal_key,
         )?;
-        FoksScheduler::new(&self.paths.hard_database, SchedulerConfig::default())?.register(
-            ScheduledJobRegistration {
-                job_id: scheduled_job_id,
-                kind: ScheduledJobKind::FederationReconcile,
-                host_id: local_host.host_id().as_bytes().to_vec(),
-                // The public job row is only a wake-up identity. Profile and
-                // team aliases, destination role, and the removal key remain
-                // authoritative only in the encrypted team record.
-                scope_id: Vec::new(),
-                interval_micros: FEDERATION_REFRESH_INTERVAL_MICROS,
-                first_run_at: now
-                    .checked_add(FEDERATION_FIRST_RETRY_MICROS)
-                    .ok_or(Error::InvalidConfig("federation retry time overflow"))?,
-                registered_at: now,
-            },
-        )?;
-
         let mut mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
@@ -185,6 +167,23 @@ impl CheckedProfileSession<'_> {
         stored.operation_id = Some(outcome.operation_id);
         stored.active = true;
         local_vault.put_team(&local_team)?;
+
+        let now = now_microseconds()?;
+        FoksScheduler::new(&self.paths.hard_database, SchedulerConfig::default())?.register(
+            ScheduledJobRegistration {
+                job_id: scheduled_job_id,
+                kind: ScheduledJobKind::FederationRefresh,
+                host_id: local_host.host_id().as_bytes().to_vec(),
+                // The public job row is only a wake-up identity. Profile and
+                // team aliases remain authoritative in the encrypted record.
+                scope_id: Vec::new(),
+                interval_micros: FEDERATION_REFRESH_INTERVAL_MICROS,
+                first_run_at: now
+                    .checked_add(FEDERATION_FIRST_RETRY_MICROS)
+                    .ok_or(Error::InvalidConfig("federation refresh time overflow"))?,
+                registered_at: now,
+            },
+        )?;
 
         Ok(FederationAdmissionReport {
             operation_id_hex: hex(&outcome.operation_id),
@@ -223,6 +222,60 @@ impl CheckedProfileSession<'_> {
             .collect())
     }
 
+    fn refresh_federated_team(
+        &self,
+        remote: &CheckedProfileSession<'_>,
+        binding: &ScheduledFederationBinding,
+        local_vault: &mut AccountVault<'_>,
+        remote_vault: &mut AccountVault<'_>,
+    ) -> Result<()> {
+        self.profile.require(Capability::Federation)?;
+        self.profile.require(Capability::Teams)?;
+        remote.profile.require(Capability::Federation)?;
+        remote.profile.require(Capability::Teams)?;
+        let local_host = self.pinned_host()?;
+        let remote_host = remote.pinned_host()?;
+        let local_team = local_vault.team(&binding.local_team_alias)?;
+        let remote_team = remote_vault.team(&binding.remote_team_alias)?;
+        let local_team_id = EntityId::from_bytes(local_team.team_id.clone())?;
+        let remote_team_id = EntityId::from_bytes(remote_team.team_id.clone())?;
+        let member = local_team
+            .federated_members
+            .iter()
+            .find(|member| {
+                member.remote_profile == remote.profile.name
+                    && member.remote_team_alias == binding.remote_team_alias
+                    && member.remote_host_id == remote_host.host_id().as_bytes()
+                    && member.remote_team_id == remote_team_id.as_bytes()
+            })
+            .ok_or(Error::InvalidAccount(
+                "scheduled federation membership disappeared",
+            ))?;
+        if !local_team.active
+            || !remote_team.active
+            || !member.active
+            || member.operation_id.is_none()
+            || member.destination != binding.destination
+        {
+            return Err(Error::InvalidAccount(
+                "scheduled federation membership is not active",
+            ));
+        }
+        let local_account = local_vault.account(&local_team.account_alias)?;
+        let remote_account = remote_vault.account(&remote_team.account_alias)?;
+        self.client.refresh_federated_team_capability(
+            &foks_client::FederatedTeamRefreshRequest {
+                remote_host: &remote_host,
+                remote_credential: &remote_account.credential,
+                remote_team: &remote_team_id,
+                local_host: &local_host,
+                local_credential: &local_account.credential,
+                local_team: &local_team_id,
+            },
+        )?;
+        Ok(())
+    }
+
     /// Runs ordinary local jobs plus cross-profile federation refreshes. The
     /// caller already holds this profile's checked operation lock; the remote
     /// lock is attempted without waiting so inverse profile jobs cannot
@@ -251,15 +304,7 @@ impl CheckedProfileSession<'_> {
                         derive_vault_key(master_key),
                     )?;
                     let mut remote_vault = AccountVault::new(&mut remote_store);
-                    self.admit_federated_team(
-                        remote,
-                        &binding.local_team_alias,
-                        &binding.remote_team_alias,
-                        binding.destination,
-                        local_vault,
-                        &mut remote_vault,
-                        master_key,
-                    )?;
+                    self.refresh_federated_team(remote, &binding, local_vault, &mut remote_vault)?;
                     Ok::<_, Error>(())
                 })
                 .map_err(|error| error.to_string())?;

@@ -261,6 +261,8 @@ pub fn open_backup_puk_parcel_for_role(
     parcel: &foks_proto::PukParcel,
     sender_hepk: &Hepk,
     expected_puk_verify_key: &EntityId,
+    expected_puk_hepk: &Hepk,
+    expected_puk_generation: u64,
     expected_host: &EntityId,
     expected_role: foks_proto::Role,
 ) -> BackupResult<SharedKeySeed> {
@@ -270,6 +272,8 @@ pub fn open_backup_puk_parcel_for_role(
         &receiver,
         sender_hepk,
         expected_puk_verify_key,
+        expected_puk_hepk,
+        expected_puk_generation,
         expected_host,
         expected_role,
     )?)

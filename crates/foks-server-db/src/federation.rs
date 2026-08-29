@@ -31,7 +31,6 @@ pub enum RemoteUserViewPermissionOutcome {
     Inserted(RemoteUserViewPermission),
     Existing(RemoteUserViewPermission),
     Renewed(RemoteUserViewPermission),
-    Reissued(RemoteUserViewPermission),
 }
 
 pub type RemoteTeamViewGrant = RemoteUserViewGrant;
@@ -54,7 +53,6 @@ pub enum RemoteTeamViewPermissionOutcome {
     Inserted(RemoteTeamViewPermission),
     Existing(RemoteTeamViewPermission),
     Renewed(RemoteTeamViewPermission),
-    Reissued(RemoteTeamViewPermission),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -117,7 +115,7 @@ impl Database {
             target_user_id,
             viewer_party_id,
             viewer_host_id,
-            now,
+            None,
         )? {
             if renewable_grant(
                 existing.token_hash,
@@ -130,7 +128,7 @@ impl Database {
                          token_nonce = ?4, token_ciphertext = ?5, key_generation = ?6,
                          updated_at = ?7, expires_at = ?8
                      WHERE target_user_id = ?1 AND viewer_party_id = ?2
-                       AND viewer_host_id = ?3 AND state = 1 AND expires_at > ?7",
+                       AND viewer_host_id = ?3 AND state = 1",
                     params![
                         target_user_id,
                         viewer_party_id,
@@ -147,14 +145,32 @@ impl Database {
                     target_user_id,
                     viewer_party_id,
                     viewer_host_id,
-                    now,
+                    Some(now),
                 )?
                 .ok_or(Error::Invalid("renewed federation permission disappeared"))?;
                 transaction.commit()?;
                 return Ok(RemoteUserViewPermissionOutcome::Renewed(renewed));
             }
+            if existing.expires_at <= now {
+                return Err(Error::Invalid(
+                    "expired federation permission must retain its bearer",
+                ));
+            }
             transaction.commit()?;
             return Ok(RemoteUserViewPermissionOutcome::Existing(existing));
+        }
+
+        let existing_state: Option<i64> = transaction
+            .query_row(
+                "SELECT state FROM federation_user_view_permissions
+                 WHERE target_user_id = ?1 AND viewer_party_id = ?2
+                   AND viewer_host_id = ?3",
+                params![target_user_id, viewer_party_id, viewer_host_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if existing_state.is_some() {
+            return Err(Error::AuthorizationChanged);
         }
 
         let global: i64 = transaction.query_row(
@@ -177,29 +193,13 @@ impl Database {
             return Err(Error::QuotaExceeded);
         }
 
-        let existed: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM federation_user_view_permissions
-                           WHERE target_user_id = ?1 AND viewer_party_id = ?2
-                             AND viewer_host_id = ?3)",
-            params![target_user_id, viewer_party_id, viewer_host_id],
-            |row| row.get(0),
-        )?;
         transaction.execute(
             "INSERT INTO federation_user_view_permissions
                  (target_user_id, viewer_party_id, viewer_host_id, token_hash,
                   token_nonce, token_ciphertext, key_generation, state, issued_at,
                   updated_at, expires_at, revoked_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8, ?9, NULL)
-             ON CONFLICT(target_user_id, viewer_party_id, viewer_host_id) DO UPDATE SET
-                 token_hash = excluded.token_hash,
-                 token_nonce = excluded.token_nonce,
-                 token_ciphertext = excluded.token_ciphertext,
-                 key_generation = excluded.key_generation,
-                 state = 1,
-                 issued_at = excluded.issued_at,
-                 updated_at = excluded.updated_at,
-                 expires_at = excluded.expires_at,
-                 revoked_at = NULL",
+             ON CONFLICT(target_user_id, viewer_party_id, viewer_host_id) DO NOTHING",
             params![
                 target_user_id,
                 viewer_party_id,
@@ -217,15 +217,11 @@ impl Database {
             target_user_id,
             viewer_party_id,
             viewer_host_id,
-            now,
+            Some(now),
         )?
         .ok_or(Error::Invalid("inserted federation permission disappeared"))?;
         transaction.commit()?;
-        Ok(if existed {
-            RemoteUserViewPermissionOutcome::Reissued(permission)
-        } else {
-            RemoteUserViewPermissionOutcome::Inserted(permission)
-        })
+        Ok(RemoteUserViewPermissionOutcome::Inserted(permission))
     }
 
     pub fn remote_user_view_token_is_current(
@@ -317,7 +313,7 @@ impl Database {
             target_team_id,
             viewer_party_id,
             viewer_host_id,
-            now,
+            None,
         )? {
             if renewable_grant(
                 existing.token_hash,
@@ -330,7 +326,7 @@ impl Database {
                          token_nonce = ?4, token_ciphertext = ?5, key_generation = ?6,
                          updated_at = ?7, expires_at = ?8
                      WHERE target_team_id = ?1 AND viewer_party_id = ?2
-                       AND viewer_host_id = ?3 AND state = 1 AND expires_at > ?7",
+                       AND viewer_host_id = ?3 AND state = 1",
                     params![
                         target_team_id,
                         viewer_party_id,
@@ -347,7 +343,7 @@ impl Database {
                     target_team_id,
                     viewer_party_id,
                     viewer_host_id,
-                    now,
+                    Some(now),
                 )?
                 .ok_or(Error::Invalid(
                     "renewed federation team permission disappeared",
@@ -355,8 +351,25 @@ impl Database {
                 transaction.commit()?;
                 return Ok(RemoteTeamViewPermissionOutcome::Renewed(renewed));
             }
+            if existing.expires_at <= now {
+                return Err(Error::Invalid(
+                    "expired federation team permission must retain its bearer",
+                ));
+            }
             transaction.commit()?;
             return Ok(RemoteTeamViewPermissionOutcome::Existing(existing));
+        }
+        let existing_state: Option<i64> = transaction
+            .query_row(
+                "SELECT state FROM federation_team_view_permissions
+                 WHERE target_team_id = ?1 AND viewer_party_id = ?2
+                   AND viewer_host_id = ?3",
+                params![target_team_id, viewer_party_id, viewer_host_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if existing_state.is_some() {
+            return Err(Error::AuthorizationChanged);
         }
         let global: i64 = transaction.query_row(
             "SELECT count(*) FROM federation_team_view_permissions
@@ -377,27 +390,13 @@ impl Database {
         {
             return Err(Error::QuotaExceeded);
         }
-        let existed: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM federation_team_view_permissions
-                           WHERE target_team_id = ?1 AND viewer_party_id = ?2
-                             AND viewer_host_id = ?3)",
-            params![target_team_id, viewer_party_id, viewer_host_id],
-            |row| row.get(0),
-        )?;
         transaction.execute(
             "INSERT INTO federation_team_view_permissions
                  (target_team_id, viewer_party_id, viewer_host_id, token_hash,
                   token_nonce, token_ciphertext, key_generation, state, issued_at,
                   updated_at, expires_at, revoked_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8, ?9, NULL)
-             ON CONFLICT(target_team_id, viewer_party_id, viewer_host_id) DO UPDATE SET
-                 token_hash = excluded.token_hash,
-                 token_nonce = excluded.token_nonce,
-                 token_ciphertext = excluded.token_ciphertext,
-                 key_generation = excluded.key_generation,
-                 state = 1, issued_at = excluded.issued_at,
-                 updated_at = excluded.updated_at, expires_at = excluded.expires_at,
-                 revoked_at = NULL",
+             ON CONFLICT(target_team_id, viewer_party_id, viewer_host_id) DO NOTHING",
             params![
                 target_team_id,
                 viewer_party_id,
@@ -415,17 +414,13 @@ impl Database {
             target_team_id,
             viewer_party_id,
             viewer_host_id,
-            now,
+            Some(now),
         )?
         .ok_or(Error::Invalid(
             "inserted federation team permission disappeared",
         ))?;
         transaction.commit()?;
-        Ok(if existed {
-            RemoteTeamViewPermissionOutcome::Reissued(permission)
-        } else {
-            RemoteTeamViewPermissionOutcome::Inserted(permission)
-        })
+        Ok(RemoteTeamViewPermissionOutcome::Inserted(permission))
     }
 
     pub fn remote_team_view_token_is_current(
@@ -469,7 +464,24 @@ impl ReadDatabase {
             target_user_id,
             viewer_party_id,
             viewer_host_id,
-            now,
+            Some(now),
+        )
+    }
+
+    /// Returns an active permission even after bearer expiry so issuance can
+    /// decrypt and renew the same token. Revoked rows are never returned.
+    pub fn renewable_remote_user_view_permission(
+        &self,
+        target_user_id: &[u8],
+        viewer_party_id: &[u8],
+        viewer_host_id: &[u8],
+    ) -> Result<Option<RemoteUserViewPermission>> {
+        permission_for_scope(
+            &self.connection,
+            target_user_id,
+            viewer_party_id,
+            viewer_host_id,
+            None,
         )
     }
 
@@ -485,7 +497,23 @@ impl ReadDatabase {
             target_team_id,
             viewer_party_id,
             viewer_host_id,
-            now,
+            Some(now),
+        )
+    }
+
+    /// Team equivalent of [`Self::renewable_remote_user_view_permission`].
+    pub fn renewable_remote_team_view_permission(
+        &self,
+        target_team_id: &[u8],
+        viewer_party_id: &[u8],
+        viewer_host_id: &[u8],
+    ) -> Result<Option<RemoteTeamViewPermission>> {
+        team_permission_for_scope(
+            &self.connection,
+            target_team_id,
+            viewer_party_id,
+            viewer_host_id,
+            None,
         )
     }
 
@@ -561,6 +589,50 @@ impl ReadSnapshot<'_> {
             })
             .transpose()
     }
+
+    pub fn remote_member_view_tokens(
+        &self,
+        target_team_id: &[u8],
+    ) -> Result<Vec<StoredRemoteMemberViewToken>> {
+        let mut statement = self.connection().prepare(
+            "SELECT member_party_id, member_host_id, ptk_generation, ptk_role_type,
+                    ptk_visibility, exact_secret_box
+             FROM team_remote_member_view_tokens
+             WHERE target_team_id = ?1
+             ORDER BY member_party_id, member_host_id",
+        )?;
+        let tokens = statement
+            .query_map([target_team_id], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                ))
+            })?
+            .map(|row| {
+                let (
+                    member_party_id,
+                    member_host_id,
+                    generation,
+                    role_type,
+                    visibility,
+                    exact_secret_box,
+                ) = row?;
+                Ok(StoredRemoteMemberViewToken {
+                    member_party_id,
+                    member_host_id,
+                    ptk_generation: crate::error::unsigned(generation)?,
+                    ptk_role_type: crate::error::unsigned(role_type)?,
+                    ptk_visibility: visibility,
+                    exact_secret_box,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(tokens)
+    }
 }
 
 fn validate_grant(
@@ -606,7 +678,7 @@ fn permission_for_scope(
     target_user_id: &[u8],
     viewer_party_id: &[u8],
     viewer_host_id: &[u8],
-    now: u64,
+    expires_after: Option<u64>,
 ) -> Result<Option<RemoteUserViewPermission>> {
     let stored: Option<StoredPermission> = connection
         .query_row(
@@ -632,7 +704,7 @@ fn permission_for_scope(
         return Ok(None);
     };
     let expires_at = crate::error::unsigned(expires_at)?;
-    if state != 1 || expires_at <= now {
+    if state != 1 || expires_after.is_some_and(|now| expires_at <= now) {
         return Ok(None);
     }
     Ok(Some(RemoteUserViewPermission {
@@ -680,7 +752,7 @@ fn team_permission_for_scope(
     target_team_id: &[u8],
     viewer_party_id: &[u8],
     viewer_host_id: &[u8],
-    now: u64,
+    expires_after: Option<u64>,
 ) -> Result<Option<RemoteTeamViewPermission>> {
     let stored: Option<StoredPermission> = connection
         .query_row(
@@ -706,7 +778,7 @@ fn team_permission_for_scope(
         return Ok(None);
     };
     let expires_at = crate::error::unsigned(expires_at)?;
-    if state != 1 || expires_at <= now {
+    if state != 1 || expires_after.is_some_and(|now| expires_at <= now) {
         return Ok(None);
     }
     Ok(Some(RemoteTeamViewPermission {
@@ -923,17 +995,47 @@ mod tests {
             .remote_user_view_token_is_current(&[5; 32], &uid, 200)
             .unwrap());
 
-        let mut reissue = grant(6, 300);
-        reissue.key_generation = [7; 16];
-        let reissued = database
-            .issue_remote_user_view_permission(&uid, &device, &viewer, &host, &reissue, 200)
-            .unwrap();
+        let reader = ReadDatabase::open(&database.path, crate::Config::default()).unwrap();
+        assert!(reader
+            .current_remote_user_view_permission(&uid, &viewer, &host, 200)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            reader
+                .renewable_remote_user_view_permission(&uid, &viewer, &host)
+                .unwrap()
+                .unwrap()
+                .token_hash,
+            [5; 32]
+        );
+        drop(reader);
+        let mut replacement = grant(7, 300);
+        replacement.token_hash = [6; 32];
         assert!(matches!(
-            reissued,
-            RemoteUserViewPermissionOutcome::Reissued(_)
+            database.issue_remote_user_view_permission(
+                &uid,
+                &device,
+                &viewer,
+                &host,
+                &replacement,
+                200,
+            ),
+            Err(Error::Invalid(
+                "expired federation permission must retain its bearer"
+            ))
         ));
+
+        let mut expired_renewal = grant(7, 300);
+        expired_renewal.token_hash = [5; 32];
+        let RemoteUserViewPermissionOutcome::Renewed(expired_renewal) = database
+            .issue_remote_user_view_permission(&uid, &device, &viewer, &host, &expired_renewal, 200)
+            .unwrap()
+        else {
+            panic!("expired active bearer must be renewed in place")
+        };
+        assert_eq!(expired_renewal.token_hash, [5; 32]);
         assert!(database
-            .remote_user_view_token_is_current(&[6; 32], &uid, 299)
+            .remote_user_view_token_is_current(&[5; 32], &uid, 299)
             .unwrap());
         assert!(database
             .revoke_remote_user_view_permission(&uid, &viewer, &host, 250)
@@ -944,6 +1046,24 @@ mod tests {
         assert!(!database
             .revoke_remote_user_view_permission(&uid, &viewer, &host, 251)
             .unwrap());
+        assert!(ReadDatabase::open(&database.path, crate::Config::default())
+            .unwrap()
+            .renewable_remote_user_view_permission(&uid, &viewer, &host)
+            .unwrap()
+            .is_none());
+        let mut revoked_renewal = grant(7, 400);
+        revoked_renewal.token_hash = [5; 32];
+        assert!(matches!(
+            database.issue_remote_user_view_permission(
+                &uid,
+                &device,
+                &viewer,
+                &host,
+                &revoked_renewal,
+                251,
+            ),
+            Err(Error::AuthorizationChanged)
+        ));
 
         let mut wrong = device;
         wrong[1] ^= 1;
@@ -1100,8 +1220,8 @@ mod tests {
             generation: 2,
             verify_key: &second_ptk,
         };
-        let mut reissue = grant(16, 300);
-        reissue.key_generation = [18; 16];
+        let mut expired_renewal = grant(18, 300);
+        expired_renewal.token_hash = [13; 32];
         assert!(matches!(
             database
                 .issue_remote_team_view_permission(
@@ -1110,18 +1230,30 @@ mod tests {
                     &viewer,
                     &viewer_host,
                     &second_authority,
-                    &reissue,
+                    &expired_renewal,
                     200,
                 )
                 .unwrap(),
-            RemoteTeamViewPermissionOutcome::Reissued(_)
+            RemoteTeamViewPermissionOutcome::Renewed(_)
         ));
         assert!(database
             .revoke_remote_team_view_permission(&team, &viewer, &viewer_host, 250)
             .unwrap());
         assert!(!database
-            .remote_team_view_token_is_current(&[16; 32], &team, 250)
+            .remote_team_view_token_is_current(&[13; 32], &team, 250)
             .unwrap());
+        assert!(matches!(
+            database.issue_remote_team_view_permission(
+                &team,
+                &device,
+                &viewer,
+                &viewer_host,
+                &second_authority,
+                &expired_renewal,
+                251,
+            ),
+            Err(Error::AuthorizationChanged)
+        ));
 
         database
             .connection

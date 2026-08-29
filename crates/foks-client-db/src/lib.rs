@@ -142,7 +142,7 @@ pub enum ScheduledJobKind {
     UserRefresh = 1,
     MutationReconcile = 2,
     YubiManagementRefresh = 3,
-    FederationReconcile = 4,
+    FederationRefresh = 4,
 }
 
 impl ScheduledJobKind {
@@ -151,7 +151,7 @@ impl ScheduledJobKind {
             1 => Ok(Self::UserRefresh),
             2 => Ok(Self::MutationReconcile),
             3 => Ok(Self::YubiManagementRefresh),
-            4 => Ok(Self::FederationReconcile),
+            4 => Ok(Self::FederationRefresh),
             _ => Err(Error::InvalidScheduledJob("unknown scheduled job kind")),
         }
     }
@@ -238,8 +238,9 @@ pub enum MutationState {
     Prepared = 1,
     Submitting = 2,
     SubmissionUnknown = 3,
-    Verified = 4,
+    RemoteVerified = 4,
     Rejected = 5,
+    Finalized = 6,
 }
 
 impl MutationState {
@@ -248,8 +249,9 @@ impl MutationState {
             1 => Ok(Self::Prepared),
             2 => Ok(Self::Submitting),
             3 => Ok(Self::SubmissionUnknown),
-            4 => Ok(Self::Verified),
+            4 => Ok(Self::RemoteVerified),
             5 => Ok(Self::Rejected),
+            6 => Ok(Self::Finalized),
             _ => Err(Error::InvalidMutationOperation("unknown operation state")),
         }
     }
@@ -261,14 +263,18 @@ impl MutationState {
                 (Self::Prepared, Self::Submitting | Self::Rejected)
                     | (
                         Self::Submitting,
-                        Self::SubmissionUnknown | Self::Verified | Self::Rejected
+                        Self::SubmissionUnknown | Self::RemoteVerified | Self::Rejected
                     )
-                    | (Self::SubmissionUnknown, Self::Verified | Self::Rejected)
+                    | (
+                        Self::SubmissionUnknown,
+                        Self::RemoteVerified | Self::Rejected
+                    )
+                    | (Self::RemoteVerified, Self::Finalized)
             )
     }
 
     pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Verified | Self::Rejected)
+        matches!(self, Self::Finalized | Self::Rejected)
     }
 }
 
@@ -378,20 +384,24 @@ impl TeamMutationKind {
 #[repr(u8)]
 pub enum TeamMutationState {
     Prepared = 1,
-    Submitted = 2,
-    Verified = 3,
-    Rejected = 4,
-    Superseded = 5,
+    Submitting = 2,
+    SubmissionUnknown = 3,
+    Submitted = 4,
+    Verified = 5,
+    Rejected = 6,
+    Superseded = 7,
 }
 
 impl TeamMutationState {
     fn from_sql(value: i64) -> Result<Self> {
         match value {
             1 => Ok(Self::Prepared),
-            2 => Ok(Self::Submitted),
-            3 => Ok(Self::Verified),
-            4 => Ok(Self::Rejected),
-            5 => Ok(Self::Superseded),
+            2 => Ok(Self::Submitting),
+            3 => Ok(Self::SubmissionUnknown),
+            4 => Ok(Self::Submitted),
+            5 => Ok(Self::Verified),
+            6 => Ok(Self::Rejected),
+            7 => Ok(Self::Superseded),
             _ => Err(Error::InvalidTeamMutation("unknown operation state")),
         }
     }
@@ -402,7 +412,17 @@ impl TeamMutationState {
                 (self, next),
                 (
                     Self::Prepared,
-                    Self::Submitted | Self::Rejected | Self::Superseded
+                    Self::Submitting | Self::Rejected | Self::Superseded
+                ) | (
+                    Self::Submitting,
+                    Self::SubmissionUnknown
+                        | Self::Submitted
+                        | Self::Verified
+                        | Self::Rejected
+                        | Self::Superseded
+                ) | (
+                    Self::SubmissionUnknown,
+                    Self::Submitted | Self::Verified | Self::Superseded
                 ) | (
                     Self::Submitted,
                     Self::Verified | Self::Rejected | Self::Superseded
@@ -457,7 +477,6 @@ impl FederationSagaState {
             || matches!(
                 (self, next),
                 (Self::PermissionGranted, Self::RemoteVerified)
-                    | (Self::RemoteVerified, Self::LocalPrepared)
                     | (Self::LocalPrepared, Self::LocalVerified)
                     | (Self::LocalVerified, Self::Completed)
                     | (
@@ -2064,7 +2083,14 @@ mod tests {
             .unwrap();
         assert!(reopened.begin_mutation_submission(&[6; 16], 103).is_err());
         reopened
-            .advance_mutation(&[6; 16], MutationState::Verified, 104)
+            .advance_mutation(&[6; 16], MutationState::RemoteVerified, 104)
+            .unwrap();
+        assert_eq!(
+            reopened.pending_mutations(&operation.host_id).unwrap()[0].state,
+            MutationState::RemoteVerified
+        );
+        reopened
+            .advance_mutation(&[6; 16], MutationState::Finalized, 105)
             .unwrap();
         assert!(reopened
             .pending_mutations(&operation.host_id)
@@ -2132,7 +2158,7 @@ mod tests {
         }
         store.begin_mutation_submission(&[2; 16], 201).unwrap();
         store
-            .advance_mutation(&[2; 16], MutationState::Verified, 202)
+            .advance_mutation(&[2; 16], MutationState::RemoteVerified, 202)
             .unwrap();
 
         let loaded = store
@@ -2145,7 +2171,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(loaded.operation_id, [2; 16]);
-        assert_eq!(loaded.state, MutationState::Verified);
+        assert_eq!(loaded.state, MutationState::RemoteVerified);
         assert!(store
             .latest_mutation_for_binding(
                 &host_id,
@@ -2338,15 +2364,36 @@ mod tests {
         store
             .advance_team_mutation(
                 &duplicate_transition.operation_id,
-                TeamMutationState::Submitted,
+                TeamMutationState::Submitting,
                 302,
             )
             .unwrap();
         store
             .advance_team_mutation(
                 &duplicate_transition.operation_id,
-                TeamMutationState::Verified,
+                TeamMutationState::SubmissionUnknown,
                 303,
+            )
+            .unwrap();
+        assert!(store
+            .advance_team_mutation(
+                &duplicate_transition.operation_id,
+                TeamMutationState::Rejected,
+                304,
+            )
+            .is_err());
+        store
+            .advance_team_mutation(
+                &duplicate_transition.operation_id,
+                TeamMutationState::Submitted,
+                304,
+            )
+            .unwrap();
+        store
+            .advance_team_mutation(
+                &duplicate_transition.operation_id,
+                TeamMutationState::Verified,
+                305,
             )
             .unwrap();
         let stale_third = TeamMutationOperation {
@@ -2365,13 +2412,20 @@ mod tests {
         };
         store.record_team_mutation(&superseded).unwrap();
         store
-            .advance_team_mutation(&superseded.operation_id, TeamMutationState::Submitted, 401)
+            .advance_team_mutation(&superseded.operation_id, TeamMutationState::Submitting, 401)
             .unwrap();
         store
-            .advance_team_mutation(&superseded.operation_id, TeamMutationState::Superseded, 402)
+            .advance_team_mutation(
+                &superseded.operation_id,
+                TeamMutationState::SubmissionUnknown,
+                402,
+            )
+            .unwrap();
+        store
+            .advance_team_mutation(&superseded.operation_id, TeamMutationState::Superseded, 403)
             .unwrap();
         assert!(store
-            .advance_team_mutation(&superseded.operation_id, TeamMutationState::Verified, 403,)
+            .advance_team_mutation(&superseded.operation_id, TeamMutationState::Verified, 404,)
             .is_err());
         let replacement = TeamMutationOperation {
             operation_id: [1; 16],
@@ -2427,7 +2481,6 @@ mod tests {
             .advance_federation_saga(
                 &operation.operation_id,
                 FederationSagaState::LocalPrepared,
-                Some((2, [9; 16])),
                 101,
             )
             .is_err());
@@ -2435,31 +2488,93 @@ mod tests {
             .advance_federation_saga(
                 &operation.operation_id,
                 FederationSagaState::RemoteVerified,
-                None,
                 101,
             )
             .unwrap();
         store
-            .advance_federation_saga(
+            .prepare_federation_local_mutation(
                 &operation.operation_id,
-                FederationSagaState::LocalPrepared,
-                Some((2, [9; 16])),
+                &TeamMutationOperation {
+                    operation_id: [9; 16],
+                    kind: TeamMutationKind::MembershipChange,
+                    host_id: operation.local_host_id.clone(),
+                    actor_id: operation.actor_id.clone(),
+                    device_id: [vec![foks_proto::ENTITY_DEVICE], vec![10; 32]].concat(),
+                    team_id: operation.local_team_id.clone(),
+                    expected_seqno: 2,
+                    request_hash: [11; 32],
+                    state: TeamMutationState::Prepared,
+                    created_at: 102,
+                    updated_at: 102,
+                },
                 102,
             )
             .unwrap();
+        let local_mutation = store.team_mutation(&[9; 16]).unwrap().unwrap();
+        store
+            .prepare_federation_local_mutation(&operation.operation_id, &local_mutation, 102)
+            .unwrap();
+        let changed_checkpoint = TeamMutationOperation {
+            expected_seqno: 3,
+            ..local_mutation.clone()
+        };
         assert!(store
+            .prepare_federation_local_mutation(&operation.operation_id, &changed_checkpoint, 103,)
+            .is_err());
+        let competing_saga = FederationSagaOperation {
+            operation_id: [42; 16],
+            remote_party_id: [vec![foks_proto::ENTITY_AD_HOC_TEAM], vec![12; 32]].concat(),
+            permission_hash: [13; 32],
+            state: FederationSagaState::PermissionGranted,
+            expected_local_seqno: None,
+            local_mutation_id: None,
+            created_at: 110,
+            updated_at: 110,
+            ..operation.clone()
+        };
+        store.record_federation_saga(&competing_saga).unwrap();
+        store
             .advance_federation_saga(
-                &operation.operation_id,
-                FederationSagaState::LocalVerified,
-                Some((3, [9; 16])),
-                103,
+                &competing_saga.operation_id,
+                FederationSagaState::RemoteVerified,
+                111,
+            )
+            .unwrap();
+        let competing_mutation = TeamMutationOperation {
+            operation_id: [12; 16],
+            created_at: 112,
+            updated_at: 112,
+            ..local_mutation.clone()
+        };
+        assert!(store
+            .prepare_federation_local_mutation(
+                &competing_saga.operation_id,
+                &competing_mutation,
+                112,
             )
             .is_err());
+        assert!(store
+            .team_mutation(&competing_mutation.operation_id)
+            .unwrap()
+            .is_none());
+        let unchanged = store
+            .federation_saga(&competing_saga.operation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.state, FederationSagaState::RemoteVerified);
+        assert_eq!(unchanged.expected_local_seqno, None);
+        assert_eq!(unchanged.local_mutation_id, None);
+        store
+            .advance_federation_saga(
+                &competing_saga.operation_id,
+                FederationSagaState::Rejected,
+                113,
+            )
+            .unwrap();
         store
             .advance_federation_saga(
                 &operation.operation_id,
                 FederationSagaState::LocalVerified,
-                None,
                 103,
             )
             .unwrap();
@@ -2471,12 +2586,7 @@ mod tests {
             1
         );
         store
-            .advance_federation_saga(
-                &operation.operation_id,
-                FederationSagaState::Completed,
-                None,
-                104,
-            )
+            .advance_federation_saga(&operation.operation_id, FederationSagaState::Completed, 104)
             .unwrap();
         assert!(store
             .pending_federation_sagas(&operation.local_host_id)

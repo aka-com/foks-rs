@@ -287,6 +287,8 @@ impl FoksClient {
             &credential.key,
             &sender.hepk,
             &role_key.verify_key,
+            &role_key.hepk,
+            role_key.generation,
             host.host_id(),
             enrolled.role,
         )?;
@@ -359,6 +361,7 @@ impl FoksClient {
             };
             let authenticated = self.authenticate_and_pin(host, &credential)?;
             return Ok(ProvisionedSoftwareDevice {
+                operation_id: None,
                 credential,
                 authenticated,
             });
@@ -469,6 +472,7 @@ impl FoksClient {
                 .any(|device| device.id == new_device.id && device.role == request.role)
         })?;
         Ok(ProvisionedSoftwareDevice {
+            operation_id: None,
             credential,
             authenticated,
         })
@@ -531,6 +535,8 @@ impl FoksClient {
             &credential.key,
             &sender.hepk,
             &role_key.verify_key,
+            &role_key.hepk,
+            role_key.generation,
             host.host_id(),
             role,
         )?;

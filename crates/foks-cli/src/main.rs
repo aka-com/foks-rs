@@ -11,7 +11,9 @@ use foks_client_app::{
     ProtocolPolicy, TrustRoot, YubiProvisionInput, YubiSignupInput,
 };
 use foks_keystore::EncryptedFileSecretStore;
-use foks_yubi::{CardId, HardwareYubiProvider, Pin, SlotId, YubiProvider as _};
+use foks_yubi::{
+    CardId, HardwareYubiProvider, Pin, PinRetryConfiguration, SlotId, YubiProvider as _,
+};
 use zeroize::Zeroizing;
 
 #[derive(clap::Parser)]
@@ -288,9 +290,9 @@ struct AccountCreate {
     device_name: String,
     #[arg(long, default_value = "")]
     email: String,
-    /// Signup invite. Standard codes start with `s.`; other values are multi-use codes.
-    #[arg(long, default_value = "")]
-    invite: String,
+    /// Private one-line file containing a signup invite.
+    #[arg(long)]
+    invite_file: Option<PathBuf>,
     /// Private UTF-8 file containing the passphrase (one trailing newline is ignored).
     #[arg(long, requires = "passphrase_confirmation_file")]
     passphrase_file: Option<PathBuf>,
@@ -356,20 +358,6 @@ enum YubiCommand {
         #[arg(long)]
         new_pin_file: PathBuf,
     },
-    ConfigureRetries {
-        profile: String,
-        alias: String,
-        /// Current PIN to verify and preserve after PIV resets it.
-        #[arg(long)]
-        pin_file: PathBuf,
-        /// PUK to restore immediately after PIV resets it.
-        #[arg(long)]
-        puk_file: PathBuf,
-        #[arg(long)]
-        pin_attempts: u8,
-        #[arg(long)]
-        puk_attempts: u8,
-    },
     RotateManagementKey {
         profile: String,
         alias: String,
@@ -421,6 +409,8 @@ struct YubiCreate {
     pq_slot: u8,
     #[arg(long)]
     pin_file: PathBuf,
+    #[command(flatten)]
+    retry: YubiRetryArguments,
     #[arg(long, requires = "passphrase_confirmation_file")]
     passphrase_file: Option<PathBuf>,
     #[arg(long, requires = "passphrase_file")]
@@ -444,6 +434,21 @@ struct YubiProvision {
     pq_slot: u8,
     #[arg(long)]
     pin_file: PathBuf,
+    #[command(flatten)]
+    retry: YubiRetryArguments,
+}
+
+#[derive(clap::Args)]
+struct YubiRetryArguments {
+    /// Private PUK file used only to set retry counts before FOKS key generation.
+    #[arg(long, requires_all = ["pin_attempts", "puk_attempts"])]
+    retry_puk_file: Option<PathBuf>,
+    /// PIN retry count to set during initial card preparation (1 through 15).
+    #[arg(long, requires_all = ["retry_puk_file", "puk_attempts"])]
+    pin_attempts: Option<u8>,
+    /// PUK retry count to set during initial card preparation (1 through 15).
+    #[arg(long, requires_all = ["retry_puk_file", "pin_attempts"])]
+    puk_attempts: Option<u8>,
 }
 
 #[derive(clap::Args)]
@@ -454,6 +459,9 @@ struct PassphraseChange {
     passphrase_file: PathBuf,
     #[arg(long)]
     passphrase_confirmation_file: PathBuf,
+    /// Private PIN file; when supplied, the alias is treated as Yubi-backed.
+    #[arg(long)]
+    pin_file: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -462,6 +470,9 @@ struct PassphraseVerify {
     alias: String,
     #[arg(long)]
     passphrase_file: PathBuf,
+    /// Private PIN file; when supplied, the alias is treated as Yubi-backed.
+    #[arg(long)]
+    pin_file: Option<PathBuf>,
 }
 
 fn main() {
@@ -624,6 +635,11 @@ fn account_command(
         }
         AccountCommand::Create(arguments) => {
             let session = ProfileSession::open(&registry, &arguments.profile)?;
+            let invite = arguments
+                .invite_file
+                .as_deref()
+                .map(read_invite)
+                .transpose()?;
             with_vault(state_dir, &session, |session, vault, master| {
                 let passphrase = match (
                     arguments.passphrase_file.as_deref(),
@@ -640,7 +656,7 @@ fn account_command(
                     &arguments.username,
                     &arguments.device_name,
                     &arguments.email,
-                    &arguments.invite,
+                    invite.as_deref().map_or("", String::as_str),
                     passphrase,
                     vault,
                     master,
@@ -671,6 +687,7 @@ fn passphrase_command(
     command: PassphraseCommand,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let registry = ProfileRegistry::open(state_dir)?;
+    let provider = HardwareYubiProvider::new();
     match command {
         PassphraseCommand::Set(arguments) => {
             let session = ProfileSession::open(&registry, &arguments.profile)?;
@@ -679,7 +696,16 @@ fn passphrase_command(
                     &arguments.passphrase_file,
                     &arguments.passphrase_confirmation_file,
                 )?;
-                let report = session.set_passphrase(&arguments.alias, passphrase, vault)?;
+                let report = match arguments.pin_file.as_deref() {
+                    Some(path) => session.set_yubi_passphrase(
+                        &arguments.alias,
+                        read_pin(path)?,
+                        passphrase,
+                        &provider,
+                        vault,
+                    )?,
+                    None => session.set_passphrase(&arguments.alias, passphrase, vault)?,
+                };
                 output(json, &report, "passphrase configured and verified")
             })
         }
@@ -690,7 +716,16 @@ fn passphrase_command(
                     &arguments.passphrase_file,
                     &arguments.passphrase_confirmation_file,
                 )?;
-                let report = session.change_passphrase(&arguments.alias, passphrase, vault)?;
+                let report = match arguments.pin_file.as_deref() {
+                    Some(path) => session.change_yubi_passphrase(
+                        &arguments.alias,
+                        read_pin(path)?,
+                        passphrase,
+                        &provider,
+                        vault,
+                    )?,
+                    None => session.change_passphrase(&arguments.alias, passphrase, vault)?,
+                };
                 output(json, &report, "passphrase changed and verified")
             })
         }
@@ -698,7 +733,16 @@ fn passphrase_command(
             let session = ProfileSession::open(&registry, &arguments.profile)?;
             with_vault(state_dir, &session, |session, vault, _| {
                 let passphrase = Passphrase::new(read_passphrase(&arguments.passphrase_file)?)?;
-                let report = session.verify_passphrase(&arguments.alias, passphrase, vault)?;
+                let report = match arguments.pin_file.as_deref() {
+                    Some(path) => session.verify_yubi_passphrase(
+                        &arguments.alias,
+                        read_pin(path)?,
+                        passphrase,
+                        &provider,
+                        vault,
+                    )?,
+                    None => session.verify_passphrase(&arguments.alias, passphrase, vault)?,
+                };
                 output(json, &report, "passphrase verified")
             })
         }
@@ -1003,6 +1047,7 @@ fn yubi_command(
             let session = ProfileSession::open(&registry, &arguments.profile)?;
             let card = yubi_card(&provider, arguments.card_serial)?;
             let pin = read_pin(&arguments.pin_file)?;
+            let retry_configuration = read_yubi_retry_configuration(&arguments.retry)?;
             let invite = arguments
                 .invite_file
                 .as_deref()
@@ -1032,6 +1077,7 @@ fn yubi_command(
                         card,
                         signing_slot: SlotId::new(arguments.signing_slot)?,
                         pq_slot: SlotId::new(arguments.pq_slot)?,
+                        retry_configuration,
                     },
                     pin,
                     &provider,
@@ -1057,6 +1103,7 @@ fn yubi_command(
             let session = ProfileSession::open(&registry, &arguments.profile)?;
             let card = yubi_card(&provider, arguments.card_serial)?;
             let pin = read_pin(&arguments.pin_file)?;
+            let retry_configuration = read_yubi_retry_configuration(&arguments.retry)?;
             with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.provision_yubi_device(
                     YubiProvisionInput {
@@ -1067,6 +1114,7 @@ fn yubi_command(
                         card,
                         signing_slot: SlotId::new(arguments.signing_slot)?,
                         pq_slot: SlotId::new(arguments.pq_slot)?,
+                        retry_configuration,
                     },
                     pin,
                     &provider,
@@ -1139,30 +1187,6 @@ fn yubi_command(
             with_vault(state_dir, &session, |session, vault, _| {
                 let status = session.unblock_yubi_pin(&alias, puk, new_pin, &provider, vault)?;
                 output(json, &status, "YubiKey PIN unblocked")
-            })
-        }
-        YubiCommand::ConfigureRetries {
-            profile,
-            alias,
-            pin_file,
-            puk_file,
-            pin_attempts,
-            puk_attempts,
-        } => {
-            let session = ProfileSession::open(&registry, &profile)?;
-            let pin = read_pin(&pin_file)?;
-            let puk = read_pin(&puk_file)?;
-            with_vault(state_dir, &session, |session, vault, _| {
-                let status = session.configure_yubi_retries(
-                    &alias,
-                    pin,
-                    puk,
-                    pin_attempts,
-                    puk_attempts,
-                    &provider,
-                    vault,
-                )?;
-                output(json, &status, "YubiKey retry policy changed")
             })
         }
         YubiCommand::RotateManagementKey {
@@ -1251,6 +1275,22 @@ fn yubi_card(
 fn read_pin(path: &Path) -> Result<Pin, Box<dyn std::error::Error>> {
     let value = read_passphrase(path)?;
     Ok(Pin::new(value.as_str())?)
+}
+
+fn read_yubi_retry_configuration(
+    arguments: &YubiRetryArguments,
+) -> Result<Option<PinRetryConfiguration>, Box<dyn std::error::Error>> {
+    match (
+        arguments.retry_puk_file.as_deref(),
+        arguments.pin_attempts,
+        arguments.puk_attempts,
+    ) {
+        (None, None, None) => Ok(None),
+        (Some(puk_file), Some(pin_attempts), Some(puk_attempts)) => Ok(Some(
+            PinRetryConfiguration::new(read_pin(puk_file)?, pin_attempts, puk_attempts)?,
+        )),
+        _ => Err("retry PUK file, PIN attempts, and PUK attempts must be supplied together".into()),
+    }
 }
 
 fn read_invite(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
@@ -1657,5 +1697,69 @@ mod tests {
         std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(read_invite(&private).is_err());
         assert!(read_invite(&link).is_err());
+    }
+
+    #[test]
+    fn retry_policy_is_available_only_on_enrollment_commands() {
+        let parsed = Arguments::try_parse_from([
+            "foks-rs",
+            "--state-dir",
+            "/tmp/foks-cli-test",
+            "yubi",
+            "create",
+            "local",
+            "hardware",
+            "--username",
+            "rae",
+            "--device-name",
+            "primary key",
+            "--card-serial",
+            "7",
+            "--pin-file",
+            "/tmp/pin",
+            "--retry-puk-file",
+            "/tmp/puk",
+            "--pin-attempts",
+            "5",
+            "--puk-attempts",
+            "4",
+        ])
+        .unwrap();
+        let Command::Yubi(YubiCommand::Create(create)) = parsed.command else {
+            panic!("expected Yubi create command");
+        };
+        assert_eq!(create.retry.pin_attempts, Some(5));
+        assert_eq!(create.retry.puk_attempts, Some(4));
+
+        assert!(Arguments::try_parse_from([
+            "foks-rs",
+            "--state-dir",
+            "/tmp/foks-cli-test",
+            "yubi",
+            "create",
+            "local",
+            "hardware",
+            "--username",
+            "rae",
+            "--device-name",
+            "primary key",
+            "--card-serial",
+            "7",
+            "--pin-file",
+            "/tmp/pin",
+            "--retry-puk-file",
+            "/tmp/puk",
+        ])
+        .is_err());
+        assert!(Arguments::try_parse_from([
+            "foks-rs",
+            "--state-dir",
+            "/tmp/foks-cli-test",
+            "yubi",
+            "configure-retries",
+            "local",
+            "hardware",
+        ])
+        .is_err());
     }
 }

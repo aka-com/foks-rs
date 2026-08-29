@@ -810,6 +810,8 @@ impl FoksClient {
                 &receiver,
                 sender_hepk,
                 &key.verify_key,
+                &key.hepk,
+                key.generation,
                 host.host_id(),
                 source.role,
                 source.generation,

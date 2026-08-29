@@ -217,7 +217,7 @@ fn protected_product_workflow_admits_and_reconciles_a_remote_team() {
             HardStateStore::open(&local.paths().hard_database)?.register_scheduled_job(
                 &ScheduledJob {
                     job_id: forged_job_id,
-                    kind: ScheduledJobKind::FederationReconcile,
+                    kind: ScheduledJobKind::FederationRefresh,
                     host_id: host.host_id().as_bytes().to_vec(),
                     scope_id: br#"{"local_team_alias":"local-team","remote_profile":"remote","remote_team_alias":"remote-team","destination":{"member":{"visibility":0}}}"#.to_vec(),
                     interval_micros: 24 * 60 * 60 * 1_000_000,

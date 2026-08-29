@@ -32,9 +32,9 @@ The implemented application slice covers:
 - durable refresh jobs and bounded retry state;
 - owner software-device provisioning and resume;
 - YubiKey-backed signup and software-owner provisioning, exact-card sync,
-  delegated-subkey recovery, PIN/PUK/retry administration, crash-safe PIV
-  management-key rotation and recovery, scheduled envelope refresh, and
-  software-owner revocation;
+  delegated-subkey recovery, PIN/PUK administration, enrollment-only retry
+  policy, crash-safe PIV management-key rotation and recovery, scheduled
+  envelope refresh, and software-owner revocation;
 - backup enrollment and owner recovery with pre-submit durable secrets;
 - named/ad-hoc team creation, resume, PTK-protected local records, team sync,
   and team-KV root creation; and

@@ -278,7 +278,10 @@ impl FoksClient {
         protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<CreatedYubiAccount<'a>> {
         validate_yubi_signup_operation_binding(host, parent, &operation, &secrets)?;
-        let already_verified = operation.state == MutationState::Verified;
+        let already_verified = matches!(
+            operation.state,
+            MutationState::RemoteVerified | MutationState::Finalized
+        );
         if operation.state == MutationState::Prepared {
             let request = prepared_request.ok_or(Error::OperationBinding(
                 "prepared Yubi signup is missing its exact request",
@@ -307,7 +310,10 @@ impl FoksClient {
             }
         } else if !matches!(
             operation.state,
-            MutationState::Submitting | MutationState::SubmissionUnknown | MutationState::Verified
+            MutationState::Submitting
+                | MutationState::SubmissionUnknown
+                | MutationState::RemoteVerified
+                | MutationState::Finalized
         ) {
             return Err(Error::OperationBinding("Yubi signup operation is terminal"));
         }
@@ -345,7 +351,7 @@ impl FoksClient {
         };
         if !already_verified {
             MutationCoordinator::new(&host.database_path, protected_store)
-                .verified(&operation.operation_id)?;
+                .remote_verified(&operation.operation_id)?;
         }
         Ok(CreatedYubiAccount {
             operation_id: operation.operation_id,
@@ -383,10 +389,10 @@ impl FoksClient {
         )
     }
 
-    /// Reconciles application-owned pending signup state even after the core
-    /// mutation journal became terminal and erased its retry material. This
-    /// closes the durability window between authoritative verification and
-    /// committing the application credential record.
+    /// Reconciles application-owned pending signup state after authoritative
+    /// verification. `RemoteVerified` retains core material until the app
+    /// stores the credential; `Finalized` is also accepted when cleanup was
+    /// interrupted after that application commit.
     #[allow(clippy::too_many_arguments)]
     pub fn resume_yubi_account_with_pending<'a>(
         &self,
@@ -403,7 +409,10 @@ impl FoksClient {
             .ok_or(Error::AccountRequest(
                 "Yubi signup operation is not recorded",
             ))?;
-        let (secrets, expected_username, request) = if operation.state == MutationState::Verified {
+        let (secrets, expected_username, request) = if matches!(
+            operation.state,
+            MutationState::RemoteVerified | MutationState::Finalized
+        ) {
             let expected_username = normalize_username(pending_username.as_bytes()).ok_or(
                 Error::OperationBinding("pending Yubi signup username is invalid"),
             )?;
