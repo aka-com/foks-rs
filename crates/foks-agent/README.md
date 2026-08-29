@@ -9,7 +9,10 @@ closes its local connection because its durable outcome can be ambiguous, and
 any surviving blocking work retains its worker permit until it exits.
 
 The resident scheduler polls durable `FoksScheduler` state and runs due user
-refreshes only for profiles whose protocol policy permits synchronization.
+refreshes and federation reconciliation only for profiles whose protocol
+policy permits them. Federation jobs resolve their public wake-up ID against
+the encrypted local-team record and nonblockingly acquire the remote profile;
+public SQLite aliases or roles never authorize a cross-host operation.
 Scheduler sweeps are single-flight, and a profile already in use by another
 frontend or scheduler is skipped rather than tying up a worker.
 The agent separately polls each current profile's stable HTTPS compatibility
@@ -22,11 +25,14 @@ drift artifact revokes on the next successful poll.
 The agent accepts software signup, including an optional invite and PPE
 passphrase, so the GPUI desktop can complete onboarding without opening
 credentials or SQLite. It also dispatches passphrase set, change, and public
-challenge verification. It generates device/PUK secrets inside the checked
+challenge verification, protected remote-team admission/listing, and
+federation-aware due-job runs. Cross-host admission locks both profiles in
+canonical order and advances both native rollback checkpoints. It generates
+device/PUK secrets inside the checked
 profile session and receives invite/passphrase values only over its
 authenticated private Unix socket; serialized request frames and decoded
-secret strings are zeroized. Provisioning and recovery requests remain outside
-the agent protocol.
+secret strings are zeroized. Software-device provisioning and backup recovery
+phrases remain outside the agent protocol.
 
 ```text
 foks-agent --state-dir /private/client

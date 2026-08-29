@@ -50,6 +50,8 @@ use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
+const FEDERATION_PERMISSION_TOKEN_HASH_TYPE_ID: u64 = 0x45cf_32f3_7d38_a811;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("invalid FOKS protocol value: {0}")]
@@ -582,6 +584,11 @@ pub fn prefixed_hash(type_id: u64, canonical_object: &[u8]) -> [u8; 32] {
     hash.finalize().into()
 }
 
+/// One-way storage and journal identity for a remote-view bearer token.
+pub fn federation_permission_token_hash(token: &foks_proto::PermissionToken) -> [u8; 32] {
+    prefixed_hash(FEDERATION_PERMISSION_TOKEN_HASH_TYPE_ID, token.expose())
+}
+
 /// Returns the Ed25519 public key for a raw 32-byte server signing seed.
 pub fn ed25519_public_key(seed: &[u8; 32]) -> [u8; 32] {
     SigningKey::from_bytes(seed).verifying_key().to_bytes()
@@ -740,6 +747,24 @@ pub struct AddLocalTeamMemberInput<'a> {
     pub time: u64,
     pub next_tree_location: [u8; 32],
     pub member: &'a EntityId,
+    pub member_source_role: Role,
+    pub member_destination_role: Role,
+    pub member_generation: u64,
+    pub member_public: &'a SharedPublicMaterial,
+}
+
+pub struct AddRemoteTeamMemberInput<'a> {
+    pub actor: &'a EntityId,
+    pub actor_source_role: Role,
+    pub team: &'a EntityId,
+    pub host: &'a EntityId,
+    pub sequence: u64,
+    pub previous: [u8; 32],
+    pub root: &'a TreeRoot,
+    pub time: u64,
+    pub next_tree_location: [u8; 32],
+    pub member: &'a EntityId,
+    pub member_host: &'a EntityId,
     pub member_source_role: Role,
     pub member_destination_role: Role,
     pub member_generation: u64,
@@ -1247,6 +1272,87 @@ pub fn make_add_local_team_member_link(
             role: input.member_destination_role,
             party: input.member.clone(),
             scoped_host: None,
+            source_role: input.member_source_role,
+            keys: Some(TeamMemberKeys {
+                verify_key: input.member_public.verify_key.clone(),
+                hepk_fingerprint: hepk_fingerprint(&input.member_public.hepk)?,
+                generation: input.member_generation,
+                removal_key_commitment: Some(removal_key_commitment),
+                index_range: None,
+            }),
+        }],
+        shared_keys: Vec::new(),
+        metadata: Vec::new(),
+    };
+    let unsigned = UnsignedUserLink::team_group_change(&change)?;
+    let signature = sign_seed_typed(
+        actor_puk_seed,
+        LINK_OUTER_V1_TYPE_ID,
+        &unsigned.signing_bytes(&[])?,
+    )?;
+    Ok(AddLocalTeamMemberMaterial {
+        link: unsigned.finish(vec![signature])?,
+        removal_key_commitment,
+        next_tree_location: input.next_tree_location,
+    })
+}
+
+/// Constructs the signed roster transition for a remote user or team. The
+/// remote host scope is part of the signed link and therefore cannot be
+/// rewritten by the local server.
+pub fn make_add_remote_team_member_link(
+    input: &AddRemoteTeamMemberInput<'_>,
+    actor_puk_seed: &SecretSeed,
+    removal_key: &SecretSeed,
+) -> Result<AddLocalTeamMemberMaterial> {
+    input.actor.clone().require_type(foks_proto::ENTITY_USER)?;
+    if !matches!(
+        input.member.entity_type(),
+        foks_proto::ENTITY_USER | foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+    ) {
+        return Err(Error::NamedTeamMaterial);
+    }
+    input
+        .team
+        .clone()
+        .require_type(foks_proto::ENTITY_NAMED_TEAM)?;
+    input.host.clone().require_type(foks_proto::ENTITY_HOST)?;
+    input
+        .member_host
+        .clone()
+        .require_type(foks_proto::ENTITY_HOST)?;
+    if input.sequence < 2
+        || input.actor_source_role == Role::NONE
+        || input.member_source_role == Role::NONE
+        || input.member_destination_role == Role::NONE
+        || input.member_generation == 0
+        || input.member_host == input.host
+        || input.actor == input.member
+    {
+        return Err(Error::NamedTeamMaterial);
+    }
+    let actor_public = derive_shared_public(actor_puk_seed, foks_proto::ENTITY_PUK_VERIFY)?;
+    let removal_key_commitment = team_removal_key_commitment(removal_key)?;
+    let change = TeamGroupChange {
+        seqno: input.sequence,
+        previous: Some(input.previous),
+        root: input.root.clone(),
+        time: input.time,
+        next_location_commitment: prefixed_hash(
+            TREE_LOCATION_TYPE_ID,
+            &encode(&Value::Binary(input.next_tree_location.to_vec()))?,
+        ),
+        team: input.team.clone(),
+        host: input.host.clone(),
+        signer: actor_public.verify_key,
+        signer_owner: TeamKeyOwner {
+            party: input.actor.clone(),
+            source_role: input.actor_source_role,
+        },
+        changes: vec![TeamMemberChange {
+            role: input.member_destination_role,
+            party: input.member.clone(),
+            scoped_host: Some(input.member_host.clone()),
             source_role: input.member_source_role,
             keys: Some(TeamMemberKeys {
                 verify_key: input.member_public.verify_key.clone(),
@@ -2887,6 +2993,43 @@ pub fn open_yubi_management_key(
         &boxed.ciphertext,
     )?;
     foks_proto::YubiManagementKeyBoxPayload::decode(&cleartext).map_err(Into::into)
+}
+
+/// Seals a federation bearer token to the target team's member-load-floor
+/// PTK using the exact v0.1.9 typed SecretBox construction.
+pub fn seal_team_remote_member_view_token(
+    ptk_seed: &SecretSeed,
+    payload: &foks_proto::TeamRemoteMemberViewTokenBoxPayload,
+    nonce: [u8; 16],
+) -> Result<SecretBox> {
+    let key = derive_key(ptk_seed, 2, None)?;
+    let cleartext = Zeroizing::new(payload.encoded()?);
+    Ok(SecretBox {
+        nonce,
+        ciphertext: seal_typed_secretbox(
+            key.as_bytes(),
+            foks_proto::TEAM_REMOTE_MEMBER_VIEW_TOKEN_BOX_PAYLOAD_TYPE_ID,
+            &nonce,
+            cleartext.as_slice(),
+            false,
+        )?,
+    })
+}
+
+/// Opens and authenticates a federation token box. Callers must additionally
+/// bind the cleartext party and the outer PTK metadata to verified team state.
+pub fn open_team_remote_member_view_token(
+    ptk_seed: &SecretSeed,
+    boxed: &SecretBox,
+) -> Result<foks_proto::TeamRemoteMemberViewTokenBoxPayload> {
+    let key = derive_key(ptk_seed, 2, None)?;
+    let cleartext = open_typed_secretbox(
+        key.as_bytes(),
+        foks_proto::TEAM_REMOTE_MEMBER_VIEW_TOKEN_BOX_PAYLOAD_TYPE_ID,
+        &boxed.nonce,
+        &boxed.ciphertext,
+    )?;
+    foks_proto::TeamRemoteMemberViewTokenBoxPayload::decode(&cleartext).map_err(Into::into)
 }
 
 pub fn sign_yubi_typed(
@@ -5241,6 +5384,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(opened.seed, expected_seed);
+    }
+
+    #[test]
+    fn remote_member_view_token_box_round_trips_and_binds_ciphertext() {
+        let seed = SecretSeed::new([0xa1; 32]);
+        let party = foks_proto::FqParty::new(
+            EntityId::from_bytes([vec![foks_proto::ENTITY_NAMED_TEAM], vec![0xa2; 32]].concat())
+                .unwrap(),
+            EntityId::from_bytes([vec![foks_proto::ENTITY_HOST], vec![0xa3; 32]].concat()).unwrap(),
+        )
+        .unwrap();
+        let mut token = [0xa4; 17];
+        token[0] = 54;
+        let payload = foks_proto::TeamRemoteMemberViewTokenBoxPayload {
+            token: foks_proto::PermissionToken::new(token),
+            party,
+            time: 42,
+        };
+        let mut boxed = seal_team_remote_member_view_token(&seed, &payload, [0xa5; 16]).unwrap();
+        assert_eq!(
+            open_team_remote_member_view_token(&seed, &boxed).unwrap(),
+            payload
+        );
+        boxed.ciphertext[0] ^= 1;
+        assert!(open_team_remote_member_view_token(&seed, &boxed).is_err());
     }
 
     fn expected_enroll_host() -> EntityId {

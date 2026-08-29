@@ -65,7 +65,7 @@ XChaCha20-Poly1305 records in a private directory. The master key is never
 written alongside those records.
 
 `FoksScheduler` persists due times, bounded leases, failures, and retry state in
-the public hard-state database for user refresh and ambiguous-mutation
+the public hard-state database for user refresh, federation reconciliation, and ambiguous-mutation
 reconciliation. It deliberately owns neither an async runtime nor credentials:
 the application timer invokes `run_due` on its blocking storage worker and
 dispatches each public job identity to its protected account context. Jobs must
@@ -219,6 +219,17 @@ role are part of every lookup, encrypted PTK parcel, removal MAC, operation ID,
 and reconciliation check. The resume API locates the unique public journal row
 by team and expected sequence, so an interrupted server-loaded removal does not
 need the removal key or a returned secret-derived operation ID.
+
+Federation support is an intentionally client-coordinated slice. A Beacon is
+an untrusted HostID-to-address hint; `discover_and_pin` accepts it only after a
+direct probe authenticates the requested HostID. Remote user/team grants use
+the exact v0.1.9 bearer wire, remote public chains are independently verified
+and pinned, and `admit_remote_team_to_named_team` journals a secret-free
+cross-host saga before constructing the local membership edit. The application
+stores the removal key and stable membership binding in its encrypted vault.
+This does not implement federated trust policy, push propagation, remote-user
+membership, join inboxes, or automatic PTK rotation after a remote roster/key
+change.
 
 See [SECURITY.md](SECURITY.md) for the trust boundaries, invariant ownership,
 secret lifecycle, review order, and explicitly unimplemented surfaces.

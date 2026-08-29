@@ -106,7 +106,7 @@ pub struct RoutePolicy {
     pub upstream_method: Option<String>,
     #[serde(default)]
     pub position_constant: Option<String>,
-    pub listener: String,
+    pub listeners: Vec<String>,
     pub authentication: String,
     pub request: String,
     pub result: String,
@@ -381,7 +381,22 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
                 return invalid(format!("duplicate Rust constant {constant}"));
             }
         }
-        validate_listener(&route.listener)?;
+        if route.listeners.is_empty() {
+            return invalid(format!(
+                "route {}.{} has no listeners",
+                route.protocol, route.method
+            ));
+        }
+        let mut route_listeners = BTreeSet::new();
+        for listener in &route.listeners {
+            validate_listener(listener)?;
+            if !route_listeners.insert(listener.as_str()) {
+                return invalid(format!(
+                    "route {}.{} repeats listener {listener}",
+                    route.protocol, route.method
+                ));
+            }
+        }
         if route.authentication.is_empty()
             || route.request.is_empty()
             || route.result.is_empty()
@@ -569,12 +584,9 @@ pub fn render_routes(merged: &Merged<'_>) -> String {
             .expect("write String");
         writeln!(output, "        method: {},", rust_string(&policy.method)).expect("write String");
         writeln!(output, "        position: {},", route.position).expect("write String");
-        writeln!(
-            output,
-            "        listener: {},",
-            rust_string(&policy.listener)
-        )
-        .expect("write String");
+        write!(output, "        listeners: &[").expect("write String");
+        write_strings(&mut output, &policy.listeners, rust_string);
+        output.push_str("],\n");
         writeln!(
             output,
             "        authentication: {},",
@@ -674,7 +686,9 @@ pub fn render_contract(merged: &Merged<'_>) -> String {
         writeln!(output, "protocol_id = {:#010x}", route.protocol_id).expect("write String");
         writeln!(output, "method = {}", toml_string(&policy.method)).expect("write String");
         writeln!(output, "position = {}", route.position).expect("write String");
-        writeln!(output, "listener = {}", toml_string(&policy.listener)).expect("write String");
+        write!(output, "listeners = [").expect("write String");
+        write_strings(&mut output, &policy.listeners, toml_string);
+        output.push_str("]\n");
         writeln!(
             output,
             "authentication = {}",

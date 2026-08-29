@@ -38,9 +38,13 @@ impl KeyGenerationManifest {
         &self,
         provider: &dyn HostKeyProvider,
         require_genesis_host: bool,
+        require_genesis_capability: bool,
     ) -> Result<()> {
         for purpose in MANIFEST_PURPOSES {
             if purpose == KeyPurpose::Host && !require_genesis_host {
+                continue;
+            }
+            if purpose == KeyPurpose::Capability && !require_genesis_capability {
                 continue;
             }
             if provider.load_existing(purpose)?.generation()

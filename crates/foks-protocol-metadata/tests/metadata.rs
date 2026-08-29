@@ -28,7 +28,7 @@ supported = true
 protocol = "Probe"
 method = "probe"
 position_constant = "PROBE_METHOD_POSITION"
-listener = "probe"
+listeners = ["probe"]
 authentication = "public"
 request = "ProbeArgument"
 result = "ProbeResponse"
@@ -81,4 +81,23 @@ fn rejects_executable_policy_for_unsupported_route() {
         merge(&artifact, &policy),
         Err(MetadataError::Invalid(_))
     ));
+}
+
+#[test]
+fn route_listeners_must_be_nonempty_unique_and_known() {
+    let artifact = parse_artifact(ARTIFACT).unwrap();
+    for malformed in [
+        POLICY.replace("listeners = [\"probe\"]", "listeners = []"),
+        POLICY.replace(
+            "listeners = [\"probe\"]",
+            "listeners = [\"probe\", \"probe\"]",
+        ),
+        POLICY.replace("listeners = [\"probe\"]", "listeners = [\"unknown\"]"),
+    ] {
+        let policy = parse_policy(&malformed).unwrap();
+        assert!(matches!(
+            merge(&artifact, &policy),
+            Err(MetadataError::Invalid(_))
+        ));
+    }
 }

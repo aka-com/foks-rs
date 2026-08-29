@@ -400,7 +400,18 @@ impl HostKeyProvider for DirectoryKeyProvider {
         purpose: KeyPurpose,
         generation: KeyGenerationId,
     ) -> Result<SecretKey> {
-        let key = self.load(&self.generation_path(purpose, generation), purpose)?;
+        let generated = self.generation_path(purpose, generation);
+        let key = match self.load(&generated, purpose) {
+            Ok(key) => key,
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let canonical = self.load(&self.path(purpose), purpose)?;
+                if canonical.generation() != generation {
+                    return Err(Error::Key("key generation does not exist"));
+                }
+                canonical
+            }
+            Err(error) => return Err(error),
+        };
         if key.generation() != generation {
             return Err(Error::Key("key generation filename mismatch"));
         }

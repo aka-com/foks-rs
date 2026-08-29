@@ -97,6 +97,22 @@ const COVERAGE: &[Coverage] = &[
         ],
     },
     Coverage {
+        name: "federation_lifecycle",
+        run: crate::federation::federation_lifecycle,
+        routes: &[
+            ("Reg", "loadUserChain"),
+            ("User", "grantRemoteViewPermissionForUser"),
+            ("TeamLoader", "loadTeamChain"),
+            ("TeamLoader", "loadTeamRemoteViewTokens"),
+            ("TeamMember", "grantRemoteViewPermissionForTeam"),
+        ],
+    },
+    Coverage {
+        name: "unsupported_federation_routes",
+        run: crate::federation::unsupported_federation_routes,
+        routes: &[("Beacon", "beaconLookup")],
+    },
+    Coverage {
         name: "team_create_edit_and_kv",
         run: crate::team_create::public_client_creates_and_loads_named_and_adhoc_teams,
         routes: &[
@@ -119,7 +135,6 @@ const COVERAGE: &[Coverage] = &[
             ("TeamLoader", "checkTeamVOBearerToken"),
             ("TeamLoader", "loadTeamMembershipChain"),
             ("TeamLoader", "loadRemovalForMember"),
-            ("TeamLoader", "loadTeamRemoteViewTokens"),
             ("TeamLoader", "getServerConfig"),
             ("TeamAdmin", "checkTeamBearerToken"),
             ("TeamAdmin", "putTeamCert"),

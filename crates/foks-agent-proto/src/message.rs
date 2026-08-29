@@ -36,6 +36,14 @@ pub struct Request {
     pub operation: Operation,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FederationRole {
+    Member,
+    Admin,
+    Owner,
+}
+
 impl Request {
     pub fn new(id: u64, operation: Operation) -> Self {
         Self {
@@ -188,6 +196,18 @@ pub enum Operation {
         profile: String,
     },
     SyncTeam {
+        profile: String,
+        team_alias: String,
+    },
+    AdmitFederatedTeam {
+        local_profile: String,
+        local_team_alias: String,
+        remote_profile: String,
+        remote_team_alias: String,
+        role: FederationRole,
+        visibility: i16,
+    },
+    ListFederatedTeams {
         profile: String,
         team_alias: String,
     },
@@ -447,6 +467,30 @@ impl std::fmt::Debug for Operation {
                 team_alias,
             } => formatter
                 .debug_struct("SyncTeam")
+                .field("profile", profile)
+                .field("team_alias", team_alias)
+                .finish(),
+            Self::AdmitFederatedTeam {
+                local_profile,
+                local_team_alias,
+                remote_profile,
+                remote_team_alias,
+                role,
+                visibility,
+            } => formatter
+                .debug_struct("AdmitFederatedTeam")
+                .field("local_profile", local_profile)
+                .field("local_team_alias", local_team_alias)
+                .field("remote_profile", remote_profile)
+                .field("remote_team_alias", remote_team_alias)
+                .field("role", role)
+                .field("visibility", visibility)
+                .finish(),
+            Self::ListFederatedTeams {
+                profile,
+                team_alias,
+            } => formatter
+                .debug_struct("ListFederatedTeams")
                 .field("profile", profile)
                 .field("team_alias", team_alias)
                 .finish(),

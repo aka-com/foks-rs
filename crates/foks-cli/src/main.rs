@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use clap::{Parser as _, ValueEnum};
 use foks_client_app::{
     derive_vault_key, AccountVault, CheckedProfileSession, ClientCredentials, CredentialBackend,
-    Passphrase, Profile, ProfileRegistry, ProfileSession, ProtocolPolicy, TrustRoot,
-    YubiProvisionInput, YubiSignupInput,
+    FederationDestinationRole, Passphrase, Profile, ProfileRegistry, ProfileSession,
+    ProtocolPolicy, TrustRoot, YubiProvisionInput, YubiSignupInput,
 };
 use foks_keystore::EncryptedFileSecretStore;
 use foks_yubi::{CardId, HardwareYubiProvider, Pin, SlotId, YubiProvider as _};
@@ -250,6 +250,66 @@ enum TeamCommand {
         profile: String,
         team_alias: String,
     },
+    ListMembers {
+        profile: String,
+        team_alias: String,
+    },
+    AddMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+        #[arg(long, value_enum, default_value_t = FederationRoleArgument::Member)]
+        role: FederationRoleArgument,
+        #[arg(long, default_value_t = 0)]
+        visibility: i16,
+    },
+    ResumeAddMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+    },
+    /// Demotes a team member to a lower role.
+    DemoteMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+        #[arg(long, value_enum, default_value_t = FederationRoleArgument::Member)]
+        role: FederationRoleArgument,
+        #[arg(long, default_value_t = 0)]
+        visibility: i16,
+    },
+    RemoveMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+    },
+    ResumeMemberEdit {
+        profile: String,
+        team_alias: String,
+    },
+    /// Add a team from another pinned profile to a local named team.
+    AdmitRemote {
+        local_profile: String,
+        local_team_alias: String,
+        remote_profile: String,
+        remote_team_alias: String,
+        #[arg(long, value_enum, default_value_t = FederationRoleArgument::Member)]
+        role: FederationRoleArgument,
+        #[arg(long, default_value_t = 0)]
+        visibility: i16,
+    },
+    /// Lists protected remote-team bindings for one local team.
+    ListRemote {
+        profile: String,
+        team_alias: String,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum FederationRoleArgument {
+    Member,
+    Admin,
+    Owner,
 }
 
 #[derive(clap::Args)]
@@ -806,8 +866,21 @@ fn job_command(
         }
         JobCommand::RunDue { profile } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |session, vault, _| {
-                let report = session.run_due_jobs(now_microseconds()?, vault)?;
+            let credentials = ClientCredentials::open(state_dir)?;
+            credentials.with_checked_session(&session, |session| {
+                let master = credentials.master_key()?;
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+                let report = session.run_due_jobs_with_federation(
+                    now_microseconds()?,
+                    &mut vault,
+                    &registry,
+                    &credentials,
+                    &master,
+                )?;
                 output(
                     json,
                     &report,
@@ -1321,6 +1394,72 @@ fn team_command(
                 let report = session.sync_team(&team_alias, vault)?;
                 output(json, &report, "team and team KV synchronized")
             })
+        }
+        TeamCommand::AdmitRemote {
+            local_profile,
+            local_team_alias,
+            remote_profile,
+            remote_team_alias,
+            role,
+            visibility,
+        } => {
+            let destination = federation_destination(role, visibility)?;
+            let local = ProfileSession::open(&registry, &local_profile)?;
+            let remote = ProfileSession::open(&registry, &remote_profile)?;
+            let credentials = ClientCredentials::open(state_dir)?;
+            let report = credentials.with_checked_sessions(&local, &remote, |local, remote| {
+                let master = credentials.master_key()?;
+                let mut local_store = EncryptedFileSecretStore::open(
+                    &local.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                let mut remote_store = EncryptedFileSecretStore::open(
+                    &remote.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                local.admit_federated_team(
+                    remote,
+                    &local_team_alias,
+                    &remote_team_alias,
+                    destination,
+                    &mut AccountVault::new(&mut local_store),
+                    &mut AccountVault::new(&mut remote_store),
+                    &master,
+                )
+            })?;
+            output(
+                json,
+                &report,
+                "remote team added and reconciliation scheduled",
+            )
+        }
+        TeamCommand::ListRemote {
+            profile,
+            team_alias,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let memberships = session.list_federated_memberships(&team_alias, vault)?;
+                output(
+                    json,
+                    &memberships,
+                    &format!("{} federated team binding(s)", memberships.len()),
+                )
+            })
+        }
+    }
+}
+
+fn federation_destination(
+    role: FederationRoleArgument,
+    visibility: i16,
+) -> Result<FederationDestinationRole, Box<dyn std::error::Error>> {
+    match role {
+        FederationRoleArgument::Member => Ok(FederationDestinationRole::Member { visibility }),
+        FederationRoleArgument::Admin if visibility == 0 => Ok(FederationDestinationRole::Admin),
+        FederationRoleArgument::Owner if visibility == 0 => Ok(FederationDestinationRole::Owner),
+        FederationRoleArgument::Admin | FederationRoleArgument::Owner => {
+            Err("--visibility applies only to member roles".into())
         }
     }
 }

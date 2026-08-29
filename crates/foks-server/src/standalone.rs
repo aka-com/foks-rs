@@ -81,6 +81,7 @@ pub struct BackupArtifacts {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HostKeyBackupFiles {
     include_genesis: bool,
+    include_genesis_capability: bool,
     generated: Vec<String>,
 }
 
@@ -136,6 +137,11 @@ pub fn restore_backup(
         if purpose == crate::keys::KeyPurpose::Host && !host_key_files.include_genesis {
             continue;
         }
+        if purpose == crate::keys::KeyPurpose::Capability
+            && !host_key_files.include_genesis_capability
+        {
+            continue;
+        }
         let expected = decoded_manifest
             .generation(purpose)
             .ok_or(crate::Error::Key("incomplete backup key manifest"))?;
@@ -172,6 +178,11 @@ pub fn restore_backup(
     )?;
     for purpose in crate::keys::MANIFEST_PURPOSES {
         if purpose == crate::keys::KeyPurpose::Host && !host_key_files.include_genesis {
+            continue;
+        }
+        if purpose == crate::keys::KeyPurpose::Capability
+            && !host_key_files.include_genesis_capability
+        {
             continue;
         }
         let name = format!("{}.key", purpose.label());
@@ -213,6 +224,11 @@ fn validate_backup_key_directory(
     let mut expected = BTreeSet::from([crate::keys::WRAPPING_KEY_FILE.to_owned()]);
     for purpose in crate::keys::MANIFEST_PURPOSES {
         if purpose == crate::keys::KeyPurpose::Host && !host_key_files.include_genesis {
+            continue;
+        }
+        if purpose == crate::keys::KeyPurpose::Capability
+            && !host_key_files.include_genesis_capability
+        {
             continue;
         }
         expected.insert(format!("{}.key", purpose.label()));
@@ -285,6 +301,11 @@ pub fn backup_standalone_installation(
         if purpose == crate::keys::KeyPurpose::Host && !host_key_files.include_genesis {
             continue;
         }
+        if purpose == crate::keys::KeyPurpose::Capability
+            && !host_key_files.include_genesis_capability
+        {
+            continue;
+        }
         if provider.load_existing(purpose)?.generation()
             != manifest.generation(purpose).ok_or(crate::Error::Key(
                 "incomplete source key generation manifest",
@@ -314,6 +335,7 @@ pub fn backup_standalone_installation(
             return Err(crate::Error::Key("source host key generation mismatch"));
         }
     }
+    crate::keys::validate_capability_key_generations(&source, &provider)?;
     create_backup(
         destination.as_ref(),
         key_directory.as_ref(),
@@ -347,6 +369,11 @@ pub(crate) fn create_backup(
     )?;
     for purpose in crate::keys::MANIFEST_PURPOSES {
         if purpose == crate::keys::KeyPurpose::Host && !host_key_files.include_genesis {
+            continue;
+        }
+        if purpose == crate::keys::KeyPurpose::Capability
+            && !host_key_files.include_genesis_capability
+        {
             continue;
         }
         let name = format!("{}.key", purpose.label());
@@ -538,8 +565,42 @@ pub(crate) fn host_key_backup_files(
             generated.push(expected);
         }
     }
+    let capability_generations = database.capability_key_generations()?;
+    if capability_generations
+        .iter()
+        .filter(|generation| {
+            generation.state == foks_server_db::CapabilityKeyGenerationState::Active
+        })
+        .count()
+        != 1
+        || capability_generations
+            .iter()
+            .filter(|generation| generation.encrypted_file_name == "capability.key")
+            .count()
+            != 1
+    {
+        return Err(crate::Error::Key("invalid capability generation ledger"));
+    }
+    let mut include_genesis_capability = false;
+    for generation in capability_generations {
+        if generation.encrypted_file_name == "capability.key" {
+            include_genesis_capability =
+                generation.state != foks_server_db::CapabilityKeyGenerationState::Revoked;
+            continue;
+        }
+        let expected = crate::keys::capability_generation_file_name(generation.generation_id);
+        if generation.encrypted_file_name != expected {
+            return Err(crate::Error::Key("invalid capability generation filename"));
+        }
+        if generation.state != foks_server_db::CapabilityKeyGenerationState::Revoked {
+            generated.push(expected);
+        }
+    }
+    generated.sort();
+    generated.dedup();
     Ok(HostKeyBackupFiles {
         include_genesis,
+        include_genesis_capability,
         generated,
     })
 }

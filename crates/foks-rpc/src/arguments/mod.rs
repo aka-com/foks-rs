@@ -1,5 +1,6 @@
 //! Strict server-side decoders for the supported v0.1.9 request surface.
 
+mod federation;
 mod invites;
 mod passphrase;
 mod recovery;
@@ -8,6 +9,7 @@ mod team_loader;
 mod user_mutation;
 mod yubi;
 
+pub use federation::*;
 pub use invites::*;
 pub use passphrase::*;
 pub use recovery::*;

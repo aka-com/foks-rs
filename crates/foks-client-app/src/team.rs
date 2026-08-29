@@ -232,6 +232,20 @@ pub(super) struct StoredTeam {
     pub(super) removal_key: Option<[u8; 32]>,
     pub(super) name_commitment: Option<[u8; 16]>,
     pub(super) active: bool,
+    #[serde(default)]
+    pub(super) federated_members: Vec<StoredFederatedMembership>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) struct StoredFederatedMembership {
+    pub(super) remote_profile: String,
+    pub(super) remote_team_alias: String,
+    pub(super) remote_host_id: Vec<u8>,
+    pub(super) remote_team_id: Vec<u8>,
+    pub(super) destination: crate::FederationDestinationRole,
+    pub(super) removal_key: [u8; 32],
+    pub(super) operation_id: Option<[u8; 16]>,
+    pub(super) active: bool,
 }
 
 impl StoredTeam {
@@ -270,6 +284,7 @@ impl StoredTeam {
             removal_key: None,
             name_commitment: None,
             active: false,
+            federated_members: Vec::new(),
         })
     }
 
@@ -313,6 +328,9 @@ impl Drop for StoredTeam {
         self.owner.zeroize();
         self.removal_key.zeroize();
         self.name_commitment.zeroize();
+        for member in &mut self.federated_members {
+            member.removal_key.zeroize();
+        }
     }
 }
 
@@ -381,6 +399,25 @@ fn validate_stored_team(team: &StoredTeam, expected_alias: &str) -> Result<()> {
         return Err(Error::InvalidAccount(
             "team ID does not match protected PTKs",
         ));
+    }
+    let mut bindings = std::collections::BTreeSet::new();
+    for member in &team.federated_members {
+        validate_name(&member.remote_profile)?;
+        validate_name(&member.remote_team_alias)?;
+        let host = EntityId::from_bytes(member.remote_host_id.clone())?
+            .require_type(foks_proto::ENTITY_HOST)?;
+        let party = EntityId::from_bytes(member.remote_team_id.clone())?;
+        if !matches!(
+            party.entity_type(),
+            foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+        ) || !bindings.insert((host.into_bytes(), party.into_bytes()))
+            || member.destination.role() == Role::NONE
+            || member.active != member.operation_id.is_some()
+        {
+            return Err(Error::InvalidAccount(
+                "federated team membership binding is invalid",
+            ));
+        }
     }
     Ok(())
 }

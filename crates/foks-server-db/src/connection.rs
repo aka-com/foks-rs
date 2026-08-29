@@ -55,6 +55,22 @@ impl Database {
         })
     }
 
+    /// Opens an already-initialized writer database without creating a new
+    /// file. Offline administration commands use this to avoid leaving a
+    /// blank installation behind after a mistyped or premature invocation.
+    pub fn open_existing(path: impl AsRef<Path>, config: Config) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let connection = Connection::open_with_flags(&path, flags)?;
+        configure(&connection, &config)?;
+        schema::validate_connection(&connection)?;
+        Ok(Self {
+            connection,
+            config,
+            path,
+        })
+    }
+
     pub fn open_reader(&self) -> Result<Connection> {
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
         let connection = Connection::open_with_flags(&self.path, flags)?;
@@ -182,6 +198,12 @@ fn configure(connection: &Connection, config: &Config) -> Result<()> {
         || config.bad_passphrase_window.is_zero()
         || config.maximum_team_view_capabilities_per_pair == 0
         || config.maximum_active_team_view_capabilities == 0
+        || config.maximum_team_admin_capabilities_per_pair == 0
+        || config.maximum_active_team_admin_capabilities == 0
+        || config.maximum_remote_user_view_permissions_per_user == 0
+        || config.maximum_active_remote_user_view_permissions == 0
+        || config.maximum_remote_team_view_permissions_per_team == 0
+        || config.maximum_active_remote_team_view_permissions == 0
     {
         return Err(crate::Error::Invalid("zero database capacity limit"));
     }

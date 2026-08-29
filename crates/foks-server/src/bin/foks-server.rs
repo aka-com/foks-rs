@@ -59,6 +59,16 @@ enum Command {
     },
     /// Revokes the prior host signing key after the observation interval.
     CompleteHostKeyRotation(CompleteHostKeyRotationArguments),
+    /// Selects a new local capability-encryption key generation.
+    RotateCapabilityKey {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Erases retired capability keys after every dependent token has expired.
+    RetireCapabilityKeys {
+        #[arg(long)]
+        config: PathBuf,
+    },
     #[command(subcommand)]
     Invite(InviteCommand),
 }
@@ -236,6 +246,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::RotateOperatorRoot(arguments) => rotate_operator_root(arguments),
         Command::BeginHostKeyRotation { config } => rotate_host_key(config),
         Command::CompleteHostKeyRotation(arguments) => complete_host_key_rotation(arguments),
+        Command::RotateCapabilityKey { config } => rotate_capability_key(config),
+        Command::RetireCapabilityKeys { config } => retire_capability_keys(config),
         Command::Invite(command) => invite_command(command),
     }
 }
@@ -590,6 +602,61 @@ fn print_host_rotation(state: &foks_server::host::HostKeyRotationState) {
         state.add_link_seqno,
         state.revoke_link_seqno,
         state.observation_not_before,
+    );
+}
+
+fn rotate_capability_key(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let config = foks_server::installation::load_config(config_path)?;
+    foks_server::installation::validate_artifacts(&config)?;
+    let mut database = foks_server_db::Database::open_existing(
+        &config.database,
+        foks_server_db::Config::default(),
+    )?;
+    let root_key = read_root_key_file(&config.root_key_file)?;
+    let provider = foks_server::keys::DirectoryKeyProvider::open_for_rotation(
+        &config.key_directory,
+        *root_key,
+    )?;
+    let state =
+        foks_server::keys::rotate_capability_key(&mut database, &provider, now_microseconds()?)?;
+    print_capability_rotation(&state);
+    Ok(())
+}
+
+fn retire_capability_keys(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let config = foks_server::installation::load_config(config_path)?;
+    foks_server::installation::validate_artifacts(&config)?;
+    let mut database = foks_server_db::Database::open_existing(
+        &config.database,
+        foks_server_db::Config::default(),
+    )?;
+    let root_key = read_root_key_file(&config.root_key_file)?;
+    let provider = foks_server::keys::DirectoryKeyProvider::open_for_rotation(
+        &config.key_directory,
+        *root_key,
+    )?;
+    let state =
+        foks_server::keys::retire_capability_keys(&mut database, &provider, now_microseconds()?)?;
+    print_capability_rotation(&state);
+    Ok(())
+}
+
+fn print_capability_rotation(state: &foks_server::keys::CapabilityKeyRotationState) {
+    let hex = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    println!(
+        "capability-key active_generation={} retiring_generations={}",
+        hex(&state.active_generation_id),
+        state
+            .retiring_generation_ids
+            .iter()
+            .map(|generation| hex(generation))
+            .collect::<Vec<_>>()
+            .join(",")
     );
 }
 

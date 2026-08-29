@@ -107,6 +107,11 @@ impl TestEnvironment {
     }
 
     #[doc(hidden)]
+    pub fn database_path(&self) -> &Path {
+        self.inner.paths.database()
+    }
+
+    #[doc(hidden)]
     pub fn rotate_host_key(&self) -> foks_server::Result<foks_server::host::HostKeyRotationState> {
         if *self
             .inner
@@ -146,6 +151,31 @@ impl TestEnvironment {
                     "missing test host observation deadline",
                 ))?,
         )
+    }
+
+    #[doc(hidden)]
+    pub fn rotate_capability_key(
+        &self,
+    ) -> foks_server::Result<foks_server::keys::CapabilityKeyRotationState> {
+        if *self
+            .inner
+            .running
+            .lock()
+            .expect("test server lifecycle lock")
+        {
+            return Err(foks_server::Error::Config(
+                "test capability rotation requires a stopped server",
+            ));
+        }
+        let provider = foks_server::keys::DirectoryKeyProvider::open_for_rotation(
+            self.inner.paths.keys(),
+            self.inner.root_key,
+        )?;
+        let mut database = foks_server_db::Database::open(
+            self.inner.paths.database(),
+            self.inner.database_config.clone(),
+        )?;
+        foks_server::keys::rotate_capability_key(&mut database, &provider, self.advance_clock(1))
     }
 
     pub fn start_probe_override(
@@ -283,6 +313,16 @@ impl TestEnvironment {
                 "User",
                 "changePassphrase",
             ),
+            TestFault::FederationGrantTeamAfterCommitBeforeResponse => (
+                foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
+                "TeamMember",
+                "grantRemoteViewPermissionForTeam",
+            ),
+            TestFault::FederationTeamEditAfterCommitBeforeResponse => (
+                foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
+                "TeamAdmin",
+                "editTeam",
+            ),
             TestFault::BetweenLargeFileChunks => (
                 foks_server::SessionFaultPoint::BetweenLargeFileChunks,
                 "KvStore",
@@ -319,6 +359,8 @@ pub enum TestFault {
     SignupDuringResponseWrite,
     PassphraseSetAfterCommitBeforeResponse,
     PassphraseChangeDuringResponseWrite,
+    FederationGrantTeamAfterCommitBeforeResponse,
+    FederationTeamEditAfterCommitBeforeResponse,
     BetweenLargeFileChunks,
 }
 
@@ -328,6 +370,7 @@ pub enum TestProfile {
     Default,
     SmallCapacity,
     SmallTeamCapacity,
+    SmallFederationCapacity,
     QueuePressure,
     TightIo,
     ProductionBenchmark,
@@ -358,6 +401,13 @@ impl TestProfile {
                 maximum_kv_namespace_bytes: 512 * 1024,
                 maximum_kv_namespace_objects: 128,
                 maximum_database_bytes: 16 * 1024 * 1024,
+                ..foks_server_db::Config::default()
+            },
+            Self::SmallFederationCapacity => foks_server_db::Config {
+                maximum_remote_user_view_permissions_per_user: 2,
+                maximum_active_remote_user_view_permissions: 3,
+                maximum_remote_team_view_permissions_per_team: 2,
+                maximum_active_remote_team_view_permissions: 3,
                 ..foks_server_db::Config::default()
             },
             Self::Default

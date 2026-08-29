@@ -10,10 +10,11 @@
 use std::io::{Read, Write};
 
 use foks_proto::{
-    AdHocTeamCreateArgument, AddTeamMemberArgument, EntityId, InviteCode, KvDirectory, KvDirent,
-    KvLargeFileMetadata, KvNodeId, KvPathVersionVector, KvSmallFileBox, KvUploadChunk,
-    NamedTeamCreateArgument, PassphraseUpdateArgument, ProvisionDeviceArgument,
-    RegistrationChallenge, RemoveTeamMemberArgument, RevokeDeviceArgument, Role, Signature,
+    AdHocTeamCreateArgument, AddTeamMemberArgument, EntityId, FqParty, FqTeam, InviteCode,
+    KvDirectory, KvDirent, KvLargeFileMetadata, KvNodeId, KvPathVersionVector, KvSmallFileBox,
+    KvUploadChunk, NamedTeamCreateArgument, PassphraseUpdateArgument, PermissionToken,
+    ProvisionDeviceArgument, RegistrationChallenge, RemoteViewPermissionPayload,
+    RemoveTeamMemberArgument, RevokeDeviceArgument, Role, RoleAndGeneration, Signature,
     SoftwareSignupArgument, TeamBearerToken, TeamBearerTokenChallenge, TeamEditResult,
     TeamNameReservation, TeamRemovalKeyBox, TeamViewChallenge, TeamViewRequest,
     YubiEncryptedManagementKey, YubiSignupArgument,
@@ -415,6 +416,109 @@ pub fn encode_load_user_chain_request_from(
     )
 }
 
+/// Encodes the public registration-service form used to load a remote user
+/// after the remote user explicitly grants this caller a bearer permission.
+pub fn encode_load_remote_user_chain_request(
+    uid: &EntityId,
+    start: u64,
+    current_name: Option<(&[u8], u64)>,
+    token: &PermissionToken,
+) -> Result<Vec<u8>> {
+    uid.clone().require_type(foks_proto::ENTITY_USER)?;
+    if start == 0 {
+        return Err(foks_proto::Error::IntegerRange("user-chain start").into());
+    }
+    let argument = arguments::load_user_chain_argument_value(
+        uid,
+        start,
+        current_name,
+        arguments::remote_token_authorization(token),
+    );
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_LOAD_USER_CHAIN_METHOD_POSITION,
+        &encode(&argument)?,
+        0,
+    )
+}
+
+pub fn encode_beacon_lookup_request(host: &EntityId) -> Result<Vec<u8>> {
+    host.clone().require_type(foks_proto::ENTITY_HOST)?;
+    encode_call(
+        BEACON_PROTOCOL_ID,
+        BEACON_LOOKUP_METHOD_POSITION,
+        &encode(&Value::Array(vec![Value::Binary(host.as_bytes().to_vec())]))?,
+        0,
+    )
+}
+
+pub fn decode_beacon_lookup_response(
+    host: EntityId,
+    response: &[u8],
+) -> Result<foks_proto::BeaconHint> {
+    foks_proto::BeaconHint::decode_address(host, response).map_err(Into::into)
+}
+
+pub fn encode_grant_remote_view_permission_for_user_request(
+    payload: &RemoteViewPermissionPayload,
+) -> Result<Vec<u8>> {
+    encode_call(
+        USER_PROTOCOL_ID,
+        USER_GRANT_REMOTE_VIEW_PERMISSION_METHOD_POSITION,
+        &encode(&Value::Array(vec![payload.to_value()]))?,
+        0,
+    )
+}
+
+pub fn encode_grant_remote_view_permission_for_team_request(
+    payload: &RemoteViewPermissionPayload,
+    signature: &Signature,
+    generation: u64,
+    role: Role,
+) -> Result<Vec<u8>> {
+    if generation == 0 || role == Role::NONE {
+        return Err(foks_proto::Error::IntegerRange("team shared-key authorization").into());
+    }
+    encode_call(
+        TEAM_MEMBER_PROTOCOL_ID,
+        TEAM_MEMBER_GRANT_REMOTE_VIEW_PERMISSION_METHOD_POSITION,
+        &encode(&Value::Array(vec![
+            payload.to_value(),
+            Value::Array(vec![
+                signature.to_value(),
+                Value::Unsigned(generation),
+                role.to_value(),
+            ]),
+        ]))?,
+        0,
+    )
+}
+
+pub fn encode_load_team_remote_view_tokens_request(
+    team: &FqTeam,
+    token: &[u8; 16],
+    members: &[FqParty],
+) -> Result<Vec<u8>> {
+    if members.len() > 256 {
+        return Err(foks_proto::Error::IntegerRange("remote team-view member count").into());
+    }
+    let members = if members.is_empty() {
+        Value::Null
+    } else {
+        Value::Array(members.iter().map(FqParty::to_value).collect())
+    };
+    encode_call(
+        TEAM_LOADER_PROTOCOL_ID,
+        TEAM_LOAD_REMOTE_VIEW_TOKENS_METHOD_POSITION,
+        &encode(&Value::Array(vec![
+            team.to_value(),
+            Value::Binary(token.to_vec()),
+            members,
+        ]))?,
+        0,
+    )
+}
+
 /// Encodes an authenticated request for the owner-role PUK parcel addressed
 /// to `device_id`.
 pub fn encode_get_owner_puk_request(device_id: &[u8]) -> Result<Vec<u8>> {
@@ -776,6 +880,33 @@ pub fn encode_load_team_chain_request_from(
     start: u64,
     current_name: Option<(&[u8], u64)>,
 ) -> Result<Vec<u8>> {
+    encode_load_team_chain_request_with_options(
+        team,
+        host,
+        token,
+        start,
+        TeamChainLoadOptions {
+            current_name,
+            ..TeamChainLoadOptions::default()
+        },
+    )
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TeamChainLoadOptions<'a> {
+    pub have_ptk_generations: &'a [RoleAndGeneration],
+    pub current_name: Option<(&'a [u8], u64)>,
+    pub load_removal_key: bool,
+    pub load_remote_view_tokens: bool,
+}
+
+pub fn encode_load_team_chain_request_with_options(
+    team: &EntityId,
+    host: &EntityId,
+    token: &[u8; 16],
+    start: u64,
+    options: TeamChainLoadOptions<'_>,
+) -> Result<Vec<u8>> {
     let token = Value::Array(vec![
         Value::Unsigned(1),
         Value::Variant(Some((
@@ -783,22 +914,81 @@ pub fn encode_load_team_chain_request_from(
             Box::new(Value::Binary(token.to_vec())),
         ))),
     ]);
+    encode_load_team_chain_with_authorization(team, host, token, start, options)
+}
+
+/// Loads a team chain from the public TeamLoader service with a federation
+/// permission granted by the authoritative remote team.
+pub fn encode_load_remote_team_chain_request(
+    team: &EntityId,
+    host: &EntityId,
+    token: &PermissionToken,
+    start: u64,
+    current_name: Option<(&[u8], u64)>,
+) -> Result<Vec<u8>> {
+    encode_load_remote_team_chain_request_with_options(
+        team,
+        host,
+        token,
+        start,
+        TeamChainLoadOptions {
+            current_name,
+            ..TeamChainLoadOptions::default()
+        },
+    )
+}
+
+pub fn encode_load_remote_team_chain_request_with_options(
+    team: &EntityId,
+    host: &EntityId,
+    token: &PermissionToken,
+    start: u64,
+    options: TeamChainLoadOptions<'_>,
+) -> Result<Vec<u8>> {
+    let authorization = Value::Array(vec![
+        Value::Unsigned(2),
+        Value::Variant(Some((b"1".to_vec(), Box::new(token.to_value())))),
+    ]);
+    encode_load_team_chain_with_authorization(team, host, authorization, start, options)
+}
+
+fn encode_load_team_chain_with_authorization(
+    team: &EntityId,
+    host: &EntityId,
+    authorization: Value,
+    start: u64,
+    options: TeamChainLoadOptions<'_>,
+) -> Result<Vec<u8>> {
+    let have_ptk_generations = if options.have_ptk_generations.is_empty() {
+        Value::Null
+    } else {
+        Value::Array(
+            options
+                .have_ptk_generations
+                .iter()
+                .copied()
+                .map(RoleAndGeneration::to_value)
+                .collect(),
+        )
+    };
     let argument = encode(&Value::Array(vec![
         Value::Array(vec![
             Value::Binary(team.as_bytes().to_vec()),
             Value::Binary(host.as_bytes().to_vec()),
         ]),
-        token,
+        authorization,
         Value::Unsigned(start),
-        current_name.map_or(Value::Null, |(name, next_sequence)| {
-            Value::Array(vec![
-                Value::Text(name.to_vec()),
-                Value::Unsigned(next_sequence),
-            ])
-        }),
-        Value::Null,
-        Value::Bool(false),
-        Value::Bool(false),
+        have_ptk_generations,
+        options
+            .current_name
+            .map_or(Value::Null, |(name, next_sequence)| {
+                Value::Array(vec![
+                    Value::Text(name.to_vec()),
+                    Value::Unsigned(next_sequence),
+                ])
+            }),
+        Value::Bool(options.load_removal_key),
+        Value::Bool(options.load_remote_view_tokens),
     ]))?;
     encode_call(
         TEAM_LOADER_PROTOCOL_ID,

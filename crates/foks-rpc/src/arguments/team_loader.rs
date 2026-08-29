@@ -1,4 +1,7 @@
-use foks_proto::{EntityId, Signature, TeamViewChallenge, TeamViewRequest};
+use foks_proto::{
+    EntityId, PermissionToken, Role, RoleAndGeneration, Signature, TeamViewChallenge,
+    TeamViewRequest,
+};
 use foks_snowpack::{decode, encode, Value};
 
 use crate::{Error, Result};
@@ -13,9 +16,18 @@ pub struct ActivateTeamViewArgument {
 pub struct LoadTeamChainArgument {
     pub team: EntityId,
     pub host: EntityId,
-    pub token: [u8; 16],
+    pub authorization: TeamChainAuthorization,
     pub start: u64,
+    pub have_ptk_generations: Vec<RoleAndGeneration>,
     pub name_cursor: Option<(Vec<u8>, u64)>,
+    pub load_removal_key: bool,
+    pub load_remote_view_tokens: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TeamChainAuthorization {
+    LocalView([u8; 16]),
+    RemotePermission(PermissionToken),
 }
 
 pub fn decode_team_view_request(bytes: &[u8]) -> Result<TeamViewRequest> {
@@ -39,7 +51,7 @@ pub fn decode_load_team_chain(bytes: &[u8]) -> Result<LoadTeamChainArgument> {
     let Value::Array(fields) = decode(bytes)? else {
         return Err(shape("team-chain load struct"));
     };
-    let [team_host, token, Value::Unsigned(start), cursor, Value::Null, Value::Bool(false), Value::Bool(false)] =
+    let [team_host, token, Value::Unsigned(start), have_ptk_generations, cursor, Value::Bool(load_removal_key), Value::Bool(load_remote_view_tokens)] =
         fields.as_slice()
     else {
         return Err(shape("supported local team-chain load fields"));
@@ -47,7 +59,8 @@ pub fn decode_load_team_chain(bytes: &[u8]) -> Result<LoadTeamChainArgument> {
     let [Value::Binary(team), Value::Binary(host)] = team_host_array(team_host)? else {
         return Err(shape("team and host IDs"));
     };
-    let token = decode_view_token(token)?;
+    let authorization = decode_view_token(token)?;
+    let have_ptk_generations = decode_shared_key_generations(have_ptk_generations)?;
     let name_cursor = match cursor {
         Value::Null => None,
         Value::Array(values) => match values.as_slice() {
@@ -59,10 +72,36 @@ pub fn decode_load_team_chain(bytes: &[u8]) -> Result<LoadTeamChainArgument> {
     Ok(LoadTeamChainArgument {
         team: EntityId::from_bytes(team.clone())?,
         host: EntityId::from_bytes(host.clone())?,
-        token,
+        authorization,
         start: *start,
+        have_ptk_generations,
         name_cursor,
+        load_removal_key: *load_removal_key,
+        load_remote_view_tokens: *load_remote_view_tokens,
     })
+}
+
+fn decode_shared_key_generations(value: &Value) -> Result<Vec<RoleAndGeneration>> {
+    let values = match value {
+        Value::Null => return Ok(Vec::new()),
+        Value::Array(values) => values,
+        _ => return Err(shape("PTK generation list")),
+    };
+    let mut result = Vec::with_capacity(values.len());
+    for value in values {
+        let Value::Array(fields) = value else {
+            return Err(shape("PTK generation fields"));
+        };
+        let [role, Value::Unsigned(generation)] = fields.as_slice() else {
+            return Err(shape("PTK generation fields"));
+        };
+        let role = Role::decode(&encode(role)?)?;
+        result.push(RoleAndGeneration {
+            role,
+            generation: *generation,
+        });
+    }
+    Ok(result)
 }
 
 fn team_host_array(value: &Value) -> Result<&[Value]> {
@@ -72,23 +111,30 @@ fn team_host_array(value: &Value) -> Result<&[Value]> {
     }
 }
 
-fn decode_view_token(value: &Value) -> Result<[u8; 16]> {
+fn decode_view_token(value: &Value) -> Result<TeamChainAuthorization> {
     let Value::Array(fields) = value else {
         return Err(shape("team-view token union"));
     };
-    let [Value::Unsigned(1), Value::Variant(Some((tag, value)))] = fields.as_slice() else {
+    let [Value::Unsigned(kind), Value::Variant(Some((tag, value)))] = fields.as_slice() else {
         return Err(shape("team-view token union"));
     };
-    let Value::Binary(token) = value.as_ref() else {
-        return Err(shape("team-view token bytes"));
-    };
-    if tag != b"0" || token.len() != 16 {
-        return Err(shape("local team-view token"));
+    match (*kind, tag.as_slice()) {
+        (1, b"0") => {
+            let Value::Binary(token) = value.as_ref() else {
+                return Err(shape("local team-view token bytes"));
+            };
+            Ok(TeamChainAuthorization::LocalView(
+                token
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| shape("16-byte team-view token"))?,
+            ))
+        }
+        (2, b"1") => Ok(TeamChainAuthorization::RemotePermission(
+            PermissionToken::decode(&encode(value.as_ref())?)?,
+        )),
+        _ => Err(shape("supported team-chain authorization")),
     }
-    token
-        .as_slice()
-        .try_into()
-        .map_err(|_| shape("16-byte team-view token"))
 }
 
 fn shape(expected: &'static str) -> Error {

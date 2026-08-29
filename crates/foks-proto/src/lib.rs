@@ -67,6 +67,7 @@ pub const ENTITY_AD_HOC_TEAM: u8 = 20;
 mod codec;
 mod entity;
 mod error;
+mod federation;
 mod host;
 mod identity;
 mod key_material;
@@ -78,6 +79,7 @@ mod yubi;
 
 pub use entity::*;
 pub use error::*;
+pub use federation::*;
 pub use host::*;
 pub use identity::*;
 pub use key_material::*;

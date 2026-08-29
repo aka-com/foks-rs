@@ -50,6 +50,7 @@ impl Database {
         {
             return Err(Error::AuthorizationChanged);
         }
+        require_current_owner_puk(&transaction, uid, mutation)?;
         if snapshot(&transaction, uid)?.is_some() {
             return Err(Error::PassphraseGeneration);
         }
@@ -76,6 +77,7 @@ impl Database {
         {
             return Err(Error::AuthorizationChanged);
         }
+        require_current_owner_puk(&transaction, uid, mutation)?;
         let current = snapshot(&transaction, uid)?.ok_or(Error::PassphraseNotFound)?;
         if current.salt != *mutation.salt
             || current.stretch_version != mutation.stretch_version
@@ -381,6 +383,26 @@ pub(crate) fn validate_mutation(
         || mutation.puk_generation == Some(0)
     {
         return Err(Error::Invalid("passphrase mutation"));
+    }
+    Ok(())
+}
+
+fn require_current_owner_puk(
+    transaction: &Transaction<'_>,
+    uid: &[u8],
+    mutation: PassphraseMutation<'_>,
+) -> Result<()> {
+    let generation: Option<i64> = transaction.query_row(
+        "SELECT max(generation) FROM shared_keys
+         WHERE uid = ?1 AND role_type = 3 AND visibility = 0",
+        [uid],
+        |row| row.get(0),
+    )?;
+    let Some(generation) = generation else {
+        return Err(Error::AuthorizationChanged);
+    };
+    if mutation.exact_puk_box.is_none() || mutation.puk_generation != Some(unsigned(generation)?) {
+        return Err(Error::AuthorizationChanged);
     }
     Ok(())
 }

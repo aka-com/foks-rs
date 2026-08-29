@@ -76,6 +76,7 @@ fn every_team_publication_boundary_is_atomic() {
             parcels: &[],
             seed_chain: &[],
             removal_boxes: &[],
+            remote_member_view_tokens: &[],
             expected_root_epoch: 1,
             expected_root_hash: &prior.root_hash,
             merkle_commit: &commit,
@@ -134,6 +135,15 @@ fn every_team_publication_boundary_is_atomic() {
         let reader =
             foks_server_db::ReadDatabase::open(&fixture.path, foks_server_db::Config::default())
                 .unwrap();
+        rusqlite::Connection::open(&fixture.path)
+            .unwrap()
+            .execute(
+                "INSERT INTO capability_key_generations
+                 (generation_id, encrypted_file_name, state, created_at, retire_after)
+                 VALUES (?1, 'capability.key', 1, 1, NULL)",
+                [[0x83; 16]],
+            )
+            .unwrap();
         let authority = reader
             .team_view_authority(&team, &[1; 33], &[2; 33], 3, 0, 1)
             .unwrap()
@@ -180,7 +190,7 @@ fn every_team_publication_boundary_is_atomic() {
                 &[0x86; 32],
                 &[0x87; 32],
                 &authority,
-                &[0x88; 16],
+                &[0x83; 16],
                 1_000_010,
                 1_000_006,
             )

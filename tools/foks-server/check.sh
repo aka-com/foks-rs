@@ -51,7 +51,7 @@ while IFS= read -r package; do
         exit 1
     fi
     if [ "$package" != "foks-server-testkit" ] \
-        && cargo tree --offline --locked --prefix none -p "$package" \
+        && cargo tree --offline --locked --edges normal --prefix none -p "$package" \
             | sed 's/ .*//' | grep '^foks-server-testkit$' >/dev/null; then
         echo "$package has a production dependency on foks-server-testkit" >&2
         exit 1

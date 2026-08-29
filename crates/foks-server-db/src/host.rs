@@ -19,6 +19,7 @@ pub struct HostBootstrap {
     pub probe_response: Vec<u8>,
     pub key_manifest: Vec<u8>,
     pub host_key_generation: [u8; 16],
+    pub capability_key_generation: [u8; 16],
     pub hostchain_link_hash: [u8; 32],
     pub exact_hostchain_link: Vec<u8>,
     pub services: Vec<BootstrapService>,
@@ -62,6 +63,15 @@ impl Database {
                 bootstrap.canonical_name,
                 bootstrap.probe_response,
                 bootstrap.key_manifest
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO capability_key_generations
+             (generation_id, encrypted_file_name, state, created_at, retire_after)
+             VALUES (?1, 'capability.key', 1, ?2, NULL)",
+            params![
+                bootstrap.capability_key_generation,
+                sql_integer(bootstrap.created_at)?
             ],
         )?;
         transaction.execute(
@@ -151,6 +161,7 @@ fn validate(bootstrap: &HostBootstrap, maximum_blob_bytes: usize) -> Result<()> 
         || bootstrap.root_node != [0; 32]
         || bootstrap.root_epoch != 1
         || bootstrap.host_key_generation == [0; 16]
+        || bootstrap.capability_key_generation == [0; 16]
         || bootstrap.exact_hostchain_link.is_empty()
         || bootstrap.services.len() != 6
         || bootstrap.services.iter().any(|service| {
@@ -224,6 +235,17 @@ fn bootstrap_matches(transaction: &Transaction<'_>, bootstrap: &HostBootstrap) -
             bootstrap.exact_hostchain_link.clone(),
         ))
     {
+        return Ok(false);
+    }
+    let capability_generation: Option<Vec<u8>> = transaction
+        .query_row(
+            "SELECT generation_id FROM capability_key_generations
+             WHERE encrypted_file_name = 'capability.key' AND state = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if capability_generation != Some(bootstrap.capability_key_generation.to_vec()) {
         return Ok(false);
     }
     let root: Option<StoredGenesisRoot> = transaction

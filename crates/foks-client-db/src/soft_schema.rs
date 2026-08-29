@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464b_5653; // `FKVS`
-pub(crate) const VERSION: u32 = 2;
+pub(crate) const VERSION: u32 = 3;
 
 pub(crate) const INITIAL: &str = r#"
 CREATE TABLE kv_parties (
@@ -74,5 +74,14 @@ CREATE TABLE kv_large_file_chunks (
     content BLOB NOT NULL CHECK (length(content) > 0),
     PRIMARY KEY (file_id, offset),
     FOREIGN KEY (file_id) REFERENCES kv_large_files(id) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+-- Beacon answers are routing hints, never trust anchors. Keeping them in the
+-- replaceable soft-state database makes that distinction structural.
+CREATE TABLE federation_discovery_hints (
+    host_id BLOB PRIMARY KEY CHECK (length(host_id) = 33),
+    address TEXT NOT NULL CHECK (length(address) BETWEEN 1 AND 512),
+    observed_at INTEGER NOT NULL CHECK (observed_at >= 0),
+    last_used_at INTEGER NOT NULL CHECK (last_used_at >= 0)
 ) STRICT, WITHOUT ROWID;
 "#;

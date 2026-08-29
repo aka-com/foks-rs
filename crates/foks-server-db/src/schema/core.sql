@@ -51,6 +51,23 @@ CREATE TABLE host_rotation_operations (
 CREATE UNIQUE INDEX host_rotation_one_in_progress
 ON host_rotation_operations(purpose) WHERE phase != 3;
 
+-- Symmetric capability keys rotate locally and do not require a hostchain
+-- publication. Retiring generations remain readable until every bounded
+-- challenge and federation permission encrypted under them has expired.
+CREATE TABLE capability_key_generations (
+    generation_id BLOB PRIMARY KEY CHECK (length(generation_id) = 16),
+    encrypted_file_name TEXT NOT NULL UNIQUE
+        CHECK (length(encrypted_file_name) BETWEEN 1 AND 96),
+    state INTEGER NOT NULL CHECK (state IN (1, 2, 3)),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    retire_after INTEGER CHECK (retire_after IS NULL OR retire_after >= created_at),
+    CHECK ((state = 1 AND retire_after IS NULL)
+        OR (state IN (2, 3) AND retire_after IS NOT NULL))
+) STRICT;
+
+CREATE UNIQUE INDEX capability_key_one_active
+ON capability_key_generations(state) WHERE state = 1;
+
 CREATE TABLE services (
     service_type INTEGER PRIMARY KEY CHECK (service_type IN (1, 2, 5, 10, 12, 16)),
     endpoint TEXT NOT NULL,

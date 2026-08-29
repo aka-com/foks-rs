@@ -8,7 +8,8 @@ use clap::Parser as _;
 use foks_agent_proto::{ErrorCode, Operation, Request, Response, MAXIMUM_MESSAGE_BYTES};
 use foks_client_app::{
     derive_vault_key, AccountVault, CancellationToken, CheckedProfileSession, ClientCredentials,
-    Passphrase, ProfileRegistry, ProfileSession, YubiProvisionInput, YubiSignupInput,
+    FederationDestinationRole, Passphrase, ProfileRegistry, ProfileSession, YubiProvisionInput,
+    YubiSignupInput,
 };
 use foks_keystore::EncryptedFileSecretStore;
 use foks_yubi::{CardId, HardwareYubiProvider, Pin, SlotId, YubiProvider as _};
@@ -222,8 +223,22 @@ fn run_scheduled_profile(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let registry = ProfileRegistry::open(state_dir)?;
     let session = ProfileSession::open_with_control(&registry, profile, timeout, cancellation)?;
-    let _ = try_with_vault(state_dir, &session, |session, vault| {
-        Ok(session.try_run_due_jobs(now_microseconds()?, vault)?)
+    let credentials = ClientCredentials::open(state_dir)?;
+    let now = now_microseconds()?;
+    let _ = credentials.try_with_checked_session(&session, |session| {
+        let master = credentials.master_key()?;
+        let mut store = EncryptedFileSecretStore::open(
+            &session.paths().credential_store,
+            derive_vault_key(&master),
+        )?;
+        session.run_due_jobs_with_federation(
+            now,
+            &mut AccountVault::new(&mut store),
+            &registry,
+            &credentials,
+            &master,
+        )?;
+        Ok::<_, foks_client_app::Error>(())
     })?;
     Ok(())
 }
@@ -950,14 +965,101 @@ fn dispatch_result(
                 )?)
             })
         }
-        Operation::RunDueJobs { profile } => {
+        Operation::AdmitFederatedTeam {
+            local_profile,
+            local_team_alias,
+            remote_profile,
+            remote_team_alias,
+            role,
+            visibility,
+        } => {
+            let destination = federation_destination(role, visibility)?;
+            let local = ProfileSession::open_with_control(
+                &registry,
+                &local_profile,
+                timeout,
+                cancellation.clone(),
+            )?;
+            let remote = ProfileSession::open_with_control(
+                &registry,
+                &remote_profile,
+                timeout,
+                cancellation,
+            )?;
+            let credentials = ClientCredentials::open(state_dir)?;
+            credentials.with_checked_sessions(&local, &remote, |local, remote| {
+                let master = credentials.master_key()?;
+                let mut local_store = EncryptedFileSecretStore::open(
+                    &local.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                let mut remote_store = EncryptedFileSecretStore::open(
+                    &remote.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                Ok(serde_json::to_value(local.admit_federated_team(
+                    remote,
+                    &local_team_alias,
+                    &remote_team_alias,
+                    destination,
+                    &mut AccountVault::new(&mut local_store),
+                    &mut AccountVault::new(&mut remote_store),
+                    &master,
+                )?)?)
+            })
+        }
+        Operation::ListFederatedTeams {
+            profile,
+            team_alias,
+        } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(
-                    session.run_due_jobs(now_microseconds()?, vault)?,
+                    session.list_federated_memberships(&team_alias, vault)?,
                 )?)
             })
+        }
+        Operation::RunDueJobs { profile } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            let credentials = ClientCredentials::open(state_dir)?;
+            credentials.with_checked_session(&session, |session| {
+                let master = credentials.master_key()?;
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                Ok(serde_json::to_value(
+                    session.run_due_jobs_with_federation(
+                        now_microseconds()?,
+                        &mut AccountVault::new(&mut store),
+                        &registry,
+                        &credentials,
+                        &master,
+                    )?,
+                )?)
+            })
+        }
+    }
+}
+
+fn federation_destination(
+    role: foks_agent_proto::FederationRole,
+    visibility: i16,
+) -> Result<FederationDestinationRole, Box<dyn std::error::Error>> {
+    match role {
+        foks_agent_proto::FederationRole::Member => {
+            Ok(FederationDestinationRole::Member { visibility })
+        }
+        foks_agent_proto::FederationRole::Admin if visibility == 0 => {
+            Ok(FederationDestinationRole::Admin)
+        }
+        foks_agent_proto::FederationRole::Owner if visibility == 0 => {
+            Ok(FederationDestinationRole::Owner)
+        }
+        foks_agent_proto::FederationRole::Admin | foks_agent_proto::FederationRole::Owner => {
+            Err("federation visibility applies only to member roles".into())
         }
     }
 }
@@ -1015,25 +1117,6 @@ fn yubi_card(
         [] => Err(format!("YubiKey serial {serial} is not connected").into()),
         _ => Err(format!("YubiKey serial {serial} is ambiguous").into()),
     }
-}
-
-fn try_with_vault<T>(
-    state_dir: &Path,
-    session: &ProfileSession,
-    operation: impl FnOnce(
-        &CheckedProfileSession<'_>,
-        &mut AccountVault<'_>,
-    ) -> Result<T, Box<dyn std::error::Error>>,
-) -> Result<Option<T>, Box<dyn std::error::Error>> {
-    let credentials = ClientCredentials::open(state_dir)?;
-    credentials.try_with_checked_session(session, |session| {
-        let master = credentials.master_key()?;
-        let mut store = EncryptedFileSecretStore::open(
-            &session.paths().credential_store,
-            derive_vault_key(&master),
-        )?;
-        operation(session, &mut AccountVault::new(&mut store))
-    })
 }
 
 #[cfg(test)]

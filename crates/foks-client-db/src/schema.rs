@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 15;
+pub(crate) const VERSION: u32 = 17;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -17,6 +17,7 @@ pub(crate) const REVISION_TABLES: &[&str] = &[
     "adhoc_team_operations",
     "team_mutation_operations",
     "mutation_operations",
+    "federation_saga_operations",
     "scheduled_jobs",
 ];
 
@@ -249,12 +250,54 @@ CREATE INDEX mutation_operations_pending
 ON mutation_operations (host_id, state, updated_at)
 WHERE state IN (1, 2, 3);
 
+-- Cross-host coordination contains only public identities, capability hashes,
+-- and local journal references. Bearer tokens and removal keys remain in the
+-- caller's protected memory or credential store.
+CREATE TABLE federation_saga_operations (
+    operation_id BLOB PRIMARY KEY CHECK (length(operation_id) = 16),
+    local_host_id BLOB NOT NULL REFERENCES hosts(host_id) ON DELETE RESTRICT
+        CHECK (length(local_host_id) = 33 AND substr(local_host_id, 1, 1) = x'02'),
+    remote_host_id BLOB NOT NULL
+        CHECK (length(remote_host_id) = 33 AND substr(remote_host_id, 1, 1) = x'02'),
+    actor_id BLOB NOT NULL
+        CHECK (length(actor_id) = 33 AND substr(actor_id, 1, 1) = x'01'),
+    local_team_id BLOB NOT NULL
+        CHECK (length(local_team_id) = 33 AND substr(local_team_id, 1, 1) = x'03'),
+    remote_party_id BLOB NOT NULL CHECK (
+        length(remote_party_id) = 33
+        AND substr(remote_party_id, 1, 1) IN (x'03', x'14')
+    ),
+    permission_hash BLOB NOT NULL CHECK (length(permission_hash) = 32),
+    destination_role_type INTEGER NOT NULL CHECK (destination_role_type BETWEEN 1 AND 3),
+    destination_visibility INTEGER NOT NULL CHECK (
+        (destination_role_type = 1 AND destination_visibility BETWEEN -32768 AND 32767)
+        OR (destination_role_type IN (2, 3) AND destination_visibility = 0)
+    ),
+    removal_key_commitment BLOB NOT NULL CHECK (length(removal_key_commitment) = 32),
+    state INTEGER NOT NULL CHECK (state BETWEEN 1 AND 6),
+    expected_local_seqno INTEGER CHECK (expected_local_seqno IS NULL OR expected_local_seqno > 0),
+    local_mutation_id BLOB CHECK (local_mutation_id IS NULL OR length(local_mutation_id) = 16),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+    CHECK ((expected_local_seqno IS NULL) = (local_mutation_id IS NULL))
+) STRICT, WITHOUT ROWID;
+
+CREATE UNIQUE INDEX federation_saga_active_binding
+ON federation_saga_operations (
+    local_host_id, local_team_id, remote_host_id, remote_party_id
+)
+WHERE state BETWEEN 1 AND 4;
+
+CREATE INDEX federation_saga_pending
+ON federation_saga_operations (local_host_id, state, updated_at)
+WHERE state BETWEEN 1 AND 4;
+
 -- Durable application scheduling metadata. Credentials and job payloads stay
 -- outside this public hard-state database; the scope only identifies the
 -- application-owned account or reconciliation target.
 CREATE TABLE scheduled_jobs (
     job_id BLOB PRIMARY KEY CHECK (length(job_id) = 16),
-    job_kind INTEGER NOT NULL CHECK (job_kind IN (1, 2, 3)),
+    job_kind INTEGER NOT NULL CHECK (job_kind IN (1, 2, 3, 4)),
     host_id BLOB NOT NULL REFERENCES hosts(host_id) ON DELETE CASCADE,
     scope_id BLOB NOT NULL CHECK (length(scope_id) BETWEEN 0 AND 1024),
     interval_micros INTEGER NOT NULL CHECK (interval_micros > 0),

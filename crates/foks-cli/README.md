@@ -32,6 +32,13 @@ be private regular files containing one bounded UTF-8 line. Output destinations
 for KV downloads and recovery phrases must be new private files; existing
 files, symlinks, and permissive secret inputs are rejected.
 
+`team admit-remote` coordinates two already-probed profiles and two active
+team records under one canonical dual-profile lock. It persists the remote
+binding and removal key before networking, resumes the cross-host mutation
+without blind replay, and registers a federation reconciliation job. `team
+list-remote` reports the protected bindings; `jobs run-due` also handles their
+renewal. No command reads an AKA path or puts a bearer token in SQLite.
+
 Current hosted profiles require an Ed25519 canary public key and the stable
 HTTPS URL polled by the agent:
 

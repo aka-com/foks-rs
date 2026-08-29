@@ -56,6 +56,7 @@ fn example() -> HostBootstrap {
         probe_response: b"probe".to_vec(),
         key_manifest: b"manifest".to_vec(),
         host_key_generation: [1; 16],
+        capability_key_generation: [4; 16],
         hostchain_link_hash: [2; 32],
         exact_hostchain_link: b"hostchain".to_vec(),
         services: [1, 2, 5, 10, 12, 16]

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use foks_proto::{EntityId, Hepk, PukParcel, Role, SeedChainBox};
+use foks_proto::{EntityId, Hepk, PukParcel, Role, SeedChainBox, TeamRemoteMemberViewToken};
 
 use crate::{Error, Result};
 
@@ -31,6 +31,7 @@ pub(crate) struct Command {
     pub parcels: Vec<Parcel>,
     pub seed_chain: Vec<SeedChainBox>,
     pub removal_boxes: Vec<RemovalBox>,
+    pub remote_member_view_tokens: Vec<TeamRemoteMemberViewToken>,
     pub expected_root_epoch: u64,
     pub expected_root_hash: [u8; 32],
 }
@@ -117,6 +118,10 @@ pub(crate) fn validate(
             {
                 expected_boxes.insert((
                     member.party.as_bytes().to_vec(),
+                    member
+                        .scoped_host
+                        .as_ref()
+                        .map(|host| host.as_bytes().to_vec()),
                     member.source_role,
                     member.generation,
                     key.role,
@@ -133,6 +138,10 @@ pub(crate) fn validate(
             {
                 expected_boxes.insert((
                     member.party.as_bytes().to_vec(),
+                    member
+                        .scoped_host
+                        .as_ref()
+                        .map(|host| host.as_bytes().to_vec()),
                     member.source_role,
                     member.generation,
                     key.role,
@@ -161,15 +170,15 @@ pub(crate) fn validate(
                 member.party == boxed.target.entity
                     && member.source_role == boxed.target.role
                     && member.generation == boxed.target.generation
-                    && boxed
-                        .target
-                        .host
-                        .as_ref()
-                        .is_none_or(|host| member.scoped_host.as_ref() == Some(host))
+                    && member.scoped_host == boxed.target.host
             })
             .ok_or(Error::Signup("team edit PTK parcel target mismatch"))?;
         let tuple = (
             target.party.as_bytes().to_vec(),
+            target
+                .scoped_host
+                .as_ref()
+                .map(|host| host.as_bytes().to_vec()),
             target.source_role,
             target.generation,
             boxed.role,
@@ -209,6 +218,12 @@ pub(crate) fn validate(
     )?;
     let expected_local = added
         .iter()
+        .filter(|member| {
+            member
+                .scoped_host
+                .as_ref()
+                .is_none_or(|scope| scope == &host)
+        })
         .map(|member| member.party.as_bytes().to_vec())
         .collect::<BTreeSet<_>>();
     let supplied_local = argument
@@ -219,6 +234,13 @@ pub(crate) fn validate(
     if expected_local != supplied_local {
         return Err(Error::Signup("local team permission set mismatch"));
     }
+    let remote_member_view_tokens = validate_remote_member_view_tokens(
+        &argument.remote_member_view_tokens,
+        &added,
+        &verified.shared_keys,
+        &team_id,
+        &host,
+    )?;
     let removal_boxes = validate_removal_boxes(&argument.removal_keys, &added, &team_id, &host)?;
     let exact_link = argument.link.encoded()?;
     Ok(Command {
@@ -233,6 +255,7 @@ pub(crate) fn validate(
         parcels,
         seed_chain: argument.seed_chain,
         removal_boxes,
+        remote_member_view_tokens,
         expected_root_epoch: root.epoch,
         expected_root_hash: root.root_hash,
     })
@@ -259,7 +282,7 @@ fn validate_removal_boxes(
             .ok_or(Error::Signup("team edit removal-box member mismatch"))?;
         if boxed.metadata.team != *team
             || boxed.metadata.host != *host
-            || boxed.metadata.member_host != *host
+            || boxed.metadata.member_host != *member.scoped_host.as_ref().unwrap_or(host)
             || boxed.metadata.destination_role != member.role
             || Some(boxed.commitment) != member.removal_key_commitment
             || !seen.insert((member.party.as_bytes().to_vec(), member.source_role))
@@ -268,7 +291,12 @@ fn validate_removal_boxes(
         }
         output.push(RemovalBox {
             member_id: member.party.as_bytes().to_vec(),
-            member_host_id: host.as_bytes().to_vec(),
+            member_host_id: member
+                .scoped_host
+                .as_ref()
+                .unwrap_or(host)
+                .as_bytes()
+                .to_vec(),
             source_role: member.source_role,
             exact: boxed.encoded()?,
         });
@@ -304,7 +332,7 @@ fn validate_removals(
             .ok_or(Error::Signup("team removal proof member mismatch"))?;
         if payload.team != *team
             || payload.host != *host
-            || payload.member_host != *host
+            || payload.member_host != *member.scoped_host.as_ref().unwrap_or(host)
             || payload.admin.as_bytes() != actor
             || payload.admin_host != *host
             || payload.root.epoch != root.epoch
@@ -316,6 +344,47 @@ fn validate_removals(
         }
     }
     Ok(())
+}
+
+fn validate_remote_member_view_tokens(
+    tokens: &[TeamRemoteMemberViewToken],
+    added: &[&foks_verify::VerifiedTeamMemberState],
+    shared_keys: &[foks_verify::VerifiedSharedKey],
+    team: &EntityId,
+    host: &EntityId,
+) -> Result<Vec<TeamRemoteMemberViewToken>> {
+    let expected = added
+        .iter()
+        .filter_map(|member| {
+            member.scoped_host.as_ref().and_then(|scope| {
+                (scope != host)
+                    .then(|| (member.party.as_bytes().to_vec(), scope.as_bytes().to_vec()))
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    if tokens.len() != expected.len() {
+        return Err(Error::Signup("remote member-view token count mismatch"));
+    }
+    let mut seen = BTreeSet::new();
+    for token in tokens {
+        let tuple = (
+            token.inner.member.party.as_bytes().to_vec(),
+            token.inner.member.host.as_bytes().to_vec(),
+        );
+        let key = shared_keys.iter().find(|key| {
+            key.role == token.inner.ptk_role && key.generation == token.inner.ptk_generation
+        });
+        if token.team != *team
+            || token.inner.member.host == *host
+            || token.inner.ptk_role != Role::member(0)
+            || key.is_none()
+            || !expected.contains(&tuple)
+            || !seen.insert(tuple)
+        {
+            return Err(Error::Signup("remote member-view token binding mismatch"));
+        }
+    }
+    Ok(tokens.to_vec())
 }
 
 fn stored_member(

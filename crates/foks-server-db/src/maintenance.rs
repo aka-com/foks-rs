@@ -13,6 +13,8 @@ pub struct MaintenanceReport {
     pub receipts: u64,
     pub locks: u64,
     pub uploads: u64,
+    pub federation_user_permissions: u64,
+    pub federation_team_permissions: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,6 +88,14 @@ impl Database {
                )",
             params![sql_integer(abandon_uploads_before)?],
         )?;
+        let federation_user_permissions = transaction.execute(
+            "DELETE FROM federation_user_view_permissions WHERE expires_at <= ?1",
+            [sql_integer(now)?],
+        )?;
+        let federation_team_permissions = transaction.execute(
+            "DELETE FROM federation_team_view_permissions WHERE expires_at <= ?1",
+            [sql_integer(now)?],
+        )?;
         transaction.commit()?;
         Ok(MaintenanceReport {
             challenges: u64::try_from(challenges).map_err(|_| Error::IntegerRange)?,
@@ -98,6 +108,10 @@ impl Database {
             receipts: u64::try_from(receipts).map_err(|_| Error::IntegerRange)?,
             locks: u64::try_from(locks).map_err(|_| Error::IntegerRange)?,
             uploads: u64::try_from(uploads).map_err(|_| Error::IntegerRange)?,
+            federation_user_permissions: u64::try_from(federation_user_permissions)
+                .map_err(|_| Error::IntegerRange)?,
+            federation_team_permissions: u64::try_from(federation_team_permissions)
+                .map_err(|_| Error::IntegerRange)?,
         })
     }
 

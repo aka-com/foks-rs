@@ -12,7 +12,7 @@ mod supported {
 
     use clap::Parser as _;
     use foks_agent_client::AgentClient;
-    use foks_agent_proto::SecretString;
+    use foks_agent_proto::{FederationRole, SecretString};
     use foks_desktop::{DesktopModel, PassphraseAction, Screen, YubiAction};
     use gpui::{
         div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, SharedString,
@@ -64,6 +64,10 @@ mod supported {
         yubi_new_puk: Entity<TextField>,
         yubi_pin_attempts: Entity<TextField>,
         yubi_puk_attempts: Entity<TextField>,
+        federation_local_team: Entity<TextField>,
+        federation_remote_profile: Entity<TextField>,
+        federation_remote_team: Entity<TextField>,
+        federation_visibility: Entity<TextField>,
     }
 
     impl FoksDesktop {
@@ -109,6 +113,13 @@ mod supported {
                 yubi_new_puk: cx.new(|cx| TextField::new("New PUK", true, 8, cx)),
                 yubi_pin_attempts: cx.new(|cx| TextField::new("3", false, 2, cx)),
                 yubi_puk_attempts: cx.new(|cx| TextField::new("3", false, 2, cx)),
+                federation_local_team: cx
+                    .new(|cx| TextField::new("Local named-team alias", false, 64, cx)),
+                federation_remote_profile: cx
+                    .new(|cx| TextField::new("Remote profile", false, 64, cx)),
+                federation_remote_team: cx
+                    .new(|cx| TextField::new("Remote team alias", false, 64, cx)),
+                federation_visibility: cx.new(|cx| TextField::new("0", false, 7, cx)),
             };
             desktop.refresh(cx);
             desktop
@@ -997,6 +1008,122 @@ mod supported {
             }
         }
 
+        fn federation_form(&self, cx: &Context<Self>) -> gpui::AnyElement {
+            let field = |label: &'static str, input: Entity<TextField>| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().text_sm().text_color(rgb(0x65738a)).child(label))
+                    .child(input)
+            };
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .p_4()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(0xd8dfeb))
+                .bg(rgb(0xf8faff))
+                .child(div().text_lg().child("Federated team admission"))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(0x65738a))
+                        .child("Both profiles must already be probed and contain active teams. Desktop admission uses a member role; CLI and agent clients can explicitly select admin or owner."),
+                )
+                .child(
+                    div()
+                        .grid()
+                        .grid_cols(2)
+                        .gap_3()
+                        .child(field("Local named team", self.federation_local_team.clone()))
+                        .child(field("Remote profile", self.federation_remote_profile.clone()))
+                        .child(field("Remote team", self.federation_remote_team.clone()))
+                        .child(field("Member visibility", self.federation_visibility.clone())),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("federation-admit")
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .bg(rgb(0x2764d8))
+                                .text_color(rgb(0xffffff))
+                                .child("Admit remote team")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.submit_federation_admission(cx)
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("federation-list")
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .bg(rgb(0x2764d8))
+                                .text_color(rgb(0xffffff))
+                                .child("List remote bindings")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.submit_federation_list(cx)
+                                })),
+                        ),
+                )
+                .into_any_element()
+        }
+
+        fn submit_federation_admission(&mut self, cx: &mut Context<Self>) {
+            if self.loading {
+                return;
+            }
+            let visibility = match self.federation_visibility.read(cx).value().parse::<i16>() {
+                Ok(visibility) => visibility,
+                Err(_) => {
+                    self.model
+                        .accept(Err("enter a signed 16-bit member visibility".to_owned()));
+                    cx.notify();
+                    return;
+                }
+            };
+            let operation = self.model.federation_admission_operation(
+                self.federation_local_team.read(cx).value(),
+                self.federation_remote_profile.read(cx).value(),
+                self.federation_remote_team.read(cx).value(),
+                FederationRole::Member,
+                visibility,
+            );
+            match operation {
+                Ok(operation) => self.start_operation(operation, cx),
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                }
+            }
+        }
+
+        fn submit_federation_list(&mut self, cx: &mut Context<Self>) {
+            if self.loading {
+                return;
+            }
+            match self
+                .model
+                .federated_teams_operation(self.federation_local_team.read(cx).value())
+            {
+                Ok(operation) => self.start_operation(operation, cx),
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                }
+            }
+        }
+
         fn start_operation(
             &mut self,
             operation: foks_agent_proto::Operation,
@@ -1087,6 +1214,18 @@ mod supported {
                     .flex_col()
                     .gap_4()
                     .child(self.yubi_form(cx))
+                    .child(response)
+                    .into_any_element()
+            } else if self.model.screen() == Screen::Teams {
+                div()
+                    .id("teams-body")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(self.federation_form(cx))
                     .child(response)
                     .into_any_element()
             } else {

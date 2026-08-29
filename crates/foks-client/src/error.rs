@@ -44,6 +44,8 @@ pub enum Error {
     CredentialBinding(&'static str),
     #[error("FOKS pinned-host binding failed: {0}")]
     HostBinding(&'static str),
+    #[error("FOKS federation discovery failed: {0}")]
+    FederationDiscovery(&'static str),
     #[error("FOKS user-state binding failed: {0}")]
     UserBinding(&'static str),
     #[error("FOKS team-state binding failed: {0}")]

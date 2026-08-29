@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use foks_rpc::{
     encode_call, read_call, DEFAULT_MAX_FRAME_LENGTH, PROBE_METHOD_POSITION, PROBE_PROTOCOL_ID,
+    TEAM_LOADER_PROTOCOL_ID, TEAM_LOAD_CHAIN_METHOD_POSITION,
 };
 use foks_server::rpc::{route_call, Listener, RouteError, ROUTES, SERVICES};
 use foks_snowpack::{encode, Value};
@@ -55,6 +56,28 @@ fn registered_routes_enforce_listener_and_argument_limits() {
 }
 
 #[test]
+fn team_chain_route_is_shared_by_public_and_authenticated_listeners_only() {
+    let nil = encode(&Value::Null).unwrap();
+    let call = || {
+        let frame = encode_call(
+            TEAM_LOADER_PROTOCOL_ID,
+            TEAM_LOAD_CHAIN_METHOD_POSITION,
+            &nil,
+            0,
+        )
+        .unwrap();
+        read_call(&mut std::io::Cursor::new(frame), DEFAULT_MAX_FRAME_LENGTH).unwrap()
+    };
+    let public = route_call(call(), Listener::PublicServices).unwrap();
+    let authenticated = route_call(call(), Listener::Authenticated).unwrap();
+    assert_eq!(public.route.id, authenticated.route.id);
+    assert!(matches!(
+        route_call(call(), Listener::Probe),
+        Err(RouteError::WrongListener)
+    ));
+}
+
+#[test]
 fn signup_contract_includes_authoritative_invite_and_saturation_outcomes() {
     let contract: Contract = toml::from_str(CONTRACT).expect("valid protocol-v1.toml");
     let signup = contract
@@ -86,7 +109,7 @@ struct Route {
     protocol_id: u64,
     method: String,
     position: u64,
-    listener: String,
+    listeners: Vec<String>,
     authentication: String,
     request: String,
     result: String,
@@ -178,7 +201,11 @@ fn protocol_contract_is_valid_and_exactly_registered() {
             protocol_id: route.protocol_id,
             method: route.method.into(),
             position: route.position,
-            listener: route.listener.into(),
+            listeners: route
+                .listeners
+                .iter()
+                .map(|listener| (*listener).into())
+                .collect(),
             authentication: route.authentication.into(),
             request: route.request.into(),
             result: route.result.into(),
@@ -216,6 +243,15 @@ fn validate_unique_contract_entries(contract: &Contract) {
     for route in &contract.route {
         assert!(route_keys.insert((route.protocol_id, route.position)));
         assert!(route_names.insert((&route.protocol, &route.method)));
+        assert!(!route.listeners.is_empty());
+        assert_eq!(
+            route.listeners.iter().collect::<BTreeSet<_>>().len(),
+            route.listeners.len()
+        );
+        assert!(route.listeners.iter().all(|listener| matches!(
+            listener.as_str(),
+            "probe" | "public_services" | "authenticated"
+        )));
         assert!(!route.authentication.is_empty());
         assert!(!route.request.is_empty());
         assert!(!route.result.is_empty());

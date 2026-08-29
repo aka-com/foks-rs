@@ -8,6 +8,10 @@ const VERIFY_KEY: [u8; 33] = [17; 33];
 const SALT: [u8; 16] = [9; 16];
 
 fn mutation(generation: u64, now: u64) -> PassphraseMutation<'static> {
+    mutation_for_puk(generation, 1, now)
+}
+
+fn mutation_for_puk(generation: u64, puk_generation: u64, now: u64) -> PassphraseMutation<'static> {
     PassphraseMutation {
         verify_key: &VERIFY_KEY,
         salt: &SALT,
@@ -15,10 +19,46 @@ fn mutation(generation: u64, now: u64) -> PassphraseMutation<'static> {
         exact_skmwk_box: b"skmwk-box",
         exact_passphrase_box: b"passphrase-box",
         exact_puk_box: Some(b"puk-box"),
-        puk_generation: Some(1),
+        puk_generation: Some(puk_generation),
         stretch_version: 1,
         now,
     }
+}
+
+#[test]
+fn passphrase_mutations_recheck_the_current_owner_puk_generation() {
+    let mut test = common::TestDatabase::new();
+    test.reserve(1_000_000);
+    test.commit(None).unwrap();
+    let rotation = rusqlite::Connection::open(&test.path).unwrap();
+    rotation
+        .execute(
+            "INSERT INTO shared_keys
+             (uid, role_type, visibility, generation, verify_key, exact_hepk)
+             VALUES (?1, 3, 0, 2, ?2, ?3)",
+            rusqlite::params![UID, [15u8; 33], b"rotated-owner-hepk"],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        test.database
+            .set_passphrase(&UID, &DEVICE, mutation_for_puk(1, 1, 2_000_000)),
+        Err(Error::AuthorizationChanged)
+    ));
+    assert!(test.database.passphrase(&UID).unwrap().is_none());
+
+    test.database
+        .set_passphrase(&UID, &DEVICE, mutation_for_puk(1, 2, 2_000_001))
+        .unwrap();
+    assert!(matches!(
+        test.database
+            .change_passphrase(&UID, &DEVICE, mutation_for_puk(2, 1, 2_000_002)),
+        Err(Error::AuthorizationChanged)
+    ));
+    assert_eq!(
+        test.database.passphrase(&UID).unwrap().unwrap().generation,
+        1
+    );
 }
 
 #[test]

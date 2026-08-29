@@ -7,7 +7,8 @@ mod message;
 
 pub use frame::{decode_request, decode_response, encode, Error, Result, MAXIMUM_MESSAGE_BYTES};
 pub use message::{
-    ErrorCode, Operation, Request, Response, ResponseResult, SecretString, PROTOCOL_VERSION,
+    ErrorCode, FederationRole, Operation, Request, Response, ResponseResult, SecretString,
+    PROTOCOL_VERSION,
 };
 
 #[cfg(test)]
@@ -91,6 +92,50 @@ mod tests {
                 "message": "locked"
             })
         );
+    }
+
+    #[test]
+    fn federation_operations_round_trip_with_explicit_profile_bindings() {
+        let admission = Request::new(
+            13,
+            Operation::AdmitFederatedTeam {
+                local_profile: "local".to_owned(),
+                local_team_alias: "engineering".to_owned(),
+                remote_profile: "partner".to_owned(),
+                remote_team_alias: "security".to_owned(),
+                role: FederationRole::Member,
+                visibility: 0,
+            },
+        );
+        assert_eq!(
+            serde_json::to_value(&admission).unwrap(),
+            serde_json::json!({
+                "version": 1,
+                "id": 13,
+                "operation": {
+                    "operation": "admit-federated-team",
+                    "local_profile": "local",
+                    "local_team_alias": "engineering",
+                    "remote_profile": "partner",
+                    "remote_team_alias": "security",
+                    "role": "member",
+                    "visibility": 0
+                }
+            })
+        );
+        assert_eq!(
+            decode_request(&encode(&admission).unwrap()).unwrap(),
+            admission
+        );
+
+        let listing = Request::new(
+            14,
+            Operation::ListFederatedTeams {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+            },
+        );
+        assert_eq!(decode_request(&encode(&listing).unwrap()).unwrap(), listing);
     }
 
     #[test]

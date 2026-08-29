@@ -13,7 +13,7 @@ pub struct RouteSpec {
     pub protocol_id: u64,
     pub method: &'static str,
     pub position: u64,
-    pub listener: &'static str,
+    pub listeners: &'static [&'static str],
     pub authentication: &'static str,
     pub request: &'static str,
     pub result: &'static str,

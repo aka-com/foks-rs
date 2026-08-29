@@ -16,6 +16,7 @@ pub(super) trait Operations {
     fn login_challenge(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn passphrase_login(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn stretch_version(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+    fn load_remote_user_chain(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
 }
 
 impl Operations for ServerData {
@@ -102,6 +103,18 @@ impl Operations for ServerData {
     fn stretch_version(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
         crate::services::registration::stretch_version(argument)
     }
+
+    fn load_remote_user_chain(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        let now = self
+            .clock
+            .now_micros()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        crate::services::federation::load_remote_user_chain(&snapshot, &self.host()?, argument, now)
+    }
 }
 
 pub(super) fn response(
@@ -160,6 +173,11 @@ pub(super) fn response(
             encode_success_response_at(&operations.load_subkey_box(call.call.argument())?, sequence)
                 .map_err(|_| RpcStatus::Unsupported)
         }
+        RouteId::RegLoadUserChain => encode_success_response_at(
+            &operations.load_remote_user_chain(call.call.argument())?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
         _ => Err(RpcStatus::Unsupported),
     }
 }
