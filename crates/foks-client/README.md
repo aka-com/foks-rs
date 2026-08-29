@@ -73,8 +73,12 @@ be idempotent because an expired lease is retried after a process crash.
 
 That hard state detects inconsistent modification, rollback relative to the
 database's retained pins, and same-sequence forks. The application layer also
-binds its database ID and monotonic hard-state revision to a native Keychain or
-Secret Service checkpoint, rejecting whole-database rollback and substitution.
+binds its database ID, monotonic hard-state revision, and per-revision random
+write token to a native Keychain or Secret Service checkpoint. A native
+database ID is claimed by one profile and locked within its client root during
+checked operations, rejecting whole-database rollback, substitution, and
+equal-revision copies. The private-file backend does not provide this
+copied-state or external rollback protection.
 The protocol crate remains usable without that application policy, so embedders
 must supply an equivalent external checkpoint if they open hard state directly.
 

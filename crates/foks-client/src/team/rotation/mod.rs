@@ -17,7 +17,10 @@ use foks_proto::{
     EntityId, RemoveTeamMemberArgument, Role, SecretSeed, TeamRemovalMacPayload, TreeRoot,
     ENTITY_NAMED_TEAM, MERKLE_ROOT_TYPE_ID,
 };
-use foks_rpc::{decode_team_edit_result, encode_remove_team_member_request, STATUS_TX_RETRY_ERROR};
+use foks_rpc::{
+    decode_team_edit_result, encode_remove_team_member_request, STATUS_TEAM_RACE_ERROR,
+    STATUS_TX_RETRY_ERROR,
+};
 use foks_verify::{VerifiedSharedKey, VerifiedTeamMemberState};
 
 use super::membership::{authorized_actor_member, finish_team_mutation_journal};
@@ -587,14 +590,26 @@ impl FoksClient {
             Err(error) => Some(error),
             Ok(()) => None,
         };
-        if post_error.is_none() {
+        let is_definite_rejection = matches!(
+            post_error.as_ref(),
+            Some(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: STATUS_TEAM_RACE_ERROR,
+                ..
+            }))
+        );
+        if is_definite_rejection {
+            hard_store.advance_team_mutation(
+                &operation_id,
+                TeamMutationState::Rejected,
+                now_microseconds()?,
+            )?;
+        } else if post_error.is_none() {
             hard_store.advance_team_mutation(
                 &operation_id,
                 TeamMutationState::Submitted,
                 now_microseconds()?,
             )?;
-        }
-        if post_error.is_some() {
+        } else if post_error.is_some() {
             hard_store.advance_team_mutation(
                 &operation_id,
                 TeamMutationState::SubmissionUnknown,
@@ -613,7 +628,17 @@ impl FoksClient {
             supplied_rotations,
         ) {
             Ok(value) => value,
-            Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
+            Err(_) if post_error.is_some() => {
+                if is_definite_rejection {
+                    return Err(post_error.expect("checked above"));
+                }
+                let _ = hard_store.advance_team_mutation(
+                    &operation_id,
+                    TeamMutationState::Rejected,
+                    now_microseconds()?,
+                );
+                return Err(post_error.expect("checked above"));
+            }
             Err(error) => return Err(error),
         };
         finish_team_mutation_journal(&mut hard_store, &operation_id)?;

@@ -35,7 +35,7 @@ pub use capability_keys::{CapabilityKeyGeneration, CapabilityKeyGenerationState}
 pub use certificates::{StoredCertificate, StoredCredentialBinding};
 pub use clock::{Clock, SystemClock};
 pub use config::Config;
-pub use connection::{Database, Pragmas, ReadDatabase, ReadSnapshot};
+pub use connection::{Database, DatabasePathIdentity, Pragmas, ReadDatabase, ReadSnapshot};
 pub use error::{Error, Result};
 pub use federation::{
     RemoteTeamViewGrant, RemoteTeamViewPermission, RemoteTeamViewPermissionOutcome,

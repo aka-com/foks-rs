@@ -207,7 +207,13 @@ included in backups; revoked generations are retained as non-secret audit
 metadata only.
 
 Root-key and private-key files must be regular, non-symlink files with no group
-or other permissions. `SIGINT` and `SIGTERM` stop accepts, cancel idle
+or other permissions. The SQLite database leaf must also be a regular,
+non-symlink file. On Unix it must have exactly one hardlink and a reliable
+device/inode identity. Startup captures that identity, takes the adjacent
+writer lock, and rechecks the identity and link count before SQLite opens the
+database; platforms or filesystems that cannot supply those semantics fail
+closed. This is deliberately path-local and does not use a global inode lock
+registry. `SIGINT` and `SIGTERM` stop accepts, cancel idle
 sessions, drain accepted writer work, stop maintenance, and join all threads.
 
 ## Architecture, jobs, and scheduling

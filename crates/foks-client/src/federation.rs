@@ -182,6 +182,18 @@ impl FoksClient {
             .federation_saga(&operation_id)?
             .ok_or(Error::OperationBinding("federation saga disappeared"))?;
         if saga.state == FederationSagaState::Rejected {
+            // Best-effort sweep: a terminally-Rejected saga never resubmits, so any
+            // remaining encrypted remote-addition material is dead. This collects
+            // rows rejected before this cleanup existed, or by a prior call that
+            // committed the Rejected transition but did not reach its erase.
+            if let Some(mutation_id) = saga.local_mutation_id {
+                match protected_store
+                    .remove(&crate::team::remote_addition_material_key(&mutation_id))
+                {
+                    Ok(()) | Err(ProtectedStoreError::Missing) => {}
+                    Err(error) => return Err(Error::ProtectedMaterial(error.to_string())),
+                }
+            }
             return Err(Error::OperationBinding(
                 "federation saga was definitively rejected",
             ));
@@ -234,6 +246,15 @@ impl FoksClient {
                             FederationSagaState::Rejected,
                             now_microseconds()?,
                         )?;
+                        // The saga is now terminally Rejected and can never
+                        // resubmit, so its encrypted remote-addition request
+                        // material is dead; erase it (mirrors the Completed path).
+                        match protected_store
+                            .remove(&crate::team::remote_addition_material_key(&mutation_id))
+                        {
+                            Ok(()) | Err(ProtectedStoreError::Missing) => {}
+                            Err(error) => return Err(Error::ProtectedMaterial(error.to_string())),
+                        }
                         return Err(Error::OperationBinding(
                             "local team mutation was rejected or superseded",
                         ));

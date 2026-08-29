@@ -143,7 +143,10 @@ pub use account::{
 };
 use checkpoint::RollbackHostCheckpoint;
 #[cfg(test)]
-use checkpoint::{hard_state_artifact_paths, rollback_record_key, CheckpointReconciliation};
+use checkpoint::{
+    database_claim_record_key, hard_state_artifact_paths, rollback_record_key,
+    CheckpointReconciliation,
+};
 pub use checkpoint::{ClientCredentials, CredentialBackend, RollbackCheckpoint};
 #[cfg(test)]
 use kv::{display_component, split_parent};
@@ -561,8 +564,9 @@ mod tests {
         let key = rollback_record_key("local").unwrap();
         let mut external = MemorySecretStore::default();
 
+        let current = session.rollback_checkpoint().unwrap();
         credentials
-            .verify_checkpoint_with_store(&session, &key, &mut external)
+            .verify_native_checkpoint_with_store(&session, &current, true, &mut external)
             .unwrap();
         assert!(session.paths().hard_database.is_file());
         assert!(SecretStore::get(&mut external, &key).is_ok());
@@ -587,6 +591,79 @@ mod tests {
             credentials.verify_checkpoint_with_store(&session, &key, &mut external),
             Err(Error::CheckpointResetRequired {
                 reason: "external checkpoint is invalid",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn native_database_identity_cannot_be_claimed_by_two_profiles() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(profile("first", ProtocolPolicy::V019))
+            .unwrap();
+        registry
+            .add(profile("second", ProtocolPolicy::V019))
+            .unwrap();
+        let first = ProfileSession::open(&registry, "first").unwrap();
+        let second = ProfileSession::open(&registry, "second").unwrap();
+        let first_checkpoint = first.rollback_checkpoint().unwrap();
+        std::fs::copy(&first.paths().hard_database, &second.paths().hard_database).unwrap();
+        let second_checkpoint = second.rollback_checkpoint().unwrap();
+        assert_eq!(first_checkpoint.database_id, second_checkpoint.database_id);
+        assert_eq!(first_checkpoint.write_token, second_checkpoint.write_token);
+
+        let credentials = ClientCredentials {
+            root: root.canonicalize().unwrap(),
+            state_id: "test-state".to_owned(),
+            backend: CredentialBackend::Native,
+        };
+        let mut external = MemorySecretStore::default();
+        assert!(matches!(
+            credentials.verify_native_checkpoint_with_store(
+                &second,
+                &second_checkpoint,
+                false,
+                &mut external
+            ),
+            Err(Error::CheckpointResetRequired {
+                reason: "external checkpoint is missing",
+                ..
+            })
+        ));
+        assert!(matches!(
+            SecretStore::get(
+                &mut external,
+                &database_claim_record_key(&first_checkpoint.database_id)
+            ),
+            Err(foks_keystore::Error::Missing)
+        ));
+        SecretStore::put(
+            &mut external,
+            &rollback_record_key("first").unwrap(),
+            &serde_json::to_vec(&first_checkpoint).unwrap(),
+        )
+        .unwrap();
+        credentials
+            .verify_native_checkpoint_with_store(&first, &first_checkpoint, false, &mut external)
+            .unwrap();
+        SecretStore::put(
+            &mut external,
+            &rollback_record_key("second").unwrap(),
+            &serde_json::to_vec(&second_checkpoint).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            credentials.verify_native_checkpoint_with_store(
+                &second,
+                &second_checkpoint,
+                false,
+                &mut external
+            ),
+            Err(Error::CheckpointResetRequired {
+                reason: "hard-state database identity is already claimed by another profile",
                 ..
             })
         ));
@@ -755,6 +832,7 @@ mod tests {
             profile: "hosted".to_owned(),
             database_id: [7; 16],
             hard_state_revision: 12,
+            write_token: [8; 16],
             host: Some(RollbackHostCheckpoint {
                 host_id: snapshot.host_id().to_vec(),
                 host_chain_sequence: snapshot.chain_seqno(),
@@ -813,12 +891,31 @@ mod tests {
 
         let mut committed_before_external_update = checkpoint.clone();
         committed_before_external_update.hard_state_revision += 1;
+        committed_before_external_update.write_token[0] ^= 1;
         assert_eq!(
             committed_before_external_update
                 .reconciliation(&checkpoint)
                 .unwrap(),
             CheckpointReconciliation::AdvanceExternal
         );
+
+        let mut equal_revision_fork = checkpoint.clone();
+        equal_revision_fork.write_token[0] ^= 1;
+        assert!(matches!(
+            equal_revision_fork.reconciliation(&checkpoint),
+            Err(Error::RollbackDetected(
+                "hard-state write token changed at the same revision"
+            ))
+        ));
+
+        let mut unchanged_write_token = checkpoint.clone();
+        unchanged_write_token.hard_state_revision += 1;
+        assert!(matches!(
+            unchanged_write_token.reconciliation(&checkpoint),
+            Err(Error::RollbackDetected(
+                "hard-state write token did not advance"
+            ))
+        ));
     }
 
     #[test]

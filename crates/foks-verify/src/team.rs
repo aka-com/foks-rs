@@ -377,6 +377,13 @@ pub fn verify_team_chain(
         verify_team_disclosures(&chain, expected_team, expected_host)?;
     let path_offset =
         usize::try_from(chain.num_team_name_links).map_err(|_| Error::TeamChainContinuity)?;
+    // The name-link offset and link count are attacker-controlled fields of the
+    // decoded chain; reject a response whose Merkle path slice would fall outside
+    // the supplied paths rather than panicking on an out-of-bounds index.
+    let path_end = path_offset
+        .checked_add(chain.links.len())
+        .filter(|end| *end <= chain.merkle.paths().len())
+        .ok_or(Error::TeamChainContinuity)?;
     let mut members = BTreeMap::<Vec<u8>, VerifiedTeamMemberState>::new();
     let mut shared_keys = BTreeMap::<Role, VerifiedSharedKey>::new();
     let mut previous_hash = None;
@@ -385,7 +392,7 @@ pub fn verify_team_chain(
         .links
         .iter()
         .zip(&chain.locations)
-        .zip(&chain.merkle.paths()[path_offset..path_offset + chain.links.len()])
+        .zip(&chain.merkle.paths()[path_offset..path_end])
         .enumerate()
     {
         let sequence = u64::try_from(index)

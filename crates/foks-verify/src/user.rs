@@ -347,6 +347,13 @@ pub fn verify_user_chain(
         verify_user_disclosures(&chain, expected_uid, expected_host)?;
     let path_offset =
         usize::try_from(chain.num_username_links).map_err(|_| Error::UserMerkleProof)?;
+    // The username-link offset and link count are attacker-controlled fields of
+    // the decoded chain; reject a response whose Merkle path slice would fall
+    // outside the supplied paths rather than panicking on an out-of-bounds index.
+    let path_end = path_offset
+        .checked_add(chain.links.len())
+        .filter(|end| *end <= chain.merkle.paths().len())
+        .ok_or(Error::UserMerkleProof)?;
 
     let mut replay_state = None;
     let mut previous_hash = None;
@@ -355,7 +362,7 @@ pub fn verify_user_chain(
         .links
         .iter()
         .zip(&chain.locations)
-        .zip(&chain.merkle.paths()[path_offset..path_offset + chain.links.len()])
+        .zip(&chain.merkle.paths()[path_offset..path_end])
         .enumerate()
     {
         let sequence = u64::try_from(index)

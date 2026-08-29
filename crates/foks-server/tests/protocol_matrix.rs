@@ -98,6 +98,70 @@ fn principal_bound_routes_are_authenticated_only() {
 }
 
 #[test]
+fn authentication_policy_matches_listener_principal_availability() {
+    // The session dispatcher (net/session.rs) constructs a Principal ONLY on the
+    // authenticated listener; probe and public_services handlers always receive
+    // principal = None. A route's declared `authentication` must therefore agree
+    // with where it is reachable: a principal-bound policy (active_*/current_*)
+    // can only be enforced where a principal exists, and an unauthenticated
+    // listener may only carry the fixed bootstrap/token vocabulary. This guards
+    // against future drift between the declared policy and the handler's actual
+    // enforcement surface.
+    const UNAUTHENTICATED_POLICIES: &[&str] = &[
+        "public",
+        "delegated_tls",
+        "signed_login_challenge",
+        "signed_lookup_challenge",
+        "signed_signup",
+        "signed_subkey_challenge",
+        "remote_view_token",
+    ];
+    for route in ROUTES.iter() {
+        let principal_bound = route.authentication.starts_with("active_")
+            || route.authentication.starts_with("current_");
+        let reachable_unauthenticated = route
+            .listeners
+            .iter()
+            .any(|listener| *listener == "probe" || *listener == "public_services");
+        if !reachable_unauthenticated {
+            // Authenticated-only routes must perform a server-side identity check:
+            // a principal-bound policy or a bearer/admin token, never a pure
+            // bootstrap policy that assumes no caller identity.
+            assert!(
+                principal_bound || route.authentication.ends_with("_token"),
+                "authenticated-only route {}.{} uses unexpected policy {}",
+                route.protocol,
+                route.method,
+                route.authentication
+            );
+            continue;
+        }
+        if route.id == RouteId::TeamLoaderLoadTeamChain {
+            // Documented carve-out: also reachable on the authenticated listener,
+            // where a principal or a remote-view bearer token authorizes it. On the
+            // public path the handler must return only public-verifiable chain data.
+            assert_eq!(route.authentication, "active_team_or_remote_view_token");
+            assert_eq!(route.listeners, ["public_services", "authenticated"]);
+            continue;
+        }
+        assert!(
+            !principal_bound,
+            "route {}.{} declares principal-bound policy {} but is reachable on an \
+             unauthenticated listener where the dispatcher supplies no principal",
+            route.protocol, route.method, route.authentication
+        );
+        assert!(
+            UNAUTHENTICATED_POLICIES.contains(&route.authentication),
+            "route {}.{} is reachable without authentication but uses unrecognized \
+             policy {}; confirm its handler can enforce this with principal = None",
+            route.protocol,
+            route.method,
+            route.authentication
+        );
+    }
+}
+
+#[test]
 fn signup_contract_includes_authoritative_invite_and_saturation_outcomes() {
     let contract: Contract = toml::from_str(CONTRACT).expect("valid protocol-v1.toml");
     let signup = contract

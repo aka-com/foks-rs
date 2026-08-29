@@ -96,15 +96,27 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let socket = arguments
         .socket
         .unwrap_or_else(|| state_dir.join("agent.sock"));
-    if socket.exists() {
+    let parent = socket.parent().ok_or("agent socket has no parent")?;
+    if socket.file_name().is_none() {
+        return Err("agent socket path has no file name".into());
+    }
+    // Refuse to replace any existing filesystem object (file, dir, symlink,
+    // socket) without following symlinks — prevents symlink-squat.
+    if std::fs::symlink_metadata(&socket).is_ok() {
         return Err("agent socket path already exists; refusing to replace it".into());
     }
-    let parent = socket.parent().ok_or("agent socket has no parent")?;
+    // Ensure parent is a real directory (not a symlink) and is inside the
+    // explicit state root. symlink_metadata does not follow the parent
+    // symlink; canonicalize then checks containment after resolution.
+    let parent_metadata = std::fs::symlink_metadata(parent)
+        .map_err(|error| format!("agent socket parent is missing or inaccessible: {error}"))?;
+    if !parent_metadata.is_dir() {
+        return Err("agent socket parent is not a directory".into());
+    }
     if !parent.canonicalize()?.starts_with(&state_dir) {
         return Err("agent socket must be below the explicit state root".into());
     }
-    let listener = tokio::net::UnixListener::bind(&socket)?;
-    set_socket_permissions(&socket)?;
+    let listener = bind_private_agent_socket(&socket)?;
     let _socket_guard = SocketGuard(socket.clone());
     let active = Arc::new(Semaphore::new(arguments.maximum_connections));
     let blocking = Arc::new(Semaphore::new(arguments.blocking_workers));
@@ -137,6 +149,21 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
             }
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
+                let cred = match stream.peer_cred() {
+                    Ok(cred) => cred,
+                    Err(error) => {
+                        eprintln!("foks-agent: rejecting connection without peer credentials: {error}");
+                        continue;
+                    }
+                };
+                if cred.uid() != rustix::process::geteuid().as_raw() {
+                    eprintln!(
+                        "foks-agent: rejecting peer uid {} (expected {})",
+                        cred.uid(),
+                        rustix::process::geteuid().as_raw()
+                    );
+                    continue;
+                }
                 let Ok(permit) = active.clone().try_acquire_owned() else {
                     drop(stream);
                     continue;
@@ -1186,10 +1213,32 @@ fn now_microseconds() -> Result<u64, Box<dyn std::error::Error>> {
 }
 
 #[cfg(unix)]
-fn set_socket_permissions(path: &Path) -> std::io::Result<()> {
+fn bind_private_agent_socket(path: &Path) -> std::io::Result<tokio::net::UnixListener> {
     use std::os::unix::fs::PermissionsExt as _;
 
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+    static NEXT_STAGING_SOCKET: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT_STAGING_SOCKET.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let staging = path.with_extension(format!("binding-{}-{}", std::process::id(), sequence));
+    let _ = std::fs::remove_file(&staging);
+    let listener = tokio::net::UnixListener::bind(&staging)?;
+    if let Err(error) =
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o600))
+    {
+        let _ = std::fs::remove_file(&staging);
+        return Err(error);
+    }
+    // hard_link publishes the already-private inode atomically and refuses
+    // to overwrite a path another server just established (EEXIST).
+    if let Err(error) = std::fs::hard_link(&staging, path) {
+        let _ = std::fs::remove_file(&staging);
+        return Err(error);
+    }
+    if let Err(error) = std::fs::remove_file(&staging) {
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(listener)
 }
 
 #[cfg(unix)]

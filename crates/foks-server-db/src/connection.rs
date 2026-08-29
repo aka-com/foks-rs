@@ -1,3 +1,7 @@
+#[cfg(unix)]
+use std::fs::OpenOptions;
+#[cfg(unix)]
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags, Transaction};
@@ -12,6 +16,88 @@ pub struct Database {
 
 pub struct ReadDatabase {
     pub(crate) connection: Connection,
+}
+
+/// Stable identity for a regular, single-link SQLite database path.
+///
+/// Server startup captures this before taking the adjacent writer lock and
+/// rechecks it under that lock before SQLite is allowed to open the file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DatabasePathIdentity {
+    path: PathBuf,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+impl DatabasePathIdentity {
+    /// Creates the database leaf when absent, then records its filesystem
+    /// identity without following a symlink at the leaf.
+    #[cfg(unix)]
+    pub fn prepare(path: &Path) -> Result<Self> {
+        create_database_leaf(path)?;
+        Self::existing(path)
+    }
+
+    #[cfg(not(unix))]
+    pub fn prepare(_path: &Path) -> Result<Self> {
+        Err(crate::Error::UnsafeDatabasePath(
+            "reliable device, inode, and link-count checks are unavailable",
+        ))
+    }
+
+    /// Records an already-existing database leaf without following symlinks.
+    pub fn existing(path: &Path) -> Result<Self> {
+        #[cfg(unix)]
+        {
+            let (_, device, inode) = validated_metadata(path)?;
+            let canonical = path.canonicalize()?;
+            let (_, canonical_device, canonical_inode) = validated_metadata(&canonical)?;
+            if device != canonical_device || inode != canonical_inode {
+                return Err(crate::Error::UnsafeDatabasePath(
+                    "database path identity changed during inspection",
+                ));
+            }
+            Ok(Self {
+                path: canonical,
+                device,
+                inode,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Err(crate::Error::UnsafeDatabasePath(
+                "reliable device, inode, and link-count checks are unavailable",
+            ))
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Rejects replacement, symlink substitution, and hardlink creation since
+    /// this identity was captured.
+    pub fn recheck(&self) -> Result<()> {
+        #[cfg(unix)]
+        {
+            let (_, device, inode) = validated_metadata(&self.path)?;
+            if device != self.device || inode != self.inode {
+                return Err(crate::Error::UnsafeDatabasePath(
+                    "database path identity changed",
+                ));
+            }
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            Err(crate::Error::UnsafeDatabasePath(
+                "reliable device, inode, and link-count checks are unavailable",
+            ))
+        }
+    }
 }
 
 /// A short-lived, request-scoped view of one SQLite WAL snapshot.
@@ -41,11 +127,22 @@ pub struct Pragmas {
 
 impl Database {
     pub fn open(path: impl AsRef<Path>, config: Config) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
+        let identity = DatabasePathIdentity::prepare(path.as_ref())?;
+        Self::open_with_identity(identity, config)
+    }
+
+    /// Opens the exact identity captured by the caller. The server writer uses
+    /// this after acquiring its adjacent lock so a replacement cannot become a
+    /// newly accepted baseline between the lock-time check and SQLite open.
+    pub fn open_with_identity(identity: DatabasePathIdentity, config: Config) -> Result<Self> {
+        identity.recheck()?;
+        let path = identity.path().to_path_buf();
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
             | OpenFlags::SQLITE_OPEN_CREATE
-            | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW;
         let mut connection = Connection::open_with_flags(&path, flags)?;
+        identity.recheck()?;
         configure(&connection, &config)?;
         schema::initialize(&mut connection)?;
         crate::kv::validate_kv_tree_capacity(&connection, &config)?;
@@ -60,9 +157,14 @@ impl Database {
     /// file. Offline administration commands use this to avoid leaving a
     /// blank installation behind after a mistyped or premature invocation.
     pub fn open_existing(path: impl AsRef<Path>, config: Config) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
-        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let identity = DatabasePathIdentity::existing(path.as_ref())?;
+        identity.recheck()?;
+        let path = identity.path().to_path_buf();
+        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW;
         let connection = Connection::open_with_flags(&path, flags)?;
+        identity.recheck()?;
         configure(&connection, &config)?;
         schema::validate_connection(&connection)?;
         crate::kv::validate_kv_tree_capacity(&connection, &config)?;
@@ -74,8 +176,12 @@ impl Database {
     }
 
     pub fn open_reader(&self) -> Result<Connection> {
-        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let connection = Connection::open_with_flags(&self.path, flags)?;
+        let identity = DatabasePathIdentity::existing(&self.path)?;
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW;
+        let connection = Connection::open_with_flags(identity.path(), flags)?;
+        identity.recheck()?;
         configure(&connection, &self.config)?;
         Ok(connection)
     }
@@ -105,8 +211,12 @@ impl Database {
 
 impl ReadDatabase {
     pub fn open(path: impl AsRef<Path>, config: Config) -> Result<Self> {
-        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let connection = Connection::open_with_flags(path, flags)?;
+        let identity = DatabasePathIdentity::existing(path.as_ref())?;
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW;
+        let connection = Connection::open_with_flags(identity.path(), flags)?;
+        identity.recheck()?;
         configure_reader(&connection, &config)?;
         schema::validate_connection(&connection)?;
         crate::kv::validate_kv_tree_capacity(&connection, &config)?;
@@ -138,6 +248,55 @@ impl ReadDatabase {
     ) -> Result<()> {
         online_backup(&self.connection, destination.as_ref(), cancelled)
     }
+}
+
+#[cfg(unix)]
+fn create_database_leaf(path: &Path) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    match options.open(path) {
+        Ok(file) => {
+            file.sync_all()?;
+            Ok(())
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(unix)]
+fn validated_metadata(path: &Path) -> Result<(std::fs::Metadata, u64, u64)> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(crate::Error::UnsafeDatabasePath(
+            "database path is a symlink",
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(crate::Error::UnsafeDatabasePath(
+            "database path is not a regular file",
+        ));
+    }
+    if metadata.nlink() != 1 {
+        return Err(crate::Error::UnsafeDatabasePath(
+            "database file must have exactly one hardlink",
+        ));
+    }
+    if metadata.dev() == 0 || metadata.ino() == 0 {
+        return Err(crate::Error::UnsafeDatabasePath(
+            "filesystem did not provide a reliable database identity",
+        ));
+    }
+    let device = metadata.dev();
+    let inode = metadata.ino();
+    Ok((metadata, device, inode))
 }
 
 fn online_backup(

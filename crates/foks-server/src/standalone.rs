@@ -4,7 +4,6 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use foks_server_db::Database;
 use zeroize::Zeroizing;
 
 use crate::host::{load_or_bootstrap, BootstrapEndpoints, BootstrapInput, BootstrapState};
@@ -696,19 +695,21 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         ttl_seconds: config.ttl_seconds,
         now_microseconds: config.now_microseconds,
     };
-    let mut database = Database::open(&config.database_path, config.database.clone())?;
-    let bootstrap = load_or_bootstrap(&mut database, keys.as_ref(), &input)?;
-    drop(database);
-    // Existing durable state is validated before PKI helpers can call their
-    // create-on-first-bootstrap key APIs. A missing persisted purpose key must
-    // fail closed rather than leave replacement material behind.
-    let tls = build_host_tls(keys.as_ref(), &input.canonical_name)?;
     let database_config = config.database;
     let writer = Writer::start(
         config.database_path.clone(),
         database_config.clone(),
         config.maximum_pending_writes,
     )?;
+    let bootstrap_keys = Arc::clone(&keys);
+    let bootstrap_input = input.clone();
+    let bootstrap = writer.call(move |database| {
+        load_or_bootstrap(database, bootstrap_keys.as_ref(), &bootstrap_input)
+    })?;
+    // Existing durable state is validated before PKI helpers can call their
+    // create-on-first-bootstrap key APIs. A missing persisted purpose key must
+    // fail closed rather than leave replacement material behind.
+    let tls = build_host_tls(keys.as_ref(), &input.canonical_name)?;
     let writer_handle = writer.handle();
     let maintenance = Maintenance::start(writer_handle.clone(), Arc::clone(&config.clock));
     let metrics = Arc::new(crate::ServerMetrics::default());

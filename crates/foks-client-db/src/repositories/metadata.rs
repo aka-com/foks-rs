@@ -42,24 +42,29 @@ impl HardStateStore {
     pub fn metadata(&self) -> Result<HardStateMetadata> {
         self.connection
             .query_row(
-                "SELECT database_id, hard_state_revision
+                "SELECT database_id, hard_state_revision, write_token
                  FROM hard_state_metadata WHERE singleton = 1",
                 [],
                 |row| {
                     let database_id = row.get::<_, Vec<u8>>(0)?;
                     let revision = row.get::<_, i64>(1)?;
-                    Ok((database_id, revision))
+                    let write_token = row.get::<_, Vec<u8>>(2)?;
+                    Ok((database_id, revision, write_token))
                 },
             )
             .map_err(Error::from)
-            .and_then(|(database_id, revision)| {
+            .and_then(|(database_id, revision, write_token)| {
                 let database_id = database_id
                     .try_into()
                     .map_err(|_| Error::InvalidHardStateMetadata)?;
                 let revision = stored_unsigned("hard-state revision", revision)?;
+                let write_token = write_token
+                    .try_into()
+                    .map_err(|_| Error::InvalidHardStateMetadata)?;
                 Ok(HardStateMetadata {
                     database_id,
                     revision,
+                    write_token,
                 })
             })
     }

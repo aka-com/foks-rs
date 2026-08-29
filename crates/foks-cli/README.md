@@ -15,7 +15,8 @@ foks-rs --state-dir /private/client profile probe local
 `init` defaults to macOS Keychain or Linux Secret Service protection and an
 external hard-state rollback checkpoint. Isolated tests and explicitly
 protected headless automation can request `--key-backend private-file`; that
-mode deliberately has no external rollback detection.
+mode deliberately has no copied-state detection or external rollback
+protection.
 
 If the native checkpoint is missing or disagrees with an existing hard-state
 database, every checked operation fails closed and prints the exact reset

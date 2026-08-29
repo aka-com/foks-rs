@@ -639,6 +639,13 @@ fn cache_check(
     if supplied.equivalent(&current) {
         Ok(Response::Void)
     } else {
+        // The full path version vector is returned to any authenticated party
+        // member regardless of role. This is accepted by design: it is opaque
+        // cache-coherence metadata (tree shape, random 16-byte node IDs, and
+        // version counters — no names, no ciphertext, name_mac excluded), scoped
+        // to the caller's own party, and the client requires the whole vector to
+        // reconcile its cache. Per-role scoping would need a per-role version
+        // vector and would change the pinned v0.1.9 wire contract.
         Err(RpcStatus::StaleCache(current))
     }
 }

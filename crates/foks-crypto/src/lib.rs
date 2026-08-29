@@ -3604,6 +3604,16 @@ pub fn verify_typed(
         Signature::Ecdsa(signature) if signer.entity_type() == foks_proto::ENTITY_YUBI => {
             let key = P256VerifyingKey::from_sec1_bytes(&signer.p256_key()?)
                 .map_err(|_| Error::PublicKey)?;
+            // ECDSA (P-256) signatures are malleable: this accepts both low-S and
+            // high-S forms. Rejecting high-S here is deliberately NOT done because
+            // YubiKey PIV hardware emits non-normalized (frequently high-S)
+            // signatures, so a strict check would fail real hardware and the
+            // v0.1.9 compatibility oracle. This is a documented accepted risk:
+            // no code path uses raw signature bytes as an identity, dedup, or
+            // uniqueness key (chain-link identity is the hash of the signed
+            // payload, Merkle keys are deterministic, one link per seqno is
+            // accepted, and idempotency binds request_hash), so malleability has
+            // no exploitable effect. Ed25519 uses verify_strict above.
             let signature = P256Signature::from_der(signature).map_err(|_| Error::Verification)?;
             let digest = prefixed_hash_without_type(&message);
             key.verify_prehash(&digest, &signature)

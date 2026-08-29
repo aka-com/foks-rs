@@ -453,6 +453,81 @@ mod tests {
     }
 
     #[test]
+    fn protected_material_is_retained_until_application_acknowledged_finalization() {
+        // Regression guard for the application-acknowledgement boundary added in
+        // 43a3119e8: protected retry material must survive every pre-`Finalized`
+        // state, and neither `finalize` (before remote verification) nor
+        // `rejected` (after it) may erase it early.
+        let (_temporary, database, host_id) = initialized_database();
+        let mut protected = MemoryProtectedStore::default();
+        let operation = MutationCoordinator::new(&database, &mut protected)
+            .prepare(
+                draft([21; 16], &host_id),
+                Zeroizing::new(b"application-owned retry material".to_vec()),
+            )
+            .unwrap();
+        let material_present = |protected: &MemoryProtectedStore| {
+            protected.0.get(operation.material_ref.as_slice()).map(Vec::as_slice)
+                == Some(b"application-owned retry material".as_slice())
+        };
+
+        // Finalizing a merely-`Submitting` mutation is rejected by the state
+        // machine and leaves the protected record in place.
+        MutationCoordinator::new(&database, &mut protected)
+            .begin_submission(&operation.operation_id)
+            .unwrap();
+        assert!(MutationCoordinator::new(&database, &mut protected)
+            .finalize(&operation.operation_id)
+            .is_err());
+        assert!(material_present(&protected));
+        assert_eq!(
+            HardStateStore::open(&database)
+                .unwrap()
+                .mutation(&operation.operation_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            MutationState::Submitting
+        );
+
+        // Same guarantee once the response is ambiguous: no early erasure.
+        MutationCoordinator::new(&database, &mut protected)
+            .submission_unknown(&operation.operation_id)
+            .unwrap();
+        assert!(MutationCoordinator::new(&database, &mut protected)
+            .finalize(&operation.operation_id)
+            .is_err());
+        assert!(material_present(&protected));
+
+        // After remote verification the mutation is authenticated but NOT yet
+        // terminal, so `rejected` (RemoteVerified -> Rejected is not a legal
+        // edge) must fail without erasing the still-needed material.
+        MutationCoordinator::new(&database, &mut protected)
+            .remote_verified(&operation.operation_id)
+            .unwrap();
+        assert!(material_present(&protected));
+        assert!(MutationCoordinator::new(&database, &mut protected)
+            .rejected(&operation.operation_id)
+            .is_err());
+        assert!(material_present(&protected));
+        assert_eq!(
+            HardStateStore::open(&database)
+                .unwrap()
+                .mutation(&operation.operation_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            MutationState::RemoteVerified
+        );
+
+        // Only the application-acknowledged finalization erases it.
+        MutationCoordinator::new(&database, &mut protected)
+            .finalize(&operation.operation_id)
+            .unwrap();
+        assert!(!material_present(&protected));
+    }
+
+    #[test]
     fn protected_material_tampering_is_detected_before_submission() {
         let temporary = tempfile::tempdir().unwrap();
         let database = temporary.path().join("hard.sqlite3");
