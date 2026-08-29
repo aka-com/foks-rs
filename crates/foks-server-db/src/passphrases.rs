@@ -274,7 +274,7 @@ impl Database {
         mutation: PassphraseMutation<'_>,
     ) -> Result<()> {
         validate_mutation(config, uid, mutation)?;
-        if mutation.generation != 1 {
+        if mutation.generation != 1 || mutation.puk_generation != Some(1) {
             return Err(Error::PassphraseGeneration);
         }
         insert_salt(transaction, uid, mutation)?;

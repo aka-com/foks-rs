@@ -17,6 +17,22 @@ pub struct MemoryKeyProvider {
 }
 
 impl HostKeyProvider for MemoryKeyProvider {
+    fn is_pristine(&self) -> crate::Result<bool> {
+        if !self
+            .keys
+            .lock()
+            .map_err(|_| crate::Error::Key("lock poisoned"))?
+            .is_empty()
+        {
+            return Ok(false);
+        }
+        Ok(self
+            .generations
+            .lock()
+            .map_err(|_| crate::Error::Key("lock poisoned"))?
+            .is_empty())
+    }
+
     fn load_or_create(&self, purpose: KeyPurpose) -> crate::Result<SecretKey> {
         let mut keys = self
             .keys

@@ -8,6 +8,21 @@ use crate::{
     unsigned, variant, EntityId, Error, Result, Role, RoleAndGeneration, SecretBox, Value,
 };
 
+/// Hard protocol-policy bounds shared by storage admission and client sync.
+pub const MAXIMUM_KV_DIRECTORIES: usize = 4096;
+pub const MAXIMUM_KV_DIRENTS: usize = 100_000;
+pub const MAXIMUM_KV_NODE_BYTES: usize = 64 * 1024;
+pub const MAXIMUM_KV_DIRENT_BYTES: usize = 4096;
+pub const MAXIMUM_KV_LIST_PAGE_ENTRIES: usize = 100;
+pub const MAXIMUM_KV_LIST_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+
+// Leave a full MiB for the list container, extended positions, and encoding
+// overhead after the maximum stored dirent and small-file bytes are included.
+const _: () = assert!(
+    MAXIMUM_KV_LIST_PAGE_ENTRIES * (MAXIMUM_KV_DIRENT_BYTES + MAXIMUM_KV_NODE_BYTES) + 1024 * 1024
+        <= MAXIMUM_KV_LIST_RESPONSE_BYTES
+);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum KvNodeType {

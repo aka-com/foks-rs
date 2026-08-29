@@ -143,6 +143,7 @@ pub(crate) fn put_yubi_management_key(
     argument: &[u8],
     principal: &Principal,
 ) -> Result<(), RpcStatus> {
+    principal.require_ordinary_device()?;
     let value =
         foks_rpc::arguments::decode_put_yubi_management_key(argument).map_err(bad_arguments)?;
     let exact_box = value
@@ -172,6 +173,7 @@ pub(crate) fn get_yubi_management_key(
     argument: &[u8],
     principal: &Principal,
 ) -> Result<Vec<u8>, RpcStatus> {
+    principal.require_ordinary_device()?;
     let parent =
         foks_rpc::arguments::decode_get_yubi_management_key(argument).map_err(bad_arguments)?;
     let snapshot = database
@@ -192,6 +194,7 @@ pub(crate) fn get_all_yubi_management_keys(
     argument: &[u8],
     principal: &Principal,
 ) -> Result<Vec<u8>, RpcStatus> {
+    principal.require_ordinary_device()?;
     foks_rpc::arguments::decode_void(argument).map_err(bad_arguments)?;
     let values = database
         .all_yubi_management_keys_for_credential(principal.uid(), principal.device_id())

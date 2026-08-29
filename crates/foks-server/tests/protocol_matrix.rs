@@ -4,7 +4,7 @@ use foks_rpc::{
     encode_call, read_call, DEFAULT_MAX_FRAME_LENGTH, PROBE_METHOD_POSITION, PROBE_PROTOCOL_ID,
     TEAM_LOADER_PROTOCOL_ID, TEAM_LOAD_CHAIN_METHOD_POSITION,
 };
-use foks_server::rpc::{route_call, Listener, RouteError, ROUTES, SERVICES};
+use foks_server::rpc::{route_call, Listener, RouteError, RouteId, ROUTES, SERVICES};
 use foks_snowpack::{encode, Value};
 use serde::Deserialize;
 
@@ -75,6 +75,26 @@ fn team_chain_route_is_shared_by_public_and_authenticated_listeners_only() {
         route_call(call(), Listener::Probe),
         Err(RouteError::WrongListener)
     ));
+}
+
+#[test]
+fn principal_bound_routes_are_authenticated_only() {
+    for route in ROUTES.iter().filter(|route| {
+        route.authentication.starts_with("active_") || route.authentication.starts_with("current_")
+    }) {
+        if route.id == RouteId::TeamLoaderLoadTeamChain {
+            assert_eq!(route.authentication, "active_team_or_remote_view_token");
+            assert_eq!(route.listeners, ["public_services", "authenticated"]);
+        } else {
+            assert_eq!(
+                route.listeners,
+                ["authenticated"],
+                "principal-bound route {}.{} is exposed on another listener",
+                route.protocol,
+                route.method
+            );
+        }
+    }
 }
 
 #[test]

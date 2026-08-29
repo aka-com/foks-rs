@@ -58,6 +58,60 @@ fn complete_identity_and_root_are_visible_together() {
 }
 
 #[test]
+fn device_subkey_ids_are_unique_across_users() {
+    let mut database = common::TestDatabase::new();
+    database.reserve(1_000_000);
+    database.commit(None).unwrap();
+    let connection = rusqlite::Connection::open(&database.path).unwrap();
+    const SUBKEY: [u8; 33] = [0x31; 33];
+    connection
+        .execute(
+            "UPDATE devices SET subkey_id = ?1 WHERE device_id = ?2",
+            rusqlite::params![SUBKEY, [4u8; 33]],
+        )
+        .unwrap();
+
+    const OTHER_UID: [u8; 33] = [0x21; 33];
+    connection
+        .execute(
+            "INSERT INTO names
+             (normalized_name, reservation_token, reservation_sequence, expires_at, uid)
+             VALUES (?1, NULL, 1, NULL, ?2)",
+            rusqlite::params![b"other-user", OTHER_UID],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO users
+             (uid, normalized_name, username_utf8, username_sequence,
+              username_commitment_key, created_at)
+             VALUES (?1, ?2, ?3, 1, ?4, 1)",
+            rusqlite::params![OTHER_UID, b"other-user", b"Other User", [0x22u8; 16]],
+        )
+        .unwrap();
+    let error = connection
+        .execute(
+            "INSERT INTO devices
+             (device_id, uid, active, role_type, visibility, subkey_id,
+              hepk_fingerprint, exact_hepk, exact_name)
+             VALUES (?1, ?2, 1, 3, 0, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                [0x23u8; 33],
+                OTHER_UID,
+                SUBKEY,
+                [0x24u8; 32],
+                b"other-hepk",
+                b"other-device"
+            ],
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::ConstraintViolation)
+    );
+}
+
+#[test]
 fn active_credentials_resolve_their_own_current_role_parcel() {
     let mut database = common::TestDatabase::new();
     database.reserve(1_000_000);

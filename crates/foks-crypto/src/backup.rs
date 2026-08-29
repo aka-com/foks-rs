@@ -256,6 +256,10 @@ impl HybridSecretDecapsulator for BackupKeyMaterial {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the authenticated PUK, host, and role bindings must remain explicit"
+)]
 pub fn open_backup_puk_parcel_for_role(
     backup: &BackupKey,
     parcel: &foks_proto::PukParcel,

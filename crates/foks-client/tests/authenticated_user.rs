@@ -5,12 +5,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{CancellationToken, DeviceCredential, Error, FoksClient, PinnedHost, ProbeTarget};
-use foks_client_db::{Acceptance, HardStateStore};
+use foks_client_db::HardStateStore;
 use foks_crypto::device_signing_key_pkcs8;
 use foks_proto::{EntityId, SecretSeed};
-use foks_rpc::{
-    encode_probe_success_response, encode_success_response_at, read_frame, DEFAULT_MAX_FRAME_LENGTH,
-};
+use foks_rpc::{encode_success_response_at, read_frame, DEFAULT_MAX_FRAME_LENGTH};
 use foks_snowpack::{decode, encode, Value};
 use foks_verify::verify_public_host;
 use rcgen::{
@@ -147,7 +145,7 @@ fn spawn_server(
 }
 
 #[test]
-fn registration_then_mtls_user_chain_and_puk_complete_without_interactivity() {
+fn unsigned_newer_merkle_root_is_rejected_before_user_state_is_used() {
     let pki = test_pki();
 
     let registration = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -157,11 +155,7 @@ fn registration_then_mtls_user_chain_and_puk_complete_without_interactivity() {
     let merkle = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let merkle_port = merkle.local_addr().unwrap().port();
     let cert_response = encode_success_response_at(&pki.certificate_result, 1).unwrap();
-    let chain_response = encode_probe_success_response(&fixture("user-chain.snowp")).unwrap();
-    let puk_response = encode_success_response_at(&fixture("puk-parcel.snowp"), 1).unwrap();
     let root_response = encode_success_response_at(&fixture("merkle-root-998.snowp"), 1).unwrap();
-    let history_response =
-        encode_success_response_at(&fixture("merkle-historical-response.snowp"), 2).unwrap();
     let select_response = fixture("kv-select-vhost-response.frame");
 
     let reg_thread = spawn_server(
@@ -170,16 +164,11 @@ fn registration_then_mtls_user_chain_and_puk_complete_without_interactivity() {
         vec![vec![select_response.clone(), cert_response]],
         false,
     );
-    let user_thread = spawn_server(
-        user,
-        pki.authenticated_server,
-        vec![vec![chain_response, puk_response]],
-        true,
-    );
+    let user_thread = spawn_server(user, pki.authenticated_server, Vec::new(), true);
     let merkle_thread = spawn_server(
         merkle,
         pki.unauthenticated_server,
-        vec![vec![select_response, root_response, history_response]],
+        vec![vec![select_response, root_response]],
         false,
     );
 
@@ -220,23 +209,10 @@ fn registration_then_mtls_user_chain_and_puk_complete_without_interactivity() {
         certificate_chain: certificates,
     };
 
-    let result = client.authenticate_and_pin(&pinned, &credential).unwrap();
-    assert_eq!(result.merkle_acceptance, Acceptance::Advanced);
-    assert_eq!(result.acceptance, Acceptance::Inserted);
-    assert_eq!(result.puks.len(), 2);
-    assert_eq!(
-        result.puks[0].seed.as_slice(),
-        fixture("initial-puk-seed.bin")
-    );
-    assert_eq!(result.puks[1].seed.as_slice(), fixture("puk-seed.bin"));
-    assert_eq!(
-        client
-            .pinned_user(&pinned, &uid)
-            .unwrap()
-            .unwrap()
-            .chain_seqno(),
-        3
-    );
+    assert!(matches!(
+        client.authenticate_and_pin(&pinned, &credential),
+        Err(Error::HostBinding("current Merkle root is not signed"))
+    ));
 
     reg_thread.join().unwrap();
     user_thread.join().unwrap();

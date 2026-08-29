@@ -166,6 +166,10 @@ struct FailFirstRetirement {
 }
 
 impl HostKeyProvider for FailFirstRetirement {
+    fn is_pristine(&self) -> foks_server::Result<bool> {
+        self.inner.is_pristine()
+    }
+
     fn load_or_create(&self, purpose: KeyPurpose) -> foks_server::Result<SecretKey> {
         self.inner.load_or_create(purpose)
     }
@@ -536,6 +540,26 @@ fn generated_key_files_are_immutable_generation_bound_and_redacted() {
     let rendered = format!("{first:?}");
     assert_eq!(rendered, "SecretKey([REDACTED])");
     assert!(!rendered.contains(&format!("{:?}", first.expose())));
+}
+
+#[test]
+fn wrong_provider_is_rejected_before_host_orphan_cleanup() {
+    let temporary = tempfile::tempdir().unwrap();
+    let provider_a = foks_server::keys::MemoryKeyProvider::default();
+    let mut database_a =
+        Database::open(temporary.path().join("host-a.sqlite"), Config::default()).unwrap();
+    load_or_bootstrap(&mut database_a, &provider_a, &input(1)).unwrap();
+
+    let provider_b = foks_server::keys::MemoryKeyProvider::default();
+    let mut database_b =
+        Database::open(temporary.path().join("host-b.sqlite"), Config::default()).unwrap();
+    load_or_bootstrap(&mut database_b, &provider_b, &input(1)).unwrap();
+    let orphan = provider_b.create_generation(KeyPurpose::Host).unwrap();
+
+    assert!(stage_host_key_rotation(&mut database_a, &provider_b, 2).is_err());
+    assert!(provider_b
+        .load_generation(KeyPurpose::Host, orphan.generation())
+        .is_ok());
 }
 
 #[test]

@@ -551,13 +551,12 @@ impl CheckedProfileSession<'_> {
                 ),
             ] {
                 if let Some(operation) = HardStateStore::open(&self.paths.hard_database)?
-                    .latest_mutation_for_binding(host.host_id().as_bytes(), kind, scope, subject)?
-                    .filter(|operation| {
-                        matches!(
-                            operation.state,
-                            MutationState::RemoteVerified | MutationState::Finalized
-                        )
-                    })
+                    .latest_finalizable_mutation_for_binding(
+                        host.host_id().as_bytes(),
+                        kind,
+                        scope,
+                        subject,
+                    )?
                 {
                     MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
                         .finalize(&operation.operation_id)?;

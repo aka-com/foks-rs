@@ -15,8 +15,12 @@ impl HardStateStore {
     ) -> Result<()> {
         validate_team_mutation(operation)?;
         if operation.kind != TeamMutationKind::MembershipChange
-            || operation.state != TeamMutationState::Prepared
-            || operation.created_at != operation.updated_at
+            || !matches!(
+                operation.state,
+                TeamMutationState::Prepared | TeamMutationState::Submitting
+            )
+            || (operation.state == TeamMutationState::Prepared
+                && operation.created_at != operation.updated_at)
         {
             return Err(Error::InvalidFederationSaga(
                 "local mutation must be a newly prepared membership change",
@@ -89,6 +93,17 @@ impl HardStateStore {
             return Err(Error::InvalidFederationSaga(
                 "local mutation ID was reused for another binding",
             ));
+        }
+        if stored.state == TeamMutationState::Prepared {
+            transaction.execute(
+                "UPDATE team_mutation_operations SET state = ?2, updated_at = ?3
+                 WHERE operation_id = ?1",
+                params![
+                    operation.operation_id.as_slice(),
+                    TeamMutationState::Submitting as u8,
+                    sqlite_integer("team mutation updated time", updated_at)?,
+                ],
+            )?;
         }
         transaction.execute(
             "UPDATE federation_saga_operations

@@ -41,9 +41,10 @@ use foks_snowpack::{decode, Value};
 use foks_verify::{
     authenticate_historical_roots_from_latest, merkle_history_requirements, normalize_device_name,
     normalize_username, restore_merkle_anchor, restore_public_host_identity, restore_verified_team,
-    restore_verified_user, user_chain_root_epochs, verify_merkle_advance, verify_public_host,
-    verify_user_chain, verify_user_chain_increment, AuthenticatedMerkleRoots, HostService,
-    VerifiedMerkleAdvance, VerifiedPublicHost, VerifiedTeamState, VerifiedUserState,
+    restore_verified_user, user_chain_root_epochs, verify_public_host,
+    verify_signed_merkle_advance, verify_user_chain, verify_user_chain_increment,
+    AuthenticatedMerkleRoots, HostService, VerifiedMerkleAdvance, VerifiedPublicHost,
+    VerifiedTeamState, VerifiedUserState,
 };
 use rustls::pki_types::CertificateDer;
 use thiserror::Error;
@@ -154,9 +155,9 @@ mod tests {
 
     use crate::kv::{read_kv_upload_chunk, read_kv_upload_chunk_with_carry, KvRequest};
     use foks_client_db::SoftStateStore;
-    use foks_proto::{KvListResponse, KvParty, KvPathVersionVector, TeamChain};
+    use foks_proto::{KvListResponse, KvParty, KvPathVersionVector};
     use foks_rpc::KvAuth;
-    use foks_verify::verify_team_chain;
+    use foks_verify::verify_merkle_advance;
 
     const PROBE: &[u8] = include_bytes!(
         "../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp"
@@ -165,16 +166,6 @@ mod tests {
         include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/merkle-root-998.snowp");
     const USER_HISTORY: &[u8] = include_bytes!(
         "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/merkle-historical-response.snowp"
-    );
-    const USER_CHAIN: &[u8] =
-        include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/user-chain.snowp");
-    const TEAM_CHAIN: &[u8] =
-        include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/team-chain.snowp");
-    const TEAM_ROOT: &[u8] = include_bytes!(
-        "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/team-merkle-root-996.snowp"
-    );
-    const TEAM_HISTORY: &[u8] = include_bytes!(
-        "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/team-merkle-historical-response.snowp"
     );
     const SIGNUP_DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/signup";
     const MUTATION_DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user-mutations";
@@ -380,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_user_sync_retries_from_durable_merkle_history() {
+    fn unsigned_merkle_skip_evidence_cannot_become_durable_authority() {
         let public = verify_public_host("foks.app", PROBE).unwrap();
         let advance = verify_merkle_advance(
             public.snapshot.merkle_root(),
@@ -396,99 +387,12 @@ mod tests {
         let database_path = directory.path().join("hard.sqlite3");
         let mut database = HardStateStore::open(&database_path).unwrap();
         database.accept_verified_host(&public.snapshot).unwrap();
-        database
-            .accept_verified_merkle_root(public.snapshot.host_id(), advance.snapshot())
-            .unwrap();
-        drop(database); // Simulate a failed user fetch followed by a fresh process.
-
-        let database = HardStateStore::open(&database_path).unwrap();
-        let pinned = database.host_for_lookup("foks.app").unwrap().unwrap();
-        let anchor = restore_merkle_anchor(
-            pinned.merkle_root.epoch,
-            pinned.merkle_root.root_hash,
-            &pinned.merkle_root.root_bytes,
-            &pinned.merkle_root.evidence,
-            &pinned.merkle_root.authenticated_roots,
-            &pinned.chain_bytes,
-        )
-        .unwrap();
-        let retry = verify_merkle_advance(
-            &anchor,
-            USER_ROOT,
-            &foks_snowpack::encode(&Value::Array(vec![Value::Null, Value::Null])).unwrap(),
-            &HostchainTail {
-                seqno: pinned.chain_seqno,
-                hash: pinned.chain_tail_hash,
-            },
-        )
-        .unwrap();
-        assert!(retry.authenticated_roots().contains_epoch(996));
-        assert!(retry.authenticated_roots().contains_epoch(997));
-
-        let Value::Binary(uid) = decode(include_bytes!(
-            "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/uid.snowp"
-        ))
-        .unwrap() else {
-            panic!("UID fixture is not a binary EntityID");
-        };
-        let uid = EntityId::from_bytes(uid).unwrap();
-        let chain = foks_proto::UserChain::decode(USER_CHAIN).unwrap();
-        let host = chain.links[0].decode_eldest().unwrap().host;
-        verify_user_chain(
-            USER_CHAIN,
-            &uid,
-            &host,
-            retry.authenticated_roots(),
-            &retry.root().hostchain,
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn pinned_team_replays_sqlite_evidence_before_use() {
-        let public = verify_public_host("foks.app", PROBE).unwrap();
-        let advance = verify_merkle_advance(
-            public.snapshot.merkle_root(),
-            TEAM_ROOT,
-            TEAM_HISTORY,
-            &HostchainTail {
-                seqno: public.snapshot.chain_seqno(),
-                hash: public.snapshot.chain_tail_hash(),
-            },
-        )
-        .unwrap();
-        let chain = TeamChain::decode(TEAM_CHAIN).unwrap();
-        let Value::Binary(team) = decode(include_bytes!(
-            "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/team-id.snowp"
-        ))
-        .unwrap() else {
-            panic!("team fixture is not binary");
-        };
-        let team = EntityId::from_bytes(team).unwrap();
-        let host_id = chain.links[0].decode_team_group_change().unwrap().host;
-        let verified = verify_team_chain(
-            TEAM_CHAIN,
-            &team,
-            &host_id,
-            advance.authenticated_roots(),
-            &chain.merkle.root().hostchain,
-        )
-        .unwrap();
-        let directory = tempfile::tempdir().unwrap();
-        let database_path = directory.path().join("hard.sqlite3");
-        let mut database = HardStateStore::open(&database_path).unwrap();
-        database.accept_verified_host(&public.snapshot).unwrap();
-        database
-            .accept_verified_merkle_root(public.snapshot.host_id(), advance.snapshot())
-            .unwrap();
-        database
-            .accept_verified_team(&verified.hard_state_snapshot().unwrap())
-            .unwrap();
-        drop(database);
-
-        let client = FoksClient::webpki();
-        let host = client.pinned_host("foks.app", &database_path).unwrap();
-        assert_eq!(client.pinned_team(&host, &team).unwrap(), Some(verified));
+        assert!(matches!(
+            database.accept_verified_merkle_root(public.snapshot.host_id(), advance.snapshot()),
+            Err(foks_client_db::Error::InvalidSnapshot(
+                "signed Merkle evidence is empty"
+            ))
+        ));
     }
 
     #[test]

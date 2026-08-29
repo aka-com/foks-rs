@@ -971,7 +971,7 @@ pub const ROUTES: &[RouteSpec] = &[
         listeners: &["public_services"],
         authentication: "delegated_tls",
         request: "CurrentMerkleRootArgument",
-        result: "MerkleRoot",
+        result: "SignedBlob",
         statuses: &["ok", "bad_args", "not_found"],
         max_request_bytes: 4096,
         supported: true,

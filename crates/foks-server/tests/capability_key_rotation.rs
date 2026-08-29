@@ -196,12 +196,44 @@ fn startup_rejects_untracked_or_missing_capability_generations() {
     assert!(load_or_bootstrap(&mut database, &provider, &input(3)).is_err());
 }
 
+#[test]
+fn wrong_provider_is_rejected_before_capability_orphan_cleanup() {
+    let temporary = tempfile::tempdir().unwrap();
+    let provider_a = foks_server::keys::MemoryKeyProvider::default();
+    let mut database_a = Database::open(
+        temporary.path().join("capability-a.sqlite"),
+        Config::default(),
+    )
+    .unwrap();
+    load_or_bootstrap(&mut database_a, &provider_a, &input(1)).unwrap();
+
+    let provider_b = foks_server::keys::MemoryKeyProvider::default();
+    let mut database_b = Database::open(
+        temporary.path().join("capability-b.sqlite"),
+        Config::default(),
+    )
+    .unwrap();
+    load_or_bootstrap(&mut database_b, &provider_b, &input(1)).unwrap();
+    let orphan = provider_b
+        .create_generation(KeyPurpose::Capability)
+        .unwrap();
+
+    assert!(rotate_capability_key(&mut database_a, &provider_b, 2).is_err());
+    assert!(provider_b
+        .load_generation(KeyPurpose::Capability, orphan.generation())
+        .is_ok());
+}
+
 struct FailFirstRetirement {
     inner: DirectoryKeyProvider,
     fail: AtomicBool,
 }
 
 impl HostKeyProvider for FailFirstRetirement {
+    fn is_pristine(&self) -> foks_server::Result<bool> {
+        self.inner.is_pristine()
+    }
+
     fn load_or_create(
         &self,
         purpose: KeyPurpose,

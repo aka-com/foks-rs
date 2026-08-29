@@ -22,6 +22,7 @@ pub enum ErrorKind {
     NonNegativeSignedInteger,
     LengthOverflow,
     DepthLimit,
+    ValueLimit,
 }
 
 /// A closed, offset-bearing Snowpack failure.
@@ -74,6 +75,7 @@ impl fmt::Display for Error {
             }
             ErrorKind::LengthOverflow => write!(formatter, "length exceeds u32"),
             ErrorKind::DepthLimit => write!(formatter, "maximum nesting depth exceeded"),
+            ErrorKind::ValueLimit => write!(formatter, "maximum decoded value count exceeded"),
         }
     }
 }
@@ -112,6 +114,10 @@ mod tests {
             ),
             (ErrorKind::LengthOverflow, "length exceeds u32"),
             (ErrorKind::DepthLimit, "maximum nesting depth exceeded"),
+            (
+                ErrorKind::ValueLimit,
+                "maximum decoded value count exceeded",
+            ),
         ];
         for (kind, expected) in cases {
             let error = Error::new(

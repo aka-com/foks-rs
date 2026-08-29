@@ -297,11 +297,7 @@ impl FoksClient {
             ) {
                 let mut coordinator =
                     MutationCoordinator::new(&host.database_path, protected_store);
-                if matches!(error, Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) {
-                    coordinator.rejected(&operation.operation_id)?;
-                } else {
-                    coordinator.submission_unknown(&operation.operation_id)?;
-                }
+                coordinator.submission_unknown(&operation.operation_id)?;
                 return Err(error);
             }
         } else if !matches!(

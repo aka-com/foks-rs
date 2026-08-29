@@ -1566,6 +1566,9 @@ fn validate_merkle_root(root: VerifiedMerkleRootParts<'_>) -> Result<()> {
         MerkleRootEvidence::SignedRefresh { .. } => Err(Error::InvalidSnapshot(
             "Merkle evidence anchors must strictly descend",
         )),
+        MerkleRootEvidence::SkipPath { signed_root, .. } if signed_root.is_empty() => {
+            Err(Error::InvalidSnapshot("signed Merkle evidence is empty"))
+        }
         MerkleRootEvidence::SkipPath {
             anchor_epoch,
             historical_response,
@@ -1573,7 +1576,11 @@ fn validate_merkle_root(root: VerifiedMerkleRootParts<'_>) -> Result<()> {
         } if *anchor_epoch >= root.epoch || historical_response.is_empty() => Err(
             Error::InvalidSnapshot("Merkle skip-path evidence is malformed"),
         ),
-        MerkleRootEvidence::SkipPath { prior, .. } => validate_evidence_order(prior, root.epoch),
+        MerkleRootEvidence::SkipPath {
+            anchor_epoch,
+            prior,
+            ..
+        } => validate_evidence_order(prior, *anchor_epoch),
         _ => Ok(()),
     }
 }
@@ -1662,10 +1669,14 @@ fn validate_evidence_order(evidence: &MerkleRootEvidence, upper: u64) -> Result<
         MerkleRootEvidence::SignedRefresh { .. } => Err(Error::InvalidSnapshot(
             "Merkle evidence anchors must strictly descend",
         )),
+        MerkleRootEvidence::SkipPath { signed_root, .. } if signed_root.is_empty() => {
+            Err(Error::InvalidSnapshot("signed Merkle evidence is empty"))
+        }
         MerkleRootEvidence::SkipPath {
             anchor_epoch,
             historical_response,
             prior,
+            ..
         } if *anchor_epoch < upper && !historical_response.is_empty() => {
             validate_evidence_order(prior, *anchor_epoch)
         }
@@ -1705,6 +1716,7 @@ fn evidence_value(evidence: &MerkleRootEvidence) -> Value {
             evidence_value(prior),
         ]),
         MerkleRootEvidence::SkipPath {
+            signed_root,
             anchor_epoch,
             historical_response,
             prior,
@@ -1713,6 +1725,7 @@ fn evidence_value(evidence: &MerkleRootEvidence) -> Value {
             Value::Unsigned(*anchor_epoch),
             Value::Binary(historical_response.clone()),
             evidence_value(prior),
+            Value::Binary(signed_root.clone()),
         ]),
     }
 }
@@ -1763,8 +1776,11 @@ fn evidence_from_value(value: &Value, depth: usize) -> Result<MerkleRootEvidence
                 prior: Box::new(evidence_from_value(prior, depth + 1)?),
             })
         }
-        [Value::Unsigned(1), Value::Unsigned(anchor_epoch), Value::Binary(historical_response), prior] => {
+        [Value::Unsigned(1), Value::Unsigned(anchor_epoch), Value::Binary(historical_response), prior, Value::Binary(signed_root)]
+            if !signed_root.is_empty() =>
+        {
             Ok(MerkleRootEvidence::SkipPath {
+                signed_root: signed_root.clone(),
                 anchor_epoch: *anchor_epoch,
                 historical_response: historical_response.clone(),
                 prior: Box::new(evidence_from_value(prior, depth + 1)?),
@@ -2103,7 +2119,7 @@ mod tests {
     }
 
     #[test]
-    fn application_binding_lookup_includes_only_the_latest_exact_operation() {
+    fn application_binding_lookups_separate_pending_resume_from_finalizable_cleanup() {
         let directory = tempfile::tempdir().unwrap();
         let mut store = HardStateStore::open(&directory.path().join("hard.db")).unwrap();
         let host = snapshot();
@@ -2160,6 +2176,23 @@ mod tests {
         store
             .advance_mutation(&[2; 16], MutationState::RemoteVerified, 202)
             .unwrap();
+        store
+            .record_mutation(&MutationOperation {
+                operation_id: [4; 16],
+                kind: MutationKind::DeviceProvision,
+                host_id: host_id.clone(),
+                scope_id: scope_id.clone(),
+                subject_id: subject_id.clone(),
+                expected_version: None,
+                request_hash: [7; 32],
+                material_ref: vec![4; 16],
+                material_hash: [8; 32],
+                state: MutationState::Prepared,
+                attempt_count: 0,
+                created_at: 300,
+                updated_at: 300,
+            })
+            .unwrap();
 
         let loaded = store
             .latest_mutation_for_binding(
@@ -2170,8 +2203,19 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert_eq!(loaded.operation_id, [2; 16]);
-        assert_eq!(loaded.state, MutationState::RemoteVerified);
+        assert_eq!(loaded.operation_id, [4; 16]);
+        assert_eq!(loaded.state, MutationState::Prepared);
+        let finalizable = store
+            .latest_finalizable_mutation_for_binding(
+                &host_id,
+                MutationKind::DeviceProvision,
+                &scope_id,
+                &subject_id,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(finalizable.operation_id, [2; 16]);
+        assert_eq!(finalizable.state, MutationState::RemoteVerified);
         assert!(store
             .latest_mutation_for_binding(
                 &host_id,
@@ -2433,6 +2477,57 @@ mod tests {
             ..superseded
         };
         store.record_team_mutation(&replacement).unwrap();
+    }
+
+    #[test]
+    fn team_mutation_records_as_submitting_and_survives_a_backwards_clock() {
+        let (_directory, mut store) = store();
+        let host = snapshot();
+        store.accept_host_parts(host.parts()).unwrap();
+        let leftover = TeamMutationOperation {
+            operation_id: [5; 16],
+            kind: TeamMutationKind::NamedCreation,
+            host_id: host.host_id.clone(),
+            actor_id: vec![1; 33],
+            device_id: vec![4; 33],
+            team_id: vec![3; 33],
+            expected_seqno: 1,
+            request_hash: [6; 32],
+            state: TeamMutationState::Prepared,
+            created_at: 300,
+            updated_at: 300,
+        };
+        store.record_team_mutation(&leftover).unwrap();
+        let operation = TeamMutationOperation {
+            operation_id: [7; 16],
+            request_hash: [8; 32],
+            ..leftover.clone()
+        };
+        store
+            .record_and_begin_team_mutation(&operation, 300)
+            .unwrap();
+        assert_eq!(
+            store
+                .team_mutation(&leftover.operation_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            TeamMutationState::Superseded
+        );
+        let stored = store
+            .team_mutation(&operation.operation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.state, TeamMutationState::Submitting);
+        store
+            .advance_team_mutation(&operation.operation_id, TeamMutationState::Submitted, 1)
+            .unwrap();
+        let advanced = store
+            .team_mutation(&operation.operation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(advanced.state, TeamMutationState::Submitted);
+        assert!(advanced.updated_at > stored.updated_at);
     }
 
     #[test]
@@ -2837,6 +2932,32 @@ mod tests {
     }
 
     #[test]
+    fn legacy_or_empty_signed_skip_evidence_is_rejected() {
+        let prior = Value::Array(vec![Value::Unsigned(0), Value::Binary(vec![0x44; 96])]);
+        let legacy = Value::Array(vec![
+            Value::Unsigned(1),
+            Value::Unsigned(1),
+            Value::Binary(vec![0x55; 96]),
+            prior.clone(),
+        ]);
+        assert!(matches!(
+            evidence_from_value(&legacy, 0),
+            Err(Error::InvalidSnapshot(
+                "persisted Merkle evidence has an invalid shape"
+            ))
+        ));
+
+        let empty_signed = Value::Array(vec![
+            Value::Unsigned(1),
+            Value::Unsigned(1),
+            Value::Binary(vec![0x55; 96]),
+            prior,
+            Value::Binary(Vec::new()),
+        ]);
+        assert!(evidence_from_value(&empty_signed, 0).is_err());
+    }
+
+    #[test]
     fn stale_merkle_root_rolls_back_a_chain_update_atomically() {
         let (_directory, mut store) = store();
         let original = snapshot();
@@ -2873,6 +2994,7 @@ mod tests {
         update.merkle_root.root_hash = [12; 32];
         update.merkle_root.root_bytes = vec![13; 80];
         update.merkle_root.evidence = MerkleRootEvidence::SkipPath {
+            signed_root: vec![14; 96],
             anchor_epoch: 11,
             historical_response: vec![12; 96],
             prior: Box::new(snapshot().merkle_root.evidence),
@@ -3074,6 +3196,7 @@ mod tests {
         host.merkle_root.root_hash = [12; 32];
         host.merkle_root.root_bytes = vec![13; 80];
         host.merkle_root.evidence = MerkleRootEvidence::SkipPath {
+            signed_root: vec![14; 96],
             anchor_epoch: 11,
             historical_response: vec![12; 96],
             prior: Box::new(snapshot().merkle_root.evidence),

@@ -18,6 +18,7 @@ pub fn rotate_capability_key(
     provider: &dyn HostKeyProvider,
     now: u64,
 ) -> Result<CapabilityKeyRotationState> {
+    validate_capability_key_generations_inner(database, provider, false)?;
     cleanup_untracked_generations(database, provider)?;
     validate_capability_key_generations(database, provider)?;
     let key = provider.create_generation(KeyPurpose::Capability)?;
@@ -39,6 +40,7 @@ pub fn retire_capability_keys(
     provider: &dyn HostKeyProvider,
     now: u64,
 ) -> Result<CapabilityKeyRotationState> {
+    validate_capability_key_generations_inner(database, provider, false)?;
     cleanup_untracked_generations(database, provider)?;
     database.revoke_retired_capability_keys(now)?;
     for generation in database.capability_key_generations()? {
@@ -78,6 +80,14 @@ pub fn validate_capability_key_generations(
     database: &impl CapabilityGenerationReader,
     provider: &dyn HostKeyProvider,
 ) -> Result<()> {
+    validate_capability_key_generations_inner(database, provider, true)
+}
+
+fn validate_capability_key_generations_inner(
+    database: &impl CapabilityGenerationReader,
+    provider: &dyn HostKeyProvider,
+    reject_untracked: bool,
+) -> Result<()> {
     let generations = database.capability_generations()?;
     if generations
         .iter()
@@ -113,7 +123,7 @@ pub fn validate_capability_key_generations(
             }
         }
     }
-    if !listed.is_subset(&known_generated) {
+    if reject_untracked && !listed.is_subset(&known_generated) {
         return Err(Error::Key("untracked capability key generation"));
     }
     Ok(())

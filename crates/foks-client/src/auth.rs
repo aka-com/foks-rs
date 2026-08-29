@@ -7,7 +7,7 @@ use super::{
     encode_load_user_chain_request_from, encode_merkle_select_vhost_request,
     encode_registration_select_vhost_request, merkle_history_requirements,
     open_puk_parcel_for_role, open_puk_parcel_with_for_role, open_puk_seed_chain,
-    restore_merkle_anchor, user_chain_root_epochs, verify_merkle_advance, verify_user_chain,
+    restore_merkle_anchor, user_chain_root_epochs, verify_signed_merkle_advance, verify_user_chain,
     verify_user_chain_increment, Acceptance, AuthenticatedMerkleRoots, EntityId, Error, FoksClient,
     HardStateStore, HostchainTail, PinnedHost, PukParcel, Result, Role, SecretSeed, Value,
     VerifiedMerkleAdvance, VerifiedUserState, YubiDevice, ENTITY_USER,
@@ -279,7 +279,9 @@ impl FoksClient {
             &encode_merkle_select_vhost_request(pinned.host_id())?,
             &encode_get_current_merkle_root_request(pinned.host_id(), 1)?,
         )?;
-        let latest = foks_proto::MerkleRoot::decode(&latest_bytes)?;
+        let signed = foks_proto::SignedBlob::decode(&latest_bytes)
+            .map_err(|_| Error::HostBinding("current Merkle root is not signed"))?;
+        let latest = foks_proto::MerkleRoot::decode(&signed.inner)?;
         let history = merkle_history_requirements(latest.epoch, host.merkle_root.epoch)?;
         let historical_bytes = if history.is_empty() {
             foks_snowpack::encode(&Value::Array(vec![Value::Null, Value::Null]))?
@@ -304,10 +306,11 @@ impl FoksClient {
             &host.merkle_root.authenticated_roots,
             &host.chain_bytes,
         )?;
-        let verified = verify_merkle_advance(
+        let verified = verify_signed_merkle_advance(
             &anchor,
             &latest_bytes,
             &historical_bytes,
+            &host.chain_bytes,
             &HostchainTail {
                 seqno: host.chain_seqno,
                 hash: host.chain_tail_hash,

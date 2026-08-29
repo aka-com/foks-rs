@@ -43,6 +43,9 @@ pub fn stage_host_key_rotation(
     provider: &dyn HostKeyProvider,
     now: u64,
 ) -> Result<HostKeyRotationState> {
+    // Authenticate every database-referenced key before treating the ledger
+    // as authority to erase provider-only crash orphans.
+    validate_host_key_generations(database, provider)?;
     retire_unreferenced_generation_files(database, provider)?;
     let operation = match database.active_host_rotation()? {
         Some(operation) => operation,

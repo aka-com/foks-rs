@@ -202,6 +202,48 @@ mod tests {
     }
 
     #[test]
+    fn merkle_advance_requires_a_merkle_signer_signature() {
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let MerkleRootEvidence::SignedBootstrap(signed) = public.snapshot.merkle_root.evidence()
+        else {
+            panic!("probe root is not a signed bootstrap");
+        };
+        let empty = encode(&Value::Array(vec![Value::Null, Value::Null])).unwrap();
+        verify_signed_merkle_advance(
+            &public.snapshot.merkle_root,
+            signed,
+            &empty,
+            public.snapshot.chain_bytes(),
+            &trusted_tail(&public),
+        )
+        .unwrap();
+        assert!(verify_signed_merkle_advance(
+            &public.snapshot.merkle_root,
+            &public.merkle_root.encoded().unwrap(),
+            &empty,
+            public.snapshot.chain_bytes(),
+            &trusted_tail(&public),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn merkle_history_rejects_epoch_zero() {
+        assert!(matches!(
+            merkle_history_requirements(1, 0),
+            Err(Error::MerkleHistoryShape)
+        ));
+        assert!(matches!(
+            merkle_history_requirements(0, 0),
+            Err(Error::MerkleHistoryShape)
+        ));
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let mut root = public.merkle_root.clone();
+        root.epoch = 0;
+        assert!(MerkleRoot::decode(&root.encoded().unwrap()).is_err());
+    }
+
+    #[test]
     fn official_user_transitions_and_merkle_advancement_verify() {
         let chain = UserChain::decode(USER_CHAIN).unwrap();
         let uid = binary_entity(include_bytes!(
@@ -614,14 +656,7 @@ mod tests {
     #[test]
     fn persisted_merkle_anchor_is_reauthenticated_from_its_signed_bootstrap() {
         let public = verify_public_host("foks.app", PROBE).unwrap();
-        let advance = verify_merkle_advance(
-            public.snapshot.merkle_root(),
-            USER_ROOT,
-            USER_HISTORY,
-            &trusted_tail(&public),
-        )
-        .unwrap();
-        let root = advance.snapshot();
+        let root = public.snapshot.merkle_root();
         let restored = restore_merkle_anchor(
             root.epoch(),
             root.root_hash(),
@@ -645,22 +680,39 @@ mod tests {
         )
         .is_err());
 
-        let mut bad_evidence = root.evidence().clone();
-        let MerkleRootEvidence::SkipPath {
-            historical_response,
-            ..
-        } = &mut bad_evidence
-        else {
+        let unsigned_advance = verify_merkle_advance(
+            public.snapshot.merkle_root(),
+            USER_ROOT,
+            USER_HISTORY,
+            &trusted_tail(&public),
+        )
+        .unwrap();
+        let unsigned = unsigned_advance.snapshot();
+        assert!(restore_merkle_anchor(
+            unsigned.epoch(),
+            unsigned.root_hash(),
+            unsigned.root_bytes(),
+            unsigned.evidence(),
+            unsigned.authenticated_roots(),
+            public.snapshot.chain_bytes(),
+        )
+        .is_err());
+
+        let mut mismatched_signature = unsigned.evidence().clone();
+        let MerkleRootEvidence::SkipPath { signed_root, .. } = &mut mismatched_signature else {
             panic!("fixture advance did not use a skip path");
         };
-        let middle = historical_response.len() / 2;
-        historical_response[middle] ^= 1;
+        let MerkleRootEvidence::SignedBootstrap(bootstrap) = public.snapshot.merkle_root.evidence()
+        else {
+            panic!("probe root did not carry a signed bootstrap");
+        };
+        signed_root.clone_from(bootstrap);
         assert!(restore_merkle_anchor(
-            root.epoch(),
-            root.root_hash(),
-            root.root_bytes(),
-            &bad_evidence,
-            root.authenticated_roots(),
+            unsigned.epoch(),
+            unsigned.root_hash(),
+            unsigned.root_bytes(),
+            &mismatched_signature,
+            unsigned.authenticated_roots(),
             public.snapshot.chain_bytes(),
         )
         .is_err());

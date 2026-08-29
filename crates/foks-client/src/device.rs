@@ -1172,6 +1172,7 @@ impl FoksClient {
             Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
             Err(error) => return Err(error),
         };
+        self.confirm_persisted_passphrase_annex(host, signer, &operation, protected_store)?;
         MutationCoordinator::new(&host.database_path, protected_store)
             .remote_verified_and_finalize(&operation_id)?;
         Ok(updated)
@@ -1215,9 +1216,38 @@ impl FoksClient {
             Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
             Err(error) => return Err(error),
         };
+        self.confirm_persisted_passphrase_annex(host, signer, &operation, protected_store)?;
         MutationCoordinator::new(&host.database_path, protected_store)
             .remote_verified_and_finalize(&operation_id)?;
         Ok(updated)
+    }
+
+    fn confirm_persisted_passphrase_annex(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        operation: &MutationOperation,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<()> {
+        let request = MutationCoordinator::new(&host.database_path, protected_store)
+            .load_bound_material(operation)?;
+        let call = foks_rpc::decode_call(&request)
+            .map_err(|_| Error::OperationBinding("persisted user mutation request is malformed"))?;
+        if call.protocol_id() != foks_rpc::USER_PROTOCOL_ID
+            || call.method_position() != foks_rpc::USER_REVOKE_DEVICE_METHOD_POSITION
+        {
+            return Err(Error::OperationBinding(
+                "persisted user mutation request targets another route",
+            ));
+        }
+        let decoded = foks_rpc::arguments::decode_revoke_device(call.argument()).map_err(|_| {
+            Error::OperationBinding("persisted user mutation argument is malformed")
+        })?;
+        if let Some(expected) = decoded.passphrase {
+            let stored = self.fetch_ppe_parcel(host, credential)?;
+            crate::passphrase::validate_committed_update(&stored, &expected)?;
+        }
+        Ok(())
     }
 
     fn bound_user_mutation(
@@ -1322,11 +1352,6 @@ impl FoksClient {
             .begin_submission(&operation_id)?;
         match self.call_void(host, &host.user, encoded, credential) {
             Ok(()) => Ok(None),
-            Err(error @ Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) => {
-                MutationCoordinator::new(&host.database_path, protected_store)
-                    .rejected(&operation_id)?;
-                Err(error)
-            }
             Err(error) => {
                 MutationCoordinator::new(&host.database_path, protected_store)
                     .submission_unknown(&operation_id)?;

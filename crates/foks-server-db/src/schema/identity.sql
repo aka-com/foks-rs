@@ -25,7 +25,7 @@ CREATE TABLE devices (
     active INTEGER NOT NULL CHECK (active IN (0, 1)),
     role_type INTEGER NOT NULL CHECK (role_type BETWEEN 1 AND 3),
     visibility INTEGER NOT NULL,
-    subkey_id BLOB CHECK (subkey_id IS NULL OR length(subkey_id) IN (33, 34)),
+    subkey_id BLOB UNIQUE CHECK (subkey_id IS NULL OR length(subkey_id) IN (33, 34)),
     hepk_fingerprint BLOB NOT NULL CHECK (length(hepk_fingerprint) = 32),
     exact_hepk BLOB NOT NULL,
     exact_name BLOB NOT NULL

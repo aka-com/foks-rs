@@ -118,6 +118,10 @@ impl Database {
         if !parent_active {
             return Err(Error::AuthorizationChanged);
         }
+        // Physical management-key rotation republishes fresh opaque ciphertext
+        // under the same current PUK. v0.1.9 gives the server no way to validate
+        // that ciphertext, so preserve same-role/current-generation replacement
+        // while rejecting role downgrades and stale generations.
         let changed = transaction.execute(
             "INSERT INTO yubi_management_keys
              (uid, parent_id, exact_box, generation, role_type, visibility, updated_at)
@@ -128,7 +132,9 @@ impl Database {
                role_type = excluded.role_type,
                visibility = excluded.visibility,
                updated_at = excluded.updated_at
-             WHERE yubi_management_keys.generation <= excluded.generation",
+             WHERE (yubi_management_keys.role_type < excluded.role_type)
+                OR (yubi_management_keys.role_type = excluded.role_type
+                    AND yubi_management_keys.generation <= excluded.generation)",
             params![
                 uid,
                 value.parent_id,

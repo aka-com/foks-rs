@@ -80,6 +80,9 @@ impl From<KeyBackendArgument> for CredentialBackend {
 #[derive(clap::Subcommand)]
 enum ProfileCommand {
     List,
+    Show {
+        name: String,
+    },
     Add(ProfileAdd),
     Remove {
         name: String,
@@ -536,6 +539,14 @@ fn profile_command(
         ProfileCommand::List => {
             let profiles = registry.profiles().cloned().collect::<Vec<_>>();
             output(json, &profiles, &format!("{} profile(s)", profiles.len()))
+        }
+        ProfileCommand::Show { name } => {
+            let profile = registry.profile(&name)?;
+            output(
+                json,
+                profile,
+                &format!("{} -> {}", profile.name, profile.probe),
+            )
         }
         ProfileCommand::Add(arguments) => {
             let protocol = match arguments.generation {

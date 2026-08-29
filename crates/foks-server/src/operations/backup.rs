@@ -129,7 +129,11 @@ fn run_backup(
     }
     std::fs::rename(&staging, &destination)?;
     std::fs::File::open(&schedule.directory)?.sync_all()?;
-    enforce_retention(&schedule.directory, schedule.retain)?;
+    enforce_retention(
+        &schedule.directory,
+        schedule.retain,
+        &source.database_config,
+    )?;
     Ok(now)
 }
 
@@ -140,7 +144,7 @@ fn cleanup_staging(root: &Path) -> Result<()> {
         let Some(name) = name.to_str() else {
             continue;
         };
-        if !name.starts_with(".backup-") || !name.ends_with(".tmp") {
+        if !is_staging_backup_name(name) {
             continue;
         }
         let file_type = entry.file_type()?;
@@ -152,19 +156,36 @@ fn cleanup_staging(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn enforce_retention(root: &Path, retain: usize) -> Result<()> {
-    let mut backups = std::fs::read_dir(root)?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            let name = entry.file_name();
-            let name = name.to_str()?;
-            if !name.starts_with("backup-") {
-                return None;
-            }
-            let file_type = entry.file_type().ok()?;
-            (file_type.is_dir() && !file_type.is_symlink()).then(|| (name.to_owned(), entry.path()))
-        })
-        .collect::<Vec<_>>();
+fn enforce_retention(
+    root: &Path,
+    retain: usize,
+    database_config: &foks_server_db::Config,
+) -> Result<()> {
+    let mut backups = Vec::new();
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !is_completed_backup_name(name) {
+            continue;
+        }
+        let file_type = entry.file_type()?;
+        if !file_type.is_dir() || file_type.is_symlink() {
+            return Err(Error::Key("completed backup is not a regular directory"));
+        }
+        let path = entry.path();
+        crate::standalone::validate_completed_backup(
+            &crate::BackupArtifacts {
+                database: path.join("foks-server.sqlite"),
+                key_directory: path.join("keys"),
+                key_manifest: path.join("key-manifest.txt"),
+            },
+            database_config.clone(),
+        )?;
+        backups.push((name.to_owned(), path));
+    }
     backups.sort_by(|left, right| left.0.cmp(&right.0));
     let remove = backups.len().saturating_sub(retain);
     for (_, path) in backups.into_iter().take(remove) {
@@ -172,4 +193,58 @@ fn enforce_retention(root: &Path, retain: usize) -> Result<()> {
     }
     std::fs::File::open(root)?.sync_all()?;
     Ok(())
+}
+
+fn is_completed_backup_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("backup-") else {
+        return false;
+    };
+    let bytes = rest.as_bytes();
+    bytes.len() == 41
+        && bytes[20] == b'-'
+        && bytes[..20].iter().all(u8::is_ascii_digit)
+        && bytes[21..].iter().all(u8::is_ascii_digit)
+}
+
+fn is_staging_backup_name(name: &str) -> bool {
+    name.strip_prefix('.')
+        .and_then(|name| name.strip_suffix(".tmp"))
+        .is_some_and(is_completed_backup_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retention_names_are_exact_and_foreign_directories_are_never_deleted() {
+        assert!(is_completed_backup_name(
+            "backup-00000000000000000001-00000000000000000002"
+        ));
+        for name in [
+            "backup-user-data",
+            "backup-00000000000000000001-00000000000000000002-extra",
+            "backup-0000000000000000001-00000000000000000002",
+            "backup-0000000000000000000x-00000000000000000002",
+        ] {
+            assert!(!is_completed_backup_name(name), "{name}");
+        }
+        assert!(is_staging_backup_name(
+            ".backup-00000000000000000001-00000000000000000002.tmp"
+        ));
+
+        let root = tempfile::tempdir().unwrap();
+        let foreign = root.path().join("backup-user-data");
+        std::fs::create_dir(&foreign).unwrap();
+        enforce_retention(root.path(), 1, &foks_server_db::Config::default()).unwrap();
+        assert!(foreign.is_dir());
+
+        let incomplete = root
+            .path()
+            .join("backup-00000000000000000001-00000000000000000002");
+        std::fs::create_dir(&incomplete).unwrap();
+        assert!(enforce_retention(root.path(), 1, &foks_server_db::Config::default()).is_err());
+        assert!(incomplete.is_dir());
+        assert!(foreign.is_dir());
+    }
 }

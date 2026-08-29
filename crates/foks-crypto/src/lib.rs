@@ -412,15 +412,19 @@ pub fn open_kv_dirent_name(directory_seed: &SecretSeed, dirent: &KvDirent) -> Re
     Ok(name)
 }
 
-/// Opens one large-file chunk and rejects a server-adjusted offset that does
-/// not contain the requested byte.
+/// Opens the large-file chunk at `requested_offset`.
+///
+/// The returned offset is authenticated only indirectly through the nonce, so
+/// require it to match the requested database key before attempting to open
+/// the ciphertext. This keeps a remote peer from changing which authenticated
+/// chunk range the caller accepts.
 pub fn open_kv_chunk(
     file_seed: &SecretSeed,
     file_id: KvNodeId,
     requested_offset: u64,
     chunk: &KvEncryptedChunk,
 ) -> Result<Vec<u8>> {
-    if chunk.offset < requested_offset {
+    if chunk.offset != requested_offset {
         return Err(Error::KvBinding);
     }
     let nonce_value = encode(&Value::Array(vec![
@@ -441,11 +445,7 @@ pub fn open_kv_chunk(
     let Value::Binary(bytes) = value else {
         return Err(Error::KvBinding);
     };
-    let skip = usize::try_from(chunk.offset - requested_offset).map_err(|_| Error::KvBinding)?;
-    bytes
-        .get(skip..)
-        .map(ToOwned::to_owned)
-        .ok_or(Error::KvBinding)
+    Ok(bytes)
 }
 
 fn derive_seed_kv_keys(seed: &SecretSeed) -> Result<KvKeySet> {
@@ -3108,6 +3108,10 @@ pub fn open_puk_parcel(
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the authenticated PUK, host, and role bindings must remain explicit"
+)]
 pub fn open_puk_parcel_for_role(
     parcel: &PukParcel,
     device_seed: &SecretSeed,
@@ -3153,6 +3157,10 @@ pub fn open_puk_parcel_with(
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the authenticated PUK, host, and role bindings must remain explicit"
+)]
 pub fn open_puk_parcel_with_for_role(
     parcel: &PukParcel,
     receiver: &dyn HybridSecretDecapsulator,
@@ -5163,38 +5171,43 @@ mod tests {
     }
 
     #[test]
-    fn large_chunk_matches_official_requested_and_returned_offset_semantics() {
+    fn large_chunk_requires_the_exact_requested_offset() {
         let file_seed = SecretSeed::new([0x55; 32]);
         let mut id = [0x77; 17];
         id[0] = 2;
         let id = KvNodeId(id);
-        let requested = 3;
-        let returned = 5;
+        let chunk_offset = 0u64;
         let clear = b"abcdef".to_vec();
-        let encoded = encode(&Value::Binary(clear)).unwrap();
-        let nonce_value = encode(&Value::Array(vec![
-            Value::Binary(id.object_id().to_vec()),
-            Value::Unsigned(requested),
-            Value::Bool(true),
-        ]))
-        .unwrap();
-        let hash = prefixed_hash(KV_CHUNK_NONCE_PAYLOAD_TYPE_ID, &nonce_value);
-        let nonce: [u8; 24] = hash[..24].try_into().unwrap();
-        let cipher = XSalsa20Poly1305::new(file_seed.as_bytes().into());
-        let ciphertext = cipher.encrypt((&nonce).into(), encoded.as_ref()).unwrap();
+        let chunk = seal_kv_chunk(&file_seed, id, chunk_offset, true, &clear, 0).unwrap();
         let chunk = KvEncryptedChunk {
-            ciphertext,
-            offset: returned,
-            final_chunk: true,
+            ciphertext: chunk.ciphertext,
+            offset: chunk.offset,
+            final_chunk: chunk.final_upload.is_some(),
         };
         assert_eq!(
-            open_kv_chunk(&file_seed, id, requested, &chunk).unwrap(),
-            b"cdef"
+            open_kv_chunk(&file_seed, id, chunk_offset, &chunk).unwrap(),
+            b"abcdef"
         );
-        let behind = KvEncryptedChunk { offset: 2, ..chunk };
+        let requested = 2u64;
         assert!(matches!(
-            open_kv_chunk(&file_seed, id, requested, &behind),
+            open_kv_chunk(&file_seed, id, requested, &chunk),
             Err(Error::KvBinding)
+        ));
+        let ahead = KvEncryptedChunk {
+            offset: requested + 1,
+            ..chunk.clone()
+        };
+        assert!(matches!(
+            open_kv_chunk(&file_seed, id, requested, &ahead),
+            Err(Error::KvBinding)
+        ));
+        let lying = KvEncryptedChunk {
+            offset: requested,
+            ..chunk
+        };
+        assert!(matches!(
+            open_kv_chunk(&file_seed, id, requested, &lying),
+            Err(Error::Decryption)
         ));
     }
 

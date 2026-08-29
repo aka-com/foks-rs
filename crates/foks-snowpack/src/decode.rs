@@ -1,5 +1,10 @@
 use crate::{Error, ErrorKind, PathSegment, Value, MAX_DEPTH};
 
+// Snowpack frames are network-facing. Cap the total decoded AST, rather than
+// only each array, because small encoded scalars expand substantially as
+// `Value` nodes and nested arrays can otherwise multiply that amplification.
+const MAXIMUM_DECODED_VALUES: usize = 1_000_000;
+
 pub fn decode(input: &[u8]) -> Result<Value, Error> {
     let (value, consumed) = decode_prefix(input)?;
     if consumed != input.len() {
@@ -16,6 +21,7 @@ pub fn decode_prefix(input: &[u8]) -> Result<(Value, usize), Error> {
         input,
         offset: 0,
         path: Vec::new(),
+        values: 0,
     };
     let value = decoder.value()?;
     Ok((value, decoder.offset))
@@ -29,6 +35,7 @@ struct Decoder<'a> {
     input: &'a [u8],
     offset: usize,
     path: Vec<PathSegment>,
+    values: usize,
 }
 
 impl Decoder<'_> {
@@ -76,6 +83,13 @@ impl Decoder<'_> {
     }
 
     fn value(&mut self) -> Result<Value, Error> {
+        self.values = self
+            .values
+            .checked_add(1)
+            .ok_or_else(|| self.error(ErrorKind::ValueLimit))?;
+        if self.values > MAXIMUM_DECODED_VALUES {
+            return Err(self.error(ErrorKind::ValueLimit));
+        }
         if self.path.len() > MAX_DEPTH {
             return Err(self.error(ErrorKind::DepthLimit));
         }
@@ -238,6 +252,9 @@ impl Decoder<'_> {
         if self.input.len().saturating_sub(self.offset) < length {
             return Err(self.error(ErrorKind::UnexpectedEof));
         }
+        if self.values.saturating_add(length) > MAXIMUM_DECODED_VALUES {
+            return Err(self.error(ErrorKind::ValueLimit));
+        }
         let mut values = Vec::with_capacity(length);
         for index in 0..length {
             self.path.push(PathSegment::Index(index));
@@ -311,5 +328,16 @@ mod tests {
     fn malicious_array_count_fails_before_allocation() {
         let error = decode(&[0xdd, 0xff, 0xff, 0xff, 0xff]).unwrap_err();
         assert_eq!(error.kind, ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn array_value_amplification_is_rejected_before_allocation() {
+        let length = MAXIMUM_DECODED_VALUES + 1;
+        let mut encoded = Vec::with_capacity(length + 5);
+        encoded.push(0xdd);
+        encoded.extend_from_slice(&u32::try_from(length).unwrap().to_be_bytes());
+        encoded.resize(length + 5, 0xc0);
+        let error = decode(&encoded).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::ValueLimit);
     }
 }

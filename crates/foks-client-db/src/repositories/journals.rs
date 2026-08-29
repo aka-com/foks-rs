@@ -223,6 +223,52 @@ impl HardStateStore {
             .map(Ok)
             .transpose()
     }
+
+    /// Finds the newest mutation that has crossed the authenticated remote
+    /// verification boundary and is therefore safe for application-owned
+    /// protected-record cleanup. Pending operations remain visible through
+    /// `latest_mutation_for_binding` for submission recovery.
+    pub fn latest_finalizable_mutation_for_binding(
+        &self,
+        host_id: &[u8],
+        kind: MutationKind,
+        scope_id: &[u8],
+        subject_id: &[u8],
+    ) -> Result<Option<MutationOperation>> {
+        self.connection
+            .query_row(
+                "SELECT operation_id, operation_kind, host_id, scope_id, subject_id,
+                        expected_version, request_hash, material_ref, material_hash, state,
+                        attempt_count, created_at, updated_at
+                 FROM mutation_operations
+                 WHERE host_id = ?1 AND operation_kind = ?2
+                   AND scope_id = ?3 AND subject_id = ?4
+                   AND state IN (?5, ?6)
+                 ORDER BY created_at DESC, operation_id DESC LIMIT 1",
+                params![
+                    host_id,
+                    kind as u8,
+                    scope_id,
+                    subject_id,
+                    MutationState::RemoteVerified as u8,
+                    MutationState::Finalized as u8
+                ],
+                |row| {
+                    let operation_id = row.get::<_, Vec<u8>>(0)?;
+                    let operation_id: [u8; 16] = operation_id.try_into().map_err(|_| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            16,
+                            rusqlite::types::Type::Blob,
+                            "invalid mutation operation ID".into(),
+                        )
+                    })?;
+                    mutation_operation_from_offset(operation_id, row, 1)
+                },
+            )
+            .optional()?
+            .map(Ok)
+            .transpose()
+    }
     /// Records only the public fingerprint of a prepared signup. The caller's
     /// encrypted credential store remains authoritative for retry material.
     pub fn record_signup_operation(&mut self, operation: &SignupOperation) -> Result<()> {
@@ -551,6 +597,110 @@ impl HardStateStore {
         Ok(())
     }
 
+    /// Records a team mutation and marks it submitting in one transaction so a
+    /// crash cannot leave the chain position reserved in `Prepared`.
+    pub fn record_and_begin_team_mutation(
+        &mut self,
+        operation: &TeamMutationOperation,
+        submitting_at: u64,
+    ) -> Result<()> {
+        validate_team_mutation(operation)?;
+        if operation.state != TeamMutationState::Prepared
+            || operation.created_at != operation.updated_at
+        {
+            return Err(Error::InvalidTeamMutation(
+                "new operation must be in the prepared state",
+            ));
+        }
+        let stamped =
+            monotonic_team_timestamp(operation.created_at, operation.updated_at, submitting_at);
+        let transaction = self.write_transaction()?;
+        let occupant: Option<(Vec<u8>, i64)> = transaction
+            .query_row(
+                "SELECT operation_id, state FROM team_mutation_operations
+                 WHERE host_id = ?1 AND team_id = ?2 AND expected_seqno = ?3
+                   AND state IN (1, 2, 3, 4, 5)",
+                params![
+                    operation.host_id,
+                    operation.team_id,
+                    sqlite_integer("team mutation sequence", operation.expected_seqno)?
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((id, state)) = occupant {
+            if id.as_slice() != operation.operation_id {
+                if TeamMutationState::from_sql(state)? == TeamMutationState::Prepared {
+                    transaction.execute(
+                        "UPDATE team_mutation_operations SET state = ?2, updated_at = ?3
+                         WHERE operation_id = ?1",
+                        params![
+                            id,
+                            TeamMutationState::Superseded as u8,
+                            sqlite_integer("team mutation updated time", stamped)?,
+                        ],
+                    )?;
+                } else {
+                    return Err(Error::InvalidTeamMutation(
+                        "team-chain position is already reserved",
+                    ));
+                }
+            }
+        }
+        transaction.execute(
+            "INSERT INTO team_mutation_operations (
+                operation_id, operation_kind, host_id, actor_id, device_id,
+                team_id, expected_seqno, request_hash, state, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(operation_id) DO NOTHING",
+            params![
+                operation.operation_id.as_slice(),
+                operation.kind as u8,
+                operation.host_id,
+                operation.actor_id,
+                operation.device_id,
+                operation.team_id,
+                sqlite_integer("team mutation sequence", operation.expected_seqno)?,
+                operation.request_hash.as_slice(),
+                TeamMutationState::Submitting as u8,
+                sqlite_integer("team mutation created time", operation.created_at)?,
+                sqlite_integer("team mutation updated time", stamped)?,
+            ],
+        )?;
+        let stored = team_mutation_from_connection(&transaction, &operation.operation_id)?.ok_or(
+            Error::InvalidTeamMutation("submitted operation disappeared"),
+        )?;
+        if stored.kind != operation.kind
+            || stored.host_id != operation.host_id
+            || stored.actor_id != operation.actor_id
+            || stored.device_id != operation.device_id
+            || stored.team_id != operation.team_id
+            || stored.expected_seqno != operation.expected_seqno
+            || stored.request_hash != operation.request_hash
+        {
+            return Err(Error::InvalidTeamMutation(
+                "operation ID was reused for another binding",
+            ));
+        }
+        if stored.state == TeamMutationState::Prepared {
+            transaction.execute(
+                "UPDATE team_mutation_operations SET state = ?2, updated_at = ?3
+                 WHERE operation_id = ?1",
+                params![
+                    operation.operation_id.as_slice(),
+                    TeamMutationState::Submitting as u8,
+                    sqlite_integer("team mutation updated time", stamped)?,
+                ],
+            )?;
+        } else if stored.state != TeamMutationState::Submitting {
+            return Err(Error::InvalidTeamMutation(
+                "operation cannot be submitted more than once",
+            ));
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn advance_team_mutation(
         &mut self,
         operation_id: &[u8; 16],
@@ -576,21 +726,19 @@ impl HardStateStore {
         let current_state = TeamMutationState::from_sql(current.0)?;
         let created_at = stored_unsigned("team mutation created time", current.1)?;
         let previous_updated_at = stored_unsigned("team mutation updated time", current.2)?;
-        if updated_at < created_at
-            || updated_at < previous_updated_at
-            || !current_state.can_transition_to(state)
-        {
+        if !current_state.can_transition_to(state) {
             return Err(Error::InvalidTeamMutation(
                 "operation state transition is invalid",
             ));
         }
+        let stamped = monotonic_team_timestamp(created_at, previous_updated_at, updated_at);
         transaction.execute(
             "UPDATE team_mutation_operations SET state = ?2, updated_at = ?3
              WHERE operation_id = ?1",
             params![
                 operation_id.as_slice(),
                 state as u8,
-                sqlite_integer("team mutation updated time", updated_at)?,
+                sqlite_integer("team mutation updated time", stamped)?,
             ],
         )?;
         transaction.commit()?;
@@ -639,6 +787,12 @@ impl HardStateStore {
             .transpose()
             .map(Option::flatten)
     }
+}
+
+fn monotonic_team_timestamp(created_at: u64, previous_updated_at: u64, requested: u64) -> u64 {
+    requested
+        .max(created_at)
+        .max(previous_updated_at.saturating_add(1))
 }
 
 pub(crate) fn team_mutation_from_connection(

@@ -472,8 +472,11 @@ impl KvWriteSession<'_> {
                 }
                 if matches!(error, Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) {
                     MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
-                        .rejected(&operation.operation_id)?;
-                    return Err(error);
+                        .submission_unknown(&operation.operation_id)?;
+                    return match self.reconcile_namespace_mutation(&operation, &dirents) {
+                        Ok(tree) => Ok((dirents, tree)),
+                        Err(_) => Err(error),
+                    };
                 }
                 MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
                     .submission_unknown(&operation.operation_id)?;
@@ -528,9 +531,7 @@ impl KvWriteSession<'_> {
                     precondition,
                     dirents: dirents.clone(),
                 }) {
-                    if is_kv_stale_cache(&error)
-                        || matches!(error, Error::Rpc(foks_rpc::Error::RemoteStatus { .. }))
-                    {
+                    if is_kv_stale_cache(&error) {
                         MutationCoordinator::new(
                             &self.host.database_path,
                             &mut *self.protected_store,
@@ -590,15 +591,7 @@ impl KvWriteSession<'_> {
             MutationState::Prepared => {
                 MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
                     .begin_submission(&operation_id)?;
-                if let Err(error) = self.call(KvRequest::PutRoot(root.clone())) {
-                    if matches!(error, Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) {
-                        MutationCoordinator::new(
-                            &self.host.database_path,
-                            &mut *self.protected_store,
-                        )
-                        .rejected(&operation_id)?;
-                        return Err(error);
-                    }
+                if self.call(KvRequest::PutRoot(root.clone())).is_err() {
                     MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
                         .submission_unknown(&operation_id)?;
                 }
@@ -636,11 +629,6 @@ impl KvWriteSession<'_> {
         MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
             .begin_submission(&operation_id)?;
         if let Err(error) = self.call(KvRequest::PutRoot(root.clone())) {
-            if matches!(error, Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) {
-                MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
-                    .rejected(&operation_id)?;
-                return Err(error);
-            }
             MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
                 .submission_unknown(&operation_id)?;
             return match self.reconcile_root_mutation(&operation, &root) {

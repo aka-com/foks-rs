@@ -20,6 +20,9 @@ pub enum MerkleRootEvidence {
         prior: Box<MerkleRootEvidence>,
     },
     SkipPath {
+        /// Independently signed latest root. The low-level in-memory
+        /// continuity verifier leaves this empty; sealed state rejects it.
+        signed_root: Vec<u8>,
         anchor_epoch: u64,
         historical_response: Vec<u8>,
         prior: Box<MerkleRootEvidence>,
@@ -249,6 +252,9 @@ impl MerkleHistoryRequest {
 }
 
 pub fn merkle_history_requirements(latest: u64, pinned: u64) -> Result<MerkleHistoryRequest> {
+    if pinned == 0 || latest == 0 {
+        return Err(Error::MerkleHistoryShape);
+    }
     if latest < pinned {
         return Err(Error::MerkleRollback {
             stored: pinned,
@@ -273,6 +279,40 @@ pub fn merkle_history_requirements(latest: u64, pinned: u64) -> Result<MerkleHis
     })
 }
 
+/// Authenticates a newer Merkle root with the host Merkle-signer signature
+/// before connecting it to `pinned` with the skip-pointer proof.
+pub fn verify_signed_merkle_advance(
+    pinned: &VerifiedMerkleRoot,
+    signed_latest_bytes: &[u8],
+    historical_bytes: &[u8],
+    hostchain_bytes: &[u8],
+    trusted_hostchain: &HostchainTail,
+) -> Result<VerifiedMerkleAdvance> {
+    let signed = SignedBlob::decode(signed_latest_bytes)?;
+    let links = foks_proto::decode_hostchain(hostchain_bytes)?;
+    let chain = verify_hostchain_at_tail(&links, trusted_hostchain)?;
+    verify_with_delegated_blob_key(
+        &chain,
+        ENTITY_HOST_MERKLE_SIGNER,
+        "Merkle signer",
+        &signed.signature,
+        MERKLE_ROOT_BLOB_TYPE_ID,
+        &signed.inner,
+    )?;
+    let mut advanced =
+        verify_merkle_advance(pinned, &signed.inner, historical_bytes, trusted_hostchain)?;
+    if let MerkleRootEvidence::SkipPath { signed_root, .. } = &mut advanced.snapshot.evidence {
+        *signed_root = signed_latest_bytes.to_vec();
+    }
+    Ok(advanced)
+}
+
+/// Verifies skip-pointer continuity from an already authenticated root.
+///
+/// This does not authenticate the newer root and therefore must not be used
+/// as an authority or persisted. Network consumers must call
+/// [`verify_signed_merkle_advance`]; sealed client state rejects the unsigned
+/// `SkipPath` evidence returned here.
 pub fn verify_merkle_advance(
     pinned: &VerifiedMerkleRoot,
     latest_bytes: &[u8],
@@ -425,6 +465,7 @@ pub fn verify_merkle_advance(
             root_hash: latest_hash,
             root_bytes: latest_bytes.to_vec(),
             evidence: MerkleRootEvidence::SkipPath {
+                signed_root: Vec::new(),
                 anchor_epoch: pinned_epoch,
                 historical_response: historical_bytes.to_vec(),
                 prior: Box::new(pinned.evidence.clone()),
@@ -568,13 +609,26 @@ fn restore_merkle_evidence(
             })
         }
         MerkleRootEvidence::SkipPath {
+            signed_root,
             anchor_epoch,
             historical_response,
             prior,
         } => {
-            if *anchor_epoch >= epoch {
+            if *anchor_epoch >= epoch || signed_root.is_empty() {
                 return Err(Error::PersistedMerkleEvidence);
             }
+            let signed = SignedBlob::decode(signed_root)?;
+            if signed.inner.as_slice() != root_bytes {
+                return Err(Error::PersistedMerkleEvidence);
+            }
+            verify_with_delegated_blob_key(
+                &chain,
+                ENTITY_HOST_MERKLE_SIGNER,
+                "Merkle signer",
+                &signed.signature,
+                MERKLE_ROOT_BLOB_TYPE_ID,
+                &signed.inner,
+            )?;
             let anchor = authenticated_roots
                 .iter()
                 .find(|root| root.epoch == *anchor_epoch)
@@ -592,7 +646,7 @@ fn restore_merkle_evidence(
                 hostchain,
                 depth + 1,
             )?;
-            let advanced = verify_merkle_advance(
+            let mut advanced = verify_merkle_advance(
                 &restored_anchor,
                 root_bytes,
                 historical_response,
@@ -603,6 +657,13 @@ fn restore_merkle_evidence(
             )?;
             if advanced.snapshot.epoch != epoch || advanced.snapshot.root_hash != root_hash {
                 return Err(Error::PersistedMerkleEvidence);
+            }
+            if let MerkleRootEvidence::SkipPath {
+                signed_root: restored_signed,
+                ..
+            } = &mut advanced.snapshot.evidence
+            {
+                restored_signed.clone_from(signed_root);
             }
             Ok(advanced.snapshot)
         }
@@ -660,6 +721,7 @@ fn merkle_collect_roots(mut start: u64, end: u64) -> (Vec<u64>, Vec<u64>) {
     let mut root_set = HashSet::new();
     let mut sibling_set = HashSet::new();
     while start > end {
+        let previous = start;
         path.push(start);
         root_set.insert(start);
         for current in merkle_backpointer_sequence(start) {
@@ -669,6 +731,9 @@ fn merkle_collect_roots(mut start: u64, end: u64) -> (Vec<u64>, Vec<u64>) {
             if !root_set.contains(&current) {
                 sibling_set.insert(current);
             }
+        }
+        if start >= previous {
+            break;
         }
     }
     let mut siblings = sibling_set.into_iter().collect::<Vec<_>>();

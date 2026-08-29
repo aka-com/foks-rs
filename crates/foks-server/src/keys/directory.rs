@@ -357,6 +357,18 @@ fn associated_data(purpose: KeyPurpose, generation: &[u8; GENERATION_BYTES]) -> 
 }
 
 impl HostKeyProvider for DirectoryKeyProvider {
+    fn is_pristine(&self) -> Result<bool> {
+        for entry in std::fs::read_dir(&self.directory)? {
+            let name = entry?.file_name();
+            if name != std::ffi::OsStr::new(WRAPPING_KEY_FILE)
+                && name != std::ffi::OsStr::new(ROTATION_LOCK_FILE)
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     fn load_or_create(&self, purpose: KeyPurpose) -> Result<SecretKey> {
         let path = self.path(purpose);
         match self.load(&path, purpose) {

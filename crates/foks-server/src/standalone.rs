@@ -40,6 +40,9 @@ pub struct StandaloneConfig {
 }
 
 pub struct RunningStandaloneServer {
+    // Drop first so the backup thread cannot outlive the shared key-provider
+    // lock held by `server` and race an offline rotation.
+    backup: Option<crate::operations::BackupScheduler>,
     server: RunningServer,
     bootstrap: BootstrapState,
     delegated_roots: rustls::RootCertStore,
@@ -52,7 +55,6 @@ pub struct RunningStandaloneServer {
     clock: Arc<dyn foks_server_db::Clock>,
     metrics: Arc<crate::ServerMetrics>,
     management: crate::operations::ManagementServer,
-    backup: Option<crate::operations::BackupScheduler>,
 }
 
 #[derive(Clone, Debug)]
@@ -94,70 +96,13 @@ pub fn restore_backup(
     key_directory: impl AsRef<Path>,
     database_config: foks_server_db::Config,
 ) -> Result<()> {
-    const MAXIMUM_MANIFEST_BYTES: u64 = 4 * 1024;
     let database_path = database_path.as_ref();
     let key_directory = key_directory.as_ref();
     if database_path.exists() || directory_has_entries(key_directory)? {
         return Err(crate::Error::Config("restore destination is not empty"));
     }
 
-    let manifest_metadata = regular_file_metadata(&artifacts.key_manifest)?;
-    if manifest_metadata.len() == 0 || manifest_metadata.len() > MAXIMUM_MANIFEST_BYTES {
-        return Err(crate::Error::Key("invalid backup key manifest size"));
-    }
-    let mut manifest = Vec::with_capacity(manifest_metadata.len() as usize);
-    std::fs::File::open(&artifacts.key_manifest)?
-        .take(MAXIMUM_MANIFEST_BYTES + 1)
-        .read_to_end(&mut manifest)?;
-    let decoded_manifest = crate::keys::KeyGenerationManifest::decode(&manifest)?;
-
-    regular_file_metadata(&artifacts.database)?;
-    let backup = foks_server_db::ReadDatabase::open(&artifacts.database, database_config.clone())?;
-    if !backup.integrity_check()? {
-        return Err(crate::Error::Database(foks_server_db::Error::Invalid(
-            "backup integrity check",
-        )));
-    }
-    let stored =
-        backup
-            .host_bootstrap()?
-            .ok_or(crate::Error::Database(foks_server_db::Error::Invalid(
-                "backup host bootstrap",
-            )))?;
-    if stored.key_manifest != manifest {
-        return Err(crate::Error::Key("backup key manifest mismatch"));
-    }
-    let host_key_files = host_key_backup_files(&backup)?;
-    drop(backup);
-
-    let wrapping_key = artifacts.key_directory.join(crate::keys::WRAPPING_KEY_FILE);
-    regular_file_metadata(&wrapping_key)?;
-
-    for purpose in crate::keys::MANIFEST_PURPOSES {
-        if purpose == crate::keys::KeyPurpose::Host && !host_key_files.include_genesis {
-            continue;
-        }
-        if purpose == crate::keys::KeyPurpose::Capability
-            && !host_key_files.include_genesis_capability
-        {
-            continue;
-        }
-        let expected = decoded_manifest
-            .generation(purpose)
-            .ok_or(crate::Error::Key("incomplete backup key manifest"))?;
-        let source = artifacts
-            .key_directory
-            .join(format!("{}.key", purpose.label()));
-        regular_file_metadata(&source)?;
-        // The generation is authenticated only after the operator supplies
-        // the root key at startup. Here the manifest still defines the exact
-        // set of files that may be restored.
-        let _ = expected;
-    }
-    for name in &host_key_files.generated {
-        regular_file_metadata(&artifacts.key_directory.join(name))?;
-    }
-    validate_backup_key_directory(&artifacts.key_directory, &host_key_files)?;
+    let host_key_files = read_validated_backup_artifacts(artifacts, database_config.clone())?;
 
     if let Some(parent) = database_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -201,6 +146,74 @@ pub fn restore_backup(
     Ok(())
 }
 
+fn read_validated_backup_artifacts(
+    artifacts: &BackupArtifacts,
+    database_config: foks_server_db::Config,
+) -> Result<HostKeyBackupFiles> {
+    const MAXIMUM_MANIFEST_BYTES: u64 = 4 * 1024;
+    validate_backup_artifact_layout(artifacts)?;
+    let manifest_metadata = regular_file_metadata(&artifacts.key_manifest)?;
+    if manifest_metadata.len() == 0 || manifest_metadata.len() > MAXIMUM_MANIFEST_BYTES {
+        return Err(crate::Error::Key("invalid backup key manifest size"));
+    }
+    let mut manifest = Vec::with_capacity(manifest_metadata.len() as usize);
+    std::fs::File::open(&artifacts.key_manifest)?
+        .take(MAXIMUM_MANIFEST_BYTES + 1)
+        .read_to_end(&mut manifest)?;
+    let decoded_manifest = crate::keys::KeyGenerationManifest::decode(&manifest)?;
+
+    regular_file_metadata(&artifacts.database)?;
+    let backup = foks_server_db::ReadDatabase::open(&artifacts.database, database_config)?;
+    if !backup.integrity_check()? {
+        return Err(crate::Error::Database(foks_server_db::Error::Invalid(
+            "backup integrity check",
+        )));
+    }
+    let stored =
+        backup
+            .host_bootstrap()?
+            .ok_or(crate::Error::Database(foks_server_db::Error::Invalid(
+                "backup host bootstrap",
+            )))?;
+    if stored.key_manifest != manifest {
+        return Err(crate::Error::Key("backup key manifest mismatch"));
+    }
+    let host_key_files = host_key_backup_files(&backup)?;
+    drop(backup);
+
+    regular_file_metadata(&artifacts.key_directory.join(crate::keys::WRAPPING_KEY_FILE))?;
+    for purpose in crate::keys::MANIFEST_PURPOSES {
+        if purpose == crate::keys::KeyPurpose::Host && !host_key_files.include_genesis {
+            continue;
+        }
+        if purpose == crate::keys::KeyPurpose::Capability
+            && !host_key_files.include_genesis_capability
+        {
+            continue;
+        }
+        decoded_manifest
+            .generation(purpose)
+            .ok_or(crate::Error::Key("incomplete backup key manifest"))?;
+        regular_file_metadata(
+            &artifacts
+                .key_directory
+                .join(format!("{}.key", purpose.label())),
+        )?;
+    }
+    for name in &host_key_files.generated {
+        regular_file_metadata(&artifacts.key_directory.join(name))?;
+    }
+    validate_backup_key_directory(&artifacts.key_directory, &host_key_files)?;
+    Ok(host_key_files)
+}
+
+pub(crate) fn validate_completed_backup(
+    artifacts: &BackupArtifacts,
+    database_config: foks_server_db::Config,
+) -> Result<()> {
+    read_validated_backup_artifacts(artifacts, database_config).map(drop)
+}
+
 fn directory_has_entries(path: &Path) -> std::io::Result<bool> {
     match std::fs::read_dir(path) {
         Ok(mut entries) => Ok(entries.next().is_some()),
@@ -217,10 +230,56 @@ fn regular_file_metadata(path: &Path) -> Result<std::fs::Metadata> {
     Ok(metadata)
 }
 
+fn validate_backup_artifact_layout(artifacts: &BackupArtifacts) -> Result<()> {
+    let root = artifacts.database.parent().ok_or(crate::Error::Key(
+        "backup artifacts have no parent directory",
+    ))?;
+    if artifacts.database.file_name() != Some(std::ffi::OsStr::new("foks-server.sqlite"))
+        || artifacts.key_directory.file_name() != Some(std::ffi::OsStr::new("keys"))
+        || artifacts.key_manifest.file_name() != Some(std::ffi::OsStr::new("key-manifest.txt"))
+        || artifacts.key_directory.parent() != Some(root)
+        || artifacts.key_manifest.parent() != Some(root)
+    {
+        return Err(crate::Error::Key("backup artifact layout mismatch"));
+    }
+    let metadata = std::fs::symlink_metadata(root)?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err(crate::Error::Key("backup root is not a regular directory"));
+    }
+    let mut found = std::fs::read_dir(root)?
+        .map(|entry| {
+            entry?
+                .file_name()
+                .into_string()
+                .map_err(|_| crate::Error::Key("backup artifact filename is not UTF-8"))
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    for sidecar in ["foks-server.sqlite-wal", "foks-server.sqlite-shm"] {
+        if found.remove(sidecar) {
+            regular_file_metadata(&root.join(sidecar))?;
+        }
+    }
+    let expected = BTreeSet::from([
+        "foks-server.sqlite".to_owned(),
+        "keys".to_owned(),
+        "key-manifest.txt".to_owned(),
+    ]);
+    if found != expected {
+        return Err(crate::Error::Key("backup artifact file set mismatch"));
+    }
+    Ok(())
+}
+
 fn validate_backup_key_directory(
     directory: &Path,
     host_key_files: &HostKeyBackupFiles,
 ) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(directory)?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err(crate::Error::Key(
+            "backup key directory is not a regular directory",
+        ));
+    }
     let mut expected = BTreeSet::from([crate::keys::WRAPPING_KEY_FILE.to_owned()]);
     for purpose in crate::keys::MANIFEST_PURPOSES {
         if purpose == crate::keys::KeyPurpose::Host && !host_key_files.include_genesis {
@@ -491,13 +550,13 @@ impl RunningStandaloneServer {
         )
     }
 
-    pub fn shutdown(self) -> Result<()> {
+    pub fn shutdown(mut self) -> Result<()> {
         self.management.mark_not_ready();
-        self.server.shutdown()?;
-        self.management.shutdown()?;
-        if let Some(backup) = self.backup {
+        if let Some(backup) = self.backup.take() {
             backup.shutdown()?;
         }
+        self.server.shutdown()?;
+        self.management.shutdown()?;
         self.maintenance.shutdown()?;
         self.writer.shutdown()
     }
@@ -653,20 +712,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     let writer_handle = writer.handle();
     let maintenance = Maintenance::start(writer_handle.clone(), Arc::clone(&config.clock));
     let metrics = Arc::new(crate::ServerMetrics::default());
-    let backup = config
-        .backup
-        .map(|schedule| {
-            crate::operations::BackupScheduler::start(
-                schedule,
-                config.database_path.clone(),
-                key_directory.clone(),
-                bootstrap.key_manifest.encode(),
-                database_config.clone(),
-                Arc::clone(&config.clock),
-                Arc::clone(&metrics),
-            )
-        })
-        .transpose()?;
+    let backup_schedule = config.backup;
 
     let server = RunningServer::start_bound(
         Config {
@@ -700,8 +746,22 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         Arc::clone(&metrics),
         server.liveness(),
     )?;
+    let backup = backup_schedule
+        .map(|schedule| {
+            crate::operations::BackupScheduler::start(
+                schedule,
+                config.database_path.clone(),
+                key_directory.clone(),
+                bootstrap.key_manifest.encode(),
+                database_config.clone(),
+                Arc::clone(&config.clock),
+                Arc::clone(&metrics),
+            )
+        })
+        .transpose()?;
     management.mark_ready();
     Ok(RunningStandaloneServer {
+        backup,
         server,
         bootstrap,
         delegated_roots: tls.delegated_ca,
@@ -714,6 +774,5 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         clock: config.clock,
         metrics,
         management,
-        backup,
     })
 }
