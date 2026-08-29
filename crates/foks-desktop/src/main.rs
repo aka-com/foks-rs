@@ -36,8 +36,8 @@ enum Command {
         device_name: String,
         #[arg(long, default_value = "")]
         email: String,
-        #[arg(long, default_value = "")]
-        invite: String,
+        #[arg(long)]
+        invite_file: Option<PathBuf>,
         #[arg(long, requires = "passphrase_confirmation_file")]
         passphrase_file: Option<PathBuf>,
         #[arg(long, requires = "passphrase_file")]
@@ -123,7 +123,7 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
             username,
             device_name,
             email,
-            invite,
+            invite_file,
             passphrase_file,
             passphrase_confirmation_file,
         } => Operation::CreateAccount {
@@ -132,7 +132,10 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
             username,
             device_name,
             email,
-            invite,
+            invite: match invite_file {
+                Some(path) => read_invite(&path)?,
+                None => SecretString::new(""),
+            },
             passphrase: match (passphrase_file, passphrase_confirmation_file) {
                 (Some(path), Some(confirmation)) => {
                     Some(read_confirmed_secret(&path, &confirmation)?)
@@ -262,6 +265,44 @@ fn read_secret(path: &std::path::Path) -> Result<SecretString, Box<dyn std::erro
     Ok(SecretString::new(value.as_str()))
 }
 
+fn read_invite(path: &std::path::Path) -> Result<SecretString, Box<dyn std::error::Error>> {
+    use std::io::Read as _;
+    use zeroize::Zeroizing;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > 4098 {
+        return Err("invite file is not a bounded regular file".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("invite file permissions allow group or other access".into());
+        }
+    }
+    let mut value = Zeroizing::new(String::new());
+    file.take(4099).read_to_string(&mut value)?;
+    if value.ends_with("\r\n") {
+        let length = value.len() - 2;
+        value.truncate(length);
+    } else if value.ends_with('\n') {
+        let length = value.len() - 1;
+        value.truncate(length);
+    }
+    if value.is_empty() || value.len() > 4096 || value.contains(['\0', '\r', '\n']) {
+        return Err("invite must be one nonempty line of at most 4096 bytes".into());
+    }
+    Ok(SecretString::new(value.as_str()))
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use std::os::unix::fs::{symlink, PermissionsExt as _};
@@ -286,5 +327,16 @@ mod tests {
         let link = directory.path().join("passphrase-link");
         symlink(&private, &link).unwrap();
         assert!(read_secret(&link).is_err());
+
+        let invite = directory.path().join("invite");
+        std::fs::write(&invite, "s.desktop-invite\n").unwrap();
+        std::fs::set_permissions(&invite, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(read_invite(&invite).unwrap().expose(), "s.desktop-invite");
+        std::fs::set_permissions(&invite, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_invite(&invite).is_err());
+
+        let invite_link = directory.path().join("invite-link");
+        symlink(&invite, &invite_link).unwrap();
+        assert!(read_invite(&invite_link).is_err());
     }
 }

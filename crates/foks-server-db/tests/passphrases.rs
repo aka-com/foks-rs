@@ -62,6 +62,37 @@ fn passphrase_mutations_recheck_the_current_owner_puk_generation() {
 }
 
 #[test]
+fn passphrase_mutations_require_an_owner_role_device() {
+    let mut test = common::TestDatabase::new();
+    test.reserve(1_000_000);
+    test.commit(None).unwrap();
+    test.database
+        .set_passphrase(&UID, &DEVICE, mutation(1, 2_000_000))
+        .unwrap();
+
+    const MEMBER: [u8; 33] = [5; 33];
+    let connection = rusqlite::Connection::open(&test.path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO devices
+             (device_id, uid, active, role_type, visibility, subkey_id,
+              hepk_fingerprint, exact_hepk, exact_name)
+             VALUES (?1, ?2, 1, 1, 0, NULL, ?3, ?4, ?5)",
+            rusqlite::params![MEMBER, UID, [0x11u8; 32], b"member-hepk", b"member"],
+        )
+        .unwrap();
+    assert!(matches!(
+        test.database
+            .change_passphrase(&UID, &MEMBER, mutation(2, 2_000_001)),
+        Err(Error::AuthorizationChanged)
+    ));
+    assert_eq!(
+        test.database.passphrase(&UID).unwrap().unwrap().generation,
+        1
+    );
+}
+
+#[test]
 fn passphrase_generations_are_atomic_and_strictly_sequential() {
     let mut test = common::TestDatabase::new();
     test.reserve(1_000_000);
@@ -248,17 +279,36 @@ fn login_challenges_are_one_time_and_bad_attempts_are_bounded() {
         .is_none());
 
     test.database
-        .record_bad_passphrase(&UID, 3_000_003)
+        .issue_passphrase_challenge(&[6; 32], &UID, &host, &key_generation, 4_000_000, 3_000_003)
         .unwrap();
     test.database
-        .record_bad_passphrase(&UID, 3_000_004)
+        .consume_failed_passphrase_challenge(&[6; 32], &UID, &host, &key_generation, 3_000_004)
         .unwrap();
+    assert!(test
+        .database
+        .consume_passphrase_challenge(
+            &[6; 32],
+            &UID,
+            &host,
+            &key_generation,
+            &VERIFY_KEY,
+            3_000_005,
+        )
+        .unwrap()
+        .is_none());
+
+    assert!(test
+        .database
+        .passphrase_for_login(&UID, 3_000_006)
+        .unwrap()
+        .is_some());
+    assert!(test
+        .database
+        .passphrase_for_login(&UID, 3_000_007)
+        .unwrap()
+        .is_some());
     assert!(matches!(
-        test.database.record_bad_passphrase(&UID, 3_000_005),
-        Err(Error::PassphraseRateLimited)
-    ));
-    assert!(matches!(
-        test.database.passphrase_for_login(&UID, 3_000_006),
+        test.database.passphrase_for_login(&UID, 3_000_008),
         Err(Error::PassphraseRateLimited)
     ));
 }

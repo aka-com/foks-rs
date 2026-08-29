@@ -39,6 +39,12 @@ operation reports an error. A database behind the external revision or with a
 different identity is rejected; a database ahead of it represents a crash
 after SQLite commit and is repaired by advancing the external checkpoint.
 
+The native credential namespace is also bound to the canonical client-state
+root path. Copying a state root therefore cannot create a second set of
+path-local lock files that shares the same master key and rollback watermark;
+the copied root is rejected before either credential or checkpoint use. A
+native state root is deliberately immovable. Export/import is not implemented.
+
 A missing external checkpoint is accepted only when no hard-state database or
 SQLite sidecar exists, which is the initial enrollment case. Missing or
 inconsistent state otherwise fails closed and reports the explicit
@@ -118,10 +124,12 @@ secret store. The client commits the exact request and required seeds there
 before it creates the public SQLite journal row. That row contains only public
 bindings, request and protected-material fingerprints, timestamps, attempt
 count, and monotonic state. Protected bytes are fingerprint-checked before the
-one allowed submission and are deleted only after terminal SQLite state is
-committed. A crash before the SQLite row can leave an unreachable protected
-record; a crash during deletion can leave a terminal record plus orphaned
-protected material. Neither case permits network replay.
+one allowed submission. Authenticated server reconciliation advances to the
+nonterminal `RemoteVerified` state; protected bytes remain until the embedding
+application durably commits its credential or projection and explicitly
+advances to `Finalized`. A crash before the SQLite row can leave an unreachable
+protected record; a crash during final deletion can leave a terminal record
+plus orphaned protected material. Neither case permits network replay.
 
 For local deployments, `EncryptedFileMutationStore` implements this contract
 with a caller-supplied 256-bit master key, XChaCha20-Poly1305 records bound to
@@ -137,10 +145,27 @@ symbolic links at record paths.
 Only `Prepared` may transition to `Submitting`, and only once. `Submitting` and
 `SubmissionUnknown` are deliberately indistinguishable for replay purposes:
 after restart they may only reconcile against authenticated server state.
+`RemoteVerified` is also returned by pending discovery so application-owned
+commits can resume without reconstructing or replaying the network mutation.
 Software signup, device provisioning and revocation, PUK rotation, and KV
 namespace/root changes use this generic journal. `resume_software_account`
 also proves that protected seeds derive the journaled UID/device and that the
 normalized username and PUK match the authenticated accepted account.
+
+Named-team mutations use a separate public journal with an explicit
+`Prepared → Submitting → SubmissionUnknown/Submitted → Verified` lifecycle.
+Every edit commits `Submitting` before transport. Recovery first compares the
+authenticated team transition at the reserved chain position; a matching
+transition verifies the journal and a different transition supersedes it.
+Only federation additions retain exact protected request bytes, so only those
+can retry after an ambiguous send, and an RPC rejection from that retry is not
+treated as proof that the original submission failed.
+
+Federation local preparation has one SQLite owner: the saga's `LocalPrepared`
+checkpoint and the corresponding prepared team-mutation row are committed in
+the same immediate transaction. The general saga transition API cannot enter
+`LocalPrepared`. An exact retry verifies both immutable bindings; a chain-slot
+or operation-ID conflict rolls back without advancing the saga.
 
 The scheduler database contains only public host/scope identifiers, timing,
 leases, counters, and the handler's last error string. Handlers must not put
@@ -335,7 +360,9 @@ remote-view permissions, verifies remote public user/team chains, and can add
 a scoped remote team through a durable client-side saga. Public scheduler rows
 are wake-up identities only: an encrypted membership record must reproduce the
 job ID before aliases, roles, or credentials are used. Bearers and removal keys
-never enter SQLite.
+never enter SQLite. Recurring federation jobs renew and verify the already
+admitted bearer only; they do not re-enter the one-time admission saga or edit
+the local team chain.
 
 Not yet implemented: additional founding members; promotion/addition through
 closed-viewership invitation and remote-join protocols; federated trust
@@ -361,4 +388,5 @@ server with PostgreSQL, then drives native Rust probe, registration, user/PUK
 authentication, root creation, KV write, and incremental SQLite projection.
 Deterministic mutation tests place a lost-response proxy after authoritative
 acceptance and restart at every durability boundary, including protected-only,
-Prepared, Submitting, SubmissionUnknown, and terminal-before-cleanup states.
+Prepared, Submitting, SubmissionUnknown, RemoteVerified, and
+Finalized-before-cleanup states.

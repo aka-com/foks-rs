@@ -568,6 +568,11 @@ impl FoksClient {
         };
         let mut hard_store = HardStateStore::open(&host.database_path)?;
         hard_store.record_team_mutation(&operation)?;
+        hard_store.advance_team_mutation(
+            &operation_id,
+            TeamMutationState::Submitting,
+            now_microseconds()?,
+        )?;
         let post = || {
             let response = self.call_with_material(
                 host,
@@ -595,7 +600,7 @@ impl FoksClient {
             )?;
         }
         if matches!(
-            post_error,
+            &post_error,
             Some(Error::Rpc(foks_rpc::Error::RemoteStatus { .. }))
         ) {
             hard_store.advance_team_mutation(
@@ -604,6 +609,13 @@ impl FoksClient {
                 now_microseconds()?,
             )?;
             return Err(post_error.expect("matched above"));
+        }
+        if post_error.is_some() {
+            hard_store.advance_team_mutation(
+                &operation_id,
+                TeamMutationState::SubmissionUnknown,
+                now_microseconds()?,
+            )?;
         }
         let authenticated = match self.wait_for_rotation(
             host,

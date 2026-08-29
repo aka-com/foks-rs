@@ -8,7 +8,7 @@ mod message;
 pub use frame::{decode_request, decode_response, encode, Error, Result, MAXIMUM_MESSAGE_BYTES};
 pub use message::{
     ErrorCode, FederationRole, Operation, Request, Response, ResponseResult, SecretString,
-    PROTOCOL_VERSION,
+    YubiRetryConfiguration, PROTOCOL_VERSION,
 };
 
 #[cfg(test)]
@@ -146,7 +146,7 @@ mod tests {
             username: "rae".to_owned(),
             device_name: "laptop".to_owned(),
             email: String::new(),
-            invite: "s.secret-invite".to_owned(),
+            invite: SecretString::new("s.secret-invite"),
             passphrase: Some(SecretString::new("secret-passphrase")),
         };
         let encoded = encode(&Request::new(10, operation.clone())).unwrap();
@@ -208,6 +208,11 @@ mod tests {
                 signing_slot: 0x82,
                 pq_slot: 0x83,
                 pin: SecretString::new("123456"),
+                retry_configuration: Some(YubiRetryConfiguration {
+                    puk: SecretString::new("retry-puk"),
+                    pin_attempts: 5,
+                    puk_attempts: 7,
+                }),
             },
             Operation::ResumeYubiAccount {
                 profile: "local".to_owned(),
@@ -224,6 +229,7 @@ mod tests {
                 signing_slot: 0x82,
                 pq_slot: 0x83,
                 pin: SecretString::new("provision-pin"),
+                retry_configuration: None,
             },
             Operation::SyncYubiAccount {
                 profile: "local".to_owned(),
@@ -247,14 +253,6 @@ mod tests {
                 alias: "hardware".to_owned(),
                 puk: SecretString::new("789012"),
                 new_pin: SecretString::new("890123"),
-            },
-            Operation::ConfigureYubiRetries {
-                profile: "local".to_owned(),
-                alias: "hardware".to_owned(),
-                pin: SecretString::new("901234"),
-                puk: SecretString::new("01234567"),
-                pin_attempts: 5,
-                puk_attempts: 7,
             },
             Operation::RotateYubiManagementKey {
                 profile: "local".to_owned(),
@@ -283,6 +281,7 @@ mod tests {
                 "s.yubi-invite",
                 "yubi-passphrase",
                 "123456",
+                "retry-puk",
                 "resume-pin",
                 "provision-pin",
                 "sync-pin",
@@ -293,8 +292,6 @@ mod tests {
                 "678901",
                 "789012",
                 "890123",
-                "901234",
-                "01234567",
                 "rotate-pin",
                 "management-resume-pin",
             ] {

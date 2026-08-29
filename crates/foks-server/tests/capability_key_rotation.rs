@@ -20,7 +20,10 @@ fn input(now_microseconds: u64) -> BootstrapInput {
     }
 }
 
-fn seed_live_permission(database_path: &std::path::Path, generation: [u8; 16]) {
+fn seed_live_permission(
+    database_path: &std::path::Path,
+    generation: [u8; 16],
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let connection = rusqlite::Connection::open(database_path).unwrap();
     let mut uid = vec![0x11; 33];
     uid[0] = foks_proto::ENTITY_USER;
@@ -53,9 +56,10 @@ fn seed_live_permission(database_path: &std::path::Path, generation: [u8; 16]) {
               updated_at, expires_at, revoked_at)
              VALUES (?1, ?2, ?3, zeroblob(32), zeroblob(24), zeroblob(33),
                      ?4, 1, 2, 2, 100, NULL)",
-            params![uid, viewer, viewer_host, generation],
+            params![&uid, &viewer, &viewer_host, generation],
         )
         .unwrap();
+    (uid, viewer, viewer_host)
 }
 
 fn restore_and_start(
@@ -84,7 +88,7 @@ fn rotation_retains_live_generations_and_backup_restores_each_phase() {
     let mut database = Database::open(&database_path, Config::default()).unwrap();
     load_or_bootstrap(&mut database, &provider, &input(1)).unwrap();
     let genesis = database.active_capability_key_generation().unwrap();
-    seed_live_permission(&database_path, genesis);
+    let (uid, viewer, viewer_host) = seed_live_permission(&database_path, genesis);
     drop(provider);
 
     let provider = DirectoryKeyProvider::open_for_rotation(&key_directory, root_key).unwrap();
@@ -120,7 +124,13 @@ fn rotation_retains_live_generations_and_backup_restores_each_phase() {
     let before_expiry = retire_capability_keys(&mut database, &provider, 99).unwrap();
     assert_eq!(before_expiry.retiring_generation_ids, vec![genesis]);
     assert!(key_directory.join("capability.key").is_file());
-    let retired = retire_capability_keys(&mut database, &provider, 100).unwrap();
+    let at_expiry = retire_capability_keys(&mut database, &provider, 100).unwrap();
+    assert_eq!(at_expiry.retiring_generation_ids, vec![genesis]);
+    assert!(key_directory.join("capability.key").is_file());
+    assert!(database
+        .revoke_remote_user_view_permission(&uid, &viewer, &viewer_host, 100)
+        .unwrap());
+    let retired = retire_capability_keys(&mut database, &provider, 101).unwrap();
     assert!(retired.retiring_generation_ids.is_empty());
     assert!(!key_directory.join("capability.key").exists());
     assert_eq!(

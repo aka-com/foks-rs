@@ -30,6 +30,7 @@ pub(crate) fn software_owner_provisions_recovers_manages_and_revokes_yubikey() {
             SlotId::new(SIGNING_SLOT).unwrap(),
             SlotId::new(PQ_SLOT).unwrap(),
             &pin,
+            None,
             PivPolicy::Once,
             PivPolicy::Never,
         )
@@ -199,6 +200,7 @@ fn yubikey_signup_supports_passphrase_and_delegated_subkey_recovery() {
             SlotId::new(SIGNING_SLOT).unwrap(),
             SlotId::new(PQ_SLOT).unwrap(),
             &pin,
+            None,
             PivPolicy::Once,
             PivPolicy::Never,
         )

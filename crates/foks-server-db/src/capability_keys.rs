@@ -111,9 +111,9 @@ impl Database {
                     (SELECT count(*) FROM team_view_challenges
                        WHERE key_generation = ?1 AND expires_at > ?2) +
                     (SELECT count(*) FROM federation_user_view_permissions
-                       WHERE key_generation = ?1 AND state = 1 AND expires_at > ?2) +
+                       WHERE key_generation = ?1 AND state = 1) +
                     (SELECT count(*) FROM federation_team_view_permissions
-                       WHERE key_generation = ?1 AND state = 1 AND expires_at > ?2)",
+                       WHERE key_generation = ?1 AND state = 1)",
                 params![generation, sql_integer(now)?],
                 |row| row.get(0),
             )?;
@@ -319,6 +319,18 @@ mod tests {
             .is_empty());
         assert_eq!(
             database.revoke_retired_capability_keys(100).unwrap(),
+            Vec::<[u8; 16]>::new()
+        );
+        assert!(database
+            .revoke_remote_user_view_permission(
+                &uid,
+                &[foks_proto::ENTITY_USER; 33],
+                &[foks_proto::ENTITY_HOST; 33],
+                100,
+            )
+            .unwrap());
+        assert_eq!(
+            database.revoke_retired_capability_keys(101).unwrap(),
             vec![[1; 16]]
         );
     }

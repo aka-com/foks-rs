@@ -52,7 +52,7 @@ pub(crate) fn grant_remote_user_view(
     let now = clock.now_micros().map_err(internal)?;
     let key = active_capability_key(reader, keys)?;
     let current = reader
-        .current_remote_user_view_permission(&target, &viewer, &viewer_host, now)
+        .renewable_remote_user_view_permission(&target, &viewer, &viewer_host)
         .map_err(internal)?;
     let grant = prepare_permission_grant(
         USER_PERMISSION_TOKEN_AAD,
@@ -81,8 +81,7 @@ pub(crate) fn grant_remote_user_view(
     let permission = match outcome {
         foks_server_db::RemoteUserViewPermissionOutcome::Inserted(permission)
         | foks_server_db::RemoteUserViewPermissionOutcome::Existing(permission)
-        | foks_server_db::RemoteUserViewPermissionOutcome::Renewed(permission)
-        | foks_server_db::RemoteUserViewPermissionOutcome::Reissued(permission) => permission,
+        | foks_server_db::RemoteUserViewPermissionOutcome::Renewed(permission) => permission,
     };
     let decrypt_key = crate::keys::load_capability_generation(keys, permission.key_generation)
         .map_err(internal)?;
@@ -171,7 +170,7 @@ pub(crate) fn grant_remote_team_view(
     let viewer_host = request.payload.viewer.host.as_bytes().to_vec();
     let key = active_capability_key(reader, keys)?;
     let current = reader
-        .current_remote_team_view_permission(&target, &viewer, &viewer_host, now)
+        .renewable_remote_team_view_permission(&target, &viewer, &viewer_host)
         .map_err(internal)?;
     let grant = prepare_permission_grant(
         TEAM_PERMISSION_TOKEN_AAD,
@@ -207,8 +206,7 @@ pub(crate) fn grant_remote_team_view(
     let permission = match outcome {
         foks_server_db::RemoteTeamViewPermissionOutcome::Inserted(permission)
         | foks_server_db::RemoteTeamViewPermissionOutcome::Existing(permission)
-        | foks_server_db::RemoteTeamViewPermissionOutcome::Renewed(permission)
-        | foks_server_db::RemoteTeamViewPermissionOutcome::Reissued(permission) => permission,
+        | foks_server_db::RemoteTeamViewPermissionOutcome::Renewed(permission) => permission,
     };
     let decrypt_key = crate::keys::load_capability_generation(keys, permission.key_generation)
         .map_err(internal)?;

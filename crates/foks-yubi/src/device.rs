@@ -27,17 +27,6 @@ pub trait YubiAdministrativeDevice: Send + Sync {
     fn change_pin(&self, old: &Pin, new: &Pin) -> Result<()>;
     fn change_puk(&self, old: &Pin, new: &Pin) -> Result<()>;
     fn unblock_pin(&self, puk: &Pin, new_pin: &Pin) -> Result<()>;
-    /// Changes both retry counters. PIV resets PIN and PUK to their factory
-    /// values as part of this command, so implementations must verify first
-    /// and restore `pin` and `puk` before returning success.
-    fn set_pin_retries(
-        &self,
-        management_key: &ManagementKey,
-        pin: &Pin,
-        puk: &Pin,
-        pin_attempts: u8,
-        puk_attempts: u8,
-    ) -> Result<()>;
     fn replace_management_key(
         &self,
         old: &ManagementKey,

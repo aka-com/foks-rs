@@ -306,7 +306,9 @@ impl FoksClient {
             }
         } else if !matches!(
             operation.state,
-            MutationState::Submitting | MutationState::SubmissionUnknown
+            MutationState::Submitting
+                | MutationState::SubmissionUnknown
+                | MutationState::RemoteVerified
         ) {
             return Err(Error::OperationBinding("signup operation is terminal"));
         }
@@ -342,7 +344,7 @@ impl FoksClient {
             session.ensure_root(Role::OWNER, Role::OWNER)?
         };
         MutationCoordinator::new(&host.database_path, protected_store)
-            .verified(&operation.operation_id)?;
+            .remote_verified(&operation.operation_id)?;
         Ok(CreatedSoftwareAccount {
             operation_id: operation.operation_id,
             credential,

@@ -542,8 +542,10 @@ impl KvWriteSession<'_> {
                         .submission_unknown(&operation_id)?;
                 }
             }
-            MutationState::Submitting | MutationState::SubmissionUnknown => {}
-            MutationState::Verified | MutationState::Rejected => {
+            MutationState::Submitting
+            | MutationState::SubmissionUnknown
+            | MutationState::RemoteVerified => {}
+            MutationState::Finalized | MutationState::Rejected => {
                 return Err(Error::OperationBinding("KV namespace mutation is terminal"));
             }
         }
@@ -601,8 +603,10 @@ impl KvWriteSession<'_> {
                         .submission_unknown(&operation_id)?;
                 }
             }
-            MutationState::Submitting | MutationState::SubmissionUnknown => {}
-            MutationState::Verified | MutationState::Rejected => {
+            MutationState::Submitting
+            | MutationState::SubmissionUnknown
+            | MutationState::RemoteVerified => {}
+            MutationState::Finalized | MutationState::Rejected => {
                 return Err(Error::OperationBinding("KV root mutation is terminal"));
             }
         }
@@ -665,7 +669,7 @@ impl KvWriteSession<'_> {
             ));
         }
         MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
-            .verified(&operation.operation_id)?;
+            .remote_verified_and_finalize(&operation.operation_id)?;
         Ok(tree)
     }
 
@@ -745,7 +749,7 @@ impl KvWriteSession<'_> {
             }
         }
         MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
-            .verified(&operation.operation_id)?;
+            .remote_verified_and_finalize(&operation.operation_id)?;
         Ok(tree)
     }
 

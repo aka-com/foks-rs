@@ -21,8 +21,8 @@ use std::time::Duration;
 pub use foks_client::CancellationToken;
 use foks_client::{
     AdHocTeamSecrets, DeviceCredential, EncryptedFileMutationStore, FoksClient, KvWriteOptions,
-    NamedTeamSecrets, NewSoftwareDeviceSecrets, ProbeTarget, SoftwareAccountRequest,
-    SoftwareAccountSecrets, SoftwareDeviceProvisionRequest,
+    MutationCoordinator, NamedTeamSecrets, NewSoftwareDeviceSecrets, ProbeTarget,
+    SoftwareAccountRequest, SoftwareAccountSecrets, SoftwareDeviceProvisionRequest,
 };
 use foks_client_db::ScheduledJobKind;
 use foks_client_db::{
@@ -47,9 +47,11 @@ const MUTATION_KEY_TYPE_ID: u64 = 0x5e4b_52ca_d668_dd1d;
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_CERTIFICATES: usize = 8;
 const MAX_CERTIFICATE_BYTES: usize = 1024 * 1024;
-const STATE_CONFIG_VERSION: u32 = 1;
+const STATE_CONFIG_VERSION: u32 = 2;
 const STATE_CONFIG_FILE: &str = "client-state.toml";
 const MASTER_KEY_RECORD: &str = "master-key-v1";
+const STATE_ROOT_RECORD: &str = "state-root-v1";
+const STATE_ROOT_BINDING_TYPE_ID: u64 = 0xf8d8_c42e_96e0_4734;
 const REGISTRY_LOCK_FILE: &str = ".profiles.lock";
 pub const PINNED_PROTOCOL_METADATA_SHA256: &str =
     "071c2548f30b9a7f20e06eb71d99b92c47d845453b8a832651631ade7ede2ef1";
@@ -253,6 +255,25 @@ fn prepare_private_directory(path: &Path) -> Result<PathBuf> {
     path.canonicalize().map_err(Error::from)
 }
 
+fn state_root_binding(path: &Path) -> [u8; 32] {
+    #[cfg(unix)]
+    let bytes = {
+        use std::os::unix::ffi::OsStrExt as _;
+        path.as_os_str().as_bytes().to_vec()
+    };
+    #[cfg(windows)]
+    let bytes = {
+        use std::os::windows::ffi::OsStrExt as _;
+        path.as_os_str()
+            .encode_wide()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>()
+    };
+    #[cfg(not(any(unix, windows)))]
+    let bytes = path.to_string_lossy().as_bytes().to_vec();
+    prefixed_hash(STATE_ROOT_BINDING_TYPE_ID, &bytes)
+}
+
 fn atomic_private_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()
@@ -373,6 +394,7 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::account::PendingSignup;
     use foks_keystore::MemorySecretStore;
     use std::collections::BTreeSet;
 
@@ -571,6 +593,45 @@ mod tests {
     }
 
     #[test]
+    fn native_state_root_binding_rejects_a_copied_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let original = temporary.path().join("original");
+        let copied = temporary.path().join("copied");
+        std::fs::create_dir_all(&original).unwrap();
+        std::fs::create_dir_all(&copied).unwrap();
+        let original = original.canonicalize().unwrap();
+        let copied = copied.canonicalize().unwrap();
+        let mut external = MemorySecretStore::default();
+        SecretStore::put(
+            &mut external,
+            STATE_ROOT_RECORD,
+            &state_root_binding(&original),
+        )
+        .unwrap();
+
+        let original_credentials = ClientCredentials {
+            root: original,
+            state_id: "shared-state".to_owned(),
+            backend: CredentialBackend::Native,
+        };
+        original_credentials
+            .verify_root_binding_with_store(&mut external)
+            .unwrap();
+
+        let copied_credentials = ClientCredentials {
+            root: copied,
+            state_id: "shared-state".to_owned(),
+            backend: CredentialBackend::Native,
+        };
+        assert!(matches!(
+            copied_credentials.verify_root_binding_with_store(&mut external),
+            Err(Error::InvalidConfig(
+                "native client state belongs to a different root path"
+            ))
+        ));
+    }
+
+    #[test]
     fn checked_session_rejects_credentials_from_another_state_root() {
         let temporary = tempfile::tempdir().unwrap();
         let first_root = temporary.path().join("first");
@@ -625,7 +686,7 @@ mod tests {
                 store.accept_verified_host(&verified.snapshot)?;
                 store.register_scheduled_job(&ScheduledJob {
                     job_id: [u8::try_from(index + 1).unwrap(); 16],
-                    kind: ScheduledJobKind::FederationReconcile,
+                    kind: ScheduledJobKind::FederationRefresh,
                     host_id: host_id.clone(),
                     scope_id: br#"{"remote_profile":"other"}"#.to_vec(),
                     interval_micros: 1_000,
@@ -1012,9 +1073,17 @@ mod tests {
             certificate_chain: vec![vec![1, 2, 3]],
         };
         let mut vault = AccountVault::new(&mut store);
+        let pending = PendingSignup::random("personal", "alice").unwrap();
+        vault.put_pending(&pending).unwrap();
         vault
             .commit_created("personal", "alice", &credential)
             .unwrap();
+        assert!(vault.pending("personal").is_ok());
+        vault.remove_pending_signup("personal").unwrap();
+        assert!(matches!(
+            vault.pending("personal"),
+            Err(Error::AccountMissing)
+        ));
         assert_eq!(vault.aliases().unwrap(), vec!["personal"]);
         let loaded = vault.account("personal").unwrap();
         assert_eq!(loaded.username, "alice");

@@ -12,7 +12,9 @@ use foks_client_app::{
     YubiSignupInput,
 };
 use foks_keystore::EncryptedFileSecretStore;
-use foks_yubi::{CardId, HardwareYubiProvider, Pin, SlotId, YubiProvider as _};
+use foks_yubi::{
+    CardId, HardwareYubiProvider, Pin, PinRetryConfiguration, SlotId, YubiProvider as _,
+};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use zeroize::Zeroizing;
@@ -589,7 +591,7 @@ fn dispatch_result(
                     &username,
                     &device_name,
                     &email,
-                    &invite,
+                    invite.expose(),
                     passphrase,
                     &mut vault,
                     &master,
@@ -676,6 +678,7 @@ fn dispatch_result(
             signing_slot,
             pq_slot,
             pin,
+            retry_configuration,
         } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
@@ -685,6 +688,15 @@ fn dispatch_result(
                 let passphrase = passphrase
                     .as_ref()
                     .map(|passphrase| Passphrase::new(passphrase.expose()))
+                    .transpose()?;
+                let retry_configuration = retry_configuration
+                    .map(|retry| {
+                        PinRetryConfiguration::new(
+                            Pin::new(retry.puk.expose())?,
+                            retry.pin_attempts,
+                            retry.puk_attempts,
+                        )
+                    })
                     .transpose()?;
                 Ok(serde_json::to_value(session.create_yubi_account(
                     YubiSignupInput {
@@ -697,6 +709,7 @@ fn dispatch_result(
                         card,
                         signing_slot: SlotId::new(signing_slot)?,
                         pq_slot: SlotId::new(pq_slot)?,
+                        retry_configuration,
                     },
                     Pin::new(pin.expose())?,
                     &provider,
@@ -732,12 +745,22 @@ fn dispatch_result(
             signing_slot,
             pq_slot,
             pin,
+            retry_configuration,
         } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let provider = HardwareYubiProvider::new();
                 let card = yubi_card(&provider, card_serial)?;
+                let retry_configuration = retry_configuration
+                    .map(|retry| {
+                        PinRetryConfiguration::new(
+                            Pin::new(retry.puk.expose())?,
+                            retry.pin_attempts,
+                            retry.puk_attempts,
+                        )
+                    })
+                    .transpose()?;
                 Ok(serde_json::to_value(session.provision_yubi_device(
                     YubiProvisionInput {
                         source_alias,
@@ -747,6 +770,7 @@ fn dispatch_result(
                         card,
                         signing_slot: SlotId::new(signing_slot)?,
                         pq_slot: SlotId::new(pq_slot)?,
+                        retry_configuration,
                     },
                     Pin::new(pin.expose())?,
                     &provider,
@@ -832,28 +856,6 @@ fn dispatch_result(
                     &alias,
                     Pin::new(puk.expose())?,
                     Pin::new(new_pin.expose())?,
-                    &HardwareYubiProvider::new(),
-                    vault,
-                )?)?)
-            })
-        }
-        Operation::ConfigureYubiRetries {
-            profile,
-            alias,
-            pin,
-            puk,
-            pin_attempts,
-            puk_attempts,
-        } => {
-            let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
-            with_vault(state_dir, &session, |session, vault| {
-                Ok(serde_json::to_value(session.configure_yubi_retries(
-                    &alias,
-                    Pin::new(pin.expose())?,
-                    Pin::new(puk.expose())?,
-                    pin_attempts,
-                    puk_attempts,
                     &HardwareYubiProvider::new(),
                     vault,
                 )?)?)
@@ -1281,7 +1283,7 @@ mod tests {
                     username: "agentinvite".to_owned(),
                     device_name: "agent laptop".to_owned(),
                     email: "agent@example.test".to_owned(),
-                    invite: invite.code.clone(),
+                    invite: foks_agent_proto::SecretString::new(invite.code.clone()),
                     passphrase: Some(foks_agent_proto::SecretString::new("agent passphrase one")),
                 },
             ),

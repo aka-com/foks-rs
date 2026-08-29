@@ -66,217 +66,64 @@ pub struct FederatedTeamAdmissionOutcome {
     pub added: AddedRemoteTeamMember,
 }
 
+/// Durable identities needed to refresh an already-admitted remote team's
+/// view capability without re-entering the admission saga.
+pub struct FederatedTeamRefreshRequest<'a> {
+    pub remote_host: &'a PinnedHost,
+    pub remote_credential: &'a DeviceCredential,
+    pub remote_team: &'a EntityId,
+    pub local_host: &'a PinnedHost,
+    pub local_credential: &'a DeviceCredential,
+    pub local_team: &'a EntityId,
+}
+
 impl FoksClient {
-    /// Allocates disjoint authenticated ranges for a federated child and its
-    /// parent. If both sides need a transition, the child is durably narrowed
-    /// first. A retry recognizes a completed child narrowing from authenticated
-    /// state and advances only the parent rather than narrowing the child twice.
-    pub fn allocate_federated_team_index_ranges(
-        &self,
-        request: &FederatedTeamAdmissionRequest<'_>,
-        child_store: &mut dyn ProtectedMutationStore,
-        parent_store: &mut dyn ProtectedMutationStore,
-    ) -> Result<FederatedTeamIndexRangeAllocation> {
-        validate_admission_request(request)?;
-        let child = self.authenticated_team_for_index_range(
-            request.remote_host,
-            request.remote_credential,
-            request.remote_team,
-        )?;
-        let parent = self.authenticated_team_for_index_range(
-            request.local_host,
-            request.local_credential,
-            request.local_team,
-        )?;
-        let child_range = child.verified.index_range().clone();
-        let parent_range = parent.verified.index_range().clone();
-        if foks_verify::rational_range_strictly_before(&child_range, &parent_range)? {
-            return Ok(FederatedTeamIndexRangeAllocation {
-                child: child_range,
-                parent: parent_range,
-            });
-        }
-
-        let (child_steps, parent_steps) = federation_index_range_plan(
-            &child_range,
-            request.remote_team.entity_type() == foks_proto::ENTITY_NAMED_TEAM,
-            &parent_range,
-        )?;
-        // Every child transition commits before the first parent transition.
-        // Re-running after any crash computes the remaining suffix from the
-        // newly authenticated heads, rather than replaying a hardcoded range.
-        for _ in 0..child_steps {
-            self.lower_team_index_range_durable(
-                request.remote_host,
-                request.remote_credential,
-                request.remote_team,
-                child_store,
-            )?;
-        }
-        for _ in 0..parent_steps {
-            self.raise_team_index_range_durable(
-                request.local_host,
-                request.local_credential,
-                request.local_team,
-                parent_store,
-            )?;
-        }
-
-        // Cross-host writes are not atomic. Authenticate both current heads
-        // again and fail closed unless the allocation that actually committed
-        // is disjoint; the scoped membership is created only after this check.
-        let child = self.authenticated_team_for_index_range(
-            request.remote_host,
-            request.remote_credential,
-            request.remote_team,
-        )?;
-        let parent = self.authenticated_team_for_index_range(
-            request.local_host,
-            request.local_credential,
-            request.local_team,
-        )?;
-        if !foks_verify::rational_range_strictly_before(
-            child.verified.index_range(),
-            parent.verified.index_range(),
-        )? {
-            return Err(Error::TeamRequest(
-                "federated index ranges are not disjoint after allocation",
-            ));
-        }
-        Ok(FederatedTeamIndexRangeAllocation {
-            child: child.verified.index_range().clone(),
-            parent: parent.verified.index_range().clone(),
-        })
-    }
-
     /// Renews the existing remote-view bearer and proves that the local team
     /// still stores that same capability. This never creates or resumes a
     /// federation admission saga and never edits the local team chain.
     pub fn refresh_federated_team_capability(
         &self,
-        request: &FederatedTeamRefreshRequest<'_, '_>,
+        request: &FederatedTeamRefreshRequest<'_>,
     ) -> Result<RemoteTeamOutcome> {
-        self.refresh_federated_capability_inner(request, None, None)
-    }
-
-    /// Renews a federated capability when the authenticated transport user
-    /// reaches the local parent through a local member team's PTKs.
-    pub fn refresh_federated_team_capability_as_local_team(
-        &self,
-        request: &FederatedTeamRefreshRequest<'_, '_>,
-        transport_user: &foks_verify::VerifiedUserState,
-        actor_team: &crate::AuthenticatedTeamOutcome,
-    ) -> Result<RemoteTeamOutcome> {
-        self.refresh_federated_capability_inner(
-            request,
-            None,
-            Some(FederationActor {
-                transport_user,
-                actor_team: Some(actor_team),
-            }),
-        )
-    }
-
-    /// Renews a federated capability for any combination of software- and
-    /// hardware-backed sides. The transport credentials remain user devices;
-    /// the optional actor teams provide the PTKs that authorize the remote
-    /// grant and/or the local capability recovery.
-    pub fn refresh_federated_team_capability_with_actors(
-        &self,
-        request: &FederatedTeamRefreshRequest<'_, '_>,
-        remote_transport_user: &foks_verify::VerifiedUserState,
-        remote_actor_team: Option<&crate::AuthenticatedTeamOutcome>,
-        local_transport_user: &foks_verify::VerifiedUserState,
-        local_actor_team: Option<&crate::AuthenticatedTeamOutcome>,
-    ) -> Result<RemoteTeamOutcome> {
-        self.refresh_federated_capability_inner(
-            request,
-            Some(FederationActor {
-                transport_user: remote_transport_user,
-                actor_team: remote_actor_team,
-            }),
-            Some(FederationActor {
-                transport_user: local_transport_user,
-                actor_team: local_actor_team,
-            }),
-        )
-    }
-
-    /// The single refresh implementation behind every entry point and every
-    /// software/hardware combination.
-    ///
-    /// A side with no supplied actor is authenticated by the grant or
-    /// capability-recovery call itself, exactly as before this path was
-    /// generalized; a side that supplies one is re-bound to it here, because
-    /// a caller-provided projection is untrusted input. Nothing is
-    /// authenticated twice: a hardware credential's PUK decapsulation is a
-    /// physical operation, so a redundant pass would be a real cost.
-    fn refresh_federated_capability_inner(
-        &self,
-        request: &FederatedTeamRefreshRequest<'_, '_>,
-        remote: Option<FederationActor<'_>>,
-        local: Option<FederationActor<'_>>,
-    ) -> Result<RemoteTeamOutcome> {
-        request.validate()?;
-        // Bind each supplied signer to its own host and chain before any
-        // call. A hardware credential must additionally match the enrolled
-        // parent HEPK and delegated subkey, so a chain that merely shares the
-        // UID cannot stand in for the YubiKey.
-        if let Some(remote) = remote {
-            request
-                .remote_credential
-                .require_enrolled(request.remote_host.host_id(), remote.transport_user)?;
+        if request.remote_host.host_id() == request.local_host.host_id()
+            || request.remote_team == request.local_team
+        {
+            return Err(Error::TeamRequest(
+                "federation refresh hosts or parties are invalid",
+            ));
         }
-        if let Some(local) = local {
-            request
-                .local_credential
-                .require_enrolled(request.local_host.host_id(), local.transport_user)?;
+        request
+            .local_team
+            .clone()
+            .require_type(foks_proto::ENTITY_NAMED_TEAM)?;
+        if !matches!(
+            request.remote_team.entity_type(),
+            foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+        ) {
+            return Err(Error::TeamRequest("remote federation party is not a team"));
         }
-
         let viewer = FqParty::new(
             request.local_team.clone(),
             request.local_host.host_id().clone(),
         )?;
-        let permission = match remote.and_then(FederationActor::as_team_actor) {
-            Some((transport_user, actor_team)) => self
-                .grant_remote_team_view_as_local_team_with_credential(
-                    request.remote_host,
-                    request.remote_credential,
-                    transport_user,
-                    actor_team,
-                    request.remote_team,
-                    viewer,
-                )?,
-            None => self.grant_remote_team_view_with_credential(
-                request.remote_host,
-                request.remote_credential,
-                request.remote_team,
-                viewer,
-            )?,
-        };
-        let remote_team =
+        let permission = self.grant_remote_team_view(
+            request.remote_host,
+            request.remote_credential,
+            request.remote_team,
+            viewer,
+        )?;
+        let remote =
             self.load_remote_team_and_pin(request.remote_host, request.remote_team, &permission)?;
         let member = FqParty::new(
             request.remote_team.clone(),
             request.remote_host.host_id().clone(),
         )?;
-        let recovered = match local.and_then(FederationActor::as_team_actor) {
-            Some((transport_user, actor_team)) => self
-                .load_remote_member_view_permissions_as_local_team_with_credential(
-                    request.local_host,
-                    request.local_credential,
-                    transport_user,
-                    actor_team,
-                    request.local_team,
-                    std::slice::from_ref(&member),
-                )?,
-            None => self.load_remote_member_view_permissions_with_credential(
-                request.local_host,
-                request.local_credential,
-                request.local_team,
-                std::slice::from_ref(&member),
-            )?,
-        };
+        let recovered = self.load_remote_member_view_permissions(
+            request.local_host,
+            request.local_credential,
+            request.local_team,
+            std::slice::from_ref(&member),
+        )?;
         let [recovered] = recovered.as_slice() else {
             return Err(Error::OperationBinding(
                 "local team did not return the admitted remote permission",
@@ -287,7 +134,7 @@ impl FoksClient {
                 "refreshed permission differs from the admitted capability",
             ));
         }
-        Ok(remote_team)
+        Ok(remote)
     }
 
     /// Runs or resumes the durable cross-host admission workflow. A retry first
@@ -346,7 +193,6 @@ impl FoksClient {
             store.advance_federation_saga(
                 &operation_id,
                 FederationSagaState::RemoteVerified,
-                None,
                 now_microseconds()?,
             )?;
             saga = store
@@ -386,7 +232,6 @@ impl FoksClient {
                         store.advance_federation_saga(
                             &operation_id,
                             FederationSagaState::Rejected,
-                            None,
                             now_microseconds()?,
                         )?;
                         return Err(Error::OperationBinding(
@@ -430,7 +275,6 @@ impl FoksClient {
             store.advance_federation_saga(
                 &operation_id,
                 FederationSagaState::LocalVerified,
-                None,
                 now_microseconds()?,
             )?;
         }
@@ -458,7 +302,6 @@ impl FoksClient {
         store.advance_federation_saga(
             &operation_id,
             FederationSagaState::Completed,
-            None,
             now_microseconds()?,
         )?;
         match protected_store.remove(&crate::team::remote_addition_material_key(

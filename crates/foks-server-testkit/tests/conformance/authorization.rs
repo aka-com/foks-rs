@@ -1,4 +1,6 @@
+use foks_client::NamedTeamSecrets;
 use foks_proto::{EntityId, SecretSeed, ENTITY_USER};
+use foks_rpc::TeamChainLoadOptions;
 use foks_server_testkit::{TestAccountSpec, TestClient};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 use std::io::Write as _;
@@ -77,6 +79,120 @@ pub(crate) fn authorization_and_unsupported_success() {
     assert_eq!(config.user_viewership, foks_proto::ViewershipMode::Open);
     assert_eq!(config.team_viewership, foks_proto::ViewershipMode::Open);
     assert!(!config.meter_users && !config.meter_vhosts && !config.meter_per_vhost_disk);
+}
+
+#[test]
+pub(crate) fn local_team_view_tokens_require_their_authenticated_member() {
+    let fixture = Fixture::start("local-team-view-auth");
+    let account = fixture
+        .client
+        .create_account(
+            fixture.host(),
+            &TestAccountSpec::new("localteamviewer", 0xa1),
+        )
+        .unwrap();
+    let secrets = NamedTeamSecrets {
+        member_min: SecretSeed::new([0xa2; 32]),
+        member: SecretSeed::new([0xa3; 32]),
+        admin: SecretSeed::new([0xa4; 32]),
+        owner: SecretSeed::new([0xa5; 32]),
+        removal_key: SecretSeed::new([0xa6; 32]),
+        team_name_commitment_key: [0xa7; 16],
+    };
+    let created = fixture
+        .client
+        .foks()
+        .create_single_owner_named_team(
+            fixture.host(),
+            &account.credential,
+            "authenticatedteam",
+            &secrets,
+        )
+        .unwrap();
+    assert_eq!(created.authenticated.verified.chain_seqno(), 1);
+
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let mut roots = rustls::RootCertStore::empty();
+    for certificate in fixture.host().tls_ca_certificates() {
+        roots
+            .add(CertificateDer::from(certificate.clone()))
+            .unwrap();
+    }
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let tcp = std::net::TcpStream::connect(fixture.server.addresses().public_services).unwrap();
+    let connection = rustls::ClientConnection::new(
+        Arc::new(config),
+        ServerName::try_from("localhost".to_owned()).unwrap(),
+    )
+    .unwrap();
+    let mut tls = rustls::StreamOwned::new(connection, tcp);
+    let request = foks_rpc::encode_load_team_chain_request_with_options(
+        &created.team,
+        fixture.host().host_id(),
+        &created.authenticated.view_token,
+        1,
+        TeamChainLoadOptions {
+            load_removal_key: true,
+            load_remote_view_tokens: true,
+            ..TeamChainLoadOptions::default()
+        },
+    )
+    .unwrap();
+    tls.write_all(&request).unwrap();
+    let error = foks_rpc::read_response(&mut tls, 1024 * 1024, 0).unwrap_err();
+    assert!(matches!(
+        error,
+        foks_rpc::Error::RemoteStatus { code: 1013, .. }
+    ));
+
+    let other_client = TestClient::new(&fixture.environment, "other-team-viewer").unwrap();
+    let other_host = other_client.probe_and_pin().unwrap();
+    let other = other_client
+        .create_account(
+            &other_host.pinned,
+            &TestAccountSpec::new("otherteamviewer", 0xb1),
+        )
+        .unwrap();
+    let certificates = other
+        .credential
+        .certificate_chain
+        .iter()
+        .cloned()
+        .map(CertificateDer::from)
+        .collect();
+    let key = foks_crypto::device_signing_key_pkcs8(&other.credential.seed).unwrap();
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.as_slice()));
+    let mut roots = rustls::RootCertStore::empty();
+    for certificate in fixture.host().tls_ca_certificates() {
+        roots
+            .add(CertificateDer::from(certificate.clone()))
+            .unwrap();
+    }
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_root_certificates(roots)
+    .with_client_auth_cert(certificates, key.clone_key())
+    .unwrap();
+    let tcp = std::net::TcpStream::connect(fixture.server.addresses().authenticated).unwrap();
+    let connection = rustls::ClientConnection::new(
+        Arc::new(config),
+        ServerName::try_from("localhost".to_owned()).unwrap(),
+    )
+    .unwrap();
+    let mut tls = rustls::StreamOwned::new(connection, tcp);
+    tls.write_all(&request).unwrap();
+    let error = foks_rpc::read_response(&mut tls, 1024 * 1024, 0).unwrap_err();
+    assert!(matches!(
+        error,
+        foks_rpc::Error::RemoteStatus { code: 1013, .. }
+    ));
 }
 
 #[test]

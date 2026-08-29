@@ -7,7 +7,8 @@ use foks_client::{
 use foks_crypto::{derive_subkey_id, YubiDevice};
 use foks_proto::{EntityId, InviteCode, Role, SecretSeed, YubiCardId, YubiSlotAndPqKeyId};
 use foks_yubi::{
-    CardId, ManagementKey, Pin, PinRetries, PivPolicy, SlotId, YubiDeviceLocator, YubiProvider,
+    CardId, ManagementKey, Pin, PinRetries, PinRetryConfiguration, PivPolicy, SlotId,
+    YubiDeviceLocator, YubiProvider,
 };
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize as _, Zeroizing};
@@ -82,6 +83,31 @@ impl Drop for StoredYubiAccount {
         self.subkey_seed.zeroize();
         self.management_key.zeroize();
         self.pending_management_key.zeroize();
+    }
+}
+
+impl StoredYubiAccount {
+    fn management_key_for_publication(&self) -> Result<[u8; 24]> {
+        self.pending_management_key
+            .or(self.management_key)
+            .ok_or(Error::InvalidAccount("Yubi management key is unavailable"))
+    }
+
+    fn require_completed_management_rotation(&self) -> Result<()> {
+        if self.pending_management_key.is_some() || !self.management_enrolled {
+            return Err(Error::InvalidAccount(
+                "Yubi management-key rotation is incomplete; resume it first",
+            ));
+        }
+        Ok(())
+    }
+
+    fn complete_management_publication(&mut self, generation: u64) {
+        if let Some(next) = self.pending_management_key.take() {
+            self.management_key = Some(next);
+        }
+        self.management_enrolled = true;
+        self.management_generation = Some(generation);
     }
 }
 
@@ -218,6 +244,7 @@ pub struct YubiSignupInput {
     pub card: CardId,
     pub signing_slot: SlotId,
     pub pq_slot: SlotId,
+    pub retry_configuration: Option<PinRetryConfiguration>,
 }
 
 pub struct YubiProvisionInput {
@@ -228,6 +255,7 @@ pub struct YubiProvisionInput {
     pub card: CardId,
     pub signing_slot: SlotId,
     pub pq_slot: SlotId,
+    pub retry_configuration: Option<PinRetryConfiguration>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -370,6 +398,10 @@ impl AccountVault<'_> {
             management_refresh_source,
         };
         self.put_stored_yubi(&stored)?;
+        Ok(())
+    }
+
+    fn remove_pending_yubi(&mut self, alias: &str) -> Result<()> {
         self.store.remove(&pending_yubi_key(alias))?;
         Ok(())
     }
@@ -421,6 +453,7 @@ impl CheckedProfileSession<'_> {
             input.signing_slot,
             input.pq_slot,
             &pin,
+            input.retry_configuration.as_ref(),
             PivPolicy::Once,
             PivPolicy::Never,
         )?;
@@ -466,6 +499,9 @@ impl CheckedProfileSession<'_> {
             &created.credential,
             None,
         )?;
+        MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
+            .finalize(&created.operation_id)?;
+        vault.remove_pending_yubi(&input.alias)?;
         let sequence = created.authenticated.verified.chain_seqno();
         drop(created);
         self.finish_management_rotation(&input.alias, provider, vault, Some(&pin))?;
@@ -498,6 +534,35 @@ impl CheckedProfileSession<'_> {
             let loaded = vault.yubi_account(alias)?;
             let device = provider.open(&loaded.locator, Some(&pin))?;
             let host = self.pinned_host()?;
+            let mut mutations = EncryptedFileMutationStore::open(
+                &self.paths.protected_mutations,
+                derive_mutation_key(master_key),
+            )?;
+            for (kind, scope, subject) in [
+                (
+                    MutationKind::Signup,
+                    device.entity_id().as_bytes(),
+                    loaded.uid.as_bytes(),
+                ),
+                (
+                    MutationKind::DeviceProvision,
+                    loaded.uid.as_bytes(),
+                    device.entity_id().as_bytes(),
+                ),
+            ] {
+                if let Some(operation) = HardStateStore::open(&self.paths.hard_database)?
+                    .latest_mutation_for_binding(host.host_id().as_bytes(), kind, scope, subject)?
+                    .filter(|operation| {
+                        matches!(
+                            operation.state,
+                            MutationState::RemoteVerified | MutationState::Finalized
+                        )
+                    })
+                {
+                    MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
+                        .finalize(&operation.operation_id)?;
+                }
+            }
             let authenticated = self
                 .client
                 .authenticate_yubi_and_pin(&host, &loaded.credential(device.as_ref()))?;
@@ -599,6 +664,9 @@ impl CheckedProfileSession<'_> {
                         &created.credential,
                         None,
                     )?;
+                    MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
+                        .finalize(&created.operation_id)?;
+                    vault.remove_pending_yubi(alias)?;
                     (sequence, None)
                 }
                 PendingYubiPurpose::Provision {
@@ -670,6 +738,9 @@ impl CheckedProfileSession<'_> {
                         &provisioned.credential,
                         Some(source_alias.clone()),
                     )?;
+                    MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
+                        .finalize(&provisioned.operation_id)?;
+                    vault.remove_pending_yubi(alias)?;
                     (sequence, Some(source_alias.clone()))
                 }
             };
@@ -726,6 +797,7 @@ impl CheckedProfileSession<'_> {
             input.signing_slot,
             input.pq_slot,
             &pin,
+            input.retry_configuration.as_ref(),
             PivPolicy::Once,
             PivPolicy::Never,
         )?;
@@ -766,6 +838,9 @@ impl CheckedProfileSession<'_> {
             &provisioned.credential,
             Some(input.source_alias.clone()),
         )?;
+        MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
+            .finalize(&provisioned.operation_id)?;
+        vault.remove_pending_yubi(&input.target_alias)?;
         drop(provisioned);
         self.finish_management_rotation(&input.target_alias, provider, vault, Some(&pin))?;
         self.register_yubi_management_refresh(&input.target_alias, &input.source_alias)?;
@@ -806,6 +881,73 @@ impl CheckedProfileSession<'_> {
             authenticated.verified.chain_seqno(),
             &directories,
         ))
+    }
+
+    pub fn set_yubi_passphrase(
+        &self,
+        alias: &str,
+        pin: Pin,
+        passphrase: Passphrase,
+        provider: &dyn YubiProvider,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<PassphraseReport> {
+        self.profile.require(Capability::Passphrases)?;
+        let loaded = vault.yubi_account(alias)?;
+        let parent = provider.open(&loaded.locator, Some(&pin))?;
+        let credential = loaded.credential(parent.as_ref());
+        let host = self.pinned_host()?;
+        let metadata = self
+            .client
+            .set_passphrase_yubi(&host, &credential, &passphrase)?;
+        let verification = self
+            .client
+            .verify_passphrase_yubi(&host, &credential, &passphrase)?;
+        PassphraseReport::from_verified(metadata, verification)
+    }
+
+    pub fn change_yubi_passphrase(
+        &self,
+        alias: &str,
+        pin: Pin,
+        passphrase: Passphrase,
+        provider: &dyn YubiProvider,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<PassphraseReport> {
+        self.profile.require(Capability::Passphrases)?;
+        let loaded = vault.yubi_account(alias)?;
+        let parent = provider.open(&loaded.locator, Some(&pin))?;
+        let credential = loaded.credential(parent.as_ref());
+        let host = self.pinned_host()?;
+        let metadata = self
+            .client
+            .change_passphrase_yubi(&host, &credential, &passphrase)?;
+        let verification = self
+            .client
+            .verify_passphrase_yubi(&host, &credential, &passphrase)?;
+        PassphraseReport::from_verified(metadata, verification)
+    }
+
+    pub fn verify_yubi_passphrase(
+        &self,
+        alias: &str,
+        pin: Pin,
+        passphrase: Passphrase,
+        provider: &dyn YubiProvider,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<PassphraseReport> {
+        self.profile.require(Capability::Passphrases)?;
+        let loaded = vault.yubi_account(alias)?;
+        let parent = provider.open(&loaded.locator, Some(&pin))?;
+        let credential = loaded.credential(parent.as_ref());
+        let host = self.pinned_host()?;
+        let verification = self
+            .client
+            .verify_passphrase_yubi(&host, &credential, &passphrase)?;
+        Ok(PassphraseReport {
+            generation: verification.generation,
+            stretch_version: "v1",
+            verified: true,
+        })
     }
 
     pub fn recover_yubi_subkey(
@@ -1011,37 +1153,6 @@ impl CheckedProfileSession<'_> {
         Ok(admin.pin_retries()?.into())
     }
 
-    // Keep the two credentials and two counters explicit at this boundary:
-    // grouping them into a serializable request type would turn a local
-    // lifecycle call into another long-lived DTO and make secret ownership
-    // less apparent.
-    #[allow(clippy::too_many_arguments)]
-    pub fn configure_yubi_retries(
-        &self,
-        alias: &str,
-        pin: Pin,
-        puk: Pin,
-        pin_attempts: u8,
-        puk_attempts: u8,
-        provider: &dyn YubiProvider,
-        vault: &mut AccountVault<'_>,
-    ) -> Result<YubiPinStatus> {
-        self.profile.require(Capability::DeviceAdministration)?;
-        let stored = vault.stored_yubi(alias)?;
-        let key = stored
-            .management_key
-            .ok_or(Error::InvalidAccount("Yubi management key is unavailable"))?;
-        let admin = provider.open_admin(&stored.locator)?;
-        admin.set_pin_retries(
-            &ManagementKey::from_bytes(key),
-            &pin,
-            &puk,
-            pin_attempts,
-            puk_attempts,
-        )?;
-        Ok(admin.pin_retries()?.into())
-    }
-
     pub fn rotate_yubi_management_key(
         &self,
         alias: &str,
@@ -1093,11 +1204,8 @@ impl CheckedProfileSession<'_> {
                 // and setting the same key is an idempotent completion.
                 admin.replace_management_key(&next_key, &next_key, false)?;
             }
-            stored.management_key = Some(next);
-            stored.pending_management_key = None;
-            vault.put_stored_yubi(&stored)?;
         }
-        if !stored.management_enrolled {
+        if stored.pending_management_key.is_some() || !stored.management_enrolled {
             let pin = pin.ok_or(Error::InvalidAccount(
                 "PIN is required to publish the Yubi management-key envelope",
             ))?;
@@ -1115,9 +1223,7 @@ impl CheckedProfileSession<'_> {
                 .iter()
                 .find(|puk| puk.role == Role::OWNER)
                 .ok_or(Error::InvalidAccount("owner PUK is unavailable"))?;
-            let key = stored
-                .management_key
-                .ok_or(Error::InvalidAccount("Yubi management key is unavailable"))?;
+            let key = stored.management_key_for_publication()?;
             let envelope = encrypt_yubi_management_key(
                 owner,
                 device.entity_id(),
@@ -1130,8 +1236,10 @@ impl CheckedProfileSession<'_> {
             )?;
             self.client
                 .put_yubi_management_key_yubi(&host, &credential, &envelope)?;
-            stored.management_enrolled = true;
-            stored.management_generation = Some(owner.generation);
+            // The durable record remains old-current/pending-new until the
+            // server has acknowledged the new envelope. A retry can therefore
+            // prove either side of the card replacement and republish safely.
+            stored.complete_management_publication(owner.generation);
             vault.put_stored_yubi(&stored)?;
         }
         Ok(YubiLifecycleReport {
@@ -1149,8 +1257,9 @@ impl CheckedProfileSession<'_> {
     ) -> Result<YubiLifecycleReport> {
         self.profile.require(Capability::DeviceAdministration)?;
         self.profile.require(Capability::Recovery)?;
-        let software = vault.account(software_alias)?;
         let mut stored = vault.stored_yubi(yubi_alias)?;
+        stored.require_completed_management_rotation()?;
+        let software = vault.account(software_alias)?;
         if software.credential.uid.as_bytes() != stored.uid {
             return Err(Error::InvalidAccount(
                 "software and Yubi aliases belong to different users",
@@ -1229,8 +1338,9 @@ impl CheckedProfileSession<'_> {
         software_alias: &str,
         vault: &mut AccountVault<'_>,
     ) -> Result<()> {
-        let software = vault.account(software_alias)?;
         let mut stored = vault.stored_yubi(yubi_alias)?;
+        stored.require_completed_management_rotation()?;
+        let software = vault.account(software_alias)?;
         if software.credential.uid.as_bytes() != stored.uid {
             return Err(Error::InvalidAccount(
                 "scheduled Yubi refresh aliases belong to different users",
@@ -1349,6 +1459,13 @@ fn validate_stored_yubi(stored: &StoredYubiAccount, alias: &str) -> Result<()> {
             "pending Yubi management key has no current key",
         ));
     }
+    if stored.pending_management_key.is_some()
+        && (stored.management_enrolled || stored.management_generation.is_some())
+    {
+        return Err(Error::InvalidAccount(
+            "pending Yubi management key is marked as enrolled",
+        ));
+    }
     if stored.management_enrolled != stored.management_generation.is_some() {
         return Err(Error::InvalidAccount(
             "Yubi management envelope generation is inconsistent",
@@ -1384,4 +1501,92 @@ fn validate_locator(locator: &YubiDeviceLocator) -> Result<()> {
         return Err(Error::InvalidAccount("Yubi locator is invalid"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stored_management_state(
+        current: [u8; 24],
+        pending: Option<[u8; 24]>,
+        enrolled: bool,
+        generation: Option<u64>,
+    ) -> StoredYubiAccount {
+        let subkey_seed = [0x41; 32];
+        let pq_public_key = [0x42; 33];
+        StoredYubiAccount {
+            version: YUBI_RECORD_VERSION,
+            alias: "hardware".to_owned(),
+            username: "hardwareuser".to_owned(),
+            uid: [vec![ENTITY_USER], vec![0x43; 32]].concat(),
+            locator: YubiDeviceLocator {
+                card: CardId {
+                    name: "test-card".to_owned(),
+                    serial: 1,
+                },
+                signing_slot: SlotId::new(0x82).unwrap(),
+                pq_slot: SlotId::new(0x83).unwrap(),
+                signing_public_key: [0x44; 33],
+                pq_public_key,
+                pq_key_id: foks_crypto::yubi_pq_key_id(&pq_public_key).unwrap(),
+            },
+            subkey_id: derive_subkey_id(&SecretSeed::new(subkey_seed))
+                .unwrap()
+                .into_bytes(),
+            subkey_seed,
+            certificate_chain: vec![vec![0x45]],
+            management_key: Some(current),
+            pending_management_key: pending,
+            management_enrolled: enrolled,
+            management_generation: generation,
+            management_refresh_source: None,
+        }
+    }
+
+    #[test]
+    fn management_key_is_promoted_only_after_publication_completes() {
+        let old = [0x11; 24];
+        let next = [0x22; 24];
+        let mut stored = stored_management_state(old, Some(next), false, None);
+
+        assert_eq!(stored.management_key_for_publication().unwrap(), next);
+        assert_eq!(stored.management_key, Some(old));
+        assert_eq!(stored.pending_management_key, Some(next));
+        assert!(!stored.management_enrolled);
+
+        stored.complete_management_publication(7);
+        assert_eq!(stored.management_key, Some(next));
+        assert_eq!(stored.pending_management_key, None);
+        assert!(stored.management_enrolled);
+        assert_eq!(stored.management_generation, Some(7));
+    }
+
+    #[test]
+    fn incomplete_rotation_blocks_recovery_and_refresh_paths() {
+        let pending = stored_management_state([0x11; 24], Some([0x22; 24]), false, None);
+        assert!(matches!(
+            pending.require_completed_management_rotation(),
+            Err(Error::InvalidAccount(
+                "Yubi management-key rotation is incomplete; resume it first"
+            ))
+        ));
+
+        let unpublished = stored_management_state([0x11; 24], None, false, None);
+        assert!(unpublished.require_completed_management_rotation().is_err());
+
+        let enrolled = stored_management_state([0x11; 24], None, true, Some(3));
+        enrolled.require_completed_management_rotation().unwrap();
+    }
+
+    #[test]
+    fn pending_rotation_cannot_be_marked_enrolled() {
+        let stored = stored_management_state([0x11; 24], Some([0x22; 24]), true, Some(3));
+        assert!(matches!(
+            validate_stored_yubi(&stored, "hardware"),
+            Err(Error::InvalidAccount(
+                "pending Yubi management key is marked as enrolled"
+            ))
+        ));
+    }
 }

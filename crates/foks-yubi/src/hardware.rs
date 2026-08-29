@@ -18,8 +18,9 @@ use yubikey::{MgmKey, PinPolicy, Serial, TouchPolicy, YubiKey};
 use zeroize::Zeroizing;
 
 use crate::{
-    CardId, Error, ManagedYubiDevice, ManagementKey, Pin, PinRetries, PivPolicy,
-    PreparedYubiDevice, Result, SlotId, YubiAdministrativeDevice, YubiDeviceLocator, YubiProvider,
+    CardId, Error, ManagedYubiDevice, ManagementKey, Pin, PinRetries, PinRetryConfiguration,
+    PivPolicy, PreparedYubiDevice, Result, SlotId, YubiAdministrativeDevice, YubiDeviceLocator,
+    YubiProvider,
 };
 
 static HARDWARE_OPERATION_LOCK: Mutex<()> = Mutex::new(());
@@ -69,12 +70,14 @@ impl YubiProvider for HardwareYubiProvider {
         Ok(cards)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn prepare(
         &self,
         card: &CardId,
         signing_slot: SlotId,
         pq_slot: SlotId,
         pin: &Pin,
+        retry_configuration: Option<&PinRetryConfiguration>,
         pin_policy: PivPolicy,
         touch_policy: PivPolicy,
     ) -> Result<PreparedYubiDevice> {
@@ -91,8 +94,20 @@ impl YubiProvider for HardwareYubiProvider {
 
         let signing_slot_native = native_slot(signing_slot)?;
         let pq_slot_native = native_slot(pq_slot)?;
-        ensure_slot_empty(&mut yubikey, signing_slot_native)?;
-        ensure_slot_empty(&mut yubikey, pq_slot_native)?;
+        if let Some(retry) = retry_configuration {
+            ensure_all_piv_slots_empty(&mut yubikey)?;
+            configure_pin_retries(
+                &mut yubikey,
+                &ManagementKey::default_piv(),
+                pin,
+                &retry.puk,
+                retry.pin_attempts,
+                retry.puk_attempts,
+            )?;
+        } else {
+            ensure_slot_empty(&mut yubikey, signing_slot_native)?;
+            ensure_slot_empty(&mut yubikey, pq_slot_native)?;
+        }
         let signing_spki = piv::generate(
             &mut yubikey,
             signing_slot_native,
@@ -210,31 +225,6 @@ impl YubiAdministrativeDevice for HardwareYubiAdminDevice {
             yubikey
                 .unblock_pin(puk.expose().as_bytes(), new_pin.expose().as_bytes())
                 .map_err(map_error)
-        })
-    }
-
-    fn set_pin_retries(
-        &self,
-        management_key: &ManagementKey,
-        pin: &Pin,
-        puk: &Pin,
-        pin_attempts: u8,
-        puk_attempts: u8,
-    ) -> Result<()> {
-        if !(1..=15).contains(&pin_attempts) || !(1..=15).contains(&puk_attempts) {
-            return Err(Error::Policy(
-                "PIN/PUK retries must be between one and fifteen",
-            ));
-        }
-        self.with_card(|yubikey| {
-            configure_pin_retries(
-                yubikey,
-                management_key,
-                pin,
-                puk,
-                pin_attempts,
-                puk_attempts,
-            )
         })
     }
 
@@ -407,31 +397,6 @@ impl YubiAdministrativeDevice for HardwareYubiDevice {
         })
     }
 
-    fn set_pin_retries(
-        &self,
-        management_key: &ManagementKey,
-        pin: &Pin,
-        puk: &Pin,
-        pin_attempts: u8,
-        puk_attempts: u8,
-    ) -> Result<()> {
-        if !(1..=15).contains(&pin_attempts) || !(1..=15).contains(&puk_attempts) {
-            return Err(Error::Policy(
-                "PIN/PUK retries must be between one and fifteen",
-            ));
-        }
-        self.with_card(|yubikey| {
-            configure_pin_retries(
-                yubikey,
-                management_key,
-                pin,
-                puk,
-                pin_attempts,
-                puk_attempts,
-            )
-        })
-    }
-
     fn replace_management_key(
         &self,
         old: &ManagementKey,
@@ -474,7 +439,7 @@ fn configure_pin_retries(
     verify_pin(yubikey, pin)?;
     yubikey
         .set_pin_retries(pin_attempts, puk_attempts)
-        .map_err(map_error)?;
+        .map_err(|_| Error::RetryUpdateUnknown)?;
     yubikey
         .change_pin(b"123456", pin.expose().as_bytes())
         .map_err(|_| Error::RetryPinRestore)?;
@@ -516,6 +481,21 @@ fn ensure_slot_empty(yubikey: &mut YubiKey, slot: piv::SlotId) -> Result<()> {
         )),
         Err(error) => Err(map_error(error)),
     }
+}
+
+fn ensure_all_piv_slots_empty(yubikey: &mut YubiKey) -> Result<()> {
+    for slot in [
+        piv::SlotId::Authentication,
+        piv::SlotId::Signature,
+        piv::SlotId::KeyManagement,
+        piv::SlotId::CardAuthentication,
+    ] {
+        ensure_slot_empty(yubikey, slot)?;
+    }
+    for value in SlotId::MIN..=SlotId::MAX {
+        ensure_slot_empty(yubikey, native_slot(SlotId::new(value)?)?)?;
+    }
+    Ok(())
 }
 
 fn verify_slot_public(yubikey: &mut YubiKey, slot: SlotId, expected: &[u8; 33]) -> Result<()> {

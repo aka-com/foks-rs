@@ -133,7 +133,8 @@ pub(crate) fn validate(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let shared_keys = latest_shared_keys(&authority.shared_keys)?;
+    let shared_key_history = decode_shared_keys(&authority.shared_keys)?;
+    let shared_keys = latest_shared_keys(&shared_key_history);
     let expected_sequence = authority
         .chain_sequence
         .checked_add(1)
@@ -152,6 +153,7 @@ pub(crate) fn validate(
         next_tree_location,
         &devices,
         &shared_keys,
+        &shared_key_history,
     )?;
     if verified.change.signer.as_bytes() != principal {
         return Err(Error::Signup(
@@ -235,23 +237,40 @@ pub(crate) fn validate(
     })
 }
 
-fn latest_shared_keys(
+fn decode_shared_keys(
     keys: &[foks_server_db::UserSharedKeySnapshot],
 ) -> Result<Vec<foks_verify::VerifiedSharedKey>> {
-    let mut latest = std::collections::BTreeMap::new();
-    for key in keys {
-        let role = decode_role(key.role_type, key.visibility)?;
-        latest.insert(
-            role,
-            foks_verify::VerifiedSharedKey {
+    keys.iter()
+        .map(|key| {
+            let role = decode_role(key.role_type, key.visibility)?;
+            Ok(foks_verify::VerifiedSharedKey {
                 role,
                 generation: key.generation,
                 verify_key: EntityId::from_bytes(key.verify_key.clone())?,
                 hepk: Hepk::decode(&key.exact_hepk)?,
-            },
-        );
+            })
+        })
+        .collect()
+}
+
+fn latest_shared_keys(
+    keys: &[foks_verify::VerifiedSharedKey],
+) -> Vec<foks_verify::VerifiedSharedKey> {
+    let mut latest = std::collections::BTreeMap::new();
+    for key in keys {
+        match latest.entry(key.role) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(key.clone());
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry)
+                if key.generation > entry.get().generation =>
+            {
+                entry.insert(key.clone());
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {}
+        }
     }
-    Ok(latest.into_values().collect())
+    latest.into_values().collect()
 }
 
 fn decode_role(kind: u64, visibility: i64) -> Result<Role> {

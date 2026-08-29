@@ -9,8 +9,9 @@ use p256::{ecdh::diffie_hellman, PublicKey, SecretKey};
 use zeroize::Zeroizing;
 
 use crate::{
-    CardId, Error, ManagedYubiDevice, ManagementKey, Pin, PinRetries, PivPolicy,
-    PreparedYubiDevice, Result, SlotId, YubiAdministrativeDevice, YubiDeviceLocator, YubiProvider,
+    CardId, Error, ManagedYubiDevice, ManagementKey, Pin, PinRetries, PinRetryConfiguration,
+    PivPolicy, PreparedYubiDevice, Result, SlotId, YubiAdministrativeDevice, YubiDeviceLocator,
+    YubiProvider,
 };
 
 const DEFAULT_MANAGEMENT_KEY: [u8; 24] = [
@@ -32,6 +33,10 @@ struct MockCard {
     puk_remaining: u8,
     management_key: [u8; 24],
     slots: BTreeMap<SlotId, SecretKey>,
+    #[cfg(test)]
+    fail_retry_update_unknown: bool,
+    #[cfg(test)]
+    fail_retry_pin_restore: bool,
 }
 
 impl Drop for MockCard {
@@ -61,6 +66,10 @@ impl MockYubiProvider {
             puk_remaining: 3,
             management_key: DEFAULT_MANAGEMENT_KEY,
             slots: BTreeMap::new(),
+            #[cfg(test)]
+            fail_retry_update_unknown: false,
+            #[cfg(test)]
+            fail_retry_pin_restore: false,
         };
         Ok(Self {
             cards: Arc::new(Mutex::new(BTreeMap::from([(
@@ -104,12 +113,14 @@ impl YubiProvider for MockYubiProvider {
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn prepare(
         &self,
         id: &CardId,
         signing_slot: SlotId,
         pq_slot: SlotId,
         pin: &Pin,
+        retry_configuration: Option<&PinRetryConfiguration>,
         _pin_policy: PivPolicy,
         _touch_policy: PivPolicy,
     ) -> Result<PreparedYubiDevice> {
@@ -124,6 +135,21 @@ impl YubiProvider for MockYubiProvider {
             verify_pin(&mut card, pin)?;
             if card.slots.contains_key(&signing_slot) || card.slots.contains_key(&pq_slot) {
                 return Err(Error::Policy("selected PIV slot is not empty"));
+            }
+            if let Some(retry) = retry_configuration {
+                if !card.slots.is_empty() {
+                    return Err(Error::Policy(
+                        "PIV retry configuration requires every key slot to be empty",
+                    ));
+                }
+                configure_pin_retries(
+                    &mut card,
+                    &ManagementKey::default_piv(),
+                    pin,
+                    &retry.puk,
+                    retry.pin_attempts,
+                    retry.puk_attempts,
+                )?;
             }
             card.slots
                 .insert(signing_slot, SecretKey::random(&mut OsRng));
@@ -187,6 +213,39 @@ fn verify_pin(card: &mut MockCard, pin: &Pin) -> Result<()> {
         });
     }
     card.pin_remaining = card.pin_attempts;
+    Ok(())
+}
+
+fn configure_pin_retries(
+    card: &mut MockCard,
+    management_key: &ManagementKey,
+    pin: &Pin,
+    puk: &Pin,
+    pin_attempts: u8,
+    puk_attempts: u8,
+) -> Result<()> {
+    if &card.management_key != management_key.expose() {
+        return Err(Error::Policy("management key was rejected"));
+    }
+    verify_pin(card, pin)?;
+    // Match PIV SET PIN RETRIES: the command first resets both credentials.
+    // This helper is called only before prepare generates any FOKS key.
+    card.pin = "123456".to_owned();
+    card.puk = "12345678".to_owned();
+    card.pin_attempts = pin_attempts;
+    card.pin_remaining = pin_attempts;
+    card.puk_attempts = puk_attempts;
+    card.puk_remaining = puk_attempts;
+    #[cfg(test)]
+    if card.fail_retry_update_unknown {
+        return Err(Error::RetryUpdateUnknown);
+    }
+    #[cfg(test)]
+    if card.fail_retry_pin_restore {
+        return Err(Error::RetryPinRestore);
+    }
+    card.pin = pin.expose().to_owned();
+    card.puk = puk.expose().to_owned();
     Ok(())
 }
 
@@ -425,40 +484,6 @@ impl YubiAdministrativeDevice for MockYubiDevice {
         Ok(())
     }
 
-    fn set_pin_retries(
-        &self,
-        management_key: &ManagementKey,
-        pin: &Pin,
-        puk: &Pin,
-        pin_attempts: u8,
-        puk_attempts: u8,
-    ) -> Result<()> {
-        if !(1..=15).contains(&pin_attempts) || !(1..=15).contains(&puk_attempts) {
-            return Err(Error::Policy(
-                "PIN/PUK retries must be between one and fifteen",
-            ));
-        }
-        let mut card = self
-            .card
-            .lock()
-            .map_err(|_| Error::Provider("mock card lock poisoned".into()))?;
-        if &card.management_key != management_key.expose() {
-            return Err(Error::Policy("management key was rejected"));
-        }
-        verify_pin(&mut card, pin)?;
-        // PIV changes both counters by first restoring the factory PIN/PUK.
-        // The public operation immediately reapplies the caller's values.
-        card.pin = "123456".to_owned();
-        card.puk = "12345678".to_owned();
-        card.pin_attempts = pin_attempts;
-        card.pin_remaining = pin_attempts;
-        card.puk_attempts = puk_attempts;
-        card.puk_remaining = puk_attempts;
-        card.pin = pin.expose().to_owned();
-        card.puk = puk.expose().to_owned();
-        Ok(())
-    }
-
     fn replace_management_key(
         &self,
         old: &ManagementKey,
@@ -493,6 +518,7 @@ mod tests {
                 SlotId::new(0x82).unwrap(),
                 SlotId::new(0x83).unwrap(),
                 &pin,
+                None,
                 PivPolicy::Once,
                 PivPolicy::Never,
             )
@@ -524,6 +550,7 @@ mod tests {
                 SlotId::new(0x82).unwrap(),
                 SlotId::new(0x83).unwrap(),
                 &pin,
+                None,
                 PivPolicy::Once,
                 PivPolicy::Never,
             )
@@ -550,36 +577,126 @@ mod tests {
     }
 
     #[test]
-    fn retry_configuration_restores_nondefault_pin_and_puk() {
+    fn retry_configuration_precedes_key_generation_and_restores_credentials() {
         let pin = Pin::new("pin-42").unwrap();
         let provider = MockYubiProvider::with_card("mock", 9, &pin).unwrap();
+        let retry = PinRetryConfiguration::new(Pin::new("puk-42").unwrap(), 5, 4).unwrap();
+        assert!(!format!("{retry:?}").contains("puk-42"));
         let prepared = provider
             .prepare(
                 &provider.cards().unwrap()[0],
                 SlotId::new(0x82).unwrap(),
                 SlotId::new(0x83).unwrap(),
                 &pin,
+                Some(&retry),
                 PivPolicy::Once,
                 PivPolicy::Never,
             )
             .unwrap();
         let admin = provider.open_admin(&prepared.locator).unwrap();
-        let puk = Pin::new("puk-42").unwrap();
-        admin
-            .change_puk(&Pin::new("12345678").unwrap(), &puk)
-            .unwrap();
-
-        admin
-            .set_pin_retries(&ManagementKey::default_piv(), &pin, &puk, 5, 4)
-            .unwrap();
 
         assert_eq!(admin.pin_retries().unwrap().remaining, 5);
         provider
             .open(&prepared.locator, Some(&pin))
             .expect("the nondefault PIN must survive retry configuration");
         admin
-            .unblock_pin(&puk, &Pin::new("new-42").unwrap())
+            .unblock_pin(&Pin::new("puk-42").unwrap(), &Pin::new("new-42").unwrap())
             .expect("the nondefault PUK must survive retry configuration");
+    }
+
+    #[test]
+    fn retry_configuration_is_rejected_after_foks_key_generation() {
+        let pin = Pin::new("123456").unwrap();
+        let provider = MockYubiProvider::with_card("mock", 10, &pin).unwrap();
+        let card = provider.cards().unwrap().remove(0);
+        let prepared = provider
+            .prepare(
+                &card,
+                SlotId::new(0x82).unwrap(),
+                SlotId::new(0x83).unwrap(),
+                &pin,
+                None,
+                PivPolicy::Once,
+                PivPolicy::Never,
+            )
+            .unwrap();
+        let retry = PinRetryConfiguration::new(Pin::new("12345678").unwrap(), 5, 4).unwrap();
+
+        assert!(matches!(
+            provider.prepare(
+                &card,
+                SlotId::new(0x84).unwrap(),
+                SlotId::new(0x85).unwrap(),
+                &pin,
+                Some(&retry),
+                PivPolicy::Once,
+                PivPolicy::Never,
+            ),
+            Err(Error::Policy(
+                "PIV retry configuration requires every key slot to be empty"
+            ))
+        ));
+        assert_eq!(
+            provider
+                .open_admin(&prepared.locator)
+                .unwrap()
+                .pin_retries()
+                .unwrap()
+                .remaining,
+            3
+        );
+    }
+
+    #[test]
+    fn unknown_retry_update_does_not_generate_foks_keys() {
+        let pin = Pin::new("pin-42").unwrap();
+        let provider = MockYubiProvider::with_card("mock", 11, &pin).unwrap();
+        let card = provider.cards().unwrap().remove(0);
+        let state = provider.card(&card).unwrap();
+        state.lock().unwrap().fail_retry_update_unknown = true;
+        let retry = PinRetryConfiguration::new(Pin::new("puk-42").unwrap(), 5, 4).unwrap();
+
+        assert!(matches!(
+            provider.prepare(
+                &card,
+                SlotId::new(0x82).unwrap(),
+                SlotId::new(0x83).unwrap(),
+                &pin,
+                Some(&retry),
+                PivPolicy::Once,
+                PivPolicy::Never,
+            ),
+            Err(Error::RetryUpdateUnknown)
+        ));
+        assert!(state.lock().unwrap().slots.is_empty());
+    }
+
+    #[test]
+    fn failed_retry_restore_does_not_generate_foks_keys() {
+        let pin = Pin::new("pin-42").unwrap();
+        let provider = MockYubiProvider::with_card("mock", 12, &pin).unwrap();
+        let card = provider.cards().unwrap().remove(0);
+        let state = provider.card(&card).unwrap();
+        state.lock().unwrap().fail_retry_pin_restore = true;
+        let retry = PinRetryConfiguration::new(Pin::new("puk-42").unwrap(), 5, 4).unwrap();
+
+        assert!(matches!(
+            provider.prepare(
+                &card,
+                SlotId::new(0x82).unwrap(),
+                SlotId::new(0x83).unwrap(),
+                &pin,
+                Some(&retry),
+                PivPolicy::Once,
+                PivPolicy::Never,
+            ),
+            Err(Error::RetryPinRestore)
+        ));
+        let state = state.lock().unwrap();
+        assert!(state.slots.is_empty());
+        assert_eq!(state.pin, "123456");
+        assert_eq!(state.puk, "12345678");
+        assert_eq!((state.pin_attempts, state.puk_attempts), (5, 4));
     }
 
     #[test]

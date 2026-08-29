@@ -245,6 +245,8 @@ impl FoksClient {
             &credential.seed,
             &sender.hepk,
             &role_key.verify_key,
+            &role_key.hepk,
+            role_key.generation,
             host.host_id(),
             role,
         )?;
@@ -439,6 +441,8 @@ impl FoksClient {
             &credential.seed,
             &sender.hepk,
             &role_key.verify_key,
+            &role_key.hepk,
+            role_key.generation,
             &host.host_id,
             role,
         )?;
@@ -532,6 +536,8 @@ impl FoksClient {
             credential.parent,
             &sender.hepk,
             &role_key.verify_key,
+            &role_key.hepk,
+            role_key.generation,
             &host.host_id,
             role,
         )?;

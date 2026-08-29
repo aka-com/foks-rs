@@ -177,3 +177,20 @@ pub(crate) fn active_credential_owner(
         .optional()
         .map_err(Into::into)
 }
+
+pub(crate) fn active_owner_role_credential(
+    connection: &rusqlite::Connection,
+    uid: &[u8],
+    credential_id: &[u8],
+) -> Result<Option<Vec<u8>>> {
+    connection
+        .query_row(
+            "SELECT device_id FROM devices
+             WHERE uid = ?1 AND active = 1 AND role_type = 3 AND visibility = 0
+               AND (device_id = ?2 OR subkey_id = ?2)",
+            params![uid, credential_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+}

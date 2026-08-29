@@ -12,7 +12,7 @@ mod supported {
 
     use clap::Parser as _;
     use foks_agent_client::AgentClient;
-    use foks_agent_proto::{FederationRole, SecretString};
+    use foks_agent_proto::{FederationRole, SecretString, YubiRetryConfiguration};
     use foks_desktop::{DesktopModel, PassphraseAction, Screen, YubiAction};
     use gpui::{
         div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, SharedString,
@@ -62,6 +62,7 @@ mod supported {
         yubi_new_pin: Entity<TextField>,
         yubi_puk: Entity<TextField>,
         yubi_new_puk: Entity<TextField>,
+        yubi_retry_puk: Entity<TextField>,
         yubi_pin_attempts: Entity<TextField>,
         yubi_puk_attempts: Entity<TextField>,
         federation_local_team: Entity<TextField>,
@@ -111,6 +112,8 @@ mod supported {
                 yubi_new_pin: cx.new(|cx| TextField::new("New PIN", true, 8, cx)),
                 yubi_puk: cx.new(|cx| TextField::new("Current PUK", true, 8, cx)),
                 yubi_new_puk: cx.new(|cx| TextField::new("New PUK", true, 8, cx)),
+                yubi_retry_puk: cx
+                    .new(|cx| TextField::new("Enrollment PUK (optional)", true, 8, cx)),
                 yubi_pin_attempts: cx.new(|cx| TextField::new("3", false, 2, cx)),
                 yubi_puk_attempts: cx.new(|cx| TextField::new("3", false, 2, cx)),
                 federation_local_team: cx
@@ -338,7 +341,9 @@ mod supported {
             let username = self.account_username.read(cx).value().to_owned();
             let device = self.account_device.read(cx).value().to_owned();
             let email = self.account_email.read(cx).value().to_owned();
-            let invite = self.account_invite.read(cx).value().to_owned();
+            let invite = self
+                .account_invite
+                .update(cx, |input, cx| input.take_secret(cx));
             let passphrase = self
                 .account_passphrase
                 .update(cx, |input, cx| input.take_secret(cx));
@@ -350,7 +355,7 @@ mod supported {
                 &username,
                 &device,
                 &email,
-                &invite,
+                SecretString::new(invite),
                 Some(SecretString::new(passphrase)),
                 Some(SecretString::new(confirmation)),
             ) {
@@ -541,7 +546,7 @@ mod supported {
                             div()
                                 .text_sm()
                                 .text_color(rgb(0x65738a))
-                                .child("The agent generates keys only in empty retired-key slots. PIN, invite, and passphrase values are consumed locally and redacted from IPC diagnostics."),
+                                .child("The agent generates keys only in empty retired-key slots. Optional retry counts are applied and both PIV credentials restored before either FOKS key is generated."),
                         )
                         .child(
                             div()
@@ -556,7 +561,13 @@ mod supported {
                                 .child(field("PIN", self.yubi_pin.clone()))
                                 .child(field("Device serial", self.yubi_device_serial.clone()))
                                 .child(field("Signing slot", self.yubi_signing_slot.clone()))
-                                .child(field("PQ slot", self.yubi_pq_slot.clone())),
+                                .child(field("PQ slot", self.yubi_pq_slot.clone()))
+                                .child(field(
+                                    "Enrollment PUK (optional)",
+                                    self.yubi_retry_puk.clone(),
+                                ))
+                                .child(field("PIN retries", self.yubi_pin_attempts.clone()))
+                                .child(field("PUK retries", self.yubi_puk_attempts.clone())),
                         )
                         .child(field("Invite", self.yubi_invite.clone()))
                         .child(
@@ -619,7 +630,7 @@ mod supported {
                             div()
                                 .text_sm()
                                 .text_color(rgb(0x65738a))
-                                .child("Use the alias and PIN above for sync or rotation. Retry changes internally reset PIV credentials, so enter the PIN and current PUK to restore them immediately. Management-key recovery uses the software alias and does not require the card PIN."),
+                                .child("Use the alias and PIN above for sync or rotation. FOKS never changes retry counts after enrollment. Management-key recovery uses the software alias and does not require the card PIN."),
                         )
                         .child(field(
                             "Software recovery alias",
@@ -636,9 +647,7 @@ mod supported {
                                 .gap_3()
                                 .child(field("New PIN", self.yubi_new_pin.clone()))
                                 .child(field("Current PUK", self.yubi_puk.clone()))
-                                .child(field("New PUK", self.yubi_new_puk.clone()))
-                                .child(field("PIN retries", self.yubi_pin_attempts.clone()))
-                                .child(field("PUK retries", self.yubi_puk_attempts.clone())),
+                                .child(field("New PUK", self.yubi_new_puk.clone())),
                         )
                         .child(
                             div()
@@ -716,20 +725,6 @@ mod supported {
                                 )
                                 .child(
                                     div()
-                                        .id("yubi-retries")
-                                        .px_3()
-                                        .py_2()
-                                        .rounded_md()
-                                        .cursor_pointer()
-                                        .bg(rgb(0x2764d8))
-                                        .text_color(rgb(0xffffff))
-                                        .child("Set retry policy")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.submit_yubi_retries(cx)
-                                        })),
-                                )
-                                .child(
-                                    div()
                                         .id("yubi-unblock-pin")
                                         .px_3()
                                         .py_2()
@@ -745,6 +740,35 @@ mod supported {
                         ),
                 )
                 .into_any_element()
+        }
+
+        fn take_yubi_retry_configuration(
+            &mut self,
+            cx: &mut Context<Self>,
+        ) -> Result<Option<YubiRetryConfiguration>, &'static str> {
+            let puk = self
+                .yubi_retry_puk
+                .update(cx, |input, cx| input.take_secret(cx));
+            if puk.is_empty() {
+                return Ok(None);
+            }
+            let pin_attempts = self
+                .yubi_pin_attempts
+                .read(cx)
+                .value()
+                .parse::<u8>()
+                .map_err(|_| "enter numeric PIN retries")?;
+            let puk_attempts = self
+                .yubi_puk_attempts
+                .read(cx)
+                .value()
+                .parse::<u8>()
+                .map_err(|_| "enter numeric PUK retries")?;
+            Ok(Some(YubiRetryConfiguration {
+                puk: SecretString::new(puk),
+                pin_attempts,
+                puk_attempts,
+            }))
         }
 
         fn submit_yubi_account(&mut self, cx: &mut Context<Self>) {
@@ -786,6 +810,14 @@ mod supported {
             let invite = self
                 .yubi_invite
                 .update(cx, |input, cx| input.take_secret(cx));
+            let retry_configuration = match self.take_yubi_retry_configuration(cx) {
+                Ok(retry) => retry,
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                    return;
+                }
+            };
             let operation = self.model.create_yubi_account_operation(
                 self.yubi_alias.read(cx).value(),
                 self.yubi_username.read(cx).value(),
@@ -798,6 +830,7 @@ mod supported {
                 signing_slot,
                 pq_slot,
                 SecretString::new(pin),
+                retry_configuration,
             );
             match operation {
                 Ok(operation) => self.start_operation(operation, cx),
@@ -837,6 +870,14 @@ mod supported {
                 }
             };
             let pin = self.yubi_pin.update(cx, |input, cx| input.take_secret(cx));
+            let retry_configuration = match self.take_yubi_retry_configuration(cx) {
+                Ok(retry) => retry,
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                    return;
+                }
+            };
             let operation = self.model.provision_yubi_operation(
                 self.yubi_software_alias.read(cx).value(),
                 self.yubi_alias.read(cx).value(),
@@ -846,6 +887,7 @@ mod supported {
                 signing_slot,
                 pq_slot,
                 SecretString::new(pin),
+                retry_configuration,
             );
             match operation {
                 Ok(operation) => self.start_operation(operation, cx),
@@ -890,50 +932,6 @@ mod supported {
                 self.yubi_alias.read(cx).value(),
                 SecretString::new(old_puk),
                 SecretString::new(new_puk),
-            );
-            match operation {
-                Ok(operation) => self.start_operation(operation, cx),
-                Err(error) => {
-                    self.model.accept(Err(error.to_owned()));
-                    cx.notify();
-                }
-            }
-        }
-
-        fn submit_yubi_retries(&mut self, cx: &mut Context<Self>) {
-            if self.loading {
-                return;
-            }
-            let pin = self.yubi_pin.update(cx, |input, cx| input.take_secret(cx));
-            let puk = self.yubi_puk.update(cx, |input, cx| input.take_secret(cx));
-            let attempts = (|| {
-                Ok::<_, &'static str>((
-                    self.yubi_pin_attempts
-                        .read(cx)
-                        .value()
-                        .parse::<u8>()
-                        .map_err(|_| "enter numeric PIN retries")?,
-                    self.yubi_puk_attempts
-                        .read(cx)
-                        .value()
-                        .parse::<u8>()
-                        .map_err(|_| "enter numeric PUK retries")?,
-                ))
-            })();
-            let (pin_attempts, puk_attempts) = match attempts {
-                Ok(attempts) => attempts,
-                Err(error) => {
-                    self.model.accept(Err(error.to_owned()));
-                    cx.notify();
-                    return;
-                }
-            };
-            let operation = self.model.configure_yubi_retries_operation(
-                self.yubi_alias.read(cx).value(),
-                SecretString::new(pin),
-                SecretString::new(puk),
-                pin_attempts,
-                puk_attempts,
             );
             match operation {
                 Ok(operation) => self.start_operation(operation, cx),

@@ -277,9 +277,15 @@ fn every_team_publication_boundary_is_atomic() {
             )
             .unwrap();
         assert!(matches!(
-            fixture
-                .database
-                .activate_team_admin_token(&[0x90; 32], &[0x91; 32], 1_000_009),
+            fixture.database.activate_team_admin_token(
+                &[0x90; 32],
+                &[0x91; 32],
+                1_000_009,
+                &team,
+                &[1; 33],
+                3,
+                1
+            ),
             Err(foks_server_db::Error::Invalid(
                 "team-admin token activation transition"
             ))
@@ -301,18 +307,37 @@ fn every_team_publication_boundary_is_atomic() {
             .is_none());
         assert!(fixture
             .database
-            .activate_team_admin_token(&[0x90; 32], &[0x91; 32], 1_000_009)
+            .activate_team_admin_token(&[0x90; 32], &[0x91; 32], 1_000_009, &team, &[1; 33], 3, 1)
             .unwrap()
             .is_some());
         assert!(fixture
             .database
-            .activate_team_admin_token(&[0x90; 32], &[0x91; 32], 1_000_010)
+            .activate_team_admin_token(&[0x90; 32], &[0x91; 32], 1_000_010, &team, &[1; 33], 3, 1)
             .unwrap()
             .is_some());
+        assert!(fixture
+            .database
+            .activate_team_admin_token(
+                &[0x90; 32],
+                &[0x91; 32],
+                1_000_011,
+                &[0xAB; 33],
+                &[1; 33],
+                3,
+                1
+            )
+            .unwrap()
+            .is_none());
         assert!(matches!(
-            fixture
-                .database
-                .activate_team_admin_token(&[0x90; 32], &[0x92; 32], 1_000_010),
+            fixture.database.activate_team_admin_token(
+                &[0x90; 32],
+                &[0x92; 32],
+                1_000_010,
+                &team,
+                &[1; 33],
+                3,
+                1
+            ),
             Err(foks_server_db::Error::ReceiptConflict)
         ));
         assert!(reader

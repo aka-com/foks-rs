@@ -39,7 +39,16 @@ impl ClientCredentials {
                 let mut master = Zeroizing::new([0u8; 32]);
                 getrandom::fill(&mut *master).map_err(|_| Error::Randomness)?;
                 let mut native = foks_keystore::NativeCredentialStore::open(&state_id)?;
-                native.put(MASTER_KEY_RECORD, &*master)?;
+                let initialized = (|| {
+                    native.put(MASTER_KEY_RECORD, &*master)?;
+                    native.put(STATE_ROOT_RECORD, &state_root_binding(&root))?;
+                    Ok::<_, foks_keystore::Error>(())
+                })();
+                if let Err(error) = initialized {
+                    let _ = native.remove(MASTER_KEY_RECORD);
+                    let _ = native.remove(STATE_ROOT_RECORD);
+                    return Err(error.into());
+                }
             }
             CredentialBackend::PrivateFile => {
                 foks_keystore::create_master_key_file(root.join("master.key"))?;
@@ -56,6 +65,7 @@ impl ClientCredentials {
                 CredentialBackend::Native => {
                     if let Ok(mut native) = foks_keystore::NativeCredentialStore::open(&state_id) {
                         let _ = native.remove(MASTER_KEY_RECORD);
+                        let _ = native.remove(STATE_ROOT_RECORD);
                     }
                 }
                 CredentialBackend::PrivateFile => {
@@ -80,11 +90,13 @@ impl ClientCredentials {
             return Err(Error::InvalidConfig("unsupported client state version"));
         }
         validate_name(&state.state_id)?;
-        Ok(Self {
+        let credentials = Self {
             root,
             state_id: state.state_id,
             backend: state.credential_backend,
-        })
+        };
+        credentials.verify_native_root_binding()?;
+        Ok(credentials)
     }
 
     pub fn backend(&self) -> CredentialBackend {
@@ -94,6 +106,7 @@ impl ClientCredentials {
     pub fn master_key(&self) -> Result<Zeroizing<[u8; 32]>> {
         match self.backend {
             CredentialBackend::Native => {
+                self.verify_native_root_binding()?;
                 let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
                 let bytes = native.get(MASTER_KEY_RECORD)?;
                 if bytes.len() != 32 {
@@ -108,6 +121,32 @@ impl ClientCredentials {
                     .map_err(Into::into)
             }
         }
+    }
+
+    fn verify_native_root_binding(&self) -> Result<()> {
+        if self.backend != CredentialBackend::Native {
+            return Ok(());
+        }
+        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
+        self.verify_root_binding_with_store(&mut native)
+    }
+
+    pub(super) fn verify_root_binding_with_store(
+        &self,
+        store: &mut impl CheckpointStore,
+    ) -> Result<()> {
+        let stored = store.get(STATE_ROOT_RECORD).map_err(|error| match error {
+            foks_keystore::Error::Missing => {
+                Error::InvalidConfig("native client state root binding is missing")
+            }
+            other => Error::Keystore(other),
+        })?;
+        if stored.as_slice() != state_root_binding(&self.root) {
+            return Err(Error::InvalidConfig(
+                "native client state belongs to a different root path",
+            ));
+        }
+        Ok(())
     }
 
     /// Serializes security-sensitive use per profile across CLI and agent

@@ -1,8 +1,112 @@
 use rusqlite::{params, OptionalExtension as _};
 
+use super::journals::team_mutation_from_connection;
 use crate::*;
 
 impl HardStateStore {
+    /// Atomically reserves the local team-chain position and checkpoints the
+    /// federation workflow that owns it. Exact retries are idempotent; any binding
+    /// conflict rolls back both halves of the preparation.
+    pub fn prepare_federation_local_mutation(
+        &mut self,
+        saga_id: &[u8; 16],
+        operation: &TeamMutationOperation,
+        updated_at: u64,
+    ) -> Result<()> {
+        validate_team_mutation(operation)?;
+        if operation.kind != TeamMutationKind::MembershipChange
+            || operation.state != TeamMutationState::Prepared
+            || operation.created_at != operation.updated_at
+        {
+            return Err(Error::InvalidFederationSaga(
+                "local mutation must be a newly prepared membership change",
+            ));
+        }
+        let transaction = self.write_transaction()?;
+        let saga = federation_saga_from_connection(&transaction, saga_id)?
+            .ok_or(Error::InvalidFederationSaga("saga is not recorded"))?;
+        if !matches!(
+            saga.state,
+            FederationSagaState::RemoteVerified | FederationSagaState::LocalPrepared
+        ) || operation.host_id != saga.local_host_id
+            || operation.actor_id != saga.actor_id
+            || operation.team_id != saga.local_team_id
+            || updated_at < saga.created_at
+            || updated_at < saga.updated_at
+        {
+            return Err(Error::InvalidFederationSaga(
+                "local mutation does not match the remote-verified saga",
+            ));
+        }
+        let checkpoint = (operation.expected_seqno, operation.operation_id);
+        match (saga.expected_local_seqno, saga.local_mutation_id) {
+            (None, None) if saga.state == FederationSagaState::RemoteVerified => {}
+            (Some(sequence), Some(mutation))
+                if saga.state == FederationSagaState::LocalPrepared
+                    && (sequence, mutation) == checkpoint => {}
+            _ => {
+                return Err(Error::InvalidFederationSaga(
+                    "local mutation checkpoint changed",
+                ));
+            }
+        }
+
+        transaction.execute(
+            "INSERT INTO team_mutation_operations (
+                operation_id, operation_kind, host_id, actor_id, device_id,
+                team_id, expected_seqno, request_hash, state, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(operation_id) DO NOTHING",
+            params![
+                operation.operation_id.as_slice(),
+                operation.kind as u8,
+                operation.host_id,
+                operation.actor_id,
+                operation.device_id,
+                operation.team_id,
+                sqlite_integer("team mutation sequence", operation.expected_seqno)?,
+                operation.request_hash.as_slice(),
+                operation.state as u8,
+                sqlite_integer("team mutation created time", operation.created_at)?,
+                sqlite_integer("team mutation updated time", operation.updated_at)?,
+            ],
+        )?;
+        let stored = team_mutation_from_connection(&transaction, &operation.operation_id)?.ok_or(
+            Error::InvalidFederationSaga("prepared local mutation disappeared"),
+        )?;
+        if stored.kind != operation.kind
+            || stored.host_id != operation.host_id
+            || stored.actor_id != operation.actor_id
+            || stored.device_id != operation.device_id
+            || stored.team_id != operation.team_id
+            || stored.expected_seqno != operation.expected_seqno
+            || stored.request_hash != operation.request_hash
+            || matches!(
+                stored.state,
+                TeamMutationState::Rejected | TeamMutationState::Superseded
+            )
+        {
+            return Err(Error::InvalidFederationSaga(
+                "local mutation ID was reused for another binding",
+            ));
+        }
+        transaction.execute(
+            "UPDATE federation_saga_operations
+             SET state = ?2, expected_local_seqno = ?3, local_mutation_id = ?4,
+                 updated_at = ?5
+             WHERE operation_id = ?1",
+            params![
+                saga_id.as_slice(),
+                FederationSagaState::LocalPrepared as u8,
+                sqlite_integer("federation local sequence", operation.expected_seqno)?,
+                operation.operation_id.as_slice(),
+                sqlite_integer("federation saga updated time", updated_at)?,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// Records the first durable cross-host checkpoint. Repeating the exact
     /// operation is idempotent; reusing its ID for another binding fails.
     pub fn record_federation_saga(&mut self, operation: &FederationSagaOperation) -> Result<()> {
@@ -68,9 +172,13 @@ impl HardStateStore {
         &mut self,
         operation_id: &[u8; 16],
         next: FederationSagaState,
-        local_checkpoint: Option<(u64, [u8; 16])>,
         updated_at: u64,
     ) -> Result<()> {
+        if next == FederationSagaState::LocalPrepared {
+            return Err(Error::InvalidFederationSaga(
+                "local preparation must atomically reserve its team mutation",
+            ));
+        }
         let transaction = self.write_transaction()?;
         let current = federation_saga_from_connection(&transaction, operation_id)?
             .ok_or(Error::InvalidFederationSaga("saga is not recorded"))?;
@@ -84,39 +192,13 @@ impl HardStateStore {
         }
         let checkpoint = match (current.expected_local_seqno, current.local_mutation_id) {
             (Some(sequence), Some(mutation)) => Some((sequence, mutation)),
-            (None, None) => local_checkpoint,
+            (None, None) => None,
             _ => {
                 return Err(Error::InvalidFederationSaga(
                     "stored local checkpoint is incomplete",
                 ));
             }
         };
-        if current.state == FederationSagaState::RemoteVerified
-            && next == FederationSagaState::LocalPrepared
-            && checkpoint.is_none()
-        {
-            return Err(Error::InvalidFederationSaga(
-                "local preparation requires its mutation checkpoint",
-            ));
-        }
-        if current.expected_local_seqno.is_none()
-            && local_checkpoint.is_some()
-            && next != FederationSagaState::LocalPrepared
-        {
-            return Err(Error::InvalidFederationSaga(
-                "local checkpoint can only be introduced during local preparation",
-            ));
-        }
-        if let (Some(existing), Some(supplied)) = (
-            current.expected_local_seqno.zip(current.local_mutation_id),
-            local_checkpoint,
-        ) {
-            if existing != supplied {
-                return Err(Error::InvalidFederationSaga(
-                    "local mutation checkpoint changed",
-                ));
-            }
-        }
         let (sequence, mutation) = if let Some((sequence, mutation)) = checkpoint {
             (
                 Some(sqlite_integer("federation local sequence", sequence)?),

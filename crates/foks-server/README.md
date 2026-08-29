@@ -35,12 +35,12 @@ registered route table exactly.
 
 Remote-view grants are 30-day renewable leases. Reauthorization during the
 last seven days preserves the exact bearer already sealed into a local team's
-PTK box while extending its expiry; a grant under a retiring capability key is
-also rewrapped under the active generation without changing that bearer. A
-client that does not reconcile before expiry can receive a new grant, but it
-cannot silently substitute that new token into an existing membership. That
-case, remote PTK/roster changes, and deliberate grant revocation require an
-explicit team-lifecycle operation rather than a permissive fallback.
+PTK box while extending its expiry; an expired but active grant is renewed the
+same way. A grant under a retiring capability key is also rewrapped under the
+active generation without changing that bearer. Revocation leaves a permanent
+non-resurrection tombstone. Remote PTK/roster changes and deliberate grant
+revocation require an explicit team-lifecycle operation rather than a
+permissive fallback.
 
 Invite policy and issuance are offline operator operations. Codes are checked
 through the v0.1.9 `Reg.checkInviteCode` route and consumed in the same SQLite
@@ -196,13 +196,15 @@ foks-server rotate-capability-key --config /var/lib/foks/server.toml
 foks-server retire-capability-keys --config /var/lib/foks/server.toml
 ```
 
-Rotation selects the new generation in one SQLite transaction and retains the
-old encrypted key through the maximum live challenge/grant expiry. Retirement
-marks the generation revoked before deleting its key file, so repeating the
-command completes cleanup after a crash. Startup and backup validate the full
-generation ledger and fail closed on missing, substituted, or untracked key
-files. A retiring generation and its encrypted key are included in backups;
-revoked generations are retained as non-secret audit metadata only.
+Rotation selects the new generation in one SQLite transaction. Challenge keys
+are retained through expiry; federation-envelope keys are retained while any
+active grant references them, including an expired grant awaiting renewal.
+Retirement marks the generation revoked before deleting its key file, so
+repeating the command completes cleanup after a crash. Startup and backup
+validate the full generation ledger and fail closed on missing, substituted,
+or untracked key files. A retiring generation and its encrypted key are
+included in backups; revoked generations are retained as non-secret audit
+metadata only.
 
 Root-key and private-key files must be regular, non-symlink files with no group
 or other permissions. `SIGINT` and `SIGTERM` stop accepts, cancel idle

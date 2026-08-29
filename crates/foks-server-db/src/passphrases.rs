@@ -46,7 +46,8 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if crate::certificates::active_credential_owner(&transaction, uid, credential_id)?.is_none()
+        if crate::certificates::active_owner_role_credential(&transaction, uid, credential_id)?
+            .is_none()
         {
             return Err(Error::AuthorizationChanged);
         }
@@ -73,7 +74,8 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if crate::certificates::active_credential_owner(&transaction, uid, credential_id)?.is_none()
+        if crate::certificates::active_owner_role_credential(&transaction, uid, credential_id)?
+            .is_none()
         {
             return Err(Error::AuthorizationChanged);
         }
@@ -154,11 +156,28 @@ impl Database {
         Ok(())
     }
 
-    pub fn passphrase_for_login(&self, uid: &[u8], now: u64) -> Result<Option<PassphraseSnapshot>> {
-        if rate_limited(&self.connection, &self.config, uid, now)? {
+    pub fn passphrase_for_login(
+        &mut self,
+        uid: &[u8],
+        now: u64,
+    ) -> Result<Option<PassphraseSnapshot>> {
+        if uid.len() != 33 {
+            return Err(Error::Invalid("passphrase login UID"));
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        prune_attempts(&transaction, &self.config, now)?;
+        if rate_limited(&transaction, &self.config, uid, now)? {
             return Err(Error::PassphraseRateLimited);
         }
-        snapshot(&self.connection, uid)
+        transaction.execute(
+            "INSERT INTO bad_passphrase_attempts(uid, attempted_at) VALUES (?1, ?2)",
+            params![uid, sql_integer(now)?],
+        )?;
+        let snapshot = snapshot(&transaction, uid)?;
+        transaction.commit()?;
+        Ok(snapshot)
     }
 
     pub fn record_bad_passphrase(&mut self, uid: &[u8], now: u64) -> Result<()> {
@@ -194,9 +213,6 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if rate_limited(&transaction, &self.config, uid, now)? {
-            return Err(Error::PassphraseRateLimited);
-        }
         let updated = transaction.execute(
             "UPDATE passphrase_login_challenges SET consumed = 1
              WHERE challenge_hash = ?1 AND uid = ?2 AND host_id = ?3
@@ -219,6 +235,36 @@ impl Database {
         }
         transaction.commit()?;
         Ok(result)
+    }
+
+    pub fn consume_failed_passphrase_challenge(
+        &mut self,
+        challenge_hash: &[u8; 32],
+        uid: &[u8],
+        host_id: &[u8],
+        key_generation: &[u8; 16],
+        now: u64,
+    ) -> Result<()> {
+        if uid.len() != 33 || host_id.len() != 33 {
+            return Err(Error::Invalid("passphrase login challenge"));
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "UPDATE passphrase_login_challenges SET consumed = 1
+             WHERE challenge_hash = ?1 AND uid = ?2 AND host_id = ?3
+               AND key_generation = ?4 AND consumed = 0 AND expires_at > ?5",
+            params![
+                challenge_hash,
+                uid,
+                host_id,
+                key_generation,
+                sql_integer(now)?
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
 
     pub(crate) fn insert_identity_passphrase(

@@ -28,6 +28,7 @@ pub fn verify_user_transition(
     next_tree_location: [u8; 32],
     devices: &[VerifiedDevice],
     shared_keys: &[VerifiedSharedKey],
+    shared_key_history: &[VerifiedSharedKey],
 ) -> Result<VerifiedUserTransition> {
     let change = link.decode_group_change()?;
     let location_wire =
@@ -42,9 +43,9 @@ pub fn verify_user_transition(
     {
         return Err(Error::UserChainContinuity);
     }
-    let mut replay = UserReplayState::from_verified(devices, shared_keys);
+    let mut replay = UserReplayState::from_verified(devices, shared_keys, shared_key_history);
     replay.replay(link, &change, hepks, expected_host)?;
-    let (devices, shared_keys) = replay.into_parts();
+    let (devices, shared_keys, _) = replay.into_parts();
     Ok(VerifiedUserTransition {
         change,
         devices,
@@ -55,20 +56,31 @@ pub fn verify_user_transition(
 pub(super) struct UserReplayState {
     devices: BTreeMap<Vec<u8>, VerifiedDevice>,
     shared_keys: BTreeMap<Role, VerifiedSharedKey>,
+    shared_key_history: Vec<VerifiedSharedKey>,
 }
 
 impl UserReplayState {
     pub(super) fn from_eldest(device: VerifiedDevice, shared_key: VerifiedSharedKey) -> Self {
         Self {
             devices: BTreeMap::from([(device.id.as_bytes().to_vec(), device)]),
-            shared_keys: BTreeMap::from([(shared_key.role, shared_key)]),
+            shared_keys: BTreeMap::from([(shared_key.role, shared_key.clone())]),
+            shared_key_history: vec![shared_key],
         }
     }
 
     pub(super) fn from_verified(
         devices: &[VerifiedDevice],
         shared_keys: &[VerifiedSharedKey],
+        shared_key_history: &[VerifiedSharedKey],
     ) -> Self {
+        let mut history = shared_key_history.to_vec();
+        for current in shared_keys {
+            if !history.iter().any(|historical| {
+                historical.role == current.role && historical.generation == current.generation
+            }) {
+                history.push(current.clone());
+            }
+        }
         Self {
             devices: devices
                 .iter()
@@ -80,6 +92,7 @@ impl UserReplayState {
                 .cloned()
                 .map(|key| (key.role, key))
                 .collect(),
+            shared_key_history: history,
         }
     }
 
@@ -101,7 +114,12 @@ impl UserReplayState {
             .get(change.signer.as_bytes())
             .cloned()
             .ok_or_else(|| invalid_transition(change, UserTransitionRule::UnknownSigner))?;
-        let rotated = validate_shared_key_rotations(change, hepks, &self.shared_keys)?;
+        let rotated = validate_shared_key_rotations(
+            change,
+            hepks,
+            &self.shared_keys,
+            &self.shared_key_history,
+        )?;
         let (added_device, provisioning_subkey) = validate_provisioning(
             change,
             hepks,
@@ -124,10 +142,17 @@ impl UserReplayState {
         !self.devices.is_empty() && self.shared_keys.contains_key(&Role::OWNER)
     }
 
-    pub(super) fn into_parts(self) -> (Vec<VerifiedDevice>, Vec<VerifiedSharedKey>) {
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        Vec<VerifiedDevice>,
+        Vec<VerifiedSharedKey>,
+        Vec<VerifiedSharedKey>,
+    ) {
         (
             self.devices.into_values().collect(),
             self.shared_keys.into_values().collect(),
+            self.shared_key_history,
         )
     }
 
@@ -152,6 +177,7 @@ impl UserReplayState {
         }
         for key in rotated {
             self.shared_keys.insert(key.role, key.clone());
+            self.shared_key_history.push(key.clone());
         }
         Ok(())
     }
@@ -206,6 +232,7 @@ fn validate_shared_key_rotations(
     change: &foks_proto::UserGroupChange,
     hepks: &[Hepk],
     shared_keys: &BTreeMap<Role, VerifiedSharedKey>,
+    shared_key_history: &[VerifiedSharedKey],
 ) -> Result<Vec<VerifiedSharedKey>> {
     let added_role = change
         .changes
@@ -232,7 +259,14 @@ fn validate_shared_key_rotations(
         }
         last_role = Some(key.role);
         let hepk = find_hepk(hepks, key.hepk_fingerprint)?;
-        if hepk.curve25519().is_none() {
+        if hepk.curve25519().is_none()
+            || shared_key_history.iter().any(|historical| {
+                historical.verify_key == key.verify_key || historical.hepk == hepk
+            })
+            || rotated.iter().any(|candidate: &VerifiedSharedKey| {
+                candidate.verify_key == key.verify_key || candidate.hepk == hepk
+            })
+        {
             return Err(invalid_transition(
                 change,
                 UserTransitionRule::SharedKeyRotation,
@@ -454,6 +488,53 @@ mod tests {
     }
 
     #[test]
+    fn shared_key_rotation_rejects_retired_key_material() {
+        let chain = UserChain::decode(&user_fixture("user-chain.snowp")).unwrap();
+        let eldest = chain.links[0].decode_eldest().unwrap();
+        let mut state = UserReplayState::from_eldest(
+            VerifiedDevice {
+                id: eldest.member,
+                role: Role::OWNER,
+                hepk: find_hepk(&chain.hepks, eldest.member_hepk_fingerprint).unwrap(),
+                subkey: eldest.member_subkey,
+            },
+            VerifiedSharedKey {
+                role: Role::OWNER,
+                generation: 1,
+                verify_key: eldest.puk_verify_key.clone(),
+                hepk: find_hepk(&chain.hepks, eldest.puk_hepk_fingerprint).unwrap(),
+            },
+        );
+        let rotation = chain.links[2].decode_group_change().unwrap();
+        let current = VerifiedSharedKey {
+            role: rotation.shared_keys[0].role,
+            generation: rotation.shared_keys[0].generation,
+            verify_key: rotation.shared_keys[0].verify_key.clone(),
+            hepk: find_hepk(&chain.hepks, rotation.shared_keys[0].hepk_fingerprint).unwrap(),
+        };
+        state.shared_keys.insert(current.role, current.clone());
+        state.shared_key_history.push(current);
+
+        let mut reuse = rotation;
+        reuse.seqno += 1;
+        reuse.shared_keys[0].generation += 1;
+        reuse.shared_keys[0].verify_key = eldest.puk_verify_key;
+        reuse.shared_keys[0].hepk_fingerprint = eldest.puk_hepk_fingerprint;
+        assert!(matches!(
+            validate_shared_key_rotations(
+                &reuse,
+                &chain.hepks,
+                &state.shared_keys,
+                &state.shared_key_history,
+            ),
+            Err(Error::UserTransition {
+                rule: UserTransitionRule::SharedKeyRotation,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn backup_provisioning_rejects_a_subkey() {
         let (state, _) = state_before_backup();
         let link = UserLink::decode(&mutation_fixture("backup-enroll-link.snowp")).unwrap();
@@ -469,6 +550,7 @@ mod tests {
             &change,
             std::slice::from_ref(&backup_hepk),
             &state.shared_keys,
+            &state.shared_key_history,
         )
         .unwrap();
         assert!(matches!(

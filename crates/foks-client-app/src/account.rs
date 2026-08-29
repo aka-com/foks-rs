@@ -43,6 +43,9 @@ impl CheckedProfileSession<'_> {
             &mut mutations,
         )?;
         vault.commit_created(alias, username, &created.credential)?;
+        MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
+            .finalize(&created.operation_id)?;
+        vault.remove_pending_signup(alias)?;
         Ok(SyncReport::from_created(&created))
     }
 
@@ -53,6 +56,33 @@ impl CheckedProfileSession<'_> {
         master_key: &[u8; 32],
     ) -> Result<SyncReport> {
         self.profile.require(Capability::Signup)?;
+        if vault.contains(alias)? {
+            let loaded = vault.account(alias)?;
+            let device = derive_device_public(&loaded.credential.seed)?;
+            if let Some(operation) = HardStateStore::open(&self.paths.hard_database)?
+                .latest_mutation_for_binding(
+                    self.pinned_host()?.host_id().as_bytes(),
+                    MutationKind::Signup,
+                    device.id.as_bytes(),
+                    loaded.credential.uid.as_bytes(),
+                )?
+                .filter(|operation| {
+                    matches!(
+                        operation.state,
+                        MutationState::RemoteVerified | MutationState::Finalized
+                    )
+                })
+            {
+                let mut mutations = EncryptedFileMutationStore::open(
+                    &self.paths.protected_mutations,
+                    derive_mutation_key(master_key),
+                )?;
+                MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
+                    .finalize(&operation.operation_id)?;
+            }
+            let _ = vault.store.remove(&pending_key(alias))?;
+            return self.sync_account(alias, vault);
+        }
         let pending = vault.pending(alias)?;
         let host = self.pinned_host()?;
         let mut uid =
@@ -73,6 +103,9 @@ impl CheckedProfileSession<'_> {
             &mut mutations,
         )?;
         vault.commit_created(alias, &pending.username, &created.credential)?;
+        MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
+            .finalize(&created.operation_id)?;
+        vault.remove_pending_signup(alias)?;
         Ok(SyncReport::from_created(&created))
     }
 
@@ -134,6 +167,10 @@ impl CheckedProfileSession<'_> {
             &mut mutations,
         )?;
         vault.commit_created(target_alias, &source.username, &provisioned.credential)?;
+        if let Some(operation_id) = provisioned.operation_id {
+            MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
+                .finalize(&operation_id)?;
+        }
         vault.remove_pending_device(target_alias)?;
         Ok(DeviceProvisionReport {
             alias: target_alias.to_owned(),
@@ -151,6 +188,41 @@ impl CheckedProfileSession<'_> {
         master_key: &[u8; 32],
     ) -> Result<DeviceProvisionReport> {
         self.profile.require(Capability::DeviceAdministration)?;
+        if vault.contains(target_alias)? {
+            let target = vault.account(target_alias)?;
+            let host = self.pinned_host()?;
+            let device = derive_device_public(&target.credential.seed)?;
+            if let Some(operation) = HardStateStore::open(&self.paths.hard_database)?
+                .latest_mutation_for_binding(
+                    host.host_id().as_bytes(),
+                    MutationKind::DeviceProvision,
+                    target.credential.uid.as_bytes(),
+                    device.id.as_bytes(),
+                )?
+                .filter(|operation| {
+                    matches!(
+                        operation.state,
+                        MutationState::RemoteVerified | MutationState::Finalized
+                    )
+                })
+            {
+                let mut mutations = EncryptedFileMutationStore::open(
+                    &self.paths.protected_mutations,
+                    derive_mutation_key(master_key),
+                )?;
+                MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
+                    .finalize(&operation.operation_id)?;
+            }
+            let _ = vault.store.remove(&pending_device_key(target_alias))?;
+            let authenticated = self
+                .client
+                .authenticate_and_pin(&host, &target.credential)?;
+            return Ok(DeviceProvisionReport {
+                alias: target_alias.to_owned(),
+                device_id_hex: hex(device.id.as_bytes()),
+                user_chain_sequence: authenticated.verified.chain_seqno(),
+            });
+        }
         let pending = vault.pending_device(target_alias)?;
         let source = vault.account(&pending.source_alias)?;
         let host = self.pinned_host()?;
@@ -180,6 +252,10 @@ impl CheckedProfileSession<'_> {
             &mut mutations,
         )?;
         vault.commit_created(target_alias, &pending.username, &provisioned.credential)?;
+        if let Some(operation_id) = provisioned.operation_id {
+            MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
+                .finalize(&operation_id)?;
+        }
         vault.remove_pending_device(target_alias)?;
         Ok(DeviceProvisionReport {
             alias: target_alias.to_owned(),
@@ -353,7 +429,7 @@ pub struct PassphraseReport {
 }
 
 impl PassphraseReport {
-    fn from_verified(
+    pub(super) fn from_verified(
         metadata: foks_client::PassphraseMetadata,
         verification: foks_client::PassphraseVerification,
     ) -> Result<Self> {
@@ -435,7 +511,7 @@ impl Drop for StoredAccount {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct PendingSignup {
+pub(super) struct PendingSignup {
     version: u32,
     alias: String,
     username: String,
@@ -550,7 +626,7 @@ impl Drop for StoredBackup {
     }
 }
 impl PendingSignup {
-    fn random(alias: &str, username: &str) -> Result<Self> {
+    pub(super) fn random(alias: &str, username: &str) -> Result<Self> {
         let mut device_seed = [0u8; 32];
         let mut puk_seed = [0u8; 32];
         let mut self_token = [0u8; 17];
@@ -635,7 +711,7 @@ impl<'a> AccountVault<'a> {
         })
     }
 
-    fn pending(&mut self, alias: &str) -> Result<PendingSignup> {
+    pub(super) fn pending(&mut self, alias: &str) -> Result<PendingSignup> {
         validate_name(alias)?;
         let bytes = self
             .store
@@ -652,10 +728,15 @@ impl<'a> AccountVault<'a> {
         Ok(pending)
     }
 
-    fn put_pending(&mut self, pending: &PendingSignup) -> Result<()> {
+    pub(super) fn put_pending(&mut self, pending: &PendingSignup) -> Result<()> {
         validate_pending(pending)?;
         let encoded = Zeroizing::new(serde_json::to_vec(pending)?);
         self.store.put(&pending_key(&pending.alias), &encoded)?;
+        Ok(())
+    }
+
+    pub(super) fn remove_pending_signup(&mut self, alias: &str) -> Result<()> {
+        self.store.remove(&pending_key(alias))?;
         Ok(())
     }
 
@@ -757,7 +838,6 @@ impl<'a> AccountVault<'a> {
         validate_account(&stored, alias)?;
         let encoded = Zeroizing::new(serde_json::to_vec(&stored)?);
         self.store.put(&account_key(alias), &encoded)?;
-        self.store.remove(&pending_key(alias))?;
         Ok(())
     }
 }

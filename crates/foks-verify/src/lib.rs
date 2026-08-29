@@ -239,6 +239,7 @@ mod tests {
         assert_eq!(verified.username_utf8(), b"fixtureuser");
         assert_eq!(verified.username_sequence(), 1);
         assert_eq!(verified.shared_keys()[0].generation, 2);
+        assert_eq!(verified.shared_key_history().len(), 2);
         assert_eq!(
             verified
                 .shared_key(Role::OWNER)

@@ -185,7 +185,7 @@ impl CheckedProfileSession<'_> {
             ScheduledJobKind::MutationReconcile => {
                 Err("mutation reconciliation is driven by explicit resume flows".to_owned())
             }
-            ScheduledJobKind::FederationReconcile => federation(job, vault),
+            ScheduledJobKind::FederationRefresh => federation(job, vault),
         })?;
         Ok(JobRunReport {
             runs: report

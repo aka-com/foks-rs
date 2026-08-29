@@ -103,8 +103,17 @@ fn maintenance_reclaims_only_expired_or_abandoned_state() {
     assert_eq!(report.team_reservations, 0);
     assert_eq!(report.team_view_challenges, 0);
     assert_eq!(report.team_view_tokens, 0);
-    assert_eq!(report.federation_user_permissions, 1);
+    assert_eq!(report.federation_user_permissions, 0);
     assert_eq!(report.federation_team_permissions, 0);
+    let retained: i64 = rusqlite::Connection::open(&test.path)
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM federation_user_view_permissions",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained, 1);
     assert!(test.database.integrity_check().unwrap());
     let checkpoint = test.database.checkpoint().unwrap();
     assert_eq!(checkpoint.busy, 0);
