@@ -1,13 +1,15 @@
 # FOKS key rotation architecture
 
 This document fixes the rotation model before the first durable deployment.
-It separates two operations with different trust and compatibility effects:
+It separates three operations with different trust and compatibility effects:
 
 - **operator-root rotation** changes only local encryption-at-rest;
 - **host-key rotation** changes public FOKS hostchain state and must be observed
-  through Merkle roots and client host synchronization.
+  through Merkle roots and client host synchronization;
+- **capability-key rotation** changes the local symmetric key used to protect
+  short-lived challenges and recoverable federation bearer tokens.
 
-The two operations must never share a command or transaction state.
+These operations must never share a command or transaction state.
 
 ## Operator-root rotation
 
@@ -44,8 +46,8 @@ post-rotation backup needs the new root.
 
 Status: implemented for the public host signing key by
 `begin-host-key-rotation` and `complete-host-key-rotation`. The commands are
-offline and mutually exclusive with a running server or backup. Delegated-key
-rotation remains design-only.
+offline and mutually exclusive with a running server or backup. Other public
+delegated-key rotation remains design-only.
 
 The immutable host ID remains the genesis `ENTITY_HOST`. Rotating signing
 authority adds a new `ENTITY_HOST` key to the hostchain; it does not invent a
@@ -131,9 +133,38 @@ public hostchain. The server trust store accepts old and new client CAs during
 overlap; newly issued certificates use the new CA; retirement waits until every
 active device certificate is replaced or explicitly revoked.
 
-Recovery and capability keys rotate with versioned envelopes and dual-read,
-single-write semantics. Existing recovery boxes or capability tokens remain
-readable until their explicit expiry/reencryption completion gate.
+Recovery keys still require versioned envelopes and dual-read, single-write
+semantics. Existing recovery boxes must remain readable until their explicit
+expiry/reencryption completion gate.
+
+## Capability-key rotation
+
+Status: implemented by `rotate-capability-key` and
+`retire-capability-keys`. Both commands are offline and take the same exclusive
+key-directory lock as the other rotations.
+
+The database owns an append-only generation ledger with one active generation
+and any number of retiring or revoked generations. Rotation first creates and
+authenticates an immutable `capability.<generation>.key` file, then atomically
+marks the prior generation retiring and the new generation active. Its
+`retire_after` bound is the maximum expiry of every live team-view challenge
+and remote user/team grant encrypted under the old key. New writes use only the
+active generation; reads select the exact stored generation.
+
+Retirement rechecks live references in the same SQLite transaction that marks
+a generation revoked. It then idempotently removes the encrypted key file and
+syncs the directory. A failure after the SQLite commit is repaired by repeating
+the command. Startup fails closed if a live ledger generation is missing,
+substituted, misnamed, or if an untracked generation file appears. Backups
+include active and retiring generation files and exclude revoked files while
+retaining their non-secret ledger rows.
+
+An authenticated repeated federation grant rewraps the existing bearer under
+the active generation on its next call. If the grant is within its seven-day
+renewal window, the same transaction also extends the lease to 30 days. The
+bearer hash stays stable, so a token already sealed into a remote-member PTK
+box remains valid. The old generation's conservative `retire_after` watermark
+is not shortened; retirement still rechecks that no live row references it.
 
 ### Enforced release gates
 

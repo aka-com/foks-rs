@@ -3,11 +3,13 @@
 #![forbid(unsafe_code)]
 
 mod capabilities;
+mod capability_keys;
 mod certificates;
 mod clock;
 mod config;
 mod connection;
 mod error;
+mod federation;
 mod host;
 mod host_rotation;
 mod identity;
@@ -29,11 +31,17 @@ mod yubi;
 
 pub use capabilities::TeamAdminAuthoritySnapshot;
 pub use capabilities::TeamViewAuthoritySnapshot;
+pub use capability_keys::{CapabilityKeyGeneration, CapabilityKeyGenerationState};
 pub use certificates::{StoredCertificate, StoredCredentialBinding};
 pub use clock::{Clock, SystemClock};
 pub use config::Config;
 pub use connection::{Database, Pragmas, ReadDatabase, ReadSnapshot};
 pub use error::{Error, Result};
+pub use federation::{
+    RemoteTeamViewGrant, RemoteTeamViewPermission, RemoteTeamViewPermissionOutcome,
+    RemoteUserViewGrant, RemoteUserViewPermission, RemoteUserViewPermissionOutcome,
+    StoredRemoteMemberViewToken, TeamGrantAuthority,
+};
 pub use host::{BootstrapService, HostBootstrap, StoredHostBootstrap};
 pub use host_rotation::{
     HostKeyGeneration, HostKeyGenerationState, HostRotationOperation, HostRotationPhase,
@@ -60,7 +68,8 @@ pub use recovery::RecoveryCredentialSnapshot;
 pub use schema::{APPLICATION_ID, SCHEMA_VERSION};
 pub use team::{
     TeamHeader, TeamMemberMutation, TeamMutation, TeamMutationFailurePoint, TeamParcelMutation,
-    TeamRemovalBoxMutation, TeamSeedChainMutation, TeamSharedKeyMutation,
+    TeamRemoteMemberViewTokenMutation, TeamRemovalBoxMutation, TeamSeedChainMutation,
+    TeamSharedKeyMutation,
 };
 pub use user_mutation::{
     AddedCredential, ParcelMutation, SeedChainMutation, SharedKeyMutation, UserMutation,

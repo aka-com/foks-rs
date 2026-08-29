@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+mod federation;
 mod runtime;
 mod yubi;
 
@@ -119,6 +120,9 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+pub use federation::{
+    FederatedMembershipSummary, FederationAdmissionReport, FederationDestinationRole,
+};
 pub use runtime::{JobRun, JobRunReport};
 pub use yubi::{
     LoadedYubiAccount, YubiAccountReport, YubiCardSummary, YubiLifecycleReport, YubiPinStatus,
@@ -588,6 +592,72 @@ mod tests {
     }
 
     #[test]
+    fn dual_checked_sessions_preserve_call_order_and_release_both_locks_after_error() {
+        use foks_client_db::ScheduledJob;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let credentials =
+            ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(profile("first", ProtocolPolicy::V019))
+            .unwrap();
+        registry
+            .add(profile("second", ProtocolPolicy::V019))
+            .unwrap();
+        let first = ProfileSession::open(&registry, "first").unwrap();
+        let second = ProfileSession::open(&registry, "second").unwrap();
+        let verified = foks_verify::verify_public_host(
+            "foks.app",
+            include_bytes!(
+                "../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp"
+            ),
+        )
+        .unwrap();
+        let host_id = verified.snapshot.host_id().to_vec();
+
+        let result = credentials.with_checked_sessions(&second, &first, |left, right| {
+            assert_eq!(left.profile().name, "second");
+            assert_eq!(right.profile().name, "first");
+            for (index, session) in [left, right].into_iter().enumerate() {
+                let mut store = HardStateStore::open(&session.paths().hard_database)?;
+                store.accept_verified_host(&verified.snapshot)?;
+                store.register_scheduled_job(&ScheduledJob {
+                    job_id: [u8::try_from(index + 1).unwrap(); 16],
+                    kind: ScheduledJobKind::FederationReconcile,
+                    host_id: host_id.clone(),
+                    scope_id: br#"{"remote_profile":"other"}"#.to_vec(),
+                    interval_micros: 1_000,
+                    next_run_at: 100,
+                    failure_count: 0,
+                    lease_until: None,
+                    last_completed_at: None,
+                    last_error: None,
+                    updated_at: 90,
+                })?;
+            }
+            Err::<(), Error>(Error::InvalidConfig("injected dual-profile failure"))
+        });
+        assert!(matches!(
+            result,
+            Err(Error::InvalidConfig("injected dual-profile failure"))
+        ));
+
+        credentials
+            .with_checked_sessions(&first, &second, |left, right| {
+                assert_eq!(left.profile().name, "first");
+                assert_eq!(right.profile().name, "second");
+                for session in [left, right] {
+                    let store = HardStateStore::open(&session.paths().hard_database)?;
+                    assert!(store.metadata()?.revision > 0);
+                }
+                Ok::<(), Error>(())
+            })
+            .unwrap();
+    }
+
+    #[test]
     fn explicit_hard_state_reset_removes_database_and_sidecars() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("state");
@@ -812,6 +882,7 @@ mod tests {
             capabilities: BTreeSet::from([
                 "kv".to_owned(),
                 "passphrases".to_owned(),
+                "teams".to_owned(),
                 "user-sync".to_owned(),
             ]),
             drift_reason: String::new(),
@@ -832,6 +903,11 @@ mod tests {
         assert_eq!(granted.apply_canary(&signed, 101).unwrap(), granted);
         assert!(granted.require_at(Capability::Kv, 199).is_ok());
         assert!(granted.require_at(Capability::Passphrases, 199).is_ok());
+        assert!(granted.require_at(Capability::Teams, 199).is_ok());
+        assert!(matches!(
+            granted.require_at(Capability::Federation, 199),
+            Err(Error::CapabilityDenied(Capability::Federation))
+        ));
         assert!(matches!(
             granted.require_at(Capability::Kv, 200),
             Err(Error::CapabilityDenied(Capability::Kv))
@@ -839,7 +915,10 @@ mod tests {
 
         let mut tampered = granted.clone();
         if let ProtocolPolicy::CurrentValidated { artifact, .. } = &mut tampered.protocol {
-            artifact.artifact.capabilities.insert("teams".to_owned());
+            artifact
+                .artifact
+                .capabilities
+                .insert("federation".to_owned());
         }
         assert!(matches!(
             tampered.validate(),

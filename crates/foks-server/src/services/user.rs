@@ -322,29 +322,28 @@ pub(crate) fn load_user_chain(
     argument: &[u8],
     principal: &Principal,
 ) -> Result<Vec<u8>, RpcStatus> {
-    let Value::Array(outer) = decode(argument).map_err(bad_arguments)? else {
-        return Err(bad_arguments("user-chain argument is not a struct"));
-    };
-    let [Value::Array(fields)] = outer.as_slice() else {
-        return Err(bad_arguments("user-chain argument has the wrong shape"));
-    };
-    let [Value::Binary(uid), Value::Unsigned(start), name, local] = fields.as_slice() else {
-        return Err(bad_arguments("user-chain cursor has the wrong shape"));
-    };
-    let uid = EntityId::from_bytes(uid.clone())
-        .and_then(|uid| uid.require_type(foks_proto::ENTITY_USER))
-        .map_err(bad_arguments)?;
+    let request =
+        foks_rpc::arguments::decode_load_user_chain_argument(argument).map_err(bad_arguments)?;
     if !matches!(
-        local,
-        Value::Array(local)
-            if matches!(local.as_slice(), [Value::Unsigned(0), Value::Variant(None)])
+        request.authorization,
+        foks_rpc::arguments::UserChainAuthorization::LocalUser
     ) {
-        return Err(bad_arguments("only local-user chain views are supported"));
+        return Err(permission_denied());
     }
     database
-        .identity_for_active_device(uid.as_bytes(), principal.device_id())
+        .identity_for_active_device(request.uid.as_bytes(), principal.device_id())
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or_else(permission_denied)?;
+    render_user_chain(database, host, &request)
+}
+
+pub(crate) fn render_user_chain(
+    database: &foks_server_db::ReadSnapshot<'_>,
+    host: &EntityId,
+    request: &foks_rpc::arguments::LoadUserChainArgument,
+) -> Result<Vec<u8>, RpcStatus> {
+    let uid = &request.uid;
+    let start = request.start;
     let chain = database
         .user_chain(uid.as_bytes())
         .map_err(|_| RpcStatus::TransactionRetry)?
@@ -353,20 +352,17 @@ pub(crate) fn load_user_chain(
         .ok()
         .and_then(|value| value.checked_add(1))
         .ok_or(RpcStatus::TransactionRetry)?;
-    let full = *start == 1 && matches!(name, Value::Null);
+    let full = start == 1 && request.name_cursor.is_none();
     if !full
-        && !matches!(
-            name,
-            Value::Array(cursor)
-                if matches!(cursor.as_slice(),
-                    [Value::Text(current), Value::Unsigned(next)]
-                    if current == &chain.normalized_name
-                        && *next == chain.username_sequence.saturating_add(1))
-        )
+        && request.name_cursor.as_ref()
+            != Some(&(
+                chain.normalized_name.clone(),
+                chain.username_sequence.saturating_add(1),
+            ))
     {
         return Err(bad_arguments("unsupported user-chain name cursor"));
     }
-    if *start == 0 || (!full && *start < 2) || *start > maximum_start {
+    if start == 0 || (!full && start < 2) || start > maximum_start {
         return Err(bad_arguments("user-chain start is out of range"));
     }
     let root = database
@@ -422,14 +418,14 @@ pub(crate) fn load_user_chain(
         let prior = index
             .checked_sub(1)
             .map(|prior| &chain.links[prior].next_tree_location);
-        let key = foks_merkle_store::chain_key(0, &uid, sequence, prior)
+        let key = foks_merkle_store::chain_key(0, uid, sequence, prior)
             .map_err(|_| RpcStatus::TransactionRetry)?;
         paths.push(prove(key)?);
     }
     let next_sequence = maximum_start;
     let next_key = foks_merkle_store::chain_key(
         0,
-        &uid,
+        uid,
         next_sequence,
         chain.links.last().map(|link| &link.next_tree_location),
     )

@@ -13,20 +13,34 @@ authenticated user-chain and PUK reads, device provisioning/revocation,
 backup-key enrollment and recovery, passphrase enrollment/change and public
 challenge login, atomic PPE reboxing during owner-PUK rotation, YubiKey signup
 and provisioning, delegated-subkey recovery, encrypted PIV management-key
-storage, named and
-ad-hoc team creation, local team
-membership edits and removals, PTK rotation/history, removal-key retrieval,
-and personal/team KV. KV covers roots, directories, optimistic dirent writes,
+storage, named and ad-hoc team creation, local team membership edits and
+removals, PTK rotation/history, removal-key retrieval, scoped remote-team
+membership with PTK view boxes, remote user/team view grants, and personal/team
+KV. KV covers roots, directories, optimistic dirent writes,
 small files, symlinks, chunked files, pagination, cache checks, and expiring
 locks. Public-client tests exercise these paths without server test hooks.
 
-Federation, remote users/teams, passphrase-only device provisioning/recovery,
-team nesting, team-member/guest services, realtime
-services, and cross-host operation are intentionally unsupported. Ad-hoc teams
-are immutable after creation. This v0.1.9-compatible slice is not a replacement
-for the full Go server. The executable contract is
+Federation is limited to client-side Beacon discovery followed by independently
+pinned remote hosts, expiring bearer grants for public user/team chains, and a
+durable client-coordinated remote-team admission saga. There is no general
+federated trust administration, remote-host push channel, direct remote-user
+membership, remote authentication to local services, team nesting,
+team-member/guest services, realtime service, or arbitrary cross-host
+transaction.
+Passphrase-only device provisioning/recovery also remains unsupported. Ad-hoc
+teams are immutable after creation. This v0.1.9-compatible slice is not a
+replacement for the full Go server. The executable contract is
 [protocol-v1.toml](protocol-v1.toml), and tests require it to match the
 registered route table exactly.
+
+Remote-view grants are 30-day renewable leases. Reauthorization during the
+last seven days preserves the exact bearer already sealed into a local team's
+PTK box while extending its expiry; a grant under a retiring capability key is
+also rewrapped under the active generation without changing that bearer. A
+client that does not reconcile before expiry can receive a new grant, but it
+cannot silently substitute that new token into an existing membership. That
+case, remote PTK/roster changes, and deliberate grant revocation require an
+explicit team-lifecycle operation rather than a permissive fallback.
 
 Invite policy and issuance are offline operator operations. Codes are checked
 through the v0.1.9 `Reg.checkInviteCode` route and consumed in the same SQLite
@@ -70,8 +84,9 @@ Normal builds need no Go toolchain or upstream source.
 
 Key-at-rest and public hostchain rotation have different failure and
 compatibility models. See [KEY_ROTATION.md](KEY_ROTATION.md) before creating a
-durable installation. Operator-root rewrapping and the two-link public host-key
-rotation are implemented; delegated-purpose key rotation remains design-only.
+durable installation. Operator-root rewrapping, the two-link public host-key
+rotation, and local symmetric capability-key rotation are implemented; other
+delegated-purpose key rotation remains design-only.
 
 ## Running
 
@@ -172,6 +187,23 @@ Rotation advances from the latest application Merkle head; client hard state
 retains the independently authenticated evidence for older roots while using
 the new signed probe root as its current anchor.
 
+Capability keys protect team-view challenges and recoverable federation bearer
+tokens at rest. Rotate them offline, then periodically retire generations whose
+last dependent capability has expired:
+
+```text
+foks-server rotate-capability-key --config /var/lib/foks/server.toml
+foks-server retire-capability-keys --config /var/lib/foks/server.toml
+```
+
+Rotation selects the new generation in one SQLite transaction and retains the
+old encrypted key through the maximum live challenge/grant expiry. Retirement
+marks the generation revoked before deleting its key file, so repeating the
+command completes cleanup after a crash. Startup and backup validate the full
+generation ledger and fail closed on missing, substituted, or untracked key
+files. A retiring generation and its encrypted key are included in backups;
+revoked generations are retained as non-secret audit metadata only.
+
 Root-key and private-key files must be regular, non-symlink files with no group
 or other permissions. `SIGINT` and `SIGTERM` stop accepts, cancel idle
 sessions, drain accepted writer work, stop maintenance, and join all threads.
@@ -269,9 +301,10 @@ destination paths.
 The SQLite snapshot includes names, invite policy/hash/redemption metadata,
 passphrase salts and encrypted PPE history, recovery credentials, user/team
 chains, current projections, encrypted PUK/PTK histories, capability policy
-state, and all user/team KV namespaces. Usable bearer tokens are never stored;
-only their hashes are present and restored tokens still undergo foreground
-expiry and current-authority checks.
+state, encrypted federation bearer envelopes plus their hashes, and all
+user/team KV namespaces. Plaintext bearer tokens are never stored. Restored
+envelopes remain bound to their exact target/viewer/key generation and tokens
+still undergo foreground expiry and current-authority checks.
 
 For restore, stop the process, retain the damaged directory, place the backed-up
 database and key directory at new explicit paths, supply the matching operator

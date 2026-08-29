@@ -1,3 +1,4 @@
+pub(crate) mod federation;
 pub(crate) mod kv;
 pub(crate) mod registration;
 pub(crate) mod team_admin;

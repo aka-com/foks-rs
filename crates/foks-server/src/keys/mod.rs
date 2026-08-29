@@ -1,11 +1,17 @@
 mod directory;
 mod manifest;
 mod memory;
+mod rotation;
 
 pub use directory::DirectoryKeyProvider;
 pub(crate) use directory::WRAPPING_KEY_FILE;
 pub use manifest::{KeyGenerationManifest, MANIFEST_PURPOSES};
 pub use memory::MemoryKeyProvider;
+pub(crate) use rotation::generation_file_name as capability_generation_file_name;
+pub use rotation::{
+    retire_capability_keys, rotate_capability_key, validate_capability_key_generations,
+    CapabilityGenerationReader, CapabilityKeyRotationState,
+};
 
 use std::fs::{File, OpenOptions};
 use std::io::Read as _;
@@ -108,6 +114,16 @@ pub trait HostKeyProvider: Send + Sync {
         purpose: KeyPurpose,
         generation: KeyGenerationId,
     ) -> crate::Result<()>;
+}
+
+pub(crate) fn load_capability_generation(
+    provider: &dyn HostKeyProvider,
+    generation: [u8; 16],
+) -> crate::Result<SecretKey> {
+    provider.load_generation(
+        KeyPurpose::Capability,
+        KeyGenerationId::from_bytes(generation),
+    )
 }
 
 pub fn read_secret_file(

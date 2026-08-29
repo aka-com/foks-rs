@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::{fs, path::PathBuf};
 
 use foks_agent_client::AgentClient;
-use foks_agent_proto::{Operation, ResponseResult, SecretString};
+use foks_agent_proto::{FederationRole, Operation, ResponseResult, SecretString};
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -250,6 +250,55 @@ impl DesktopModel {
                 alias,
                 passphrase,
             },
+        })
+    }
+
+    pub fn federation_admission_operation(
+        &self,
+        local_team_alias: &str,
+        remote_profile: &str,
+        remote_team_alias: &str,
+        role: FederationRole,
+        visibility: i16,
+    ) -> Result<Operation, &'static str> {
+        let local_profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select the local profile first")?;
+        if local_team_alias.trim().is_empty()
+            || remote_profile.trim().is_empty()
+            || remote_team_alias.trim().is_empty()
+            || remote_profile == local_profile
+        {
+            return Err("enter distinct profiles and both team aliases");
+        }
+        if role != FederationRole::Member && visibility != 0 {
+            return Err("visibility applies only to member roles");
+        }
+        Ok(Operation::AdmitFederatedTeam {
+            local_profile,
+            local_team_alias: local_team_alias.to_owned(),
+            remote_profile: remote_profile.to_owned(),
+            remote_team_alias: remote_team_alias.to_owned(),
+            role,
+            visibility,
+        })
+    }
+
+    pub fn federated_teams_operation(
+        &self,
+        local_team_alias: &str,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select the local profile first")?;
+        if local_team_alias.trim().is_empty() {
+            return Err("enter the local team alias");
+        }
+        Ok(Operation::ListFederatedTeams {
+            profile,
+            team_alias: local_team_alias.to_owned(),
         })
     }
 
@@ -801,6 +850,71 @@ mod tests {
                 Some(SecretString::new("second passphrase")),
             ),
             Err("verification does not take a confirmation")
+        );
+    }
+
+    #[test]
+    fn federation_form_binds_both_profiles_and_validates_role_visibility() {
+        let transport = Arc::new(MockTransport {
+            operations: Mutex::new(Vec::new()),
+        });
+        let mut model = DesktopModel::new(transport);
+        assert_eq!(
+            model.federation_admission_operation(
+                "engineering",
+                "partner",
+                "security",
+                FederationRole::Member,
+                0,
+            ),
+            Err("select the local profile first")
+        );
+        model.select_profile("local");
+        assert_eq!(
+            model
+                .federation_admission_operation(
+                    "engineering",
+                    "partner",
+                    "security",
+                    FederationRole::Member,
+                    4,
+                )
+                .unwrap(),
+            Operation::AdmitFederatedTeam {
+                local_profile: "local".to_owned(),
+                local_team_alias: "engineering".to_owned(),
+                remote_profile: "partner".to_owned(),
+                remote_team_alias: "security".to_owned(),
+                role: FederationRole::Member,
+                visibility: 4,
+            }
+        );
+        assert_eq!(
+            model.federation_admission_operation(
+                "engineering",
+                "local",
+                "security",
+                FederationRole::Member,
+                0,
+            ),
+            Err("enter distinct profiles and both team aliases")
+        );
+        assert_eq!(
+            model.federation_admission_operation(
+                "engineering",
+                "partner",
+                "security",
+                FederationRole::Admin,
+                1,
+            ),
+            Err("visibility applies only to member roles")
+        );
+        assert_eq!(
+            model.federated_teams_operation("engineering").unwrap(),
+            Operation::ListFederatedTeams {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+            }
         );
     }
 

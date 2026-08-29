@@ -35,9 +35,24 @@ The implemented application slice covers:
   delegated-subkey recovery, PIN/PUK/retry administration, crash-safe PIV
   management-key rotation and recovery, scheduled envelope refresh, and
   software-owner revocation;
-- backup enrollment and owner recovery with pre-submit durable secrets; and
+- backup enrollment and owner recovery with pre-submit durable secrets;
 - named/ad-hoc team creation, resume, PTK-protected local records, team sync,
-  and team-KV root creation.
+  and team-KV root creation; and
+- two-profile remote-team admission, protected federation bindings, durable
+  crash reconciliation, and daily remote-view renewal.
+
+Federation takes both profile operation locks in canonical path order and
+publishes both rollback checkpoints even after an error. The scheduled job row
+contains no authoritative aliases, role, bearer, or removal key: its
+deterministic ID must resolve to exactly one encrypted team binding before a
+remote profile is opened. Inverse background jobs use nonblocking acquisition
+of the second profile, so they retry instead of deadlocking. The bundled Rust
+server renews its 30-day view grant with the same embedded bearer during the
+last seven days and rewraps it under the active capability key on the next
+grant call after rotation.
+Profiles that stay offline past expiry require explicit recovery; a remote
+PTK-generation or roster change is detected as a failed reconciliation and
+still requires the complete FOKS PTK-rotation workflow.
 
 Most provisioning and recovery inputs that contain long-lived secrets stay in
 the direct application/CLI boundary. Software and YubiKey signup, hardware
@@ -48,6 +63,8 @@ long-term credential material inside the checked session so the desktop never
 opens the credential store directly. Current-server profiles require an
 explicit `passphrases` capability; the hosted canary must not grant it until a
 scheduled canary actually exercises these mutations and reads.
+Federation has its own hosted capability, separate from `teams`; a canary that
+only covers same-host team operations cannot enable cross-host mutations.
 
 The crate is split by ownership boundary: `checkpoint` owns native credentials
 and rollback enrollment, `registry` owns profiles and compatibility policy,

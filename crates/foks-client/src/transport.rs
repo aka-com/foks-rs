@@ -576,6 +576,19 @@ impl FoksClient {
         self.call_prepared(host, target, request, credential, None, false)
     }
 
+    /// Executes a public RPC against a WebPKI-authenticated endpoint that has
+    /// not yet been pinned. This is intentionally not pooled and is suitable
+    /// only for discovery data that will be independently authenticated.
+    pub(crate) fn call_unpinned(&self, target: &ProbeTarget, request: &[u8]) -> Result<Vec<u8>> {
+        let control = self.operation_control()?;
+        let tcp = self.connect_tcp(target, &control)?;
+        let config = self.tls_config(None)?;
+        let mut tls = self.connect_tls(target, tcp, config)?;
+        tls.write_all(request).map_err(map_io_error)?;
+        tls.flush().map_err(map_io_error)?;
+        read_response(&mut tls, self.maximum_frame_length, 0).map_err(map_rpc_error)
+    }
+
     pub(crate) fn call_with_material(
         &self,
         host: &PinnedHost,

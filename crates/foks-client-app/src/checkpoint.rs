@@ -133,6 +133,57 @@ impl ClientCredentials {
         result
     }
 
+    /// Checks and locks two distinct profiles in a canonical order for one
+    /// cross-host operation. Both external rollback watermarks are published
+    /// after the closure, including when one side committed recovery state
+    /// before returning an error.
+    pub fn with_checked_sessions<T, E>(
+        &self,
+        left: &ProfileSession,
+        right: &ProfileSession,
+        operation: impl FnOnce(
+            &CheckedProfileSession<'_>,
+            &CheckedProfileSession<'_>,
+        ) -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, E>
+    where
+        E: From<Error>,
+    {
+        self.ensure_session_root(left).map_err(E::from)?;
+        self.ensure_session_root(right).map_err(E::from)?;
+        if left.paths.directory == right.paths.directory {
+            return Err(E::from(Error::InvalidConfig(
+                "cross-host operation requires two distinct profiles",
+            )));
+        }
+        let (first, second) = if left.paths.directory < right.paths.directory {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        let first_lock = runtime::ProfileLock::operation(first.paths()).map_err(E::from)?;
+        let second_lock = runtime::ProfileLock::operation(second.paths()).map_err(E::from)?;
+        self.verify_checkpoint(first).map_err(E::from)?;
+        self.verify_checkpoint(second).map_err(E::from)?;
+
+        let left_checked = CheckedProfileSession { session: left };
+        let right_checked = CheckedProfileSession { session: right };
+        let result = operation(&left_checked, &right_checked);
+
+        // Perform every durability and release step before selecting which
+        // error to report. An early return here could strand the other
+        // profile's external watermark behind a committed SQLite revision.
+        let left_checkpoint = self.advance_checkpoint(left);
+        let right_checkpoint = self.advance_checkpoint(right);
+        let second_release = second_lock.release();
+        let first_release = first_lock.release();
+        left_checkpoint.map_err(E::from)?;
+        right_checkpoint.map_err(E::from)?;
+        second_release.map_err(E::from)?;
+        first_release.map_err(E::from)?;
+        result
+    }
+
     /// Attempts the checked-session sequence without waiting for another
     /// process using the profile. Periodic work uses this to skip contention.
     pub fn try_with_checked_session<T, E>(

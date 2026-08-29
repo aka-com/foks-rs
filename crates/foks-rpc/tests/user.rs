@@ -4,9 +4,10 @@ use foks_proto::{
     DecodedSignupArgument, DecodedTeamEditArgument, DeviceLabel, DeviceLabelNameAndCommitmentKey,
     DeviceType, EntityId, HostConfig, InviteCode, NamedTeamCreateArgument, ProvisionDeviceArgument,
     PukParcel, RegistrationChallenge, RemoveTeamMemberArgument, RevokeDeviceArgument, Role,
-    SecretSeed, SeedChainBox, SharedKeyBoxSet, SoftwareSignupArgument, TeamBearerTokenChallenge,
-    TeamChain, TeamRemovalAndCommitment, TeamRemovalBoxData, TeamViewChallenge, TeamViewRequest,
-    UserChain, UserLink, UsernameReservation, ViewershipMode, TEAM_VIEW_CHALLENGE_TYPE_ID,
+    RoleAndGeneration, SecretSeed, SeedChainBox, SharedKeyBoxSet, SoftwareSignupArgument,
+    TeamBearerTokenChallenge, TeamChain, TeamRemovalAndCommitment, TeamRemovalBoxData,
+    TeamViewChallenge, TeamViewRequest, UserChain, UserLink, UsernameReservation, ViewershipMode,
+    TEAM_VIEW_CHALLENGE_TYPE_ID,
 };
 use foks_rpc::{
     decode_team_bearer_token, decode_team_edit_result, decode_team_removal_key_box,
@@ -17,13 +18,13 @@ use foks_rpc::{
     encode_get_historical_merkle_roots_request, encode_get_host_config_request,
     encode_get_owner_puk_request, encode_get_puk_for_role_request,
     encode_get_uid_lookup_challenge_request, encode_load_team_chain_request,
-    encode_load_team_removal_key_box_request, encode_load_user_chain_request,
-    encode_lookup_uid_by_device_request, encode_make_team_bearer_token_request,
-    encode_merkle_select_vhost_request, encode_provision_device_request,
-    encode_registration_select_vhost_request, encode_remove_team_member_request,
-    encode_reserve_team_name_request, encode_reserve_username_request_at,
-    encode_revoke_device_request, encode_signup_request_at, encode_team_view_challenge_request,
-    read_call, DEFAULT_MAX_FRAME_LENGTH,
+    encode_load_team_chain_request_with_options, encode_load_team_removal_key_box_request,
+    encode_load_user_chain_request, encode_lookup_uid_by_device_request,
+    encode_make_team_bearer_token_request, encode_merkle_select_vhost_request,
+    encode_provision_device_request, encode_registration_select_vhost_request,
+    encode_remove_team_member_request, encode_reserve_team_name_request,
+    encode_reserve_username_request_at, encode_revoke_device_request, encode_signup_request_at,
+    encode_team_view_challenge_request, read_call, TeamChainLoadOptions, DEFAULT_MAX_FRAME_LENGTH,
 };
 use foks_snowpack::{decode, encode, Value};
 
@@ -280,6 +281,7 @@ fn additive_team_edit_matches_go_v019() {
         ptk_boxes: &boxes,
         removal_keys: &[removal],
         hepks: std::slice::from_ref(&target.hepk),
+        remote_member_view_tokens: &[],
         local_permissions_for: std::slice::from_ref(&target_id),
     })
     .unwrap();
@@ -290,6 +292,7 @@ fn additive_team_edit_matches_go_v019() {
         ptk_boxes: &boxes,
         removal_keys: &[],
         hepks: std::slice::from_ref(&target.hepk),
+        remote_member_view_tokens: &[],
         local_permissions_for: std::slice::from_ref(&target_id),
     }
     .encoded()
@@ -728,21 +731,38 @@ fn incremental_chain_requests_carry_go_v019_name_cursors() {
         ]),
         Value::Unsigned(2),
         Value::Array(vec![
+            Value::Array(vec![Role::member(0).to_value(), Value::Unsigned(3)]),
+            Value::Array(vec![Role::ADMIN.to_value(), Value::Unsigned(2)]),
+        ]),
+        Value::Array(vec![
             Value::Text(b"fixtureteam".to_vec()),
             Value::Unsigned(2),
         ]),
-        Value::Null,
-        Value::Bool(false),
-        Value::Bool(false),
+        Value::Bool(true),
+        Value::Bool(true),
     ]))
     .unwrap();
     assert_eq!(
-        foks_rpc::encode_load_team_chain_request_from(
+        encode_load_team_chain_request_with_options(
             &team,
             &host,
             &token,
             2,
-            Some((b"fixtureteam", 2)),
+            TeamChainLoadOptions {
+                have_ptk_generations: &[
+                    RoleAndGeneration {
+                        role: Role::member(0),
+                        generation: 3,
+                    },
+                    RoleAndGeneration {
+                        role: Role::ADMIN,
+                        generation: 2,
+                    },
+                ],
+                current_name: Some((b"fixtureteam", 2)),
+                load_removal_key: true,
+                load_remote_view_tokens: true,
+            },
         )
         .unwrap(),
         foks_rpc::encode_call(

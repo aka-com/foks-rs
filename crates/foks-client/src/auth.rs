@@ -56,9 +56,9 @@ impl AuthenticatedUserOutcome {
     }
 }
 
-type UserChainCursor<'a> = (u64, Option<(&'a [u8], u64)>);
+pub(crate) type UserChainCursor<'a> = (u64, Option<(&'a [u8], u64)>);
 
-fn user_chain_cursor(prior: Option<&VerifiedUserState>) -> Result<UserChainCursor<'_>> {
+pub(crate) fn user_chain_cursor(prior: Option<&VerifiedUserState>) -> Result<UserChainCursor<'_>> {
     match prior {
         Some(prior) => Ok((
             prior

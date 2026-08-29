@@ -1,12 +1,13 @@
 //! Authenticated team-chain and team-view response schemas.
 
 use super::{
-    array_any, hepk, list_values, name_commitment_and_key, role, user_link, user_merkle_paths,
-    Hepk, NameCommitmentAndKey, UserLink, UserMerklePaths,
+    array_any, hepk, name_commitment_and_key, role, user_link, user_merkle_paths, Hepk,
+    NameCommitmentAndKey, UserLink, UserMerklePaths,
 };
 use crate::{
     array, decode, encode, entity, fixed_blob, list, option, puk_parcel, text, type_error,
-    unsigned, variant, EntityId, Error, PukParcel, Result, Role, Value, ENTITY_HOST,
+    unsigned, variant, EntityId, Error, PukParcel, Result, Role, TeamRemoteMemberViewTokenInner,
+    TeamRemovalKeyBox, Value, ENTITY_HOST,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -18,6 +19,8 @@ pub struct TeamChain {
     pub team_name_utf8: Vec<u8>,
     pub num_team_name_links: u64,
     pub boxes: Vec<PukParcel>,
+    pub removal_key: Option<TeamRemovalKeyBox>,
+    pub remote_view_tokens: Vec<TeamRemoteMemberViewTokenInner>,
     pub hepks: Vec<Hepk>,
     pub exact_bytes: Vec<u8>,
 }
@@ -33,10 +36,12 @@ impl TeamChain {
         let team_name_utf8 = text(&fields[4])?.into_bytes();
         let num_team_name_links = unsigned(&fields[5])?;
         let boxes = list(&fields[6], puk_parcel)?;
-        // Removal keys and remote-view tokens are intentionally retained in
-        // the exact transcript but are not part of the read-only PTK slice.
-        option(&fields[7], |_| Ok(()))?;
-        list_values(&fields[8])?;
+        let removal_key = option(&fields[7], |value| {
+            TeamRemovalKeyBox::decode(&encode(value)?)
+        })?;
+        let remote_view_tokens = list(&fields[8], |value| {
+            TeamRemoteMemberViewTokenInner::decode(&encode(value)?)
+        })?;
         let hepk_set = array(&fields[9], 1)?;
         let hepks = array_any(&hepk_set[0])?
             .iter()
@@ -74,6 +79,8 @@ impl TeamChain {
             team_name_utf8,
             num_team_name_links,
             boxes,
+            removal_key,
+            remote_view_tokens,
             hepks,
             exact_bytes: bytes.to_vec(),
         })
@@ -89,6 +96,8 @@ pub struct TeamChainResponse<'a> {
     pub team_name_utf8: &'a [u8],
     pub num_team_name_links: u64,
     pub exact_parcels: &'a [Vec<u8>],
+    pub exact_removal_key: Option<&'a [u8]>,
+    pub remote_view_tokens: &'a [TeamRemoteMemberViewTokenInner],
     pub exact_hepks: &'a [Vec<u8>],
 }
 
@@ -132,8 +141,16 @@ impl TeamChainResponse<'_> {
                     .map(|exact| decode(exact).map_err(Error::from))
                     .collect::<Result<Vec<_>>>()?,
             ),
-            Value::Null,
-            Value::Null,
+            self.exact_removal_key
+                .map(decode)
+                .transpose()?
+                .unwrap_or(Value::Null),
+            list_or_null(
+                self.remote_view_tokens
+                    .iter()
+                    .map(TeamRemoteMemberViewTokenInner::to_value)
+                    .collect(),
+            ),
             Value::Array(vec![list_or_null(
                 self.exact_hepks
                     .iter()

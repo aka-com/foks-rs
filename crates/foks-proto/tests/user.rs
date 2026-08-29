@@ -1,13 +1,27 @@
 use foks_proto::{
-    decode_merkle_back_pointers, ChangeMetadata, EntityId, Hepk, HistoricalMerkleRoots, PukParcel,
-    Role, SharedKeySeed, SoftwareEldestPublic, TeamChain, UnsignedUserLink, UserChain,
-    UserChainResponse, UserLink,
+    decode_merkle_back_pointers, ChangeMetadata, EntityId, FqParty, Hepk, HistoricalMerkleRoots,
+    PukParcel, Role, SecretBox, SharedKeySeed, SoftwareEldestPublic, TeamChain, TeamChainResponse,
+    TeamRemoteMemberViewTokenInner, UnsignedUserLink, UserChain, UserChainResponse, UserLink,
 };
 
 const DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user";
 
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(format!("{DIR}/{name}")).unwrap()
+}
+
+fn binary_fixture(name: &str) -> Vec<u8> {
+    match foks_snowpack::decode(&fixture(name)).unwrap() {
+        foks_snowpack::Value::Binary(bytes) => bytes,
+        other => panic!("expected binary fixture, got {other:?}"),
+    }
+}
+
+fn mutation_fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!(
+        "../foks-snowpack/tests/fixtures/foks-v0.1.9/user-mutations/{name}"
+    ))
+    .unwrap()
 }
 
 #[test]
@@ -261,9 +275,68 @@ fn official_named_team_chain_and_ptk_parcels_decode() {
     let chain = TeamChain::decode(&fixture("team-chain.snowp")).unwrap();
     assert_eq!(chain.links.len(), 1);
     assert_eq!(chain.boxes.len(), 4);
+    assert!(chain.removal_key.is_none());
+    assert!(chain.remote_view_tokens.is_empty());
     assert_eq!(chain.hepks.len(), 4);
     assert_eq!(chain.team_name_utf8, b"fixtureteam");
     let change = chain.links[0].decode_team_group_change().unwrap();
     assert_eq!(change.shared_keys.len(), 4);
     assert_eq!(change.changes.len(), 1);
+}
+
+#[test]
+fn team_chain_response_round_trips_removal_and_remote_token_fields() {
+    let chain = TeamChain::decode(&fixture("team-chain.snowp")).unwrap();
+    let host = chain.links[0].decode_team_group_change().unwrap().host;
+    let links = chain
+        .links
+        .iter()
+        .map(UserLink::encoded)
+        .collect::<foks_proto::Result<Vec<_>>>()
+        .unwrap();
+    let parcels = chain
+        .boxes
+        .iter()
+        .map(PukParcel::encoded)
+        .collect::<foks_proto::Result<Vec<_>>>()
+        .unwrap();
+    let hepks = chain
+        .hepks
+        .iter()
+        .map(Hepk::encoded)
+        .collect::<foks_proto::Result<Vec<_>>>()
+        .unwrap();
+    let removal = mutation_fixture("team-removal-admin-box.snowp");
+    let root = chain.merkle.encoded_root().unwrap();
+    let remote = TeamRemoteMemberViewTokenInner {
+        member: FqParty::new(
+            EntityId::from_bytes(binary_fixture("uid.snowp")).unwrap(),
+            host,
+        )
+        .unwrap(),
+        ptk_generation: 1,
+        secret_box: SecretBox {
+            nonce: [0x80; 16],
+            ciphertext: vec![0x90, 0x91],
+        },
+        ptk_role: Role::member(0),
+    };
+    let encoded = TeamChainResponse {
+        exact_links: &links,
+        locations: &chain.locations,
+        team_names: &chain.team_names,
+        exact_root: &root,
+        paths: chain.merkle.paths(),
+        team_name_utf8: &chain.team_name_utf8,
+        num_team_name_links: chain.num_team_name_links,
+        exact_parcels: &parcels,
+        exact_removal_key: Some(&removal),
+        remote_view_tokens: std::slice::from_ref(&remote),
+        exact_hepks: &hepks,
+    }
+    .encoded()
+    .unwrap();
+    let decoded = TeamChain::decode(&encoded).unwrap();
+    assert!(decoded.removal_key.is_some());
+    assert_eq!(decoded.remote_view_tokens, vec![remote]);
 }

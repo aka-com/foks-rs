@@ -79,6 +79,16 @@ impl HostKeyProvider for MemoryKeyProvider {
         purpose: KeyPurpose,
         generation: KeyGenerationId,
     ) -> crate::Result<SecretKey> {
+        if let Some(key) = self
+            .keys
+            .lock()
+            .map_err(|_| crate::Error::Key("lock poisoned"))?
+            .get(&purpose)
+            .copied()
+            .filter(|key| key.generation == generation.as_bytes())
+        {
+            return Ok(SecretKey::new(key.bytes, key.generation));
+        }
         let generations = self
             .generations
             .lock()

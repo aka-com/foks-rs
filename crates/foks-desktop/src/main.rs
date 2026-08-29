@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use clap::Parser as _;
 use foks_agent_client::AgentClient;
-use foks_agent_proto::{Operation, ResponseResult, SecretString};
+use foks_agent_proto::{FederationRole, Operation, ResponseResult, SecretString};
 
 #[derive(clap::Parser)]
 #[command(name = "foks-desktop-backend")]
@@ -61,9 +61,30 @@ enum Command {
         profile: String,
         team_alias: String,
     },
+    TeamAdmitRemote {
+        local_profile: String,
+        local_team_alias: String,
+        remote_profile: String,
+        remote_team_alias: String,
+        #[arg(long, value_enum, default_value_t = FederationRoleArgument::Member)]
+        role: FederationRoleArgument,
+        #[arg(long, default_value_t = 0)]
+        visibility: i16,
+    },
+    TeamListRemote {
+        profile: String,
+        team_alias: String,
+    },
     RunJobs {
         profile: String,
     },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum FederationRoleArgument {
+    Member,
+    Admin,
+    Owner,
 }
 
 #[derive(clap::Args)]
@@ -148,6 +169,32 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
             profile,
             team_alias,
         } => Operation::SyncTeam {
+            profile,
+            team_alias,
+        },
+        Command::TeamAdmitRemote {
+            local_profile,
+            local_team_alias,
+            remote_profile,
+            remote_team_alias,
+            role,
+            visibility,
+        } => Operation::AdmitFederatedTeam {
+            local_profile,
+            local_team_alias,
+            remote_profile,
+            remote_team_alias,
+            role: match role {
+                FederationRoleArgument::Member => FederationRole::Member,
+                FederationRoleArgument::Admin => FederationRole::Admin,
+                FederationRoleArgument::Owner => FederationRole::Owner,
+            },
+            visibility,
+        },
+        Command::TeamListRemote {
+            profile,
+            team_alias,
+        } => Operation::ListFederatedTeams {
             profile,
             team_alias,
         },

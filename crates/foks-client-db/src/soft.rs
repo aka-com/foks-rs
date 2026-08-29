@@ -5,10 +5,14 @@ use std::time::Duration;
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension as _, TransactionBehavior};
 
-use foks_proto::{KvDirectoryVersion, KvDirentVersion, KvPathVersionVector};
+use foks_proto::{
+    BeaconHint, EntityId, KvDirectoryVersion, KvDirentVersion, KvPathVersionVector, ENTITY_HOST,
+};
 
 use crate::soft_schema::{APPLICATION_ID, INITIAL, VERSION};
 use crate::{sqlite_integer, stored_unsigned, Acceptance, Error, Result};
+
+pub const MAX_DISCOVERY_HINTS: usize = 128;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KvProjectedEntry {
@@ -93,6 +97,77 @@ impl SoftStateStore {
             connection,
             owned_stages: std::collections::BTreeSet::new(),
         })
+    }
+
+    /// Stores an authenticated routing hint and evicts the least-recently-used
+    /// hints. This cache is never sufficient to authorize a host: callers must
+    /// probe the address and bind the returned hostchain to `host_id` first.
+    pub fn store_discovery_hint(&mut self, hint: &BeaconHint, observed_at: u64) -> Result<()> {
+        hint.host_id
+            .clone()
+            .require_type(ENTITY_HOST)
+            .map_err(|_| Error::InvalidDiscoveryHint)?;
+        let validated = BeaconHint::new(hint.host_id.clone(), hint.address.clone())
+            .map_err(|_| Error::InvalidDiscoveryHint)?;
+        let observed_at = sqlite_integer("discovery observation time", observed_at)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "INSERT INTO federation_discovery_hints
+                 (host_id, address, observed_at, last_used_at)
+             VALUES (?1, ?2, ?3, ?3)
+             ON CONFLICT(host_id) DO UPDATE SET
+                 address = excluded.address,
+                 observed_at = excluded.observed_at,
+                 last_used_at = max(federation_discovery_hints.last_used_at,
+                                    excluded.last_used_at)",
+            params![validated.host_id.as_bytes(), validated.address, observed_at],
+        )?;
+        transaction.execute(
+            "DELETE FROM federation_discovery_hints
+             WHERE host_id NOT IN (
+                 SELECT host_id FROM federation_discovery_hints
+                 ORDER BY last_used_at DESC, observed_at DESC, host_id DESC
+                 LIMIT ?1
+             )",
+            [i64::try_from(MAX_DISCOVERY_HINTS).expect("discovery cache bound fits SQLite")],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Returns and touches an untrusted routing hint. A hit must still be
+    /// followed by the same authenticated direct probe as a fresh Beacon hit.
+    pub fn discovery_hint(
+        &mut self,
+        host_id: &EntityId,
+        used_at: u64,
+    ) -> Result<Option<BeaconHint>> {
+        host_id
+            .clone()
+            .require_type(ENTITY_HOST)
+            .map_err(|_| Error::InvalidDiscoveryHint)?;
+        let used_at = sqlite_integer("discovery use time", used_at)?;
+        let stored = self
+            .connection
+            .query_row(
+                "SELECT address FROM federation_discovery_hints WHERE host_id = ?1",
+                [host_id.as_bytes()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(address) = stored else {
+            return Ok(None);
+        };
+        let hint =
+            BeaconHint::new(host_id.clone(), address).map_err(|_| Error::InvalidDiscoveryHint)?;
+        self.connection.execute(
+            "UPDATE federation_discovery_hints
+             SET last_used_at = max(last_used_at, ?2) WHERE host_id = ?1",
+            params![host_id.as_bytes(), used_at],
+        )?;
+        Ok(Some(hint))
     }
 
     /// Starts a durable, initially invisible large-file download. Chunks are
@@ -969,6 +1044,44 @@ fn load_directory(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn host(fill: u8) -> EntityId {
+        EntityId::from_bytes([vec![ENTITY_HOST], vec![fill; 32]].concat()).unwrap()
+    }
+
+    #[test]
+    fn discovery_hints_are_bounded_and_touched_as_lru_soft_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("soft.sqlite3");
+        let mut store = SoftStateStore::open(&path).unwrap();
+        for index in 0..u8::try_from(MAX_DISCOVERY_HINTS).unwrap() {
+            let hint = BeaconHint::new(host(index), format!("host-{index}.test:4430")).unwrap();
+            store
+                .store_discovery_hint(&hint, u64::from(index) + 1)
+                .unwrap();
+        }
+
+        assert!(store.discovery_hint(&host(0), 1_000).unwrap().is_some());
+        store
+            .store_discovery_hint(
+                &BeaconHint::new(host(200), "replacement.test:4430".to_owned()).unwrap(),
+                2_000,
+            )
+            .unwrap();
+
+        assert!(store.discovery_hint(&host(0), 2_001).unwrap().is_some());
+        assert!(store.discovery_hint(&host(1), 2_001).unwrap().is_none());
+        assert!(store.discovery_hint(&host(200), 2_001).unwrap().is_some());
+        let count: i64 = store
+            .connection
+            .query_row(
+                "SELECT count(*) FROM federation_discovery_hints",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, i64::try_from(MAX_DISCOVERY_HINTS).unwrap());
+    }
 
     fn entry(id: u8, name: &[u8]) -> KvProjectedEntry {
         let mut node_id = [id; 17];

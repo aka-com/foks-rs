@@ -139,6 +139,20 @@ impl CheckedProfileSession<'_> {
     }
 
     fn run_due_jobs_locked(&self, now: u64, vault: &mut AccountVault<'_>) -> Result<JobRunReport> {
+        self.run_due_jobs_locked_with(now, vault, |_, _| {
+            Err("federation reconciliation requires access to the remote profile".to_owned())
+        })
+    }
+
+    pub(super) fn run_due_jobs_locked_with(
+        &self,
+        now: u64,
+        vault: &mut AccountVault<'_>,
+        mut federation: impl FnMut(
+            &foks_client_db::ScheduledJob,
+            &mut AccountVault<'_>,
+        ) -> std::result::Result<(), String>,
+    ) -> Result<JobRunReport> {
         let scheduler = FoksScheduler::new(&self.paths.hard_database, SchedulerConfig::default())?;
         let report = scheduler.run_due(now, |job| match job.kind {
             ScheduledJobKind::UserRefresh => {
@@ -171,6 +185,7 @@ impl CheckedProfileSession<'_> {
             ScheduledJobKind::MutationReconcile => {
                 Err("mutation reconciliation is driven by explicit resume flows".to_owned())
             }
+            ScheduledJobKind::FederationReconcile => federation(job, vault),
         })?;
         Ok(JobRunReport {
             runs: report

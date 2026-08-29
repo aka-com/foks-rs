@@ -19,7 +19,8 @@ CREATE TABLE team_view_challenges (
     source_role_type INTEGER NOT NULL CHECK (source_role_type BETWEEN 1 AND 3),
     source_visibility INTEGER NOT NULL,
     source_generation INTEGER NOT NULL CHECK (source_generation >= 1),
-    key_generation BLOB NOT NULL CHECK (length(key_generation) = 16),
+    key_generation BLOB NOT NULL REFERENCES capability_key_generations(generation_id)
+        CHECK (length(key_generation) = 16),
     expires_at INTEGER NOT NULL CHECK (expires_at >= 0),
     consumed INTEGER NOT NULL DEFAULT 0 CHECK (consumed IN (0, 1)),
     activation_hash BLOB CHECK (activation_hash IS NULL OR length(activation_hash) = 32),

@@ -412,6 +412,7 @@ pub(crate) fn create(
                 parcels: &parcels,
                 seed_chain: &[],
                 removal_boxes: &removal_boxes,
+                remote_member_view_tokens: &[],
                 expected_root_epoch: command.expected_root_epoch,
                 expected_root_hash: &command.expected_root_hash,
                 merkle_commit: &merkle_commit,
@@ -495,7 +496,7 @@ pub(crate) fn edit(
                 return Err(crate::Error::Signup("team belongs to another host"));
             }
             let command = crate::identity::team_edit::validate(decoded, &team, &root, &uid)?;
-            validate_local_member_keys(database, &command.members)?;
+            validate_local_member_keys(database, &command.members, &host)?;
             if command.link_hash != idempotency_key || command.team != team_id {
                 return Err(crate::Error::Signup("team edit identity changed"));
             }
@@ -646,6 +647,29 @@ pub(crate) fn edit(
                     }
                 })
                 .collect::<Vec<_>>();
+            let exact_remote_token_boxes = command
+                .remote_member_view_tokens
+                .iter()
+                .map(|token| token.inner.secret_box.encoded())
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let remote_member_view_tokens = command
+                .remote_member_view_tokens
+                .iter()
+                .zip(&exact_remote_token_boxes)
+                .map(|(token, exact_secret_box)| {
+                    let (ptk_role_type, ptk_visibility) =
+                        crate::auth::team::role_parts(token.inner.ptk_role);
+                    foks_server_db::TeamRemoteMemberViewTokenMutation {
+                        member_party_id: token.inner.member.party.as_bytes(),
+                        member_host_id: token.inner.member.host.as_bytes(),
+                        ptk_generation: token.inner.ptk_generation,
+                        ptk_role_type,
+                        ptk_visibility,
+                        exact_secret_box,
+                        join_request_token: token.join_request.expose(),
+                    }
+                })
+                .collect::<Vec<_>>();
             Ok(
                 database.commit_team_mutation(&foks_server_db::TeamMutation {
                     team_id: command.team.as_bytes(),
@@ -661,6 +685,7 @@ pub(crate) fn edit(
                     parcels: &parcels,
                     seed_chain: &seed_chain,
                     removal_boxes: &removal_boxes,
+                    remote_member_view_tokens: &remote_member_view_tokens,
                     expected_root_epoch: command.expected_root_epoch,
                     expected_root_hash: &command.expected_root_hash,
                     merkle_commit: &merkle_commit,
@@ -684,8 +709,16 @@ pub(crate) fn edit(
 fn validate_local_member_keys(
     database: &foks_server_db::Database,
     members: &[foks_verify::VerifiedTeamMemberState],
+    local_host: &EntityId,
 ) -> crate::Result<()> {
     for member in members {
+        if member
+            .scoped_host
+            .as_ref()
+            .is_some_and(|host| host != local_host)
+        {
+            continue;
+        }
         let authority = database
             .user_authority(member.party.as_bytes())?
             .ok_or(crate::Error::Signup("team member user is missing"))?;

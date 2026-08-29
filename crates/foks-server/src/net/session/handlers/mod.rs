@@ -37,7 +37,8 @@ pub(super) fn response(
         | RegGetSubkeyBoxChallenge
         | RegLoadSubkeyBox
         | RegGetUIDLookupChallege
-        | RegLookupUIDByDevice => registration::response(data, call),
+        | RegLookupUIDByDevice
+        | RegLoadUserChain => registration::response(data, call),
         UserSetPassphrase
         | UserChangePassphrase
         | UserGetSalt
@@ -51,10 +52,13 @@ pub(super) fn response(
         | UserPutYubiManagementKey
         | UserGetYubiManagementKey
         | UserGetAllYubiManagementKeys
-        | UserGetHostConfig => user::response(data, call, principal),
+        | UserGetHostConfig
+        | UserGrantRemoteViewPermissionForUser => user::response(data, call, principal),
         TeamLoaderGetTeamVOBearerTokenChallenge
         | TeamLoaderActivateTeamVOBearerToken
         | TeamLoaderLoadTeamChain
+        | TeamLoaderLoadTeamRemoteViewTokens
+        | TeamMemberGrantRemoteViewPermissionForTeam
         | TeamAdminReserveTeamname
         | TeamAdminCreateTeam
         | TeamAdminEditTeam
@@ -76,10 +80,10 @@ pub(super) fn response(
         | KvStoreList
         | KvStoreLockAcquire
         | KvStoreLockRelease => kv::response(data, call, principal),
-        TeamLoaderCheckTeamVOBearerToken
+        BeaconBeaconLookup
+        | TeamLoaderCheckTeamVOBearerToken
         | TeamLoaderLoadTeamMembershipChain
         | TeamLoaderLoadRemovalForMember
-        | TeamLoaderLoadTeamRemoteViewTokens
         | TeamLoaderGetServerConfig
         | TeamAdminCheckTeamBearerToken
         | TeamAdminPutTeamCert

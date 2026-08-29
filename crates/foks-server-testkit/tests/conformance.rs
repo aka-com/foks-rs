@@ -1,5 +1,7 @@
 #[path = "conformance/authorization.rs"]
 mod authorization;
+#[path = "conformance/federation.rs"]
+mod federation;
 #[path = "conformance/kv_large.rs"]
 mod kv_large;
 #[path = "conformance/kv_locks.rs"]

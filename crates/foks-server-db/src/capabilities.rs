@@ -72,6 +72,7 @@ impl Database {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         reclaim(&transaction, now)?;
+        crate::capability_keys::require_active_generation(&transaction, key_generation)?;
         let global: i64 = transaction.query_row(
             "SELECT (SELECT count(*) FROM team_view_challenges WHERE consumed = 0)
                     + (SELECT count(*) FROM team_view_tokens)",

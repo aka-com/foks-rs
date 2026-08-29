@@ -6,8 +6,8 @@ use super::{
 use crate::{
     array, boolean, decode, encode, entity, expect_unsigned, fixed_blob, list, list_or_null, role,
     text, unsigned, EntityId, Error, HybridBox, Result, Role, SecretSeed, SeedChainBox,
-    SharedKeyBoxSet, TeamRemovalKeyBox, Value, ENTITY_AD_HOC_TEAM, ENTITY_HOST, ENTITY_NAMED_TEAM,
-    ENTITY_USER,
+    SharedKeyBoxSet, TeamRemoteMemberViewToken, TeamRemovalKeyBox, Value, ENTITY_AD_HOC_TEAM,
+    ENTITY_HOST, ENTITY_NAMED_TEAM, ENTITY_USER,
 };
 use zeroize::Zeroizing;
 
@@ -807,6 +807,7 @@ impl DecodedAdHocTeamCreateArgument {
         if !edit.seed_chain.is_empty()
             || !edit.removal_keys.is_empty()
             || !edit.removals.is_empty()
+            || !edit.remote_member_view_tokens.is_empty()
             || !edit.local_permissions_for.is_empty()
         {
             return Err(Error::IntegerRange("ad-hoc team founding edit"));
@@ -860,6 +861,7 @@ impl DecodedNamedTeamCreateArgument {
         let edit = decode_team_edit_common(&fields[4])?;
         if !edit.seed_chain.is_empty()
             || !edit.removals.is_empty()
+            || !edit.remote_member_view_tokens.is_empty()
             || !edit.local_permissions_for.is_empty()
         {
             return Err(Error::IntegerRange("named-team founding edit"));
@@ -885,6 +887,7 @@ pub struct AddTeamMemberArgument<'a> {
     pub ptk_boxes: &'a SharedKeyBoxSet,
     pub removal_keys: &'a [TeamRemovalBoxData],
     pub hepks: &'a [Hepk],
+    pub remote_member_view_tokens: &'a [TeamRemoteMemberViewToken],
     pub local_permissions_for: &'a [EntityId],
 }
 
@@ -897,6 +900,7 @@ pub struct DecodedTeamEditArgument {
     pub removal_keys: Vec<TeamRemovalBoxData>,
     pub removals: Vec<TeamRemovalAndCommitment>,
     pub hepks: Vec<Hepk>,
+    pub remote_member_view_tokens: Vec<TeamRemoteMemberViewToken>,
     pub local_permissions_for: Vec<EntityId>,
 }
 
@@ -1240,14 +1244,16 @@ impl NamedTeamCreateArgument<'_> {
 
 impl AddTeamMemberArgument<'_> {
     pub fn encoded(&self) -> Result<Vec<u8>> {
-        for found in [
-            self.removal_keys.len(),
-            self.hepks.len(),
-            self.local_permissions_for.len(),
-        ] {
+        for found in [self.removal_keys.len(), self.hepks.len()] {
             if found != 1 {
                 return Err(Error::FieldCount { expected: 1, found });
             }
+        }
+        if self.remote_member_view_tokens.len() + self.local_permissions_for.len() != 1 {
+            return Err(Error::FieldCount {
+                expected: 1,
+                found: self.remote_member_view_tokens.len() + self.local_permissions_for.len(),
+            });
         }
         for removal_key in self.removal_keys {
             removal_key.validate()?;
@@ -1260,7 +1266,11 @@ impl AddTeamMemberArgument<'_> {
         let offchain = Value::Array(vec![
             decode(&self.ptk_boxes.encoded())?,
             Value::Null,
-            Value::Null,
+            list_or_null(
+                self.remote_member_view_tokens
+                    .iter()
+                    .map(TeamRemoteMemberViewToken::to_value),
+            ),
             list_or_null(self.removal_keys.iter().map(TeamRemovalBoxData::to_value)),
             Value::Null,
             Value::Array(vec![Value::Array(hepks)]),
@@ -1455,7 +1465,6 @@ fn decode_team_edit_common(value: &Value) -> Result<DecodedTeamEditArgument> {
     let fields = array(value, 5)?;
     require_null(&fields[3], "team edit invite links")?;
     let offchain = array(&fields[2], 7)?;
-    require_null(&offchain[2], "team edit remote removal boxes")?;
     require_null(&offchain[6], "team edit remote join requests")?;
     Ok(DecodedTeamEditArgument {
         link: UserLink::decode(&encode(&fields[0])?)?,
@@ -1469,6 +1478,9 @@ fn decode_team_edit_common(value: &Value) -> Result<DecodedTeamEditArgument> {
             TeamRemovalAndCommitment::decode(&encode(value)?)
         })?,
         hepks: decode_hepk_set(&offchain[5])?,
+        remote_member_view_tokens: list(&offchain[2], |value| {
+            TeamRemoteMemberViewToken::decode(&encode(value)?)
+        })?,
         local_permissions_for: list(&fields[4], entity)?,
     })
 }

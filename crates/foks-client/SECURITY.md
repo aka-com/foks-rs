@@ -329,11 +329,20 @@ non-serializable value; successful recovery returns a normal caller-durable
 software credential. Backup keys are not written to SQLite. Losing both every
 permanent device and every enrolled backup phrase remains unrecoverable.
 
+The bounded federation slice treats Beacon answers as untrusted routing,
+authenticates and pins the requested remote HostID directly, issues exact
+remote-view permissions, verifies remote public user/team chains, and can add
+a scoped remote team through a durable client-side saga. Public scheduler rows
+are wake-up identities only: an encrypted membership record must reproduce the
+job ID before aliases, roles, or credentials are used. Bearers and removal keys
+never enter SQLite.
+
 Not yet implemented: additional founding members; promotion/addition through
-closed-viewership invitation and remote-join protocols; beacon resolution;
-federated discovery and remote-view-token issuance; CLKR; Git; chat/realtime;
-passphrase-based device recovery; SSO; or a full federated FOKS server. These
-omissions should fail by absence, not by permissive fallbacks.
+closed-viewership invitation and remote-join protocols; federated trust
+administration or push propagation; direct remote-user membership; automatic
+cross-team PTK rotation after remote roster/key changes; CLKR; Git;
+chat/realtime; passphrase-based device recovery; SSO; or a full federated FOKS
+server. These omissions should fail by absence, not by permissive fallbacks.
 
 ## Testing strategy
 

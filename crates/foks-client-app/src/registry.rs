@@ -10,6 +10,7 @@ pub enum Capability {
     Recovery,
     Passphrases,
     Teams,
+    Federation,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -268,6 +269,7 @@ fn capability_from_canary(value: &str) -> Result<Capability> {
         "recovery" => Ok(Capability::Recovery),
         "passphrases" => Ok(Capability::Passphrases),
         "teams" => Ok(Capability::Teams),
+        "federation" => Ok(Capability::Federation),
         _ => Err(Error::InvalidProfile("canary grants an unknown capability")),
     }
 }
@@ -282,6 +284,7 @@ fn capability_canary_name(capability: Capability) -> &'static str {
         Capability::Recovery => "recovery",
         Capability::Passphrases => "passphrases",
         Capability::Teams => "teams",
+        Capability::Federation => "federation",
     }
 }
 
@@ -504,6 +507,19 @@ impl ProfileSession {
 
     pub fn paths(&self) -> &ProfilePaths {
         &self.paths
+    }
+
+    /// Opens another profile under the same operation controls. This is used
+    /// only after that profile's own rollback checkpoint and operation lock
+    /// are acquired by the caller.
+    pub(crate) fn related_profile(&self, registry: &ProfileRegistry, name: &str) -> Result<Self> {
+        let profile = registry.profile(name)?.clone();
+        let paths = registry.prepare_profile_directory(name)?;
+        Ok(Self {
+            profile,
+            paths,
+            client: self.client.clone(),
+        })
     }
 
     pub(super) fn rollback_checkpoint(&self) -> Result<RollbackCheckpoint> {

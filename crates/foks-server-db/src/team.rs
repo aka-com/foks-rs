@@ -67,6 +67,16 @@ pub struct TeamRemovalBoxMutation<'a> {
     pub exact_box: &'a [u8],
 }
 
+pub struct TeamRemoteMemberViewTokenMutation<'a> {
+    pub member_party_id: &'a [u8],
+    pub member_host_id: &'a [u8],
+    pub ptk_generation: u64,
+    pub ptk_role_type: u64,
+    pub ptk_visibility: i64,
+    pub exact_secret_box: &'a [u8],
+    pub join_request_token: &'a [u8; 17],
+}
+
 pub struct TeamMutation<'a> {
     pub team_id: &'a [u8],
     pub signer_credential_id: &'a [u8],
@@ -81,6 +91,7 @@ pub struct TeamMutation<'a> {
     pub parcels: &'a [TeamParcelMutation<'a>],
     pub seed_chain: &'a [TeamSeedChainMutation<'a>],
     pub removal_boxes: &'a [TeamRemovalBoxMutation<'a>],
+    pub remote_member_view_tokens: &'a [TeamRemoteMemberViewTokenMutation<'a>],
     pub expected_root_epoch: u64,
     pub expected_root_hash: &'a [u8; 32],
     pub merkle_commit: &'a foks_merkle_store::Commit,
@@ -231,18 +242,31 @@ impl Database {
             return Err(Error::Invalid("team identity or founding roster"));
         }
         for member in mutation.members {
-            if member.party_id.first() != Some(&foks_proto::ENTITY_USER)
-                || member.scoped_host_id.is_some_and(|host| host != team_host)
-                || transaction
-                    .query_row(
-                        "SELECT 1 FROM users WHERE uid = ?1",
-                        [member.party_id],
-                        |_| Ok(()),
-                    )
-                    .optional()?
-                    .is_none()
-            {
-                return Err(Error::Invalid("non-local team member"));
+            let local = member
+                .scoped_host_id
+                .is_none_or(|scope| scope == team_host.as_slice());
+            let valid_party = if local {
+                member.party_id.first() == Some(&foks_proto::ENTITY_USER)
+                    && transaction
+                        .query_row(
+                            "SELECT 1 FROM users WHERE uid = ?1",
+                            [member.party_id],
+                            |_| Ok(()),
+                        )
+                        .optional()?
+                        .is_some()
+            } else {
+                member.scoped_host_id.is_some_and(|scope| {
+                    scope.len() == 33 && scope.first() == Some(&foks_proto::ENTITY_HOST)
+                }) && matches!(
+                    member.party_id.first(),
+                    Some(&foks_proto::ENTITY_USER)
+                        | Some(&foks_proto::ENTITY_NAMED_TEAM)
+                        | Some(&foks_proto::ENTITY_AD_HOC_TEAM)
+                )
+            };
+            if !valid_party {
+                return Err(Error::Invalid("invalid local or remote team member"));
             }
         }
 
@@ -382,6 +406,78 @@ impl Database {
                 "conflicting team removal box",
             )?;
         }
+        transaction.execute(
+            "DELETE FROM team_remote_member_view_tokens AS t
+             WHERE t.target_team_id = ?1 AND NOT EXISTS (
+               SELECT 1 FROM team_members AS m
+               WHERE m.team_id = t.target_team_id
+                 AND m.party_id = t.member_party_id
+                 AND m.scoped_host_id = t.member_host_id)",
+            [mutation.team_id],
+        )?;
+        for token in mutation.remote_member_view_tokens {
+            let member_exists = transaction
+                .query_row(
+                    "SELECT 1 FROM team_members
+                     WHERE team_id = ?1 AND party_id = ?2 AND scoped_host_id = ?3",
+                    params![
+                        mutation.team_id,
+                        token.member_party_id,
+                        token.member_host_id
+                    ],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if !member_exists
+                || token.member_host_id == team_host.as_slice()
+                || token.join_request_token[0] != 56
+            {
+                return Err(Error::Invalid("remote member-view token binding"));
+            }
+            insert_exact(
+                &transaction,
+                "INSERT INTO team_remote_member_view_tokens
+                 (target_team_id, member_party_id, member_host_id, ptk_generation,
+                  ptk_role_type, ptk_visibility, exact_secret_box, join_request_token,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+                 ON CONFLICT(target_team_id, member_party_id, member_host_id) DO UPDATE SET
+                   ptk_generation = excluded.ptk_generation,
+                   ptk_role_type = excluded.ptk_role_type,
+                   ptk_visibility = excluded.ptk_visibility,
+                   exact_secret_box = excluded.exact_secret_box,
+                   join_request_token = excluded.join_request_token,
+                   updated_at = excluded.updated_at",
+                params![
+                    mutation.team_id,
+                    token.member_party_id,
+                    token.member_host_id,
+                    sql_integer(token.ptk_generation)?,
+                    sql_integer(token.ptk_role_type)?,
+                    token.ptk_visibility,
+                    token.exact_secret_box,
+                    token.join_request_token,
+                    sql_integer(mutation.now)?
+                ],
+                "conflicting remote member-view token",
+            )?;
+        }
+        let missing_remote: i64 = transaction.query_row(
+            "SELECT count(*) FROM team_members m
+             WHERE m.team_id = ?1 AND m.scoped_host_id IS NOT NULL
+               AND m.scoped_host_id != ?2 AND NOT EXISTS (
+                 SELECT 1 FROM team_remote_member_view_tokens t
+                 WHERE t.target_team_id = m.team_id AND t.member_party_id = m.party_id
+                   AND t.member_host_id = m.scoped_host_id)",
+            params![mutation.team_id, team_host],
+            |row| row.get(0),
+        )?;
+        if missing_remote != 0 {
+            return Err(Error::Invalid(
+                "remote member is missing its view-token box",
+            ));
+        }
         inject(failure, TeamMutationFailurePoint::Projection)?;
 
         publish_merkle(&transaction, mutation, failure)?;
@@ -489,6 +585,15 @@ fn validate(database: &Database, mutation: &TeamMutation<'_>) -> Result<()> {
         || mutation.parcels.len() > database.config.maximum_boxes_per_mutation
         || mutation.seed_chain.len() > database.config.maximum_boxes_per_mutation
         || mutation.removal_boxes.len() > database.config.maximum_boxes_per_mutation
+        || mutation.remote_member_view_tokens.len() > database.config.maximum_boxes_per_mutation
+        || mutation.remote_member_view_tokens.iter().any(|token| {
+            token.member_party_id.len() != 33
+                || token.member_host_id.len() != 33
+                || token.ptk_generation == 0
+                || !(1..=3).contains(&token.ptk_role_type)
+                || token.exact_secret_box.is_empty()
+                || token.exact_secret_box.len() > database.config.maximum_blob_bytes
+        })
         || mutation.merkle_commit.nodes.len() > database.config.maximum_merkle_nodes_per_commit
         || mutation.back_pointers.len() > database.config.maximum_back_pointers
         || mutation.receipt_expires_at <= mutation.now

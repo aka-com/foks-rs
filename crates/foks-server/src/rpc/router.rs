@@ -42,7 +42,7 @@ pub fn route_call(call: DecodedCall, listener: Listener) -> Result<RoutedCall, R
         protocol_id: call.protocol_id(),
         position: call.method_position(),
     })?;
-    if route.listener != listener.contract_name() {
+    if !route.listeners.contains(&listener.contract_name()) {
         return Err(RouteError::WrongListener);
     }
     if call.argument().len() > route.max_request_bytes {

@@ -125,6 +125,31 @@ impl FoksClient {
         })
     }
 
+    /// Probes a Beacon-supplied endpoint and requires its authenticated
+    /// hostchain to identify the exact requested host before changing durable
+    /// hard state.
+    pub fn probe_and_pin_host_id(
+        &self,
+        target: &ProbeTarget,
+        expected_host_id: &EntityId,
+        database_path: &Path,
+    ) -> Result<ProbeOutcome> {
+        expected_host_id
+            .clone()
+            .require_type(foks_proto::ENTITY_HOST)?;
+        let response = self.probe(target)?;
+        let verified = verify_discovered_host(target, expected_host_id, &response)?;
+        let mut store = HardStateStore::open(database_path)?;
+        let acceptance = store.accept_verified_host(&verified.snapshot)?;
+        drop(store);
+        let pinned = self.pinned_host(&target.hostname, database_path)?;
+        Ok(ProbeOutcome {
+            acceptance,
+            verified,
+            pinned,
+        })
+    }
+
     /// Loads an authenticated host capability from durable hard state.
     pub fn pinned_host(&self, lookup_name: &str, database_path: &Path) -> Result<PinnedHost> {
         let store = HardStateStore::open(database_path)?;
@@ -193,6 +218,20 @@ impl FoksClient {
             &host_snapshot.chain_bytes,
         )?))
     }
+}
+
+fn verify_discovered_host(
+    target: &ProbeTarget,
+    expected_host_id: &EntityId,
+    response: &[u8],
+) -> Result<VerifiedPublicHost> {
+    let verified = verify_public_host(&target.hostname, response)?;
+    if verified.snapshot.host_id() != expected_host_id.as_bytes() {
+        return Err(Error::FederationDiscovery(
+            "the probed host does not match the requested HostID",
+        ));
+    }
+    Ok(verified)
 }
 
 pub(crate) fn authenticated_tls_roots(host: &PinnedHost) -> Result<rustls::RootCertStore> {
@@ -275,4 +314,35 @@ fn service_target(
     };
     let endpoint = std::str::from_utf8(&endpoint).map_err(|_| Error::PinnedService(label))?;
     ProbeTarget::parse(endpoint).map_err(|_| Error::PinnedService(label))
+}
+
+#[cfg(test)]
+mod federation_tests {
+    use super::*;
+
+    const PROBE: &[u8] = include_bytes!(
+        "../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp"
+    );
+
+    #[test]
+    fn direct_probe_must_authenticate_the_requested_host_id() {
+        let target = ProbeTarget::parse("foks.app").unwrap();
+        let verified = verify_public_host("foks.app", PROBE).unwrap();
+        let expected = EntityId::from_bytes(verified.snapshot.host_id().to_vec()).unwrap();
+        assert_eq!(
+            verify_discovered_host(&target, &expected, PROBE)
+                .unwrap()
+                .snapshot
+                .host_id(),
+            expected.as_bytes()
+        );
+
+        let mut other = expected.as_bytes().to_vec();
+        other[32] ^= 1;
+        let other = EntityId::from_bytes(other).unwrap();
+        assert!(matches!(
+            verify_discovered_host(&target, &other, PROBE),
+            Err(Error::FederationDiscovery(_))
+        ));
+    }
 }

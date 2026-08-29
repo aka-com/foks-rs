@@ -10,7 +10,9 @@ mod schema;
 mod soft;
 mod soft_schema;
 
-pub use soft::{KvDirectoryProjection, KvLargeFileStage, KvProjectedEntry, SoftStateStore};
+pub use soft::{
+    KvDirectoryProjection, KvLargeFileStage, KvProjectedEntry, SoftStateStore, MAX_DISCOVERY_HINTS,
+};
 
 use foks_proto::ServiceType;
 use foks_snowpack::{decode, encode, Value};
@@ -140,6 +142,7 @@ pub enum ScheduledJobKind {
     UserRefresh = 1,
     MutationReconcile = 2,
     YubiManagementRefresh = 3,
+    FederationReconcile = 4,
 }
 
 impl ScheduledJobKind {
@@ -148,6 +151,7 @@ impl ScheduledJobKind {
             1 => Ok(Self::UserRefresh),
             2 => Ok(Self::MutationReconcile),
             3 => Ok(Self::YubiManagementRefresh),
+            4 => Ok(Self::FederationReconcile),
             _ => Err(Error::InvalidScheduledJob("unknown scheduled job kind")),
         }
     }
@@ -422,6 +426,74 @@ pub struct TeamMutationOperation {
     pub updated_at: u64,
 }
 
+/// Monotonic recovery stages for admitting a remote party to a local team.
+/// The journal never stores the bearer permission or the removal key.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum FederationSagaState {
+    PermissionGranted = 1,
+    RemoteVerified = 2,
+    LocalPrepared = 3,
+    LocalVerified = 4,
+    Completed = 5,
+    Rejected = 6,
+}
+
+impl FederationSagaState {
+    fn from_sql(value: i64) -> Result<Self> {
+        match value {
+            1 => Ok(Self::PermissionGranted),
+            2 => Ok(Self::RemoteVerified),
+            3 => Ok(Self::LocalPrepared),
+            4 => Ok(Self::LocalVerified),
+            5 => Ok(Self::Completed),
+            6 => Ok(Self::Rejected),
+            _ => Err(Error::InvalidFederationSaga("unknown saga state")),
+        }
+    }
+
+    fn can_transition_to(self, next: Self) -> bool {
+        self == next
+            || matches!(
+                (self, next),
+                (Self::PermissionGranted, Self::RemoteVerified)
+                    | (Self::RemoteVerified, Self::LocalPrepared)
+                    | (Self::LocalPrepared, Self::LocalVerified)
+                    | (Self::LocalVerified, Self::Completed)
+                    | (
+                        Self::PermissionGranted
+                            | Self::RemoteVerified
+                            | Self::LocalPrepared
+                            | Self::LocalVerified,
+                        Self::Rejected
+                    )
+            )
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Rejected)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FederationSagaOperation {
+    pub operation_id: [u8; 16],
+    pub local_host_id: Vec<u8>,
+    pub remote_host_id: Vec<u8>,
+    pub actor_id: Vec<u8>,
+    pub local_team_id: Vec<u8>,
+    pub remote_party_id: Vec<u8>,
+    pub permission_hash: [u8; 32],
+    pub destination_role_type: u64,
+    pub destination_visibility: i64,
+    pub removal_key_commitment: [u8; 32],
+    pub state: FederationSagaState,
+    pub expected_local_seqno: Option<u64>,
+    pub local_mutation_id: Option<[u8; 16]>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("hard-state filesystem operation failed: {0}")]
@@ -482,6 +554,8 @@ pub enum Error {
     UnsupportedSoftSchema { found: u32, supported: u32 },
     #[error("invalid verified KV projection")]
     InvalidKvProjection,
+    #[error("persisted federation discovery hint is malformed")]
+    InvalidDiscoveryHint,
     #[error("KV root rolled back from version {stored} to {received}")]
     KvRootRollback { stored: u64, received: u64 },
     #[error("KV directory rolled back from version {stored} to {received}")]
@@ -494,6 +568,8 @@ pub enum Error {
     InvalidAdHocTeamOperation(&'static str),
     #[error("invalid named-team mutation operation: {0}")]
     InvalidTeamMutation(&'static str),
+    #[error("invalid federation saga operation: {0}")]
+    InvalidFederationSaga(&'static str),
     #[error("invalid generic mutation operation: {0}")]
     InvalidMutationOperation(&'static str),
     #[error("invalid scheduled job: {0}")]
@@ -2303,6 +2379,109 @@ mod tests {
             ..superseded
         };
         store.record_team_mutation(&replacement).unwrap();
+    }
+
+    #[test]
+    fn federation_saga_is_secret_free_idempotent_and_monotonic() {
+        let (_directory, mut store) = store();
+        let mut host = snapshot();
+        host.host_id = [vec![foks_proto::ENTITY_HOST], vec![1; 32]].concat();
+        store.accept_host_parts(host.parts()).unwrap();
+        let operation = FederationSagaOperation {
+            operation_id: [41; 16],
+            local_host_id: host.host_id,
+            remote_host_id: [vec![foks_proto::ENTITY_HOST], vec![2; 32]].concat(),
+            actor_id: [vec![foks_proto::ENTITY_USER], vec![3; 32]].concat(),
+            local_team_id: [vec![foks_proto::ENTITY_NAMED_TEAM], vec![4; 32]].concat(),
+            remote_party_id: [vec![foks_proto::ENTITY_AD_HOC_TEAM], vec![5; 32]].concat(),
+            permission_hash: [6; 32],
+            destination_role_type: 1,
+            destination_visibility: 0,
+            removal_key_commitment: [7; 32],
+            state: FederationSagaState::PermissionGranted,
+            expected_local_seqno: None,
+            local_mutation_id: None,
+            created_at: 100,
+            updated_at: 100,
+        };
+        let before = store.metadata().unwrap().revision;
+        store.record_federation_saga(&operation).unwrap();
+        store.record_federation_saga(&operation).unwrap();
+        assert!(store.metadata().unwrap().revision > before);
+        assert_eq!(
+            store.federation_saga(&operation.operation_id).unwrap(),
+            Some(operation.clone())
+        );
+
+        let conflicting = FederationSagaOperation {
+            permission_hash: [8; 32],
+            ..operation.clone()
+        };
+        assert!(store.record_federation_saga(&conflicting).is_err());
+        let malformed = FederationSagaOperation {
+            actor_id: [vec![foks_proto::ENTITY_NAMED_TEAM], vec![3; 32]].concat(),
+            ..operation.clone()
+        };
+        assert!(store.record_federation_saga(&malformed).is_err());
+        assert!(store
+            .advance_federation_saga(
+                &operation.operation_id,
+                FederationSagaState::LocalPrepared,
+                Some((2, [9; 16])),
+                101,
+            )
+            .is_err());
+        store
+            .advance_federation_saga(
+                &operation.operation_id,
+                FederationSagaState::RemoteVerified,
+                None,
+                101,
+            )
+            .unwrap();
+        store
+            .advance_federation_saga(
+                &operation.operation_id,
+                FederationSagaState::LocalPrepared,
+                Some((2, [9; 16])),
+                102,
+            )
+            .unwrap();
+        assert!(store
+            .advance_federation_saga(
+                &operation.operation_id,
+                FederationSagaState::LocalVerified,
+                Some((3, [9; 16])),
+                103,
+            )
+            .is_err());
+        store
+            .advance_federation_saga(
+                &operation.operation_id,
+                FederationSagaState::LocalVerified,
+                None,
+                103,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .pending_federation_sagas(&operation.local_host_id)
+                .unwrap()
+                .len(),
+            1
+        );
+        store
+            .advance_federation_saga(
+                &operation.operation_id,
+                FederationSagaState::Completed,
+                None,
+                104,
+            )
+            .unwrap();
+        assert!(store
+            .pending_federation_sagas(&operation.local_host_id)
+            .unwrap()
+            .is_empty());
     }
 
     fn snapshot() -> TestHostSnapshot {

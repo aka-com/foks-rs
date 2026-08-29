@@ -13,7 +13,17 @@ pub(super) trait Operations {
     ) -> Result<Vec<u8>, RpcStatus>;
     fn activate_loader(&self, argument: &[u8], principal: &Principal)
         -> Result<Vec<u8>, RpcStatus>;
-    fn load_chain(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus>;
+    fn load_chain(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+    fn load_remote_view_tokens(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus>;
+    fn grant_remote_view(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus>;
     fn reserve_name(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus>;
     fn create(&self, argument: &[u8], named: bool, principal: &Principal) -> Result<(), RpcStatus>;
     fn edit(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus>;
@@ -66,17 +76,52 @@ impl Operations for ServerData {
         )
     }
 
-    fn load_chain(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus> {
+    fn load_chain(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
         let database = self.read_database()?;
         let snapshot = database
             .snapshot()
             .map_err(|_| RpcStatus::TransactionRetry)?;
         crate::services::team_loader::load_chain(
             argument,
+            &self.host()?,
+            &snapshot,
+            self.clock.as_ref(),
+        )
+    }
+
+    fn load_remote_view_tokens(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        crate::services::team_loader::load_remote_view_tokens(
+            argument,
             principal,
             &self.host()?,
             &snapshot,
             self.clock.as_ref(),
+        )
+    }
+
+    fn grant_remote_view(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        crate::services::federation::grant_remote_team_view(
+            argument,
+            principal,
+            &self.host()?,
+            &database,
+            self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+            self.key_provider.as_deref().ok_or(RpcStatus::Unsupported)?,
+            &self.clock,
+            self.entropy.as_ref(),
         )
     }
 
@@ -171,40 +216,56 @@ pub(super) fn response(
     call: RoutedCall,
     principal: Option<&Principal>,
 ) -> Result<Vec<u8>, RpcStatus> {
-    let principal = principal.ok_or_else(permission_denied)?;
     let sequence = call.call.sequence();
     let data = match call.route.id {
-        RouteId::TeamLoaderGetTeamVOBearerTokenChallenge => {
-            Some(operations.loader_challenge(call.call.argument(), principal)?)
-        }
-        RouteId::TeamLoaderActivateTeamVOBearerToken => {
-            Some(operations.activate_loader(call.call.argument(), principal)?)
-        }
-        RouteId::TeamLoaderLoadTeamChain => {
-            Some(operations.load_chain(call.call.argument(), principal)?)
-        }
-        RouteId::TeamAdminReserveTeamname => {
-            Some(operations.reserve_name(call.call.argument(), principal)?)
-        }
+        RouteId::TeamLoaderGetTeamVOBearerTokenChallenge => Some(operations.loader_challenge(
+            call.call.argument(),
+            principal.ok_or_else(permission_denied)?,
+        )?),
+        RouteId::TeamLoaderActivateTeamVOBearerToken => Some(operations.activate_loader(
+            call.call.argument(),
+            principal.ok_or_else(permission_denied)?,
+        )?),
+        RouteId::TeamLoaderLoadTeamChain => Some(operations.load_chain(call.call.argument())?),
+        RouteId::TeamLoaderLoadTeamRemoteViewTokens => Some(operations.load_remote_view_tokens(
+            call.call.argument(),
+            principal.ok_or_else(permission_denied)?,
+        )?),
+        RouteId::TeamMemberGrantRemoteViewPermissionForTeam => Some(operations.grant_remote_view(
+            call.call.argument(),
+            principal.ok_or_else(permission_denied)?,
+        )?),
+        RouteId::TeamAdminReserveTeamname => Some(operations.reserve_name(
+            call.call.argument(),
+            principal.ok_or_else(permission_denied)?,
+        )?),
         RouteId::TeamAdminCreateTeam | RouteId::TeamAdminCreateTeamAdHoc => {
             operations.create(
                 call.call.argument(),
                 call.route.id == RouteId::TeamAdminCreateTeam,
-                principal,
+                principal.ok_or_else(permission_denied)?,
             )?;
             None
         }
-        RouteId::TeamAdminEditTeam => Some(operations.edit(call.call.argument(), principal)?),
-        RouteId::TeamAdminMakeInertTeamBearerToken => {
-            Some(operations.make_inert_token(call.call.argument(), principal)?)
-        }
+        RouteId::TeamAdminEditTeam => Some(operations.edit(
+            call.call.argument(),
+            principal.ok_or_else(permission_denied)?,
+        )?),
+        RouteId::TeamAdminMakeInertTeamBearerToken => Some(operations.make_inert_token(
+            call.call.argument(),
+            principal.ok_or_else(permission_denied)?,
+        )?),
         RouteId::TeamAdminActivateTeamBearerToken => {
-            operations.activate_token(call.call.argument(), principal)?;
+            operations.activate_token(
+                call.call.argument(),
+                principal.ok_or_else(permission_denied)?,
+            )?;
             None
         }
-        RouteId::TeamAdminLoadRemovalKeyBoxForTeamAdmin => {
-            Some(operations.load_removal_box(call.call.argument(), principal)?)
-        }
+        RouteId::TeamAdminLoadRemovalKeyBoxForTeamAdmin => Some(operations.load_removal_box(
+            call.call.argument(),
+            principal.ok_or_else(permission_denied)?,
+        )?),
         _ => return Err(RpcStatus::Unsupported),
     };
     match data {

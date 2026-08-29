@@ -46,6 +46,7 @@ pub fn bootstrap(
     let metadata_key = provider.load_or_create(KeyPurpose::Metadata)?;
     let merkle_key = provider.load_or_create(KeyPurpose::Merkle)?;
     let delegated_tls_key = provider.load_or_create(KeyPurpose::DelegatedTls)?;
+    let capability_key = provider.load_or_create(KeyPurpose::Capability)?;
 
     let host_id = entity(ENTITY_HOST, &host_key)?;
     let metadata_id = entity(ENTITY_HOST_METADATA_SIGNER, &metadata_key)?;
@@ -170,6 +171,7 @@ pub fn bootstrap(
         probe_response: probe_response.clone(),
         key_manifest: manifest.encode(),
         host_key_generation: host_key.generation().as_bytes(),
+        capability_key_generation: capability_key.generation().as_bytes(),
         hostchain_link_hash: hostchain_hash,
         exact_hostchain_link: exact_hostchain,
         services,
@@ -212,8 +214,14 @@ pub fn load_or_bootstrap(
         generation.encrypted_file_name == "host.key"
             && generation.state != foks_server_db::HostKeyGenerationState::Revoked
     });
-    manifest.validate_existing(provider, require_genesis_host)?;
+    let capability_generations = database.capability_key_generations()?;
+    let require_genesis_capability = capability_generations.iter().any(|generation| {
+        generation.encrypted_file_name == "capability.key"
+            && generation.state != foks_server_db::CapabilityKeyGenerationState::Revoked
+    });
+    manifest.validate_existing(provider, require_genesis_host, require_genesis_capability)?;
     super::rotation::validate_host_key_generations(database, provider)?;
+    crate::keys::validate_capability_key_generations(database, provider)?;
     let verified = foks_verify::verify_public_host(&input.canonical_name, &stored.probe_response)?;
     if verified.snapshot.host_id() != stored.host_id
         || verified.public_zone.ttl_seconds != input.ttl_seconds

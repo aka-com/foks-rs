@@ -1,5 +1,6 @@
 //! Domain repositories sharing the store's single SQLite transaction layer.
 
+mod federation;
 mod host;
 mod jobs;
 mod journals;
@@ -26,6 +27,7 @@ mod tests {
     fn domain_repositories_use_the_shared_write_transaction_layer() {
         let repositories = [
             include_str!("host.rs"),
+            include_str!("federation.rs"),
             include_str!("jobs.rs"),
             include_str!("journals.rs"),
             include_str!("metadata.rs"),

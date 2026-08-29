@@ -39,6 +39,11 @@ pub(super) trait Operations {
         argument: &[u8],
         principal: &Principal,
     ) -> Result<Vec<u8>, RpcStatus>;
+    fn grant_remote_user_view(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus>;
 }
 
 impl Operations for ServerData {
@@ -181,6 +186,24 @@ impl Operations for ServerData {
             .map_err(|_| RpcStatus::TransactionRetry)?;
         crate::services::user::get_all_yubi_management_keys(&snapshot, argument, principal)
     }
+
+    fn grant_remote_user_view(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        crate::services::federation::grant_remote_user_view(
+            argument,
+            principal,
+            &self.host()?,
+            &database,
+            self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+            self.key_provider.as_deref().ok_or(RpcStatus::Unsupported)?,
+            &self.clock,
+            self.entropy.as_ref(),
+        )
+    }
 }
 
 pub(super) fn response(
@@ -252,6 +275,11 @@ pub(super) fn response(
         .map_err(|_| RpcStatus::Unsupported),
         RouteId::UserGetAllYubiManagementKeys => encode_success_response_at(
             &operations.get_all_yubi_management_keys(call.call.argument(), principal)?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
+        RouteId::UserGrantRemoteViewPermissionForUser => encode_success_response_at(
+            &operations.grant_remote_user_view(call.call.argument(), principal)?,
             sequence,
         )
         .map_err(|_| RpcStatus::Unsupported),
