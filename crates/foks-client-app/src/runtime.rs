@@ -13,8 +13,13 @@ use crate::{
 const USER_REFRESH_JOB_TYPE_ID: u64 = 0xb1a8_c09a_d2b9_4de7;
 const OPERATION_LOCK_FILE: &str = ".profile-operation.lock";
 const SCHEDULER_LOCK_FILE: &str = ".scheduler-run.lock";
+const DATABASE_LOCK_DIRECTORY: &str = ".database-operation-locks";
 
 pub(crate) struct ProfileLock {
+    file: File,
+}
+
+pub(crate) struct DatabaseLock {
     file: File,
 }
 
@@ -56,6 +61,31 @@ impl ProfileLock {
     }
 }
 
+impl DatabaseLock {
+    pub(crate) fn acquire(root: &std::path::Path, database_id: &[u8; 16]) -> Result<Self> {
+        let file = open_database_lock(root, database_id)?;
+        file.lock_exclusive()?;
+        Ok(Self { file })
+    }
+
+    pub(crate) fn try_acquire(
+        root: &std::path::Path,
+        database_id: &[u8; 16],
+    ) -> Result<Option<Self>> {
+        let file = open_database_lock(root, database_id)?;
+        match file.try_lock_exclusive() {
+            Ok(()) => Ok(Some(Self { file })),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub(crate) fn release(self) -> Result<()> {
+        self.file.unlock()?;
+        Ok(())
+    }
+}
+
 fn open_lock(paths: &ProfilePaths, name: &str) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
@@ -65,6 +95,20 @@ fn open_lock(paths: &ProfilePaths, name: &str) -> Result<File> {
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
     options.open(paths.directory.join(name)).map_err(Into::into)
+}
+
+fn open_database_lock(root: &std::path::Path, database_id: &[u8; 16]) -> Result<File> {
+    let directory = crate::prepare_private_directory(&root.join(DATABASE_LOCK_DIRECTORY))?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    options
+        .open(directory.join(format!("{}.lock", crate::hex(database_id))))
+        .map_err(Into::into)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -248,6 +292,55 @@ mod tests {
         scheduler.release().unwrap();
         other_profile.release().unwrap();
         operation.release().unwrap();
+    }
+
+    #[test]
+    fn database_locks_are_keyed_by_identity_within_one_client_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        std::fs::create_dir(&root).unwrap();
+        let first = DatabaseLock::acquire(&root, &[1; 16]).unwrap();
+        assert!(DatabaseLock::try_acquire(&root, &[1; 16])
+            .unwrap()
+            .is_none());
+        let other = DatabaseLock::try_acquire(&root, &[2; 16]).unwrap().unwrap();
+        assert!(root
+            .join(DATABASE_LOCK_DIRECTORY)
+            .join(format!("{}.lock", crate::hex(&[1; 16])))
+            .is_file());
+        other.release().unwrap();
+        first.release().unwrap();
+    }
+
+    #[test]
+    fn database_locks_contend_across_processes() {
+        const ROOT_ENV: &str = "FOKS_DATABASE_LOCK_TEST_ROOT";
+        const CHILD_ENV: &str = "FOKS_DATABASE_LOCK_TEST_CHILD";
+
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let root = std::path::PathBuf::from(std::env::var_os(ROOT_ENV).unwrap());
+            assert!(DatabaseLock::try_acquire(&root, &[3; 16])
+                .unwrap()
+                .is_none());
+            return;
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        std::fs::create_dir(&root).unwrap();
+        let lock = DatabaseLock::acquire(&root, &[3; 16]).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "runtime::tests::database_locks_contend_across_processes",
+                "--nocapture",
+            ])
+            .env(ROOT_ENV, &root)
+            .env(CHILD_ENV, "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        lock.release().unwrap();
     }
 
     #[test]

@@ -8,6 +8,7 @@ description = "Authoritative standalone SQLite storage for the FOKS v0.1.9 serve
 [dependencies]
 foks-merkle-store = { workspace = true }
 foks-proto = { workspace = true }
+libc = { workspace = true }
 rusqlite = { workspace = true }
 thiserror = { workspace = true }
 

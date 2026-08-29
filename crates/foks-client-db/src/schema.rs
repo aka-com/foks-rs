@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 18;
+pub(crate) const VERSION: u32 = 19;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -25,7 +25,8 @@ pub(crate) const INITIAL: &str = r#"
 CREATE TABLE hard_state_metadata (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     database_id BLOB NOT NULL UNIQUE CHECK (length(database_id) = 16),
-    hard_state_revision INTEGER NOT NULL CHECK (hard_state_revision >= 0)
+    hard_state_revision INTEGER NOT NULL CHECK (hard_state_revision >= 0),
+    write_token BLOB NOT NULL CHECK (length(write_token) = 16)
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE hosts (

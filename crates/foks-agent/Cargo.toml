@@ -17,6 +17,7 @@ foks-compat-artifact = { workspace = true }
 foks-keystore = { workspace = true }
 foks-yubi = { workspace = true, features = ["hardware"] }
 reqwest = { workspace = true }
+rustix = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 zeroize = { workspace = true }

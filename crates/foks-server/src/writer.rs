@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
-use foks_server_db::Database;
+use foks_server_db::{Database, DatabasePathIdentity};
 
 use crate::{Error, Result};
 
@@ -117,21 +117,30 @@ impl Writer {
         if maximum_pending == 0 {
             return Err(Error::Config("zero writer queue limit"));
         }
+        let database_identity = DatabasePathIdentity::prepare(&database_path)?;
+        let database_path = database_identity.path().to_path_buf();
         let mut lock_path = database_path.as_os_str().to_os_string();
         lock_path.push(".writer-lock");
-        let process_lock = std::fs::OpenOptions::new()
+        let mut lock_options = std::fs::OpenOptions::new();
+        lock_options
             .read(true)
             .write(true)
             .create(true)
-            .truncate(false)
-            .open(std::path::PathBuf::from(lock_path))?;
+            .truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            lock_options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        let process_lock = lock_options.open(std::path::PathBuf::from(lock_path))?;
         process_lock
             .try_lock()
             .map_err(|_| Error::Config("database writer is already active"))?;
+        database_identity.recheck()?;
         let (sender, receiver) = mpsc::sync_channel(maximum_pending);
         let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
         let thread = thread::spawn(move || {
-            let database = Database::open(database_path, database_config);
+            let database = Database::open_with_identity(database_identity, database_config);
             match database {
                 Ok(mut database) => {
                     if startup_sender.send(Ok(())).is_ok() {

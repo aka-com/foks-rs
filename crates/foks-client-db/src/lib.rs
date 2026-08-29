@@ -45,6 +45,7 @@ pub struct StoredHostSnapshot {
 pub struct HardStateMetadata {
     pub database_id: [u8; 16],
     pub revision: u64,
+    pub write_token: [u8; 16],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -422,7 +423,7 @@ impl TeamMutationState {
                         | Self::Superseded
                 ) | (
                     Self::SubmissionUnknown,
-                    Self::Submitted | Self::Verified | Self::Superseded
+                    Self::Submitted | Self::Verified | Self::Rejected | Self::Superseded
                 ) | (
                     Self::Submitted,
                     Self::Verified | Self::Rejected | Self::Superseded
@@ -642,12 +643,15 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
         }
         let mut database_id = [0u8; 16];
         getrandom::fill(&mut database_id).map_err(|_| Error::Randomness)?;
+        let mut write_token = [0u8; 16];
+        getrandom::fill(&mut write_token).map_err(|_| Error::Randomness)?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute_batch(SCHEMA)?;
         transaction.execute(
-            "INSERT INTO hard_state_metadata (singleton, database_id, hard_state_revision)
-             VALUES (1, ?1, 0)",
-            [database_id.as_slice()],
+            "INSERT INTO hard_state_metadata
+                 (singleton, database_id, hard_state_revision, write_token)
+             VALUES (1, ?1, 0, ?2)",
+            rusqlite::params![database_id.as_slice(), write_token.as_slice()],
         )?;
         install_revision_triggers(&transaction)?;
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
@@ -678,7 +682,8 @@ fn install_revision_triggers(transaction: &Transaction<'_>) -> Result<()> {
                  AFTER {operation} ON {table}
                  BEGIN
                    UPDATE hard_state_metadata
-                   SET hard_state_revision = hard_state_revision + 1
+                   SET hard_state_revision = hard_state_revision + 1,
+                       write_token = randomblob(16)
                    WHERE singleton = 1;
                  END;"
             ))?;
@@ -1988,6 +1993,7 @@ mod tests {
         let pinned = store.metadata().unwrap();
         assert_eq!(initial.database_id, pinned.database_id);
         assert!(pinned.revision > initial.revision);
+        assert_ne!(pinned.write_token, initial.write_token);
 
         store
             .register_scheduled_job(&ScheduledJob {
@@ -2006,6 +2012,7 @@ mod tests {
             .unwrap();
         let scheduled = store.metadata().unwrap();
         assert!(scheduled.revision > pinned.revision);
+        assert_ne!(scheduled.write_token, pinned.write_token);
 
         store
             .record_mutation(&MutationOperation {
@@ -2026,6 +2033,7 @@ mod tests {
             .unwrap();
         let journaled = store.metadata().unwrap();
         assert!(journaled.revision > scheduled.revision);
+        assert_ne!(journaled.write_token, scheduled.write_token);
 
         let other = HardStateStore::open(&directory.path().join("other.db"))
             .unwrap()
@@ -2434,31 +2442,44 @@ mod tests {
                 303,
             )
             .unwrap();
-        assert!(store
+        // SubmissionUnknown can now be rejected to unblock a wedged sole-client
+        // (fix for team mutation recovery wedge).
+        store
             .advance_team_mutation(
                 &duplicate_transition.operation_id,
                 TeamMutationState::Rejected,
                 304,
             )
-            .is_err());
-        store
+            .unwrap();
+        // Rejected is terminal and releases the chain position.
+        assert!(store
             .advance_team_mutation(
                 &duplicate_transition.operation_id,
                 TeamMutationState::Submitted,
-                304,
-            )
-            .unwrap();
-        store
-            .advance_team_mutation(
-                &duplicate_transition.operation_id,
-                TeamMutationState::Verified,
                 305,
             )
+            .is_err());
+        let fresh = TeamMutationOperation {
+            operation_id: [6; 16],
+            state: TeamMutationState::Prepared,
+            created_at: 306,
+            updated_at: 306,
+            ..duplicate_transition.clone()
+        };
+        store.record_team_mutation(&fresh).unwrap();
+        store
+            .advance_team_mutation(&fresh.operation_id, TeamMutationState::Submitting, 307)
+            .unwrap();
+        store
+            .advance_team_mutation(&fresh.operation_id, TeamMutationState::Submitted, 307)
+            .unwrap();
+        store
+            .advance_team_mutation(&fresh.operation_id, TeamMutationState::Verified, 308)
             .unwrap();
         let stale_third = TeamMutationOperation {
             operation_id: [3; 16],
             state: TeamMutationState::Prepared,
-            ..duplicate_transition
+            ..fresh
         };
         assert!(store.record_team_mutation(&stale_third).is_err());
 

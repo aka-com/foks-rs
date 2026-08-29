@@ -565,6 +565,7 @@ fn rollback_checkpoint(session: &ProfileSession) -> Result<RollbackCheckpoint> {
         profile: session.profile.name.clone(),
         database_id: metadata.database_id,
         hard_state_revision: metadata.revision,
+        write_token: metadata.write_token,
         host,
     })
 }

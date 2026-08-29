@@ -12,6 +12,8 @@ pub enum Error {
     IntegerRange,
     #[error("invalid storage input: {0}")]
     Invalid(&'static str),
+    #[error("unsafe or unsupported database path: {0}")]
+    UnsafeDatabasePath(&'static str),
     #[error("name is already reserved or claimed")]
     NameInUse,
     #[error("reservation is missing, expired, or does not match")]

@@ -78,15 +78,17 @@ impl HardStateStore {
             )
             .optional()?
             .ok_or(Error::InvalidMutationOperation("operation is not recorded"))?;
-        if MutationState::from_sql(state)? != MutationState::Prepared
-            || attempts != 0
-            || updated_at < stored_unsigned("mutation created time", created_at)?
-            || updated_at < stored_unsigned("mutation updated time", previous_updated_at)?
-        {
+        let created_at = stored_unsigned("mutation created time", created_at)?;
+        let previous_updated_at = stored_unsigned("mutation updated time", previous_updated_at)?;
+        if MutationState::from_sql(state)? != MutationState::Prepared || attempts != 0 {
             return Err(Error::InvalidMutationOperation(
                 "mutation cannot be submitted more than once",
             ));
         }
+        // Clamp the local journal timestamp monotonically so a backward wall-clock
+        // step cannot block the one-time submission. The no-replay boundary is the
+        // state/attempt guard above, not the timestamp.
+        let stamped = monotonic_timestamp(created_at, previous_updated_at, updated_at);
         transaction.execute(
             "UPDATE mutation_operations
              SET state = ?2, attempt_count = 1, updated_at = ?3
@@ -94,7 +96,7 @@ impl HardStateStore {
             params![
                 operation_id.as_slice(),
                 MutationState::Submitting as u8,
-                sqlite_integer("mutation updated time", updated_at)?,
+                sqlite_integer("mutation updated time", stamped)?,
             ],
         )?;
         transaction.commit()?;
@@ -124,21 +126,24 @@ impl HardStateStore {
             .optional()?
             .ok_or(Error::InvalidMutationOperation("operation is not recorded"))?;
         let current = MutationState::from_sql(current)?;
-        if !current.can_transition_to(state)
-            || updated_at < stored_unsigned("mutation created time", created_at)?
-            || updated_at < stored_unsigned("mutation updated time", previous_updated_at)?
-        {
+        let created_at = stored_unsigned("mutation created time", created_at)?;
+        let previous_updated_at = stored_unsigned("mutation updated time", previous_updated_at)?;
+        if !current.can_transition_to(state) {
             return Err(Error::InvalidMutationOperation(
                 "operation state transition is invalid",
             ));
         }
+        // Clamp monotonically so a backward wall-clock step cannot block
+        // finalization/verification. Ordering (state machine) is enforced by
+        // can_transition_to above, not by the timestamp.
+        let stamped = monotonic_timestamp(created_at, previous_updated_at, updated_at);
         transaction.execute(
             "UPDATE mutation_operations SET state = ?2, updated_at = ?3
              WHERE operation_id = ?1",
             params![
                 operation_id.as_slice(),
                 state as u8,
-                sqlite_integer("mutation updated time", updated_at)?,
+                sqlite_integer("mutation updated time", stamped)?,
             ],
         )?;
         transaction.commit()?;
@@ -613,7 +618,7 @@ impl HardStateStore {
             ));
         }
         let stamped =
-            monotonic_team_timestamp(operation.created_at, operation.updated_at, submitting_at);
+            monotonic_timestamp(operation.created_at, operation.updated_at, submitting_at);
         let transaction = self.write_transaction()?;
         let occupant: Option<(Vec<u8>, i64)> = transaction
             .query_row(
@@ -731,7 +736,7 @@ impl HardStateStore {
                 "operation state transition is invalid",
             ));
         }
-        let stamped = monotonic_team_timestamp(created_at, previous_updated_at, updated_at);
+        let stamped = monotonic_timestamp(created_at, previous_updated_at, updated_at);
         transaction.execute(
             "UPDATE team_mutation_operations SET state = ?2, updated_at = ?3
              WHERE operation_id = ?1",
@@ -789,7 +794,11 @@ impl HardStateStore {
     }
 }
 
-fn monotonic_team_timestamp(created_at: u64, previous_updated_at: u64, requested: u64) -> u64 {
+/// Clamps a local journal timestamp so it never moves backward: a backward
+/// wall-clock adjustment cannot leave a row whose `updated_at` predates its
+/// `created_at` or a prior update, which would otherwise block submission,
+/// finalization, or verification. Used by both the team and generic journals.
+fn monotonic_timestamp(created_at: u64, previous_updated_at: u64, requested: u64) -> u64 {
     requested
         .max(created_at)
         .max(previous_updated_at.saturating_add(1))

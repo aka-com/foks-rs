@@ -21,7 +21,11 @@ rejected as replay.
 Registry mutations reload and merge under a state-root cross-process lock, so
 independent CLI and agent processes cannot publish stale snapshots over one
 another. Profile operations use separate checked operation and scheduler locks;
-periodic scheduling uses nonblocking acquisition and skips contended profiles.
+native checked operations additionally use a client-root-local database-ID lock
+and reject a database ID claimed by another profile. Periodic scheduling uses
+nonblocking acquisition and skips contended profiles. These checks are not a
+machine-global or cross-root coordination mechanism. The private-file backend
+provides neither copied-state detection nor an external rollback boundary.
 
 The implemented application slice covers:
 

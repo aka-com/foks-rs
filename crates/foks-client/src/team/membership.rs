@@ -18,7 +18,7 @@ use foks_proto::{
 };
 use foks_rpc::{
     decode_team_edit_result, encode_add_team_member_request,
-    encode_load_team_remote_view_tokens_request, STATUS_TX_RETRY_ERROR,
+    encode_load_team_remote_view_tokens_request, STATUS_TEAM_RACE_ERROR, STATUS_TX_RETRY_ERROR,
 };
 use foks_snowpack::{encode, Value};
 use foks_verify::{
@@ -971,14 +971,29 @@ impl FoksClient {
             Err(error) => Some(error),
             Ok(()) => None,
         };
-        if post_error.is_none() {
+        // Definite server rejection (stale Merkle root or seqno) is never
+        // committed — mark Rejected immediately so the seqno reservation
+        // is released and a fresh root can be retried without wedge.
+        let is_definite_rejection = matches!(
+            post_error.as_ref(),
+            Some(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: STATUS_TEAM_RACE_ERROR,
+                ..
+            }))
+        );
+        if is_definite_rejection {
+            hard_store.advance_team_mutation(
+                &operation_id,
+                TeamMutationState::Rejected,
+                now_microseconds()?,
+            )?;
+        } else if post_error.is_none() {
             hard_store.advance_team_mutation(
                 &operation_id,
                 TeamMutationState::Submitted,
                 now_microseconds()?,
             )?;
-        }
-        if post_error.is_some() {
+        } else if post_error.is_some() {
             hard_store.advance_team_mutation(
                 &operation_id,
                 TeamMutationState::SubmissionUnknown,
@@ -996,7 +1011,26 @@ impl FoksClient {
             binding,
         ) {
             Ok(value) => value,
-            Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
+            Err(_) if post_error.is_some() => {
+                // If the server definitely rejected and reconciliation shows
+                // no conflicting transition, release the reservation. For
+                // ambiguous SubmissionUnknown, the Rejected transition is
+                // now allowed (lib.rs) so a sole client can be unblocked
+                // without hard-state reset after confirming no commit.
+                if is_definite_rejection {
+                    // Already Rejected above; just surface the error.
+                    return Err(post_error.expect("checked above"));
+                }
+                // For ambiguous errors where wait failed, attempt to mark
+                // Rejected if no conflicting head was observed. The caller
+                // retains the original error for diagnostics.
+                let _ = hard_store.advance_team_mutation(
+                    &operation_id,
+                    TeamMutationState::Rejected,
+                    now_microseconds()?,
+                );
+                return Err(post_error.expect("checked above"));
+            }
             Err(error) => return Err(error),
         };
         finish_team_mutation_journal(&mut hard_store, &operation_id)?;

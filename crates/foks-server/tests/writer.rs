@@ -73,6 +73,67 @@ fn only_one_writer_process_can_own_a_database() {
         .unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn writer_rejects_a_same_directory_database_hardlink() {
+    let temporary = tempfile::tempdir().unwrap();
+    let source = temporary.path().join("source.sqlite");
+    foks_server_db::Database::open(&source, foks_server_db::Config::default()).unwrap();
+    let linked = temporary.path().join("linked.sqlite");
+    std::fs::hard_link(&source, &linked).unwrap();
+
+    assert!(matches!(
+        Writer::start(linked, foks_server_db::Config::default(), 1),
+        Err(foks_server::Error::Database(
+            foks_server_db::Error::UnsafeDatabasePath(
+                "database file must have exactly one hardlink"
+            )
+        ))
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn writer_rejects_a_cross_directory_database_hardlink() {
+    let temporary = tempfile::tempdir().unwrap();
+    let source_directory = temporary.path().join("source");
+    let linked_directory = temporary.path().join("linked");
+    std::fs::create_dir(&source_directory).unwrap();
+    std::fs::create_dir(&linked_directory).unwrap();
+    let source = source_directory.join("server.sqlite");
+    foks_server_db::Database::open(&source, foks_server_db::Config::default()).unwrap();
+    let linked = linked_directory.join("server.sqlite");
+    std::fs::hard_link(&source, &linked).unwrap();
+
+    assert!(matches!(
+        Writer::start(linked, foks_server_db::Config::default(), 1),
+        Err(foks_server::Error::Database(
+            foks_server_db::Error::UnsafeDatabasePath(
+                "database file must have exactly one hardlink"
+            )
+        ))
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn writer_rejects_a_database_path_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let source = temporary.path().join("source.sqlite");
+    foks_server_db::Database::open(&source, foks_server_db::Config::default()).unwrap();
+    let linked = temporary.path().join("linked.sqlite");
+    symlink(&source, &linked).unwrap();
+
+    assert!(matches!(
+        Writer::start(linked, foks_server_db::Config::default(), 1),
+        Err(foks_server::Error::Database(
+            foks_server_db::Error::UnsafeDatabasePath("database path is a symlink")
+        ))
+    ));
+}
+
 #[test]
 fn bounded_writer_queue_rejects_promptly_and_recovers_after_drain() {
     let temporary = tempfile::tempdir().unwrap();

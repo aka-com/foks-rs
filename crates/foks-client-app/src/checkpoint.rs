@@ -162,12 +162,16 @@ impl ClientCredentials {
     {
         self.ensure_session_root(session).map_err(E::from)?;
         let lock = runtime::ProfileLock::operation(session.paths()).map_err(E::from)?;
-        self.verify_checkpoint(session).map_err(E::from)?;
+        let database_lock = self.lock_and_verify_checkpoint(session).map_err(E::from)?;
         let checked = CheckedProfileSession { session };
         let result = operation(&checked);
         let checkpoint = self.advance_checkpoint(session);
+        let database_unlock = database_lock
+            .map(runtime::DatabaseLock::release)
+            .transpose();
         let unlock = lock.release();
         checkpoint.map_err(E::from)?;
+        database_unlock.map_err(E::from)?;
         unlock.map_err(E::from)?;
         result
     }
@@ -202,8 +206,9 @@ impl ClientCredentials {
         };
         let first_lock = runtime::ProfileLock::operation(first.paths()).map_err(E::from)?;
         let second_lock = runtime::ProfileLock::operation(second.paths()).map_err(E::from)?;
-        self.verify_checkpoint(first).map_err(E::from)?;
-        self.verify_checkpoint(second).map_err(E::from)?;
+        let database_locks = self
+            .lock_and_verify_checkpoints(first, second)
+            .map_err(E::from)?;
 
         let left_checked = CheckedProfileSession { session: left };
         let right_checked = CheckedProfileSession { session: right };
@@ -214,10 +219,12 @@ impl ClientCredentials {
         // profile's external watermark behind a committed SQLite revision.
         let left_checkpoint = self.advance_checkpoint(left);
         let right_checkpoint = self.advance_checkpoint(right);
+        let database_release = release_database_locks(database_locks);
         let second_release = second_lock.release();
         let first_release = first_lock.release();
         left_checkpoint.map_err(E::from)?;
         right_checkpoint.map_err(E::from)?;
+        database_release.map_err(E::from)?;
         second_release.map_err(E::from)?;
         first_release.map_err(E::from)?;
         result
@@ -238,57 +245,211 @@ impl ClientCredentials {
         else {
             return Ok(None);
         };
-        self.verify_checkpoint(session).map_err(E::from)?;
+        let database_lock = match self
+            .try_lock_and_verify_checkpoint(session)
+            .map_err(E::from)?
+        {
+            Some(lock) => lock,
+            None => return Ok(None),
+        };
         let checked = CheckedProfileSession { session };
         let result = operation(&checked);
         let checkpoint = self.advance_checkpoint(session);
+        let database_unlock = database_lock
+            .map(runtime::DatabaseLock::release)
+            .transpose();
         let unlock = lock.release();
         checkpoint.map_err(E::from)?;
+        database_unlock.map_err(E::from)?;
         unlock.map_err(E::from)?;
         result.map(Some)
     }
 
-    fn verify_checkpoint(&self, session: &ProfileSession) -> Result<()> {
+    fn lock_and_verify_checkpoint(
+        &self,
+        session: &ProfileSession,
+    ) -> Result<Option<runtime::DatabaseLock>> {
         if self.backend != CredentialBackend::Native {
-            return Ok(());
+            return Ok(None);
         }
-        let key = rollback_record_key(&session.profile.name)?;
-        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-        self.verify_checkpoint_with_store(session, &key, &mut native)
+        let allow_checkpoint_enrollment =
+            !hard_state_artifacts_exist(&session.paths.hard_database)?;
+        let current = session.rollback_checkpoint()?;
+        let lock = runtime::DatabaseLock::acquire(&self.root, &current.database_id)?;
+        self.verify_native_checkpoint(session, &current, allow_checkpoint_enrollment)?;
+        Ok(Some(lock))
     }
 
+    fn try_lock_and_verify_checkpoint(
+        &self,
+        session: &ProfileSession,
+    ) -> Result<Option<Option<runtime::DatabaseLock>>> {
+        if self.backend != CredentialBackend::Native {
+            return Ok(Some(None));
+        }
+        let allow_checkpoint_enrollment =
+            !hard_state_artifacts_exist(&session.paths.hard_database)?;
+        let current = session.rollback_checkpoint()?;
+        let Some(lock) = runtime::DatabaseLock::try_acquire(&self.root, &current.database_id)?
+        else {
+            return Ok(None);
+        };
+        self.verify_native_checkpoint(session, &current, allow_checkpoint_enrollment)?;
+        Ok(Some(Some(lock)))
+    }
+
+    fn lock_and_verify_checkpoints(
+        &self,
+        first: &ProfileSession,
+        second: &ProfileSession,
+    ) -> Result<Vec<runtime::DatabaseLock>> {
+        if self.backend != CredentialBackend::Native {
+            return Ok(Vec::new());
+        }
+        let first_allows_enrollment = !hard_state_artifacts_exist(&first.paths.hard_database)?;
+        let second_allows_enrollment = !hard_state_artifacts_exist(&second.paths.hard_database)?;
+        let first_current = first.rollback_checkpoint()?;
+        let second_current = second.rollback_checkpoint()?;
+        if first_current.database_id == second_current.database_id {
+            return Err(self.checkpoint_reset_error(
+                second,
+                "hard-state database identity is already used by another profile",
+            ));
+        }
+        let mut database_ids = [first_current.database_id, second_current.database_id];
+        database_ids.sort_unstable();
+        let mut locks = Vec::with_capacity(database_ids.len());
+        for database_id in database_ids {
+            locks.push(runtime::DatabaseLock::acquire(&self.root, &database_id)?);
+        }
+        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
+        self.verify_native_checkpoint_with_store(
+            first,
+            &first_current,
+            first_allows_enrollment,
+            &mut native,
+        )?;
+        self.verify_native_checkpoint_with_store(
+            second,
+            &second_current,
+            second_allows_enrollment,
+            &mut native,
+        )?;
+        Ok(locks)
+    }
+
+    fn verify_native_checkpoint(
+        &self,
+        session: &ProfileSession,
+        current: &RollbackCheckpoint,
+        allow_checkpoint_enrollment: bool,
+    ) -> Result<()> {
+        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
+        self.verify_native_checkpoint_with_store(
+            session,
+            current,
+            allow_checkpoint_enrollment,
+            &mut native,
+        )
+    }
+
+    pub(super) fn verify_native_checkpoint_with_store(
+        &self,
+        session: &ProfileSession,
+        current: &RollbackCheckpoint,
+        allow_checkpoint_enrollment: bool,
+        store: &mut impl CheckpointStore,
+    ) -> Result<()> {
+        let key = rollback_record_key(&session.profile.name)?;
+        let publish = self.reconcile_checkpoint_with_store(
+            session,
+            &key,
+            current,
+            allow_checkpoint_enrollment,
+            store,
+        )?;
+        self.claim_database_with_store(session, current.database_id, store)?;
+        if publish {
+            store.put(&key, &serde_json::to_vec(current)?)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub(super) fn verify_checkpoint_with_store(
         &self,
         session: &ProfileSession,
         key: &str,
         store: &mut impl CheckpointStore,
     ) -> Result<()> {
+        let allow_checkpoint_enrollment =
+            !hard_state_artifacts_exist(&session.paths.hard_database)?;
+        let current = session.rollback_checkpoint()?;
+        let publish = self.reconcile_checkpoint_with_store(
+            session,
+            key,
+            &current,
+            allow_checkpoint_enrollment,
+            store,
+        )?;
+        if publish {
+            store.put(key, &serde_json::to_vec(&current)?)?;
+        }
+        Ok(())
+    }
+
+    fn reconcile_checkpoint_with_store(
+        &self,
+        session: &ProfileSession,
+        key: &str,
+        current: &RollbackCheckpoint,
+        allow_checkpoint_enrollment: bool,
+        store: &mut impl CheckpointStore,
+    ) -> Result<bool> {
         match store.get(key) {
             Ok(bytes) => {
                 let previous: RollbackCheckpoint =
                     serde_json::from_slice(&bytes).map_err(|_| {
                         self.checkpoint_reset_error(session, "external checkpoint is invalid")
                     })?;
-                let current = session.rollback_checkpoint()?;
                 let reconciliation = current.reconciliation(&previous).map_err(|error| {
                     self.checkpoint_reset_error(session, rollback_reason(&error))
                 })?;
-                if reconciliation == CheckpointReconciliation::AdvanceExternal {
-                    store.put(key, &serde_json::to_vec(&current)?)?;
-                }
+                Ok(reconciliation == CheckpointReconciliation::AdvanceExternal)
             }
             Err(foks_keystore::Error::Missing) => {
-                if hard_state_artifacts_exist(&session.paths.hard_database)? {
+                if !allow_checkpoint_enrollment
+                    && hard_state_artifacts_exist(&session.paths.hard_database)?
+                {
                     return Err(
                         self.checkpoint_reset_error(session, "external checkpoint is missing")
                     );
                 }
-                let current = session.rollback_checkpoint()?;
-                store.put(key, &serde_json::to_vec(&current)?)?;
+                Ok(true)
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => Err(error.into()),
         }
-        Ok(())
+    }
+
+    fn claim_database_with_store(
+        &self,
+        session: &ProfileSession,
+        database_id: [u8; 16],
+        store: &mut impl CheckpointStore,
+    ) -> Result<()> {
+        let key = database_claim_record_key(&database_id);
+        match store.get(&key) {
+            Ok(profile) if profile.as_slice() == session.profile.name.as_bytes() => Ok(()),
+            Ok(_) => Err(self.checkpoint_reset_error(
+                session,
+                "hard-state database identity is already claimed by another profile",
+            )),
+            Err(foks_keystore::Error::Missing) => {
+                store.put(&key, session.profile.name.as_bytes())?;
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     fn checkpoint_reset_error(&self, session: &ProfileSession, reason: &'static str) -> Error {
@@ -303,9 +464,9 @@ impl ClientCredentials {
         if self.backend != CredentialBackend::Native {
             return Ok(());
         }
-        let key = rollback_record_key(&session.profile.name)?;
+        let current = session.rollback_checkpoint()?;
         let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-        self.verify_checkpoint_with_store(session, &key, &mut native)
+        self.verify_native_checkpoint_with_store(session, &current, false, &mut native)
     }
 
     /// Deliberately removes a profile's external rollback watermark and local
@@ -314,10 +475,28 @@ impl ClientCredentials {
         self.ensure_session_root(session)?;
         let operation = runtime::ProfileLock::operation(session.paths())?;
         let scheduler = runtime::ProfileLock::scheduler(session.paths())?;
-        let result = self.reset_hard_state_locked(session);
+        let current =
+            if self.backend == CredentialBackend::Native && session.paths.hard_database.exists() {
+                // Reset is the explicit recovery path for malformed hard
+                // state. If its metadata cannot be read, no database-ID lock
+                // or claim cleanup is possible; the profile locks still
+                // serialize deletion and the unreachable claim is harmless.
+                session.rollback_checkpoint().ok()
+            } else {
+                None
+            };
+        let database_lock = current
+            .as_ref()
+            .map(|checkpoint| runtime::DatabaseLock::acquire(&self.root, &checkpoint.database_id))
+            .transpose()?;
+        let result = self.reset_hard_state_locked(session, current.as_ref());
+        let database_release = database_lock
+            .map(runtime::DatabaseLock::release)
+            .transpose();
         let scheduler_release = scheduler.release();
         let operation_release = operation.release();
         result?;
+        database_release?;
         scheduler_release?;
         operation_release
     }
@@ -335,10 +514,21 @@ impl ClientCredentials {
         Ok(())
     }
 
-    fn reset_hard_state_locked(&self, session: &ProfileSession) -> Result<()> {
+    fn reset_hard_state_locked(
+        &self,
+        session: &ProfileSession,
+        current: Option<&RollbackCheckpoint>,
+    ) -> Result<()> {
         if self.backend == CredentialBackend::Native {
             let key = rollback_record_key(&session.profile.name)?;
             let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
+            if let Some(current) = current {
+                remove_database_claim_if_owned(
+                    &mut native,
+                    current.database_id,
+                    &session.profile.name,
+                )?;
+            }
             native.remove(&key)?;
         }
         remove_hard_state_artifacts(&session.paths.hard_database)?;
@@ -352,6 +542,7 @@ impl ClientCredentials {
 pub(super) trait CheckpointStore {
     fn put(&mut self, key: &str, value: &[u8]) -> foks_keystore::Result<()>;
     fn get(&mut self, key: &str) -> foks_keystore::Result<Zeroizing<Vec<u8>>>;
+    fn remove(&mut self, key: &str) -> foks_keystore::Result<bool>;
 }
 
 impl CheckpointStore for foks_keystore::NativeCredentialStore {
@@ -361,6 +552,10 @@ impl CheckpointStore for foks_keystore::NativeCredentialStore {
 
     fn get(&mut self, key: &str) -> foks_keystore::Result<Zeroizing<Vec<u8>>> {
         foks_keystore::NativeCredentialStore::get(self, key)
+    }
+
+    fn remove(&mut self, key: &str) -> foks_keystore::Result<bool> {
+        foks_keystore::NativeCredentialStore::remove(self, key)
     }
 }
 
@@ -373,6 +568,42 @@ impl CheckpointStore for foks_keystore::MemorySecretStore {
     fn get(&mut self, key: &str) -> foks_keystore::Result<Zeroizing<Vec<u8>>> {
         foks_keystore::SecretStore::get(self, key)
     }
+
+    fn remove(&mut self, key: &str) -> foks_keystore::Result<bool> {
+        foks_keystore::SecretStore::remove(self, key)
+    }
+}
+
+fn release_database_locks(locks: Vec<runtime::DatabaseLock>) -> Result<()> {
+    let mut first_error = None;
+    for lock in locks.into_iter().rev() {
+        if let Err(error) = lock.release() {
+            if first_error.is_none() {
+                first_error = Some(error);
+            }
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+pub(super) fn database_claim_record_key(database_id: &[u8; 16]) -> String {
+    format!("database.{}.profile-v1", hex(database_id))
+}
+
+fn remove_database_claim_if_owned(
+    store: &mut impl CheckpointStore,
+    database_id: [u8; 16],
+    profile: &str,
+) -> Result<()> {
+    let key = database_claim_record_key(&database_id);
+    match store.get(&key) {
+        Ok(owner) if owner.as_slice() == profile.as_bytes() => {
+            store.remove(&key)?;
+        }
+        Ok(_) | Err(foks_keystore::Error::Missing) => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
 }
 
 fn rollback_reason(error: &Error) -> &'static str {
@@ -428,6 +659,7 @@ pub struct RollbackCheckpoint {
     pub(super) profile: String,
     pub(super) database_id: [u8; 16],
     pub(super) hard_state_revision: u64,
+    pub(super) write_token: [u8; 16],
     pub(super) host: Option<RollbackHostCheckpoint>,
 }
 
@@ -468,6 +700,20 @@ impl RollbackCheckpoint {
             return Err(Error::RollbackDetected("hard-state revision rolled back"));
         }
         let previous_hard_state_revision = previous.hard_state_revision;
+        if self.hard_state_revision == previous_hard_state_revision
+            && self.write_token != previous.write_token
+        {
+            return Err(Error::RollbackDetected(
+                "hard-state write token changed at the same revision",
+            ));
+        }
+        if self.hard_state_revision > previous_hard_state_revision
+            && self.write_token == previous.write_token
+        {
+            return Err(Error::RollbackDetected(
+                "hard-state write token did not advance",
+            ));
+        }
         let Some(previous) = previous.host.as_ref() else {
             return Ok(if self.hard_state_revision > previous_hard_state_revision {
                 CheckpointReconciliation::AdvanceExternal

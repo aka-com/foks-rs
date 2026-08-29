@@ -180,25 +180,6 @@ impl Database {
         Ok(snapshot)
     }
 
-    pub fn record_bad_passphrase(&mut self, uid: &[u8], now: u64) -> Result<()> {
-        if uid.len() != 33 {
-            return Err(Error::Invalid("passphrase login UID"));
-        }
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        prune_attempts(&transaction, &self.config, now)?;
-        if rate_limited(&transaction, &self.config, uid, now)? {
-            return Err(Error::PassphraseRateLimited);
-        }
-        transaction.execute(
-            "INSERT INTO bad_passphrase_attempts(uid, attempted_at) VALUES (?1, ?2)",
-            params![uid, sql_integer(now)?],
-        )?;
-        transaction.commit()?;
-        Ok(())
-    }
-
     /// Burns an exact challenge and returns the current PPE boxes only if the
     /// verify key checked by the caller is still authoritative.
     pub fn consume_passphrase_challenge(
