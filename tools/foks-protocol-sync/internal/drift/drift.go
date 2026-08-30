@@ -215,7 +215,8 @@ func Compare(baseline, candidate model.Artifact, policy Policy) Report {
 
 	compareNamed("status", baseline.Statuses, candidate.Statuses, policy.Statuses, add)
 	compareNamed("service", baseline.Services, candidate.Services, policy.Services, add)
-	compareSources(baseline.Sources, candidate.Sources, policy, supportedProtocols, add)
+	sourceOwners := protocolSourceOwners(baseline.Protocols, candidate.Protocols)
+	compareSources(baseline.Sources, candidate.Sources, policy, supportedProtocols, sourceOwners, add)
 	sort.Slice(report.Changes, func(i, j int) bool {
 		if report.Changes[i].Class != report.Changes[j].Class {
 			return report.Changes[i].Class < report.Changes[j].Class
@@ -298,7 +299,7 @@ func compareNamed(kind string, old, candidate []model.NamedValue, relevant map[s
 	}
 }
 
-func compareSources(old, candidate []model.SourceFile, policy Policy, supported map[string]bool, add func(Class, string, string, string)) {
+func compareSources(old, candidate []model.SourceFile, policy Policy, supported map[string]bool, owners map[string]map[string]bool, add func(Class, string, string, string)) {
 	oldSources, newSources := make(map[string]model.SourceFile), make(map[string]model.SourceFile)
 	for _, source := range old {
 		oldSources[source.Path] = source
@@ -312,7 +313,7 @@ func compareSources(old, candidate []model.SourceFile, policy Policy, supported 
 			continue
 		}
 		class := SourceOnly
-		if (!ok || source.SemanticSHA256 != newSource.SemanticSHA256) && sourceRelevant(path, supported) {
+		if (!ok || source.SemanticSHA256 != newSource.SemanticSHA256) && sourceRelevant(path, supported, owners) {
 			class = BehaviorReviewRequired
 		}
 		detail := "source removed"
@@ -323,63 +324,57 @@ func compareSources(old, candidate []model.SourceFile, policy Policy, supported 
 			}
 		}
 		if class == BehaviorReviewRequired {
-			detail += coverageForSource(path, policy)
+			detail += coverageForSource(path, policy, owners)
 		}
 		add(class, "source_changed", path, detail)
 	}
 	for path, source := range newSources {
 		if _, ok := oldSources[path]; !ok {
 			class := SourceOnly
-			if sourceRelevant(path, supported) {
+			if sourceRelevant(path, supported, owners) {
 				class = BehaviorReviewRequired
 			}
 			detail := source.SHA256
 			if class == BehaviorReviewRequired {
-				detail += coverageForSource(path, policy)
+				detail += coverageForSource(path, policy, owners)
 			}
 			add(class, "source_added", path, detail)
 		}
 	}
 }
 
-func sourceRelevant(path string, supported map[string]bool) bool {
+func sourceRelevant(path string, supported map[string]bool, owners map[string]map[string]bool) bool {
 	if strings.HasPrefix(path, "proto-src/lib/") {
 		return true
 	}
-	base := strings.TrimSuffix(strings.TrimPrefix(path, "proto-src/rem/"), ".snowp")
-	for protocol := range supported {
-		switch base {
-		case "team":
-			if strings.HasPrefix(protocol, "Team") {
-				return true
-			}
-		case "kv":
-			if protocol == "KVStore" {
-				return true
-			}
-		case "merkle":
-			if protocol == "MerkleQuery" {
-				return true
-			}
-		case "reg":
-			if protocol == "Reg" {
-				return true
-			}
-		case "user":
-			if protocol == "User" {
-				return true
-			}
-		case "probe":
-			if protocol == "Probe" {
-				return true
-			}
-		case "realtime":
-			if protocol == "RealTime" {
-				return true
-			}
+	protocols, mapped := owners[path]
+	for protocol := range protocols {
+		if supported[protocol] {
+			return true
 		}
 	}
-	return false
+	// An unmapped rem source can still define argument types consumed by a
+	// supported protocol (invite.snowp is the v0.1.9 example). Treat it as
+	// review-required instead of silently classifying it outside the slice.
+	return !mapped && strings.HasPrefix(path, "proto-src/rem/")
+}
+
+func protocolSourceOwners(artifacts ...[]model.Protocol) map[string]map[string]bool {
+	result := make(map[string]map[string]bool)
+	for _, protocols := range artifacts {
+		for _, protocol := range protocols {
+			path := strings.TrimSuffix(protocol.GoFile, ".go")
+			path = strings.Replace(path, "proto/rem/", "proto-src/rem/", 1) + ".snowp"
+			if !strings.HasPrefix(path, "proto-src/rem/") {
+				continue
+			}
+			if result[path] == nil {
+				result[path] = make(map[string]bool)
+			}
+			result[path][protocol.Name] = true
+		}
+	}
+	return result
 }
 
 func protocols(artifact model.Artifact) map[string]model.Protocol {
@@ -419,12 +414,12 @@ func withCoverage(detail, subject string, policy Policy) string {
 	return detail
 }
 
-func coverageForSource(path string, policy Policy) string {
+func coverageForSource(path string, policy Policy, owners map[string]map[string]bool) string {
 	var values []string
 	seen := make(map[string]bool)
 	for route, coverage := range policy.Coverage {
 		protocol, _, _ := strings.Cut(route, ".")
-		if !sourceRelevant(path, map[string]bool{protocol: true}) {
+		if !owners[path][protocol] {
 			continue
 		}
 		for _, value := range coverage {

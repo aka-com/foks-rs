@@ -30,7 +30,15 @@ impl GenericChain {
             expected: usize::MAX,
             found: merkle.paths().len(),
         })?;
-        if locations.len() != links.len() || merkle.paths().len() != expected_paths {
+        let valid_location_count = match links.first() {
+            Some(link) if link.decode_generic()?.sequence == 1 => locations.len() == links.len(),
+            Some(_) => locations.len() == expected_paths,
+            // An empty suffix has no returned link from which to recover its
+            // starting seqno. Accept the only two Go shapes: empty eldest or
+            // the single prior location for an up-to-date incremental load.
+            None => locations.len() <= 1,
+        };
+        if !valid_location_count || merkle.paths().len() != expected_paths {
             return Err(Error::FieldCount {
                 expected: expected_paths,
                 found: merkle.paths().len(),

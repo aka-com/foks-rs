@@ -1,6 +1,8 @@
 mod common;
 
-use foks_merkle_store::{back_pointer_hash, back_pointer_sequence, collect_roots};
+use foks_merkle_store::{
+    back_pointer_hash, back_pointer_sequence, collect_roots, GO_V019_FIRST_UNMINTABLE_EPOCH,
+};
 use foks_proto::{decode_merkle_back_pointers, MerkleRoot};
 
 #[test]
@@ -23,7 +25,10 @@ fn official_back_pointer_lists_hash_to_the_published_roots() {
             .collect::<Vec<_>>();
         let root =
             MerkleRoot::decode(&common::fixture(&format!("merkle-root-{epoch}.snowp"))).unwrap();
-        assert_eq!(back_pointer_hash(&pairs).unwrap(), root.back_pointers);
+        assert_eq!(
+            back_pointer_hash(epoch, &pairs).unwrap(),
+            root.back_pointers
+        );
     }
 }
 
@@ -47,10 +52,32 @@ fn early_and_power_of_two_sequences_match_v019() {
 }
 
 #[test]
-fn go_rejected_array16_back_pointer_lists_are_not_hashed() {
-    let pointers = (0..16).map(|epoch| (epoch, [0; 32])).collect::<Vec<_>>();
+fn epoch_65536_is_blocked_by_the_go_v019_signable_rule() {
+    let sequence = back_pointer_sequence(GO_V019_FIRST_UNMINTABLE_EPOCH);
+    assert_eq!(sequence.len(), 16);
+    let pointers = sequence
+        .into_iter()
+        .map(|epoch| (epoch, [0; 32]))
+        .collect::<Vec<_>>();
     assert!(matches!(
-        back_pointer_hash(&pointers),
-        Err(foks_merkle_store::Error::Snowpack(_))
+        back_pointer_hash(GO_V019_FIRST_UNMINTABLE_EPOCH, &pointers),
+        Err(foks_merkle_store::Error::GoV019EpochCliff {
+            epoch: GO_V019_FIRST_UNMINTABLE_EPOCH,
+            pointer_count: 16,
+        })
     ));
+}
+
+#[test]
+fn epoch_cliff_error_is_actionable_without_changing_the_go_hash() {
+    let epoch = GO_V019_FIRST_UNMINTABLE_EPOCH;
+    let pointers = back_pointer_sequence(epoch)
+        .into_iter()
+        .map(|pointer_epoch| (pointer_epoch, [0; 32]))
+        .collect::<Vec<_>>();
+    let error = back_pointer_hash(epoch, &pointers).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "cannot mint FOKS v0.1.9 Merkle epoch 65536: its 16-entry back-pointer array is rejected by go-foks canonical signable validation"
+    );
 }

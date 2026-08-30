@@ -1,8 +1,8 @@
 use std::io::Read;
 
 use super::{
-    check_compatibility_header, is_headerless_protocol, read_frame, text, unsigned, Cursor, Error,
-    Result, METHOD_CALL_V2,
+    check_compatibility_header, is_headerless_argument_protocol, read_frame, text, unsigned,
+    Cursor, Error, Result, METHOD_CALL_V2,
 };
 
 /// A validated v0.1.9 RPC call whose protocol argument remains byte-exact.
@@ -145,7 +145,7 @@ pub fn decode_call(content: &[u8]) -> Result<DecodedCall> {
     // Team and Kex protocols place the bare argument struct directly in the
     // payload slot; every other protocol wraps it in a `{Data, Header}`
     // DataWrap map (go-foks proto/rem/team.go and kex.go versus reg.go et al.).
-    let argument = if is_headerless_protocol(protocol_id) {
+    let argument = if is_headerless_argument_protocol(protocol_id) {
         payload.to_vec()
     } else {
         decode_wrapped_argument(payload)?

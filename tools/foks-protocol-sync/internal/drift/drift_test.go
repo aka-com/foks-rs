@@ -60,6 +60,25 @@ func TestCompareClassifiesFormattingOnlySnowpackChangeAsSourceOnly(t *testing.T)
 	}
 }
 
+func TestCompareReviewsSupportedAndUnmappedRemSources(t *testing.T) {
+	baseline := fixtureArtifact()
+	baseline.Sources = append(baseline.Sources, model.SourceFile{
+		Path: "proto-src/rem/invite.snowp", SHA256: strings.Repeat("a", 64),
+		SemanticSHA256: strings.Repeat("b", 64),
+	})
+	candidate := baseline
+	candidate.Sources = append([]model.SourceFile(nil), baseline.Sources...)
+	candidate.Sources[1].SHA256 = strings.Repeat("d", 64)
+	candidate.Sources[1].SemanticSHA256 = strings.Repeat("c", 64)
+	report := Compare(baseline, candidate, Policy{
+		Protocols: map[string]string{"Probe": "Probe"},
+		Supported: map[string]bool{"Probe.probe": true},
+	})
+	if report.Counts[BehaviorReviewRequired] != 1 {
+		t.Fatalf("unmapped rem source did not require review: %#v", report.Changes)
+	}
+}
+
 func TestCompareClassifiesLocallyUsedNumericChangesAsWireBreaking(t *testing.T) {
 	baseline := fixtureArtifact()
 	candidate := fixtureArtifact()

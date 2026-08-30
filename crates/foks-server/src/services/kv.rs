@@ -44,10 +44,6 @@ trait KvContextRead {
         now: u64,
     ) -> foks_server_db::Result<Option<foks_server_db::TeamViewAuthoritySnapshot>>;
     fn team(&self, team_id: &[u8]) -> foks_server_db::Result<Option<foks_server_db::TeamSnapshot>>;
-    fn kv_version_vector(
-        &self,
-        uid: &[u8],
-    ) -> foks_server_db::Result<Option<foks_proto::KvPathVersionVector>>;
 }
 
 macro_rules! impl_kv_read {
@@ -81,13 +77,6 @@ macro_rules! impl_kv_read {
                 team_id: &[u8],
             ) -> foks_server_db::Result<Option<foks_server_db::TeamSnapshot>> {
                 self.team(team_id)
-            }
-
-            fn kv_version_vector(
-                &self,
-                uid: &[u8],
-            ) -> foks_server_db::Result<Option<foks_proto::KvPathVersionVector>> {
-                self.kv_version_vector(uid)
             }
         }
     };
@@ -289,6 +278,8 @@ fn mkdir(
         Value::Null => None,
         value => Some(foks_proto::KvPathVersionVector::from_value(value).map_err(bad_arguments)?),
     };
+    let snapshot = reader.snapshot().map_err(|_| RpcStatus::TransactionRetry)?;
+    check_precondition(&snapshot, authority, precondition.as_ref())?;
     let exact = encode(&fields[1]).map_err(bad_arguments)?;
     let directory = foks_proto::KvDirectory::decode(&exact).map_err(bad_arguments)?;
     if directory.version != 1
@@ -472,10 +463,13 @@ fn put_small_file_or_symlink(
         return Err(bad_arguments("KV node is not a small file or symlink"));
     }
     let exact = encode(&fields[2]).map_err(bad_arguments)?;
-    if exact.len() > 64 * 1024 {
-        return Err(bad_arguments("encoded KV small node exceeds 64 KiB"));
-    }
     let boxed = foks_proto::KvSmallFileBox::decode(&exact).map_err(bad_arguments)?;
+    // go-foks limits the encrypted small-file payload to 2 KiB of plaintext
+    // plus Secretbox's 16-byte authenticator. Matching that boundary keeps a
+    // namespace written here portable to an upstream server.
+    if boxed.ciphertext.len() > 2_048 + 16 {
+        return Err(bad_arguments("KV small node exceeds the Go payload limit"));
+    }
     if !authority.can_write_key(boxed.key) {
         return Err(bad_arguments("KV node uses an unsupported content key"));
     }
@@ -509,6 +503,8 @@ fn put(
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 2)?;
     let precondition = request_precondition(&fields[0])?;
+    let snapshot = reader.snapshot().map_err(|_| RpcStatus::TransactionRetry)?;
+    check_precondition(&snapshot, authority, precondition.as_ref())?;
     let Value::Array(values) = &fields[1] else {
         return Err(bad_arguments("KV dirents are not a list"));
     };
@@ -574,7 +570,12 @@ fn put(
                     exact,
                 })
                 .collect::<Vec<_>>();
-            database.put_kv_dirents(&uid, precondition.as_ref(), &mutations)?;
+            database.put_kv_dirents(
+                &uid,
+                precondition.as_ref(),
+                write_authority.maximum_role,
+                &mutations,
+            )?;
             Ok(())
         })
         .map_err(|error| map_write_error(error, reader, &error_uid))?;
@@ -734,17 +735,24 @@ fn list(
         let entry =
             foks_proto::KvDirent::decode(&stored.exact).map_err(|_| RpcStatus::TransactionRetry)?;
         if *load_small && stored.node_id[0] == 3 {
-            let node = reader
+            let Some(node) = reader
                 .kv_node(&uid, &stored.node_id)
                 .map_err(|_| RpcStatus::TransactionRetry)?
-                .ok_or(RpcStatus::KvNoEnt)?;
+            else {
+                entries.push(entry);
+                continue;
+            };
             let small_file = foks_proto::KvSmallFileBox::decode(&node.exact)
                 .map_err(|_| RpcStatus::TransactionRetry)?;
-            authority.require_read_key(small_file.key)?;
-            extended.push(foks_proto::KvExtendedDirent {
-                position: u64::try_from(position).map_err(|_| RpcStatus::TransactionRetry)?,
-                small_file,
-            });
+            // Go's list path uses failOnPermError=false: the dirent remains in
+            // the page, while an unreadable or absent optional small-file body
+            // is omitted from the extended-entry side table.
+            if authority.require_read_key(small_file.key).is_ok() {
+                extended.push(foks_proto::KvExtendedDirent {
+                    position: u64::try_from(position).map_err(|_| RpcStatus::TransactionRetry)?,
+                    small_file,
+                });
+            }
         }
         entries.push(entry);
     }
@@ -835,16 +843,6 @@ fn lock_release(
         })
         .map_err(map_lock_error)?;
     Ok(Response::Void)
-}
-
-fn current_versions(
-    reader: &dyn KvContextRead,
-    uid: &[u8],
-) -> Result<foks_proto::KvPathVersionVector, RpcStatus> {
-    reader
-        .kv_version_vector(uid)
-        .map_err(|_| RpcStatus::TransactionRetry)?
-        .ok_or(RpcStatus::KvNoEnt)
 }
 
 fn request_precondition(
@@ -1209,17 +1207,21 @@ fn role_parts(role: foks_proto::Role) -> (u64, i64) {
 
 fn map_write_error(
     error: crate::Error,
-    reader: &foks_server_db::ReadDatabase,
-    uid: &[u8],
+    _reader: &foks_server_db::ReadDatabase,
+    _uid: &[u8],
 ) -> RpcStatus {
     if matches!(&error, crate::Error::Database(error) if error.is_quota()) {
         return RpcStatus::QuotaExceeded;
     }
     match error {
         crate::Error::AuthorizationChanged => permission_denied(),
-        crate::Error::Database(foks_server_db::Error::KvConflict) => current_versions(reader, uid)
-            .map(RpcStatus::StaleCache)
-            .unwrap_or(RpcStatus::TransactionRetry),
+        crate::Error::Database(foks_server_db::Error::KvConflict) => {
+            RpcStatus::KvRace("KV mutation lost a version race".to_owned())
+        }
+        crate::Error::Database(foks_server_db::Error::KvPermission) => RpcStatus::KvPermission {
+            operation: 2,
+            resource: 1,
+        },
         crate::Error::WriterQueue => RpcStatus::RateLimited,
         _ => RpcStatus::TransactionRetry,
     }

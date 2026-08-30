@@ -76,14 +76,11 @@ pub(crate) fn go_client_activation_success() {
         .foks()
         .check_name_exists(fixture.host(), "GoActivation")
         .unwrap();
-    assert_eq!(
-        fixture
-            .client
-            .foks()
-            .resolve_username(fixture.host(), &created.credential, "GoActivation", false,)
-            .unwrap(),
-        created.credential.uid
-    );
+    assert!(fixture
+        .client
+        .foks()
+        .resolve_username(fixture.host(), &created.credential, "GoActivation", false,)
+        .is_err());
     let peer = fixture
         .client
         .create_account(
@@ -91,6 +88,16 @@ pub(crate) fn go_client_activation_success() {
             &TestAccountSpec::new("goactivationpeer", 0x32),
         )
         .unwrap();
+    assert!(fixture
+        .client
+        .foks()
+        .resolve_username(
+            fixture.host(),
+            &created.credential,
+            "GoActivationPeer",
+            false,
+        )
+        .is_err());
     assert_eq!(
         fixture
             .client
@@ -99,19 +106,10 @@ pub(crate) fn go_client_activation_success() {
                 fixture.host(),
                 &created.credential,
                 "GoActivationPeer",
-                false,
+                true,
             )
             .unwrap(),
-        peer.credential.uid,
-        "AsLocalUser resolves another local account, not only self"
-    );
-    assert_eq!(
-        fixture
-            .client
-            .foks()
-            .resolve_username(fixture.host(), &created.credential, "GoActivation", true,)
-            .unwrap(),
-        created.credential.uid
+        peer.credential.uid
     );
     let first_device = foks_crypto::derive_device_public(&created.credential.seed).unwrap();
     fixture

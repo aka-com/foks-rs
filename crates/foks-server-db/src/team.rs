@@ -78,6 +78,7 @@ pub struct TeamRemovalProofMutation<'a> {
     pub member_host_id: &'a [u8],
     pub source_role_type: u64,
     pub source_visibility: i64,
+    pub exact_box: &'a [u8],
     pub exact_removal: &'a [u8],
 }
 
@@ -474,8 +475,7 @@ impl Database {
                  (team_id, member_id, member_host_id, source_role_type,
                   source_visibility, exact_box) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(team_id, member_id, member_host_id, source_role_type,
-                             source_visibility) DO UPDATE SET exact_box = excluded.exact_box
-                 WHERE exact_box = excluded.exact_box",
+                             source_visibility) DO UPDATE SET exact_box = excluded.exact_box",
                 params![
                     mutation.team_id,
                     boxed.member_id,
@@ -492,17 +492,20 @@ impl Database {
                 &transaction,
                 "INSERT INTO team_removal_proofs
                  (team_id, commitment, member_id, member_host_id, source_role_type,
-                  source_visibility, exact_removal) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                  source_visibility, exact_box, exact_removal)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(team_id, commitment) DO UPDATE SET
                    member_id = excluded.member_id,
                    member_host_id = excluded.member_host_id,
                    source_role_type = excluded.source_role_type,
                    source_visibility = excluded.source_visibility,
+                   exact_box = excluded.exact_box,
                    exact_removal = excluded.exact_removal
                  WHERE member_id = excluded.member_id
                    AND member_host_id = excluded.member_host_id
                    AND source_role_type = excluded.source_role_type
-                   AND source_visibility = excluded.source_visibility",
+                   AND source_visibility = excluded.source_visibility
+                   AND exact_box = excluded.exact_box",
                 params![
                     mutation.team_id,
                     proof.commitment,
@@ -510,6 +513,7 @@ impl Database {
                     proof.member_host_id,
                     sql_integer(proof.source_role_type)?,
                     proof.source_visibility,
+                    proof.exact_box,
                     proof.exact_removal
                 ],
                 "conflicting team removal proof",

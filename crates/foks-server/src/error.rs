@@ -45,3 +45,30 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// Preserves the explicit v0.1.9 Merkle epoch ceiling across RPC mutation
+/// boundaries instead of collapsing it into an opaque retry response.
+pub(crate) fn merkle_mint_status(error: &Error) -> Option<foks_rpc::RpcStatus> {
+    match error {
+        Error::Merkle(foks_merkle_store::Error::GoV019EpochCliff { .. }) => {
+            Some(foks_rpc::RpcStatus::MerkleVerify(error.to_string()))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn epoch_cliff_maps_to_a_loud_go_compatible_status() {
+        let error = super::Error::Merkle(foks_merkle_store::Error::GoV019EpochCliff {
+            epoch: 65_536,
+            pointer_count: 16,
+        });
+        assert!(matches!(
+            super::merkle_mint_status(&error),
+            Some(foks_rpc::RpcStatus::MerkleVerify(detail))
+                if detail.contains("epoch 65536") && detail.contains("16-entry")
+        ));
+    }
+}

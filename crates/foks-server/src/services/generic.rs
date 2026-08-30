@@ -195,7 +195,7 @@ pub(crate) fn commit_for_entity(
             let root = MerkleRoot {
                 epoch: root_epoch,
                 time: now / 1_000,
-                back_pointers: foks_merkle_store::back_pointer_hash(&back_pointers)?,
+                back_pointers: foks_merkle_store::back_pointer_hash(root_epoch, &back_pointers)?,
                 root_node: merkle_commit.root,
                 hostchain: hostchain_tail,
                 extensions: Vec::new(),
@@ -304,10 +304,12 @@ pub(crate) fn load_for_entity(
         .iter()
         .map(|link| link.exact_link.clone())
         .collect::<Vec<_>>();
-    let locations = selected
-        .iter()
-        .map(|link| link.next_tree_location)
-        .collect::<Vec<_>>();
+    let mut locations = if start == 1 {
+        Vec::new()
+    } else {
+        vec![chain.links[start_index - 1].next_tree_location]
+    };
+    locations.extend(selected.iter().map(|link| link.next_tree_location));
     let mut current_location = if start == 1 {
         foks_crypto::subchain_tree_location(&chain.location_seed, chain_type).map_err(internal)?
     } else {
@@ -430,6 +432,9 @@ fn decode_root_status(root: &foks_server_db::RootSnapshot) -> Result<MerkleRoot,
 }
 
 fn map_write_error(error: crate::Error) -> RpcStatus {
+    if let Some(status) = crate::error::merkle_mint_status(&error) {
+        return status;
+    }
     match error {
         crate::Error::WriterQueue => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::StaleRoot) => RpcStatus::StaleRoot,

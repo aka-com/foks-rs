@@ -7,7 +7,8 @@ use std::{fs, path::PathBuf};
 
 use foks_agent_client::AgentClient;
 use foks_agent_proto::{
-    FederationRole, Operation, ResponseResult, SecretString, TeamRole, YubiRetryConfiguration,
+    ErrorCode, FederationRole, Operation, ResponseResult, SecretString, TeamRole,
+    YubiRetryConfiguration,
 };
 use serde_json::Value;
 
@@ -78,10 +79,25 @@ impl AgentTransport for AgentClient {
         match response.result {
             ResponseResult::Success { value } => Ok(value),
             ResponseResult::Error { code, message } => {
-                Err(format!("agent returned {code:?}: {message}"))
+                let mut rendered = format!("agent returned {code:?}: {message}");
+                if matches!(code, ErrorCode::DeadlineExceeded) {
+                    rendered.push_str(
+                        "\n\nThe operation may still have completed. Refresh this screen \
+                         (or run the matching resume action) before retrying it.",
+                    );
+                }
+                Err(rendered)
             }
         }
     }
+}
+
+/// The one response shape the desktop interprets structurally besides plain
+/// string lists. Parsing through serde keeps the coupling to agent payloads
+/// in one typed, testable place instead of scattered `Value` walking.
+#[derive(serde::Deserialize)]
+struct ProfileSummary {
+    name: String,
 }
 
 pub struct DesktopModel {
@@ -89,6 +105,8 @@ pub struct DesktopModel {
     screen: Screen,
     selected_profile: Option<String>,
     selected_account: Option<String>,
+    profiles: Vec<String>,
+    accounts: Vec<String>,
     value: Option<Value>,
     error: Option<String>,
 }
@@ -100,6 +118,8 @@ impl DesktopModel {
             screen: Screen::Status,
             selected_profile: None,
             selected_account: None,
+            profiles: Vec::new(),
+            accounts: Vec::new(),
             value: None,
             error: None,
         }
@@ -121,6 +141,14 @@ impl DesktopModel {
         self.selected_account.as_deref()
     }
 
+    pub fn profiles(&self) -> &[String] {
+        &self.profiles
+    }
+
+    pub fn accounts(&self) -> &[String] {
+        &self.accounts
+    }
+
     pub fn value(&self) -> Option<&Value> {
         self.value.as_ref()
     }
@@ -138,12 +166,21 @@ impl DesktopModel {
     pub fn select_profile(&mut self, profile: impl Into<String>) {
         self.selected_profile = Some(profile.into());
         self.selected_account = None;
-        self.value = None;
+        self.accounts.clear();
     }
 
     pub fn select_account(&mut self, account: impl Into<String>) {
         self.selected_account = Some(account.into());
-        self.value = None;
+    }
+
+    /// Records an account created this session so the selector reflects it
+    /// without waiting for the next `ListAccounts` round trip.
+    pub fn record_account(&mut self, alias: impl Into<String>) {
+        let alias = alias.into();
+        if !self.accounts.contains(&alias) {
+            self.accounts.push(alias.clone());
+        }
+        self.selected_account = Some(alias);
     }
 
     pub fn operation(&self) -> Result<Operation, &'static str> {
@@ -701,20 +738,27 @@ impl DesktopModel {
     pub fn accept(&mut self, result: Result<Value, String>) {
         match result {
             Ok(value) => {
-                if self.screen == Screen::Profiles && self.selected_profile.is_none() {
-                    self.selected_profile = value
-                        .as_array()
-                        .and_then(|profiles| profiles.first())
-                        .and_then(|profile| profile.get("name"))
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
-                }
-                if self.screen == Screen::Accounts && self.selected_account.is_none() {
-                    self.selected_account = value
-                        .as_array()
-                        .and_then(|accounts| accounts.first())
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
+                match self.screen {
+                    Screen::Profiles => {
+                        if let Ok(parsed) =
+                            serde_json::from_value::<Vec<ProfileSummary>>(value.clone())
+                        {
+                            self.profiles =
+                                parsed.into_iter().map(|profile| profile.name).collect();
+                            if self.selected_profile.is_none() {
+                                self.selected_profile = self.profiles.first().cloned();
+                            }
+                        }
+                    }
+                    Screen::Accounts => {
+                        if let Ok(parsed) = serde_json::from_value::<Vec<String>>(value.clone()) {
+                            self.accounts = parsed;
+                            if self.selected_account.is_none() {
+                                self.selected_account = self.accounts.first().cloned();
+                            }
+                        }
+                    }
+                    _ => {}
                 }
                 self.value = Some(value);
                 self.error = None;
@@ -927,9 +971,47 @@ mod tests {
         model.navigate(Screen::Profiles);
         model.accept(Ok(serde_json::json!([{"name": "local"}])));
         assert_eq!(model.selected_profile(), Some("local"));
+        assert_eq!(model.profiles(), ["local".to_owned()]);
         model.navigate(Screen::Accounts);
         model.accept(Ok(serde_json::json!(["personal"])));
         assert_eq!(model.selected_account(), Some("personal"));
+        assert_eq!(model.accounts(), ["personal".to_owned()]);
+    }
+
+    #[test]
+    fn selection_and_cached_lists_survive_selection_and_form_responses() {
+        let transport = Arc::new(MockTransport {
+            operations: Mutex::new(Vec::new()),
+        });
+        let mut model = DesktopModel::new(transport);
+        model.navigate(Screen::Profiles);
+        model.accept(Ok(
+            serde_json::json!([{"name": "local"}, {"name": "partner"}]),
+        ));
+        // Choosing a profile must not erase the list it was chosen from.
+        model.select_profile("partner");
+        assert_eq!(model.profiles(), ["local".to_owned(), "partner".to_owned()]);
+        assert!(model.value().is_some());
+
+        model.navigate(Screen::Accounts);
+        model.accept(Ok(serde_json::json!(["personal", "work"])));
+        model.select_account("work");
+        assert_eq!(model.accounts(), ["personal".to_owned(), "work".to_owned()]);
+
+        // A non-list response (a form submission report) must not clobber
+        // the cached account list or the selection.
+        model.accept(Ok(serde_json::json!({"username": "rae", "entries": 3})));
+        assert_eq!(model.accounts(), ["personal".to_owned(), "work".to_owned()]);
+        assert_eq!(model.selected_account(), Some("work"));
+
+        // Switching profile invalidates the cached accounts of the old one.
+        model.select_profile("local");
+        assert!(model.accounts().is_empty());
+        assert_eq!(model.selected_account(), None);
+
+        model.record_account("fresh");
+        assert_eq!(model.accounts(), ["fresh".to_owned()]);
+        assert_eq!(model.selected_account(), Some("fresh"));
     }
 
     #[test]

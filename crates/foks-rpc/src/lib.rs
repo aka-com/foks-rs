@@ -277,7 +277,7 @@ fn encode_call_with_validated_argument(
     encode_unsigned(sequence, &mut content);
     encode_unsigned(protocol_id, &mut content);
     encode_unsigned(method_position, &mut content);
-    if is_headerless_protocol(protocol_id) {
+    if is_headerless_argument_protocol(protocol_id) {
         // Team and Kex protocols carry the bare argument struct with no
         // DataWrap envelope and no header (go-foks proto/rem/team.go, kex.go).
         content.extend_from_slice(argument);
@@ -3001,6 +3001,29 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(&error, Error::RemoteStatus { code: 1001, detail } if detail.0.as_deref() == Some("block"))
+        );
+
+        let framed = encode_status_response_at(&RpcStatus::KvRace("dirent".to_owned()), 9).unwrap();
+        let error = read_response(
+            &mut std::io::Cursor::new(&framed),
+            DEFAULT_MAX_FRAME_LENGTH,
+            9,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, Error::RemoteStatus { code: 8003, detail } if detail.0.as_deref() == Some("dirent"))
+        );
+
+        let framed =
+            encode_status_response_at(&RpcStatus::MerkleVerify("proof".to_owned()), 9).unwrap();
+        let error = read_response(
+            &mut std::io::Cursor::new(&framed),
+            DEFAULT_MAX_FRAME_LENGTH,
+            9,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, Error::RemoteStatus { code: 4003, detail } if detail.0.as_deref() == Some("proof"))
         );
 
         // Stale-cache status: [8012, {"b": [Root, [ [Id, Vers, [[Id, Vers]]] ]]}].

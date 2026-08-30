@@ -333,7 +333,7 @@ fn construct_publication(
     let root = MerkleRoot {
         epoch: root_epoch,
         time: protocol_time,
-        back_pointers: foks_merkle_store::back_pointer_hash(&back_pointers)?,
+        back_pointers: foks_merkle_store::back_pointer_hash(root_epoch, &back_pointers)?,
         root_node: current_root.root_node,
         hostchain: HostchainTail {
             seqno: hostchain_seqno,

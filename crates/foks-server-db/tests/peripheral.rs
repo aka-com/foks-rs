@@ -36,7 +36,7 @@ fn waitlist_entries_are_typed_validated_and_persisted() {
 }
 
 #[test]
-fn log_send_uploads_are_capability_bounded_and_exactly_sized() {
+fn log_send_uploads_accept_go_uncompressed_length_and_bound_actual_bytes() {
     let mut store = common::TestDatabase::new();
     let id = log_send_id(3);
     store
@@ -50,7 +50,9 @@ fn log_send_uploads_are_capability_bounded_and_exactly_sized() {
             log_send_id: &id,
             file_id: 9,
             filename: "client.log",
-            content_length: MAXIMUM_LOG_SEND_BLOCK_BYTES as u64 + 2,
+            // go-foks leaves this as the uncompressed size while sending
+            // gzip-compressed blocks.
+            content_length: 10 * 1024 * 1024,
             block_count: 2,
             content_hash: &hash,
             now: 1_000_001,
@@ -112,7 +114,7 @@ fn log_send_uploads_are_capability_bounded_and_exactly_sized() {
         stored,
         (
             "client.log".to_owned(),
-            MAXIMUM_LOG_SEND_BLOCK_BYTES as i64 + 2,
+            10 * 1024 * 1024,
             2,
             hash.to_vec(),
             MAXIMUM_LOG_SEND_BLOCK_BYTES as i64 + 2,
@@ -150,8 +152,9 @@ fn log_send_rejects_missing_expired_and_inconsistent_uploads() {
         }),
         Err(Error::Invalid("log-send file metadata"))
     ));
-    assert!(matches!(
-        store.database.begin_log_send_file(&LogSendFileMutation {
+    store
+        .database
+        .begin_log_send_file(&LogSendFileMutation {
             log_send_id: &id,
             file_id: 1,
             filename: "client.log",
@@ -159,9 +162,8 @@ fn log_send_rejects_missing_expired_and_inconsistent_uploads() {
             block_count: 1,
             content_hash: &hash,
             now: 2,
-        }),
-        Err(Error::Invalid("log-send file metadata"))
-    ));
+        })
+        .unwrap();
     assert!(matches!(
         store.database.begin_log_send_file(&LogSendFileMutation {
             log_send_id: &id,
@@ -193,7 +195,7 @@ fn log_send_rejects_missing_expired_and_inconsistent_uploads() {
         store.database.put_log_send_block(&LogSendBlockMutation {
             log_send_id: &active,
             file_id: 2,
-            block_number: 0,
+            block_number: 1,
             block: b"wrong",
             now: 12,
         }),
@@ -233,6 +235,36 @@ fn log_send_caps_the_number_of_files_per_public_capability() {
         }),
         Err(Error::Capacity("log-send file count"))
     ));
+}
+
+#[test]
+fn log_send_treats_reported_content_length_as_fully_advisory() {
+    let mut store = common::TestDatabase::new();
+    let id = log_send_id(7);
+    let hash = [0x71; 32];
+    store.database.begin_log_send(&id, None, 1).unwrap();
+    store
+        .database
+        .begin_log_send_file(&LogSendFileMutation {
+            log_send_id: &id,
+            file_id: 1,
+            filename: "empty-source.log.gz",
+            content_length: 0,
+            block_count: 1,
+            content_hash: &hash,
+            now: 2,
+        })
+        .unwrap();
+    store
+        .database
+        .put_log_send_block(&LogSendBlockMutation {
+            log_send_id: &id,
+            file_id: 1,
+            block_number: 0,
+            block: b"gzip-stream",
+            now: 3,
+        })
+        .unwrap();
 }
 
 fn waitlist_id(fill: u8) -> [u8; 13] {

@@ -107,6 +107,9 @@ fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
 fn map_write_error(error: impl Into<crate::Error>) -> RpcStatus {
     match error.into() {
         crate::Error::WriterQueue => RpcStatus::RateLimited,
+        crate::Error::Database(foks_server_db::Error::Capacity(
+            "active log-send sessions" | "log-send bytes",
+        )) => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::Invalid(message)) => bad_arguments(message),
         crate::Error::Database(foks_server_db::Error::Capacity(message)) => {
             bad_arguments(format_args!("{message} exceeds configured capacity"))

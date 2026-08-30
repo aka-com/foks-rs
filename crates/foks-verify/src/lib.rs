@@ -283,6 +283,20 @@ mod tests {
             &advance,
         )
         .unwrap();
+        let mut older_advance = advance.clone();
+        older_advance.root.epoch = older_advance.root.epoch.checked_sub(1).unwrap();
+        assert_eq!(
+            verify_user_chain(
+                USER_CHAIN,
+                &uid,
+                &host,
+                advance.authenticated_roots(),
+                &older_advance,
+            )
+            .unwrap(),
+            verified,
+            "an authenticated response root may race ahead of the pre-request anchor"
+        );
         assert!(matches!(
             verify_user_chain(
                 USER_CHAIN,
@@ -532,6 +546,20 @@ mod tests {
             &advance,
         )
         .unwrap();
+        let mut older_advance = advance.clone();
+        older_advance.root.epoch = older_advance.root.epoch.checked_sub(1).unwrap();
+        assert_eq!(
+            verify_team_chain(
+                TEAM_CHAIN,
+                &team,
+                &host,
+                advance.authenticated_roots(),
+                &older_advance,
+            )
+            .unwrap(),
+            verified,
+            "an authenticated response root may race ahead of the pre-request anchor"
+        );
         let mut newer_advance = advance.clone();
         newer_advance.root.epoch = newer_advance.root.epoch.checked_add(1).unwrap();
         assert!(matches!(
@@ -967,6 +995,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn non_self_user_load_accepts_go_omitted_device_names() {
+        let chain = UserChain::decode(USER_CHAIN).unwrap();
+        let uid = binary_entity(include_bytes!(
+            "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/uid.snowp"
+        ));
+        let host = chain.links[0].decode_eldest().unwrap().host;
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let advance = verify_merkle_advance(
+            public.snapshot.merkle_root(),
+            USER_ROOT,
+            USER_HISTORY,
+            &trusted_tail(&public),
+        )
+        .unwrap();
+        let Value::Array(mut fields) = foks_snowpack::decode(USER_CHAIN).unwrap() else {
+            panic!("user-chain fixture is not an array");
+        };
+        fields[4] = Value::Null;
+        let omitted = encode(&Value::Array(fields)).unwrap();
+        assert!(matches!(
+            verify_user_chain(
+                &omitted,
+                &uid,
+                &host,
+                advance.authenticated_roots(),
+                &advance,
+            ),
+            Err(Error::UserDisclosure)
+        ));
+        verify_non_self_user_chain(
+            &omitted,
+            &uid,
+            &host,
+            advance.authenticated_roots(),
+            &advance,
+        )
+        .unwrap();
     }
 
     #[test]

@@ -1268,7 +1268,9 @@ impl FoksClient {
             .map(|device| {
                 let valid_receiver = match device.id.entity_type() {
                     foks_proto::ENTITY_YUBI => device.hepk.p256().is_some(),
-                    foks_proto::ENTITY_DEVICE => device.hepk.curve25519().is_some(),
+                    foks_proto::ENTITY_DEVICE
+                    | foks_proto::ENTITY_BACKUP_KEY
+                    | foks_proto::ENTITY_BOT_TOKEN_KEY => device.hepk.curve25519().is_some(),
                     _ => false,
                 };
                 if !valid_receiver {

@@ -1,6 +1,6 @@
 use foks_proto::{
     DecodedProvisionDeviceArgument, DecodedRevokeDeviceArgument, EntityId, Hepk, Role, RoleType,
-    SeedChainBox, UserMemberKeys,
+    SeedChainBox, SharedKeyBoxSet, UserMemberKeys,
 };
 
 use crate::{Error, Result};
@@ -80,6 +80,15 @@ pub(crate) fn validate(
     argument: Argument,
     signed_root: foks_proto::TreeRoot,
 ) -> Result<Command> {
+    let is_revoke_request = matches!(&argument, Argument::Revoke(_));
+    if let Argument::Provision(provision) = &argument {
+        for device in authority.devices.iter().filter(|device| device.active) {
+            let existing = foks_proto::DeviceLabelNameAndCommitmentKey::decode(&device.exact_name)?;
+            if existing.label == provision.device_name.label {
+                return Err(Error::Signup("device label is already enrolled"));
+            }
+        }
+    }
     let provision_self_token = match &argument {
         Argument::Provision(argument) => Some(argument.self_token),
         Argument::Revoke(_) => None,
@@ -221,6 +230,9 @@ pub(crate) fn validate(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    if is_revoke_request && !introduced.is_empty() {
+        validate_rotation_box_gameplan(&devices, revoked.as_deref(), &introduced, boxes)?;
+    }
     let exact_boxes = boxes.encoded();
     let parcels = boxes
         .boxes
@@ -328,6 +340,51 @@ pub(crate) fn validate(
     })
 }
 
+/// Mirrors go-foks's `ComputeRotateNewBoxGameplan`: every active credential
+/// that can read a rotated role must receive that role's next generation,
+/// with no duplicate or surplus parcels. An empty shared-key change is the
+/// intentional Go self-revoke shape and is handled by the caller.
+fn validate_rotation_box_gameplan(
+    devices: &[foks_verify::VerifiedDevice],
+    revoked: Option<&[u8]>,
+    rotated: &[SharedKey],
+    boxes: &SharedKeyBoxSet,
+) -> Result<()> {
+    let expected = devices
+        .iter()
+        .filter(|device| revoked != Some(device.id.as_bytes()))
+        .flat_map(|device| {
+            rotated
+                .iter()
+                .filter(|key| device.role >= key.role)
+                .map(|key| (device.id.as_bytes().to_vec(), key.role, key.generation))
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let actual = boxes
+        .boxes
+        .iter()
+        .map(|boxed| {
+            if boxed.target.host.is_some()
+                || boxed.target.role != Role::NONE
+                || boxed.target.generation != 0
+            {
+                return Err(Error::Signup("invalid local PUK box target"));
+            }
+            Ok((
+                boxed.target.entity.as_bytes().to_vec(),
+                boxed.role,
+                boxed.generation,
+            ))
+        })
+        .collect::<Result<std::collections::BTreeSet<_>>>()?;
+    if actual.len() != boxes.boxes.len() || actual != expected {
+        return Err(Error::Signup(
+            "PUK rotation box set does not match the active roster",
+        ));
+    }
+    Ok(())
+}
+
 fn decode_shared_keys(
     keys: &[foks_server_db::UserSharedKeySnapshot],
 ) -> Result<Vec<foks_verify::VerifiedSharedKey>> {
@@ -391,4 +448,86 @@ fn hepk_by_fingerprint(hepks: &[Hepk], expected: [u8; 32]) -> Result<&Hepk> {
         .iter()
         .find(|hepk| foks_crypto::hepk_fingerprint(hepk).ok() == Some(expected))
         .ok_or(Error::Signup("mutation HEPK is missing"))
+}
+
+#[cfg(test)]
+mod tests {
+    use foks_crypto::{
+        derive_device_public, derive_shared_public, seal_software_puk_boxes_mixed,
+        PukBoxRandomness, SoftwarePukBoxInput, SoftwarePukBoxSetRandomness,
+    };
+    use foks_proto::{EntityId, Role, SecretSeed, SharedKeyBoxSet, ENTITY_HOST, ENTITY_PUK_VERIFY};
+
+    use super::{validate_rotation_box_gameplan, SharedKey};
+
+    #[test]
+    fn rotated_puk_boxes_must_exactly_cover_the_post_revoke_roster() {
+        let host = EntityId::from_bytes([vec![ENTITY_HOST], vec![0x11; 32]].concat()).unwrap();
+        let sender_seed = SecretSeed::new([0x12; 32]);
+        let receiver_a = derive_device_public(&SecretSeed::new([0x13; 32])).unwrap();
+        let receiver_b = derive_device_public(&SecretSeed::new([0x14; 32])).unwrap();
+        let new_puk = SecretSeed::new([0x15; 32]);
+        let public_puk = derive_shared_public(&new_puk, ENTITY_PUK_VERIFY).unwrap();
+        let devices = [&receiver_a, &receiver_b]
+            .into_iter()
+            .map(|device| foks_verify::VerifiedDevice {
+                id: device.id.clone(),
+                role: Role::OWNER,
+                hepk: device.hepk.clone(),
+                subkey: None,
+            })
+            .collect::<Vec<_>>();
+        let inputs = [&receiver_a, &receiver_b].map(|receiver| SoftwarePukBoxInput {
+            seed: &new_puk,
+            generation: 2,
+            role: Role::OWNER,
+            receiver,
+        });
+        let boxes = seal_software_puk_boxes_mixed(
+            &host,
+            &sender_seed,
+            [0x16; 16],
+            &inputs,
+            &[
+                PukBoxRandomness {
+                    kem_message: [0x17; 32],
+                    nonce: [0x18; 16],
+                },
+                PukBoxRandomness {
+                    kem_message: [0x19; 32],
+                    nonce: [0x1a; 16],
+                },
+            ],
+            SoftwarePukBoxSetRandomness {
+                ephemeral_secret: [0x1b; 32],
+                time: 1,
+            },
+        )
+        .unwrap();
+        let rotated = [SharedKey {
+            role: Role::OWNER,
+            generation: 2,
+            verify_key: public_puk.verify_key.into_bytes(),
+            exact_hepk: public_puk.hepk.encoded().unwrap(),
+        }];
+
+        validate_rotation_box_gameplan(&devices, None, &rotated, &boxes).unwrap();
+
+        let empty = SharedKeyBoxSet::new([0x16; 16], Vec::new(), None).unwrap();
+        assert!(validate_rotation_box_gameplan(&devices, None, &rotated, &empty).is_err());
+
+        let survivor_only = SharedKeyBoxSet::new(
+            boxes.box_id,
+            vec![boxes.boxes[1].clone()],
+            boxes.temp_dh_key.clone(),
+        )
+        .unwrap();
+        validate_rotation_box_gameplan(
+            &devices,
+            Some(receiver_a.id.as_bytes()),
+            &rotated,
+            &survivor_only,
+        )
+        .unwrap();
+    }
 }

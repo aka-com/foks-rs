@@ -42,3 +42,9 @@ foks-agent --state-dir /private/client
 macOS and Linux are supported. Windows is currently refused because an
 authenticated named-pipe implementation and ACL validation have not landed.
 Use `foks-rs` directly on Windows until that boundary exists.
+
+On Unix, the socket authenticates the operating-system user ID. It is not a
+sandbox boundary between mutually untrusted processes running under the same
+UID; deployments that include such processes must isolate the agent under a
+separate OS identity. A stronger same-UID client capability would require a
+different launch and credential-brokering design.

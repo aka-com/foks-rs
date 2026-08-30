@@ -12,10 +12,11 @@ use super::{
     encode_registration_select_vhost_request, encode_resolve_username_request,
     encode_user_ping_request, merkle_history_requirements, open_puk_parcel_for_role,
     open_puk_parcel_with_for_role, open_puk_seed_chain, restore_merkle_anchor,
-    user_chain_root_epochs, verify_signed_merkle_advance, verify_user_chain,
-    verify_user_chain_increment, Acceptance, AuthenticatedMerkleRoots, DeviceNagInfo, EntityId,
-    Error, FoksClient, HardStateStore, HostchainTail, PinnedHost, PukParcel, Result, Role,
-    SecretSeed, Value, VerifiedMerkleAdvance, VerifiedUserState, YubiDevice, ENTITY_USER,
+    user_chain_root_epochs, verify_non_self_user_chain, verify_non_self_user_chain_increment,
+    verify_signed_merkle_advance, verify_user_chain, verify_user_chain_increment, Acceptance,
+    AuthenticatedMerkleRoots, DeviceNagInfo, EntityId, Error, FoksClient, HardStateStore,
+    HostchainTail, PinnedHost, PukParcel, Result, Role, SecretSeed, Value, VerifiedMerkleAdvance,
+    VerifiedUserState, YubiDevice, ENTITY_USER,
 };
 use foks_crypto::{open_subkey_box, sign_yubi_typed};
 use foks_proto::{
@@ -540,7 +541,7 @@ impl FoksClient {
             let authenticated_roots =
                 self.authenticate_user_chain_roots(current, &merkle, &chain_bytes)?;
             let verified = match prior.as_ref() {
-                Some(prior) => verify_user_chain_increment(
+                Some(prior) => verify_non_self_user_chain_increment(
                     &chain_bytes,
                     prior,
                     target,
@@ -548,7 +549,7 @@ impl FoksClient {
                     &authenticated_roots,
                     &merkle,
                 )?,
-                None => verify_user_chain(
+                None => verify_non_self_user_chain(
                     &chain_bytes,
                     target,
                     current.host_id(),
@@ -743,16 +744,29 @@ impl FoksClient {
         chain_bytes: &[u8],
     ) -> Result<AuthenticatedMerkleRoots> {
         let chain = UserChain::decode(chain_bytes)?;
-        if chain.merkle.root() != latest.root() {
+        if chain.merkle.root().epoch < latest.root().epoch {
             return Err(Error::UserBinding(
-                "chain response is not anchored at the latest Merkle root",
+                "chain response is older than the authenticated Merkle root",
             ));
         }
-        let targets = user_chain_root_epochs(chain_bytes)?
+        let anchor = if chain.merkle.root().epoch > latest.root().epoch {
+            let (_, advanced) = self.advance_merkle_root(host)?;
+            if advanced.root().epoch < chain.merkle.root().epoch {
+                return Err(Error::UserBinding(
+                    "user chain references an unauthenticated future Merkle root",
+                ));
+            }
+            advanced
+        } else {
+            latest.clone()
+        };
+        let mut targets = user_chain_root_epochs(chain_bytes)?;
+        targets.push(chain.merkle.root().epoch);
+        let targets = targets
             .into_iter()
-            .filter(|epoch| !latest.authenticated_roots().contains_epoch(*epoch))
+            .filter(|epoch| !anchor.authenticated_roots().contains_epoch(*epoch))
             .collect::<Vec<_>>();
-        self.authenticate_chain_roots(host, latest, targets, Error::UserBinding)
+        self.authenticate_chain_roots(host, &anchor, targets, Error::UserBinding)
     }
 
     pub(crate) fn authenticate_team_chain_roots(
@@ -762,16 +776,29 @@ impl FoksClient {
         chain_bytes: &[u8],
     ) -> Result<AuthenticatedMerkleRoots> {
         let chain = TeamChain::decode(chain_bytes)?;
-        if chain.merkle.root() != latest.root() {
+        if chain.merkle.root().epoch < latest.root().epoch {
             return Err(Error::TeamBinding(
-                "chain response is not anchored at the latest Merkle root",
+                "chain response is older than the authenticated Merkle root",
             ));
         }
-        let targets = team_chain_root_epochs(chain_bytes)?
+        let anchor = if chain.merkle.root().epoch > latest.root().epoch {
+            let (_, advanced) = self.advance_merkle_root(host)?;
+            if advanced.root().epoch < chain.merkle.root().epoch {
+                return Err(Error::TeamBinding(
+                    "team chain references an unauthenticated future Merkle root",
+                ));
+            }
+            advanced
+        } else {
+            latest.clone()
+        };
+        let mut targets = team_chain_root_epochs(chain_bytes)?;
+        targets.push(chain.merkle.root().epoch);
+        let targets = targets
             .into_iter()
-            .filter(|epoch| !latest.authenticated_roots().contains_epoch(*epoch))
+            .filter(|epoch| !anchor.authenticated_roots().contains_epoch(*epoch))
             .collect();
-        self.authenticate_chain_roots(host, latest, targets, Error::TeamBinding)
+        self.authenticate_chain_roots(host, &anchor, targets, Error::TeamBinding)
     }
 
     pub(crate) fn authenticate_chain_roots(

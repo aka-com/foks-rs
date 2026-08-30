@@ -14,8 +14,8 @@ use super::{
     RefreshTeamMemberKeysRequest, RotatedTeamPtks, RotationBinding,
 };
 use crate::{
-    AuthenticatedTeamOutcome, FoksClient, PinnedHost, ProtectedMutationStore, ProtectedStoreError,
-    Result, VerifiedTeamRecipient, YubiCredential,
+    AuthenticatedTeamOutcome, DeviceCredential, FoksClient, PinnedHost, ProtectedMutationStore,
+    ProtectedStoreError, Result, VerifiedTeamRecipient, YubiCredential,
 };
 
 const DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user-mutations";
@@ -418,6 +418,50 @@ fn protected_only_clkr_frame_can_be_rebuilt_but_a_journaled_frame_cannot_be_disc
         protected.get(&key).unwrap().as_slice(),
         b"rebuilt latest-head frame"
     );
+}
+
+#[test]
+fn superseded_member_edit_releases_its_journal_and_protected_material() {
+    let (_temporary, client, host) = initialized_host();
+    let operation_id = [0x69; 16];
+    let (operation, actor, team) = team_operation(&host, operation_id);
+    HardStateStore::open(&host.database_path)
+        .unwrap()
+        .record_team_mutation(&operation)
+        .unwrap();
+    let key = super::team_rotation_material_key(&operation_id);
+    let mut protected = MemoryProtectedStore::default();
+    protected.put_if_absent(&key, b"lost-race frame").unwrap();
+    let credential = DeviceCredential {
+        uid: actor,
+        seed: SecretSeed::new([0x71; 32]),
+        certificate_chain: Vec::new(),
+    };
+
+    client
+        .supersede_recorded_team_member_change(
+            &host,
+            &credential,
+            &team,
+            operation.expected_seqno,
+            &operation_id,
+            &mut protected,
+        )
+        .unwrap();
+
+    assert_eq!(
+        HardStateStore::open(&host.database_path)
+            .unwrap()
+            .team_mutation(&operation_id)
+            .unwrap()
+            .unwrap()
+            .state,
+        TeamMutationState::Superseded
+    );
+    assert!(matches!(
+        protected.get(&key),
+        Err(ProtectedStoreError::Missing)
+    ));
 }
 
 #[test]

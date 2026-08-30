@@ -139,20 +139,20 @@ mod tests {
             unreachable!()
         }
 
-        fn validate_host_argument(&self, _: &[u8]) -> Result<(), RpcStatus> {
+        fn validate_host_argument(&self, argument: &[u8]) -> Result<(), RpcStatus> {
             self.strict_host_validations
                 .set(self.strict_host_validations.get() + 1);
-            Ok(())
+            super::super::super::validate_host_argument_against(argument, &expected_host(), false)
         }
 
-        fn validate_optional_host_argument(&self, _: &[u8]) -> Result<(), RpcStatus> {
+        fn validate_optional_host_argument(&self, argument: &[u8]) -> Result<(), RpcStatus> {
             self.optional_host_validations
                 .set(self.optional_host_validations.get() + 1);
-            Ok(())
+            super::super::super::validate_host_argument_against(argument, &expected_host(), true)
         }
 
         fn current_root(&self) -> Result<Vec<u8>, RpcStatus> {
-            Ok(foks_snowpack::encode(&foks_snowpack::Value::Unsigned(1)).unwrap())
+            Ok(user_fixture("merkle-root-998.snowp"))
         }
 
         fn current_root_signed(&self) -> Result<Vec<u8>, RpcStatus> {
@@ -180,13 +180,23 @@ mod tests {
         }
     }
 
-    fn routed_merkle_call(position: u64) -> RoutedCall {
-        let argument = foks_snowpack::encode(&foks_snowpack::Value::Array(vec![
-            foks_snowpack::Value::Null,
-        ]))
-        .unwrap();
+    fn expected_host() -> Vec<u8> {
+        [vec![foks_proto::ENTITY_HOST], vec![0x41; 32]].concat()
+    }
+
+    fn user_fixture(name: &str) -> Vec<u8> {
+        std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../foks-snowpack/tests/fixtures/foks-v0.1.9/user")
+                .join(name),
+        )
+        .unwrap()
+    }
+
+    fn routed_merkle_call(position: u64, host: foks_snowpack::Value) -> RoutedCall {
+        let argument = foks_snowpack::encode(&foks_snowpack::Value::Array(vec![host])).unwrap();
         let framed =
-            foks_rpc::encode_call(foks_rpc::MERKLE_QUERY_PROTOCOL_ID, position, &argument, 7)
+            foks_rpc::encode_call(foks_rpc::MERKLE_QUERY_PROTOCOL_ID, position, &argument, 1)
                 .unwrap();
         let call = foks_rpc::read_call(&mut Cursor::new(framed), 4096).unwrap();
         route_call(call, Listener::PublicServices).unwrap()
@@ -198,12 +208,18 @@ mod tests {
 
         response(
             &operations,
-            routed_merkle_call(foks_rpc::MERKLE_GET_CURRENT_ROOT_METHOD_POSITION),
+            routed_merkle_call(
+                foks_rpc::MERKLE_GET_CURRENT_ROOT_METHOD_POSITION,
+                foks_snowpack::Value::Null,
+            ),
         )
         .unwrap();
         response(
             &operations,
-            routed_merkle_call(foks_rpc::MERKLE_GET_CURRENT_ROOT_SIGNED_METHOD_POSITION),
+            routed_merkle_call(
+                foks_rpc::MERKLE_GET_CURRENT_ROOT_SIGNED_METHOD_POSITION,
+                foks_snowpack::Value::Null,
+            ),
         )
         .unwrap();
 
@@ -212,16 +228,61 @@ mod tests {
     }
 
     #[test]
+    fn unsigned_current_root_response_matches_the_generated_go_frame() {
+        let operations = RecordingOperations::default();
+        let actual = response(
+            &operations,
+            routed_merkle_call(
+                foks_rpc::MERKLE_GET_CURRENT_ROOT_METHOD_POSITION,
+                foks_snowpack::Value::Null,
+            ),
+        )
+        .unwrap();
+        assert_eq!(actual, user_fixture("merkle-current-root-response.frame"));
+    }
+
+    #[test]
     fn select_vhost_keeps_strict_host_validation() {
         let operations = RecordingOperations::default();
 
         response(
             &operations,
-            routed_merkle_call(foks_rpc::MERKLE_SELECT_VHOST_METHOD_POSITION),
+            routed_merkle_call(
+                foks_rpc::MERKLE_SELECT_VHOST_METHOD_POSITION,
+                foks_snowpack::Value::Binary(expected_host()),
+            ),
         )
         .unwrap();
 
         assert_eq!(operations.strict_host_validations.get(), 1);
         assert_eq!(operations.optional_host_validations.get(), 0);
+    }
+
+    #[test]
+    fn selected_vhost_rejects_omission_and_another_listener_host() {
+        let operations = RecordingOperations::default();
+        assert!(matches!(
+            response(
+                &operations,
+                routed_merkle_call(
+                    foks_rpc::MERKLE_SELECT_VHOST_METHOD_POSITION,
+                    foks_snowpack::Value::Null,
+                ),
+            ),
+            Err(RpcStatus::BadArguments(_))
+        ));
+
+        let mut other_host = expected_host();
+        other_host[1] ^= 1;
+        assert!(matches!(
+            response(
+                &operations,
+                routed_merkle_call(
+                    foks_rpc::MERKLE_SELECT_VHOST_METHOD_POSITION,
+                    foks_snowpack::Value::Binary(other_host),
+                ),
+            ),
+            Err(RpcStatus::NotFound(_))
+        ));
     }
 }

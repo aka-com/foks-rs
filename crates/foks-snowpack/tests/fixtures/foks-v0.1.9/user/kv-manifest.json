@@ -1,7 +1,6 @@
 {
-  "format": "foks-v0.1.9-kv-fixtures-v1",
+  "format": "foks-v0.1.9-kv-fixtures-v2",
   "foks_version": "v0.1.9",
-  "official_generated": true,
   "files": [
     { "file": "kv-cache-check-request.frame", "bytes": 147, "sha256": "1bea95c32e90a433c3015066a91fb99e4e30563984ff4eb9cec84952ff393524" },
     { "file": "kv-file-upload-chunk-request.frame", "bytes": 170, "sha256": "7c294b6175b55de750d1fc48483946d0189403a871e8388c1c3d98bb721f3f73" },

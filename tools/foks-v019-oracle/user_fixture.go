@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -187,19 +189,18 @@ func fixtureMerkleRoot(
 }
 
 type userFixtureManifest struct {
-	Format          string    `json:"format"`
-	FOKSVersion     string    `json:"foks_version"`
-	GeneratedAt     string    `json:"generated_at"`
-	HostID          string    `json:"host_id"`
-	UID             string    `json:"uid"`
-	DeviceID        string    `json:"device_id"`
-	UserRootHash    string    `json:"user_root_hash"`
-	UserMerkleKey   string    `json:"user_merkle_key"`
-	UserLinkHash    string    `json:"user_link_hash"`
-	PUKGeneration   uint64    `json:"puk_generation"`
-	OfficialUnboxed bool      `json:"official_unboxed"`
-	Files           []fixture `json:"files"`
-	RawFiles        []fixture `json:"raw_files"`
+	Format        string    `json:"format"`
+	FOKSVersion   string    `json:"foks_version"`
+	GeneratedAt   string    `json:"generated_at"`
+	HostID        string    `json:"host_id"`
+	UID           string    `json:"uid"`
+	DeviceID      string    `json:"device_id"`
+	UserRootHash  string    `json:"user_root_hash"`
+	UserMerkleKey string    `json:"user_merkle_key"`
+	UserLinkHash  string    `json:"user_link_hash"`
+	PUKGeneration uint64    `json:"puk_generation"`
+	Files         []fixture `json:"files"`
+	RawFiles      []fixture `json:"raw_files"`
 }
 
 func rpcRequestFrame[D any](protocol rpc.ProtocolUniqueID, position rpc.Position, data D) ([]byte, error) {
@@ -329,6 +330,82 @@ func generatedWireArgument[D any](protocol rpc.ProtocolUniqueID, position rpc.Po
 	return want, nil
 }
 
+var errCapturedResponseEnvelope = errors.New("captured generated response envelope")
+
+// responseEnvelopeClient records the result target selected by a generated
+// go-foks client. Returning a sentinel stops non-void methods before they try
+// to import a zero-value result; the selected target remains available for
+// independent response-envelope inspection.
+type responseEnvelopeClient struct {
+	result interface{}
+}
+
+func (*responseEnvelopeClient) Transport(context.Context) (rpc.Transporter, error) {
+	panic("unused")
+}
+func (*responseEnvelopeClient) Call(context.Context, rpc.Methoder, interface{}, interface{}, time.Duration) error {
+	panic("unused")
+}
+func (c *responseEnvelopeClient) Call2(_ context.Context, _ rpc.Methoder, _ interface{}, result interface{}, _ time.Duration, _ rpc.ErrorUnwrapper) error {
+	c.result = result
+	return errCapturedResponseEnvelope
+}
+func (*responseEnvelopeClient) CallCompressed(context.Context, rpc.Methoder, interface{}, interface{}, rpc.CompressionType, time.Duration) error {
+	panic("unused")
+}
+func (*responseEnvelopeClient) Notify(context.Context, rpc.Methoder, interface{}, time.Duration) error {
+	panic("unused")
+}
+
+// generatedWireResult derives the result envelope from the generated client
+// for the exact method. It intentionally does not inspect MakeArg, since Go's
+// request and response wrappers are separate generated choices.
+func generatedWireResult(protocol rpc.ProtocolUniqueID, position rpc.Position, data interface{}) (interface{}, error) {
+	capture := &responseEnvelopeClient{}
+	ctx := context.Background()
+	var err error
+	switch {
+	case protocol == rem.TeamAdminProtocolID && position == 1:
+		err = (rem.TeamAdminClient{Cli: capture}).CreateTeam(ctx, rem.CreateTeamArg{})
+	case protocol == rem.TeamLoaderProtocolID && position == 3:
+		_, err = (rem.TeamLoaderClient{Cli: capture}).LoadTeamChain(ctx, rem.LoadTeamChainArg{})
+	case protocol == rem.KVStoreProtocolID && position == 18:
+		err = (rem.KVStoreClient{Cli: capture}).SelectVHost(ctx, proto.HostID{})
+	case protocol == rem.RegProtocolID && position == 15:
+		err = (rem.RegClient{Cli: capture}).SelectVHost(ctx, proto.HostID{})
+	case protocol == rem.MerkleQueryProtocolID && position == 8:
+		err = (rem.MerkleQueryClient{Cli: capture}).SelectVHost(ctx, proto.HostID{})
+	case protocol == rem.MerkleQueryProtocolID && position == 2:
+		_, err = (rem.MerkleQueryClient{Cli: capture}).GetCurrentRoot(ctx, nil)
+	default:
+		return nil, fmt.Errorf("no generated response-envelope probe for protocol 0x%x method %d", protocol, position)
+	}
+	if !errors.Is(err, errCapturedResponseEnvelope) {
+		return nil, fmt.Errorf("capture generated response envelope for protocol 0x%x method %d: %w", protocol, position, err)
+	}
+
+	target := reflect.ValueOf(capture.result)
+	if !target.IsValid() {
+		if data != nil {
+			return nil, fmt.Errorf("generated bare-void response for protocol 0x%x method %d cannot carry %T", protocol, position, data)
+		}
+		return nil, nil
+	}
+	if target.Kind() != reflect.Pointer || target.Elem().Kind() != reflect.Struct {
+		return nil, fmt.Errorf("generated response target for protocol 0x%x method %d is invalid: %T", protocol, position, capture.result)
+	}
+	dataWrapType := reflect.TypeOf(rpc.DataWrap[proto.Header, interface{}]{})
+	if target.Elem().Type().PkgPath() == dataWrapType.PkgPath() &&
+		strings.HasPrefix(target.Elem().Type().Name(), "DataWrap[") {
+		return &rpc.DataWrap[proto.Header, interface{}]{Header: core.MakeProtoHeader(), Data: data}, nil
+	}
+	dataValue := reflect.ValueOf(data)
+	if !dataValue.IsValid() || !dataValue.Type().AssignableTo(target.Type()) {
+		return nil, fmt.Errorf("generated bare response target %T does not accept %T", capture.result, data)
+	}
+	return data, nil
+}
+
 func rpcRequestFrameAt[D any](protocol rpc.ProtocolUniqueID, position rpc.Position, data D, sequence rpc.SeqNumber) ([]byte, error) {
 	arg, err := generatedWireArgument(protocol, position, data)
 	if err != nil {
@@ -354,24 +431,13 @@ func rpcRequestFrameAt[D any](protocol rpc.ProtocolUniqueID, position rpc.Positi
 }
 
 func rpcVoidResponseFrame(protocol rpc.ProtocolUniqueID, position rpc.Position, sequence rpc.SeqNumber) ([]byte, error) {
-	definition, err := generatedProtocol(protocol)
+	return rpcResponseFrame(protocol, position, sequence, nil)
+}
+
+func rpcResponseFrame(protocol rpc.ProtocolUniqueID, position rpc.Position, sequence rpc.SeqNumber, data interface{}) ([]byte, error) {
+	result, err := generatedWireResult(protocol, position, data)
 	if err != nil {
 		return nil, err
-	}
-	method, ok := definition.Methods[position]
-	if !ok {
-		return nil, fmt.Errorf("protocol %s has no method at position %d", definition.Name, position)
-	}
-	argument := reflect.ValueOf(method.MakeArg())
-	if !argument.IsValid() || argument.Kind() != reflect.Pointer {
-		return nil, fmt.Errorf("protocol %s method %s has an invalid generated argument", definition.Name, method.Name)
-	}
-	result := interface{}(nil)
-	wrapper := argument.Elem()
-	dataWrapType := reflect.TypeOf(rpc.DataWrap[proto.Header, interface{}]{})
-	if wrapper.Kind() == reflect.Struct && wrapper.Type().PkgPath() == dataWrapType.PkgPath() &&
-		strings.HasPrefix(wrapper.Type().Name(), "DataWrap[") {
-		result = &rpc.DataWrap[proto.Header, interface{}]{Header: core.MakeProtoHeader()}
 	}
 	frame := []interface{}{rpc.MethodResponse, sequence, (*proto.Status)(nil), result}
 	handle := core.Codec()
@@ -942,6 +1008,10 @@ func writeUserFixtures(output string, address proto.TCPAddr, hostID proto.HostID
 	if err != nil {
 		return err
 	}
+	teamLoadResponseFrame, err := rpcResponseFrame(rem.TeamLoaderProtocolID, 3, 0, teamChain.Export())
+	if err != nil {
+		return err
+	}
 
 	// Build a deterministic read-only KV tree with the official v0.1.9
 	// implementation. The member-min PTK is deliberately used so these
@@ -1269,6 +1339,15 @@ func writeUserFixtures(output string, address proto.TCPAddr, hostID proto.HostID
 	if err != nil {
 		return err
 	}
+	currentRootResponseFrame, err := rpcResponseFrame(
+		rem.MerkleQueryProtocolID,
+		2,
+		1,
+		userRoot.Export(),
+	)
+	if err != nil {
+		return err
+	}
 	historicalFull, historicalHashEpochs := merkle.MerkleCollectRoots(trustedV1.Epno+3, trustedV1.Epno)
 	historicalFull = historicalFull[1:]
 	historicalHashEpochs = slices.DeleteFunc(historicalHashEpochs, func(epoch proto.MerkleEpno) bool {
@@ -1276,6 +1355,11 @@ func writeUserFixtures(output string, address proto.TCPAddr, hostID proto.HostID
 	})
 	historicalArg := rem.GetHistoricalRootsArg{HostID: &hostID, Full: historicalFull, Hashes: historicalHashEpochs}
 	historicalFrame, err := rpcRequestFrameAt(rem.MerkleQueryProtocolID, 1, historicalArg.Export(), 1)
+	if err != nil {
+		return err
+	}
+	historicalArg.HostID = nil
+	historicalOmittedHostFrame, err := rpcRequestFrameAt(rem.MerkleQueryProtocolID, 1, historicalArg.Export(), 1)
 	if err != nil {
 		return err
 	}
@@ -1358,12 +1442,15 @@ func writeUserFixtures(output string, address proto.TCPAddr, hostID proto.HostID
 		{"user-puk-request.frame", pukFrame},
 		{"user-member-puk-request.frame", memberPUKFrame},
 		{"merkle-current-root-request.frame", currentRootFrame},
+		{"merkle-current-root-response.frame", currentRootResponseFrame},
 		{"merkle-historical-roots-request.frame", historicalFrame},
+		{"merkle-historical-roots-omitted-host-request.frame", historicalOmittedHostFrame},
 		{"merkle-select-vhost-request.frame", merkleSelectFrame},
 		{"merkle-select-vhost-response.frame", merkleSelectResponseFrame},
 		{"team-view-challenge-request.frame", viewChallengeFrame},
 		{"team-view-activate-request.frame", viewActivateFrame},
 		{"team-load-request.frame", teamLoadFrame},
+		{"team-load-response.frame", teamLoadResponseFrame},
 		{"kv-file-seed.bin", fileSeed[:]},
 		{"kv-root-dir-seed.bin", rootDirSeed[:]},
 		{"kv-small-plaintext.bin", []byte(smallPayload.Smallfile())},
@@ -1402,19 +1489,18 @@ func writeUserFixtures(output string, address proto.TCPAddr, hostID proto.HostID
 		return err
 	}
 	manifest := userFixtureManifest{
-		Format:          "foks-v0.1.9-user-fixtures-v1",
-		FOKSVersion:     "v0.1.9",
-		GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
-		HostID:          hostID.String(),
-		UID:             uidString,
-		DeviceID:        deviceIDString,
-		UserRootHash:    hex.EncodeToString(rootHash[:]),
-		UserMerkleKey:   hex.EncodeToString(firstKey[:]),
-		UserLinkHash:    revokeHash.String(),
-		PUKGeneration:   uint64(proto.FirstGeneration + 1),
-		OfficialUnboxed: true,
-		Files:           w.files,
-		RawFiles:        w.rpcFiles,
+		Format:        "foks-v0.1.9-user-fixtures-v2",
+		FOKSVersion:   "v0.1.9",
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		HostID:        hostID.String(),
+		UID:           uidString,
+		DeviceID:      deviceIDString,
+		UserRootHash:  hex.EncodeToString(rootHash[:]),
+		UserMerkleKey: hex.EncodeToString(firstKey[:]),
+		UserLinkHash:  revokeHash.String(),
+		PUKGeneration: uint64(proto.FirstGeneration + 1),
+		Files:         w.files,
+		RawFiles:      w.rpcFiles,
 	}
 	encoded, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -1431,15 +1517,13 @@ func writeUserFixtures(output string, address proto.TCPAddr, hostID proto.HostID
 		}
 	}
 	kvManifest := struct {
-		Format            string    `json:"format"`
-		FOKSVersion       string    `json:"foks_version"`
-		OfficialGenerated bool      `json:"official_generated"`
-		Files             []fixture `json:"files"`
+		Format      string    `json:"format"`
+		FOKSVersion string    `json:"foks_version"`
+		Files       []fixture `json:"files"`
 	}{
-		Format:            "foks-v0.1.9-kv-fixtures-v1",
-		FOKSVersion:       "v0.1.9",
-		OfficialGenerated: true,
-		Files:             kvFiles,
+		Format:      "foks-v0.1.9-kv-fixtures-v2",
+		FOKSVersion: "v0.1.9",
+		Files:       kvFiles,
 	}
 	kvEncoded, err := json.MarshalIndent(kvManifest, "", "  ")
 	if err != nil {

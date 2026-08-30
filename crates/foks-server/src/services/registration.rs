@@ -10,6 +10,7 @@ use crate::keys::{HostKeyProvider, KeyPurpose};
 use crate::{Entropy, WriterHandle};
 
 const CHALLENGE_LIFETIME_MICROSECONDS: u64 = 10 * 60 * 1_000_000;
+pub(crate) const USER_VIEWERSHIP: foks_proto::ViewershipMode = foks_proto::ViewershipMode::Open;
 
 pub(crate) fn client_version_info(argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
     foks_rpc::arguments::decode_client_version_info(argument).map_err(bad_arguments)?;
@@ -35,7 +36,7 @@ pub(crate) fn server_config(
     foks_proto::RegServerConfig {
         sso: None,
         host_type: 4,
-        user_viewership: foks_proto::ViewershipMode::Open,
+        user_viewership: USER_VIEWERSHIP,
         team_viewership: foks_proto::ViewershipMode::Open,
         invite_code_regime,
     }

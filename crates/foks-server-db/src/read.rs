@@ -208,6 +208,24 @@ impl Database {
     ) -> Result<Option<TeamRemovalSnapshot>> {
         team_removal(&self.connection, team_id, commitment)
     }
+
+    pub fn team_removal_box(
+        &self,
+        team_id: &[u8],
+        member_id: &[u8],
+        member_host_id: &[u8],
+        source_role_type: u64,
+        source_visibility: i64,
+    ) -> Result<Option<Vec<u8>>> {
+        team_removal_box(
+            &self.connection,
+            team_id,
+            member_id,
+            member_host_id,
+            source_role_type,
+            source_visibility,
+        )
+    }
 }
 
 impl ReadDatabase {
@@ -445,13 +463,8 @@ fn team_removal(
 ) -> Result<Option<TeamRemovalSnapshot>> {
     Ok(connection
         .query_row(
-            "SELECT b.exact_box, p.exact_removal
-             FROM team_removal_proofs AS p JOIN team_removal_boxes AS b
-               ON b.team_id = p.team_id AND b.member_id = p.member_id
-              AND b.member_host_id = p.member_host_id
-              AND b.source_role_type = p.source_role_type
-              AND b.source_visibility = p.source_visibility
-             WHERE p.team_id = ?1 AND p.commitment = ?2",
+            "SELECT exact_box, exact_removal FROM team_removal_proofs
+             WHERE team_id = ?1 AND commitment = ?2",
             rusqlite::params![team_id, commitment],
             |row| {
                 Ok(TeamRemovalSnapshot {

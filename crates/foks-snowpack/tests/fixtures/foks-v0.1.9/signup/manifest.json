@@ -1,8 +1,8 @@
 {
-  "format": "foks-v0.1.9-signup-fixtures-v1",
+  "format": "foks-v0.1.9-signup-fixtures-v2",
   "foks_version": "v0.1.9",
   "generated_at": "2026-08-23T23:38:11Z",
-  "official_built": true,
+  "go_module_generated": true,
   "files": [
     {
       "file": "eldest-link.snowp",

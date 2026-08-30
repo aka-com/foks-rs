@@ -216,7 +216,7 @@ impl UserReplayState {
             .ok_or_else(|| invalid_transition(change, UserTransitionRule::Revocation))?;
         let self_revoke = target.id == signer.id;
         if self_revoke != rotated.is_empty()
-            || (!self_revoke && signer.role != Role::OWNER)
+            || signer.role != Role::OWNER
             || (!self_revoke
                 && self.shared_keys.keys().any(|role| {
                     *role <= target.role && !rotated.iter().any(|key| key.role == *role)
@@ -581,6 +581,24 @@ mod tests {
         revoke.shared_keys.clear();
         let member = revoke.changes[0].clone();
         revoke.signer = member.entity.clone();
+        state
+            .devices
+            .get_mut(revoke.signer.as_bytes())
+            .unwrap()
+            .role = Role::member(0);
+        let non_owner = state.devices.get(revoke.signer.as_bytes()).unwrap().clone();
+        assert!(matches!(
+            state.apply_revocation(&revoke, &member, &eldest.host, &non_owner, &[]),
+            Err(Error::UserTransition {
+                rule: UserTransitionRule::Revocation,
+                ..
+            })
+        ));
+        state
+            .devices
+            .get_mut(revoke.signer.as_bytes())
+            .unwrap()
+            .role = Role::OWNER;
         let signer = state.devices.get(revoke.signer.as_bytes()).unwrap().clone();
         state
             .apply_revocation(&revoke, &member, &eldest.host, &signer, &[])

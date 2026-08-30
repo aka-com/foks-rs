@@ -18,8 +18,8 @@ use foks_rpc::{
 };
 use foks_snowpack::{encode, Value};
 use foks_verify::{
-    verify_team_chain, verify_team_chain_increment, verify_user_chain, verify_user_chain_increment,
-    VerifiedTeamState, VerifiedUserState,
+    verify_non_self_user_chain, verify_non_self_user_chain_increment, verify_team_chain,
+    verify_team_chain_increment, VerifiedTeamState, VerifiedUserState,
 };
 
 use crate::auth::user_chain_cursor;
@@ -564,7 +564,7 @@ impl FoksClient {
                 ))?,
         };
         let verified = match prior.as_ref() {
-            Some(prior) => verify_user_chain_increment(
+            Some(prior) => verify_non_self_user_chain_increment(
                 &chain_bytes,
                 prior,
                 uid,
@@ -572,7 +572,7 @@ impl FoksClient {
                 &authenticated_roots,
                 &merkle,
             )?,
-            None => verify_user_chain(
+            None => verify_non_self_user_chain(
                 &chain_bytes,
                 uid,
                 host.host_id(),

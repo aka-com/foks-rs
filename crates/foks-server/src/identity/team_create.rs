@@ -92,6 +92,13 @@ pub(crate) fn validate(
             Argument::Named(argument) => {
                 let normalized = foks_verify::normalize_username(&argument.name_utf8)
                     .ok_or(Error::Signup("invalid team name"))?;
+                // lib.Time is milliseconds on the Go wire; reservation rows
+                // use the database clock's microsecond units.
+                let reservation_expires_at = argument
+                    .reservation
+                    .expires_at
+                    .checked_mul(1_000)
+                    .ok_or(Error::Signup("team reservation expiry overflow"))?;
                 let commitment_wire = foks_snowpack::encode(&Value::Array(vec![
                     Value::Text(normalized.clone()),
                     Value::Unsigned(argument.reservation.sequence),
@@ -121,7 +128,7 @@ pub(crate) fn validate(
                         name_sequence: argument.reservation.sequence,
                         name_commitment_key: Some(argument.team_name_commitment_key),
                         reservation_token: Some(argument.reservation.token),
-                        reservation_expires_at: Some(argument.reservation.expires_at),
+                        reservation_expires_at: Some(reservation_expires_at),
                         subchain_tree_location_seed: argument.subchain_tree_location,
                         member_load_floor: Role::member(0),
                     },

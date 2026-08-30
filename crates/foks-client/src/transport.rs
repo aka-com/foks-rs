@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use foks_crypto::{device_signing_key_pkcs8, prefixed_hash};
 use foks_proto::SecretSeed;
 use foks_rpc::{
-    call_protocol_id, is_headerless_protocol, read_bare_response, read_bare_void_response,
+    call_protocol_id, is_headerless_result_protocol, read_bare_response, read_bare_void_response,
     read_probe_response, read_response, read_void_response, resequence_call, write_probe_request,
     DEFAULT_MAX_FRAME_LENGTH,
 };
@@ -270,7 +270,7 @@ impl PooledConnection {
         // Team and Kex protocols exchange bare arguments and results with no
         // DataWrap envelope, so select the matching response decoder from the
         // protocol the request targets.
-        let headerless = is_headerless_protocol(
+        let headerless = is_headerless_result_protocol(
             call_protocol_id(&request, self.maximum_frame_length).map_err(map_rpc_error)?,
         );
         connection

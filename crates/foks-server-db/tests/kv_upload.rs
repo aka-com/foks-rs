@@ -1,7 +1,7 @@
 mod common;
 
 use foks_server_db::{
-    Error, KvDirectoryMutation, KvFileChunkMutation, KvRootMutation, ReadDatabase,
+    Error, KvDirectoryMutation, KvDirentMutation, KvFileChunkMutation, KvRootMutation, ReadDatabase,
 };
 
 const UID: [u8; 33] = [1; 33];
@@ -57,6 +57,30 @@ fn incomplete_uploads_are_hidden_and_final_chunks_replay_exactly() {
     let reader = ReadDatabase::open(&test.path, foks_server_db::Config::default()).unwrap();
     assert!(reader.kv_file(&UID, &file).unwrap().is_none());
     assert!(reader.kv_file_chunk(&UID, &file, 0).unwrap().is_none());
+
+    // Go links a large-file dirent immediately after upload-init and streams
+    // the remaining chunks afterward. The reference is valid even though the
+    // file remains unreadable until its final chunk commits.
+    let mut file_node = [0_u8; 17];
+    file_node[0] = 2;
+    file_node[1..].copy_from_slice(&file);
+    test.database
+        .put_kv_dirents(
+            &UID,
+            None,
+            foks_proto::Role::OWNER,
+            &[KvDirentMutation {
+                parent: &[0x51; 16],
+                id: &[0x62; 16],
+                version: 1,
+                directory_version: 1,
+                node_id: &file_node,
+                name_mac: &[0x63; 32],
+                creation_time: 100,
+                exact: b"large-file-dirent",
+            }],
+        )
+        .unwrap();
 
     let final_chunk = KvFileChunkMutation {
         uid: &UID,

@@ -1,8 +1,11 @@
 mod common;
 
-use foks_proto::{KvDirectoryVersion, KvDirentVersion, KvPathVersionVector};
+use foks_proto::{
+    KvDirectoryStatus, KvDirectoryVersion, KvDirent, KvDirentVersion, KvNodeId,
+    KvPathVersionVector, Role, SecretBox,
+};
 use foks_server_db::{
-    KvDirectoryMutation, KvDirentMutation, KvNodeMutation, KvRootMutation, KvVersionCheck,
+    Error, KvDirectoryMutation, KvDirentMutation, KvNodeMutation, KvRootMutation, KvVersionCheck,
 };
 
 const UID: [u8; 33] = [1; 33];
@@ -37,6 +40,30 @@ fn initialized_database() -> (common::TestDatabase, [u8; 16]) {
         })
         .unwrap();
     (test, root)
+}
+
+#[test]
+fn small_node_ids_are_immutable_nonce_bindings() {
+    let (mut test, _) = initialized_database();
+    let node = [3; 17];
+    let original = KvNodeMutation {
+        uid: &UID,
+        id: &node,
+        node_type: 3,
+        exact: b"first-ciphertext",
+    };
+    test.database.put_kv_node(&original).unwrap();
+    // Idempotent transport retries remain valid.
+    test.database.put_kv_node(&original).unwrap();
+    // A distinct ciphertext may not reuse the object ID that supplies its
+    // deterministic v0.1.9 Secretbox nonce.
+    assert!(matches!(
+        test.database.put_kv_node(&KvNodeMutation {
+            exact: b"second-ciphertext",
+            ..original
+        }),
+        Err(Error::KvConflict)
+    ));
 }
 
 #[test]
@@ -85,6 +112,7 @@ fn dirent_batch_is_atomic_and_updates_only_the_reachable_version_vector() {
         .put_kv_dirents(
             &UID,
             Some(&initial),
+            foks_proto::Role::OWNER,
             &[KvDirentMutation {
                 parent: &root,
                 id: &entry,
@@ -103,6 +131,7 @@ fn dirent_batch_is_atomic_and_updates_only_the_reachable_version_vector() {
         .put_kv_dirents(
             &UID,
             Some(&initial),
+            foks_proto::Role::OWNER,
             &[KvDirentMutation {
                 parent: &root,
                 id: &entry,
@@ -158,6 +187,7 @@ fn dirent_batch_is_atomic_and_updates_only_the_reachable_version_vector() {
         .put_kv_dirents(
             &UID,
             Some(&initial),
+            foks_proto::Role::OWNER,
             &[KvDirentMutation {
                 parent: &root,
                 id: &other_entry,
@@ -175,6 +205,7 @@ fn dirent_batch_is_atomic_and_updates_only_the_reachable_version_vector() {
         .put_kv_dirents(
             &UID,
             None,
+            foks_proto::Role::OWNER,
             &[KvDirentMutation {
                 parent: &root,
                 id: &wildcard_entry,
@@ -211,6 +242,7 @@ fn tombstone_removes_an_entry_from_listing_and_cache_preconditions() {
         .put_kv_dirents(
             &UID,
             Some(&empty),
+            foks_proto::Role::OWNER,
             &[KvDirentMutation {
                 parent: &root,
                 id: &entry,
@@ -228,6 +260,7 @@ fn tombstone_removes_an_entry_from_listing_and_cache_preconditions() {
         .put_kv_dirents(
             &UID,
             Some(&live),
+            foks_proto::Role::OWNER,
             &[KvDirentMutation {
                 parent: &root,
                 id: &entry,
@@ -264,4 +297,87 @@ fn tombstone_removes_an_entry_from_listing_and_cache_preconditions() {
             .exact,
         b"tombstone"
     );
+}
+
+#[test]
+fn replacing_a_dirent_requires_its_stored_write_role() {
+    let (mut test, root) = initialized_database();
+    let node = [3; 17];
+    test.database
+        .put_kv_node(&KvNodeMutation {
+            uid: &UID,
+            id: &node,
+            node_type: 3,
+            exact: b"small-file-box",
+        })
+        .unwrap();
+    let id = [0x65; 16];
+    let name_mac = [0x75; 32];
+    let name_box = SecretBox {
+        nonce: [0x85; 16],
+        ciphertext: vec![0x95; 16],
+    };
+    let initial = KvDirent::new(
+        root,
+        id,
+        KvNodeId(node),
+        1,
+        1,
+        Role::ADMIN,
+        name_mac,
+        name_box.clone(),
+        KvDirectoryStatus::Active,
+        [0xa5; 32],
+        1,
+    )
+    .unwrap();
+    test.database
+        .put_kv_dirents(
+            &UID,
+            None,
+            Role::OWNER,
+            &[KvDirentMutation {
+                parent: &root,
+                id: &id,
+                version: 1,
+                directory_version: 1,
+                node_id: &node,
+                name_mac: &name_mac,
+                creation_time: 1,
+                exact: initial.encoded(),
+            }],
+        )
+        .unwrap();
+    let replacement = KvDirent::new(
+        root,
+        id,
+        KvNodeId(node),
+        2,
+        1,
+        Role::member(0),
+        name_mac,
+        name_box,
+        KvDirectoryStatus::Active,
+        [0xb5; 32],
+        1,
+    )
+    .unwrap();
+    assert!(matches!(
+        test.database.put_kv_dirents(
+            &UID,
+            None,
+            Role::member(0),
+            &[KvDirentMutation {
+                parent: &root,
+                id: &id,
+                version: 2,
+                directory_version: 1,
+                node_id: &node,
+                name_mac: &name_mac,
+                creation_time: 1,
+                exact: replacement.encoded(),
+            }],
+        ),
+        Err(foks_server_db::Error::KvPermission)
+    ));
 }

@@ -50,21 +50,19 @@ type fixture struct {
 }
 
 type manifest struct {
-	Format             string    `json:"format"`
-	FOKSVersion        string    `json:"foks_version"`
-	CapturedAt         string    `json:"captured_at"`
-	ProbeAddress       string    `json:"probe_address"`
-	HostID             string    `json:"host_id"`
-	HostchainSeqno     uint64    `json:"hostchain_seqno"`
-	HostchainTail      string    `json:"hostchain_tail"`
-	MerkleEpoch        uint64    `json:"merkle_epoch"`
-	MerkleRootNode     string    `json:"merkle_root_node"`
-	MerkleRootHash     string    `json:"merkle_root_hash"`
-	MerkleHostchain    string    `json:"merkle_hostchain_tail"`
-	CanonicalVerified  bool      `json:"canonical_verified"`
-	SignaturesVerified bool      `json:"signatures_verified"`
-	Files              []fixture `json:"files"`
-	RPCFiles           []fixture `json:"rpc_files"`
+	Format          string    `json:"format"`
+	FOKSVersion     string    `json:"foks_version"`
+	CapturedAt      string    `json:"captured_at"`
+	ProbeAddress    string    `json:"probe_address"`
+	HostID          string    `json:"host_id"`
+	HostchainSeqno  uint64    `json:"hostchain_seqno"`
+	HostchainTail   string    `json:"hostchain_tail"`
+	MerkleEpoch     uint64    `json:"merkle_epoch"`
+	MerkleRootNode  string    `json:"merkle_root_node"`
+	MerkleRootHash  string    `json:"merkle_root_hash"`
+	MerkleHostchain string    `json:"merkle_hostchain_tail"`
+	Files           []fixture `json:"files"`
+	RPCFiles        []fixture `json:"rpc_files"`
 }
 
 type writer struct {
@@ -288,21 +286,19 @@ func run() error {
 
 	tail := chain.Tail()
 	result := manifest{
-		Format:             "foks-v0.1.9-probe-fixtures-v1",
-		FOKSVersion:        "v0.1.9",
-		CapturedAt:         time.Now().UTC().Format(time.RFC3339),
-		ProbeAddress:       host,
-		HostID:             hostID.String(),
-		HostchainSeqno:     uint64(tail.Seqno),
-		HostchainTail:      tail.Hash.String(),
-		MerkleEpoch:        uint64(rootV1.Epno),
-		MerkleRootNode:     hex.EncodeToString(rootV1.RootNode[:]),
-		MerkleRootHash:     hex.EncodeToString(rootHash[:]),
-		MerkleHostchain:    rootV1.Hostchain.Hash.String(),
-		CanonicalVerified:  true,
-		SignaturesVerified: true,
-		Files:              w.files,
-		RPCFiles:           w.rpcFiles,
+		Format:          "foks-v0.1.9-probe-fixtures-v2",
+		FOKSVersion:     "v0.1.9",
+		CapturedAt:      time.Now().UTC().Format(time.RFC3339),
+		ProbeAddress:    host,
+		HostID:          hostID.String(),
+		HostchainSeqno:  uint64(tail.Seqno),
+		HostchainTail:   tail.Hash.String(),
+		MerkleEpoch:     uint64(rootV1.Epno),
+		MerkleRootNode:  hex.EncodeToString(rootV1.RootNode[:]),
+		MerkleRootHash:  hex.EncodeToString(rootHash[:]),
+		MerkleHostchain: rootV1.Hostchain.Hash.String(),
+		Files:           w.files,
+		RPCFiles:        w.rpcFiles,
 	}
 	manifestBytes, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {

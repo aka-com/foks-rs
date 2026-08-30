@@ -251,6 +251,15 @@ impl KvKeySet {
         )
     }
 
+    /// Seals a v0.1.9 small-file or symlink payload.
+    ///
+    /// `id.object_id()` supplies the protocol's deterministic Secretbox nonce
+    /// suffix and must be freshly generated for every distinct plaintext under
+    /// this key, including across the file and symlink variants. The official
+    /// Go and Rust client write paths enforce that invariant. The server's
+    /// full-node-ID immutability additionally prevents same-type overwrites,
+    /// but callers constructing IDs directly must preserve cross-type
+    /// object-ID uniqueness themselves.
     pub fn seal_small_file(
         &self,
         id: KvNodeId,
@@ -2314,7 +2323,12 @@ pub fn seal_software_puk_boxes_mixed(
         }
         let (sender_dh, dh_shared, dh_type) = match input.receiver.hepk.classical() {
             DhPublicKey::Curve25519(receiver_dh)
-                if input.receiver.id.entity_type() == foks_proto::ENTITY_DEVICE =>
+                if matches!(
+                    input.receiver.id.entity_type(),
+                    foks_proto::ENTITY_DEVICE
+                        | foks_proto::ENTITY_BACKUP_KEY
+                        | foks_proto::ENTITY_BOT_TOKEN_KEY
+                ) =>
             {
                 (
                     DhPublicKey::Curve25519(sender_curve),
@@ -2525,7 +2539,10 @@ pub fn seal_yubi_puk_boxes(
             || input.role == Role::NONE
             || !matches!(
                 input.receiver.id.entity_type(),
-                foks_proto::ENTITY_DEVICE | foks_proto::ENTITY_YUBI
+                foks_proto::ENTITY_DEVICE
+                    | foks_proto::ENTITY_YUBI
+                    | foks_proto::ENTITY_BACKUP_KEY
+                    | foks_proto::ENTITY_BOT_TOKEN_KEY
             )
         {
             return Err(Error::WrongReceiver);
@@ -2542,7 +2559,12 @@ pub fn seal_yubi_puk_boxes(
                 )
             }
             DhPublicKey::Curve25519(receiver_dh)
-                if input.receiver.id.entity_type() == foks_proto::ENTITY_DEVICE =>
+                if matches!(
+                    input.receiver.id.entity_type(),
+                    foks_proto::ENTITY_DEVICE
+                        | foks_proto::ENTITY_BACKUP_KEY
+                        | foks_proto::ENTITY_BOT_TOKEN_KEY
+                ) =>
             {
                 used_temporary = true;
                 let raw = ephemeral_secret.diffie_hellman(&X25519PublicKey::from(*receiver_dh));
@@ -4079,12 +4101,12 @@ pub fn verify_typed(
             // high-S forms. Rejecting high-S here is deliberately NOT done because
             // YubiKey PIV hardware emits non-normalized (frequently high-S)
             // signatures, so a strict check would fail real hardware and the
-            // v0.1.9 compatibility oracle. This is a documented accepted risk:
-            // no code path uses raw signature bytes as an identity, dedup, or
-            // uniqueness key (chain-link identity is the hash of the signed
-            // payload, Merkle keys are deterministic, one link per seqno is
-            // accepted, and idempotency binds request_hash), so malleability has
-            // no exploitable effect. Ed25519 uses verify_strict above.
+            // v0.1.9 compatibility oracle. Exact signature bytes do contribute
+            // to link and receipt identity, but every mutation atomically binds
+            // its expected sequence, chain tail, and Merkle root. Alternate
+            // high-S/low-S forms are therefore competing proposals: only one
+            // can commit, and the other fails as stale rather than replaying the
+            // transition. Ed25519 uses verify_strict above.
             let signature = P256Signature::from_der(signature).map_err(|_| Error::Verification)?;
             let digest = prefixed_hash_without_type(&message);
             key.verify_prehash(&digest, &signature)
@@ -4841,6 +4863,101 @@ mod tests {
             Role::OWNER,
         )
         .is_ok());
+    }
+
+    #[test]
+    fn mixed_puk_boxers_support_backup_and_bot_token_recipients() {
+        let host =
+            EntityId::from_bytes([vec![foks_proto::ENTITY_HOST], vec![0x4a; 32]].concat()).unwrap();
+        let software_seed = SecretSeed::new([0x4b; 32]);
+        let backup = BackupKey::from_seed([0x01; BACKUP_SEED_BYTES])
+            .unwrap()
+            .into_key_material()
+            .unwrap();
+        let backup_public = DevicePublicMaterial {
+            id: backup.entity_id().clone(),
+            hepk: backup.hepk().clone(),
+        };
+        let bot_id =
+            EntityId::from_bytes([vec![foks_proto::ENTITY_BOT_TOKEN_KEY], vec![0x4c; 32]].concat())
+                .unwrap();
+        let bot_public = DevicePublicMaterial {
+            id: bot_id,
+            hepk: derive_device_public(&SecretSeed::new([0x4d; 32]))
+                .unwrap()
+                .hepk,
+        };
+        let puk_seed = SecretSeed::new([0x58; 32]);
+        let inputs = [&backup_public, &bot_public].map(|receiver| SoftwarePukBoxInput {
+            seed: &puk_seed,
+            generation: 2,
+            role: Role::OWNER,
+            receiver,
+        });
+        let software_boxes = seal_software_puk_boxes_mixed(
+            &host,
+            &software_seed,
+            [0x74; 16],
+            &inputs,
+            &[
+                PukBoxRandomness {
+                    kem_message: [0x70; 32],
+                    nonce: [0x71; 16],
+                },
+                PukBoxRandomness {
+                    kem_message: [0x72; 32],
+                    nonce: [0x73; 16],
+                },
+            ],
+            SoftwarePukBoxSetRandomness {
+                ephemeral_secret: [0x75; 32],
+                time: 1_724_000_000_003,
+            },
+        )
+        .unwrap();
+        assert!(software_boxes.temp_dh_key.is_none());
+
+        let parent = MockYubi::new(0x4e, 0x4f);
+        let yubi_boxes = seal_yubi_puk_boxes(
+            &host,
+            &parent,
+            [0x76; 16],
+            &[YubiPukBoxInput {
+                seed: &puk_seed,
+                generation: 2,
+                role: Role::OWNER,
+                receiver: &backup_public,
+            }],
+            &[PukBoxRandomness {
+                kem_message: [0x77; 32],
+                nonce: [0x78; 16],
+            }],
+            YubiPukBoxSetRandomness {
+                ephemeral_secret: [0x79; 32],
+                time: 1_724_000_000_004,
+            },
+        )
+        .unwrap();
+        assert!(yubi_boxes.temp_dh_key.is_some());
+        let public_puk = derive_shared_public(&puk_seed, ENTITY_PUK_VERIFY).unwrap();
+        let parcel =
+            PukParcel::from_box_set(&yubi_boxes, 0, parent.entity_id().clone(), Vec::new())
+                .unwrap();
+        assert_eq!(
+            open_puk_parcel_with_for_role(
+                &parcel,
+                &backup,
+                parent.hepk(),
+                &public_puk.verify_key,
+                &public_puk.hepk,
+                2,
+                &host,
+                Role::OWNER,
+            )
+            .unwrap()
+            .seed,
+            puk_seed
+        );
     }
 
     #[test]

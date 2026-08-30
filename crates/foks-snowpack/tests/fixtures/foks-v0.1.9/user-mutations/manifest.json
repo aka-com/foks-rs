@@ -1,9 +1,9 @@
 {
-  "format": "foks-v0.1.9-user-mutation-fixtures-v2",
+  "format": "foks-v0.1.9-user-mutation-fixtures-v3",
   "foks_version": "v0.1.9",
   "generator": "sha256-counter-v1",
-  "official_built": true,
-  "server_semantics_verified": true,
+  "go_module_generated": true,
+  "server_observed": false,
   "files": [
     {
       "file": "add-member-edit-result.snowp",

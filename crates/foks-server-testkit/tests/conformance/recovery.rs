@@ -1,5 +1,8 @@
-use foks_client::{NewSoftwareDeviceSecrets, SoftwareDeviceProvisionRequest};
-use foks_crypto::BackupKey;
+use foks_client::{
+    NewSoftwareDeviceSecrets, NoPassphraseConfigured, SoftwareDeviceProvisionRequest,
+    UserPukRotation,
+};
+use foks_crypto::{derive_device_public, BackupKey};
 use foks_proto::{Role, SecretSeed};
 use foks_server_testkit::{TestAccountSpec, TestClient};
 
@@ -69,4 +72,37 @@ pub(crate) fn recovery_success() {
         .authenticate_and_pin(&recovery_probe.pinned, &recovered.credential)
         .unwrap();
     assert_eq!(refreshed.verified.chain_seqno(), 3);
+
+    // Recovery credentials remain active recipients after provisioning. A
+    // subsequent revoke must rotate the PUK to both the recovered software
+    // device and the enrolled backup key, exactly as Go's box gameplan does.
+    let original = derive_device_public(&SecretSeed::new([0x21; 32])).unwrap();
+    let mut protected = fixture.client.open_protected_store().unwrap();
+    let revoked = fixture
+        .client
+        .foks()
+        .revoke_user_credential_with_software_device(
+            fixture.host(),
+            &recovered.credential,
+            &original.id,
+            &[UserPukRotation {
+                role: Role::OWNER,
+                previous_generation: 1,
+                previous_seed: SecretSeed::new([0x22; 32]),
+                new_seed: SecretSeed::new([0x51; 32]),
+            }],
+            Some(NoPassphraseConfigured),
+            &mut protected,
+        )
+        .unwrap();
+    assert_eq!(revoked.verified.chain_seqno(), 4);
+    assert_eq!(
+        revoked.verified.shared_key(Role::OWNER).unwrap().generation,
+        2
+    );
+    assert!(revoked
+        .verified
+        .devices()
+        .iter()
+        .any(|device| device.id.entity_type() == foks_proto::ENTITY_BACKUP_KEY));
 }

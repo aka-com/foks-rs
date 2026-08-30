@@ -191,19 +191,19 @@ func writeSignupFixtures(output string, host proto.HostID, root *proto.MerkleRoo
 	sort.Slice(w.files, func(i, j int) bool { return w.files[i].File < w.files[j].File })
 	sort.Slice(w.rpcFiles, func(i, j int) bool { return w.rpcFiles[i].File < w.rpcFiles[j].File })
 	manifest := struct {
-		Format        string    `json:"format"`
-		FOKSVersion   string    `json:"foks_version"`
-		GeneratedAt   string    `json:"generated_at"`
-		OfficialBuilt bool      `json:"official_built"`
-		Files         []fixture `json:"files"`
-		RawFiles      []fixture `json:"raw_files"`
+		Format            string    `json:"format"`
+		FOKSVersion       string    `json:"foks_version"`
+		GeneratedAt       string    `json:"generated_at"`
+		GoModuleGenerated bool      `json:"go_module_generated"`
+		Files             []fixture `json:"files"`
+		RawFiles          []fixture `json:"raw_files"`
 	}{
-		Format:        "foks-v0.1.9-signup-fixtures-v1",
-		FOKSVersion:   "v0.1.9",
-		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
-		OfficialBuilt: true,
-		Files:         w.files,
-		RawFiles:      w.rpcFiles,
+		Format:            "foks-v0.1.9-signup-fixtures-v2",
+		FOKSVersion:       "v0.1.9",
+		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
+		GoModuleGenerated: true,
+		Files:             w.files,
+		RawFiles:          w.rpcFiles,
 	}
 	encoded, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

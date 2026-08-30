@@ -19,7 +19,9 @@ pub enum RpcStatus {
     LockTimeout,
     MerkleLeafNotFound,
     MerkleNoRoot,
+    MerkleVerify(String),
     KvNoEnt,
+    KvRace(String),
     KvPermission { operation: u64, resource: u64 },
     KeyNotFound(String),
     KexBadSecret,
@@ -64,7 +66,9 @@ impl RpcStatus {
             Self::LockTimeout => 8015,
             Self::MerkleLeafNotFound => 4002,
             Self::MerkleNoRoot => 4001,
+            Self::MerkleVerify(_) => 4003,
             Self::KvNoEnt => 8016,
+            Self::KvRace(_) => 8003,
             Self::KvPermission { .. } => 8011,
             Self::KeyNotFound(_) => 1025,
             Self::KexBadSecret => 1032,
@@ -144,6 +148,8 @@ fn status_switch_variant(status: &RpcStatus) -> Value {
     match status {
         RpcStatus::BadArguments(message)
         | RpcStatus::Duplicate(message)
+        | RpcStatus::MerkleVerify(message)
+        | RpcStatus::KvRace(message)
         | RpcStatus::NotFound(message)
         | RpcStatus::KeyNotFound(message)
         | RpcStatus::PermissionDenied(message)

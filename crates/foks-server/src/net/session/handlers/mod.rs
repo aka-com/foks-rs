@@ -123,6 +123,13 @@ pub(super) fn response(
     }
 }
 
+pub(super) async fn kex_receive_response(
+    data: &ServerData,
+    call: RoutedCall,
+) -> Result<Vec<u8>, RpcStatus> {
+    kex::receive_response(data, call).await
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

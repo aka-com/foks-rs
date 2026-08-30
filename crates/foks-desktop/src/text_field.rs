@@ -54,6 +54,7 @@ pub(crate) struct TextField {
     placeholder: SharedString,
     secret: bool,
     maximum_bytes: usize,
+    overflowed: bool,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
@@ -76,6 +77,7 @@ impl TextField {
             placeholder: placeholder.into(),
             secret,
             maximum_bytes,
+            overflowed: false,
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -93,6 +95,7 @@ impl TextField {
     pub(crate) fn clear(&mut self, cx: &mut Context<Self>) {
         self.content.zeroize();
         self.content.clear();
+        self.overflowed = false;
         self.selected_range = 0..0;
         self.selection_reversed = false;
         self.marked_range = None;
@@ -102,21 +105,6 @@ impl TextField {
         self.last_boundaries.push((0, 0));
         self.is_selecting = false;
         cx.notify();
-    }
-
-    pub(crate) fn take_secret(&mut self, cx: &mut Context<Self>) -> String {
-        debug_assert!(self.secret);
-        let value = std::mem::take(&mut self.content);
-        self.selected_range = 0..0;
-        self.selection_reversed = false;
-        self.marked_range = None;
-        self.last_layout = None;
-        self.last_bounds = None;
-        self.last_boundaries.clear();
-        self.last_boundaries.push((0, 0));
-        self.is_selecting = false;
-        cx.notify();
-        value
     }
 
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
@@ -172,7 +160,13 @@ impl TextField {
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.replace_text_in_range(None, &text.replace(['\n', '\r'], " "), window, cx);
+            // Trailing newlines are copy artifacts (terminals, password
+            // managers), not content; substituting spaces for them would
+            // silently change a secret.
+            let sanitized = text
+                .trim_end_matches(['\n', '\r'])
+                .replace(['\n', '\r'], " ");
+            self.replace_text_in_range(None, &sanitized, window, cx);
         }
     }
 
@@ -331,24 +325,25 @@ impl TextField {
 
     fn replace(&mut self, range: Range<usize>, new_text: &str) {
         let mut new_text = new_text.replace(['\n', '\r'], " ");
-        let retained = self.content.len() - (range.end - range.start);
-        let remaining = self.maximum_bytes.saturating_sub(retained);
-        let mut accepted = new_text.len().min(remaining);
-        while !new_text.is_char_boundary(accepted) {
-            accepted -= 1;
+        match compose_replacement(&self.content, &range, &new_text, self.maximum_bytes) {
+            Some(replacement) => {
+                if self.secret {
+                    self.content.zeroize();
+                }
+                self.overflowed = false;
+                self.content = replacement;
+                let cursor = range.start + new_text.len();
+                self.selected_range = cursor..cursor;
+                self.selection_reversed = false;
+            }
+            // Rejecting the whole insertion (rather than keeping a truncated
+            // prefix) means an oversized passphrase can never silently match
+            // its equally-truncated confirmation.
+            None => self.overflowed = true,
         }
-        let mut replacement = String::with_capacity(retained + accepted);
-        replacement.push_str(&self.content[..range.start]);
-        replacement.push_str(&new_text[..accepted]);
-        replacement.push_str(&self.content[range.end..]);
         if self.secret {
-            self.content.zeroize();
             new_text.zeroize();
         }
-        self.content = replacement;
-        let cursor = range.start + accepted;
-        self.selected_range = cursor..cursor;
-        self.selection_reversed = false;
     }
 
     fn displayed(&self) -> (SharedString, Vec<(usize, usize)>) {
@@ -378,6 +373,25 @@ impl Drop for TextField {
     }
 }
 
+/// Splices `new_text` into `content` over `range`, refusing the entire edit
+/// when the result would exceed `maximum_bytes`. Deletions always fit.
+fn compose_replacement(
+    content: &str,
+    range: &Range<usize>,
+    new_text: &str,
+    maximum_bytes: usize,
+) -> Option<String> {
+    let retained = content.len() - (range.end - range.start);
+    if new_text.len() > maximum_bytes.saturating_sub(retained) {
+        return None;
+    }
+    let mut replacement = String::with_capacity(retained + new_text.len());
+    replacement.push_str(&content[..range.start]);
+    replacement.push_str(new_text);
+    replacement.push_str(&content[range.end..]);
+    Some(replacement)
+}
+
 impl EntityInputHandler for TextField {
     fn text_for_range(
         &mut self,
@@ -386,6 +400,12 @@ impl EntityInputHandler for TextField {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<String> {
+        // Input services (IME reconversion, press-and-hold accents,
+        // dictation) query text through this path; a secret field must never
+        // hand its contents to them.
+        if self.secret {
+            return None;
+        }
         let range = self.range_from_utf16(&range_utf16);
         actual_range.replace(self.range_to_utf16(&range));
         Some(self.content[range].to_owned())
@@ -720,7 +740,11 @@ impl Render for TextField {
             .py_2()
             .rounded_md()
             .border_1()
-            .border_color(rgb(0xb8c3d3))
+            .border_color(if self.overflowed {
+                rgb(0xc0392b)
+            } else {
+                rgb(0xb8c3d3)
+            })
             .bg(rgb(0xffffff))
             .child(TextElement { input: cx.entity() })
     }
@@ -729,5 +753,30 @@ impl Render for TextField {
 impl Focusable for TextField {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compose_replacement;
+
+    #[test]
+    fn oversized_insertions_are_rejected_whole_rather_than_truncated() {
+        assert_eq!(
+            compose_replacement("abc", &(3..3), "de", 5),
+            Some("abcde".to_owned())
+        );
+        assert_eq!(compose_replacement("abc", &(3..3), "def", 5), None);
+        assert_eq!(compose_replacement("", &(0..0), "too long", 7), None);
+        // A replacement that frees enough room still fits.
+        assert_eq!(
+            compose_replacement("abcde", &(0..3), "xy", 5),
+            Some("xyde".to_owned())
+        );
+        // Deletions always fit, even at the cap.
+        assert_eq!(
+            compose_replacement("abcde", &(4..5), "", 5),
+            Some("abcd".to_owned())
+        );
     }
 }

@@ -593,7 +593,7 @@ impl CheckedProfileSession<'_> {
                         &alias,
                         &team_id,
                         actor,
-                        team,
+                        &team,
                         &std::collections::BTreeMap::new(),
                         vault,
                         protected_store,
@@ -769,7 +769,7 @@ impl CheckedProfileSession<'_> {
                         &alias,
                         &team_id,
                         TeamRefreshActor::User(&user),
-                        team,
+                        &team,
                         &parties,
                         vault,
                         protected_store,
@@ -796,7 +796,7 @@ impl CheckedProfileSession<'_> {
                             authenticated: actor_team,
                             recipient: Some(actor_recipient),
                         },
-                        team,
+                        &team,
                         &parties,
                         vault,
                         protected_store,
@@ -814,22 +814,14 @@ impl CheckedProfileSession<'_> {
                         .into())
                     }
                     TeamRefreshAttempt::Complete => {
-                        // The planner consumes the target. Reloading would be
-                        // redundant because no chain or Merkle state changed;
-                        // rediscovery occurs after every actual mutation.
-                        let refreshed =
-                            self.discover_team_refresh_graph(host, credential, &user)?;
-                        let current =
-                            refreshed
-                                .team(&team_id)
-                                .ok_or(foks_client::Error::TeamBinding(
-                                    "authenticated membership graph lost a completed team",
-                                ))?;
+                        // No chain or Merkle state changed. Retain the
+                        // already-authenticated target so a no-op sweep stays
+                        // linear in the number of teams.
                         let direct = parties
                             .values()
                             .map(TeamRefreshParty::verified)
                             .collect::<Vec<_>>();
-                        match current.verified_recipient(host, &direct) {
+                        match team.verified_recipient(host, &direct) {
                             Ok(recipient) => {
                                 recipients.insert(team_key.clone(), recipient);
                             }
@@ -839,17 +831,7 @@ impl CheckedProfileSession<'_> {
                             }
                             Err(error) => return Err(error.into()),
                         }
-                        // A completed/no-op target is needed only as a public
-                        // actor state for later parents. Rediscovery owns the
-                        // replacement, so move it into the working map.
-                        let current = refreshed
-                            .teams
-                            .into_iter()
-                            .find(|candidate| candidate.verified.team() == &team_id)
-                            .ok_or(foks_client::Error::TeamBinding(
-                                "authenticated membership graph lost a completed team",
-                            ))?;
-                        teams.insert(team_key, current);
+                        teams.insert(team_key, team);
                     }
                 }
             }
@@ -894,7 +876,14 @@ impl CheckedProfileSession<'_> {
         uid: &foks_proto::EntityId,
         now: u64,
     ) -> Result<()> {
-        self.profile.require(Capability::UserSync)?;
+        // Default registration is opportunistic. Probe-only profiles and
+        // expired capability canaries must not abort an unrelated scheduler
+        // batch (or the signup finalization path that calls this helper).
+        match self.profile.require(Capability::UserSync) {
+            Ok(()) => {}
+            Err(Error::CapabilityDenied(Capability::UserSync)) => return Ok(()),
+            Err(error) => return Err(error),
+        }
         let host = self.pinned_host()?;
         let scheduler = FoksScheduler::new(&self.paths.hard_database, SchedulerConfig::default())?;
         register_default_refresh_job(
@@ -1143,7 +1132,7 @@ impl CheckedProfileSession<'_> {
         if authenticated_any && !stale_without_owner && !owner_attempted {
             return Ok(());
         }
-        if !authenticated_any {
+        if !owner_attempted {
             for alias in vault.yubi_aliases().map_err(|error| error.to_string())? {
                 if vault
                     .yubi_account(&alias)
@@ -1151,7 +1140,9 @@ impl CheckedProfileSession<'_> {
                 {
                     // Resident jobs never prompt for or retain a PIN. Treat
                     // hardware-presence work as deferred without growing the
-                    // failure backoff; the next explicit unlock runs it.
+                    // failure backoff, even if a lower-role software device
+                    // authenticated but cannot perform the stale-key repair.
+                    // The next explicit hardware unlock runs it.
                     return Ok(());
                 }
             }
@@ -1514,7 +1505,7 @@ impl CheckedProfileSession<'_> {
                             &team_alias,
                             &team_id,
                             TeamRefreshActor::User(&user),
-                            team,
+                            &team,
                             &std::collections::BTreeMap::new(),
                             vault,
                             &mut mutations,
@@ -1686,7 +1677,7 @@ impl CheckedProfileSession<'_> {
                         &team_alias,
                         &team_id,
                         TeamRefreshActor::User(&actor),
-                        team,
+                        &team,
                         &std::collections::BTreeMap::new(),
                         vault,
                         &mut mutations,
@@ -1734,7 +1725,7 @@ impl CheckedProfileSession<'_> {
         team_alias: &str,
         team_id: &foks_proto::EntityId,
         actor: TeamRefreshActor<'_>,
-        team: AuthenticatedTeamOutcome,
+        team: &AuthenticatedTeamOutcome,
         supplied_parties: &std::collections::BTreeMap<TeamRefreshPartyKey, TeamRefreshParty>,
         vault: &mut AccountVault<'_>,
         protected_store: &mut EncryptedFileMutationStore,
@@ -2273,7 +2264,6 @@ impl CheckedProfileSession<'_> {
 
         let mut stale = Vec::new();
         let mut stale_puk_recipients = Vec::new();
-        let mut has_unrepairable_stale_recipient = false;
         let mut has_public_only_team_recipient = false;
         for member in team.verified.members() {
             let party = parties
@@ -2314,16 +2304,8 @@ impl CheckedProfileSession<'_> {
             if key.generation > member.generation {
                 if member.role <= actor_member.role {
                     stale.push((member, key));
-                } else {
-                    has_unrepairable_stale_recipient = true;
                 }
             }
-        }
-        if has_unrepairable_stale_recipient {
-            // Any higher-role stale member can read every PTK this actor can
-            // rotate. Defer the whole batch without failing this lower-role
-            // job; a higher-role refresh job will repair it.
-            return Ok(TeamRefreshAttempt::Complete);
         }
         if has_public_only_team_recipient && !stale.is_empty() {
             // The public child might itself be stale or another row might
@@ -3361,6 +3343,28 @@ mod tests {
                         .generation,
                     1
                 );
+                // Model a KEX-provisioned installation (or a client whose
+                // local PPE pin predates another owner's passphrase change).
+                // The stale-owner repair must establish the pin from the
+                // authenticated settings parcel instead of deadlocking on it.
+                rusqlite::Connection::open(&session.paths().hard_database)
+                    .unwrap()
+                    .execute(
+                        "DELETE FROM user_local_security WHERE host_id = ?1 AND uid = ?2",
+                        rusqlite::params![
+                            host.host_id().as_bytes(),
+                            primary.credential.uid.as_bytes()
+                        ],
+                    )
+                    .unwrap();
+                assert_eq!(
+                    HardStateStore::open(&session.paths().hard_database)?
+                        .trusted_user_passphrase_parcel_hash(
+                            host.host_id().as_bytes(),
+                            primary.credential.uid.as_bytes(),
+                        )?,
+                    None
+                );
                 session
                     .refresh_team_chains(primary.credential.uid.as_bytes(), &mut vault, &master)
                     .expect("CLKR sweep defers recipients with a stale PUK");
@@ -3920,6 +3924,39 @@ mod tests {
         assert_eq!(user.next_run_at, 100 + DEFAULT_USER_REFRESH_INTERVAL_MICROS);
         assert_eq!(team.kind, ScheduledJobKind::TeamRefresh);
         assert_eq!(team.next_run_at, 100 + DEFAULT_TEAM_REFRESH_INTERVAL_MICROS);
+    }
+
+    #[test]
+    fn probe_only_profile_skips_default_job_registration() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let mut registry = crate::ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(crate::Profile {
+                name: "hosted".to_owned(),
+                probe: "foks.app".to_owned(),
+                protocol: crate::ProtocolPolicy::CurrentProbeOnly {
+                    canary_public_key:
+                        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+                            .to_owned(),
+                    lease_url: "https://updates.example.test/foks/canary.json".to_owned(),
+                    last_artifact: None,
+                },
+                trust: crate::TrustRoot::WebPki,
+            })
+            .unwrap();
+        let session = crate::ProfileSession::open(&registry, "hosted").unwrap();
+        let checked = crate::CheckedProfileSession { session: &session };
+        let mut uid = vec![7; 33];
+        uid[0] = foks_proto::ENTITY_USER;
+        let uid = foks_proto::EntityId::from_bytes(uid).unwrap();
+
+        checked
+            .register_default_refresh_jobs_for(&uid, 100)
+            .unwrap();
+
+        let store = HardStateStore::open(&session.paths.hard_database).unwrap();
+        assert_eq!(store.next_scheduled_run().unwrap(), None);
     }
 
     #[test]

@@ -39,26 +39,25 @@ func TestMutationFixturesAreByteReproducible(t *testing.T) {
 	userDir := filepath.Join(
 		"..", "..", "crates", "foks-snowpack", "tests", "fixtures", "foks-v0.1.9", "user",
 	)
-	first := t.TempDir()
-	second := t.TempDir()
-	if err := writeMutationFixtures(first, userDir); err != nil {
+	committedDir := filepath.Join(
+		"..", "..", "crates", "foks-snowpack", "tests", "fixtures", "foks-v0.1.9", "user-mutations",
+	)
+	generatedDir := t.TempDir()
+	if err := writeMutationFixtures(generatedDir, userDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeMutationFixtures(second, userDir); err != nil {
-		t.Fatal(err)
+	committed := readFixtureTree(t, committedDir)
+	generated := readFixtureTree(t, generatedDir)
+	if len(committed) != len(generated) {
+		t.Fatalf("fixture counts differ: committed=%d generated=%d", len(committed), len(generated))
 	}
-	left := readFixtureTree(t, first)
-	right := readFixtureTree(t, second)
-	if len(left) != len(right) {
-		t.Fatalf("fixture counts differ: %d != %d", len(left), len(right))
-	}
-	for name, expected := range left {
-		actual, ok := right[name]
+	for name, expected := range committed {
+		actual, ok := generated[name]
 		if !ok {
-			t.Fatalf("second fixture tree is missing %q", name)
+			t.Fatalf("generated fixture tree is missing committed artifact %q", name)
 		}
 		if !bytes.Equal(actual, expected) {
-			t.Fatalf("fixture %q changed across identical generations", name)
+			t.Fatalf("generated fixture %q differs from the committed oracle", name)
 		}
 	}
 }
