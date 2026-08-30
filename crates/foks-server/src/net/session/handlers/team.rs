@@ -6,6 +6,11 @@ use crate::rpc::{RouteId, RoutedCall};
 use super::super::{permission_denied, ServerData};
 
 pub(super) trait Operations {
+    fn loader_server_config(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus>;
     fn loader_challenge(
         &self,
         argument: &[u8],
@@ -22,6 +27,11 @@ pub(super) trait Operations {
         &self,
         argument: &[u8],
         principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus>;
+    fn load_removal_for_member(
+        &self,
+        argument: &[u8],
+        principal: Option<&Principal>,
     ) -> Result<Vec<u8>, RpcStatus>;
     fn load_team_membership_chain(
         &self,
@@ -52,9 +62,20 @@ pub(super) trait Operations {
         argument: &[u8],
         principal: &Principal,
     ) -> Result<(), RpcStatus>;
+    fn team_config(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus>;
 }
 
 impl Operations for ServerData {
+    fn loader_server_config(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus> {
+        principal.require_ordinary_device()?;
+        let database = self.read_database()?;
+        crate::services::registration::server_config(argument, &database)
+    }
+
     fn loader_challenge(
         &self,
         argument: &[u8],
@@ -126,6 +147,23 @@ impl Operations for ServerData {
         )
     }
 
+    fn load_removal_for_member(
+        &self,
+        argument: &[u8],
+        principal: Option<&Principal>,
+    ) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        crate::services::team_loader::load_removal_for_member(
+            argument,
+            principal,
+            &self.host()?,
+            &snapshot,
+        )
+    }
+
     fn load_team_membership_chain(
         &self,
         argument: &[u8],
@@ -143,6 +181,7 @@ impl Operations for ServerData {
             self.clock.as_ref(),
         )
     }
+
     fn grant_remote_view(
         &self,
         argument: &[u8],
@@ -263,6 +302,11 @@ impl Operations for ServerData {
             &self.hostchain_tail,
         )
     }
+
+    fn team_config(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        crate::services::team_admin::config(argument, principal, &database)
+    }
 }
 
 pub(super) fn response(
@@ -286,7 +330,14 @@ pub(super) fn response(
         RouteId::TeamLoaderLoadTeamMembershipChain => {
             Some(operations.load_team_membership_chain(call.call.argument(), principal)?)
         }
+        RouteId::TeamLoaderLoadRemovalForMember => {
+            Some(operations.load_removal_for_member(call.call.argument(), principal)?)
+        }
         RouteId::TeamLoaderLoadTeamRemoteViewTokens => Some(operations.load_remote_view_tokens(
+            call.call.argument(),
+            principal.ok_or_else(permission_denied)?,
+        )?),
+        RouteId::TeamLoaderGetServerConfig => Some(operations.loader_server_config(
             call.call.argument(),
             principal.ok_or_else(permission_denied)?,
         )?),
@@ -332,6 +383,10 @@ pub(super) fn response(
             )?;
             None
         }
+        RouteId::TeamAdminGetTeamConfig => Some(operations.team_config(
+            call.call.argument(),
+            principal.ok_or_else(permission_denied)?,
+        )?),
         _ => return Err(RpcStatus::Unsupported),
     };
     // Team protocols place their result bare on the wire with no DataWrap

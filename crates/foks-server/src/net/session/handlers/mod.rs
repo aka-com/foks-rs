@@ -1,6 +1,8 @@
 //! Typed RPC family dispatch over narrow operation ports.
 
+mod kex;
 mod kv;
+mod logsend;
 mod probe;
 mod registration;
 mod team;
@@ -34,6 +36,7 @@ pub(super) fn response(
         | KvStoreSelectVHost => probe::response(data, call),
         RegReserveUsername
         | RegCheckNameExists
+        | RegJoinWaitList
         | RegResolveUsername
         | RegProbeKeyExists
         | RegGetClientVersionInfo
@@ -75,7 +78,9 @@ pub(super) fn response(
         | TeamLoaderActivateTeamVOBearerToken
         | TeamLoaderLoadTeamChain
         | TeamLoaderLoadTeamMembershipChain
+        | TeamLoaderLoadRemovalForMember
         | TeamLoaderLoadTeamRemoteViewTokens
+        | TeamLoaderGetServerConfig
         | TeamMemberGrantRemoteViewPermissionForTeam
         | TeamAdminReserveTeamname
         | TeamAdminCreateTeam
@@ -84,6 +89,7 @@ pub(super) fn response(
         | TeamAdminActivateTeamBearerToken
         | TeamAdminLoadRemovalKeyBoxForTeamAdmin
         | TeamAdminPostTeamMembershipLink
+        | TeamAdminGetTeamConfig
         | TeamAdminCreateTeamAdHoc => team::response(data, call, principal),
         KvStoreMkdir
         | KvStorePut
@@ -101,18 +107,19 @@ pub(super) fn response(
         | KvStoreLockAcquire
         | KvStoreLockRelease
         | KvStoreUsage => kv::response(data, call, principal),
+        KexSend | KexReceive => kex::response(data, call),
+        LogSendLogSendInit | LogSendLogSendInitFile | LogSendLogSendUploadBlock => {
+            logsend::response(data, call, principal)
+        }
         BeaconBeaconLookup
         | TeamLoaderCheckTeamVOBearerToken
-        | TeamLoaderLoadRemovalForMember
-        | TeamLoaderGetServerConfig
         | TeamAdminCheckTeamBearerToken
         | TeamAdminPutTeamCert
         | TeamAdminGetCurrentTeamCerts
         | TeamAdminLoadTeamRemoteJoinReq
         | TeamAdminPostTeamRemoval
         | TeamAdminLoadTeamRawInbox
-        | TeamAdminRejectJoinReq
-        | TeamAdminGetTeamConfig => Err(RpcStatus::Unsupported),
+        | TeamAdminRejectJoinReq => Err(RpcStatus::Unsupported),
     }
 }
 

@@ -79,11 +79,27 @@ fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocat
                 &master,
             )?;
             assert!(signup.management_enrolled);
+            let scheduler_now = u64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("test clock is after the Unix epoch")
+                    .as_micros(),
+            )
+            .expect("test clock fits in u64")
+            .saturating_add(20 * 60 * 1_000_000);
+            let scheduled = session.run_due_jobs(scheduler_now, &mut vault, &master)?;
+            assert_eq!(scheduled.runs.len(), 4);
+            assert!(
+                scheduled.runs.iter().all(|run| run.completed),
+                "hardware-only refresh jobs must defer without failure: {:?}",
+                scheduled.runs
+            );
             session.sync_yubi_account(
                 "hardware-signup",
                 Pin::new("123456")?,
                 &signup_provider,
                 &mut vault,
+                &master,
             )?;
             let changed = Passphrase::new("hardware-only rotated recovery phrase")?;
             let report = session.change_yubi_passphrase(
@@ -92,6 +108,7 @@ fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocat
                 changed,
                 &signup_provider,
                 &mut vault,
+                &master,
             )?;
             assert_eq!(report.generation, 2);
             assert!(report.verified);
@@ -101,6 +118,7 @@ fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocat
                 Passphrase::new("hardware-only rotated recovery phrase")?,
                 &signup_provider,
                 &mut vault,
+                &master,
             )?;
             assert_eq!(verified.generation, 2);
             let resumed_signup = session.resume_yubi_account(
@@ -150,12 +168,19 @@ fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocat
                     .remaining,
                 5
             );
-            session.sync_yubi_account("hardware", Pin::new("123456")?, &provider, &mut vault)?;
+            session.sync_yubi_account(
+                "hardware",
+                Pin::new("123456")?,
+                &provider,
+                &mut vault,
+                &master,
+            )?;
             let recovered = session.recover_yubi_subkey(
                 "hardware",
                 Pin::new("123456")?,
                 &provider,
                 &mut vault,
+                &master,
             )?;
             assert!(!recovered.subkey_id_hex.is_empty());
             assert!(recovered.certificate_count >= 1);
@@ -166,6 +191,7 @@ fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocat
                         Pin::new("123456")?,
                         &provider,
                         &mut vault,
+                        &master,
                     )?
                     .management_enrolled
             );
@@ -188,7 +214,13 @@ fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocat
                 &provider,
                 &mut vault,
             )?;
-            session.sync_yubi_account("hardware", Pin::new("234567")?, &provider, &mut vault)?;
+            session.sync_yubi_account(
+                "hardware",
+                Pin::new("234567")?,
+                &provider,
+                &mut vault,
+                &master,
+            )?;
             let locator = vault.yubi_account("hardware")?.locator;
             for _ in 0..5 {
                 assert!(provider.open(&locator, Some(&Pin::new("999999")?)).is_err());
@@ -210,7 +242,13 @@ fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocat
                     .remaining,
                 5
             );
-            session.sync_yubi_account("hardware", Pin::new("345678")?, &provider, &mut vault)?;
+            session.sync_yubi_account(
+                "hardware",
+                Pin::new("345678")?,
+                &provider,
+                &mut vault,
+                &master,
+            )?;
             assert!(
                 session
                     .recover_yubi_management_key("hardware", "software", &mut vault)?

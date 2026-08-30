@@ -48,6 +48,9 @@ pub const KV_DIRENT_BINDING_PAYLOAD_TYPE_ID: u64 = 0x9cc3_7c83_63dc_39fa;
 pub const KV_ROOT_BINDING_PAYLOAD_TYPE_ID: u64 = 0xcfac_dd4e_ab21_3a36;
 pub const KV_FILE_KEY_PAYLOAD_TYPE_ID: u64 = 0x9211_ae1e_1721_3884;
 pub const KV_CHUNK_NONCE_PAYLOAD_TYPE_ID: u64 = 0xadba_174b_7e8d_cc08;
+pub const KEX_KEY_DERIVATION_TYPE_ID: u64 = 0x8d7b_c770_3f63_ad64;
+pub const KEX_CLEARTEXT_TYPE_ID: u64 = 0xd2bc_e826_3ea1_dc0b;
+pub const KEX_WRAPPER_MSG_TYPE_ID: u64 = 0xc59b_e470_ee7e_cc62;
 
 pub const ENTITY_HOST: u8 = 2;
 pub const ENTITY_USER: u8 = 1;
@@ -75,6 +78,7 @@ mod error;
 mod federation;
 mod host;
 mod identity;
+mod kex;
 mod key_material;
 mod kv;
 mod passphrase;
@@ -88,6 +92,7 @@ pub use error::*;
 pub use federation::*;
 pub use host::*;
 pub use identity::*;
+pub use kex::*;
 pub use key_material::*;
 pub use kv::*;
 pub use passphrase::*;
@@ -123,8 +128,31 @@ mod tests {
         assert_eq!(decoded.sequence, 1);
         assert!(matches!(
             decoded.payload,
-            GenericLinkPayload::TeamMembership
+            GenericLinkPayload::TeamMembership(TeamMembershipPayload {
+                state: TeamMembershipState::Approved { .. },
+                ..
+            })
         ));
+    }
+
+    #[test]
+    fn team_removal_response_round_trips_go_v019_shapes() {
+        let boxes = TeamRemovalBoxData::decode(&user_fixture(
+            "../user-mutations/named-removal-boxes.snowp",
+        ))
+        .unwrap();
+        let proof = TeamRemovalAndCommitment::decode(&user_fixture(
+            "../user-mutations/remove-member-proof.snowp",
+        ))
+        .unwrap();
+        let response = TeamRemovalAndKeyBox {
+            key_box: boxes.member_box,
+            removal: proof.removal,
+        };
+        assert_eq!(
+            TeamRemovalAndKeyBox::decode(&response.encoded().unwrap()).unwrap(),
+            response
+        );
     }
 
     #[test]

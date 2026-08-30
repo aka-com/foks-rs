@@ -102,9 +102,12 @@ introducing a new role also distributes its generation-1 PUK to all eligible
 existing software devices. Revocation rotates every PUK visible to the removed
 credential, preserves the encrypted historical seed chain, and waits for the
 exact user-chain transition before reporting success. Callers must durably
-retain every supplied seed before submission. Physically separated
-countersigning/KEX, Yubi/P-256 mutation recipients, and self-revocation are not
-yet exposed by these convenience APIs. When an owner PUK rotates, the client
+retain every supplied seed before submission. Physically separated software
+countersigning is available through `publish_kex_provision_offer`,
+`finish_kex_provisioning`, and `accept_kex_provisioning`; these use the v0.1.9
+13-token HESP phrase and public headerless KEX relay while keeping the final
+mutation in the durable WAL. Yubi/P-256 mutation recipients and self-revocation
+are not yet exposed by these convenience APIs. When an owner PUK rotates, the client
 queries passphrase state and atomically appends the required PPE annex; an
 explicit `NoPassphraseConfigured` token is accepted only after the server
 confirms that no passphrase exists. Rust-to-Go standalone set/change requests
@@ -231,9 +234,18 @@ the exact v0.1.9 bearer wire, remote public chains are independently verified
 and pinned, and `admit_remote_team_to_named_team` journals a secret-free
 cross-host saga before constructing the local membership edit. The application
 stores the removal key and stable membership binding in its encrypted vault.
-This does not implement federated trust policy, push propagation, remote-user
-membership, join inboxes, or automatic PTK rotation after a remote roster/key
-change.
+This standalone workflow is deliberately operator-mediated: one operator must
+hold credentials for both profiles, the remote team's source role is pinned to
+`ADMIN`, and the client constructs the join RSVP needed by the server-side
+tuple. It is **not** Go v0.1.9's three-party invite/RSVP/inbox consent flow and
+must not be presented as wire-compatible implementation of that flow.
+
+The hash domain `0x45cf32f37d38a811` is used only for one-way local
+storage/journal identity of the federation permission bearer. It is a
+Rust-standalone implementation detail, never a v0.1.9 Snowpack type ID or wire
+surface. This slice does not implement federated trust policy, push
+propagation, remote-user membership, join inboxes, or cross-host PTK rotation
+after a remote roster/key change.
 
 See [SECURITY.md](SECURITY.md) for the trust boundaries, invariant ownership,
 secret lifecycle, review order, and explicitly unimplemented surfaces.

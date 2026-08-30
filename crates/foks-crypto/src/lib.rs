@@ -7,9 +7,11 @@
 #![forbid(unsafe_code)]
 
 mod backup;
+mod kex;
 mod passphrase;
 
 pub use backup::*;
+pub use kex::*;
 pub use passphrase::*;
 
 use crypto_secretbox::{aead::Aead, KeyInit, XSalsa20Poly1305};
@@ -50,6 +52,8 @@ use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
+// Rust-standalone local storage/journal domain separator. This value is never
+// encoded on the FOKS v0.1.9 wire and is not an upstream Snowpack type ID.
 const FEDERATION_PERMISSION_TOKEN_HASH_TYPE_ID: u64 = 0x45cf_32f3_7d38_a811;
 
 #[derive(Debug, Error)]
@@ -885,6 +889,28 @@ pub struct ChangeTeamMemberInput<'a> {
     pub member_public: Option<&'a SharedPublicMaterial>,
 }
 
+pub struct ChangeTeamMemberEntryInput<'a> {
+    pub member: &'a EntityId,
+    pub member_host: Option<&'a EntityId>,
+    pub member_source_role: Role,
+    pub destination_role: Role,
+    pub member_generation: Option<u64>,
+    pub member_public: Option<&'a SharedPublicMaterial>,
+}
+
+pub struct ChangeTeamMembersInput<'a> {
+    pub actor: &'a EntityId,
+    pub actor_source_role: Role,
+    pub team: &'a EntityId,
+    pub host: &'a EntityId,
+    pub sequence: u64,
+    pub previous: [u8; 32],
+    pub root: &'a TreeRoot,
+    pub time: u64,
+    pub next_tree_location: [u8; 32],
+    pub members: &'a [ChangeTeamMemberEntryInput<'a>],
+}
+
 pub struct RemoveLocalTeamMemberMaterial {
     pub link: UserLink,
     pub ptks: Vec<SharedPublicMaterial>,
@@ -1474,32 +1500,76 @@ pub fn make_change_team_member_link(
     actor_puk_seed: &SecretSeed,
     rotations: &[TeamPtkRotation<'_>],
 ) -> Result<RemoveLocalTeamMemberMaterial> {
-    input.actor.clone().require_type(foks_proto::ENTITY_USER)?;
-    if !matches!(
-        input.member.entity_type(),
-        foks_proto::ENTITY_USER | foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
-    ) {
-        return Err(Error::NamedTeamMaterial);
-    }
+    make_change_team_members_link(
+        &ChangeTeamMembersInput {
+            actor: input.actor,
+            actor_source_role: input.actor_source_role,
+            team: input.team,
+            host: input.host,
+            sequence: input.sequence,
+            previous: input.previous,
+            root: input.root,
+            time: input.time,
+            next_tree_location: input.next_tree_location,
+            members: &[ChangeTeamMemberEntryInput {
+                member: input.member,
+                member_host: input.member_host,
+                member_source_role: input.member_source_role,
+                destination_role: input.destination_role,
+                member_generation: input.member_generation,
+                member_public: input.member_public,
+            }],
+        },
+        actor_puk_seed,
+        rotations,
+    )
+}
+
+/// Constructs and stacked-signs one atomic group change covering multiple
+/// roster transitions and their union PTK rotation schedule.
+pub fn make_change_team_members_link(
+    input: &ChangeTeamMembersInput<'_>,
+    actor_shared_key_seed: &SecretSeed,
+    rotations: &[TeamPtkRotation<'_>],
+) -> Result<RemoveLocalTeamMemberMaterial> {
+    let actor_key_type = match input.actor.entity_type() {
+        foks_proto::ENTITY_USER => foks_proto::ENTITY_PUK_VERIFY,
+        foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM => {
+            foks_proto::ENTITY_PTK_VERIFY
+        }
+        _ => return Err(Error::NamedTeamMaterial),
+    };
     input
         .team
         .clone()
         .require_type(foks_proto::ENTITY_NAMED_TEAM)?;
     input.host.clone().require_type(foks_proto::ENTITY_HOST)?;
-    if input.sequence < 2
-        || input.actor_source_role == Role::NONE
-        || input.member_source_role == Role::NONE
-        || (input.actor == input.member && input.member_host.is_none())
-        || rotations.is_empty()
-        || (input.destination_role == Role::NONE)
-            != (input.member_generation.is_none() && input.member_public.is_none())
-        || input
-            .member_host
-            .is_some_and(|host| host.entity_type() != foks_proto::ENTITY_HOST)
-    {
+    if input.sequence < 2 || input.actor_source_role == Role::NONE || input.members.is_empty() {
         return Err(Error::NamedTeamMaterial);
     }
-    let actor = derive_shared_public(actor_puk_seed, foks_proto::ENTITY_PUK_VERIFY)?;
+    let mut member_bindings = std::collections::BTreeSet::new();
+    for member in input.members {
+        if !matches!(
+            member.member.entity_type(),
+            foks_proto::ENTITY_USER
+                | foks_proto::ENTITY_NAMED_TEAM
+                | foks_proto::ENTITY_AD_HOC_TEAM
+        ) || member.member_source_role == Role::NONE
+            || (member.destination_role == Role::NONE)
+                != (member.member_generation.is_none() && member.member_public.is_none())
+            || member
+                .member_host
+                .is_some_and(|host| host.entity_type() != foks_proto::ENTITY_HOST)
+            || !member_bindings.insert((
+                member.member.as_bytes().to_vec(),
+                member.member_host.map(|host| host.as_bytes().to_vec()),
+                member.member_source_role,
+            ))
+        {
+            return Err(Error::NamedTeamMaterial);
+        }
+    }
+    let actor = derive_shared_public(actor_shared_key_seed, actor_key_type)?;
     let mut prior_role = None;
     let mut verify_keys = std::collections::BTreeSet::new();
     let mut ptks = Vec::with_capacity(rotations.len());
@@ -1537,23 +1607,31 @@ pub fn make_change_team_member_link(
             party: input.actor.clone(),
             source_role: input.actor_source_role,
         },
-        changes: vec![TeamMemberChange {
-            role: input.destination_role,
-            party: input.member.clone(),
-            scoped_host: input.member_host.cloned(),
-            source_role: input.member_source_role,
-            keys: match (input.member_generation, input.member_public) {
-                (Some(generation), Some(public)) if generation > 0 => Some(TeamMemberKeys {
-                    verify_key: public.verify_key.clone(),
-                    hepk_fingerprint: hepk_fingerprint(&public.hepk)?,
-                    generation,
-                    removal_key_commitment: None,
-                    index_range: None,
-                }),
-                (None, None) => None,
-                _ => return Err(Error::NamedTeamMaterial),
-            },
-        }],
+        changes: input
+            .members
+            .iter()
+            .map(|member| {
+                Ok(TeamMemberChange {
+                    role: member.destination_role,
+                    party: member.member.clone(),
+                    scoped_host: member.member_host.cloned(),
+                    source_role: member.member_source_role,
+                    keys: match (member.member_generation, member.member_public) {
+                        (Some(generation), Some(public)) if generation > 0 => {
+                            Some(TeamMemberKeys {
+                                verify_key: public.verify_key.clone(),
+                                hepk_fingerprint: hepk_fingerprint(&public.hepk)?,
+                                generation,
+                                removal_key_commitment: None,
+                                index_range: None,
+                            })
+                        }
+                        (None, None) => None,
+                        _ => return Err(Error::NamedTeamMaterial),
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
         shared_keys,
         metadata: Vec::new(),
     };
@@ -1567,7 +1645,7 @@ pub fn make_change_team_member_link(
         )?);
     }
     signatures.push(sign_seed_typed(
-        actor_puk_seed,
+        actor_shared_key_seed,
         LINK_OUTER_V1_TYPE_ID,
         &unsigned.signing_bytes(&signatures)?,
     )?);
@@ -1994,6 +2072,62 @@ pub fn make_software_puk_rotation_link(
     make_software_puk_change_link(base, signing_device_seed, None, rotations)
 }
 
+/// Constructs a standalone PUK-rotation link signed by an enrolled Yubi
+/// parent. Each rotated PUK signs the accumulated stack first, in shared-key
+/// order, and the P-256 parent signs last as required by user-chain replay.
+pub fn make_yubi_puk_rotation_link(
+    base: &UserMutationBase<'_>,
+    parent: &dyn YubiDevice,
+    rotations: &[PukRotation<'_>],
+) -> Result<UserLink> {
+    if rotations.is_empty() {
+        return Err(Error::PukBinding);
+    }
+    if parent.entity_id().entity_type() != foks_proto::ENTITY_YUBI
+        || parent.entity_id().p256_key().ok().as_ref() != parent.hepk().p256()
+    {
+        return Err(Error::DeviceKey);
+    }
+    let mut shared_keys = Vec::with_capacity(rotations.len());
+    for rotation in rotations {
+        let public = derive_shared_public(rotation.seed, foks_proto::ENTITY_PUK_VERIFY)?;
+        shared_keys.push(UserSharedKey {
+            generation: rotation.generation,
+            role: rotation.role,
+            verify_key: public.verify_key,
+            hepk_fingerprint: hepk_fingerprint(&public.hepk)?,
+        });
+    }
+    let change = UserGroupChange {
+        seqno: base.seqno,
+        previous: Some(base.previous),
+        root: base.root.clone(),
+        time: base.time,
+        next_location_commitment: tree_location_commitment(&base.next_tree_location)?,
+        uid: base.uid.clone(),
+        host: base.host.clone(),
+        signer: parent.entity_id().clone(),
+        changes: Vec::new(),
+        shared_keys,
+        metadata: Vec::new(),
+    };
+    let unsigned = UnsignedUserLink::user_group_change(&change)?;
+    let mut signatures = Vec::with_capacity(rotations.len() + 1);
+    for rotation in rotations {
+        signatures.push(sign_seed_typed(
+            rotation.seed,
+            LINK_OUTER_V1_TYPE_ID,
+            &unsigned.signing_bytes(&signatures)?,
+        )?);
+    }
+    signatures.push(sign_yubi_typed(
+        parent,
+        LINK_OUTER_V1_TYPE_ID,
+        &unsigned.signing_bytes(&signatures)?,
+    )?);
+    unsigned.finish(signatures).map_err(Into::into)
+}
+
 fn make_software_puk_change_link(
     base: &UserMutationBase<'_>,
     signing_device_seed: &SecretSeed,
@@ -2072,6 +2206,20 @@ pub struct YubiPukBoxRandomness {
     pub time: u64,
 }
 
+/// Set-level randomness for the authenticated temporary X25519 sender used
+/// when a Yubi parent boxes to one or more software devices.
+pub struct YubiPukBoxSetRandomness {
+    pub ephemeral_secret: [u8; 32],
+    pub time: u64,
+}
+
+/// Set-level P-256 sender randomness for software parents boxing to Yubi
+/// recipients in an otherwise mixed X25519/P-256 device roster.
+pub struct SoftwarePukBoxSetRandomness {
+    pub ephemeral_secret: [u8; 32],
+    pub time: u64,
+}
+
 pub struct YubiPukBoxInput<'a> {
     pub seed: &'a SecretSeed,
     pub generation: u64,
@@ -2131,6 +2279,128 @@ pub fn seal_software_puk_boxes(
         &generic,
         randomness,
     )
+}
+
+/// Boxes PUK generations from a software sender to a mixed software/Yubi
+/// roster. X25519 recipients use the enrolled sender directly; P-256
+/// recipients share one signed temporary key, matching Go's box-set rules.
+pub fn seal_software_puk_boxes_mixed(
+    host: &EntityId,
+    sender_seed: &SecretSeed,
+    box_id: [u8; 16],
+    inputs: &[SoftwarePukBoxInput<'_>],
+    randomness: &[PukBoxRandomness],
+    set_randomness: SoftwarePukBoxSetRandomness,
+) -> Result<SharedKeyBoxSet> {
+    let host = host.clone().require_type(foks_proto::ENTITY_HOST)?;
+    if inputs.is_empty() || inputs.len() != randomness.len() {
+        return Err(Error::HybridBox);
+    }
+    let sender = derive_device_public(sender_seed)?;
+    let sender_curve = sender.hepk.curve25519().copied().ok_or(Error::HybridBox)?;
+    let ephemeral = P256SecretKey::from_slice(&set_randomness.ephemeral_secret)
+        .map_err(|_| Error::HybridBox)?;
+    let ephemeral_public = ephemeral.public_key().to_encoded_point(true);
+    let ephemeral_public: [u8; 33] = ephemeral_public
+        .as_bytes()
+        .try_into()
+        .map_err(|_| Error::HybridBox)?;
+    let temporary_dh = DhPublicKey::P256(ephemeral_public);
+    let mut used_temporary = false;
+    let mut boxes = Vec::with_capacity(inputs.len());
+    for (input, random) in inputs.iter().zip(randomness) {
+        if input.generation == 0 || input.role == Role::NONE {
+            return Err(Error::WrongReceiver);
+        }
+        let (sender_dh, dh_shared, dh_type) = match input.receiver.hepk.classical() {
+            DhPublicKey::Curve25519(receiver_dh)
+                if input.receiver.id.entity_type() == foks_proto::ENTITY_DEVICE =>
+            {
+                (
+                    DhPublicKey::Curve25519(sender_curve),
+                    software_dh_shared(sender_seed, &DhPublicKey::Curve25519(*receiver_dh))?,
+                    1,
+                )
+            }
+            DhPublicKey::P256(receiver_dh)
+                if input.receiver.id.entity_type() == foks_proto::ENTITY_YUBI
+                    && input.receiver.id.p256_key().ok().as_ref() == input.receiver.hepk.p256() =>
+            {
+                used_temporary = true;
+                let receiver_public =
+                    P256PublicKey::from_sec1_bytes(receiver_dh).map_err(|_| Error::HybridBox)?;
+                let shared =
+                    p256_diffie_hellman(ephemeral.to_nonzero_scalar(), receiver_public.as_affine());
+                (
+                    temporary_dh.clone(),
+                    Zeroizing::new(<[u8; 32]>::from(*shared.raw_secret_bytes())),
+                    2,
+                )
+            }
+            _ => return Err(Error::WrongReceiver),
+        };
+        let receiver_mlkem =
+            ml_kem_768::EncapsulationKey::new_from_slice(input.receiver.hepk.mlkem768())
+                .map_err(|_| Error::MlKem)?;
+        let (kem_ciphertext, kem_shared) =
+            receiver_mlkem.encapsulate_deterministic(&ml_kem::B32::from(random.kem_message));
+        let derivation = hybrid_key_derivation_payload(
+            kem_shared.as_slice(),
+            dh_shared.as_slice(),
+            &input.receiver.hepk,
+            &sender_dh,
+        )?;
+        let mut hash = <Sha3_256 as Sha3Digest>::new();
+        hash.update(HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID.to_be_bytes());
+        hash.update(derivation.as_slice());
+        let key = Zeroizing::new(<[u8; 32]>::from(hash.finalize()));
+        let cleartext = shared_key_seed_plaintext(
+            &input.receiver.id,
+            &host,
+            input.generation,
+            input.role,
+            input.seed,
+        )?;
+        let mut nonce = [0u8; 24];
+        nonce[..8].copy_from_slice(&SHARED_KEY_SEED_TYPE_ID.to_be_bytes());
+        nonce[8..].copy_from_slice(&random.nonce);
+        let ciphertext = XSalsa20Poly1305::new(key.as_slice().into())
+            .encrypt((&nonce).into(), cleartext.as_slice())
+            .map_err(|_| Error::Decryption)?;
+        boxes.push(SharedKeyBox {
+            generation: input.generation,
+            role: input.role,
+            hybrid: HybridBox {
+                kem_ciphertext: kem_ciphertext.as_slice().to_vec(),
+                dh_type,
+                sender_dh: None,
+                nonce: random.nonce,
+                ciphertext,
+            },
+            target: SharedKeyBoxTarget {
+                entity: input.receiver.id.clone(),
+                host: None,
+                role: Role::NONE,
+                generation: 0,
+            },
+        });
+    }
+    let temporary = if used_temporary {
+        let mut temporary = foks_proto::TempDhKeySigned {
+            key: temporary_dh,
+            time: set_randomness.time,
+            signature: Signature::Ed25519([0; 64]),
+        };
+        temporary.signature = sign_seed_typed(
+            sender_seed,
+            TEMP_DH_KEY_SIG_TEMPLATE_TYPE_ID,
+            &temporary.signing_bytes(&box_id, &sender.id, &host)?,
+        )?;
+        Some(temporary)
+    } else {
+        None
+    };
+    SharedKeyBoxSet::new(box_id, boxes, temporary).map_err(Into::into)
 }
 
 /// Seals one PUK from an existing software device to a P-256 Yubi recipient.
@@ -2222,6 +2492,128 @@ pub fn seal_software_puk_box_to_yubi(
         Some(temporary),
     )
     .map_err(Into::into)
+}
+
+/// Boxes one or more PUK generations from a Yubi parent to a mixed software
+/// and Yubi recipient set. P-256 recipients use the enrolled parent directly;
+/// X25519 recipients share one temporary key authenticated by that parent,
+/// matching the v0.1.9 `SharedKeyBoxer` construction.
+pub fn seal_yubi_puk_boxes(
+    host: &EntityId,
+    parent: &dyn YubiDevice,
+    box_id: [u8; 16],
+    inputs: &[YubiPukBoxInput<'_>],
+    randomness: &[PukBoxRandomness],
+    set_randomness: YubiPukBoxSetRandomness,
+) -> Result<SharedKeyBoxSet> {
+    let host = host.clone().require_type(foks_proto::ENTITY_HOST)?;
+    if inputs.is_empty()
+        || inputs.len() != randomness.len()
+        || parent.entity_id().entity_type() != foks_proto::ENTITY_YUBI
+        || parent.entity_id().p256_key().ok().as_ref() != parent.hepk().p256()
+    {
+        return Err(Error::HybridBox);
+    }
+    let parent_dh = parent.hepk().p256().copied().ok_or(Error::HybridBox)?;
+    let ephemeral_secret = StaticSecret::from(set_randomness.ephemeral_secret);
+    let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
+    let temporary_dh = DhPublicKey::Curve25519(*ephemeral_public.as_bytes());
+    let mut used_temporary = false;
+    let mut boxes = Vec::with_capacity(inputs.len());
+    for (input, random) in inputs.iter().zip(randomness) {
+        if input.generation == 0
+            || input.role == Role::NONE
+            || !matches!(
+                input.receiver.id.entity_type(),
+                foks_proto::ENTITY_DEVICE | foks_proto::ENTITY_YUBI
+            )
+        {
+            return Err(Error::WrongReceiver);
+        }
+        let (sender_dh, dh_shared, dh_type) = match input.receiver.hepk.classical() {
+            DhPublicKey::P256(receiver_dh)
+                if input.receiver.id.entity_type() == foks_proto::ENTITY_YUBI
+                    && input.receiver.id.p256_key().ok().as_ref() == input.receiver.hepk.p256() =>
+            {
+                (
+                    DhPublicKey::P256(parent_dh),
+                    parent.derive_dh_shared(&DhPublicKey::P256(*receiver_dh))?,
+                    2,
+                )
+            }
+            DhPublicKey::Curve25519(receiver_dh)
+                if input.receiver.id.entity_type() == foks_proto::ENTITY_DEVICE =>
+            {
+                used_temporary = true;
+                let raw = ephemeral_secret.diffie_hellman(&X25519PublicKey::from(*receiver_dh));
+                let zero = [0u8; 16];
+                let shared = hsalsa::<U10>(raw.as_bytes().into(), (&zero).into());
+                (temporary_dh.clone(), Zeroizing::new(shared.into()), 1)
+            }
+            _ => return Err(Error::WrongReceiver),
+        };
+        let receiver_mlkem =
+            ml_kem_768::EncapsulationKey::new_from_slice(input.receiver.hepk.mlkem768())
+                .map_err(|_| Error::MlKem)?;
+        let (kem_ciphertext, kem_shared) =
+            receiver_mlkem.encapsulate_deterministic(&ml_kem::B32::from(random.kem_message));
+        let derivation = hybrid_key_derivation_payload(
+            kem_shared.as_slice(),
+            dh_shared.as_slice(),
+            &input.receiver.hepk,
+            &sender_dh,
+        )?;
+        let mut hash = <Sha3_256 as Sha3Digest>::new();
+        hash.update(HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID.to_be_bytes());
+        hash.update(derivation.as_slice());
+        let key = Zeroizing::new(<[u8; 32]>::from(hash.finalize()));
+        let cleartext = shared_key_seed_plaintext(
+            &input.receiver.id,
+            &host,
+            input.generation,
+            input.role,
+            input.seed,
+        )?;
+        let mut nonce = [0u8; 24];
+        nonce[..8].copy_from_slice(&SHARED_KEY_SEED_TYPE_ID.to_be_bytes());
+        nonce[8..].copy_from_slice(&random.nonce);
+        let ciphertext = XSalsa20Poly1305::new(key.as_slice().into())
+            .encrypt((&nonce).into(), cleartext.as_slice())
+            .map_err(|_| Error::Decryption)?;
+        boxes.push(SharedKeyBox {
+            generation: input.generation,
+            role: input.role,
+            hybrid: HybridBox {
+                kem_ciphertext: kem_ciphertext.as_slice().to_vec(),
+                dh_type,
+                sender_dh: None,
+                nonce: random.nonce,
+                ciphertext,
+            },
+            target: SharedKeyBoxTarget {
+                entity: input.receiver.id.clone(),
+                host: None,
+                role: Role::NONE,
+                generation: 0,
+            },
+        });
+    }
+    let temporary = if used_temporary {
+        let mut temporary = foks_proto::TempDhKeySigned {
+            key: temporary_dh,
+            time: set_randomness.time,
+            signature: Signature::Ecdsa(Vec::new()),
+        };
+        temporary.signature = sign_yubi_typed(
+            parent,
+            TEMP_DH_KEY_SIG_TEMPLATE_TYPE_ID,
+            &temporary.signing_bytes(&box_id, parent.entity_id(), &host)?,
+        )?;
+        Some(temporary)
+    } else {
+        None
+    };
+    SharedKeyBoxSet::new(box_id, boxes, temporary).map_err(Into::into)
 }
 
 /// Boxes PUKs from an ephemeral backup key to newly provisioned software
@@ -3268,6 +3660,47 @@ pub fn open_shared_key_seed_chain(
     Ok(descending)
 }
 
+/// Opens a team PTK generation chain. FOKS v0.1.9 creates one global chain
+/// per rotated PTK and binds its informational receiver field to the editor,
+/// then attaches that chain to every recipient parcel. Callers must bind each
+/// recovered seed to the authenticated team-chain public-key history.
+pub fn open_team_shared_key_seed_chain(
+    current: SharedKeySeed,
+    parcel: &PukParcel,
+    expected_host: &EntityId,
+) -> Result<Vec<SharedKeySeed>> {
+    if current.generation != parcel.generation || current.role != parcel.role {
+        return Err(Error::PukBinding);
+    }
+    let mut descending = vec![current];
+    for boxed in parcel.seed_chain.iter().rev() {
+        let newer = descending.last().ok_or(Error::PukBinding)?;
+        let expected_generation = newer.generation.checked_sub(1).ok_or(Error::PukBinding)?;
+        if boxed.generation != expected_generation || boxed.role != newer.role {
+            return Err(Error::PukBinding);
+        }
+        let secretbox_key = derive_key(&newer.seed, 2, None)?;
+        let plaintext = open_typed_secretbox(
+            secretbox_key.as_bytes(),
+            SHARED_KEY_SEED_TYPE_ID,
+            &boxed.secret_box.nonce,
+            &boxed.secret_box.ciphertext,
+        )?;
+        let (_, consumed) = decode_prefix(&plaintext)?;
+        require_zero_padding(&plaintext, consumed)?;
+        let older = SharedKeySeed::decode(&plaintext[..consumed])?;
+        if &older.host != expected_host
+            || older.generation != boxed.generation
+            || older.role != boxed.role
+        {
+            return Err(Error::PukBinding);
+        }
+        descending.push(older);
+    }
+    descending.reverse();
+    Ok(descending)
+}
+
 /// Opens a PUK or PTK parcel and binds its cleartext to the authenticated
 /// target, role, generation, host, and expected verification key.
 #[allow(clippy::too_many_arguments)]
@@ -3394,9 +3827,8 @@ fn authenticated_sender_dh(
     let same_type = std::mem::discriminant(receiver_hepk.classical())
         == std::mem::discriminant(sender_hepk.classical());
     if same_type {
-        if parcel.temp_dh_key.is_some() {
-            return Err(Error::HybridBox);
-        }
+        // A mixed-curve box set carries one temporary key for mismatched
+        // recipients. Go ignores it for same-curve boxes in that same set.
         return Ok(sender_hepk.classical().clone());
     }
     let temporary = parcel.temp_dh_key.as_ref().ok_or(Error::HybridBox)?;
@@ -3710,6 +4142,86 @@ mod tests {
         std::fs::read(format!("{MUTATION_DIR}/{name}")).unwrap()
     }
 
+    struct MockYubi {
+        public: YubiPublicMaterial,
+        signing: p256::ecdsa::SigningKey,
+        dh: P256SecretKey,
+        pq_self_secret: [u8; 32],
+    }
+
+    impl MockYubi {
+        fn new(signing_scalar: u8, pq_scalar: u8) -> Self {
+            let signing_bytes = [signing_scalar; 32];
+            let pq_bytes = [pq_scalar; 32];
+            let signing = p256::ecdsa::SigningKey::from_bytes((&signing_bytes).into()).unwrap();
+            let dh = P256SecretKey::from_slice(&signing_bytes).unwrap();
+            let pq = P256SecretKey::from_slice(&pq_bytes).unwrap();
+            let signing_public: [u8; 33] = signing
+                .verifying_key()
+                .to_encoded_point(true)
+                .as_bytes()
+                .try_into()
+                .unwrap();
+            let pq_public: [u8; 33] = pq
+                .public_key()
+                .to_encoded_point(true)
+                .as_bytes()
+                .try_into()
+                .unwrap();
+            let pq_self = p256_diffie_hellman(pq.to_nonzero_scalar(), pq.public_key().as_affine());
+            let pq_self_secret = pq_self.raw_secret_bytes().as_slice().try_into().unwrap();
+            let public =
+                derive_yubi_public_material(signing_public, pq_public, pq_self_secret).unwrap();
+            Self {
+                public,
+                signing,
+                dh,
+                pq_self_secret,
+            }
+        }
+    }
+
+    impl HybridSecretDecapsulator for MockYubi {
+        fn entity_id(&self) -> &EntityId {
+            &self.public.device.id
+        }
+
+        fn hepk(&self) -> &Hepk {
+            &self.public.device.hepk
+        }
+
+        fn derive_dh_shared(&self, peer: &DhPublicKey) -> Result<Zeroizing<[u8; 32]>> {
+            let DhPublicKey::P256(peer) = peer else {
+                return Err(Error::HybridBox);
+            };
+            let peer = P256PublicKey::from_sec1_bytes(peer).map_err(|_| Error::HybridBox)?;
+            let shared = p256_diffie_hellman(self.dh.to_nonzero_scalar(), peer.as_affine());
+            Ok(Zeroizing::new(
+                shared.raw_secret_bytes().as_slice().try_into().unwrap(),
+            ))
+        }
+
+        fn decapsulate_mlkem768(&self, ciphertext: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
+            yubi_mlkem_decapsulate(self.pq_self_secret, ciphertext)
+        }
+    }
+
+    impl YubiDevice for MockYubi {
+        fn pq_key_id(&self) -> [u8; 32] {
+            self.public.pq_key_id
+        }
+
+        fn sign_sha512_256(&self, digest: &[u8; 32]) -> Result<Vec<u8>> {
+            use p256::ecdsa::signature::hazmat::PrehashSigner as _;
+
+            let signature: P256Signature = self
+                .signing
+                .sign_prehash(digest)
+                .map_err(|_| Error::YubiSigning)?;
+            Ok(signature.to_der().as_bytes().to_vec())
+        }
+    }
+
     #[test]
     fn subchain_location_matches_the_go_reference() {
         assert_eq!(
@@ -3924,6 +4436,500 @@ mod tests {
             &[],
         )
         .is_err());
+    }
+
+    #[test]
+    fn yubi_puk_rotation_stacks_rotated_keys_before_the_parent() {
+        let expected = UserLink::decode(&mutation_fixture("rotation-link.snowp")).unwrap();
+        let base_change = expected.decode_group_change().unwrap();
+        let parent = MockYubi::new(0x11, 0x12);
+        let member_seed = SecretSeed::new([0x21; 32]);
+        let owner_seed = SecretSeed::new([0x22; 32]);
+        let rotations = [
+            PukRotation {
+                role: Role::member(0),
+                generation: 2,
+                seed: &member_seed,
+            },
+            PukRotation {
+                role: Role::OWNER,
+                generation: 3,
+                seed: &owner_seed,
+            },
+        ];
+        let base = UserMutationBase {
+            uid: &base_change.uid,
+            host: &base_change.host,
+            seqno: base_change.seqno,
+            previous: base_change.previous.unwrap(),
+            root: &base_change.root,
+            time: base_change.time,
+            next_tree_location: [0x31; 32],
+        };
+        let link = make_yubi_puk_rotation_link(&base, &parent, &rotations).unwrap();
+        assert_eq!(
+            link.encoded().unwrap(),
+            make_yubi_puk_rotation_link(&base, &parent, &rotations)
+                .unwrap()
+                .encoded()
+                .unwrap()
+        );
+        let change = link.decode_group_change().unwrap();
+        assert_eq!(change.signer, *parent.entity_id());
+        assert!(change.changes.is_empty());
+        assert_eq!(
+            change
+                .shared_keys
+                .iter()
+                .map(|key| (key.role, key.generation))
+                .collect::<Vec<_>>(),
+            vec![(Role::member(0), 2), (Role::OWNER, 3)]
+        );
+        assert_eq!(link.signatures().len(), 3);
+        let member = derive_shared_public(&member_seed, ENTITY_PUK_VERIFY).unwrap();
+        let owner = derive_shared_public(&owner_seed, ENTITY_PUK_VERIFY).unwrap();
+        verify_typed(
+            &member.verify_key,
+            &link.signatures()[0],
+            LINK_OUTER_V1_TYPE_ID,
+            &link.signing_bytes(0).unwrap(),
+        )
+        .unwrap();
+        verify_typed(
+            &owner.verify_key,
+            &link.signatures()[1],
+            LINK_OUTER_V1_TYPE_ID,
+            &link.signing_bytes(1).unwrap(),
+        )
+        .unwrap();
+        verify_typed(
+            parent.entity_id(),
+            &link.signatures()[2],
+            LINK_OUTER_V1_TYPE_ID,
+            &link.signing_bytes(2).unwrap(),
+        )
+        .unwrap();
+        assert!(verify_typed(
+            parent.entity_id(),
+            &link.signatures()[2],
+            LINK_OUTER_V1_TYPE_ID,
+            &link.signing_bytes(1).unwrap(),
+        )
+        .is_err());
+
+        let mut impostor = MockYubi::new(0x13, 0x14);
+        impostor.public = parent.public.clone();
+        assert!(matches!(
+            make_yubi_puk_rotation_link(&base, &impostor, &rotations),
+            Err(Error::Verification)
+        ));
+        assert!(make_yubi_puk_rotation_link(&base, &parent, &[]).is_err());
+    }
+
+    #[test]
+    fn yubi_puk_boxes_round_trip_without_temp_dh_and_reject_wrong_bindings() {
+        let host =
+            EntityId::from_bytes([vec![foks_proto::ENTITY_HOST], vec![0x41; 32]].concat()).unwrap();
+        let wrong_host =
+            EntityId::from_bytes([vec![foks_proto::ENTITY_HOST], vec![0x42; 32]].concat()).unwrap();
+        let parent = MockYubi::new(0x31, 0x32);
+        let receiver_a = MockYubi::new(0x33, 0x34);
+        let receiver_b = MockYubi::new(0x35, 0x36);
+        let wrong_parent = MockYubi::new(0x37, 0x38);
+        let member_seed = SecretSeed::new([0x51; 32]);
+        let owner_seed = SecretSeed::new([0x52; 32]);
+        let inputs = [
+            YubiPukBoxInput {
+                seed: &member_seed,
+                generation: 2,
+                role: Role::member(0),
+                receiver: &receiver_a.public.device,
+            },
+            YubiPukBoxInput {
+                seed: &owner_seed,
+                generation: 3,
+                role: Role::OWNER,
+                receiver: &receiver_b.public.device,
+            },
+        ];
+        let randomness = [
+            PukBoxRandomness {
+                kem_message: [0x61; 32],
+                nonce: [0x62; 16],
+            },
+            PukBoxRandomness {
+                kem_message: [0x63; 32],
+                nonce: [0x64; 16],
+            },
+        ];
+        let set_randomness = YubiPukBoxSetRandomness {
+            ephemeral_secret: [0x65; 32],
+            time: 1_724_000_000_000,
+        };
+        let boxes = seal_yubi_puk_boxes(
+            &host,
+            &parent,
+            [0x71; 16],
+            &inputs,
+            &randomness,
+            set_randomness,
+        )
+        .unwrap();
+        let repeated = seal_yubi_puk_boxes(
+            &host,
+            &parent,
+            [0x71; 16],
+            &inputs,
+            &randomness,
+            YubiPukBoxSetRandomness {
+                ephemeral_secret: [0x65; 32],
+                time: 1_724_000_000_000,
+            },
+        )
+        .unwrap();
+        assert_eq!(boxes.encoded(), repeated.encoded());
+        assert!(boxes.temp_dh_key.is_none());
+        assert!(boxes
+            .boxes
+            .iter()
+            .all(|boxed| boxed.hybrid.dh_type == 2 && boxed.hybrid.sender_dh.is_none()));
+
+        let member_public = derive_shared_public(&member_seed, ENTITY_PUK_VERIFY).unwrap();
+        let owner_public = derive_shared_public(&owner_seed, ENTITY_PUK_VERIFY).unwrap();
+        let member_parcel =
+            PukParcel::from_box_set(&boxes, 0, parent.entity_id().clone(), Vec::new()).unwrap();
+        let owner_parcel =
+            PukParcel::from_box_set(&boxes, 1, parent.entity_id().clone(), Vec::new()).unwrap();
+        let opened_member = open_puk_parcel_with_for_role(
+            &member_parcel,
+            &receiver_a,
+            parent.hepk(),
+            &member_public.verify_key,
+            &member_public.hepk,
+            2,
+            &host,
+            Role::member(0),
+        )
+        .unwrap();
+        let opened_owner = open_puk_parcel_with_for_role(
+            &owner_parcel,
+            &receiver_b,
+            parent.hepk(),
+            &owner_public.verify_key,
+            &owner_public.hepk,
+            3,
+            &host,
+            Role::OWNER,
+        )
+        .unwrap();
+        assert_eq!(opened_member.seed, member_seed);
+        assert_eq!(opened_owner.seed, owner_seed);
+
+        assert!(open_puk_parcel_with_for_role(
+            &member_parcel,
+            &receiver_b,
+            parent.hepk(),
+            &member_public.verify_key,
+            &member_public.hepk,
+            2,
+            &host,
+            Role::member(0),
+        )
+        .is_err());
+        let mut rebound_receiver = member_parcel.clone();
+        rebound_receiver.target = receiver_b.entity_id().clone();
+        assert!(open_puk_parcel_with_for_role(
+            &rebound_receiver,
+            &receiver_b,
+            parent.hepk(),
+            &member_public.verify_key,
+            &member_public.hepk,
+            2,
+            &host,
+            Role::member(0),
+        )
+        .is_err());
+        assert!(open_puk_parcel_with_for_role(
+            &member_parcel,
+            &receiver_a,
+            wrong_parent.hepk(),
+            &member_public.verify_key,
+            &member_public.hepk,
+            2,
+            &host,
+            Role::member(0),
+        )
+        .is_err());
+        assert!(matches!(
+            open_puk_parcel_with_for_role(
+                &member_parcel,
+                &receiver_a,
+                parent.hepk(),
+                &member_public.verify_key,
+                &member_public.hepk,
+                2,
+                &wrong_host,
+                Role::member(0),
+            ),
+            Err(Error::PukBinding)
+        ));
+        let mut rebound_generation = member_parcel.clone();
+        rebound_generation.generation = 4;
+        assert!(matches!(
+            open_puk_parcel_with_for_role(
+                &rebound_generation,
+                &receiver_a,
+                parent.hepk(),
+                &member_public.verify_key,
+                &member_public.hepk,
+                4,
+                &host,
+                Role::member(0),
+            ),
+            Err(Error::PukBinding)
+        ));
+        let mut rebound_role = member_parcel.clone();
+        rebound_role.role = Role::ADMIN;
+        assert!(matches!(
+            open_puk_parcel_with_for_role(
+                &rebound_role,
+                &receiver_a,
+                parent.hepk(),
+                &member_public.verify_key,
+                &member_public.hepk,
+                2,
+                &host,
+                Role::ADMIN,
+            ),
+            Err(Error::PukBinding)
+        ));
+        let wrong_puk =
+            derive_shared_public(&SecretSeed::new([0x53; 32]), ENTITY_PUK_VERIFY).unwrap();
+        assert!(matches!(
+            open_puk_parcel_with_for_role(
+                &member_parcel,
+                &receiver_a,
+                parent.hepk(),
+                &wrong_puk.verify_key,
+                &wrong_puk.hepk,
+                2,
+                &host,
+                Role::member(0),
+            ),
+            Err(Error::PukBinding)
+        ));
+    }
+
+    #[test]
+    fn yubi_puk_boxes_round_trip_for_mixed_recipient_curves() {
+        let host =
+            EntityId::from_bytes([vec![foks_proto::ENTITY_HOST], vec![0x43; 32]].concat()).unwrap();
+        let parent = MockYubi::new(0x39, 0x3a);
+        let yubi_receiver = MockYubi::new(0x3b, 0x3c);
+        let software_seed = SecretSeed::new([0x3d; 32]);
+        let software_receiver = derive_device_public(&software_seed).unwrap();
+        let member_seed = SecretSeed::new([0x54; 32]);
+        let owner_seed = SecretSeed::new([0x55; 32]);
+        let inputs = [
+            YubiPukBoxInput {
+                seed: &member_seed,
+                generation: 2,
+                role: Role::member(0),
+                receiver: &software_receiver,
+            },
+            YubiPukBoxInput {
+                seed: &owner_seed,
+                generation: 3,
+                role: Role::OWNER,
+                receiver: &yubi_receiver.public.device,
+            },
+        ];
+        let boxes = seal_yubi_puk_boxes(
+            &host,
+            &parent,
+            [0x72; 16],
+            &inputs,
+            &[
+                PukBoxRandomness {
+                    kem_message: [0x66; 32],
+                    nonce: [0x67; 16],
+                },
+                PukBoxRandomness {
+                    kem_message: [0x68; 32],
+                    nonce: [0x69; 16],
+                },
+            ],
+            YubiPukBoxSetRandomness {
+                ephemeral_secret: [0x6a; 32],
+                time: 1_724_000_000_001,
+            },
+        )
+        .unwrap();
+        assert!(boxes.temp_dh_key.is_some());
+        assert_eq!(boxes.boxes[0].hybrid.dh_type, 1);
+        assert_eq!(boxes.boxes[1].hybrid.dh_type, 2);
+
+        let member_public = derive_shared_public(&member_seed, ENTITY_PUK_VERIFY).unwrap();
+        let owner_public = derive_shared_public(&owner_seed, ENTITY_PUK_VERIFY).unwrap();
+        let software_parcel =
+            PukParcel::from_box_set(&boxes, 0, parent.entity_id().clone(), Vec::new()).unwrap();
+        let yubi_parcel =
+            PukParcel::from_box_set(&boxes, 1, parent.entity_id().clone(), Vec::new()).unwrap();
+        assert_eq!(
+            open_puk_parcel_for_role(
+                &software_parcel,
+                &software_seed,
+                parent.hepk(),
+                &member_public.verify_key,
+                &member_public.hepk,
+                2,
+                &host,
+                Role::member(0),
+            )
+            .unwrap()
+            .seed,
+            member_seed
+        );
+        assert_eq!(
+            open_puk_parcel_with_for_role(
+                &yubi_parcel,
+                &yubi_receiver,
+                parent.hepk(),
+                &owner_public.verify_key,
+                &owner_public.hepk,
+                3,
+                &host,
+                Role::OWNER,
+            )
+            .unwrap()
+            .seed,
+            owner_seed
+        );
+
+        let mut tampered = software_parcel.clone();
+        let Signature::Ecdsa(signature) = &mut tampered
+            .temp_dh_key
+            .as_mut()
+            .expect("mixed set has a temporary key")
+            .signature
+        else {
+            panic!("Yubi temporary key has the wrong signature type")
+        };
+        signature[0] ^= 1;
+        assert!(open_puk_parcel_for_role(
+            &tampered,
+            &software_seed,
+            parent.hepk(),
+            &member_public.verify_key,
+            &member_public.hepk,
+            2,
+            &host,
+            Role::member(0),
+        )
+        .is_err());
+        // Go ignores the set-level temporary key for same-curve boxes.
+        let mut same_curve = yubi_parcel;
+        same_curve.temp_dh_key = tampered.temp_dh_key;
+        assert!(open_puk_parcel_with_for_role(
+            &same_curve,
+            &yubi_receiver,
+            parent.hepk(),
+            &owner_public.verify_key,
+            &owner_public.hepk,
+            3,
+            &host,
+            Role::OWNER,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn software_puk_boxes_round_trip_for_mixed_recipient_curves() {
+        let host =
+            EntityId::from_bytes([vec![foks_proto::ENTITY_HOST], vec![0x44; 32]].concat()).unwrap();
+        let sender_seed = SecretSeed::new([0x45; 32]);
+        let sender = derive_device_public(&sender_seed).unwrap();
+        let software_seed = SecretSeed::new([0x46; 32]);
+        let software_receiver = derive_device_public(&software_seed).unwrap();
+        let yubi_receiver = MockYubi::new(0x47, 0x48);
+        let member_seed = SecretSeed::new([0x56; 32]);
+        let owner_seed = SecretSeed::new([0x57; 32]);
+        let inputs = [
+            SoftwarePukBoxInput {
+                seed: &member_seed,
+                generation: 2,
+                role: Role::member(0),
+                receiver: &software_receiver,
+            },
+            SoftwarePukBoxInput {
+                seed: &owner_seed,
+                generation: 3,
+                role: Role::OWNER,
+                receiver: &yubi_receiver.public.device,
+            },
+        ];
+        let boxes = seal_software_puk_boxes_mixed(
+            &host,
+            &sender_seed,
+            [0x73; 16],
+            &inputs,
+            &[
+                PukBoxRandomness {
+                    kem_message: [0x6b; 32],
+                    nonce: [0x6c; 16],
+                },
+                PukBoxRandomness {
+                    kem_message: [0x6d; 32],
+                    nonce: [0x6e; 16],
+                },
+            ],
+            SoftwarePukBoxSetRandomness {
+                ephemeral_secret: [0x6f; 32],
+                time: 1_724_000_000_002,
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            boxes.temp_dh_key.as_ref().map(|key| &key.signature),
+            Some(Signature::Ed25519(_))
+        ));
+
+        let member_public = derive_shared_public(&member_seed, ENTITY_PUK_VERIFY).unwrap();
+        let owner_public = derive_shared_public(&owner_seed, ENTITY_PUK_VERIFY).unwrap();
+        let software_parcel =
+            PukParcel::from_box_set(&boxes, 0, sender.id.clone(), Vec::new()).unwrap();
+        let yubi_parcel =
+            PukParcel::from_box_set(&boxes, 1, sender.id.clone(), Vec::new()).unwrap();
+        assert_eq!(
+            open_puk_parcel_for_role(
+                &software_parcel,
+                &software_seed,
+                &sender.hepk,
+                &member_public.verify_key,
+                &member_public.hepk,
+                2,
+                &host,
+                Role::member(0),
+            )
+            .unwrap()
+            .seed,
+            member_seed
+        );
+        assert_eq!(
+            open_puk_parcel_with_for_role(
+                &yubi_parcel,
+                &yubi_receiver,
+                &sender.hepk,
+                &owner_public.verify_key,
+                &owner_public.hepk,
+                3,
+                &host,
+                Role::OWNER,
+            )
+            .unwrap()
+            .seed,
+            owner_seed
+        );
     }
 
     #[test]
@@ -4394,6 +5400,49 @@ mod tests {
             expected.encoded().unwrap()
         );
         assert_eq!(material.link.decode_team_group_change().unwrap(), change);
+    }
+
+    #[test]
+    fn role_only_team_promotion_needs_no_ptk_rotation() {
+        let addition = UserLink::decode(&mutation_fixture("add-member-link.snowp")).unwrap();
+        let prior = addition.decode_team_group_change().unwrap();
+        let member = &prior.changes[0];
+        let actor_seed = SecretSeed::new(user_fixture("puk-seed.bin").try_into().unwrap());
+        let target_seed = SecretSeed::new(
+            mutation_fixture("add-member-target-puk-seed.bin")
+                .try_into()
+                .unwrap(),
+        );
+        let target = derive_shared_public(&target_seed, foks_proto::ENTITY_PUK_VERIFY).unwrap();
+        let material = make_change_team_member_link(
+            &ChangeTeamMemberInput {
+                actor: &prior.signer_owner.party,
+                actor_source_role: prior.signer_owner.source_role,
+                team: &prior.team,
+                host: &prior.host,
+                sequence: prior.seqno + 1,
+                previous: prefixed_hash(
+                    foks_proto::LINK_OUTER_TYPE_ID,
+                    &addition.encoded().unwrap(),
+                ),
+                root: &prior.root,
+                time: prior.time + 1,
+                next_tree_location: [7; 32],
+                member: &member.party,
+                member_host: member.scoped_host.as_ref(),
+                member_source_role: member.source_role,
+                destination_role: Role::OWNER,
+                member_generation: Some(member.keys.as_ref().unwrap().generation),
+                member_public: Some(&target),
+            },
+            &actor_seed,
+            &[],
+        )
+        .unwrap();
+        let change = material.link.decode_team_group_change().unwrap();
+        assert!(change.shared_keys.is_empty());
+        assert_eq!(change.changes[0].role, Role::OWNER);
+        assert_eq!(material.link.signatures().len(), 1);
     }
 
     #[test]
@@ -5458,6 +6507,78 @@ mod tests {
             &eldest.host,
         )
         .is_err());
+    }
+
+    #[test]
+    fn official_go_mixed_curve_box_sets_open_with_the_matching_sender_path() {
+        let software_seed = SecretSeed::new(
+            user_fixture("yubi/software-device-seed.bin")
+                .try_into()
+                .unwrap(),
+        );
+        let software = derive_device_public(&software_seed).unwrap();
+        let link = UserLink::decode(&user_fixture("yubi/yubi-eldest-link.snowp")).unwrap();
+        let eldest = link.decode_eldest().unwrap();
+        let puk_seed = SecretSeed::new(user_fixture("yubi/puk-seed.bin").try_into().unwrap());
+        let puk = derive_shared_public(&puk_seed, ENTITY_PUK_VERIFY).unwrap();
+
+        let software_mixed =
+            SharedKeyBoxSet::decode(&user_fixture("yubi/software-mixed-puk-box-set.snowp"))
+                .unwrap();
+        assert_eq!(software_mixed.boxes.len(), 2);
+        assert!(software_mixed.temp_dh_key.is_some());
+        let mut same_curve =
+            PukParcel::from_box_set(&software_mixed, 0, software.id.clone(), Vec::new()).unwrap();
+        // Go's OpenBoxInSet deliberately ignores the set-level temporary key
+        // when sender and receiver use the same classical curve.
+        let Signature::Ed25519(signature) = &mut same_curve
+            .temp_dh_key
+            .as_mut()
+            .expect("mixed set has a temporary key")
+            .signature
+        else {
+            panic!("software sender used the wrong temporary-key signature")
+        };
+        signature[0] ^= 1;
+        assert_eq!(
+            open_puk_parcel(
+                &same_curve,
+                &software_seed,
+                &software.hepk,
+                &puk.verify_key,
+                &puk.hepk,
+                1,
+                &eldest.host,
+            )
+            .unwrap()
+            .seed,
+            puk_seed
+        );
+
+        let yubi_mixed =
+            SharedKeyBoxSet::decode(&user_fixture("yubi/yubi-mixed-puk-box-set.snowp")).unwrap();
+        assert_eq!(yubi_mixed.boxes.len(), 2);
+        let yubi_sender_hepk = Hepk::decode(&user_fixture("yubi/yubi-hepk.snowp")).unwrap();
+        let yubi_sender = match foks_snowpack::decode(&user_fixture("yubi/yubi-id.snowp")).unwrap()
+        {
+            Value::Binary(bytes) => EntityId::from_bytes(bytes).unwrap(),
+            _ => panic!("Yubi fixture is not an EntityID"),
+        };
+        let cross_curve = PukParcel::from_box_set(&yubi_mixed, 1, yubi_sender, Vec::new()).unwrap();
+        assert_eq!(
+            open_puk_parcel(
+                &cross_curve,
+                &software_seed,
+                &yubi_sender_hepk,
+                &puk.verify_key,
+                &puk.hepk,
+                1,
+                &eldest.host,
+            )
+            .unwrap()
+            .seed,
+            puk_seed
+        );
     }
 
     #[test]

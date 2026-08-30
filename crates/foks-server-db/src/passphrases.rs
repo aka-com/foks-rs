@@ -14,6 +14,7 @@ pub struct PassphraseMutation<'a> {
     pub exact_passphrase_box: &'a [u8],
     pub exact_puk_box: Option<&'a [u8]>,
     pub puk_generation: Option<u64>,
+    pub puk_role: Option<foks_proto::Role>,
     pub stretch_version: u64,
     pub now: u64,
 }
@@ -447,7 +448,11 @@ pub(crate) fn validate_mutation(
             .exact_puk_box
             .is_some_and(|blob| blob.is_empty() || blob.len() > config.maximum_blob_bytes)
         || mutation.exact_puk_box.is_some() != mutation.puk_generation.is_some()
+        || mutation.exact_puk_box.is_some() != mutation.puk_role.is_some()
         || mutation.puk_generation == Some(0)
+        || mutation
+            .puk_role
+            .is_some_and(|role| role != foks_proto::Role::OWNER)
     {
         return Err(Error::Invalid("passphrase mutation"));
     }
@@ -489,9 +494,10 @@ pub(crate) fn apply_owner_rotation(
         )),
         (Some(_), None, None) => Ok(()),
         (Some(_), None, Some(_)) => Err(Error::PassphraseNotFound),
-        (Some(_), Some(_), None) => Err(Error::Invalid(
-            "owner PUK rotation omitted the configured passphrase annex",
-        )),
+        // Go permits owner-PUK rotation without a PPE annex and repairs the
+        // lag from its background passphrase responder. Preserve the existing
+        // authenticated parcel until that responder publishes generation +1.
+        (Some(_), Some(_), None) => Ok(()),
         (Some(owner_generation), Some(current), Some(mutation)) => {
             validate_mutation(config, uid, mutation)?;
             if current.salt != *mutation.salt
@@ -501,6 +507,7 @@ pub(crate) fn apply_owner_rotation(
                     .checked_add(1)
                     .is_none_or(|next| next != mutation.generation)
                 || mutation.puk_generation != Some(owner_generation)
+                || mutation.puk_role != Some(foks_proto::Role::OWNER)
             {
                 return Err(Error::PassphraseGeneration);
             }

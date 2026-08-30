@@ -20,6 +20,7 @@ fn mutation_for_puk(generation: u64, puk_generation: u64, now: u64) -> Passphras
         exact_passphrase_box: b"passphrase-box",
         exact_puk_box: Some(b"puk-box"),
         puk_generation: Some(puk_generation),
+        puk_role: Some(foks_proto::Role::OWNER),
         stretch_version: 1,
         now,
     }
@@ -47,12 +48,18 @@ fn passphrase_mutations_recheck_the_current_owner_puk_generation() {
     ));
     assert!(test.database.passphrase(&UID).unwrap().is_none());
 
+    let mut wrong_role = mutation_for_puk(1, 2, 2_000_001);
+    wrong_role.puk_role = Some(foks_proto::Role::ADMIN);
+    assert!(matches!(
+        test.database.set_passphrase(&UID, &DEVICE, wrong_role),
+        Err(Error::Invalid("passphrase mutation"))
+    ));
     test.database
-        .set_passphrase(&UID, &DEVICE, mutation_for_puk(1, 2, 2_000_001))
+        .set_passphrase(&UID, &DEVICE, mutation_for_puk(1, 2, 2_000_002))
         .unwrap();
     assert!(matches!(
         test.database
-            .change_passphrase(&UID, &DEVICE, mutation_for_puk(2, 1, 2_000_002)),
+            .change_passphrase(&UID, &DEVICE, mutation_for_puk(2, 1, 2_000_003)),
         Err(Error::AuthorizationChanged)
     ));
     assert_eq!(

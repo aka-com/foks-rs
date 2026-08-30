@@ -9,9 +9,9 @@ use foks_crypto::{
     YubiEldestMaterial, YubiSubkeyBoxRandomness,
 };
 use foks_proto::{
-    DeviceLabel, DeviceLabelNameAndCommitmentKey, DeviceType, EntityId, HybridBox, InviteCode,
-    PassphraseUpdateArgument, Role, SecretSeed, SharedKeyBoxSet, TreeRoot, UsernameReservation,
-    YubiSignupArgument, YubiSlotAndPqKeyId, ENTITY_PUK_VERIFY, ENTITY_USER,
+    DecodedSignupArgument, DeviceLabel, DeviceLabelNameAndCommitmentKey, DeviceType, EntityId,
+    HybridBox, InviteCode, PassphraseUpdateArgument, Role, SecretSeed, SharedKeyBoxSet, TreeRoot,
+    UsernameReservation, YubiSignupArgument, YubiSlotAndPqKeyId, ENTITY_PUK_VERIFY, ENTITY_USER,
 };
 use foks_rpc::{encode_registration_select_vhost_request, encode_yubi_signup_request_at};
 use zeroize::{Zeroize as _, Zeroizing};
@@ -278,6 +278,12 @@ impl FoksClient {
         protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<CreatedYubiAccount<'a>> {
         validate_yubi_signup_operation_binding(host, parent, &operation, &secrets)?;
+        let signup_request_was_available = prepared_request.is_some();
+        let signup_passphrase = prepared_request
+            .as_deref()
+            .map(|request| yubi_signup_passphrase_from_request(request.as_slice()))
+            .transpose()?
+            .flatten();
         let already_verified = matches!(
             operation.state,
             MutationState::RemoteVerified | MutationState::Finalized
@@ -323,7 +329,7 @@ impl FoksClient {
             subkey_seed: secrets.subkey_seed,
             certificate_chain,
         };
-        let authenticated = self.authenticate_new_yubi_account(host, &credential)?;
+        let mut authenticated = self.authenticate_new_yubi_account(host, &credential)?;
         let supplied_puk = secrets.puk_seed;
         if authenticated.verified.username() != expected_username
             || authenticated
@@ -333,6 +339,15 @@ impl FoksClient {
             return Err(Error::CredentialBinding(
                 "created Yubi account does not match the protected PUK",
             ));
+        }
+        if let Some(passphrase) = signup_passphrase.as_ref() {
+            self.bootstrap_user_settings_from_signup_yubi(host, &credential, passphrase)?;
+            authenticated = self.authenticate_new_yubi_account(host, &credential)?;
+        } else if signup_request_was_available {
+            HardStateStore::open(&host.database_path)?.attest_user_has_no_passphrase(
+                host.host_id().as_bytes(),
+                credential.uid.as_bytes(),
+            )?;
         }
         let kv_projection = {
             let mut session = self.user_kv_write_session_yubi(
@@ -451,6 +466,21 @@ impl FoksClient {
         }
         Err(last_error.expect("Yubi account authentication loop executes at least once"))
     }
+}
+
+fn yubi_signup_passphrase_from_request(request: &[u8]) -> Result<Option<PassphraseUpdateArgument>> {
+    let mut framed = std::io::Cursor::new(request);
+    let call = foks_rpc::read_call(&mut framed, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)
+        .map_err(|_| Error::OperationBinding("persisted Yubi signup request is malformed"))?;
+    if usize::try_from(framed.position()).ok() != Some(request.len())
+        || call.protocol_id() != foks_rpc::REG_PROTOCOL_ID
+        || call.method_position() != foks_rpc::REG_SIGNUP_METHOD_POSITION
+    {
+        return Err(Error::OperationBinding(
+            "persisted Yubi signup request targets another route",
+        ));
+    }
+    Ok(DecodedSignupArgument::decode(call.argument())?.passphrase)
 }
 
 fn encode_yubi_signup_material(

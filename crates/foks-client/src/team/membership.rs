@@ -18,7 +18,7 @@ use foks_proto::{
 };
 use foks_rpc::{
     decode_team_edit_result, encode_add_team_member_request,
-    encode_load_team_remote_view_tokens_request, STATUS_TEAM_RACE_ERROR, STATUS_TX_RETRY_ERROR,
+    encode_load_team_remote_view_tokens_request, STATUS_TX_RETRY_ERROR,
 };
 use foks_snowpack::{encode, Value};
 use foks_verify::{
@@ -27,10 +27,11 @@ use foks_verify::{
 
 use super::{AuthenticatedTeamOutcome, TeamPrivateKey};
 use crate::{
-    current_owner_puk, now_microseconds, now_milliseconds, random_bytes, user_key_for_seed,
-    AuthenticatedUserOutcome, DeviceCredential, Error, FoksClient, PinnedHost,
-    ProtectedMutationStore, ProtectedStoreError, RemoteTeamOutcome, Result, UserPrivateKey,
-    YubiCredential, TEAM_MUTATION_OPERATION_ID_TYPE_ID, TEAM_MUTATION_REQUEST_HASH_TYPE_ID,
+    current_owner_puk, now_microseconds, now_milliseconds, random_bytes,
+    require_nonstale_shared_key, user_key_for_seed, AuthenticatedUserOutcome, DeviceCredential,
+    Error, FoksClient, PinnedHost, ProtectedMutationStore, ProtectedStoreError, RemoteTeamOutcome,
+    Result, UserPrivateKey, YubiCredential, TEAM_MUTATION_OPERATION_ID_TYPE_ID,
+    TEAM_MUTATION_REQUEST_HASH_TYPE_ID,
 };
 
 /// Caller-durable material for adding one local user to a named team.
@@ -61,6 +62,23 @@ pub struct AddedLocalTeamMember {
 
 pub type AddedRemoteTeamMember = AddedLocalTeamMember;
 
+/// Stable, secret-free identity of a caller-durable local-member addition.
+///
+/// Applications persist this beside the removal key before the first socket
+/// write. It is sufficient to authenticate or replay the exact protected RPC
+/// after a crash even if the target user has since rotated its PUK.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalTeamMemberAdditionPlan {
+    pub target_id: EntityId,
+    pub target_verify_key: EntityId,
+    pub target_generation: u64,
+    pub target_source_role: Role,
+    pub destination_role: Role,
+    pub removal_key_commitment: [u8; 32],
+    pub expected_seqno: u64,
+    pub operation_id: [u8; 16],
+}
+
 #[derive(Debug)]
 pub struct RemoteMemberViewPermission {
     pub member: FqParty,
@@ -70,13 +88,67 @@ pub struct RemoteMemberViewPermission {
 struct AdditionBinding<'a> {
     target_id: &'a EntityId,
     target_host: Option<&'a EntityId>,
-    target: &'a VerifiedSharedKey,
+    target_verify_key: &'a EntityId,
+    target_generation: u64,
+    target_source_role: Role,
     destination_role: Role,
     removal_key_commitment: [u8; 32],
     expected_seqno: u64,
 }
 
 impl FoksClient {
+    /// Computes the exact public identity which a durable local-member
+    /// addition will reserve. The authenticated team and target user must be
+    /// retained until submission; the returned plan itself contains no secret.
+    pub fn local_team_member_addition_plan(
+        &self,
+        actor: &EntityId,
+        team: &EntityId,
+        authenticated_team: &AuthenticatedTeamOutcome,
+        request: &AddLocalTeamMemberRequest<'_>,
+    ) -> Result<LocalTeamMemberAdditionPlan> {
+        team.clone().require_type(ENTITY_NAMED_TEAM)?;
+        if authenticated_team.verified.team() != team
+            || authenticated_team
+                .verified
+                .members()
+                .iter()
+                .any(|member| member.party == *request.target_user.uid())
+            || request.destination_role == Role::NONE
+        {
+            return Err(Error::TeamRequest(
+                "local-team addition plan does not match the authenticated roster",
+            ));
+        }
+        let target = current_owner_public(request.target_user)?;
+        let expected_seqno = authenticated_team
+            .verified
+            .chain_seqno()
+            .checked_add(1)
+            .ok_or(Error::TeamRequest("team sequence overflow"))?;
+        let removal_key_commitment = foks_crypto::team_removal_key_commitment(request.removal_key)?;
+        let binding = AdditionBinding {
+            target_id: request.target_user.uid(),
+            target_host: None,
+            target_verify_key: &target.verify_key,
+            target_generation: target.generation,
+            target_source_role: target.role,
+            destination_role: request.destination_role,
+            removal_key_commitment,
+            expected_seqno,
+        };
+        Ok(LocalTeamMemberAdditionPlan {
+            target_id: request.target_user.uid().clone(),
+            target_verify_key: target.verify_key.clone(),
+            target_generation: target.generation,
+            target_source_role: target.role,
+            destination_role: request.destination_role,
+            removal_key_commitment,
+            expected_seqno,
+            operation_id: addition_operation_id(actor, team, &binding)?,
+        })
+    }
+
     /// Adds one current local user PUK to a named team using FOKS v0.1.9's
     /// open-viewership edit path. Pure additions reuse existing PTKs and box
     /// only the roles visible at `destination_role` to the new member.
@@ -100,7 +172,41 @@ impl FoksClient {
             owner,
             team,
             request,
+            None,
+            None,
         )
+    }
+
+    /// Durable local-user addition. The application must persist `plan` and
+    /// the removal key before this call; the exact signed RPC is then retained
+    /// in `protected_store` before the public mutation journal begins.
+    pub fn add_local_user_to_named_team_durable(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team: &EntityId,
+        plan: &LocalTeamMemberAdditionPlan,
+        request: &AddLocalTeamMemberRequest<'_>,
+        protected_store: &mut dyn ProtectedMutationStore,
+    ) -> Result<AddedLocalTeamMember> {
+        let authenticated_user = self.authenticate_and_pin(host, credential)?;
+        let owner = current_owner_puk(&authenticated_user)?;
+        let device_id = derive_device_public(&credential.seed)?.id;
+        let added = self.add_local_user_with_material(
+            host,
+            &credential.uid,
+            &device_id,
+            &credential.seed,
+            &credential.certificate_chain,
+            &authenticated_user,
+            owner,
+            team,
+            request,
+            Some(plan),
+            Some(&mut *protected_store),
+        )?;
+        remove_addition_material(protected_store, &added.operation_id)?;
+        Ok(added)
     }
 
     /// Hardware-backed variant of [`Self::add_local_user_to_named_team`].
@@ -134,6 +240,8 @@ impl FoksClient {
             owner,
             team,
             request,
+            None,
+            None,
         )
     }
 
@@ -186,15 +294,88 @@ impl FoksClient {
         team: &EntityId,
         members: &[FqParty],
     ) -> Result<Vec<RemoteMemberViewPermission>> {
-        let user = self.authenticate_and_pin(host, credential)?;
+        self.load_remote_member_view_permissions_with_credential(
+            host,
+            crate::FederationCredential::Software(credential),
+            team,
+            members,
+        )
+    }
+
+    /// Credential-agnostic form of
+    /// [`Self::load_remote_member_view_permissions`]. The bearer boxes are
+    /// opened with the team's own PTKs, so hardware backing changes only the
+    /// transport and the PUK decapsulation, never the box authority.
+    pub fn load_remote_member_view_permissions_with_credential(
+        &self,
+        host: &PinnedHost,
+        credential: crate::FederationCredential<'_, '_>,
+        team: &EntityId,
+        members: &[FqParty],
+    ) -> Result<Vec<RemoteMemberViewPermission>> {
+        let user = self.authenticate_credential_and_pin(host, credential)?;
         let owner = current_owner_puk(&user)?;
-        let loaded = self.load_and_pin_team(
+        let loaded = self.load_and_pin_team_with_credential(
             host,
             credential,
             &user.verified,
             std::slice::from_ref(owner),
             team,
         )?;
+        self.open_remote_member_view_permissions(host, credential, team, &loaded, members)
+    }
+
+    /// Local-team-authority variant used when the transport user reaches a
+    /// federated parent only through a member team.
+    pub fn load_remote_member_view_permissions_as_local_team(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        transport_user: &foks_verify::VerifiedUserState,
+        actor_team: &AuthenticatedTeamOutcome,
+        team: &EntityId,
+        members: &[FqParty],
+    ) -> Result<Vec<RemoteMemberViewPermission>> {
+        self.load_remote_member_view_permissions_as_local_team_with_credential(
+            host,
+            crate::FederationCredential::Software(credential),
+            transport_user,
+            actor_team,
+            team,
+            members,
+        )
+    }
+
+    /// Credential-agnostic form of
+    /// [`Self::load_remote_member_view_permissions_as_local_team`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_remote_member_view_permissions_as_local_team_with_credential(
+        &self,
+        host: &PinnedHost,
+        credential: crate::FederationCredential<'_, '_>,
+        transport_user: &foks_verify::VerifiedUserState,
+        actor_team: &AuthenticatedTeamOutcome,
+        team: &EntityId,
+        members: &[FqParty],
+    ) -> Result<Vec<RemoteMemberViewPermission>> {
+        let loaded = self.load_and_pin_team_as_local_team_with_credential(
+            host,
+            credential,
+            transport_user,
+            actor_team,
+            team,
+        )?;
+        self.open_remote_member_view_permissions(host, credential, team, &loaded, members)
+    }
+
+    fn open_remote_member_view_permissions(
+        &self,
+        host: &PinnedHost,
+        credential: crate::FederationCredential<'_, '_>,
+        team: &EntityId,
+        loaded: &AuthenticatedTeamOutcome,
+        members: &[FqParty],
+    ) -> Result<Vec<RemoteMemberViewPermission>> {
         let mut requested = std::collections::BTreeSet::new();
         for member in members {
             if member.host == *host.host_id()
@@ -217,7 +398,9 @@ impl FoksClient {
             &loaded.view_token,
             members,
         )?;
-        let response = self.call(host, &host.user, &request, Some(credential))?;
+        let (auth_seed, certificate_chain) = credential.transport();
+        let response =
+            self.call_with_material(host, &host.user, &request, auth_seed, certificate_chain)?;
         let set = foks_proto::TeamRemoteViewTokenSet::decode(&response)?;
         if set.tokens.len() > members.len() {
             return Err(Error::TeamBinding(
@@ -450,7 +633,9 @@ impl FoksClient {
         let binding = AdditionBinding {
             target_id: remote_id,
             target_host: Some(remote_host),
-            target,
+            target_verify_key: &target.verify_key,
+            target_generation: target.generation,
+            target_source_role: target.role,
             destination_role: request.destination_role,
             removal_key_commitment: material.removal_key_commitment,
             expected_seqno,
@@ -495,6 +680,191 @@ impl FoksClient {
             expected_seqno,
             request,
         )
+    }
+
+    /// Reconciles or replays a durable local-member addition from its stable
+    /// plan and protected exact request. No current target-user state is
+    /// required, so a post-crash PUK rotation cannot strand the operation.
+    pub fn resume_durable_local_team_member_addition(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team: &EntityId,
+        plan: &LocalTeamMemberAdditionPlan,
+        protected_store: &mut dyn ProtectedMutationStore,
+    ) -> Result<AddedLocalTeamMember> {
+        let authenticated_user = self.authenticate_and_pin(host, credential)?;
+        let owner = current_owner_puk(&authenticated_user)?;
+        let device_id = derive_device_public(&credential.seed)?.id;
+        let binding = addition_binding_from_plan(plan);
+        validate_local_addition_plan(plan, &credential.uid, team, &binding)?;
+        let mut hard_store = HardStateStore::open(&host.database_path)?;
+        let operation = hard_store
+            .team_mutation(&plan.operation_id)?
+            .ok_or(Error::TeamRequest("team-member addition is not recorded"))?;
+        validate_addition_operation(
+            &operation,
+            host,
+            &credential.uid,
+            &device_id,
+            team,
+            plan.expected_seqno,
+        )?;
+        if matches!(
+            operation.state,
+            TeamMutationState::Rejected | TeamMutationState::Superseded
+        ) {
+            return Err(Error::OperationBinding("team-member addition is terminal"));
+        }
+
+        if operation.state == TeamMutationState::Verified {
+            let authenticated = self.wait_for_addition(
+                host,
+                &credential.uid,
+                &credential.seed,
+                &credential.certificate_chain,
+                &authenticated_user,
+                &owner.seed,
+                team,
+                &binding,
+            )?;
+            remove_addition_material(protected_store, &plan.operation_id)?;
+            return Ok(AddedLocalTeamMember {
+                operation_id: plan.operation_id,
+                expected_seqno: plan.expected_seqno,
+                authenticated,
+            });
+        }
+
+        // If a write may already have reached the server, authenticate the
+        // reserved sequence before replaying the exact bytes.
+        if operation.state != TeamMutationState::Prepared {
+            match self.wait_for_addition(
+                host,
+                &credential.uid,
+                &credential.seed,
+                &credential.certificate_chain,
+                &authenticated_user,
+                &owner.seed,
+                team,
+                &binding,
+            ) {
+                Ok(authenticated) => {
+                    finish_team_mutation_journal(&mut hard_store, &plan.operation_id)?;
+                    remove_addition_material(protected_store, &plan.operation_id)?;
+                    return Ok(AddedLocalTeamMember {
+                        operation_id: plan.operation_id,
+                        expected_seqno: plan.expected_seqno,
+                        authenticated,
+                    });
+                }
+                Err(Error::TransitionNotObserved(_)) => {}
+                Err(error @ Error::OperationBinding(_)) => {
+                    if self.authenticated_addition_conflicts(
+                        host,
+                        &credential.uid,
+                        &credential.seed,
+                        &credential.certificate_chain,
+                        &authenticated_user,
+                        &owner.seed,
+                        team,
+                        &binding,
+                    )? {
+                        hard_store.advance_team_mutation(
+                            &plan.operation_id,
+                            TeamMutationState::Superseded,
+                            now_microseconds()?,
+                        )?;
+                        remove_addition_material(protected_store, &plan.operation_id)?;
+                    }
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        let material_key = remote_addition_material_key(&plan.operation_id);
+        let exact_request = protected_store
+            .get(&material_key)
+            .map_err(protected_material_error)?;
+        if prefixed_hash(TEAM_MUTATION_REQUEST_HASH_TYPE_ID, &exact_request)
+            != operation.request_hash
+        {
+            return Err(Error::OperationBinding(
+                "protected local-team addition changed",
+            ));
+        }
+        validate_protected_addition(&exact_request, team, &binding)?;
+        if operation.state == TeamMutationState::Prepared {
+            hard_store.advance_team_mutation(
+                &plan.operation_id,
+                TeamMutationState::Submitting,
+                now_microseconds()?,
+            )?;
+        }
+        let post_error = self
+            .call_with_material(
+                host,
+                &host.user,
+                &exact_request,
+                &credential.seed,
+                &credential.certificate_chain,
+            )
+            .and_then(|response| {
+                decode_team_edit_result(&response)?;
+                Ok(())
+            })
+            .err();
+        hard_store.advance_team_mutation(
+            &plan.operation_id,
+            if post_error.is_none() {
+                TeamMutationState::Submitted
+            } else {
+                TeamMutationState::SubmissionUnknown
+            },
+            now_microseconds()?,
+        )?;
+        let authenticated = match self.wait_for_addition(
+            host,
+            &credential.uid,
+            &credential.seed,
+            &credential.certificate_chain,
+            &authenticated_user,
+            &owner.seed,
+            team,
+            &binding,
+        ) {
+            Ok(authenticated) => authenticated,
+            Err(error @ Error::OperationBinding(_)) => {
+                if self.authenticated_addition_conflicts(
+                    host,
+                    &credential.uid,
+                    &credential.seed,
+                    &credential.certificate_chain,
+                    &authenticated_user,
+                    &owner.seed,
+                    team,
+                    &binding,
+                )? {
+                    hard_store.advance_team_mutation(
+                        &plan.operation_id,
+                        TeamMutationState::Superseded,
+                        now_microseconds()?,
+                    )?;
+                    remove_addition_material(protected_store, &plan.operation_id)?;
+                }
+                return Err(error);
+            }
+            Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
+            Err(error) => return Err(error),
+        };
+        finish_team_mutation_journal(&mut hard_store, &plan.operation_id)?;
+        remove_addition_material(protected_store, &plan.operation_id)?;
+        Ok(AddedLocalTeamMember {
+            operation_id: plan.operation_id,
+            expected_seqno: plan.expected_seqno,
+            authenticated,
+        })
     }
 
     /// Hardware-backed reconciliation variant. It never reposts the edit.
@@ -553,7 +923,9 @@ impl FoksClient {
         let binding = AdditionBinding {
             target_id: remote_id,
             target_host: Some(remote_host),
-            target,
+            target_verify_key: &target.verify_key,
+            target_generation: target.generation,
+            target_source_role: target.role,
             destination_role: request.destination_role,
             removal_key_commitment: foks_crypto::team_removal_key_commitment(request.removal_key)?,
             expected_seqno,
@@ -752,9 +1124,12 @@ impl FoksClient {
         actor_puk: &UserPrivateKey,
         team: &EntityId,
         request: &AddLocalTeamMemberRequest<'_>,
+        expected_plan: Option<&LocalTeamMemberAdditionPlan>,
+        protected_store: Option<&mut dyn ProtectedMutationStore>,
     ) -> Result<AddedLocalTeamMember> {
         self.require_open_user_viewership(host, auth_seed, certificate_chain)?;
         validate_target_user(host, uid, team, request)?;
+        require_nonstale_shared_key(request.target_user, Role::OWNER)?;
         let target = current_owner_public(request.target_user)?;
         let authenticated_team = self.load_and_pin_team_with_material(
             host,
@@ -880,11 +1255,16 @@ impl FoksClient {
         let binding = AdditionBinding {
             target_id: request.target_user.uid(),
             target_host: None,
-            target,
+            target_verify_key: &target.verify_key,
+            target_generation: target.generation,
+            target_source_role: target.role,
             destination_role: request.destination_role,
             removal_key_commitment: material.removal_key_commitment,
             expected_seqno,
         };
+        if let Some(plan) = expected_plan {
+            validate_local_addition_plan(plan, uid, team, &binding)?;
+        }
         self.submit_addition_with_material(
             host,
             uid,
@@ -897,7 +1277,7 @@ impl FoksClient {
             &binding,
             &encoded_request,
             None,
-            None,
+            protected_store,
         )
     }
 
@@ -977,23 +1357,10 @@ impl FoksClient {
             Err(error) => Some(error),
             Ok(()) => None,
         };
-        // Definite server rejection (stale Merkle root or seqno) is never
-        // committed — mark Rejected immediately so the seqno reservation
-        // is released and a fresh root can be retried without wedge.
-        let is_definite_rejection = matches!(
-            post_error.as_ref(),
-            Some(Error::Rpc(foks_rpc::Error::RemoteStatus {
-                code: STATUS_TEAM_RACE_ERROR,
-                ..
-            }))
-        );
-        if is_definite_rejection {
-            hard_store.advance_team_mutation(
-                &operation_id,
-                TeamMutationState::Rejected,
-                now_microseconds()?,
-            )?;
-        } else if post_error.is_none() {
+        // RPC statuses are not authenticated evidence. Keep every post error
+        // ambiguous until the latest-root team chain proves the addition or a
+        // conflicting transition.
+        if post_error.is_none() {
             hard_store.advance_team_mutation(
                 &operation_id,
                 TeamMutationState::Submitted,
@@ -1017,17 +1384,10 @@ impl FoksClient {
             binding,
         ) {
             Ok(value) => value,
-            Err(_) if post_error.is_some() => {
-                if is_definite_rejection {
-                    // STATUS_TEAM_RACE_ERROR is never committed; already Rejected
-                    // above, so just surface the error.
-                    return Err(post_error.expect("checked above"));
-                }
-                // Ambiguous failure (network timeout / lost acknowledgement): the
-                // server may have committed the addition even though we never saw
-                // the response. Reconcile once against authenticated state before
-                // deciding, so we neither falsely reject a committed mutation nor
-                // wedge the reserved chain position.
+            Err(wait_error) => {
+                // Both success and error replies are unauthenticated. Reconcile
+                // every failed observation against the latest-root chain before
+                // deciding whether this sequence committed or conflicted.
                 match self.authenticated_addition_outcome(
                     host,
                     uid,
@@ -1049,25 +1409,16 @@ impl FoksClient {
                             TeamMutationState::Rejected,
                             now_microseconds()?,
                         )?;
-                        return Err(post_error.expect("checked above"));
+                        return Err(post_error.unwrap_or(wait_error));
                     }
                     // Not yet observable — the request may never have arrived, or a
                     // real commit may still be lagging behind the Merkle root. A
-                    // read cannot distinguish these, so release the seqno (as before
-                    // this change) to avoid wedging a sole client, accepting a rare
-                    // false-reject of a committed-but-lagged op that a fresh retry
-                    // recovers once the chain advances.
+                    // read cannot distinguish these, so retain the ambiguous journal.
                     Ok(AdditionOutcome::Unresolved) | Err(_) => {
-                        let _ = hard_store.advance_team_mutation(
-                            &operation_id,
-                            TeamMutationState::Rejected,
-                            now_microseconds()?,
-                        );
-                        return Err(post_error.expect("checked above"));
+                        return Err(post_error.unwrap_or(wait_error));
                     }
                 }
             }
-            Err(error) => return Err(error),
         };
         finish_team_mutation_journal(&mut hard_store, &operation_id)?;
         Ok(AddedLocalTeamMember {
@@ -1097,7 +1448,9 @@ impl FoksClient {
         let binding = AdditionBinding {
             target_id: request.target_user.uid(),
             target_host: None,
-            target,
+            target_verify_key: &target.verify_key,
+            target_generation: target.generation,
+            target_source_role: target.role,
             destination_role: request.destination_role,
             removal_key_commitment,
             expected_seqno,
@@ -1431,15 +1784,60 @@ fn addition_operation_id(
         binding
             .target_host
             .map_or(Value::Null, |host| Value::Binary(host.as_bytes().to_vec())),
-        Value::Binary(binding.target.verify_key.as_bytes().to_vec()),
-        Value::Unsigned(binding.target.generation),
-        binding.target.role.to_value(),
+        Value::Binary(binding.target_verify_key.as_bytes().to_vec()),
+        Value::Unsigned(binding.target_generation),
+        binding.target_source_role.to_value(),
         binding.destination_role.to_value(),
         Value::Unsigned(binding.expected_seqno),
         Value::Binary(binding.removal_key_commitment.to_vec()),
     ]))?;
     let hash = prefixed_hash(TEAM_MUTATION_OPERATION_ID_TYPE_ID, &identity);
     Ok(hash[..16].try_into().expect("hash prefix has fixed length"))
+}
+
+fn addition_binding_from_plan(plan: &LocalTeamMemberAdditionPlan) -> AdditionBinding<'_> {
+    AdditionBinding {
+        target_id: &plan.target_id,
+        target_host: None,
+        target_verify_key: &plan.target_verify_key,
+        target_generation: plan.target_generation,
+        target_source_role: plan.target_source_role,
+        destination_role: plan.destination_role,
+        removal_key_commitment: plan.removal_key_commitment,
+        expected_seqno: plan.expected_seqno,
+    }
+}
+
+fn validate_local_addition_plan(
+    plan: &LocalTeamMemberAdditionPlan,
+    actor: &EntityId,
+    team: &EntityId,
+    binding: &AdditionBinding<'_>,
+) -> Result<()> {
+    plan.target_id
+        .clone()
+        .require_type(foks_proto::ENTITY_USER)?;
+    plan.target_verify_key
+        .clone()
+        .require_type(ENTITY_PUK_VERIFY)?;
+    if plan.target_source_role != Role::OWNER
+        || plan.destination_role == Role::NONE
+        || plan.expected_seqno < 2
+        || binding.target_id != &plan.target_id
+        || binding.target_host.is_some()
+        || binding.target_verify_key != &plan.target_verify_key
+        || binding.target_generation != plan.target_generation
+        || binding.target_source_role != plan.target_source_role
+        || binding.destination_role != plan.destination_role
+        || binding.removal_key_commitment != plan.removal_key_commitment
+        || binding.expected_seqno != plan.expected_seqno
+        || addition_operation_id(actor, team, binding)? != plan.operation_id
+    {
+        return Err(Error::OperationBinding(
+            "local-team addition plan changed before reconciliation",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn remote_addition_material_key(operation_id: &[u8; 16]) -> Vec<u8> {
@@ -1457,6 +1855,13 @@ fn validate_addition_transition(
     binding: &AdditionBinding<'_>,
 ) -> Result<()> {
     let change = team.group_change_at(binding.expected_seqno)?;
+    validate_addition_change(&change, binding)
+}
+
+fn validate_addition_change(
+    change: &foks_proto::TeamGroupChange,
+    binding: &AdditionBinding<'_>,
+) -> Result<()> {
     let [member] = change.changes.as_slice() else {
         return Err(Error::OperationBinding(
             "prepared addition sequence contains another roster transition",
@@ -1468,10 +1873,10 @@ fn validate_addition_transition(
     if !change.shared_keys.is_empty()
         || member.party != *binding.target_id
         || member.scoped_host.as_ref() != binding.target_host
-        || member.source_role != binding.target.role
+        || member.source_role != binding.target_source_role
         || member.role != binding.destination_role
-        || keys.generation != binding.target.generation
-        || keys.verify_key != binding.target.verify_key
+        || keys.generation != binding.target_generation
+        || keys.verify_key != *binding.target_verify_key
         || keys.removal_key_commitment != Some(binding.removal_key_commitment)
     {
         return Err(Error::OperationBinding(
@@ -1479,6 +1884,47 @@ fn validate_addition_transition(
         ));
     }
     Ok(())
+}
+
+fn validate_protected_addition(
+    request: &[u8],
+    team: &EntityId,
+    binding: &AdditionBinding<'_>,
+) -> Result<()> {
+    let mut framed = std::io::Cursor::new(request);
+    let call = foks_rpc::read_call(&mut framed, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)
+        .map_err(|_| Error::OperationBinding("protected addition request is malformed"))?;
+    if usize::try_from(framed.position()).ok() != Some(request.len())
+        || call.protocol_id() != foks_rpc::TEAM_ADMIN_PROTOCOL_ID
+        || call.method_position() != foks_rpc::TEAM_EDIT_METHOD_POSITION
+    {
+        return Err(Error::OperationBinding(
+            "protected addition request targets another route",
+        ));
+    }
+    let decoded = foks_proto::DecodedTeamEditArgument::decode(call.argument())?;
+    let change = decoded.link.decode_team_group_change()?;
+    if change.team != *team
+        || decoded.team_bearer_token.is_some()
+        || decoded.local_permissions_for.as_slice() != [binding.target_id.clone()]
+        || decoded.removal_keys.len() != 1
+        || decoded.removal_keys[0].commitment != binding.removal_key_commitment
+    {
+        return Err(Error::OperationBinding(
+            "protected addition request changed its authority or target",
+        ));
+    }
+    validate_addition_change(&change, binding)
+}
+
+fn remove_addition_material(
+    store: &mut dyn ProtectedMutationStore,
+    operation_id: &[u8; 16],
+) -> Result<()> {
+    match store.remove(&remote_addition_material_key(operation_id)) {
+        Ok(()) | Err(ProtectedStoreError::Missing) => Ok(()),
+        Err(error) => Err(protected_material_error(error)),
+    }
 }
 
 fn validate_addition_operation(

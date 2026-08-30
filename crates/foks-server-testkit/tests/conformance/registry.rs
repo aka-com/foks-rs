@@ -24,9 +24,24 @@ struct DeclaredRoute {
 
 const COVERAGE: &[Coverage] = &[
     Coverage {
+        name: "kex_relay",
+        run: crate::kex::interactive_software_device_pairing,
+        routes: &[("Kex", "send"), ("Kex", "receive")],
+    },
+    Coverage {
         name: "go_client_activation",
         run: crate::go_client_activation::go_client_activation_success,
         routes: &[("Reg", "getServerConfig"), ("User", "ping")],
+    },
+    Coverage {
+        name: "go_client_peripheral",
+        run: crate::peripheral::go_client_waitlist_and_log_send_work,
+        routes: &[
+            ("Reg", "joinWaitList"),
+            ("LogSend", "logSendInit"),
+            ("LogSend", "logSendInitFile"),
+            ("LogSend", "logSendUploadBlock"),
+        ],
     },
     Coverage {
         name: "go_client_housekeeping",
@@ -65,7 +80,9 @@ const COVERAGE: &[Coverage] = &[
             ("User", "loadGenericChain"),
             ("User", "getTeamListServerTrust"),
             ("TeamLoader", "loadTeamMembershipChain"),
+            ("TeamLoader", "getServerConfig"),
             ("TeamAdmin", "postTeamMembershipLink"),
+            ("TeamAdmin", "getTeamConfig"),
         ],
     },
     Coverage {
@@ -165,6 +182,7 @@ const COVERAGE: &[Coverage] = &[
             ("TeamLoader", "getTeamVOBearerTokenChallenge"),
             ("TeamLoader", "activateTeamVOBearerToken"),
             ("TeamLoader", "loadTeamChain"),
+            ("TeamLoader", "loadRemovalForMember"),
             ("TeamAdmin", "reserveTeamname"),
             ("TeamAdmin", "createTeam"),
             ("TeamAdmin", "editTeam"),
@@ -179,8 +197,6 @@ const COVERAGE: &[Coverage] = &[
         run: crate::authorization::unsupported_team_routes_return_typed_status,
         routes: &[
             ("TeamLoader", "checkTeamVOBearerToken"),
-            ("TeamLoader", "loadRemovalForMember"),
-            ("TeamLoader", "getServerConfig"),
             ("TeamAdmin", "checkTeamBearerToken"),
             ("TeamAdmin", "putTeamCert"),
             ("TeamAdmin", "getCurrentTeamCerts"),
@@ -188,7 +204,6 @@ const COVERAGE: &[Coverage] = &[
             ("TeamAdmin", "postTeamRemoval"),
             ("TeamAdmin", "loadTeamRawInbox"),
             ("TeamAdmin", "rejectJoinReq"),
-            ("TeamAdmin", "getTeamConfig"),
         ],
     },
     Coverage {

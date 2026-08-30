@@ -12,6 +12,7 @@ pub(crate) struct Header {
     pub reservation_token: Option<[u8; 17]>,
     pub reservation_expires_at: Option<u64>,
     pub subchain_tree_location_seed: [u8; 32],
+    pub member_load_floor: Role,
 }
 
 pub(crate) struct Member {
@@ -35,6 +36,7 @@ pub(crate) struct SharedKey {
 pub(crate) struct Parcel {
     pub party_id: Vec<u8>,
     pub sender_id: Vec<u8>,
+    pub target_role: Role,
     pub role: Role,
     pub generation: u64,
     pub exact: Vec<u8>,
@@ -68,6 +70,7 @@ pub(crate) struct Command {
     pub shared_keys: Vec<SharedKey>,
     pub parcels: Vec<Parcel>,
     pub removal_boxes: Vec<RemovalBox>,
+    pub local_view_permissions: Vec<(Vec<u8>, Role)>,
     pub membership_link: MembershipLink,
 }
 
@@ -84,7 +87,7 @@ pub(crate) fn validate(
     principal_owner: &EntityId,
     signed_root: foks_proto::TreeRoot,
 ) -> Result<Command> {
-    let (link, next, boxes, hepks, membership, membership_next, subchain, header, removals) =
+    let (link, next, boxes, hepks, membership, membership_next, subchain, mut header, removals) =
         match argument {
             Argument::Named(argument) => {
                 let normalized = foks_verify::normalize_username(&argument.name_utf8)
@@ -120,6 +123,7 @@ pub(crate) fn validate(
                         reservation_token: Some(argument.reservation.token),
                         reservation_expires_at: Some(argument.reservation.expires_at),
                         subchain_tree_location_seed: argument.subchain_tree_location,
+                        member_load_floor: Role::member(0),
                     },
                     argument.edit.removal_keys,
                 )
@@ -141,6 +145,7 @@ pub(crate) fn validate(
                     reservation_token: None,
                     reservation_expires_at: None,
                     subchain_tree_location_seed: argument.subchain_tree_location,
+                    member_load_floor: Role::member(0),
                 },
                 Vec::new(),
             ),
@@ -166,6 +171,7 @@ pub(crate) fn validate(
         signed_root.clone(),
         next,
     )?;
+    header.member_load_floor = founding.member_load_floor;
     if founding.members.len() != 1
         || founding.members[0].party.as_bytes() != authority.uid
         || founding.members[0].role != Role::OWNER
@@ -181,6 +187,13 @@ pub(crate) fn validate(
             && key.verify_key == founder.verify_key.as_bytes()
     });
     if user_key.is_none() {
+        return Err(Error::Signup("team founder PUK is not current"));
+    }
+    let founder_role = (
+        founder.source_role.protocol_value(),
+        i64::from(founder.source_role.visibility().unwrap_or_default()),
+    );
+    if authority.stale_shared_key_roles.contains(&founder_role) {
         return Err(Error::Signup("team founder PUK is not current"));
     }
     let membership_change = membership.decode_approved_membership()?;
@@ -251,6 +264,7 @@ pub(crate) fn validate(
         parcels.push(Parcel {
             party_id: authority.uid.clone(),
             sender_id: founder.verify_key.as_bytes().to_vec(),
+            target_role: boxed.target.role,
             role: parcel.role,
             generation: parcel.generation,
             exact: parcel.encoded()?,
@@ -292,6 +306,7 @@ pub(crate) fn validate(
         shared_keys,
         parcels,
         removal_boxes,
+        local_view_permissions: vec![(authority.uid.clone(), founding.member_load_floor)],
         membership_link: MembershipLink {
             user: authority.uid.clone(),
             signer: principal_owner.as_bytes().to_vec(),

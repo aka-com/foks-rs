@@ -3,10 +3,16 @@ use std::sync::Arc;
 
 use foks_client::{
     AddLocalTeamMemberRequest, ChangeTeamMemberRequest, FederatedTeamAdmissionRequest,
-    NamedTeamSecrets, TeamMemberSelector, TeamPtkRotationSeed, VerifiedMemberParty,
+    FederatedTeamRefreshRequest, FederationCredential, NamedTeamSecrets, NewYubiDeviceSecrets,
+    TeamMemberSelector, TeamPtkRotationSeed, VerifiedMemberParty, YubiCredential,
+    YubiDeviceProvisionRequest,
 };
-use foks_proto::{EntityId, FqParty, PermissionToken, Role, SecretSeed, ENTITY_HOST, ENTITY_USER};
+use foks_proto::{
+    EntityId, FqParty, PermissionToken, Role, SecretSeed, YubiSlotAndPqKeyId, ENTITY_HOST,
+    ENTITY_USER,
+};
 use foks_server_testkit::{TestAccountSpec, TestClient, TestEnvironment};
+use foks_yubi::{MockYubiProvider, Pin, PivPolicy, SlotId, YubiProvider as _};
 use rustls::pki_types::ServerName;
 
 use crate::support::Fixture;
@@ -42,6 +48,8 @@ pub(crate) fn federation_lifecycle() {
         .load_remote_user_and_pin(&remote_host, &created.credential.uid, &token)
         .unwrap();
     assert_eq!(loaded.verified.username(), b"federateduser");
+    let recipient = loaded.verified_recipient().unwrap();
+    assert_eq!(recipient.verified().uid(), &created.credential.uid);
 
     let mut invalid = [0xc1; 17];
     invalid[0] = 54;
@@ -239,7 +247,22 @@ pub(crate) fn remote_team_membership_and_ptk_tokens() {
             seed: &rotated_member,
         },
     ];
-    let remaining = [VerifiedMemberParty::Team(&admitted.remote.verified)];
+    let stale_remote_direct = [VerifiedMemberParty::User(
+        &remote_account.authenticated.verified,
+    )];
+    assert!(admitted
+        .remote
+        .verified_recipient(&stale_remote_direct)
+        .is_err());
+    let current_remote_user = remote
+        .client
+        .foks()
+        .authenticate_and_pin(remote.host(), &remote_account.credential)
+        .unwrap();
+    let remote_direct = [VerifiedMemberParty::User(&current_remote_user.verified)];
+    let remote_recipient = admitted.remote.verified_recipient(&remote_direct).unwrap();
+    let remaining = [VerifiedMemberParty::Team(&remote_recipient)];
+    let mut protected = local.client.open_protected_store().unwrap();
     local
         .client
         .foks()
@@ -258,6 +281,7 @@ pub(crate) fn remote_team_membership_and_ptk_tokens() {
                 rotations: &rotations,
                 remaining_parties: &remaining,
             },
+            &mut protected,
         )
         .unwrap();
     let recovered_after_rotation = local
@@ -381,7 +405,7 @@ pub(crate) fn remote_team_permission_renewal_preserves_the_embedded_bearer() {
         token_hash,
         foks_crypto::federation_permission_token_hash(&first)
     );
-    assert!(u64::try_from(expires_at).unwrap() > now + 29 * 24 * 60 * 60 * 1_000_000);
+    assert_eq!(expires_at, i64::MAX);
 }
 
 #[test]
@@ -420,4 +444,408 @@ pub(crate) fn unsupported_federation_routes() {
             foks_rpc::Error::RemoteStatus { code: 1020, .. }
         ));
     }
+}
+
+/// One YubiKey enrolled onto an existing software account, kept as owned parts
+/// so the borrowing [`YubiCredential`] can be rebuilt by each caller.
+struct EnrolledYubi {
+    prepared: foks_yubi::PreparedYubiDevice,
+    subkey_seed: SecretSeed,
+    certificate_chain: Vec<Vec<u8>>,
+    uid: EntityId,
+}
+
+impl EnrolledYubi {
+    fn credential(&self) -> YubiCredential<'_> {
+        YubiCredential {
+            uid: self.uid.clone(),
+            parent: self.prepared.device.as_ref(),
+            subkey_seed: SecretSeed::new(*self.subkey_seed.as_bytes()),
+            certificate_chain: self.certificate_chain.clone(),
+        }
+    }
+}
+
+fn provision_owner_yubi(
+    fixture: &Fixture,
+    existing: &foks_client::DeviceCredential,
+    card_name: &str,
+    serial: u32,
+    subkey_fill: u8,
+) -> EnrolledYubi {
+    let pin = Pin::new("123456").unwrap();
+    let provider = MockYubiProvider::with_card(card_name, serial, &pin).unwrap();
+    let card = provider.cards().unwrap().remove(0);
+    let prepared = provider
+        .prepare(
+            &card,
+            SlotId::new(0x82).unwrap(),
+            SlotId::new(0x83).unwrap(),
+            &pin,
+            None,
+            PivPolicy::Once,
+            PivPolicy::Never,
+        )
+        .unwrap();
+    let subkey_seed = SecretSeed::new([subkey_fill; 32]);
+    let mut protected = fixture.client.open_protected_store().unwrap();
+    let provisioned = fixture
+        .client
+        .foks()
+        .provision_yubi_device(
+            fixture.host(),
+            existing,
+            prepared.device.as_ref(),
+            YubiDeviceProvisionRequest {
+                role: Role::OWNER,
+                device_name: format!("{card_name} owner key"),
+                serial: u64::from(serial),
+                pq_hint: YubiSlotAndPqKeyId {
+                    slot: 0x83,
+                    id: prepared.locator.pq_key_id,
+                },
+            },
+            NewYubiDeviceSecrets::new(
+                SecretSeed::new(*subkey_seed.as_bytes()),
+                [subkey_fill ^ 0x5a; 17],
+            ),
+            &mut protected,
+        )
+        .unwrap();
+    let certificate_chain = provisioned.credential.certificate_chain.clone();
+    let uid = provisioned.credential.uid.clone();
+    drop(provisioned);
+    EnrolledYubi {
+        prepared,
+        subkey_seed,
+        certificate_chain,
+        uid,
+    }
+}
+
+/// Two federated hosts whose owning administrators each hold both a software
+/// device and an enrolled YubiKey.
+struct FederatedYubiPair {
+    remote: Fixture,
+    remote_account: foks_client::CreatedSoftwareAccount,
+    remote_team: EntityId,
+    remote_yubi: EnrolledYubi,
+    local: Fixture,
+    local_account: foks_client::CreatedSoftwareAccount,
+    local_team: EntityId,
+    local_yubi: EnrolledYubi,
+}
+
+fn federated_yubi_pair(tag: &str, fill: u8) -> FederatedYubiPair {
+    let remote = Fixture::start(&format!("federation-yubi-remote-{tag}"));
+    let remote_account = remote
+        .client
+        .create_account(
+            remote.host(),
+            &TestAccountSpec::new(format!("fedyubirem{tag}"), fill),
+        )
+        .unwrap();
+    let remote_secrets = NamedTeamSecrets {
+        member_min: SecretSeed::new([fill ^ 0x11; 32]),
+        member: SecretSeed::new([fill ^ 0x12; 32]),
+        admin: SecretSeed::new([fill ^ 0x13; 32]),
+        owner: SecretSeed::new([fill ^ 0x14; 32]),
+        removal_key: SecretSeed::new([fill ^ 0x15; 32]),
+        team_name_commitment_key: [fill ^ 0x16; 16],
+    };
+    let remote_team = remote
+        .client
+        .foks()
+        .create_single_owner_named_team(
+            remote.host(),
+            &remote_account.credential,
+            &format!("remyubi{tag}"),
+            &remote_secrets,
+        )
+        .unwrap()
+        .team;
+
+    let local = Fixture::start(&format!("federation-yubi-local-{tag}"));
+    let local_account = local
+        .client
+        .create_account(
+            local.host(),
+            &TestAccountSpec::new(format!("fedyubiloc{tag}"), fill ^ 0x20),
+        )
+        .unwrap();
+    let local_secrets = NamedTeamSecrets {
+        member_min: SecretSeed::new([fill ^ 0x21; 32]),
+        member: SecretSeed::new([fill ^ 0x22; 32]),
+        admin: SecretSeed::new([fill ^ 0x23; 32]),
+        owner: SecretSeed::new([fill ^ 0x24; 32]),
+        removal_key: SecretSeed::new([fill ^ 0x25; 32]),
+        team_name_commitment_key: [fill ^ 0x26; 16],
+    };
+    let local_team = local
+        .client
+        .foks()
+        .create_single_owner_named_team(
+            local.host(),
+            &local_account.credential,
+            &format!("locyubi{tag}"),
+            &local_secrets,
+        )
+        .unwrap()
+        .team;
+
+    let removal_key = SecretSeed::new([fill ^ 0x27; 32]);
+    let mut protected = local.client.open_protected_store().unwrap();
+    local
+        .client
+        .foks()
+        .admit_remote_team_to_named_team(
+            &FederatedTeamAdmissionRequest {
+                remote_host: remote.host(),
+                remote_credential: &remote_account.credential,
+                remote_team: &remote_team,
+                local_host: local.host(),
+                local_credential: &local_account.credential,
+                local_team: &local_team,
+                destination_role: Role::member(0),
+                removal_key: &removal_key,
+            },
+            &mut protected,
+        )
+        .unwrap();
+    drop(protected);
+
+    let local_yubi = provision_owner_yubi(
+        &local,
+        &local_account.credential,
+        &format!("local-federation-yubikey-{tag}"),
+        73_001,
+        fill ^ 0x31,
+    );
+    let remote_yubi = provision_owner_yubi(
+        &remote,
+        &remote_account.credential,
+        &format!("remote-federation-yubikey-{tag}"),
+        73_002,
+        fill ^ 0x32,
+    );
+    FederatedYubiPair {
+        remote,
+        remote_account,
+        remote_team,
+        remote_yubi,
+        local,
+        local_account,
+        local_team,
+        local_yubi,
+    }
+}
+
+/// The federated security responder must run for every combination of
+/// software- and hardware-backed administrator on the two sides. A Yubi-only
+/// administrator that could not renew the remote bearer would leave a revoked
+/// member key inside future federated team material indefinitely.
+#[test]
+pub(crate) fn federated_refresh_accepts_software_and_yubi_credentials_on_both_sides() {
+    let pair = federated_yubi_pair("combos", 0xf1);
+    let local_yubi = pair.local_yubi.credential();
+    let remote_yubi = pair.remote_yubi.credential();
+    let combinations: [(FederationCredential<'_, '_>, FederationCredential<'_, '_>); 4] = [
+        (
+            FederationCredential::Software(&pair.remote_account.credential),
+            FederationCredential::Software(&pair.local_account.credential),
+        ),
+        (
+            FederationCredential::Software(&pair.remote_account.credential),
+            FederationCredential::Yubi(&local_yubi),
+        ),
+        (
+            FederationCredential::Yubi(&remote_yubi),
+            FederationCredential::Software(&pair.local_account.credential),
+        ),
+        (
+            FederationCredential::Yubi(&remote_yubi),
+            FederationCredential::Yubi(&local_yubi),
+        ),
+    ];
+    for (index, (remote_credential, local_credential)) in combinations.into_iter().enumerate() {
+        // Each combination starts from fresh sockets. A pooled connection the
+        // server has already timed out would otherwise surface as a transport
+        // error and hide the credential behaviour under test.
+        pair.local.client.foks().clear_connection_pool().unwrap();
+        let refreshed = pair
+            .local
+            .client
+            .foks()
+            .refresh_federated_team_capability(&FederatedTeamRefreshRequest {
+                remote_host: pair.remote.host(),
+                remote_credential,
+                remote_team: &pair.remote_team,
+                local_host: pair.local.host(),
+                local_credential,
+                local_team: &pair.local_team,
+            })
+            .unwrap_or_else(|error| panic!("credential combination {index} failed: {error}"));
+        assert_eq!(refreshed.verified.team(), &pair.remote_team);
+    }
+}
+
+/// Generalizing the refresh over credential forms must not let a caller
+/// substitute one identity for another. Each rejection below would otherwise
+/// let a party that does not hold the hardware drive the responder.
+#[test]
+pub(crate) fn federated_refresh_rejects_mismatched_identity_host_and_authority() {
+    let pair = federated_yubi_pair("binding", 0x71);
+    let local_yubi = pair.local_yubi.credential();
+
+    // A valid local transport paired with the wrong hardware parent. Only the
+    // parent differs: the UID, subkey, and certificate chain are the enrolled
+    // local ones, so a check that trusted the transport alone would accept it.
+    let impostor = YubiCredential {
+        uid: local_yubi.uid.clone(),
+        parent: pair.remote_yubi.prepared.device.as_ref(),
+        subkey_seed: SecretSeed::new(*local_yubi.subkey_seed.as_bytes()),
+        certificate_chain: local_yubi.certificate_chain.clone(),
+    };
+    pair.local.client.foks().clear_connection_pool().unwrap();
+    let wrong_identity = pair
+        .local
+        .client
+        .foks()
+        .refresh_federated_team_capability(&FederatedTeamRefreshRequest {
+            remote_host: pair.remote.host(),
+            remote_credential: FederationCredential::Software(&pair.remote_account.credential),
+            remote_team: &pair.remote_team,
+            local_host: pair.local.host(),
+            local_credential: FederationCredential::Yubi(&impostor),
+            local_team: &pair.local_team,
+        })
+        .unwrap_err();
+    assert!(
+        matches!(
+            wrong_identity,
+            foks_client::Error::CredentialBinding(_) | foks_client::Error::UserBinding(_)
+        ),
+        "unexpected error for a mismatched Yubi parent: {wrong_identity}"
+    );
+
+    // The actor-driven entry point accepts a caller-supplied transport
+    // projection instead of authenticating one itself, so it must re-bind the
+    // credential to that projection rather than trust it.
+    pair.local.client.foks().clear_connection_pool().unwrap();
+    let local_transport = pair
+        .local
+        .client
+        .foks()
+        .authenticate_yubi_and_pin(pair.local.host(), &local_yubi)
+        .unwrap();
+    let remote_transport = pair
+        .remote
+        .client
+        .foks()
+        .authenticate_and_pin(pair.remote.host(), &pair.remote_account.credential)
+        .unwrap();
+    let supplied_transport = pair
+        .local
+        .client
+        .foks()
+        .refresh_federated_team_capability_with_actors(
+            &FederatedTeamRefreshRequest {
+                remote_host: pair.remote.host(),
+                remote_credential: FederationCredential::Software(&pair.remote_account.credential),
+                remote_team: &pair.remote_team,
+                local_host: pair.local.host(),
+                local_credential: FederationCredential::Yubi(&impostor),
+                local_team: &pair.local_team,
+            },
+            &remote_transport.verified,
+            None,
+            &local_transport.verified,
+            None,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        supplied_transport,
+        foks_client::Error::CredentialBinding(
+            "Yubi credential is not enrolled in the verified user chain"
+        )
+    ));
+
+    // A transport projection from the wrong user must be rejected even when
+    // the credential itself is genuine.
+    let crossed_transport = pair
+        .local
+        .client
+        .foks()
+        .refresh_federated_team_capability_with_actors(
+            &FederatedTeamRefreshRequest {
+                remote_host: pair.remote.host(),
+                remote_credential: FederationCredential::Software(&pair.remote_account.credential),
+                remote_team: &pair.remote_team,
+                local_host: pair.local.host(),
+                local_credential: FederationCredential::Yubi(&local_yubi),
+                local_team: &pair.local_team,
+            },
+            &remote_transport.verified,
+            None,
+            &remote_transport.verified,
+            None,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        crossed_transport,
+        foks_client::Error::UserBinding(
+            "transport user does not match the credential and pinned host"
+        )
+    ));
+
+    // Both sides on one host is not a federation and must fail before any
+    // grant is issued.
+    let swapped_hosts = pair
+        .local
+        .client
+        .foks()
+        .refresh_federated_team_capability_with_actors(
+            &FederatedTeamRefreshRequest {
+                remote_host: pair.local.host(),
+                remote_credential: FederationCredential::Yubi(&local_yubi),
+                remote_team: &pair.remote_team,
+                local_host: pair.local.host(),
+                local_credential: FederationCredential::Yubi(&local_yubi),
+                local_team: &pair.local_team,
+            },
+            &local_transport.verified,
+            None,
+            &local_transport.verified,
+            None,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        swapped_hosts,
+        foks_client::Error::TeamRequest("federation refresh hosts or parties are invalid")
+    ));
+
+    // A user with no administrative authority over the exported team cannot
+    // renew its bearer, whatever credential form it presents.
+    let outsider = TestClient::new(&pair.remote.environment, "federation-yubi-outsider").unwrap();
+    let outsider_host = outsider.probe_and_pin().unwrap().pinned;
+    let outsider_account = outsider
+        .create_account(&outsider_host, &TestAccountSpec::new("fedyubiout", 0x79))
+        .unwrap();
+    let no_authority = pair
+        .local
+        .client
+        .foks()
+        .refresh_federated_team_capability(&FederatedTeamRefreshRequest {
+            remote_host: pair.remote.host(),
+            remote_credential: FederationCredential::Software(&outsider_account.credential),
+            remote_team: &pair.remote_team,
+            local_host: pair.local.host(),
+            local_credential: FederationCredential::Yubi(&local_yubi),
+            local_team: &pair.local_team,
+        })
+        .unwrap_err();
+    assert!(
+        !matches!(no_authority, foks_client::Error::TeamRequest(_)),
+        "an unauthorized grantor must fail on authority, not request shape: {no_authority}"
+    );
 }

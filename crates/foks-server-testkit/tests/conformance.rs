@@ -10,6 +10,8 @@ mod go_client_generic;
 mod go_client_kv;
 #[path = "conformance/go_client_merkle.rs"]
 mod go_client_merkle;
+#[path = "conformance/kex.rs"]
+mod kex;
 #[path = "conformance/kv_large.rs"]
 mod kv_large;
 #[path = "conformance/kv_locks.rs"]
@@ -18,6 +20,8 @@ mod kv_locks;
 mod kv_small;
 #[path = "conformance/passphrases.rs"]
 mod passphrases;
+#[path = "conformance/peripheral.rs"]
+mod peripheral;
 #[path = "conformance/probe_and_pin.rs"]
 mod probe_and_pin;
 #[path = "conformance/provisioning.rs"]

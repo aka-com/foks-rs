@@ -210,6 +210,43 @@ pub(crate) fn generic_membership_chains_and_trusted_team_lists_work() {
     assert!(teams.iter().any(|entry| entry.team == adhoc.team));
     assert!(teams.iter().any(|entry| entry.team == named.team));
 
+    let authenticated_user = fixture
+        .client
+        .foks()
+        .authenticate_and_pin(fixture.host(), &account.credential)
+        .unwrap();
+    let user_memberships = fixture
+        .client
+        .foks()
+        .authenticated_user_team_memberships(
+            fixture.host(),
+            &account.credential,
+            &authenticated_user.verified,
+        )
+        .unwrap();
+    assert_eq!(user_memberships.active().count(), 2);
+    let current_named = fixture
+        .client
+        .foks()
+        .load_and_pin_team(
+            fixture.host(),
+            &account.credential,
+            &authenticated_user.verified,
+            &authenticated_user.puks,
+            &named.team,
+        )
+        .unwrap();
+    let team_memberships = fixture
+        .client
+        .foks()
+        .authenticated_team_memberships(fixture.host(), &account.credential, &current_named)
+        .unwrap();
+    assert_eq!(team_memberships.active().count(), 1);
+    assert_eq!(
+        team_memberships.active().next().unwrap().membership.team,
+        adhoc.team
+    );
+
     let mut protected = fixture.client.open_protected_store().unwrap();
     let provisioned = fixture
         .client

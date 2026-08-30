@@ -9,6 +9,8 @@ use std::time::Duration;
 use foks_agent_proto::{Operation, Request, Response, MAXIMUM_MESSAGE_BYTES};
 use thiserror::Error;
 
+const DEVICE_PAIRING_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("local agent IPC is unsupported on this platform")]
@@ -53,7 +55,12 @@ impl AgentClient {
 
     pub fn call(&self, operation: Operation) -> Result<Response> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let response = call_platform(&self.socket, self.timeout, Request::new(id, operation))?;
+        let timeout = if operation.is_device_pairing_wait() {
+            self.timeout.max(DEVICE_PAIRING_TIMEOUT)
+        } else {
+            self.timeout
+        };
+        let response = call_platform(&self.socket, timeout, Request::new(id, operation))?;
         if response.id != id {
             return Err(Error::ResponseBinding);
         }

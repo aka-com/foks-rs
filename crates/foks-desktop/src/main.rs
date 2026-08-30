@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use clap::Parser as _;
 use foks_agent_client::AgentClient;
-use foks_agent_proto::{FederationRole, Operation, ResponseResult, SecretString};
+use foks_agent_proto::{FederationRole, Operation, ResponseResult, SecretString, TeamRole};
 
 #[derive(clap::Parser)]
 #[command(name = "foks-desktop-backend")]
@@ -50,6 +50,32 @@ enum Command {
         profile: String,
         alias: String,
     },
+    DevicePairOffer {
+        profile: String,
+        account_alias: String,
+    },
+    DevicePairRepublish {
+        profile: String,
+        account_alias: String,
+    },
+    DevicePairFinish {
+        profile: String,
+        account_alias: String,
+    },
+    DevicePairAccept {
+        profile: String,
+        target_alias: String,
+        #[arg(long)]
+        phrase_file: PathBuf,
+        #[arg(long)]
+        device_name: String,
+        #[arg(long, default_value_t = 1)]
+        serial: u64,
+    },
+    DevicePairResumeAccept {
+        profile: String,
+        target_alias: String,
+    },
     Kv {
         profile: String,
         alias: String,
@@ -58,6 +84,42 @@ enum Command {
         profile: String,
     },
     TeamSync {
+        profile: String,
+        team_alias: String,
+    },
+    TeamMembers {
+        profile: String,
+        team_alias: String,
+    },
+    TeamAddMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+        #[arg(long, value_enum, default_value_t = FederationRoleArgument::Member)]
+        role: FederationRoleArgument,
+        #[arg(long, default_value_t = 0)]
+        visibility: i16,
+    },
+    TeamResumeAddMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+    },
+    TeamDemoteMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+        #[arg(long, value_enum, default_value_t = FederationRoleArgument::Member)]
+        role: FederationRoleArgument,
+        #[arg(long, default_value_t = 0)]
+        visibility: i16,
+    },
+    TeamRemoveMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+    },
+    TeamResumeMemberEdit {
         profile: String,
         team_alias: String,
     },
@@ -166,12 +228,111 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
             passphrase: read_secret(&arguments.passphrase_file)?,
         },
         Command::Sync { profile, alias } => Operation::SyncAccount { profile, alias },
+        Command::DevicePairOffer {
+            profile,
+            account_alias,
+        } => Operation::StartDevicePairing {
+            profile,
+            account_alias,
+        },
+        Command::DevicePairRepublish {
+            profile,
+            account_alias,
+        } => Operation::RepublishDevicePairing {
+            profile,
+            account_alias,
+        },
+        Command::DevicePairFinish {
+            profile,
+            account_alias,
+        } => Operation::FinishDevicePairing {
+            profile,
+            account_alias,
+        },
+        Command::DevicePairAccept {
+            profile,
+            target_alias,
+            phrase_file,
+            device_name,
+            serial,
+        } => Operation::AcceptDevicePairing {
+            profile,
+            target_alias,
+            device_name,
+            serial,
+            phrase: read_secret(&phrase_file)?,
+        },
+        Command::DevicePairResumeAccept {
+            profile,
+            target_alias,
+        } => Operation::ResumeDevicePairingAcceptance {
+            profile,
+            target_alias,
+        },
         Command::Kv { profile, alias } => Operation::ListKv { profile, alias },
         Command::Teams { profile } => Operation::ListTeams { profile },
         Command::TeamSync {
             profile,
             team_alias,
         } => Operation::SyncTeam {
+            profile,
+            team_alias,
+        },
+        Command::TeamMembers {
+            profile,
+            team_alias,
+        } => Operation::ListTeamMembers {
+            profile,
+            team_alias,
+        },
+        Command::TeamAddMember {
+            profile,
+            team_alias,
+            username,
+            role,
+            visibility,
+        } => Operation::AddTeamMember {
+            profile,
+            team_alias,
+            username,
+            role: desktop_team_role(role),
+            visibility,
+        },
+        Command::TeamResumeAddMember {
+            profile,
+            team_alias,
+            username,
+        } => Operation::ResumeTeamMemberAddition {
+            profile,
+            team_alias,
+            username,
+        },
+        Command::TeamDemoteMember {
+            profile,
+            team_alias,
+            username,
+            role,
+            visibility,
+        } => Operation::DemoteTeamMember {
+            profile,
+            team_alias,
+            username,
+            role: desktop_team_role(role),
+            visibility,
+        },
+        Command::TeamRemoveMember {
+            profile,
+            team_alias,
+            username,
+        } => Operation::RemoveTeamMember {
+            profile,
+            team_alias,
+            username,
+        },
+        Command::TeamResumeMemberEdit {
+            profile,
+            team_alias,
+        } => Operation::ResumeTeamMemberEdit {
             profile,
             team_alias,
         },
@@ -212,6 +373,14 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
         ResponseResult::Error { code, message } => {
             Err(format!("agent returned {code:?}: {message}").into())
         }
+    }
+}
+
+fn desktop_team_role(role: FederationRoleArgument) -> TeamRole {
+    match role {
+        FederationRoleArgument::Member => TeamRole::Member,
+        FederationRoleArgument::Admin => TeamRole::Admin,
+        FederationRoleArgument::Owner => TeamRole::Owner,
     }
 }
 

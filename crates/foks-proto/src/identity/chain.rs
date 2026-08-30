@@ -43,7 +43,31 @@ pub struct PassphraseInfo {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GenericLinkPayload {
     UserSettings(PassphraseInfo),
-    TeamMembership,
+    TeamMembership(TeamMembershipPayload),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TeamMembershipPayload {
+    pub team: EntityId,
+    pub team_host: EntityId,
+    pub source_role: Role,
+    pub state: TeamMembershipState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TeamMembershipState {
+    None,
+    Requested,
+    Approved {
+        destination_role: Role,
+        team_sequence: u64,
+        removal_key_commitment: [u8; 32],
+    },
+    Removed,
+    ApprovedAdHoc {
+        destination_role: Role,
+        team_sequence: u64,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -453,6 +477,65 @@ impl UnsignedUserLink {
         })
     }
 
+    /// Builds the v0.1.9 generic UserSettings passphrase-info link.
+    pub fn user_settings(input: &UserSettingsLinkPublic<'_>) -> Result<Self> {
+        input.user.clone().require_type(ENTITY_USER)?;
+        input.host.clone().require_type(ENTITY_HOST)?;
+        if !matches!(input.signer.entity_type(), ENTITY_DEVICE | ENTITY_YUBI)
+            || input.sequence == 0
+            || (input.sequence == 1) != input.previous.is_none()
+            || input.passphrase.generation == 0
+        {
+            return Err(Error::IntegerRange("user-settings link"));
+        }
+        let passphrase = Value::Array(vec![
+            Value::Unsigned(input.passphrase.generation),
+            input
+                .passphrase
+                .salt
+                .map_or(Value::Null, |salt| Value::Binary(salt.to_vec())),
+            Value::Unsigned(input.passphrase.stretch_version),
+        ]);
+        let settings = Value::Array(vec![
+            Value::Unsigned(0),
+            Value::Variant(Some((b"0".to_vec(), Box::new(passphrase)))),
+        ]);
+        let generic = Value::Array(vec![
+            Value::Array(vec![
+                Value::Array(vec![
+                    Value::Unsigned(input.sequence),
+                    input
+                        .previous
+                        .map_or(Value::Null, |hash| Value::Binary(hash.to_vec())),
+                    Value::Array(vec![
+                        Value::Unsigned(input.root.epoch),
+                        Value::Binary(input.root.hash.to_vec()),
+                    ]),
+                    Value::Unsigned(input.time),
+                ]),
+                Value::Binary(input.next_location_commitment.to_vec()),
+            ]),
+            Value::Array(vec![
+                Value::Binary(input.user.as_bytes().to_vec()),
+                Value::Binary(input.host.as_bytes().to_vec()),
+            ]),
+            Value::Array(vec![
+                Value::Binary(input.signer.as_bytes().to_vec()),
+                Value::Null,
+            ]),
+            Value::Array(vec![
+                Value::Unsigned(crate::CHAIN_TYPE_USER_SETTINGS),
+                Value::Variant(Some((b"0".to_vec(), Box::new(settings)))),
+            ]),
+        ]);
+        Ok(Self {
+            inner: encode(&Value::Array(vec![
+                Value::Unsigned(2),
+                Value::Variant(Some((b"1".to_vec(), Box::new(generic)))),
+            ]))?,
+        })
+    }
+
     /// Builds the exact v0.1.9 `Approved` membership link used by named teams.
     pub fn approved_membership(input: &ApprovedMembershipLinkPublic<'_>) -> Result<Self> {
         require_party(input.user)?;
@@ -564,6 +647,28 @@ impl UnsignedUserLink {
             exact,
         })
     }
+
+    /// Materializes the unsigned `LinkOuter` sent during interactive KEX.
+    /// The standard chain builders require at least one signature; KEX is the
+    /// sole protocol path where the provisionee receives and signs an empty
+    /// stack before the provisioner countersigns it.
+    pub fn finish_for_kex(self) -> Result<UserLink> {
+        let exact = encode(&Value::Array(vec![
+            Value::Unsigned(1),
+            Value::Variant(Some((
+                b"1".to_vec(),
+                Box::new(Value::Array(vec![
+                    Value::Binary(self.inner.clone()),
+                    Value::Null,
+                ])),
+            ))),
+        ]))?;
+        Ok(UserLink {
+            inner: self.inner,
+            signatures: Vec::new(),
+            exact,
+        })
+    }
 }
 
 pub struct AdHocMembershipLinkPublic<'a> {
@@ -595,6 +700,18 @@ pub struct ApprovedMembershipLinkPublic<'a> {
     pub destination_role: Role,
     pub team_sequence: u64,
     pub removal_key_commitment: [u8; 32],
+}
+
+pub struct UserSettingsLinkPublic<'a> {
+    pub user: &'a EntityId,
+    pub host: &'a EntityId,
+    pub signer: &'a EntityId,
+    pub sequence: u64,
+    pub previous: Option<[u8; 32]>,
+    pub root: &'a TreeRoot,
+    pub time: u64,
+    pub next_location_commitment: [u8; 32],
+    pub passphrase: &'a PassphraseInfo,
 }
 
 fn require_party(entity: &EntityId) -> Result<&EntityId> {
@@ -803,6 +920,28 @@ impl UserLink {
             Value::Binary(self.inner.clone()),
             signatures,
         ]))?)
+    }
+
+    /// Returns the same authenticated inner link with one additional stacked
+    /// signature. Used by the two-party KEX countersigning sequence.
+    pub fn with_appended_signature(&self, signature: Signature) -> Result<Self> {
+        let mut signatures = self.signatures.clone();
+        signatures.push(signature);
+        let exact = encode(&Value::Array(vec![
+            Value::Unsigned(1),
+            Value::Variant(Some((
+                b"1".to_vec(),
+                Box::new(Value::Array(vec![
+                    Value::Binary(self.inner.clone()),
+                    Value::Array(signatures.iter().map(Signature::to_value).collect()),
+                ])),
+            ))),
+        ]))?;
+        Ok(Self {
+            inner: self.inner.clone(),
+            signatures,
+            exact,
+        })
     }
 
     pub fn decode_approved_membership(&self) -> Result<DecodedMembershipLink> {
@@ -1070,10 +1209,9 @@ fn decode_generic_payload(value: &Value) -> Result<GenericLinkPayload> {
                 stretch_version: unsigned(&passphrase[2])?,
             }))
         }
-        crate::CHAIN_TYPE_TEAM_MEMBERSHIP => {
-            validate_team_membership_payload(variant(&wrapper[1], "1")?)?;
-            Ok(GenericLinkPayload::TeamMembership)
-        }
+        crate::CHAIN_TYPE_TEAM_MEMBERSHIP => Ok(GenericLinkPayload::TeamMembership(
+            decode_team_membership_payload(variant(&wrapper[1], "1")?)?,
+        )),
         value => Err(Error::UnknownEnum {
             kind: "generic chain type",
             value,
@@ -1081,41 +1219,77 @@ fn decode_generic_payload(value: &Value) -> Result<GenericLinkPayload> {
     }
 }
 
-fn validate_team_membership_payload(value: &Value) -> Result<()> {
+fn decode_team_membership_payload(value: &Value) -> Result<TeamMembershipPayload> {
     let membership = array(value, 3)?;
     let team = array(&membership[0], 2)?;
-    let team = entity(&team[0])?;
-    if !matches!(team.entity_type(), ENTITY_NAMED_TEAM | ENTITY_AD_HOC_TEAM) {
-        return Err(Error::EntityType(team.entity_type()));
+    let team_id = entity(&team[0])?;
+    if !matches!(
+        team_id.entity_type(),
+        ENTITY_NAMED_TEAM | ENTITY_AD_HOC_TEAM
+    ) {
+        return Err(Error::EntityType(team_id.entity_type()));
     }
-    entity(&array(&membership[0], 2)?[1])?.require_type(ENTITY_HOST)?;
-    role(&membership[1])?;
+    let team_host = entity(&team[1])?.require_type(ENTITY_HOST)?;
+    let source_role = role(&membership[1])?;
     let state = array(&membership[2], 2)?;
-    match unsigned(&state[0])? {
-        0 | 1 | 3 if state[1] == Value::Variant(None) => Ok(()),
+    let state = match unsigned(&state[0])? {
+        0 if state[1] == Value::Variant(None) => TeamMembershipState::None,
+        1 if state[1] == Value::Variant(None) => TeamMembershipState::Requested,
+        3 if state[1] == Value::Variant(None) => TeamMembershipState::Removed,
         2 => {
             let approved = array(variant(&state[1], "1")?, 2)?;
             let destination = array(&approved[0], 2)?;
-            role(&destination[0])?;
-            if unsigned(&destination[1])? == 0 {
+            let destination_role = role(&destination[0])?;
+            let team_sequence = unsigned(&destination[1])?;
+            if team_sequence == 0 {
                 return Err(Error::IntegerRange("team membership sequence"));
             }
-            let _: [u8; 32] = fixed_blob(&approved[1], "membership key commitment")?;
-            Ok(())
+            TeamMembershipState::Approved {
+                destination_role,
+                team_sequence,
+                removal_key_commitment: fixed_blob(&approved[1], "membership key commitment")?,
+            }
         }
         4 => {
             let approved = array(variant(&state[1], "2")?, 2)?;
-            role(&approved[0])?;
-            if unsigned(&approved[1])? == 0 {
+            let destination_role = role(&approved[0])?;
+            let team_sequence = unsigned(&approved[1])?;
+            if team_sequence == 0 {
                 return Err(Error::IntegerRange("ad-hoc membership sequence"));
             }
-            Ok(())
+            TeamMembershipState::ApprovedAdHoc {
+                destination_role,
+                team_sequence,
+            }
         }
         value => Err(Error::UnknownEnum {
             kind: "team membership state",
             value,
-        }),
+        })?,
+    };
+    match &state {
+        TeamMembershipState::Approved { .. } if team_id.entity_type() != ENTITY_NAMED_TEAM => {
+            return Err(Error::WrongEntityType {
+                expected: ENTITY_NAMED_TEAM,
+                found: team_id.entity_type(),
+            });
+        }
+        TeamMembershipState::ApprovedAdHoc { .. }
+            if team_id.entity_type() != ENTITY_AD_HOC_TEAM =>
+        {
+            return Err(Error::WrongEntityType {
+                expected: ENTITY_AD_HOC_TEAM,
+                found: team_id.entity_type(),
+            });
+        }
+        _ => {}
     }
+    Ok(TeamMembershipPayload {
+        team: team_id,
+        team_host,
+        source_role,
+        state,
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

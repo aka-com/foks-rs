@@ -12,7 +12,7 @@ mod supported {
 
     use clap::Parser as _;
     use foks_agent_client::AgentClient;
-    use foks_agent_proto::{FederationRole, SecretString, YubiRetryConfiguration};
+    use foks_agent_proto::{FederationRole, SecretString, TeamRole, YubiRetryConfiguration};
     use foks_desktop::{DesktopModel, PassphraseAction, Screen, YubiAction};
     use gpui::{
         div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, SharedString,
@@ -69,6 +69,9 @@ mod supported {
         federation_remote_profile: Entity<TextField>,
         federation_remote_team: Entity<TextField>,
         federation_visibility: Entity<TextField>,
+        member_team: Entity<TextField>,
+        member_username: Entity<TextField>,
+        member_visibility: Entity<TextField>,
     }
 
     impl FoksDesktop {
@@ -123,6 +126,9 @@ mod supported {
                 federation_remote_team: cx
                     .new(|cx| TextField::new("Remote team alias", false, 64, cx)),
                 federation_visibility: cx.new(|cx| TextField::new("0", false, 7, cx)),
+                member_team: cx.new(|cx| TextField::new("Named-team alias", false, 64, cx)),
+                member_username: cx.new(|cx| TextField::new("Local username", false, 64, cx)),
+                member_visibility: cx.new(|cx| TextField::new("0", false, 7, cx)),
             };
             desktop.refresh(cx);
             desktop
@@ -656,6 +662,11 @@ mod supported {
                                 .flex_wrap()
                                 .child(action_button("yubi-sync", "Sync", YubiAction::Sync))
                                 .child(action_button(
+                                    "yubi-sync-federation",
+                                    "Sync + federation",
+                                    YubiAction::SyncWithFederation,
+                                ))
+                                .child(action_button(
                                     "yubi-list-cards",
                                     "List connected cards",
                                     YubiAction::ListCards,
@@ -972,6 +983,7 @@ mod supported {
                 action,
                 YubiAction::ResumeAccount
                     | YubiAction::Sync
+                    | YubiAction::SyncWithFederation
                     | YubiAction::RotateManagementKey
                     | YubiAction::ResumeManagementKey
                     | YubiAction::RecoverSubkey
@@ -1075,6 +1087,163 @@ mod supported {
                         ),
                 )
                 .into_any_element()
+        }
+
+        fn team_member_form(&self, cx: &Context<Self>) -> gpui::AnyElement {
+            let field = |label: &'static str, input: Entity<TextField>| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().text_sm().text_color(rgb(0x65738a)).child(label))
+                    .child(input)
+            };
+            let button = |id: &'static str, label: &'static str| {
+                div()
+                    .id(id)
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(rgb(0x2764d8))
+                    .text_color(rgb(0xffffff))
+                    .child(label)
+            };
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .p_4()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(0xd8dfeb))
+                .bg(rgb(0xf8faff))
+                .child(div().text_lg().child("Local team members"))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(0x65738a))
+                        .child("Add local users, list the authenticated roster, or strictly demote/remove a member. Desktop uses member roles; admin/owner admission is available through the CLI and agent protocol."),
+                )
+                .child(
+                    div()
+                        .grid()
+                        .grid_cols(2)
+                        .gap_3()
+                        .child(field("Named team", self.member_team.clone()))
+                        .child(field("Username", self.member_username.clone()))
+                        .child(field("Member visibility", self.member_visibility.clone())),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(button("member-list", "List roster").on_click(cx.listener(
+                            |this, _, _, cx| this.submit_team_member_list(cx),
+                        )))
+                        .child(button("member-add", "Add member").on_click(cx.listener(
+                            |this, _, _, cx| this.submit_team_member_add(cx),
+                        )))
+                        .child(button("member-resume-add", "Resume add").on_click(cx.listener(
+                            |this, _, _, cx| this.submit_team_member_resume_add(cx),
+                        )))
+                        .child(button("member-demote", "Demote to member").on_click(cx.listener(
+                            |this, _, _, cx| this.submit_team_member_demote(cx),
+                        )))
+                        .child(button("member-remove", "Remove member").on_click(cx.listener(
+                            |this, _, _, cx| this.submit_team_member_remove(cx),
+                        )))
+                        .child(button("member-resume-edit", "Resume edit").on_click(cx.listener(
+                            |this, _, _, cx| this.submit_team_member_resume_edit(cx),
+                        ))),
+                )
+                .into_any_element()
+        }
+
+        fn team_member_visibility(&mut self, cx: &mut Context<Self>) -> Option<i16> {
+            match self.member_visibility.read(cx).value().parse::<i16>() {
+                Ok(visibility) => Some(visibility),
+                Err(_) => {
+                    self.model
+                        .accept(Err("enter a signed 16-bit member visibility".to_owned()));
+                    cx.notify();
+                    None
+                }
+            }
+        }
+
+        fn submit_team_member_operation(
+            &mut self,
+            operation: Result<foks_agent_proto::Operation, &'static str>,
+            cx: &mut Context<Self>,
+        ) {
+            if self.loading {
+                return;
+            }
+            match operation {
+                Ok(operation) => self.start_operation(operation, cx),
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
+                    cx.notify();
+                }
+            }
+        }
+
+        fn submit_team_member_list(&mut self, cx: &mut Context<Self>) {
+            let operation = self
+                .model
+                .team_members_operation(self.member_team.read(cx).value());
+            self.submit_team_member_operation(operation, cx);
+        }
+
+        fn submit_team_member_add(&mut self, cx: &mut Context<Self>) {
+            let Some(visibility) = self.team_member_visibility(cx) else {
+                return;
+            };
+            let operation = self.model.add_team_member_operation(
+                self.member_team.read(cx).value(),
+                self.member_username.read(cx).value(),
+                TeamRole::Member,
+                visibility,
+            );
+            self.submit_team_member_operation(operation, cx);
+        }
+
+        fn submit_team_member_resume_add(&mut self, cx: &mut Context<Self>) {
+            let operation = self.model.resume_team_member_addition_operation(
+                self.member_team.read(cx).value(),
+                self.member_username.read(cx).value(),
+            );
+            self.submit_team_member_operation(operation, cx);
+        }
+
+        fn submit_team_member_demote(&mut self, cx: &mut Context<Self>) {
+            let Some(visibility) = self.team_member_visibility(cx) else {
+                return;
+            };
+            let operation = self.model.demote_team_member_operation(
+                self.member_team.read(cx).value(),
+                self.member_username.read(cx).value(),
+                TeamRole::Member,
+                visibility,
+            );
+            self.submit_team_member_operation(operation, cx);
+        }
+
+        fn submit_team_member_remove(&mut self, cx: &mut Context<Self>) {
+            let operation = self.model.remove_team_member_operation(
+                self.member_team.read(cx).value(),
+                self.member_username.read(cx).value(),
+            );
+            self.submit_team_member_operation(operation, cx);
+        }
+
+        fn submit_team_member_resume_edit(&mut self, cx: &mut Context<Self>) {
+            let operation = self
+                .model
+                .resume_team_member_edit_operation(self.member_team.read(cx).value());
+            self.submit_team_member_operation(operation, cx);
         }
 
         fn submit_federation_admission(&mut self, cx: &mut Context<Self>) {
@@ -1223,6 +1392,7 @@ mod supported {
                     .flex()
                     .flex_col()
                     .gap_4()
+                    .child(self.team_member_form(cx))
                     .child(self.federation_form(cx))
                     .child(response)
                     .into_any_element()

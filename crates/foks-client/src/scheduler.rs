@@ -98,6 +98,27 @@ impl FoksScheduler {
         Ok(())
     }
 
+    /// Registers a default job without replacing an operator-selected
+    /// interval or execution state on an existing, identically bound job.
+    pub fn register_if_missing(&self, registration: ScheduledJobRegistration) -> Result<bool> {
+        let mut store = HardStateStore::open(&self.hard_database)?;
+        store
+            .register_scheduled_job_if_missing(&ScheduledJob {
+                job_id: registration.job_id,
+                kind: registration.kind,
+                host_id: registration.host_id,
+                scope_id: registration.scope_id,
+                interval_micros: registration.interval_micros,
+                next_run_at: registration.first_run_at,
+                failure_count: 0,
+                lease_until: None,
+                last_completed_at: None,
+                last_error: None,
+                updated_at: registration.registered_at,
+            })
+            .map_err(Into::into)
+    }
+
     pub fn unregister(&self, job_id: &[u8; 16]) -> Result<bool> {
         HardStateStore::open(&self.hard_database)?
             .remove_scheduled_job(job_id)
@@ -151,17 +172,24 @@ impl FoksScheduler {
                 }
                 Err(error) => {
                     let error = bounded_error(error);
+                    let security_backoff_cap = match job.kind {
+                        ScheduledJobKind::UserRefresh | ScheduledJobKind::TeamRefresh => {
+                            self.config.max_backoff_micros.min(job.interval_micros)
+                        }
+                        _ => self.config.max_backoff_micros,
+                    };
                     let exponential = self
                         .config
                         .base_backoff_micros
                         .saturating_mul(1u64 << job.failure_count.min(62))
-                        .min(self.config.max_backoff_micros);
+                        .min(security_backoff_cap);
                     let delay = jittered_delay(
                         exponential,
                         self.config.jitter_percent,
                         &job,
                         job.failure_count,
-                    )?;
+                    )?
+                    .min(security_backoff_cap);
                     let next_run_at = now
                         .checked_add(delay)
                         .ok_or(Error::Scheduler("retry timestamp overflow"))?;
@@ -327,5 +355,59 @@ mod tests {
         let error = bounded_error("é".repeat(600));
         assert!(error.len() <= 1024);
         assert!(error.is_char_boundary(error.len()));
+    }
+
+    #[test]
+    fn default_team_refresh_registration_preserves_operator_configuration() {
+        let (_directory, scheduler, host_id) = scheduler();
+        let registration = ScheduledJobRegistration {
+            job_id: [9; 16],
+            kind: ScheduledJobKind::TeamRefresh,
+            host_id,
+            scope_id: vec![8; 33],
+            interval_micros: 17 * 60 * 1_000_000,
+            first_run_at: 1_020,
+            registered_at: 1,
+        };
+        assert!(scheduler.register_if_missing(registration.clone()).unwrap());
+        let mut later = registration.clone();
+        later.interval_micros = 1;
+        later.first_run_at = 2;
+        assert!(!scheduler.register_if_missing(later).unwrap());
+        let stored = HardStateStore::open(&scheduler.hard_database)
+            .unwrap()
+            .scheduled_job(&registration.job_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.kind, ScheduledJobKind::TeamRefresh);
+        assert_eq!(stored.interval_micros, registration.interval_micros);
+        assert_eq!(stored.next_run_at, registration.first_run_at);
+    }
+
+    #[test]
+    fn security_refresh_failures_never_back_off_past_their_cadence() {
+        let (_directory, mut scheduler, host_id) = scheduler();
+        scheduler.config.jitter_percent = 100;
+        let job_id = [10; 16];
+        scheduler
+            .register(ScheduledJobRegistration {
+                job_id,
+                kind: ScheduledJobKind::TeamRefresh,
+                host_id,
+                scope_id: vec![11; 33],
+                interval_micros: 30,
+                first_run_at: 10,
+                registered_at: 1,
+            })
+            .unwrap();
+        let mut now = 10;
+        for _ in 0..8 {
+            let failed = scheduler
+                .run_due(now, |_| Err("one stored team is inaccessible".to_owned()))
+                .unwrap();
+            assert_eq!(failed.runs.len(), 1);
+            assert!(failed.runs[0].next_run_at - now <= 30);
+            now = failed.runs[0].next_run_at;
+        }
     }
 }

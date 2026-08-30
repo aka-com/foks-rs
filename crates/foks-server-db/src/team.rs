@@ -21,6 +21,8 @@ pub struct TeamHeader<'a> {
     pub reservation_token: Option<&'a [u8; 17]>,
     pub reservation_expires_at: Option<u64>,
     pub subchain_tree_location_seed: &'a [u8; 32],
+    pub member_load_floor_type: u64,
+    pub member_load_floor_visibility: i64,
 }
 
 pub struct TeamMemberMutation<'a> {
@@ -47,6 +49,8 @@ pub struct TeamSharedKeyMutation<'a> {
 pub struct TeamParcelMutation<'a> {
     pub party_id: &'a [u8],
     pub sender_id: &'a [u8],
+    pub target_role_type: u64,
+    pub target_visibility: i64,
     pub role_type: u64,
     pub visibility: i64,
     pub generation: u64,
@@ -68,6 +72,15 @@ pub struct TeamRemovalBoxMutation<'a> {
     pub exact_box: &'a [u8],
 }
 
+pub struct TeamRemovalProofMutation<'a> {
+    pub commitment: &'a [u8; 32],
+    pub member_id: &'a [u8],
+    pub member_host_id: &'a [u8],
+    pub source_role_type: u64,
+    pub source_visibility: i64,
+    pub exact_removal: &'a [u8],
+}
+
 pub struct TeamRemoteMemberViewTokenMutation<'a> {
     pub member_party_id: &'a [u8],
     pub member_host_id: &'a [u8],
@@ -76,6 +89,12 @@ pub struct TeamRemoteMemberViewTokenMutation<'a> {
     pub ptk_visibility: i64,
     pub exact_secret_box: &'a [u8],
     pub join_request_token: &'a [u8; 17],
+}
+
+pub struct TeamLocalViewPermissionMutation<'a> {
+    pub target_id: &'a [u8],
+    pub minimum_role_type: u64,
+    pub minimum_role_visibility: i64,
 }
 
 pub struct TeamMutation<'a> {
@@ -92,7 +111,9 @@ pub struct TeamMutation<'a> {
     pub parcels: &'a [TeamParcelMutation<'a>],
     pub seed_chain: &'a [TeamSeedChainMutation<'a>],
     pub removal_boxes: &'a [TeamRemovalBoxMutation<'a>],
+    pub removal_proofs: &'a [TeamRemovalProofMutation<'a>],
     pub remote_member_view_tokens: &'a [TeamRemoteMemberViewTokenMutation<'a>],
+    pub local_view_permissions: &'a [TeamLocalViewPermissionMutation<'a>],
     pub generic_link: Option<crate::GenericLinkMutation<'a>>,
     pub expected_root_epoch: u64,
     pub expected_root_hash: &'a [u8; 32],
@@ -197,8 +218,9 @@ impl Database {
             transaction.execute(
                 "INSERT INTO teams
                  (team_id, team_kind, host_id, normalized_name, team_name_utf8,
-                  team_name_sequence, team_name_commitment_key, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                  team_name_sequence, team_name_commitment_key,
+                  member_load_floor_type, member_load_floor_visibility, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     mutation.team_id,
                     i64::from(header.kind),
@@ -207,6 +229,8 @@ impl Database {
                     header.team_name_utf8,
                     sql_integer(header.name_sequence)?,
                     header.name_commitment_key.map(|key| key.as_slice()),
+                    sql_integer(header.member_load_floor_type)?,
+                    header.member_load_floor_visibility,
                     sql_integer(mutation.now)?
                 ],
             )?;
@@ -252,15 +276,35 @@ impl Database {
                 .scoped_host_id
                 .is_none_or(|scope| scope == team_host.as_slice());
             let valid_party = if local {
-                member.party_id.first() == Some(&foks_proto::ENTITY_USER)
-                    && transaction
+                match member.party_id.first() {
+                    Some(&foks_proto::ENTITY_USER) => transaction
                         .query_row(
                             "SELECT 1 FROM users WHERE uid = ?1",
                             [member.party_id],
                             |_| Ok(()),
                         )
                         .optional()?
-                        .is_some()
+                        .is_some(),
+                    Some(&foks_proto::ENTITY_NAMED_TEAM)
+                    | Some(&foks_proto::ENTITY_AD_HOC_TEAM) => {
+                        let same_host = transaction
+                            .query_row(
+                                "SELECT 1 FROM teams WHERE team_id = ?1 AND host_id = ?2",
+                                params![member.party_id, team_host],
+                                |_| Ok(()),
+                            )
+                            .optional()?
+                            .is_some();
+                        same_host
+                            && !local_team_reaches(
+                                &transaction,
+                                member.party_id,
+                                mutation.team_id,
+                                &team_host,
+                            )?
+                    }
+                    _ => false,
+                }
             } else {
                 member.scoped_host_id.is_some_and(|scope| {
                     scope.len() == 33 && scope.first() == Some(&foks_proto::ENTITY_HOST)
@@ -274,6 +318,22 @@ impl Database {
             if !valid_party {
                 return Err(Error::Invalid("invalid local or remote team member"));
             }
+        }
+        for permission in mutation.local_view_permissions {
+            transaction.execute(
+                "INSERT INTO team_local_view_permissions
+                 (team_id, target_id, minimum_role_type, minimum_role_visibility)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(team_id, target_id) DO UPDATE SET
+                   minimum_role_type = excluded.minimum_role_type,
+                   minimum_role_visibility = excluded.minimum_role_visibility",
+                params![
+                    mutation.team_id,
+                    permission.target_id,
+                    sql_integer(permission.minimum_role_type)?,
+                    permission.minimum_role_visibility
+                ],
+            )?;
         }
 
         transaction.execute(
@@ -368,15 +428,19 @@ impl Database {
             insert_exact(
                 &transaction,
                 "INSERT INTO team_parcels
-                 (team_id, party_id, sender_id, role_type, visibility, generation, exact_parcel)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(team_id, party_id, role_type, visibility, generation) DO UPDATE SET
+                 (team_id, party_id, sender_id, target_role_type, target_visibility,
+                  role_type, visibility, generation, exact_parcel)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(team_id, party_id, target_role_type, target_visibility,
+                             role_type, visibility, generation) DO UPDATE SET
                    sender_id = excluded.sender_id, exact_parcel = excluded.exact_parcel
                  WHERE sender_id = excluded.sender_id AND exact_parcel = excluded.exact_parcel",
                 params![
                     mutation.team_id,
                     parcel.party_id,
                     parcel.sender_id,
+                    sql_integer(parcel.target_role_type)?,
+                    parcel.target_visibility,
                     sql_integer(parcel.role_type)?,
                     parcel.visibility,
                     sql_integer(parcel.generation)?,
@@ -421,6 +485,34 @@ impl Database {
                     boxed.exact_box
                 ],
                 "conflicting team removal box",
+            )?;
+        }
+        for proof in mutation.removal_proofs {
+            insert_exact(
+                &transaction,
+                "INSERT INTO team_removal_proofs
+                 (team_id, commitment, member_id, member_host_id, source_role_type,
+                  source_visibility, exact_removal) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(team_id, commitment) DO UPDATE SET
+                   member_id = excluded.member_id,
+                   member_host_id = excluded.member_host_id,
+                   source_role_type = excluded.source_role_type,
+                   source_visibility = excluded.source_visibility,
+                   exact_removal = excluded.exact_removal
+                 WHERE member_id = excluded.member_id
+                   AND member_host_id = excluded.member_host_id
+                   AND source_role_type = excluded.source_role_type
+                   AND source_visibility = excluded.source_visibility",
+                params![
+                    mutation.team_id,
+                    proof.commitment,
+                    proof.member_id,
+                    proof.member_host_id,
+                    sql_integer(proof.source_role_type)?,
+                    proof.source_visibility,
+                    proof.exact_removal
+                ],
+                "conflicting team removal proof",
             )?;
         }
         transaction.execute(
@@ -511,6 +603,32 @@ impl Database {
         transaction.commit()?;
         Ok(mutation.response.to_vec())
     }
+}
+
+fn local_team_reaches(
+    transaction: &rusqlite::Transaction<'_>,
+    source_team: &[u8],
+    target_team: &[u8],
+    host: &[u8],
+) -> Result<bool> {
+    Ok(transaction
+        .query_row(
+            "WITH RECURSIVE descendants(team_id) AS (
+               SELECT ?1
+               UNION
+               SELECT m.party_id
+               FROM team_members m
+               JOIN descendants d ON d.team_id = m.team_id
+               JOIN teams nested ON nested.team_id = m.party_id
+               WHERE nested.host_id = ?3
+                 AND (m.scoped_host_id IS NULL OR m.scoped_host_id = ?3)
+             )
+             SELECT 1 FROM descendants WHERE team_id = ?2",
+            params![source_team, target_team, host],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 fn publish_merkle(

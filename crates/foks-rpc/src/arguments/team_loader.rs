@@ -1,5 +1,5 @@
 use foks_proto::{
-    EntityId, PermissionToken, Role, RoleAndGeneration, Signature, TeamViewChallenge,
+    EntityId, FqTeam, PermissionToken, Role, RoleAndGeneration, Signature, TeamViewChallenge,
     TeamViewRequest,
 };
 use foks_snowpack::{decode, encode, Value};
@@ -32,6 +32,12 @@ pub enum TeamChainAuthorization {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoadRemovalForMemberArgument {
+    pub team: FqTeam,
+    pub commitment: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoadTeamMembershipChainArgument {
     pub team: FqTeam,
     pub token: [u8; 16],
@@ -57,6 +63,23 @@ pub fn decode_load_team_membership_chain(bytes: &[u8]) -> Result<LoadTeamMembers
         start: *start,
     })
 }
+
+pub fn decode_load_removal_for_member(bytes: &[u8]) -> Result<LoadRemovalForMemberArgument> {
+    let Value::Array(fields) = decode(bytes)? else {
+        return Err(shape("team removal-key load argument"));
+    };
+    let [team, Value::Binary(commitment)] = fields.as_slice() else {
+        return Err(shape("team removal-key load fields"));
+    };
+    Ok(LoadRemovalForMemberArgument {
+        team: FqTeam::decode(&encode(team)?)?,
+        commitment: commitment
+            .as_slice()
+            .try_into()
+            .map_err(|_| shape("32-byte removal-key commitment"))?,
+    })
+}
+
 pub fn decode_team_view_request(bytes: &[u8]) -> Result<TeamViewRequest> {
     let Value::Array(fields) = decode(bytes)? else {
         return Err(shape("team-view challenge argument"));
@@ -202,5 +225,25 @@ mod tests {
             decode_view_token(&value).unwrap(),
             TeamChainAuthorization::LocalParentTeam([7; 16])
         );
+    }
+
+    #[test]
+    fn go_v019_removal_lookup_decodes_bare_positional_fields() {
+        let mut team = vec![3; 33];
+        team[0] = foks_proto::ENTITY_NAMED_TEAM;
+        let mut host = vec![2; 33];
+        host[0] = foks_proto::ENTITY_HOST;
+        let argument = encode(&Value::Array(vec![
+            Value::Array(vec![
+                Value::Binary(team.clone()),
+                Value::Binary(host.clone()),
+            ]),
+            Value::Binary(vec![0x44; 32]),
+        ]))
+        .unwrap();
+        let decoded = decode_load_removal_for_member(&argument).unwrap();
+        assert_eq!(decoded.team.team.as_bytes(), team);
+        assert_eq!(decoded.team.host.as_bytes(), host);
+        assert_eq!(decoded.commitment, [0x44; 32]);
     }
 }

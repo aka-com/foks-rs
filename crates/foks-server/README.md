@@ -10,6 +10,7 @@ The implemented v1 slice supports username reservation, optional or required
 signup invites (standard single-use and named multi-use), software-device
 signup, device certificate issuance, current and historical Merkle roots,
 authenticated user-chain and PUK reads, device provisioning/revocation,
+the bounded public KEX relay used by interactive software-device pairing,
 backup-key enrollment and recovery, passphrase enrollment/change and public
 challenge login, atomic PPE reboxing during owner-PUK rotation, YubiKey signup
 and provisioning, delegated-subkey recovery, encrypted PIV management-key
@@ -69,8 +70,8 @@ delegated Ed25519 mTLS subkey, burns one-time hardware recovery challenges, and
 stores PUK-encrypted PIV management-key envelopes with monotonic generations.
 The server never talks to PC/SC and never receives a PIN, PUK, management key,
 or private hardware key. Client-side hardware support is macOS/Linux only.
-Interactive cross-device KEX and rotation to another already-enrolled Yubi
-recipient remain outside this slice.
+Interactive software-device KEX is supported. Rotation to another
+already-enrolled Yubi recipient remains outside this slice.
 
 Protocol IDs, method positions, status codes, and service numbers are extracted
 from the checksum-pinned go-foks v0.1.9 module into

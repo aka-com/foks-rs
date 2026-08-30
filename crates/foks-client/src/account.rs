@@ -16,6 +16,7 @@ use super::{
     SoftwareEldestInput, SoftwareEldestMaterial, SoftwareSignupArgument, TreeRoot,
     UsernameReservation, VerifiedMerkleAdvance, Zeroizing, ENTITY_PUK_VERIFY, ENTITY_USER,
 };
+use foks_proto::DecodedSignupArgument;
 
 const SIGNUP_REQUEST_HASH_TYPE_ID: u64 = 0x8f4b_8ab7_464f_4b53;
 const SIGNUP_MATERIAL_VERSION: u8 = 1;
@@ -332,6 +333,12 @@ impl FoksClient {
         protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<CreatedSoftwareAccount> {
         validate_signup_operation_binding(host, &operation, &secrets)?;
+        let signup_request_was_available = prepared_request.is_some();
+        let signup_passphrase = prepared_request
+            .as_deref()
+            .map(|request| signup_passphrase_from_request(request.as_slice()))
+            .transpose()?
+            .flatten();
         if operation.state == MutationState::Prepared {
             let request = prepared_request.ok_or(Error::OperationBinding(
                 "prepared signup is missing its exact request",
@@ -371,7 +378,7 @@ impl FoksClient {
             seed: secrets.device_seed,
             certificate_chain,
         };
-        let authenticated = self.authenticate_new_account(host, &credential)?;
+        let mut authenticated = self.authenticate_new_account(host, &credential)?;
         let supplied_puk = secrets.puk_seed;
         if authenticated.verified.username() != expected_username
             || authenticated
@@ -381,6 +388,15 @@ impl FoksClient {
             return Err(Error::CredentialBinding(
                 "created account does not match the protected PUK",
             ));
+        }
+        if let Some(passphrase) = signup_passphrase.as_ref() {
+            self.bootstrap_user_settings_from_signup(host, &credential, passphrase)?;
+            authenticated = self.authenticate_new_account(host, &credential)?;
+        } else if signup_request_was_available {
+            HardStateStore::open(&host.database_path)?.attest_user_has_no_passphrase(
+                host.host_id().as_bytes(),
+                credential.uid.as_bytes(),
+            )?;
         }
         let kv_projection = {
             let mut session = self.user_kv_write_session(
@@ -482,6 +498,21 @@ impl FoksClient {
         }
         Err(last_error.expect("account authentication loop executes at least once"))
     }
+}
+
+fn signup_passphrase_from_request(request: &[u8]) -> Result<Option<PassphraseUpdateArgument>> {
+    let mut framed = std::io::Cursor::new(request);
+    let call = foks_rpc::read_call(&mut framed, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)
+        .map_err(|_| Error::OperationBinding("persisted signup request is malformed"))?;
+    if usize::try_from(framed.position()).ok() != Some(request.len())
+        || call.protocol_id() != foks_rpc::REG_PROTOCOL_ID
+        || call.method_position() != foks_rpc::REG_SIGNUP_METHOD_POSITION
+    {
+        return Err(Error::OperationBinding(
+            "persisted signup request targets another route",
+        ));
+    }
+    Ok(DecodedSignupArgument::decode(call.argument())?.passphrase)
 }
 
 fn encode_signup_material(

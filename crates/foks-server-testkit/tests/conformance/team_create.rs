@@ -4,9 +4,10 @@ use foks_client::{
 };
 use foks_proto::{Role, SecretSeed};
 use foks_server_testkit::{TestAccountSpec, TestClient};
+use foks_snowpack::{encode, Value};
 
 use crate::support::Fixture;
-use std::io::Cursor;
+use std::io::{Cursor, Write as _};
 
 #[test]
 pub(crate) fn public_client_creates_and_loads_named_and_adhoc_teams() {
@@ -170,6 +171,7 @@ pub(crate) fn public_client_creates_and_loads_named_and_adhoc_teams() {
             seed: &rotated_member,
         },
     ];
+    let mut protected = fixture.client.open_protected_store().unwrap();
     let removed = fixture
         .client
         .foks()
@@ -182,10 +184,64 @@ pub(crate) fn public_client_creates_and_loads_named_and_adhoc_teams() {
                 rotations: &rotations,
                 remaining_users: &[],
             },
+            &mut protected,
         )
         .unwrap();
     assert_eq!(removed.authenticated.verified.chain_seqno(), 3);
     assert_eq!(removed.authenticated.verified.members().len(), 1);
+    let commitment = foks_crypto::team_removal_key_commitment(&removal_key).unwrap();
+    let removal_argument = encode(&Value::Array(vec![
+        Value::Array(vec![
+            Value::Binary(created_named.team.as_bytes().to_vec()),
+            Value::Binary(fixture.host().host_id().as_bytes().to_vec()),
+        ]),
+        Value::Binary(commitment.to_vec()),
+    ]))
+    .unwrap();
+    let removal_request = foks_rpc::encode_call(
+        foks_rpc::TEAM_LOADER_PROTOCOL_ID,
+        5, // TeamLoader.loadRemovalForMember in v0.1.9.
+        &removal_argument,
+        0,
+    )
+    .unwrap();
+    let mut removed_member_stream =
+        crate::authorization::authenticated_stream(&fixture, &target.credential);
+    removed_member_stream.write_all(&removal_request).unwrap();
+    let response = foks_rpc::read_bare_response(
+        &mut removed_member_stream,
+        crate::authorization::MAX_RESPONSE,
+        0,
+    )
+    .unwrap();
+    let returned = foks_proto::TeamRemovalAndKeyBox::decode(&response).unwrap();
+    assert_eq!(returned.removal.payload.team, created_named.team);
+    assert_eq!(returned.removal.payload.member, target.credential.uid);
+    assert_eq!(
+        foks_crypto::make_team_removal_proof(&removal_key, returned.removal.payload.clone())
+            .unwrap()
+            .removal,
+        returned.removal
+    );
+    let mut public = crate::authorization::public_stream(&fixture);
+    public
+        .write_all(
+            &foks_rpc::encode_registration_select_vhost_request(fixture.host().host_id()).unwrap(),
+        )
+        .unwrap();
+    foks_rpc::read_void_response(&mut public, crate::authorization::MAX_RESPONSE, 0).unwrap();
+    public
+        .write_all(
+            &foks_rpc::resequence_call(&removal_request, 1, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)
+                .unwrap(),
+        )
+        .unwrap();
+    let public_response =
+        foks_rpc::read_bare_response(&mut public, crate::authorization::MAX_RESPONSE, 1).unwrap();
+    assert_eq!(
+        foks_proto::TeamRemovalAndKeyBox::decode(&public_response).unwrap(),
+        returned
+    );
     assert!(target_client
         .foks()
         .sync_team_kv(

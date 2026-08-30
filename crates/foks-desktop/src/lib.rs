@@ -7,7 +7,7 @@ use std::{fs, path::PathBuf};
 
 use foks_agent_client::AgentClient;
 use foks_agent_proto::{
-    FederationRole, Operation, ResponseResult, SecretString, YubiRetryConfiguration,
+    FederationRole, Operation, ResponseResult, SecretString, TeamRole, YubiRetryConfiguration,
 };
 use serde_json::Value;
 
@@ -34,6 +34,8 @@ pub enum YubiAction {
     ListCards,
     ResumeAccount,
     Sync,
+    /// Sync plus every federated security responder this key can drive.
+    SyncWithFederation,
     PinStatus,
     RotateManagementKey,
     ResumeManagementKey,
@@ -255,6 +257,87 @@ impl DesktopModel {
         })
     }
 
+    pub fn start_device_pairing_operation(&self) -> Result<Operation, &'static str> {
+        let (profile, account_alias) = self.selected_account_context()?;
+        Ok(Operation::StartDevicePairing {
+            profile,
+            account_alias,
+        })
+    }
+
+    pub fn republish_device_pairing_operation(&self) -> Result<Operation, &'static str> {
+        let (profile, account_alias) = self.selected_account_context()?;
+        Ok(Operation::RepublishDevicePairing {
+            profile,
+            account_alias,
+        })
+    }
+
+    pub fn finish_device_pairing_operation(&self) -> Result<Operation, &'static str> {
+        let (profile, account_alias) = self.selected_account_context()?;
+        Ok(Operation::FinishDevicePairing {
+            profile,
+            account_alias,
+        })
+    }
+
+    pub fn accept_device_pairing_operation(
+        &self,
+        target_alias: &str,
+        device_name: &str,
+        serial: u64,
+        phrase: SecretString,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        if target_alias.trim().is_empty() || device_name.trim().is_empty() {
+            return Err("alias and device name are required");
+        }
+        if serial == 0 {
+            return Err("device serial must be positive");
+        }
+        if phrase.expose().split_whitespace().count() != 13 {
+            return Err("pairing phrase must contain exactly 13 tokens");
+        }
+        Ok(Operation::AcceptDevicePairing {
+            profile,
+            target_alias: target_alias.to_owned(),
+            device_name: device_name.to_owned(),
+            serial,
+            phrase,
+        })
+    }
+
+    pub fn resume_device_pairing_acceptance_operation(
+        &self,
+        target_alias: &str,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        if target_alias.trim().is_empty() {
+            return Err("alias is required");
+        }
+        Ok(Operation::ResumeDevicePairingAcceptance {
+            profile,
+            target_alias: target_alias.to_owned(),
+        })
+    }
+
+    fn selected_account_context(&self) -> Result<(String, String), &'static str> {
+        Ok((
+            self.selected_profile
+                .clone()
+                .ok_or("select a profile first")?,
+            self.selected_account
+                .clone()
+                .ok_or("select an account first")?,
+        ))
+    }
+
     pub fn federation_admission_operation(
         &self,
         local_team_alias: &str,
@@ -274,8 +357,8 @@ impl DesktopModel {
         {
             return Err("enter distinct profiles and both team aliases");
         }
-        if role != FederationRole::Member && visibility != 0 {
-            return Err("visibility applies only to member roles");
+        if role != FederationRole::Member {
+            return Err("federated teams can only hold member roles");
         }
         Ok(Operation::AdmitFederatedTeam {
             local_profile,
@@ -301,6 +384,113 @@ impl DesktopModel {
         Ok(Operation::ListFederatedTeams {
             profile,
             team_alias: local_team_alias.to_owned(),
+        })
+    }
+
+    pub fn team_members_operation(&self, team_alias: &str) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        if team_alias.trim().is_empty() {
+            return Err("enter the team alias");
+        }
+        Ok(Operation::ListTeamMembers {
+            profile,
+            team_alias: team_alias.to_owned(),
+        })
+    }
+
+    pub fn add_team_member_operation(
+        &self,
+        team_alias: &str,
+        username: &str,
+        role: TeamRole,
+        visibility: i16,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        validate_team_member_input(team_alias, username, role, visibility)?;
+        Ok(Operation::AddTeamMember {
+            profile,
+            team_alias: team_alias.to_owned(),
+            username: username.to_owned(),
+            role,
+            visibility,
+        })
+    }
+
+    pub fn resume_team_member_addition_operation(
+        &self,
+        team_alias: &str,
+        username: &str,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        validate_team_member_input(team_alias, username, TeamRole::Member, 0)?;
+        Ok(Operation::ResumeTeamMemberAddition {
+            profile,
+            team_alias: team_alias.to_owned(),
+            username: username.to_owned(),
+        })
+    }
+
+    pub fn demote_team_member_operation(
+        &self,
+        team_alias: &str,
+        username: &str,
+        role: TeamRole,
+        visibility: i16,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        validate_team_member_input(team_alias, username, role, visibility)?;
+        Ok(Operation::DemoteTeamMember {
+            profile,
+            team_alias: team_alias.to_owned(),
+            username: username.to_owned(),
+            role,
+            visibility,
+        })
+    }
+
+    pub fn remove_team_member_operation(
+        &self,
+        team_alias: &str,
+        username: &str,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        validate_team_member_input(team_alias, username, TeamRole::Member, 0)?;
+        Ok(Operation::RemoveTeamMember {
+            profile,
+            team_alias: team_alias.to_owned(),
+            username: username.to_owned(),
+        })
+    }
+
+    pub fn resume_team_member_edit_operation(
+        &self,
+        team_alias: &str,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        if team_alias.trim().is_empty() {
+            return Err("enter the team alias");
+        }
+        Ok(Operation::ResumeTeamMemberEdit {
+            profile,
+            team_alias: team_alias.to_owned(),
         })
     }
 
@@ -372,6 +562,13 @@ impl DesktopModel {
                 profile,
                 alias: alias.to_owned(),
                 pin: required_pin(pin)?,
+                with_federation: false,
+            }),
+            YubiAction::SyncWithFederation => Ok(Operation::SyncYubiAccount {
+                profile,
+                alias: alias.to_owned(),
+                pin: required_pin(pin)?,
+                with_federation: true,
             }),
             YubiAction::RotateManagementKey => Ok(Operation::RotateYubiManagementKey {
                 profile,
@@ -528,6 +725,21 @@ impl DesktopModel {
             }
         }
     }
+}
+
+fn validate_team_member_input(
+    team_alias: &str,
+    username: &str,
+    role: TeamRole,
+    visibility: i16,
+) -> Result<(), &'static str> {
+    if team_alias.trim().is_empty() || username.trim().is_empty() {
+        return Err("enter the team alias and username");
+    }
+    if role != TeamRole::Member && visibility != 0 {
+        return Err("visibility applies only to member roles");
+    }
+    Ok(())
 }
 
 fn validate_yubi_inputs(
@@ -860,6 +1072,69 @@ mod tests {
     }
 
     #[test]
+    fn device_pairing_operations_are_bound_and_phrase_checked() {
+        let transport = Arc::new(MockTransport {
+            operations: Mutex::new(Vec::new()),
+        });
+        let mut model = DesktopModel::new(transport);
+        assert_eq!(
+            model.start_device_pairing_operation(),
+            Err("select a profile first")
+        );
+        model.select_profile("local");
+        assert_eq!(
+            model.start_device_pairing_operation(),
+            Err("select an account first")
+        );
+        model.select_account("personal");
+        assert_eq!(
+            model.start_device_pairing_operation().unwrap(),
+            Operation::StartDevicePairing {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+            }
+        );
+        assert_eq!(
+            model.finish_device_pairing_operation().unwrap(),
+            Operation::FinishDevicePairing {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+            }
+        );
+        assert_eq!(
+            model.accept_device_pairing_operation(
+                "laptop",
+                "new device",
+                1,
+                SecretString::new("too short"),
+            ),
+            Err("pairing phrase must contain exactly 13 tokens")
+        );
+        let phrase = SecretString::new("one 1 two 2 three 3 four 4 five 5 six 6 seven");
+        assert_eq!(
+            model
+                .accept_device_pairing_operation("laptop", "new device", 2, phrase.clone())
+                .unwrap(),
+            Operation::AcceptDevicePairing {
+                profile: "local".to_owned(),
+                target_alias: "laptop".to_owned(),
+                device_name: "new device".to_owned(),
+                serial: 2,
+                phrase,
+            }
+        );
+        assert_eq!(
+            model
+                .resume_device_pairing_acceptance_operation("laptop")
+                .unwrap(),
+            Operation::ResumeDevicePairingAcceptance {
+                profile: "local".to_owned(),
+                target_alias: "laptop".to_owned(),
+            }
+        );
+    }
+
+    #[test]
     fn federation_form_binds_both_profiles_and_validates_role_visibility() {
         let transport = Arc::new(MockTransport {
             operations: Mutex::new(Vec::new()),
@@ -913,11 +1188,84 @@ mod tests {
                 FederationRole::Admin,
                 1,
             ),
-            Err("visibility applies only to member roles")
+            Err("federated teams can only hold member roles")
         );
         assert_eq!(
             model.federated_teams_operation("engineering").unwrap(),
             Operation::ListFederatedTeams {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn team_member_form_builds_every_agent_operation_and_rejects_bad_visibility() {
+        let transport = Arc::new(MockTransport {
+            operations: Mutex::new(Vec::new()),
+        });
+        let mut model = DesktopModel::new(transport);
+        model.select_profile("local");
+        assert_eq!(
+            model.team_members_operation("engineering").unwrap(),
+            Operation::ListTeamMembers {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+            }
+        );
+        assert_eq!(
+            model
+                .add_team_member_operation("engineering", "alice", TeamRole::Admin, 0)
+                .unwrap(),
+            Operation::AddTeamMember {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+                username: "alice".to_owned(),
+                role: TeamRole::Admin,
+                visibility: 0,
+            }
+        );
+        assert_eq!(
+            model.add_team_member_operation("engineering", "alice", TeamRole::Owner, 1),
+            Err("visibility applies only to member roles")
+        );
+        assert_eq!(
+            model
+                .resume_team_member_addition_operation("engineering", "alice")
+                .unwrap(),
+            Operation::ResumeTeamMemberAddition {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+                username: "alice".to_owned(),
+            }
+        );
+        assert_eq!(
+            model
+                .demote_team_member_operation("engineering", "alice", TeamRole::Member, -2)
+                .unwrap(),
+            Operation::DemoteTeamMember {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+                username: "alice".to_owned(),
+                role: TeamRole::Member,
+                visibility: -2,
+            }
+        );
+        assert_eq!(
+            model
+                .remove_team_member_operation("engineering", "alice")
+                .unwrap(),
+            Operation::RemoveTeamMember {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+                username: "alice".to_owned(),
+            }
+        );
+        assert_eq!(
+            model
+                .resume_team_member_edit_operation("engineering")
+                .unwrap(),
+            Operation::ResumeTeamMemberEdit {
                 profile: "local".to_owned(),
                 team_alias: "engineering".to_owned(),
             }

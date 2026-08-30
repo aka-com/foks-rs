@@ -13,6 +13,7 @@ pub enum RpcStatus {
     BadInvite,
     BadPassphrase,
     DeviceAlreadyProvisioned,
+    Duplicate(String),
     Expired,
     Locked,
     LockTimeout,
@@ -21,6 +22,7 @@ pub enum RpcStatus {
     KvNoEnt,
     KvPermission { operation: u64, resource: u64 },
     KeyNotFound(String),
+    KexBadSecret,
     NameInUse,
     NotFound(String),
     PermissionDenied(String),
@@ -57,6 +59,7 @@ impl RpcStatus {
             Self::BadPassphrase => STATUS_BAD_PASSPHRASE_ERROR,
             Self::Expired => 1062,
             Self::DeviceAlreadyProvisioned => 1072,
+            Self::Duplicate(_) => 1001,
             Self::Locked => 8014,
             Self::LockTimeout => 8015,
             Self::MerkleLeafNotFound => 4002,
@@ -64,6 +67,7 @@ impl RpcStatus {
             Self::KvNoEnt => 8016,
             Self::KvPermission { .. } => 8011,
             Self::KeyNotFound(_) => 1025,
+            Self::KexBadSecret => 1032,
             Self::NameInUse => 1023,
             Self::NotFound(_) => 1049,
             Self::PermissionDenied(_) => 1013,
@@ -139,6 +143,7 @@ fn status_switch_variant(status: &RpcStatus) -> Value {
     let arm = |tag: &[u8], value: Value| Value::Variant(Some((tag.to_vec(), Box::new(value))));
     match status {
         RpcStatus::BadArguments(message)
+        | RpcStatus::Duplicate(message)
         | RpcStatus::NotFound(message)
         | RpcStatus::KeyNotFound(message)
         | RpcStatus::PermissionDenied(message)

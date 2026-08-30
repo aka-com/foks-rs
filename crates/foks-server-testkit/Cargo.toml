@@ -18,6 +18,7 @@ tempfile = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+foks-client = { workspace = true, features = ["test-support"] }
 foks-client-db = { workspace = true }
 foks-crypto = { workspace = true }
 foks-merkle-store = { workspace = true }

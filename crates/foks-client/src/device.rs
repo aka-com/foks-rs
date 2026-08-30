@@ -13,8 +13,10 @@ use super::{
     YubiCredential, YubiDevice, Zeroizing, ENTITY_PUK_VERIFY,
 };
 use foks_crypto::{
-    derive_subkey_id, make_yubi_provision_link, seal_software_puk_box_to_yubi,
-    seal_yubi_subkey_box, YubiPukBoxInput, YubiPukBoxRandomness, YubiSubkeyBoxRandomness,
+    derive_subkey_id, make_yubi_provision_link, make_yubi_puk_rotation_link,
+    seal_software_puk_box_to_yubi, seal_software_puk_boxes_mixed, seal_yubi_puk_boxes,
+    seal_yubi_subkey_box, SoftwarePukBoxSetRandomness, YubiPukBoxInput, YubiPukBoxRandomness,
+    YubiPukBoxSetRandomness, YubiSubkeyBoxRandomness,
 };
 use foks_proto::YubiSlotAndPqKeyId;
 
@@ -124,8 +126,8 @@ fn validate_fresh_puk_seeds<'a>(
 
 impl FoksClient {
     /// Provisions one software device through the exact v0.1.9 user-chain
-    /// mutation. This convenience path holds both signing seeds; physically
-    /// separated countersigning through FOKS's interactive KEX is not exposed.
+    /// mutation. This convenience path holds both signing seeds; use the KEX
+    /// APIs for physically separated interactive countersigning.
     pub fn provision_software_device(
         &self,
         host: &PinnedHost,
@@ -573,9 +575,56 @@ impl FoksClient {
         no_passphrase: Option<NoPassphraseConfigured>,
         protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<AuthenticatedUserOutcome> {
-        let authenticated = self.authenticate_and_pin(host, signer_credential)?;
+        self.revoke_user_credential_with_software_device_inner(
+            host,
+            signer_credential,
+            target,
+            rotations,
+            no_passphrase,
+            protected_store,
+            true,
+            None,
+        )
+    }
+
+    /// Test-only compatibility seam for modeling an upstream revoke that
+    /// intentionally leaves PUK rotation to the background responder.
+    #[cfg(feature = "test-support")]
+    pub fn revoke_user_credential_without_puk_rotation_for_test(
+        &self,
+        host: &PinnedHost,
+        signer_credential: &DeviceCredential,
+        alternate_verifier: &DeviceCredential,
+        target: &EntityId,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<AuthenticatedUserOutcome> {
+        self.revoke_user_credential_with_software_device_inner(
+            host,
+            signer_credential,
+            target,
+            &[],
+            None,
+            protected_store,
+            false,
+            Some(alternate_verifier),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn revoke_user_credential_with_software_device_inner(
+        &self,
+        host: &PinnedHost,
+        signer_credential: &DeviceCredential,
+        target: &EntityId,
+        rotations: &[UserPukRotation],
+        no_passphrase: Option<NoPassphraseConfigured>,
+        protected_store: &mut impl ProtectedMutationStore,
+        require_complete_rotation: bool,
+        alternate_verifier: Option<&DeviceCredential>,
+    ) -> Result<AuthenticatedUserOutcome> {
+        let mut authenticated = self.authenticate_and_pin(host, signer_credential)?;
         let signer = derive_device_public(&signer_credential.seed)?;
-        if &signer.id == target {
+        if &signer.id == target && require_complete_rotation {
             return Err(Error::AccountRequest(
                 "self-revocation requires an alternate verifier",
             ));
@@ -615,23 +664,25 @@ impl FoksClient {
             .filter(|key| key.role <= target_state.role)
             .map(|key| key.role)
             .collect::<Vec<_>>();
-        if rotations.len() != expected_roles.len()
-            || rotations
-                .iter()
-                .zip(&expected_roles)
-                .any(|(rotation, role)| {
-                    rotation.role != *role
-                        || authenticated.verified.shared_key(*role).is_none_or(|key| {
-                            rotation.previous_generation != key.generation
-                                || foks_crypto::derive_shared_public(
-                                    &rotation.previous_seed,
-                                    ENTITY_PUK_VERIFY,
-                                )
-                                .map_or(true, |public| {
-                                    public.verify_key != key.verify_key || public.hepk != key.hepk
-                                })
-                        })
-                })
+        if require_complete_rotation
+            && (rotations.len() != expected_roles.len()
+                || rotations
+                    .iter()
+                    .zip(&expected_roles)
+                    .any(|(rotation, role)| {
+                        rotation.role != *role
+                            || authenticated.verified.shared_key(*role).is_none_or(|key| {
+                                rotation.previous_generation != key.generation
+                                    || foks_crypto::derive_shared_public(
+                                        &rotation.previous_seed,
+                                        ENTITY_PUK_VERIFY,
+                                    )
+                                    .map_or(true, |public| {
+                                        public.verify_key != key.verify_key
+                                            || public.hepk != key.hepk
+                                    })
+                            })
+                    }))
         {
             return Err(Error::AccountRequest(
                 "revocation PUK rotation set is incomplete",
@@ -641,12 +692,16 @@ impl FoksClient {
             &authenticated.verified,
             rotations.iter().map(|rotation| &rotation.new_seed),
         )?;
-        let passphrase_annex = self.owner_passphrase_rotation_annex(
+        let (passphrase_annex, refreshed) = self.owner_passphrase_rotation_annex(
             host,
             signer_credential,
+            &authenticated,
             rotations,
             no_passphrase.is_some(),
         )?;
+        if let Some(refreshed) = refreshed {
+            authenticated = refreshed;
+        }
         let next_tree_location = random_bytes()?;
         let rotation_refs = rotations
             .iter()
@@ -720,13 +775,21 @@ impl FoksClient {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let puk_boxes = seal_software_puk_boxes(
-            host.host_id(),
-            &signer_credential.seed,
-            random_bytes()?,
-            &box_inputs,
-            &randomness,
-        )?;
+        let puk_boxes = if box_inputs.is_empty() {
+            foks_proto::SharedKeyBoxSet::new([0; 16], Vec::new(), None)?
+        } else {
+            seal_software_puk_boxes_mixed(
+                host.host_id(),
+                &signer_credential.seed,
+                random_bytes()?,
+                &box_inputs,
+                &randomness,
+                SoftwarePukBoxSetRandomness {
+                    ephemeral_secret: random_nonzero_p256_secret()?,
+                    time: now_milliseconds()?,
+                },
+            )?
+        };
         let mut seed_chain = Vec::with_capacity(rotations.len());
         for rotation in rotations {
             seed_chain.push(seal_puk_seed_chain_box(
@@ -770,7 +833,8 @@ impl FoksClient {
             &encoded,
             protected_store,
         )?;
-        let updated = match self.wait_for_user_transition(host, signer_credential, |user| {
+        let verifier = alternate_verifier.unwrap_or(signer_credential);
+        let updated = match self.wait_for_user_transition(host, verifier, |user| {
             !user.devices().iter().any(|device| &device.id == target)
         }) {
             Ok(updated) => updated,
@@ -795,7 +859,8 @@ impl FoksClient {
         }
         if let Some(expected) = &passphrase_annex {
             let stored = self.fetch_ppe_parcel(host, signer_credential)?;
-            crate::passphrase::validate_committed_update(&stored, expected)?;
+            crate::passphrase::validate_committed_or_superseded(&stored, expected)?;
+            self.confirm_committed_user_settings(host, signer_credential, expected, &stored)?;
         }
         MutationCoordinator::new(&host.database_path, protected_store)
             .remote_verified_and_finalize(&operation_id)?;
@@ -812,7 +877,46 @@ impl FoksClient {
         no_passphrase: Option<NoPassphraseConfigured>,
         protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<AuthenticatedUserOutcome> {
-        let authenticated = self.authenticate_and_pin(host, signer_credential)?;
+        self.rotate_software_puks_inner(
+            host,
+            signer_credential,
+            rotations,
+            no_passphrase,
+            protected_store,
+            true,
+        )
+    }
+
+    /// Test-only compatibility seam for modeling an upstream PUK rotation
+    /// whose PPE annex must be repaired by the background responder.
+    #[cfg(feature = "test-support")]
+    pub fn rotate_software_puks_without_passphrase_annex_for_test(
+        &self,
+        host: &PinnedHost,
+        signer_credential: &DeviceCredential,
+        rotations: &[UserPukRotation],
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<AuthenticatedUserOutcome> {
+        self.rotate_software_puks_inner(
+            host,
+            signer_credential,
+            rotations,
+            None,
+            protected_store,
+            false,
+        )
+    }
+
+    fn rotate_software_puks_inner(
+        &self,
+        host: &PinnedHost,
+        signer_credential: &DeviceCredential,
+        rotations: &[UserPukRotation],
+        no_passphrase: Option<NoPassphraseConfigured>,
+        protected_store: &mut impl ProtectedMutationStore,
+        include_passphrase_annex: bool,
+    ) -> Result<AuthenticatedUserOutcome> {
+        let mut authenticated = self.authenticate_and_pin(host, signer_credential)?;
         let signer = derive_device_public(&signer_credential.seed)?;
         let signer_state = authenticated
             .verified
@@ -867,12 +971,20 @@ impl FoksClient {
             &authenticated.verified,
             rotations.iter().map(|rotation| &rotation.new_seed),
         )?;
-        let passphrase_annex = self.owner_passphrase_rotation_annex(
-            host,
-            signer_credential,
-            rotations,
-            no_passphrase.is_some(),
-        )?;
+        let (passphrase_annex, refreshed) = if include_passphrase_annex {
+            self.owner_passphrase_rotation_annex(
+                host,
+                signer_credential,
+                &authenticated,
+                rotations,
+                no_passphrase.is_some(),
+            )?
+        } else {
+            (None, None)
+        };
+        if let Some(refreshed) = refreshed {
+            authenticated = refreshed;
+        }
 
         let next_tree_location = random_bytes()?;
         let rotation_refs = rotations
@@ -946,12 +1058,16 @@ impl FoksClient {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let puk_boxes = seal_software_puk_boxes(
+        let puk_boxes = seal_software_puk_boxes_mixed(
             host.host_id(),
             &signer_credential.seed,
             random_bytes()?,
             &box_inputs,
             &randomness,
+            SoftwarePukBoxSetRandomness {
+                ephemeral_secret: random_nonzero_p256_secret()?,
+                time: now_milliseconds()?,
+            },
         )?;
         let mut seed_chain = Vec::with_capacity(rotations.len());
         for rotation in rotations {
@@ -984,7 +1100,7 @@ impl FoksClient {
             host,
             MutationKind::PukRotation,
             authenticated.verified.uid(),
-            authenticated.verified.uid(),
+            &signer.id,
             authenticated.verified.chain_seqno() + 1,
             &encoded,
             protected_store,
@@ -1019,7 +1135,293 @@ impl FoksClient {
         };
         if let Some(expected) = &passphrase_annex {
             let stored = self.fetch_ppe_parcel(host, signer_credential)?;
-            crate::passphrase::validate_committed_update(&stored, expected)?;
+            crate::passphrase::validate_committed_or_superseded(&stored, expected)?;
+            self.confirm_committed_user_settings(host, signer_credential, expected, &stored)?;
+        }
+        MutationCoordinator::new(&host.database_path, protected_store)
+            .remote_verified_and_finalize(&operation_id)?;
+        Ok(updated)
+    }
+
+    /// Rotates a complete prefix of user PUK roles with a live Yubi owner.
+    /// Mixed software/Yubi rosters share one parent-signed temporary X25519
+    /// sender for software recipients while P-256 recipients use the enrolled
+    /// Yubi parent directly, matching v0.1.9 box-set semantics.
+    pub fn rotate_yubi_puks(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        rotations: &[UserPukRotation],
+        no_passphrase: Option<NoPassphraseConfigured>,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<AuthenticatedUserOutcome> {
+        self.rotate_yubi_puks_inner(
+            host,
+            credential,
+            rotations,
+            no_passphrase,
+            protected_store,
+            true,
+        )
+    }
+
+    /// Test-only seam for modeling a legitimate peer that advanced a PUK
+    /// without carrying the PPE annex repaired by the responder.
+    #[cfg(feature = "test-support")]
+    pub fn rotate_yubi_puks_without_passphrase_annex_for_test(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        rotations: &[UserPukRotation],
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<AuthenticatedUserOutcome> {
+        self.rotate_yubi_puks_inner(host, credential, rotations, None, protected_store, false)
+    }
+
+    fn rotate_yubi_puks_inner(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        rotations: &[UserPukRotation],
+        no_passphrase: Option<NoPassphraseConfigured>,
+        protected_store: &mut impl ProtectedMutationStore,
+        include_passphrase_annex: bool,
+    ) -> Result<AuthenticatedUserOutcome> {
+        let mut authenticated = self.authenticate_yubi_and_pin(host, credential)?;
+        let subkey = derive_subkey_id(&credential.subkey_seed)?;
+        let signer_state = authenticated
+            .verified
+            .devices()
+            .iter()
+            .find(|device| {
+                device.id == *credential.parent.entity_id()
+                    && device.hepk == *credential.parent.hepk()
+                    && device.subkey.as_ref() == Some(&subkey)
+            })
+            .ok_or(Error::UserBinding("Yubi signer is not enrolled"))?;
+        if signer_state.role != Role::OWNER {
+            return Err(Error::AccountRequest(
+                "PUK rotation requires an owner signer",
+            ));
+        }
+        let upper_role = rotations
+            .last()
+            .map(|rotation| rotation.role)
+            .ok_or(Error::AccountRequest("PUK rotation set is empty"))?;
+        let expected_roles = authenticated
+            .verified
+            .shared_keys()
+            .iter()
+            .filter(|key| key.role <= upper_role)
+            .map(|key| key.role)
+            .collect::<Vec<_>>();
+        if rotations.len() != expected_roles.len()
+            || rotations
+                .iter()
+                .zip(&expected_roles)
+                .any(|(rotation, role)| rotation.role != *role)
+        {
+            return Err(Error::AccountRequest(
+                "PUK rotation must be a complete ordered role prefix",
+            ));
+        }
+        for rotation in rotations {
+            let current =
+                authenticated
+                    .verified
+                    .shared_key(rotation.role)
+                    .ok_or(Error::UserBinding(
+                        "PUK role is missing from the user chain",
+                    ))?;
+            let previous =
+                foks_crypto::derive_shared_public(&rotation.previous_seed, ENTITY_PUK_VERIFY)?;
+            if rotation.previous_generation != current.generation
+                || previous.verify_key != current.verify_key
+                || previous.hepk != current.hepk
+            {
+                return Err(Error::AccountRequest("invalid replacement PUK material"));
+            }
+        }
+        validate_fresh_puk_seeds(
+            &authenticated.verified,
+            rotations.iter().map(|rotation| &rotation.new_seed),
+        )?;
+        let (passphrase_annex, refreshed) = if include_passphrase_annex {
+            self.owner_passphrase_rotation_annex_yubi(
+                host,
+                credential,
+                &authenticated,
+                rotations,
+                no_passphrase.is_some(),
+            )?
+        } else {
+            (None, None)
+        };
+        if let Some(refreshed) = refreshed {
+            authenticated = refreshed;
+        }
+
+        let recipients = authenticated
+            .verified
+            .devices()
+            .iter()
+            .map(|device| {
+                let valid_receiver = match device.id.entity_type() {
+                    foks_proto::ENTITY_YUBI => device.hepk.p256().is_some(),
+                    foks_proto::ENTITY_DEVICE => device.hepk.curve25519().is_some(),
+                    _ => false,
+                };
+                if !valid_receiver {
+                    return Err(Error::AccountRequest(
+                        "Yubi PUK rotation found an unsupported active recipient",
+                    ));
+                }
+                Ok((
+                    device.role,
+                    DevicePublicMaterial {
+                        id: device.id.clone(),
+                        hepk: device.hepk.clone(),
+                    },
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let next_tree_location = random_bytes()?;
+        let rotation_refs = rotations
+            .iter()
+            .map(|rotation| {
+                Ok(PukRotation {
+                    role: rotation.role,
+                    generation: rotation
+                        .previous_generation
+                        .checked_add(1)
+                        .ok_or(Error::AccountRequest("PUK generation overflow"))?,
+                    seed: &rotation.new_seed,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let link = make_yubi_puk_rotation_link(
+            &UserMutationBase {
+                uid: authenticated.verified.uid(),
+                host: authenticated.verified.host(),
+                seqno: authenticated
+                    .verified
+                    .chain_seqno()
+                    .checked_add(1)
+                    .ok_or(Error::AccountRequest("user sequence overflow"))?,
+                previous: authenticated.verified.chain_tail_hash(),
+                root: &authenticated.verified.tree_root(),
+                time: now_milliseconds()?,
+                next_tree_location,
+            },
+            credential.parent,
+            &rotation_refs,
+        )?;
+        let mut box_inputs = Vec::new();
+        for rotation in rotations {
+            let generation = rotation
+                .previous_generation
+                .checked_add(1)
+                .ok_or(Error::AccountRequest("PUK generation overflow"))?;
+            for receiver in recipients
+                .iter()
+                .filter(|(role, _)| *role >= rotation.role)
+                .map(|(_, receiver)| receiver)
+            {
+                box_inputs.push(YubiPukBoxInput {
+                    seed: &rotation.new_seed,
+                    generation,
+                    role: rotation.role,
+                    receiver,
+                });
+            }
+        }
+        let randomness = (0..box_inputs.len())
+            .map(|_| {
+                Ok(PukBoxRandomness {
+                    kem_message: random_bytes()?,
+                    nonce: random_bytes()?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let puk_boxes = seal_yubi_puk_boxes(
+            host.host_id(),
+            credential.parent,
+            random_bytes()?,
+            &box_inputs,
+            &randomness,
+            YubiPukBoxSetRandomness {
+                ephemeral_secret: random_bytes()?,
+                time: now_milliseconds()?,
+            },
+        )?;
+        let mut seed_chain = Vec::with_capacity(rotations.len());
+        for rotation in rotations {
+            seed_chain.push(seal_puk_seed_chain_box(
+                &rotation.new_seed,
+                &rotation.previous_seed,
+                authenticated.verified.uid(),
+                host.host_id(),
+                rotation.previous_generation,
+                rotation.role,
+                random_bytes()?,
+            )?);
+        }
+        let hepks = rotations
+            .iter()
+            .map(|rotation| {
+                foks_crypto::derive_shared_public(&rotation.new_seed, ENTITY_PUK_VERIFY)
+                    .map(|public| public.hepk)
+            })
+            .collect::<std::result::Result<Vec<_>, foks_crypto::Error>>()?;
+        let encoded = Zeroizing::new(encode_revoke_device_request(&RevokeDeviceArgument {
+            link: &link,
+            puk_boxes: &puk_boxes,
+            seed_chain: &seed_chain,
+            next_tree_location,
+            hepks: &hepks,
+            passphrase: passphrase_annex.as_ref(),
+        })?);
+        let operation_id = self.prepare_user_mutation(
+            host,
+            MutationKind::PukRotation,
+            authenticated.verified.uid(),
+            credential.parent.entity_id(),
+            authenticated.verified.chain_seqno() + 1,
+            &encoded,
+            protected_store,
+        )?;
+        let post_error = self.submit_user_mutation_yubi(
+            host,
+            credential,
+            operation_id,
+            &encoded,
+            protected_store,
+        )?;
+        let updated = match self.wait_for_yubi_transition(host, credential, |user| {
+            rotations.iter().all(|rotation| {
+                let Some(expected_generation) = rotation.previous_generation.checked_add(1) else {
+                    return false;
+                };
+                let Ok(expected) =
+                    foks_crypto::derive_shared_public(&rotation.new_seed, ENTITY_PUK_VERIFY)
+                else {
+                    return false;
+                };
+                user.shared_key(rotation.role).is_some_and(|key| {
+                    key.generation == expected_generation
+                        && key.verify_key == expected.verify_key
+                        && key.hepk == expected.hepk
+                })
+            })
+        }) {
+            Ok(updated) => updated,
+            Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
+            Err(error) => return Err(error),
+        };
+        if let Some(expected) = &passphrase_annex {
+            let stored = self.fetch_ppe_parcel_yubi(host, credential)?;
+            crate::passphrase::validate_committed_or_superseded(&stored, expected)?;
+            self.confirm_committed_user_settings_yubi(host, credential, expected, &stored)?;
         }
         MutationCoordinator::new(&host.database_path, protected_store)
             .remote_verified_and_finalize(&operation_id)?;
@@ -1030,16 +1432,34 @@ impl FoksClient {
         &self,
         host: &PinnedHost,
         credential: &DeviceCredential,
+        authenticated: &AuthenticatedUserOutcome,
         rotations: &[UserPukRotation],
         confirmed_no_passphrase: bool,
-    ) -> Result<Option<PassphraseUpdateArgument>> {
+    ) -> Result<(
+        Option<PassphraseUpdateArgument>,
+        Option<AuthenticatedUserOutcome>,
+    )> {
         let Some(owner) = rotations
             .iter()
             .find(|rotation| rotation.role == Role::OWNER)
         else {
-            return Ok(None);
+            return Ok((None, None));
         };
-        let parcel = match self.fetch_ppe_parcel(host, credential) {
+        self.retry_chain_load(host, |current_host| {
+        let fresh = self.authenticate_and_pin(current_host, credential)?;
+        if fresh.verified.chain_seqno() != authenticated.verified.chain_seqno()
+            || fresh.verified.chain_tail_hash() != authenticated.verified.chain_tail_hash()
+        {
+            return Err(Error::UserBinding(
+                "user chain changed while preparing the passphrase annex",
+            ));
+        }
+            let (_, authenticated_settings, _) = self.authenticated_user_settings(
+                current_host,
+                credential,
+                &fresh.verified,
+            )?;
+        let parcel = match self.fetch_ppe_parcel(current_host, credential) {
             Ok(_) if confirmed_no_passphrase => {
                 return Err(Error::AccountRequest(
                     "passphrase is configured; omit NoPassphraseConfigured so its PPE history is rotated",
@@ -1049,7 +1469,25 @@ impl FoksClient {
             Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
                 code: foks_rpc::STATUS_PASSPHRASE_NOT_FOUND_ERROR,
                 ..
-            })) if confirmed_no_passphrase => return Ok(None),
+            })) if confirmed_no_passphrase && authenticated_settings.is_none() => {
+                if !HardStateStore::open(&current_host.database_path)?.user_has_no_passphrase_attestation(
+                    current_host.host_id().as_bytes(),
+                    credential.uid.as_bytes(),
+                )? {
+                    return Err(Error::AccountRequest(
+                        "owner PUK rotation needs a trusted local no-passphrase attestation",
+                    ));
+                }
+                return Ok((None, Some(fresh)));
+            }
+            Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_PASSPHRASE_NOT_FOUND_ERROR,
+                ..
+            })) if confirmed_no_passphrase => {
+                return Err(Error::CredentialBinding(
+                    "server omitted PPE state committed by user settings",
+                ));
+            }
             Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
                 code: foks_rpc::STATUS_PASSPHRASE_NOT_FOUND_ERROR,
                 ..
@@ -1066,13 +1504,127 @@ impl FoksClient {
             .ok_or(Error::AccountRequest("PUK generation overflow"))?;
         let update = foks_crypto::rotate_passphrase_for_puk(
             &credential.uid,
-            host.host_id(),
+            current_host.host_id(),
             &parcel,
             &owner.previous_seed,
             &owner.new_seed,
             owner_generation,
         )?;
-        Ok(Some(update.argument()))
+        Ok((Some(self.with_user_settings_link(
+            current_host,
+            credential,
+            &fresh,
+            update.argument(),
+            Some(&parcel),
+            crate::passphrase::PassphrasePukTarget::FutureOwner {
+                previous_seed: &owner.previous_seed,
+                new_seed: &owner.new_seed,
+                new_generation: owner_generation,
+            },
+        )?), Some(fresh)))
+        })
+    }
+
+    fn owner_passphrase_rotation_annex_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        authenticated: &AuthenticatedUserOutcome,
+        rotations: &[UserPukRotation],
+        confirmed_no_passphrase: bool,
+    ) -> Result<(
+        Option<PassphraseUpdateArgument>,
+        Option<AuthenticatedUserOutcome>,
+    )> {
+        let Some(owner) = rotations
+            .iter()
+            .find(|rotation| rotation.role == Role::OWNER)
+        else {
+            return Ok((None, None));
+        };
+        self.retry_chain_load(host, |current_host| {
+            let fresh = self.authenticate_yubi_and_pin(current_host, credential)?;
+            if fresh.verified.chain_seqno() != authenticated.verified.chain_seqno()
+                || fresh.verified.chain_tail_hash() != authenticated.verified.chain_tail_hash()
+            {
+                return Err(Error::UserBinding(
+                    "user chain changed while preparing the passphrase annex",
+                ));
+            }
+            let (_, authenticated_settings, _) = self.authenticated_user_settings_yubi(
+                current_host,
+                credential,
+                &fresh.verified,
+            )?;
+            let parcel = match self.fetch_ppe_parcel_yubi(current_host, credential) {
+                Ok(_) if confirmed_no_passphrase => {
+                    return Err(Error::AccountRequest(
+                        "passphrase is configured; omit NoPassphraseConfigured so its PPE history is rotated",
+                    ));
+                }
+                Ok(parcel) => parcel,
+                Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                    code: foks_rpc::STATUS_PASSPHRASE_NOT_FOUND_ERROR,
+                    ..
+                })) if confirmed_no_passphrase && authenticated_settings.is_none() => {
+                    if !HardStateStore::open(&current_host.database_path)?
+                        .user_has_no_passphrase_attestation(
+                            current_host.host_id().as_bytes(),
+                            credential.uid.as_bytes(),
+                        )?
+                    {
+                        return Err(Error::AccountRequest(
+                            "owner PUK rotation needs a trusted local no-passphrase attestation",
+                        ));
+                    }
+                    return Ok((None, Some(fresh)));
+                }
+                Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                    code: foks_rpc::STATUS_PASSPHRASE_NOT_FOUND_ERROR,
+                    ..
+                })) if confirmed_no_passphrase => {
+                    return Err(Error::CredentialBinding(
+                        "server omitted PPE state committed by user settings",
+                    ));
+                }
+                Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                    code: foks_rpc::STATUS_PASSPHRASE_NOT_FOUND_ERROR,
+                    ..
+                })) => {
+                    return Err(Error::AccountRequest(
+                        "account has no passphrase; pass NoPassphraseConfigured for owner PUK rotation",
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
+            let owner_generation = owner
+                .previous_generation
+                .checked_add(1)
+                .ok_or(Error::AccountRequest("PUK generation overflow"))?;
+            let update = foks_crypto::rotate_passphrase_for_puk(
+                &credential.uid,
+                current_host.host_id(),
+                &parcel,
+                &owner.previous_seed,
+                &owner.new_seed,
+                owner_generation,
+            )?;
+            Ok((
+                Some(self.with_user_settings_link_yubi(
+                    current_host,
+                    credential,
+                    &fresh,
+                    update.argument(),
+                    Some(&parcel),
+                    crate::passphrase::PassphrasePukTarget::FutureOwner {
+                        previous_seed: &owner.previous_seed,
+                        new_seed: &owner.new_seed,
+                        new_generation: owner_generation,
+                    },
+                )?),
+                Some(fresh),
+            ))
+        })
     }
 
     /// Reconciles an interrupted software-device provision. A request is sent
@@ -1193,6 +1745,11 @@ impl FoksClient {
             &signer.uid,
             protected_store,
         )?;
+        if operation.subject_id != derive_device_public(&signer.seed)?.id.as_bytes() {
+            return Err(Error::OperationBinding(
+                "journaled PUK rotation belongs to another signer",
+            ));
+        }
         let post_error =
             self.resume_user_mutation_submission(host, signer, &operation, protected_store)?;
         let updated = match self.wait_for_user_transition(host, signer, |user| {
@@ -1222,6 +1779,299 @@ impl FoksClient {
         Ok(updated)
     }
 
+    /// Resumes a journaled PUK rotation from its exact protected request.
+    /// The request already contains all encrypted replacement material, so a
+    /// background worker must not generate a second set of seeds after a
+    /// crash or ambiguous submission.
+    pub fn resume_software_puk_rotation_from_journal(
+        &self,
+        host: &PinnedHost,
+        signer: &DeviceCredential,
+        operation_id: [u8; 16],
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<AuthenticatedUserOutcome> {
+        let operation = self.bound_user_mutation(
+            host,
+            operation_id,
+            MutationKind::PukRotation,
+            &signer.uid,
+            protected_store,
+        )?;
+        let request = MutationCoordinator::new(&host.database_path, protected_store)
+            .load_bound_material(&operation)?;
+        let decoded = decode_persisted_puk_rotation(&request)?;
+        let signer_id = derive_device_public(&signer.seed)?.id;
+        if operation.subject_id != signer_id.as_bytes()
+            || decoded.link.decode_group_change()?.signer != signer_id
+        {
+            return Err(Error::OperationBinding(
+                "journaled PUK rotation belongs to another signer",
+            ));
+        }
+        let sequence = decoded.link.decode_group_change()?.seqno;
+        if operation.expected_version != Some(sequence) {
+            return Err(Error::OperationBinding(
+                "persisted PUK rotation sequence changed",
+            ));
+        }
+        let link_hash =
+            foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, &decoded.link.encoded()?);
+        let current = self.authenticate_and_pin(host, signer)?;
+        if current.verified.chain_seqno() >= sequence
+            && !current
+                .verified
+                .contains_authenticated_link(sequence, &link_hash)?
+        {
+            MutationCoordinator::new(&host.database_path, protected_store)
+                .rejected(&operation_id)?;
+            return Err(Error::OperationBinding(
+                "journaled PUK rotation was superseded by another user link",
+            ));
+        }
+        let post_error =
+            self.resume_user_mutation_submission(host, signer, &operation, protected_store)?;
+        let updated = match self.wait_for_user_transition(host, signer, |user| {
+            user.contains_authenticated_link(sequence, &link_hash)
+                .unwrap_or(false)
+        }) {
+            Ok(updated) => updated,
+            Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
+            Err(error) => return Err(error),
+        };
+        self.confirm_persisted_passphrase_annex(host, signer, &operation, protected_store)?;
+        MutationCoordinator::new(&host.database_path, protected_store)
+            .remote_verified_and_finalize(&operation_id)?;
+        Ok(updated)
+    }
+
+    /// Resumes an exact caller-durable PUK rotation signed by the selected
+    /// Yubi parent. Hardware authorization is supplied afresh and is never
+    /// reconstructed from the journal.
+    pub fn resume_yubi_puk_rotation_from_journal(
+        &self,
+        host: &PinnedHost,
+        signer: &YubiCredential<'_>,
+        operation_id: [u8; 16],
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<AuthenticatedUserOutcome> {
+        let operation = self.bound_user_mutation(
+            host,
+            operation_id,
+            MutationKind::PukRotation,
+            &signer.uid,
+            protected_store,
+        )?;
+        let request = MutationCoordinator::new(&host.database_path, protected_store)
+            .load_bound_material(&operation)?;
+        let decoded = decode_persisted_puk_rotation(&request)?;
+        if operation.subject_id != signer.parent.entity_id().as_bytes()
+            || decoded.link.decode_group_change()?.signer != *signer.parent.entity_id()
+        {
+            return Err(Error::OperationBinding(
+                "journaled PUK rotation belongs to another signer",
+            ));
+        }
+        let sequence = decoded.link.decode_group_change()?.seqno;
+        if operation.expected_version != Some(sequence) {
+            return Err(Error::OperationBinding(
+                "persisted PUK rotation sequence changed",
+            ));
+        }
+        let link_hash =
+            foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, &decoded.link.encoded()?);
+        let current = self.authenticate_yubi_and_pin(host, signer)?;
+        if current.verified.chain_seqno() >= sequence
+            && !current
+                .verified
+                .contains_authenticated_link(sequence, &link_hash)?
+        {
+            MutationCoordinator::new(&host.database_path, protected_store)
+                .rejected(&operation_id)?;
+            return Err(Error::OperationBinding(
+                "journaled PUK rotation was superseded by another user link",
+            ));
+        }
+        let post_error =
+            self.resume_user_mutation_submission_yubi(host, signer, &operation, protected_store)?;
+        let updated = match self.wait_for_yubi_transition(host, signer, |user| {
+            user.contains_authenticated_link(sequence, &link_hash)
+                .unwrap_or(false)
+        }) {
+            Ok(updated) => updated,
+            Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
+            Err(error) => return Err(error),
+        };
+        self.confirm_persisted_passphrase_annex_yubi(host, signer, &operation, protected_store)?;
+        MutationCoordinator::new(&host.database_path, protected_store)
+            .remote_verified_and_finalize(&operation_id)?;
+        Ok(updated)
+    }
+
+    /// Reconciles a PUK-rotation journal with any authenticated credential for
+    /// the same user. Only the original signer may resend the request, but a
+    /// different owner can safely finalize an exact on-chain link, reject a
+    /// superseded/never-submitted request, or leave an ambiguous submission
+    /// pending while racing a fresh rotation at the same chain position.
+    pub fn reconcile_software_puk_rotation_from_journal(
+        &self,
+        host: &PinnedHost,
+        verifier: &DeviceCredential,
+        operation_id: [u8; 16],
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<AuthenticatedUserOutcome> {
+        let operation = self.bound_user_mutation(
+            host,
+            operation_id,
+            MutationKind::PukRotation,
+            &verifier.uid,
+            protected_store,
+        )?;
+        let request = MutationCoordinator::new(&host.database_path, protected_store)
+            .load_bound_material(&operation)?;
+        let decoded = decode_persisted_puk_rotation(&request)?;
+        let change = decoded.link.decode_group_change()?;
+        if operation.subject_id != change.signer.as_bytes()
+            || operation.expected_version != Some(change.seqno)
+        {
+            return Err(Error::OperationBinding(
+                "journaled PUK rotation binding changed",
+            ));
+        }
+        let link_hash =
+            foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, &decoded.link.encoded()?);
+        let current = self.authenticate_and_pin(host, verifier)?;
+        if current
+            .verified
+            .contains_authenticated_link(change.seqno, &link_hash)?
+        {
+            self.confirm_persisted_passphrase_annex(host, verifier, &operation, protected_store)?;
+            MutationCoordinator::new(&host.database_path, protected_store)
+                .remote_verified_and_finalize(&operation_id)?;
+        } else if current.verified.chain_seqno() >= change.seqno
+            || operation.state == MutationState::Prepared
+        {
+            MutationCoordinator::new(&host.database_path, protected_store)
+                .rejected(&operation_id)?;
+        }
+        Ok(current)
+    }
+
+    /// Hardware-transport variant of
+    /// [`Self::reconcile_software_puk_rotation_from_journal`]. The observing
+    /// Yubi need not be the original signer and therefore never resubmits the
+    /// exact request; it can only finalize an observed link or reject an
+    /// unsubmitted/superseded journal entry.
+    pub fn reconcile_yubi_puk_rotation_from_journal(
+        &self,
+        host: &PinnedHost,
+        verifier: &YubiCredential<'_>,
+        operation_id: [u8; 16],
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<AuthenticatedUserOutcome> {
+        let operation = self.bound_user_mutation(
+            host,
+            operation_id,
+            MutationKind::PukRotation,
+            &verifier.uid,
+            protected_store,
+        )?;
+        let request = MutationCoordinator::new(&host.database_path, protected_store)
+            .load_bound_material(&operation)?;
+        let decoded = decode_persisted_puk_rotation(&request)?;
+        let change = decoded.link.decode_group_change()?;
+        if operation.subject_id != change.signer.as_bytes()
+            || operation.expected_version != Some(change.seqno)
+        {
+            return Err(Error::OperationBinding(
+                "journaled PUK rotation binding changed",
+            ));
+        }
+        let link_hash =
+            foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, &decoded.link.encoded()?);
+        let current = self.authenticate_yubi_and_pin(host, verifier)?;
+        if current
+            .verified
+            .contains_authenticated_link(change.seqno, &link_hash)?
+        {
+            self.confirm_persisted_passphrase_annex_yubi(
+                host,
+                verifier,
+                &operation,
+                protected_store,
+            )?;
+            MutationCoordinator::new(&host.database_path, protected_store)
+                .remote_verified_and_finalize(&operation_id)?;
+        } else if current.verified.chain_seqno() >= change.seqno
+            || operation.state == MutationState::Prepared
+        {
+            MutationCoordinator::new(&host.database_path, protected_store)
+                .rejected(&operation_id)?;
+        }
+        Ok(current)
+    }
+
+    pub fn journaled_puk_rotation_requires_passphrase_capability(
+        &self,
+        host: &PinnedHost,
+        signer: &DeviceCredential,
+        operation_id: [u8; 16],
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<bool> {
+        let operation = self.bound_user_mutation(
+            host,
+            operation_id,
+            MutationKind::PukRotation,
+            &signer.uid,
+            protected_store,
+        )?;
+        let request = MutationCoordinator::new(&host.database_path, protected_store)
+            .load_bound_material(&operation)?;
+        let decoded = decode_persisted_puk_rotation(&request)?;
+        if operation.subject_id != decoded.link.decode_group_change()?.signer.as_bytes() {
+            return Err(Error::OperationBinding(
+                "journaled PUK rotation binding changed",
+            ));
+        }
+        Ok(decoded.passphrase.is_some()
+            || decoded
+                .link
+                .decode_group_change()?
+                .shared_keys
+                .iter()
+                .any(|key| key.role == Role::OWNER))
+    }
+
+    pub fn journaled_yubi_puk_rotation_requires_passphrase_capability(
+        &self,
+        host: &PinnedHost,
+        signer: &YubiCredential<'_>,
+        operation_id: [u8; 16],
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<bool> {
+        let operation = self.bound_user_mutation(
+            host,
+            operation_id,
+            MutationKind::PukRotation,
+            &signer.uid,
+            protected_store,
+        )?;
+        let request = MutationCoordinator::new(&host.database_path, protected_store)
+            .load_bound_material(&operation)?;
+        let decoded = decode_persisted_puk_rotation(&request)?;
+        if operation.subject_id != decoded.link.decode_group_change()?.signer.as_bytes() {
+            return Err(Error::OperationBinding(
+                "journaled PUK rotation binding changed",
+            ));
+        }
+        Ok(decoded.passphrase.is_some()
+            || decoded
+                .link
+                .decode_group_change()?
+                .shared_keys
+                .iter()
+                .any(|key| key.role == Role::OWNER))
+    }
+
     fn confirm_persisted_passphrase_annex(
         &self,
         host: &PinnedHost,
@@ -1231,26 +2081,44 @@ impl FoksClient {
     ) -> Result<()> {
         let request = MutationCoordinator::new(&host.database_path, protected_store)
             .load_bound_material(operation)?;
-        let call = foks_rpc::decode_call(&request)
-            .map_err(|_| Error::OperationBinding("persisted user mutation request is malformed"))?;
-        if call.protocol_id() != foks_rpc::USER_PROTOCOL_ID
-            || call.method_position() != foks_rpc::USER_REVOKE_DEVICE_METHOD_POSITION
-        {
-            return Err(Error::OperationBinding(
-                "persisted user mutation request targets another route",
-            ));
-        }
-        let decoded = foks_rpc::arguments::decode_revoke_device(call.argument()).map_err(|_| {
-            Error::OperationBinding("persisted user mutation argument is malformed")
-        })?;
-        if let Some(expected) = decoded.passphrase {
+        let decoded = decode_persisted_puk_rotation(&request)?;
+        if let Some(mut expected) = decoded.passphrase {
             let stored = self.fetch_ppe_parcel(host, credential)?;
-            crate::passphrase::validate_committed_update(&stored, &expected)?;
+            // ChangePassphraseArg omits the salt. It is safe to bind from the
+            // current parcel only when this exact generation is still current;
+            // a later committed update can carry a different salt, while the
+            // signed UserSettings link remains authoritative for this update.
+            if stored.generation == expected.generation {
+                expected.salt = stored.salt;
+            }
+            crate::passphrase::validate_committed_or_superseded(&stored, &expected)?;
+            self.confirm_committed_user_settings(host, credential, &expected, &stored)?;
         }
         Ok(())
     }
 
-    fn bound_user_mutation(
+    fn confirm_persisted_passphrase_annex_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        operation: &MutationOperation,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<()> {
+        let request = MutationCoordinator::new(&host.database_path, protected_store)
+            .load_bound_material(operation)?;
+        let decoded = decode_persisted_puk_rotation(&request)?;
+        if let Some(mut expected) = decoded.passphrase {
+            let stored = self.fetch_ppe_parcel_yubi(host, credential)?;
+            if stored.generation == expected.generation {
+                expected.salt = stored.salt;
+            }
+            crate::passphrase::validate_committed_or_superseded(&stored, &expected)?;
+            self.confirm_committed_user_settings_yubi(host, credential, &expected, &stored)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn bound_user_mutation(
         &self,
         host: &PinnedHost,
         operation_id: [u8; 16],
@@ -1282,7 +2150,7 @@ impl FoksClient {
         Ok(operation)
     }
 
-    fn resume_user_mutation_submission(
+    pub(crate) fn resume_user_mutation_submission(
         &self,
         host: &PinnedHost,
         credential: &DeviceCredential,
@@ -1301,9 +2169,51 @@ impl FoksClient {
                     protected_store,
                 )
             }
-            MutationState::Submitting
-            | MutationState::SubmissionUnknown
-            | MutationState::RemoteVerified => Ok(None),
+            MutationState::Submitting | MutationState::SubmissionUnknown => {
+                let request = MutationCoordinator::new(&host.database_path, protected_store)
+                    .load_bound_material(operation)?;
+                Ok(self.call_void(host, &host.user, &request, credential).err())
+            }
+            MutationState::RemoteVerified => Ok(None),
+            MutationState::Finalized | MutationState::Rejected => {
+                Err(Error::OperationBinding("user mutation is terminal"))
+            }
+        }
+    }
+
+    fn resume_user_mutation_submission_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        operation: &MutationOperation,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<Option<Error>> {
+        match operation.state {
+            MutationState::Prepared => {
+                let request = MutationCoordinator::new(&host.database_path, protected_store)
+                    .load_bound_material(operation)?;
+                self.submit_user_mutation_yubi(
+                    host,
+                    credential,
+                    operation.operation_id,
+                    &request,
+                    protected_store,
+                )
+            }
+            MutationState::Submitting | MutationState::SubmissionUnknown => {
+                let request = MutationCoordinator::new(&host.database_path, protected_store)
+                    .load_bound_material(operation)?;
+                Ok(self
+                    .call_void_with_material(
+                        host,
+                        &host.user,
+                        &request,
+                        &credential.subkey_seed,
+                        &credential.certificate_chain,
+                    )
+                    .err())
+            }
+            MutationState::RemoteVerified => Ok(None),
             MutationState::Finalized | MutationState::Rejected => {
                 Err(Error::OperationBinding("user mutation is terminal"))
             }
@@ -1311,7 +2221,7 @@ impl FoksClient {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn prepare_user_mutation(
+    pub(crate) fn prepare_user_mutation(
         &self,
         host: &PinnedHost,
         kind: MutationKind,
@@ -1340,7 +2250,7 @@ impl FoksClient {
         Ok(operation_id)
     }
 
-    fn submit_user_mutation(
+    pub(crate) fn submit_user_mutation(
         &self,
         host: &PinnedHost,
         credential: &DeviceCredential,
@@ -1351,6 +2261,32 @@ impl FoksClient {
         MutationCoordinator::new(&host.database_path, protected_store)
             .begin_submission(&operation_id)?;
         match self.call_void(host, &host.user, encoded, credential) {
+            Ok(()) => Ok(None),
+            Err(error) => {
+                MutationCoordinator::new(&host.database_path, protected_store)
+                    .submission_unknown(&operation_id)?;
+                Ok(Some(error))
+            }
+        }
+    }
+
+    fn submit_user_mutation_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        operation_id: [u8; 16],
+        encoded: &[u8],
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<Option<Error>> {
+        MutationCoordinator::new(&host.database_path, protected_store)
+            .begin_submission(&operation_id)?;
+        match self.call_void_with_material(
+            host,
+            &host.user,
+            encoded,
+            &credential.subkey_seed,
+            &credential.certificate_chain,
+        ) {
             Ok(()) => Ok(None),
             Err(error) => {
                 MutationCoordinator::new(&host.database_path, protected_store)
@@ -1405,6 +2341,24 @@ impl FoksClient {
     }
 }
 
+fn decode_persisted_puk_rotation(
+    request: &[u8],
+) -> Result<foks_proto::DecodedRevokeDeviceArgument> {
+    let mut framed = std::io::Cursor::new(request);
+    let call = foks_rpc::read_call(&mut framed, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)
+        .map_err(|_| Error::OperationBinding("persisted PUK rotation is malformed"))?;
+    if usize::try_from(framed.position()).ok() != Some(request.len())
+        || call.protocol_id() != foks_rpc::USER_PROTOCOL_ID
+        || call.method_position() != foks_rpc::USER_REVOKE_DEVICE_METHOD_POSITION
+    {
+        return Err(Error::OperationBinding(
+            "persisted PUK rotation targets another route",
+        ));
+    }
+    foks_rpc::arguments::decode_revoke_device(call.argument())
+        .map_err(|_| Error::OperationBinding("persisted PUK rotation is malformed"))
+}
+
 fn random_nonzero_p256_secret() -> Result<[u8; 32]> {
     loop {
         let mut bytes: [u8; 32] = random_bytes()?;
@@ -1415,5 +2369,25 @@ fn random_nonzero_p256_secret() -> Result<[u8; 32]> {
         if bytes != [0; 32] {
             return Ok(bytes);
         }
+    }
+}
+
+#[cfg(test)]
+mod journal_tests {
+    use super::*;
+
+    #[test]
+    fn persisted_rotation_parser_accepts_one_exact_framed_call() {
+        let frame = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../foks-snowpack/tests/fixtures/foks-v0.1.9/user-mutations/rotation-request.frame"
+        ))
+        .unwrap();
+        let decoded = decode_persisted_puk_rotation(&frame).unwrap();
+        assert!(decoded.link.decode_group_change().unwrap().seqno > 0);
+
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(decode_persisted_puk_rotation(&trailing).is_err());
     }
 }

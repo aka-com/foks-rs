@@ -113,7 +113,7 @@ pub(crate) fn commit_for_entity(
             foks_proto::CHAIN_TYPE_USER_SETTINGS,
             Some((info.generation, info.salt, info.stretch_version)),
         ),
-        GenericLinkPayload::TeamMembership => (foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP, None),
+        GenericLinkPayload::TeamMembership(_) => (foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP, None),
     };
     if entity.entity_type() != foks_proto::ENTITY_USER
         && chain_type != foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP

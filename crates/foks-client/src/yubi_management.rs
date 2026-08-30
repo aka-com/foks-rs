@@ -210,6 +210,39 @@ impl FoksClient {
         self.put_yubi_management_key(host, credential, &refreshed)?;
         Ok(YubiEnvelopeRefresh::Reencrypted)
     }
+
+    /// Hardware-transport variant of [`Self::refresh_yubi_management_key`].
+    /// The management envelope is PUK-encrypted, so the delegated software
+    /// subkey is used only for the authenticated RPC transport.
+    pub fn refresh_yubi_management_key_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        current_puk: &UserPrivateKey,
+        loaded_puks: &[UserPrivateKey],
+    ) -> Result<YubiEnvelopeRefresh> {
+        let parent = credential.parent.entity_id();
+        let stored = self.get_yubi_management_key_yubi(host, credential, parent)?;
+        if stored.role == current_puk.role && stored.generation == current_puk.generation {
+            let _ = decrypt_yubi_management_key(&stored, loaded_puks)?;
+            return Ok(YubiEnvelopeRefresh::Fresh);
+        }
+        if stored.role != current_puk.role || stored.generation > current_puk.generation {
+            return Err(Error::KeyBinding(
+                "Yubi management-key envelope has an incompatible PUK version",
+            ));
+        }
+        let recovered = decrypt_yubi_management_key(&stored, loaded_puks)?;
+        let refreshed = encrypt_yubi_management_key(
+            current_puk,
+            &recovered.yubi_id,
+            recovered.card,
+            recovered.slot,
+            &recovered.management_key,
+        )?;
+        self.put_yubi_management_key_yubi(host, credential, &refreshed)?;
+        Ok(YubiEnvelopeRefresh::Reencrypted)
+    }
 }
 
 fn decode_management_key_for_parent(

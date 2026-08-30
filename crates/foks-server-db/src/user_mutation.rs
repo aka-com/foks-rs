@@ -56,6 +56,7 @@ pub struct UserMutation<'a> {
     pub expected_tail_hash: &'a [u8; 32],
     pub link_hash: &'a [u8; 32],
     pub exact_link: &'a [u8],
+    pub current_tree_location: &'a [u8; 32],
     pub next_tree_location: &'a [u8; 32],
     pub added_credential: Option<AddedCredential<'a>>,
     pub revoked_device_id: Option<&'a [u8]>,
@@ -63,6 +64,7 @@ pub struct UserMutation<'a> {
     pub parcels: &'a [ParcelMutation<'a>],
     pub seed_chain: &'a [SeedChainMutation<'a>],
     pub passphrase: Option<crate::PassphraseMutation<'a>>,
+    pub user_settings: Option<crate::GenericLinkMutation<'a>>,
     pub expected_root_epoch: u64,
     pub expected_root_hash: &'a [u8; 32],
     pub merkle_commit: &'a foks_merkle_store::Commit,
@@ -270,6 +272,14 @@ impl Database {
             owner_generation,
             mutation.passphrase,
         )?;
+        if let Some(settings) = &mutation.user_settings {
+            crate::generic::insert_generic_link(
+                &transaction,
+                &self.config,
+                settings,
+                mutation.root_epoch,
+            )?;
+        }
         inject(failure, UserMutationFailurePoint::Passphrase)?;
 
         for (hash, encoded) in &mutation.merkle_commit.nodes {
@@ -360,6 +370,31 @@ fn validate(database: &Database, mutation: &UserMutation<'_>) -> Result<()> {
         || mutation.receipt_expires_at <= mutation.now
     {
         return Err(Error::Invalid("user mutation"));
+    }
+    let uid = foks_proto::EntityId::from_bytes(mutation.uid.to_vec())
+        .map_err(|_| Error::Invalid("user mutation entity"))?;
+    let mut expected_leaves = vec![(
+        foks_merkle_store::chain_key(
+            0,
+            &uid,
+            mutation.expected_sequence,
+            Some(mutation.current_tree_location),
+        )?,
+        *mutation.link_hash,
+    )];
+    if let Some(settings) = &mutation.user_settings {
+        expected_leaves.push((
+            foks_merkle_store::chain_key(
+                settings.chain_type,
+                &uid,
+                settings.sequence,
+                Some(settings.current_tree_location),
+            )?,
+            *settings.link_hash,
+        ));
+    }
+    if mutation.merkle_leaves != expected_leaves {
+        return Err(Error::Invalid("user mutation Merkle leaves"));
     }
     let expected = foks_merkle_store::back_pointer_sequence(mutation.root_epoch);
     if mutation

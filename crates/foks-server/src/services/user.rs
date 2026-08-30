@@ -5,7 +5,7 @@ use foks_rpc::RpcStatus;
 use foks_snowpack::{decode, encode, Value};
 
 use crate::auth::Principal;
-use crate::{net::session::OwnedPassphraseMutation, WriterHandle};
+use crate::WriterHandle;
 
 pub(crate) fn ping(
     database: &foks_server_db::ReadSnapshot<'_>,
@@ -34,8 +34,10 @@ pub(crate) fn resolve_username(
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or_else(permission_denied)?;
     match request.authorization {
-        foks_rpc::arguments::ResolveUsernameAuthorization::LocalUser
-            if principal.is_some_and(|principal| uid.as_slice() == principal.uid()) => {}
+        // `AsLocalUser` proves the caller is an active local account; it is
+        // not a self-only selector. Team administration resolves another
+        // local username before that user has a team-view capability.
+        foks_rpc::arguments::ResolveUsernameAuthorization::LocalUser if principal.is_some() => {}
         foks_rpc::arguments::ResolveUsernameAuthorization::OpenHost => {}
         _ => return Err(permission_denied()),
     }
@@ -80,55 +82,6 @@ pub(crate) fn clear_device_nag(
             Ok(())
         })
         .map_err(map_device_nag_write_error)
-}
-
-pub(crate) fn set_passphrase(
-    database: &foks_server_db::ReadDatabase,
-    writer: &WriterHandle,
-    clock: &Arc<dyn foks_server_db::Clock>,
-    argument: &[u8],
-    principal: &Principal,
-) -> Result<(), RpcStatus> {
-    authorize_database(database, principal)?;
-    principal.require_ordinary_device()?;
-    let decoded = foks_rpc::arguments::decode_set_passphrase(argument).map_err(bad_arguments)?;
-    let owned = OwnedPassphraseMutation::from_argument(&decoded)
-        .map_err(|_| bad_arguments("invalid passphrase boxes"))?;
-    let uid = principal.uid().to_vec();
-    let credential = principal.device_id().to_vec();
-    writer
-        .call_with_current_time(Arc::clone(clock), move |database, now| {
-            database.set_passphrase(&uid, &credential, owned.as_database(now))?;
-            Ok(())
-        })
-        .map_err(map_passphrase_write_error)
-}
-
-pub(crate) fn change_passphrase(
-    database: &foks_server_db::ReadDatabase,
-    writer: &WriterHandle,
-    clock: &Arc<dyn foks_server_db::Clock>,
-    argument: &[u8],
-    principal: &Principal,
-) -> Result<(), RpcStatus> {
-    authorize_database(database, principal)?;
-    principal.require_ordinary_device()?;
-    let current = database
-        .passphrase(principal.uid())
-        .map_err(|_| RpcStatus::TransactionRetry)?
-        .ok_or(RpcStatus::PassphraseNotFound)?;
-    let decoded = foks_rpc::arguments::decode_change_passphrase(argument, current.salt)
-        .map_err(bad_arguments)?;
-    let owned = OwnedPassphraseMutation::from_argument(&decoded)
-        .map_err(|_| bad_arguments("invalid passphrase boxes"))?;
-    let uid = principal.uid().to_vec();
-    let credential = principal.device_id().to_vec();
-    writer
-        .call_with_current_time(Arc::clone(clock), move |database, now| {
-            database.change_passphrase(&uid, &credential, owned.as_database(now))?;
-            Ok(())
-        })
-        .map_err(map_passphrase_write_error)
 }
 
 pub(crate) fn passphrase_salt(
@@ -332,22 +285,6 @@ fn authorize_database(
     Ok(())
 }
 
-fn map_passphrase_write_error(error: crate::Error) -> RpcStatus {
-    match error {
-        crate::Error::AuthorizationChanged => permission_denied(),
-        crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
-        crate::Error::Database(foks_server_db::Error::PassphraseNotFound) => {
-            RpcStatus::PassphraseNotFound
-        }
-        crate::Error::Database(foks_server_db::Error::PassphraseGeneration) => {
-            RpcStatus::BadArguments("passphrase generation is stale".to_owned())
-        }
-        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::RateLimited,
-        _ => RpcStatus::TransactionRetry,
-    }
-}
-
 fn map_yubi_write_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::AuthorizationChanged
@@ -447,9 +384,7 @@ fn authorize_user_chain_load(
                 .resolve_team_view_token(&crate::auth::team::token_hash(token), now)
                 .map_err(|_| RpcStatus::TransactionRetry)?
                 .ok_or(RpcStatus::Expired)?;
-            if authority.member_id != principal.uid()
-                || authority.member_host_id != host.as_bytes()
-                || !role_can_load_members(&authority)
+            if authority.member_id != principal.uid() || authority.member_host_id != host.as_bytes()
             {
                 return Err(permission_denied());
             }
@@ -457,14 +392,12 @@ fn authorize_user_chain_load(
                 .team(&authority.team_id)
                 .map_err(|_| RpcStatus::TransactionRetry)?
                 .ok_or_else(permission_denied)?;
+            let minimum = database
+                .team_local_view_permission(&authority.team_id, request.uid.as_bytes())
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .ok_or_else(permission_denied)?;
             if team.host_id != host.as_bytes()
-                || !team.members.iter().any(|member| {
-                    member.party_id == request.uid.as_bytes()
-                        && member
-                            .scoped_host_id
-                            .as_deref()
-                            .is_none_or(|scope| scope == host.as_bytes())
-                })
+                || !role_can_load_members(&authority, minimum.0, minimum.1)
             {
                 return Err(permission_denied());
             }
@@ -475,10 +408,19 @@ fn authorize_user_chain_load(
     }
 }
 
-pub(super) fn role_can_load_members(authority: &foks_server_db::TeamViewAuthoritySnapshot) -> bool {
-    authority.effective_role_type > foks_proto::Role::member(0).protocol_value()
-        || (authority.effective_role_type == foks_proto::Role::member(0).protocol_value()
-            && authority.effective_visibility >= 0)
+pub(super) fn role_can_load_members(
+    authority: &foks_server_db::TeamViewAuthoritySnapshot,
+    minimum_role_type: u64,
+    minimum_role_visibility: i64,
+) -> bool {
+    let effective = crate::auth::team::stored_role(
+        authority.effective_role_type,
+        authority.effective_visibility,
+    );
+    let floor = crate::auth::team::stored_role(minimum_role_type, minimum_role_visibility);
+    effective
+        .zip(floor)
+        .is_some_and(|(effective, floor)| effective >= floor)
 }
 
 pub(crate) fn render_user_chain(

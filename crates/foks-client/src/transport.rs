@@ -98,6 +98,34 @@ impl ControlledTcpStream {
     fn set_control(&mut self, control: OperationControl) {
         self.control = control;
     }
+
+    /// True when the peer has not closed this idle socket and nothing is
+    /// already pending on it.
+    ///
+    /// A server closes a kept-alive session once its own idle timeout
+    /// elapses. Without this check the close is discovered only when the next
+    /// request fails mid-flight, which cannot be retried safely because the
+    /// request may already have been processed. Probing before reuse keeps
+    /// every RPC exactly-once: a dead connection is replaced before anything
+    /// is written. Operations that idle for a long time between calls -- a
+    /// hardware-backed credential waiting on a person, most of all -- would
+    /// otherwise fail on their first call after the pause.
+    fn is_reusable(&self) -> bool {
+        if self.inner.set_nonblocking(true).is_err() {
+            return false;
+        }
+        let mut probe = [0_u8; 1];
+        let live = matches!(
+            self.inner.peek(&mut probe),
+            // Nothing readable: an ordinary idle keep-alive connection.
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+        );
+        // Zero bytes is a clean peer close and any already-readable byte on an
+        // idle connection is a close_notify or a desynchronized stream. Both
+        // are discarded, as is a socket that cannot be restored to blocking
+        // mode, because the per-operation read and write timeouts require it.
+        self.inner.set_nonblocking(false).is_ok() && live
+    }
 }
 
 impl Read for ControlledTcpStream {
@@ -776,14 +804,21 @@ impl FoksClient {
                 .connection_pool
                 .lock()
                 .map_err(|_| Error::Transport("connection pool lock is poisoned"))?;
-            let connection = pool.idle.get_mut(&key).and_then(Vec::pop);
-            if connection.is_some() {
+            // Discard every idle connection the peer has already closed
+            // rather than handing one out to fail on its first write.
+            let live = loop {
+                let Some(connection) = pool.idle.get_mut(&key).and_then(Vec::pop) else {
+                    break None;
+                };
                 pool.idle_count -= 1;
-            }
+                if connection.stream.sock.is_reusable() {
+                    break Some(connection);
+                }
+            };
             if pool.idle.get(&key).is_some_and(Vec::is_empty) {
                 pool.idle.remove(&key);
             }
-            connection
+            live
         };
         let connection = match pooled {
             Some(mut connection) => {

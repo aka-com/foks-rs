@@ -59,6 +59,18 @@ pub(crate) struct Command {
     pub parcels: Vec<Parcel>,
     pub seed_chain: Vec<SeedChainBox>,
     pub passphrase: Option<foks_proto::PassphraseUpdateArgument>,
+    pub user_settings: Option<UserSettingsMutation>,
+}
+
+pub(crate) struct UserSettingsMutation {
+    pub signer: Vec<u8>,
+    pub sequence: u64,
+    pub previous: Option<[u8; 32]>,
+    pub root: foks_proto::TreeRoot,
+    pub next_tree_location: [u8; 32],
+    pub link_hash: [u8; 32],
+    pub exact_link: Vec<u8>,
+    pub info: foks_proto::PassphraseInfo,
 }
 
 pub(crate) fn validate(
@@ -221,6 +233,80 @@ pub(crate) fn validate(
         })
         .collect();
     let exact_link = link.encoded()?;
+    let user_settings = passphrase
+        .as_ref()
+        .and_then(|passphrase| {
+            passphrase
+                .user_settings_link
+                .as_ref()
+                .map(|link| (passphrase, link))
+        })
+        .map(|(passphrase, link)| {
+            let decoded = link.link.decode_generic()?;
+            let foks_proto::GenericLinkPayload::UserSettings(info) = decoded.payload else {
+                return Err(Error::Signup("passphrase annex generic payload"));
+            };
+            let next_wire = foks_snowpack::encode(&foks_snowpack::Value::Binary(
+                link.next_tree_location.to_vec(),
+            ))?;
+            if decoded.entity.as_bytes() != authority.uid {
+                return Err(Error::Signup("passphrase settings entity mismatch"));
+            }
+            if decoded.host != *host {
+                return Err(Error::Signup("passphrase settings host mismatch"));
+            }
+            if decoded.signer.as_bytes() != principal {
+                return Err(Error::Signup("passphrase settings signer mismatch"));
+            }
+            // ChangePassphraseArg omits the salt, so revoke-annex decoding is
+            // intentionally unbound here. The database transaction validates
+            // the settings salt against the authoritative PPE snapshot after
+            // applying the update.
+            if info.generation != passphrase.generation
+                || info.stretch_version != passphrase.stretch_version.protocol_value()
+            {
+                return Err(Error::Signup("passphrase settings payload mismatch"));
+            }
+            if link.link.signatures().len() != 1
+                || foks_crypto::verify_typed(
+                    &decoded.signer,
+                    &link.link.signatures()[0],
+                    foks_proto::LINK_OUTER_V1_TYPE_ID,
+                    &link.link.signing_bytes(0)?,
+                )
+                .is_err()
+            {
+                return Err(Error::Signup("passphrase settings signature mismatch"));
+            }
+            if decoded.next_location_commitment
+                != foks_crypto::prefixed_hash_signable(
+                    foks_proto::TREE_LOCATION_TYPE_ID,
+                    &next_wire,
+                )?
+            {
+                return Err(Error::Signup("passphrase settings location mismatch"));
+            }
+            let exact_link = link.link.encoded()?;
+            Ok(UserSettingsMutation {
+                signer: decoded.signer.into_bytes(),
+                sequence: decoded.sequence,
+                previous: decoded.previous,
+                root: decoded.root,
+                next_tree_location: link.next_tree_location,
+                link_hash: foks_crypto::prefixed_hash_signable(
+                    foks_proto::LINK_OUTER_TYPE_ID,
+                    &exact_link,
+                )?,
+                exact_link,
+                info,
+            })
+        })
+        .transpose()?;
+    if passphrase.is_some() && user_settings.is_none() {
+        return Err(Error::Signup(
+            "configured passphrase annex omitted its UserSettings link",
+        ));
+    }
     Ok(Command {
         uid: authority.uid.clone(),
         signer: verified.change.signer.as_bytes().to_vec(),
@@ -238,6 +324,7 @@ pub(crate) fn validate(
         parcels,
         seed_chain,
         passphrase,
+        user_settings,
     })
 }
 

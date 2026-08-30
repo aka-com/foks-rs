@@ -5,7 +5,8 @@ use super::{
     encode_clear_device_nag_request, encode_get_client_cert_chain_request_at,
     encode_get_current_merkle_root_hash_request, encode_get_current_merkle_root_signed_request,
     encode_get_device_nag_request, encode_get_historical_merkle_roots_request,
-    encode_get_puk_for_role_request, encode_load_user_chain_request_from,
+    encode_get_puk_for_role_request, encode_load_user_chain_as_local_team_request,
+    encode_load_user_chain_open_host_request, encode_load_user_chain_request_from,
     encode_merkle_check_key_exists_request, encode_merkle_lookup_request,
     encode_merkle_multi_lookup_request, encode_merkle_select_vhost_request,
     encode_registration_select_vhost_request, encode_resolve_username_request,
@@ -17,8 +18,11 @@ use super::{
     SecretSeed, Value, VerifiedMerkleAdvance, VerifiedUserState, YubiDevice, ENTITY_USER,
 };
 use foks_crypto::{open_subkey_box, sign_yubi_typed};
-use foks_proto::{RegistrationChallenge, ENTITY_SUBKEY, REG_CHALLENGE_PAYLOAD_TYPE_ID};
+use foks_proto::{
+    RegistrationChallenge, TeamChain, UserChain, ENTITY_SUBKEY, REG_CHALLENGE_PAYLOAD_TYPE_ID,
+};
 use foks_rpc::{encode_get_subkey_box_challenge_request, encode_load_subkey_box_request};
+use foks_verify::team_chain_root_epochs;
 
 const YUBI_CHALLENGE_WINDOW_MILLISECONDS: u64 = 15 * 60 * 1_000;
 
@@ -37,6 +41,88 @@ pub struct YubiCredential<'a> {
     pub parent: &'a dyn YubiDevice,
     pub subkey_seed: SecretSeed,
     pub certificate_chain: Vec<Vec<u8>>,
+}
+
+/// One acting credential for an operation that can be driven either by a
+/// software device or by an already-unlocked Yubi parent. Both forms present
+/// the same transport shape to the host: an Ed25519 mTLS seed plus its
+/// certificate chain. A Yubi parent's private key never appears here; only
+/// its delegated software subkey is used for mTLS, exactly as
+/// [`FoksClient::authenticate_yubi_and_pin`] does.
+#[derive(Clone, Copy)]
+pub enum FederationCredential<'a, 'device> {
+    Software(&'a DeviceCredential),
+    Yubi(&'a YubiCredential<'device>),
+}
+
+impl<'a, 'device> FederationCredential<'a, 'device> {
+    pub fn uid(&self) -> &'a EntityId {
+        match self {
+            Self::Software(credential) => &credential.uid,
+            Self::Yubi(credential) => &credential.uid,
+        }
+    }
+
+    /// True when hardware holds the acting chain device's private key.
+    pub fn is_hardware(&self) -> bool {
+        matches!(self, Self::Yubi(_))
+    }
+
+    /// mTLS material. For a Yubi credential this is the delegated subkey, so
+    /// no hardware secret is ever copied out of the device.
+    pub(crate) fn transport(&self) -> (&'a SecretSeed, &'a [Vec<u8>]) {
+        match self {
+            Self::Software(credential) => (&credential.seed, &credential.certificate_chain),
+            Self::Yubi(credential) => (&credential.subkey_seed, &credential.certificate_chain),
+        }
+    }
+
+    /// The chain device that must be enrolled for this credential to act:
+    /// the software device itself, or the Yubi parent.
+    pub fn device_id(&self) -> Result<EntityId> {
+        match self {
+            Self::Software(credential) => Ok(derive_device_public(&credential.seed)?.id),
+            Self::Yubi(credential) => Ok(credential.parent.entity_id().clone()),
+        }
+    }
+
+    /// Fails closed unless `user` is this credential's own verified chain and
+    /// enrolls exactly this device. A Yubi credential must additionally match
+    /// the parent's HEPK and its delegated subkey, so a chain that merely
+    /// shares a UID cannot stand in for the hardware identity.
+    pub(crate) fn require_enrolled(&self, host: &EntityId, user: &VerifiedUserState) -> Result<()> {
+        if user.uid() != self.uid() || user.host() != host {
+            return Err(Error::UserBinding(
+                "transport user does not match the credential and pinned host",
+            ));
+        }
+        match self {
+            Self::Software(credential) => {
+                let derived = derive_device_public(&credential.seed)?;
+                user.devices()
+                    .iter()
+                    .find(|device| device.id == derived.id && device.hepk == derived.hepk)
+                    .map(|_| ())
+                    .ok_or(Error::CredentialBinding(
+                        "device seed is not enrolled in the verified user chain",
+                    ))
+            }
+            Self::Yubi(credential) => {
+                let subkey = derive_subkey_id(&credential.subkey_seed)?;
+                user.devices()
+                    .iter()
+                    .find(|device| {
+                        device.id == *credential.parent.entity_id()
+                            && device.hepk == *credential.parent.hepk()
+                            && device.subkey.as_ref() == Some(&subkey)
+                    })
+                    .map(|_| ())
+                    .ok_or(Error::CredentialBinding(
+                        "Yubi credential is not enrolled in the verified user chain",
+                    ))
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -352,6 +438,130 @@ impl FoksClient {
         self.call(host, &host.user, &request, Some(credential))
     }
 
+    /// Loads another local user's public chain through an already activated
+    /// team-view token. This is the Go TeamLoader authorization used by CLKR:
+    /// the caller learns only authenticated public PUK material and never a
+    /// target user's private parcel.
+    pub fn load_and_pin_user_as_local_team(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        target: &EntityId,
+        team_view_token: &[u8; 16],
+    ) -> Result<VerifiedUserState> {
+        self.load_and_pin_other_local_user_with_material(
+            host,
+            &credential.seed,
+            &credential.certificate_chain,
+            target,
+            |start, name| {
+                encode_load_user_chain_as_local_team_request(
+                    target.as_bytes(),
+                    start,
+                    name,
+                    team_view_token,
+                )
+            },
+        )
+    }
+
+    /// Hardware-backed transport variant of
+    /// [`Self::load_and_pin_user_as_local_team`]. The Yubi parent remains the
+    /// authenticated chain actor while its delegated subkey supplies mTLS.
+    pub fn load_and_pin_user_as_local_team_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        target: &EntityId,
+        team_view_token: &[u8; 16],
+    ) -> Result<VerifiedUserState> {
+        self.load_and_pin_other_local_user_with_material(
+            host,
+            &credential.subkey_seed,
+            &credential.certificate_chain,
+            target,
+            |start, name| {
+                encode_load_user_chain_as_local_team_request(
+                    target.as_bytes(),
+                    start,
+                    name,
+                    team_view_token,
+                )
+            },
+        )
+    }
+
+    /// Loads a prospective local member through the host's authenticated
+    /// public-user view. This is intentionally separate from `AsLocalTeam`:
+    /// the target is not a roster member yet and therefore has no team token.
+    pub fn load_and_pin_open_local_user(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        target: &EntityId,
+    ) -> Result<VerifiedUserState> {
+        self.load_and_pin_other_local_user_with_material(
+            host,
+            &credential.seed,
+            &credential.certificate_chain,
+            target,
+            |start, name| encode_load_user_chain_open_host_request(target.as_bytes(), start, name),
+        )
+    }
+
+    fn load_and_pin_other_local_user_with_material(
+        &self,
+        host: &PinnedHost,
+        auth_seed: &SecretSeed,
+        certificate_chain: &[Vec<u8>],
+        target: &EntityId,
+        encode_request: impl Fn(u64, Option<(&[u8], u64)>) -> foks_rpc::Result<Vec<u8>>,
+    ) -> Result<VerifiedUserState> {
+        target.clone().require_type(ENTITY_USER)?;
+        self.retry_chain_load(host, |current| {
+            let (_, merkle) = self.advance_merkle_root(current)?;
+            let prior = match self.pinned_user(current, target) {
+                Ok(prior) => prior,
+                Err(Error::Verify(
+                    foks_verify::Error::PersistedMerkleEvidence
+                    | foks_verify::Error::UserChainContinuity,
+                )) => None,
+                Err(error) => return Err(error),
+            };
+            let (start, name) = user_chain_cursor(prior.as_ref())?;
+            let request = encode_request(start, name)?;
+            let chain_bytes = self.call_with_material(
+                current,
+                &current.user,
+                &request,
+                auth_seed,
+                certificate_chain,
+            )?;
+            let authenticated_roots =
+                self.authenticate_user_chain_roots(current, &merkle, &chain_bytes)?;
+            let verified = match prior.as_ref() {
+                Some(prior) => verify_user_chain_increment(
+                    &chain_bytes,
+                    prior,
+                    target,
+                    current.host_id(),
+                    &authenticated_roots,
+                    &merkle,
+                )?,
+                None => verify_user_chain(
+                    &chain_bytes,
+                    target,
+                    current.host_id(),
+                    &authenticated_roots,
+                    &merkle,
+                )?,
+            };
+            HardStateStore::open(&current.database_path)?
+                .accept_verified_user(&verified.hard_state_snapshot()?)?;
+            Ok(verified)
+        })
+    }
+
     fn fetch_puk_parcel(
         &self,
         host: &PinnedHost,
@@ -363,7 +573,12 @@ impl FoksClient {
         self.call(host, &host.user, &request, Some(credential))
     }
 
-    pub(crate) fn load_puks_for_role(
+    /// Loads and authenticates the complete PUK history visible at `role`.
+    ///
+    /// Owner-side background rotation uses this to assemble every role in a
+    /// stale prefix instead of assuming the authentication role parcel
+    /// contains lower-role histories.
+    pub fn load_puks_for_role(
         &self,
         host: &PinnedHost,
         credential: &DeviceCredential,
@@ -371,24 +586,86 @@ impl FoksClient {
         role: Role,
     ) -> Result<Vec<UserPrivateKey>> {
         let parcel = PukParcel::decode(&self.fetch_puk_parcel(host, credential, role)?)?;
-        let sender = verified
-            .devices()
-            .iter()
-            .find(|device| device.id == parcel.sender)
-            .ok_or(Error::UserBinding("PUK parcel sender is not enrolled"))?;
         let role_key = verified.shared_key(role).ok_or(Error::UserBinding(
             "requested PUK role is not in the user chain",
         ))?;
-        let clear = open_puk_parcel_for_role(
-            &parcel,
-            &credential.seed,
-            &sender.hepk,
-            &role_key.verify_key,
-            &role_key.hepk,
-            role_key.generation,
-            host.host_id(),
-            role,
-        )?;
+        let senders = verified.device_history(&parcel.sender)?;
+        let clear = senders
+            .iter()
+            .rev()
+            .find_map(|sender| {
+                open_puk_parcel_for_role(
+                    &parcel,
+                    &credential.seed,
+                    &sender.hepk,
+                    &role_key.verify_key,
+                    &role_key.hepk,
+                    role_key.generation,
+                    host.host_id(),
+                    role,
+                )
+                .ok()
+            })
+            .ok_or(Error::KeyBinding(
+                "no authenticated historical sender opens the PUK parcel",
+            ))?;
+        Ok(
+            open_puk_seed_chain(clear, &parcel, verified.uid(), host.host_id())?
+                .into_iter()
+                .map(|key| UserPrivateKey {
+                    role: key.role,
+                    generation: key.generation,
+                    seed: key.into_seed(),
+                })
+                .collect(),
+        )
+    }
+
+    /// Loads and authenticates the complete PUK history visible at `role`
+    /// while using a hardware parent for parcel decapsulation.
+    ///
+    /// The parcel returned during Yubi authentication covers only the
+    /// parent's role. Owner-side stale-PUK rotation must load each lower role
+    /// independently so it never substitutes one role's seed for another.
+    pub fn load_puks_for_role_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        verified: &VerifiedUserState,
+        role: Role,
+    ) -> Result<Vec<UserPrivateKey>> {
+        let request =
+            encode_get_puk_for_role_request(role, credential.parent.entity_id().as_bytes())?;
+        let parcel = PukParcel::decode(&self.call_with_material(
+            host,
+            &host.user,
+            &request,
+            &credential.subkey_seed,
+            &credential.certificate_chain,
+        )?)?;
+        let role_key = verified.shared_key(role).ok_or(Error::UserBinding(
+            "requested PUK role is not in the user chain",
+        ))?;
+        let senders = verified.device_history(&parcel.sender)?;
+        let clear = senders
+            .iter()
+            .rev()
+            .find_map(|sender| {
+                open_puk_parcel_with_for_role(
+                    &parcel,
+                    credential.parent,
+                    &sender.hepk,
+                    &role_key.verify_key,
+                    &role_key.hepk,
+                    role_key.generation,
+                    host.host_id(),
+                    role,
+                )
+                .ok()
+            })
+            .ok_or(Error::KeyBinding(
+                "no authenticated historical sender opens the PUK parcel",
+            ))?;
         Ok(
             open_puk_seed_chain(clear, &parcel, verified.uid(), host.host_id())?
                 .into_iter()
@@ -465,11 +742,36 @@ impl FoksClient {
         latest: &VerifiedMerkleAdvance,
         chain_bytes: &[u8],
     ) -> Result<AuthenticatedMerkleRoots> {
+        let chain = UserChain::decode(chain_bytes)?;
+        if chain.merkle.root() != latest.root() {
+            return Err(Error::UserBinding(
+                "chain response is not anchored at the latest Merkle root",
+            ));
+        }
         let targets = user_chain_root_epochs(chain_bytes)?
             .into_iter()
             .filter(|epoch| !latest.authenticated_roots().contains_epoch(*epoch))
             .collect::<Vec<_>>();
         self.authenticate_chain_roots(host, latest, targets, Error::UserBinding)
+    }
+
+    pub(crate) fn authenticate_team_chain_roots(
+        &self,
+        host: &PinnedHost,
+        latest: &VerifiedMerkleAdvance,
+        chain_bytes: &[u8],
+    ) -> Result<AuthenticatedMerkleRoots> {
+        let chain = TeamChain::decode(chain_bytes)?;
+        if chain.merkle.root() != latest.root() {
+            return Err(Error::TeamBinding(
+                "chain response is not anchored at the latest Merkle root",
+            ));
+        }
+        let targets = team_chain_root_epochs(chain_bytes)?
+            .into_iter()
+            .filter(|epoch| !latest.authenticated_roots().contains_epoch(*epoch))
+            .collect();
+        self.authenticate_chain_roots(host, latest, targets, Error::TeamBinding)
     }
 
     pub(crate) fn authenticate_chain_roots(
@@ -605,14 +907,14 @@ impl FoksClient {
                 &credential.uid,
                 &host.host_id,
                 &authenticated_roots,
-                &merkle.root().hostchain,
+                &merkle,
             )?,
             None => verify_user_chain(
                 &chain_bytes,
                 &credential.uid,
                 &host.host_id,
                 &authenticated_roots,
-                &merkle.root().hostchain,
+                &merkle,
             )?,
         };
         let enrolled = verified
@@ -625,24 +927,29 @@ impl FoksClient {
         let role = enrolled.role;
         let parcel_bytes = self.fetch_puk_parcel(host, credential, role)?;
         let parcel = PukParcel::decode(&parcel_bytes)?;
-        let sender = verified
-            .devices()
-            .iter()
-            .find(|device| device.id == parcel.sender)
-            .ok_or(Error::UserBinding("PUK parcel sender is not enrolled"))?;
         let role_key = verified
             .shared_key(role)
             .ok_or(Error::UserBinding("device role has no PUK"))?;
-        let clear = open_puk_parcel_for_role(
-            &parcel,
-            &credential.seed,
-            &sender.hepk,
-            &role_key.verify_key,
-            &role_key.hepk,
-            role_key.generation,
-            &host.host_id,
-            role,
-        )?;
+        let senders = verified.device_history(&parcel.sender)?;
+        let clear = senders
+            .iter()
+            .rev()
+            .find_map(|sender| {
+                open_puk_parcel_for_role(
+                    &parcel,
+                    &credential.seed,
+                    &sender.hepk,
+                    &role_key.verify_key,
+                    &role_key.hepk,
+                    role_key.generation,
+                    &host.host_id,
+                    role,
+                )
+                .ok()
+            })
+            .ok_or(Error::KeyBinding(
+                "no authenticated historical sender opens the PUK parcel",
+            ))?;
         let puks = open_puk_seed_chain(clear, &parcel, verified.uid(), host.host_id())?
             .into_iter()
             .map(|key| UserPrivateKey {
@@ -659,6 +966,24 @@ impl FoksClient {
             verified,
             puks,
         })
+    }
+
+    /// Authenticates whichever credential form the caller holds. This is the
+    /// single entry point used by federation so that a hardware-only
+    /// administrator reaches exactly the same verification as a software one.
+    pub fn authenticate_credential_and_pin(
+        &self,
+        host: &PinnedHost,
+        credential: FederationCredential<'_, '_>,
+    ) -> Result<AuthenticatedUserOutcome> {
+        match credential {
+            FederationCredential::Software(credential) => {
+                self.authenticate_and_pin(host, credential)
+            }
+            FederationCredential::Yubi(credential) => {
+                self.authenticate_yubi_and_pin(host, credential)
+            }
+        }
     }
 
     /// Authenticates a Yubi-backed device using its software subkey for mTLS
@@ -699,14 +1024,14 @@ impl FoksClient {
                 &credential.uid,
                 &host.host_id,
                 &authenticated_roots,
-                &merkle.root().hostchain,
+                &merkle,
             )?,
             None => verify_user_chain(
                 &chain_bytes,
                 &credential.uid,
                 &host.host_id,
                 &authenticated_roots,
-                &merkle.root().hostchain,
+                &merkle,
             )?,
         };
         let parent = verified
@@ -730,24 +1055,29 @@ impl FoksClient {
             &credential.certificate_chain,
         )?;
         let parcel = PukParcel::decode(&parcel_bytes)?;
-        let sender = verified
-            .devices()
-            .iter()
-            .find(|device| device.id == parcel.sender)
-            .ok_or(Error::UserBinding("PUK parcel sender is not enrolled"))?;
         let role_key = verified
             .shared_key(role)
             .ok_or(Error::UserBinding("Yubi parent role has no PUK"))?;
-        let clear = open_puk_parcel_with_for_role(
-            &parcel,
-            credential.parent,
-            &sender.hepk,
-            &role_key.verify_key,
-            &role_key.hepk,
-            role_key.generation,
-            &host.host_id,
-            role,
-        )?;
+        let senders = verified.device_history(&parcel.sender)?;
+        let clear = senders
+            .iter()
+            .rev()
+            .find_map(|sender| {
+                open_puk_parcel_with_for_role(
+                    &parcel,
+                    credential.parent,
+                    &sender.hepk,
+                    &role_key.verify_key,
+                    &role_key.hepk,
+                    role_key.generation,
+                    &host.host_id,
+                    role,
+                )
+                .ok()
+            })
+            .ok_or(Error::KeyBinding(
+                "no authenticated historical sender opens the PUK parcel",
+            ))?;
         let puks = open_puk_seed_chain(clear, &parcel, verified.uid(), host.host_id())?
             .into_iter()
             .map(|key| UserPrivateKey {
@@ -879,10 +1209,15 @@ fn historical_epoch_requests(
         .collect()
 }
 
-fn retryable_chain_load_error(error: &Error) -> bool {
+pub(crate) fn retryable_chain_load_error(error: &Error) -> bool {
     match error {
         Error::UserBinding(message) | Error::TeamBinding(message) => {
-            *message == "user chain references an unauthenticated future Merkle root"
+            matches!(
+                *message,
+                "user chain references an unauthenticated future Merkle root"
+                    | "chain response is not anchored at the latest Merkle root"
+                    | "membership chain is not bound to the authenticated user root"
+            )
         }
         Error::Verify(
             foks_verify::Error::UntrustedUserRoot
@@ -890,6 +1225,7 @@ fn retryable_chain_load_error(error: &Error) -> bool {
             | foks_verify::Error::MissingDelegatedKey("Merkle signer")
             | foks_verify::Error::DelegatedSignature("Merkle signer"),
         ) => true,
+        Error::Database(foks_client_db::Error::MerkleRollback { .. }) => true,
         _ => false,
     }
 }
@@ -905,8 +1241,106 @@ fn current_milliseconds() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        historical_epoch_requests, historical_root_batches, retryable_chain_load_error, Error,
+        historical_epoch_requests, historical_root_batches, retryable_chain_load_error,
+        DeviceCredential, EntityId, Error, FederationCredential, SecretSeed, YubiCredential,
     };
+
+    /// Stand-in for a hardware parent. Only the identity surface is exercised
+    /// here; nothing in this test performs a hardware operation.
+    struct StubYubiParent {
+        id: EntityId,
+        hepk: foks_proto::Hepk,
+    }
+
+    impl foks_crypto::HybridSecretDecapsulator for StubYubiParent {
+        fn entity_id(&self) -> &EntityId {
+            &self.id
+        }
+
+        fn hepk(&self) -> &foks_proto::Hepk {
+            &self.hepk
+        }
+
+        fn derive_dh_shared(
+            &self,
+            _peer: &foks_proto::DhPublicKey,
+        ) -> foks_crypto::Result<zeroize::Zeroizing<[u8; 32]>> {
+            unreachable!("identity-only stub")
+        }
+
+        fn decapsulate_mlkem768(
+            &self,
+            _ciphertext: &[u8],
+        ) -> foks_crypto::Result<zeroize::Zeroizing<[u8; 32]>> {
+            unreachable!("identity-only stub")
+        }
+    }
+
+    impl foks_crypto::YubiDevice for StubYubiParent {
+        fn pq_key_id(&self) -> [u8; 32] {
+            [0x33; 32]
+        }
+
+        fn sign_sha512_256(&self, _digest: &[u8; 32]) -> foks_crypto::Result<Vec<u8>> {
+            unreachable!("identity-only stub")
+        }
+    }
+
+    /// The transport material a federation credential exposes must never be a
+    /// hardware secret, and the acting chain device must be the Yubi parent
+    /// rather than the delegated mTLS subkey. Getting either backwards would
+    /// either leak a hardware key into an ordinary buffer or let a caller
+    /// present the subkey where the parent's authority is required.
+    #[test]
+    fn federation_credentials_expose_transport_material_and_the_acting_device() {
+        let uid =
+            EntityId::from_bytes([vec![foks_proto::ENTITY_USER], vec![0x41; 32]].concat()).unwrap();
+        let device = DeviceCredential {
+            uid: uid.clone(),
+            seed: SecretSeed::new([0x51; 32]),
+            certificate_chain: vec![vec![1, 2, 3]],
+        };
+        let software = FederationCredential::Software(&device);
+        assert_eq!(software.uid(), &uid);
+        assert!(!software.is_hardware());
+        let (seed, chain) = software.transport();
+        assert_eq!(seed.as_slice(), device.seed.as_slice());
+        assert_eq!(chain, device.certificate_chain.as_slice());
+        assert_eq!(
+            software.device_id().unwrap(),
+            foks_crypto::derive_device_public(&device.seed).unwrap().id
+        );
+
+        let parent_id =
+            EntityId::from_bytes([vec![foks_proto::ENTITY_YUBI], vec![0x61; 33]].concat()).unwrap();
+        let parent = StubYubiParent {
+            id: parent_id.clone(),
+            hepk: foks_crypto::derive_device_public(&SecretSeed::new([0x71; 32]))
+                .unwrap()
+                .hepk,
+        };
+        let yubi = YubiCredential {
+            uid: uid.clone(),
+            parent: &parent,
+            subkey_seed: SecretSeed::new([0x81; 32]),
+            certificate_chain: vec![vec![4, 5, 6]],
+        };
+        let hardware = FederationCredential::Yubi(&yubi);
+        assert_eq!(hardware.uid(), &uid);
+        assert!(hardware.is_hardware());
+        let (seed, chain) = hardware.transport();
+        assert_eq!(
+            seed.as_slice(),
+            yubi.subkey_seed.as_slice(),
+            "mTLS must use the delegated subkey, never a hardware secret"
+        );
+        assert_eq!(chain, yubi.certificate_chain.as_slice());
+        assert_eq!(
+            hardware.device_id().unwrap(),
+            parent_id,
+            "the acting chain device is the Yubi parent, not its subkey"
+        );
+    }
 
     #[test]
     fn historical_root_requests_are_batched_without_dropping_targets() {
@@ -945,11 +1379,20 @@ mod tests {
         assert!(retryable_chain_load_error(&Error::UserBinding(
             "user chain references an unauthenticated future Merkle root"
         )));
+        assert!(retryable_chain_load_error(&Error::TeamBinding(
+            "chain response is not anchored at the latest Merkle root"
+        )));
         assert!(retryable_chain_load_error(&Error::Verify(
             foks_verify::Error::MerkleHostchainMismatch
         )));
         assert!(!retryable_chain_load_error(&Error::Verify(
             foks_verify::Error::UserChainContinuity
+        )));
+        assert!(retryable_chain_load_error(&Error::Database(
+            foks_client_db::Error::MerkleRollback {
+                stored: 2,
+                received: 1,
+            }
         )));
     }
 }

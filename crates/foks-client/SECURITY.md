@@ -169,9 +169,16 @@ Named-team mutations use a separate public journal with an explicit
 Every edit commits `Submitting` before transport. Recovery first compares the
 authenticated team transition at the reserved chain position; a matching
 transition verifies the journal and a different transition supersedes it.
-Only federation additions retain exact protected request bytes, so only those
-can retry after an ambiguous send, and an RPC rejection from that retry is not
-treated as proof that the original submission failed.
+Federation additions and application-managed local additions retain exact
+protected request bytes, so those can retry after an ambiguous send; an RPC
+rejection from that retry is not treated as proof that the original submission
+failed. Generalized demotion/removal retains an exact frame too, but replay is
+permitted only after revalidating its recipient manifest against current
+authenticated user state. An already visible transition can be finalized
+without replay by recomputing its journal identity from the authenticated
+chain, the retained removal-key commitment, and the retained PTK seeds. This
+also covers a crash after the library removed the exact frame but before the
+application cleared its encrypted pending intent.
 
 Federation local preparation has one SQLite owner: the saga's `LocalPrepared`
 checkpoint and the corresponding prepared team-mutation row are committed in
@@ -312,6 +319,13 @@ that link, dual-boxed to the current admin PTK and target PUK, and excluded
 from SQLite. Reconciliation replays the authenticated team chain and checks
 the exact expected link rather than trusting the latest roster projection.
 FOKS's closed-viewership three-way invitation flow is intentionally absent.
+The product surface therefore exposes direct open-view local additions,
+strict demotions, removals, and authenticated roster listing. Promotion is
+absent because it requires distributing newly visible existing PTKs and is not
+safely represented by the single demotion/removal transaction. Direct edits
+currently require a local-user-only roster; mixed local/federated or nested-team
+rosters fail closed until their complete receiver set can be hydrated through
+the corresponding cross-host or parent-team capabilities.
 
 Named-team removal and downgrade accept exactly one member already present in
 the authenticated roster. A caller-retained removal key may be used by the
@@ -376,10 +390,18 @@ never enter SQLite. Recurring federation jobs renew and verify the already
 admitted bearer only; they do not re-enter the one-time admission saga or edit
 the local team chain.
 
+Federated admission is an explicit standalone model, not Go v0.1.9's
+three-party consent protocol. The coordinating operator holds both profiles'
+credentials, the source role is fixed to `ADMIN`, and a client-constructed join
+RSVP satisfies the local server tuple. The permission-token hash prefix
+`0x45cf32f37d38a811` is only a Rust-local storage/journal domain separator; it
+is never placed on the wire and must not be catalogued as an upstream protocol
+type ID.
+
 Not yet implemented: additional founding members; promotion/addition through
 closed-viewership invitation and remote-join protocols; federated trust
 administration or push propagation; direct remote-user membership; automatic
-cross-team PTK rotation after remote roster/key changes; CLKR; Git;
+cross-team PTK rotation after remote roster/key changes; Git;
 chat/realtime; passphrase-based device recovery; SSO; or a full federated FOKS
 server. These omissions should fail by absence, not by permissive fallbacks.
 

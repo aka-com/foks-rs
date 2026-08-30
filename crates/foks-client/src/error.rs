@@ -34,6 +34,10 @@ pub enum Error {
     Crypto(#[from] foks_crypto::Error),
     #[error("invalid FOKS backup key: {0}")]
     Backup(#[from] foks_crypto::BackupPhraseError),
+    #[error("invalid FOKS KEX phrase: {0}")]
+    KexPhrase(#[from] foks_crypto::KexPhraseError),
+    #[error("FOKS KEX failed: {0}")]
+    Kex(&'static str),
     #[error("registration returned an invalid certificate chain")]
     CertificateChain,
     #[error("authenticated hostchain contains no usable TLS CA certificates")]

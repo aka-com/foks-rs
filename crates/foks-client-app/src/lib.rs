@@ -20,9 +20,10 @@ use std::time::Duration;
 
 pub use foks_client::CancellationToken;
 use foks_client::{
-    AdHocTeamSecrets, DeviceCredential, EncryptedFileMutationStore, FoksClient, KvWriteOptions,
-    MutationCoordinator, NamedTeamSecrets, NewSoftwareDeviceSecrets, ProbeTarget,
-    SoftwareAccountRequest, SoftwareAccountSecrets, SoftwareDeviceProvisionRequest,
+    AdHocTeamSecrets, AuthenticatedTeamOutcome, AuthenticatedUserOutcome, DeviceCredential,
+    EncryptedFileMutationStore, FoksClient, KvWriteOptions, MutationCoordinator, NamedTeamSecrets,
+    NewSoftwareDeviceSecrets, ProbeTarget, SoftwareAccountRequest, SoftwareAccountSecrets,
+    SoftwareDeviceProvisionRequest,
 };
 use foks_client_db::ScheduledJobKind;
 use foks_client_db::{
@@ -92,10 +93,16 @@ pub enum Error {
     Yubi(#[from] foks_yubi::Error),
     #[error("FOKS backup phrase failed: {0}")]
     Backup(#[from] foks_crypto::BackupPhraseError),
+    #[error("FOKS KEX phrase failed: {0}")]
+    KexPhrase(#[from] foks_crypto::KexPhraseError),
     #[error("FOKS application I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("FOKS client state failed: {0}")]
     ClientDatabase(#[from] foks_client_db::Error),
+    #[error("FOKS background security refresh failed: {0}")]
+    BackgroundRefresh(String),
+    #[error("FOKS security refresh is deferred until a YubiKey is unlocked: {0}")]
+    YubiUnlockRequired(String),
     #[error("FOKS application TOML failed: {0}")]
     TomlDecode(#[from] toml::de::Error),
     #[error("FOKS application TOML encoding failed: {0}")]
@@ -124,11 +131,13 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub use federation::{
     FederatedMembershipSummary, FederationAdmissionReport, FederationDestinationRole,
+    FederationRefreshReport, UnlockedYubiActor,
 };
 pub use runtime::{JobRun, JobRunReport};
 pub use yubi::{
-    LoadedYubiAccount, YubiAccountReport, YubiCardSummary, YubiLifecycleReport, YubiPinStatus,
-    YubiProvisionInput, YubiRevocationReport, YubiSignupInput, YubiSubkeyRecoveryReport,
+    LoadedYubiAccount, YubiAccountReport, YubiCardSummary, YubiFederationSyncReport,
+    YubiLifecycleReport, YubiPinStatus, YubiProvisionInput, YubiRevocationReport, YubiSignupInput,
+    YubiSubkeyRecoveryReport,
 };
 
 mod account;
@@ -139,7 +148,7 @@ mod team;
 
 pub use account::{
     derive_mutation_key, derive_vault_key, AccountVault, DeviceProvisionReport, DeviceSummary,
-    LoadedAccount, PassphraseReport, SyncReport,
+    KexAcceptanceInput, KexOfferReport, LoadedAccount, PassphraseReport, SyncReport,
 };
 use checkpoint::RollbackHostCheckpoint;
 #[cfg(test)]
@@ -157,7 +166,9 @@ pub use registry::{
 };
 #[cfg(test)]
 use team::StoredTeam;
-pub use team::{TeamSummary, TeamSyncReport};
+pub use team::{
+    TeamMemberMutationReport, TeamMemberRole, TeamMemberSummary, TeamSummary, TeamSyncReport,
+};
 fn account_key(alias: &str) -> String {
     format!("account.{alias}")
 }
@@ -170,6 +181,14 @@ fn pending_device_key(alias: &str) -> String {
     format!("pending-device.{alias}")
 }
 
+fn kex_offer_key(alias: &str) -> String {
+    format!("kex-offer.{alias}")
+}
+
+fn pending_kex_key(alias: &str) -> String {
+    format!("pending-kex.{alias}")
+}
+
 fn pending_recovery_key(alias: &str) -> String {
     format!("pending-recovery.{alias}")
 }
@@ -180,6 +199,14 @@ fn backup_key(alias: &str) -> String {
 
 fn team_key(alias: &str) -> String {
     format!("team.{alias}")
+}
+
+fn team_rekey_key(alias: &str) -> String {
+    format!("team-rekey.{alias}")
+}
+
+fn team_member_edit_key(alias: &str) -> String {
+    format!("team-member-edit.{alias}")
 }
 
 fn validate_name(name: &str) -> Result<()> {
@@ -727,6 +754,74 @@ mod tests {
                 "profile session belongs to a different client state"
             ))
         ));
+    }
+
+    /// A recursive federation graph revisits a profile that is already on
+    /// this thread's stack. Without reentry that visit blocks on the very
+    /// operation lock this thread holds; with it, the nested visit runs and
+    /// the outermost frame still owns the real lock and the checkpoint.
+    #[test]
+    fn checked_session_reenters_an_ancestor_profile_on_the_same_thread() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let credentials =
+            ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(profile("local", ProtocolPolicy::V019))
+            .unwrap();
+        let outer = ProfileSession::open(&registry, "local").unwrap();
+
+        credentials
+            .with_checked_session(&outer, |_| {
+                let nested = ProfileSession::open(&registry, "local")?;
+                let result = credentials.try_with_checked_session(&nested, |checked| {
+                    assert_eq!(checked.profile().name, "local");
+                    Ok::<_, Error>(7)
+                })?;
+                assert_eq!(result, Some(7));
+                credentials.with_checked_session(&nested, |checked| {
+                    assert_eq!(checked.profile().name, "local");
+                    Ok::<_, Error>(())
+                })
+            })
+            .unwrap();
+
+        // The outermost operation still owns and releases the real file lock.
+        assert_eq!(
+            credentials
+                .try_with_checked_session(&outer, |_| Ok::<_, Error>(9))
+                .unwrap(),
+            Some(9)
+        );
+    }
+
+    /// A paired operation takes both locks in a canonical order, so it cannot
+    /// safely reuse a hold this thread already owns. It must say so rather
+    /// than block on itself.
+    #[test]
+    fn paired_checked_sessions_refuse_to_nest_inside_a_held_profile() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let credentials =
+            ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(profile("local", ProtocolPolicy::V019))
+            .unwrap();
+        registry
+            .add(profile("remote", ProtocolPolicy::V019))
+            .unwrap();
+        let local = ProfileSession::open(&registry, "local").unwrap();
+        let remote = ProfileSession::open(&registry, "remote").unwrap();
+
+        let outcome = credentials.with_checked_session(&local, |_| {
+            credentials.with_checked_sessions(&local, &remote, |_, _| Ok::<_, Error>(()))
+        });
+        assert!(
+            matches!(outcome, Err(Error::InvalidConfig(_))),
+            "{outcome:?}"
+        );
     }
 
     #[test]

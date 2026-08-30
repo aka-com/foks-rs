@@ -7,12 +7,21 @@ use crate::{Error, Result};
 pub(crate) struct Parcel {
     pub party_id: Vec<u8>,
     pub sender_id: Vec<u8>,
+    pub target_role: Role,
     pub role: Role,
     pub generation: u64,
     pub exact: Vec<u8>,
 }
 
 pub(crate) struct RemovalBox {
+    pub member_id: Vec<u8>,
+    pub member_host_id: Vec<u8>,
+    pub source_role: Role,
+    pub exact: Vec<u8>,
+}
+
+pub(crate) struct RemovalProof {
+    pub commitment: [u8; 32],
     pub member_id: Vec<u8>,
     pub member_host_id: Vec<u8>,
     pub source_role: Role,
@@ -31,14 +40,15 @@ pub(crate) struct Command {
     pub parcels: Vec<Parcel>,
     pub seed_chain: Vec<SeedChainBox>,
     pub removal_boxes: Vec<RemovalBox>,
+    pub removal_proofs: Vec<RemovalProof>,
     pub remote_member_view_tokens: Vec<TeamRemoteMemberViewToken>,
+    pub local_view_permissions: Vec<(Vec<u8>, Role)>,
 }
 
 pub(crate) fn validate(
     argument: foks_proto::DecodedTeamEditArgument,
     team: &foks_server_db::TeamSnapshot,
     root: &foks_server_db::RootSnapshot,
-    principal_uid: &[u8],
 ) -> Result<Command> {
     if team.kind != foks_proto::ENTITY_NAMED_TEAM {
         return Err(Error::Signup("ad-hoc teams are immutable"));
@@ -46,9 +56,6 @@ pub(crate) fn validate(
     let team_id = EntityId::from_bytes(team.team_id.clone())?;
     let host = EntityId::from_bytes(team.host_id.clone())?;
     let change = argument.link.decode_team_group_change()?;
-    if change.signer_owner.party.as_bytes() != principal_uid {
-        return Err(Error::Signup("team editor principal mismatch"));
-    }
     let current_members = team
         .members
         .iter()
@@ -95,6 +102,7 @@ pub(crate) fn validate(
         &current_members,
         &current_keys.into_values().collect::<Vec<_>>(),
     )?;
+    validate_seed_chain_schedule(&verified.introduced_keys, &argument.seed_chain)?;
     let old = current_members
         .iter()
         .map(|member| (member_key(member), member))
@@ -158,9 +166,27 @@ pub(crate) fn validate(
         .iter()
         .find(|member| {
             member.party == change.signer_owner.party
+                && member.scoped_host.is_none()
                 && member.source_role == change.signer_owner.source_role
         })
         .ok_or(Error::Signup("team editor is not a member"))?;
+    let mut actor_changes = change.changes.iter().filter(|member| {
+        member.party == change.signer_owner.party
+            && member.scoped_host.is_none()
+            && member.source_role == change.signer_owner.source_role
+    });
+    let actor_change = actor_changes.next();
+    if actor_changes.next().is_some() {
+        return Err(Error::Signup("team edit contains duplicate editor changes"));
+    }
+    if actor_change.is_some_and(|member| member.keys.is_none()) {
+        return Err(Error::Signup("team editor cannot remove its parcel sender"));
+    }
+    let parcel_sender = select_parcel_sender(
+        actor,
+        actor_change.and_then(|member| member.keys.as_ref()),
+        argument.new_key_on_rotate.as_ref(),
+    )?;
     let mut actual_boxes = BTreeSet::new();
     let mut parcels = Vec::with_capacity(argument.ptk_boxes.boxes.len());
     for (index, boxed) in argument.ptk_boxes.boxes.iter().enumerate() {
@@ -197,24 +223,25 @@ pub(crate) fn validate(
         let parcel = PukParcel::from_box_set(
             &argument.ptk_boxes,
             index,
-            actor.verify_key.clone(),
+            parcel_sender.clone(),
             role_seed_chain,
         )?;
         parcels.push(Parcel {
             party_id: target.party.as_bytes().to_vec(),
-            sender_id: actor.verify_key.as_bytes().to_vec(),
+            sender_id: parcel_sender.as_bytes().to_vec(),
+            target_role: target.source_role,
             role: parcel.role,
             generation: parcel.generation,
             exact: parcel.encoded()?,
         });
     }
-    validate_removals(
+    let removal_proofs = validate_removals(
         &argument.removals,
         &old,
         &new,
         &team_id,
         &host,
-        principal_uid,
+        change.signer_owner.party.as_bytes(),
         root,
     )?;
     let expected_local = added
@@ -256,8 +283,66 @@ pub(crate) fn validate(
         parcels,
         seed_chain: argument.seed_chain,
         removal_boxes,
+        removal_proofs,
         remote_member_view_tokens,
+        local_view_permissions: supplied_local
+            .into_iter()
+            .map(|target| (target, Role::member(0)))
+            .collect(),
     })
+}
+
+fn select_parcel_sender(
+    actor: &foks_verify::VerifiedTeamMemberState,
+    replacement: Option<&foks_proto::TeamMemberKeys>,
+    supplied: Option<&EntityId>,
+) -> Result<EntityId> {
+    let key_changed = replacement.is_some_and(|keys| {
+        keys.generation != actor.generation
+            || keys.verify_key != actor.verify_key
+            || keys.hepk_fingerprint != actor.hepk_fingerprint
+    });
+    match (key_changed, replacement, supplied) {
+        (true, Some(keys), Some(sender)) if keys.verify_key == *sender => Ok(sender.clone()),
+        (true, _, _) => Err(Error::Signup(
+            "new team parcel sender does not match the self change",
+        )),
+        (false, _, None) => Ok(actor.verify_key.clone()),
+        (false, _, Some(_)) => Err(Error::Signup(
+            "new team parcel sender is present without a self rotation",
+        )),
+    }
+}
+
+fn validate_seed_chain_schedule(
+    introduced: &[foks_verify::VerifiedSharedKey],
+    supplied: &[SeedChainBox],
+) -> Result<()> {
+    validate_seed_chain_schedule_pairs(
+        introduced.iter().map(|key| (key.role, key.generation)),
+        supplied.iter().map(|boxed| (boxed.role, boxed.generation)),
+    )
+}
+
+fn validate_seed_chain_schedule_pairs(
+    introduced: impl IntoIterator<Item = (Role, u64)>,
+    supplied: impl IntoIterator<Item = (Role, u64)>,
+) -> Result<()> {
+    let expected = introduced
+        .into_iter()
+        .filter_map(|(role, generation)| {
+            generation
+                .checked_sub(1)
+                .filter(|_| generation > 1)
+                .map(|previous| (role, previous))
+        })
+        .collect::<BTreeSet<_>>();
+    let supplied = supplied.into_iter().collect::<Vec<_>>();
+    let actual = supplied.iter().copied().collect::<BTreeSet<_>>();
+    if supplied.len() != actual.len() || actual != expected {
+        return Err(Error::Signup("team edit PTK seed-chain schedule mismatch"));
+    }
+    Ok(())
 }
 
 fn validate_removal_boxes(
@@ -311,7 +396,7 @@ fn validate_removals(
     host: &EntityId,
     actor: &[u8],
     root: &foks_server_db::RootSnapshot,
-) -> Result<()> {
+) -> Result<Vec<RemovalProof>> {
     let lost = old
         .iter()
         .filter(|(key, prior)| new.get(*key).is_none_or(|next| next.role < prior.role))
@@ -321,6 +406,7 @@ fn validate_removals(
         return Err(Error::Signup("team removal proof count mismatch"));
     }
     let mut seen = BTreeSet::new();
+    let mut output = Vec::with_capacity(proofs.len());
     for proof in proofs {
         let payload = &proof.removal.payload;
         let member = lost
@@ -341,8 +427,20 @@ fn validate_removals(
         {
             return Err(Error::Signup("team removal proof binding mismatch"));
         }
+        output.push(RemovalProof {
+            commitment: proof.commitment,
+            member_id: member.party.as_bytes().to_vec(),
+            member_host_id: member
+                .scoped_host
+                .as_ref()
+                .unwrap_or(host)
+                .as_bytes()
+                .to_vec(),
+            source_role: member.source_role,
+            exact: proof.removal.encoded()?,
+        });
     }
-    Ok(())
+    Ok(output)
 }
 
 fn validate_remote_member_view_tokens(
@@ -426,4 +524,75 @@ fn member_key(member: &foks_verify::VerifiedTeamMemberState) -> Vec<u8> {
             .to_be_bytes(),
     );
     key
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{select_parcel_sender, validate_seed_chain_schedule_pairs};
+    use foks_proto::{EntityId, Role, TeamMemberKeys, ENTITY_PUK_VERIFY};
+
+    fn puk(tag: u8) -> EntityId {
+        let mut bytes = vec![tag; 33];
+        bytes[0] = ENTITY_PUK_VERIFY;
+        EntityId::from_bytes(bytes).unwrap()
+    }
+
+    #[test]
+    fn seed_chain_schedule_exactly_matches_rotated_ptks() {
+        let introduced = [(Role::OWNER, 3), (Role::member(0), 2)];
+        assert!(validate_seed_chain_schedule_pairs(
+            introduced,
+            [(Role::OWNER, 2), (Role::member(0), 1)]
+        )
+        .is_ok());
+
+        assert!(validate_seed_chain_schedule_pairs(introduced, [(Role::OWNER, 2)]).is_err());
+        assert!(validate_seed_chain_schedule_pairs(
+            introduced,
+            [(Role::OWNER, 2), (Role::member(0), 1), (Role::ADMIN, 1)]
+        )
+        .is_err());
+        assert!(validate_seed_chain_schedule_pairs(
+            introduced,
+            [(Role::OWNER, 1), (Role::member(0), 1)]
+        )
+        .is_err());
+        assert!(validate_seed_chain_schedule_pairs(
+            introduced,
+            [(Role::OWNER, 2), (Role::member(0), 1), (Role::member(0), 1),]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn self_rotation_requires_the_exact_replacement_parcel_sender() {
+        let old = puk(1);
+        let new = puk(2);
+        let actor = foks_verify::VerifiedTeamMemberState {
+            party: puk(3),
+            scoped_host: None,
+            source_role: Role::OWNER,
+            role: Role::OWNER,
+            generation: 1,
+            verify_key: old.clone(),
+            hepk_fingerprint: [4; 32],
+            removal_key_commitment: Some([5; 32]),
+        };
+        let replacement = TeamMemberKeys {
+            verify_key: new.clone(),
+            hepk_fingerprint: [6; 32],
+            generation: 2,
+            removal_key_commitment: None,
+            index_range: None,
+        };
+
+        assert_eq!(
+            select_parcel_sender(&actor, Some(&replacement), Some(&new)).unwrap(),
+            new
+        );
+        assert!(select_parcel_sender(&actor, Some(&replacement), None).is_err());
+        assert!(select_parcel_sender(&actor, Some(&replacement), Some(&old)).is_err());
+        assert!(select_parcel_sender(&actor, None, Some(&old)).is_err());
+        assert_eq!(select_parcel_sender(&actor, None, None).unwrap(), old);
+    }
 }

@@ -20,9 +20,10 @@ use foks_verify::normalize_username;
 
 use super::AuthenticatedTeamOutcome;
 use crate::{
-    current_owner_puk, now_microseconds, now_milliseconds, random_bytes, AuthenticatedUserOutcome,
-    DeviceCredential, Error, FoksClient, PinnedHost, Result, UserPrivateKey, YubiCredential,
-    TEAM_MUTATION_OPERATION_ID_TYPE_ID, TEAM_MUTATION_REQUEST_HASH_TYPE_ID,
+    current_owner_puk, now_microseconds, now_milliseconds, random_bytes,
+    require_nonstale_shared_key, AuthenticatedUserOutcome, DeviceCredential, Error, FoksClient,
+    PinnedHost, Result, UserPrivateKey, YubiCredential, TEAM_MUTATION_OPERATION_ID_TYPE_ID,
+    TEAM_MUTATION_REQUEST_HASH_TYPE_ID,
 };
 
 /// Caller-durable secrets needed to create, reconcile, and later administer a
@@ -81,6 +82,7 @@ impl FoksClient {
             )?;
             Ok((authenticated, membership))
         })?;
+        require_nonstale_shared_key(&authenticated_user.verified, Role::OWNER)?;
         let owner = current_owner_puk(&authenticated_user)?;
         let device_id = derive_device_public(&credential.seed)?.id;
         let device = authenticated_user
@@ -132,6 +134,7 @@ impl FoksClient {
             )?;
             Ok((authenticated, membership))
         })?;
+        require_nonstale_shared_key(&authenticated_user.verified, Role::OWNER)?;
         let owner = current_owner_puk(&authenticated_user)?;
         let subkey = derive_subkey_id(&credential.subkey_seed)?;
         let device = authenticated_user

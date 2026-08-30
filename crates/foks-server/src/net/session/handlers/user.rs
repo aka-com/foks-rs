@@ -176,27 +176,20 @@ impl Operations for ServerData {
     fn set_passphrase(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
         let decoded = foks_rpc::arguments::decode_set_passphrase(argument)
             .map_err(|_| RpcStatus::BadArguments("invalid passphrase boxes".to_owned()))?;
-        if let Some(link) = decoded.user_settings_link.clone() {
-            let owned = super::super::OwnedPassphraseMutation::from_argument(&decoded)
-                .map_err(|_| RpcStatus::BadArguments("invalid passphrase boxes".to_owned()))?;
-            return crate::services::generic::commit(
-                link,
-                principal,
-                &self.host()?,
-                self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
-                self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
-                &self.clock,
-                &self.hostchain_tail,
-                Some(crate::services::generic::PassphraseCompanion::Set(owned)),
-            );
-        }
-        let database = self.read_database()?;
-        crate::services::user::set_passphrase(
-            &database,
-            self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
-            &self.clock,
-            argument,
+        let link = decoded.user_settings_link.clone().ok_or_else(|| {
+            RpcStatus::BadArguments("passphrase update omitted UserSettings link".to_owned())
+        })?;
+        let owned = super::super::OwnedPassphraseMutation::from_argument(&decoded)
+            .map_err(|_| RpcStatus::BadArguments("invalid passphrase boxes".to_owned()))?;
+        crate::services::generic::commit(
+            link,
             principal,
+            &self.host()?,
+            self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+            self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
+            &self.clock,
+            &self.hostchain_tail,
+            Some(crate::services::generic::PassphraseCompanion::Set(owned)),
         )
     }
 
@@ -208,26 +201,20 @@ impl Operations for ServerData {
             .ok_or(RpcStatus::PassphraseNotFound)?;
         let decoded = foks_rpc::arguments::decode_change_passphrase(argument, current.salt)
             .map_err(|_| RpcStatus::BadArguments("invalid passphrase boxes".to_owned()))?;
-        if let Some(link) = decoded.user_settings_link.clone() {
-            let owned = super::super::OwnedPassphraseMutation::from_argument(&decoded)
-                .map_err(|_| RpcStatus::BadArguments("invalid passphrase boxes".to_owned()))?;
-            return crate::services::generic::commit(
-                link,
-                principal,
-                &self.host()?,
-                self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
-                self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
-                &self.clock,
-                &self.hostchain_tail,
-                Some(crate::services::generic::PassphraseCompanion::Change(owned)),
-            );
-        }
-        crate::services::user::change_passphrase(
-            &database,
-            self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
-            &self.clock,
-            argument,
+        let link = decoded.user_settings_link.clone().ok_or_else(|| {
+            RpcStatus::BadArguments("passphrase update omitted UserSettings link".to_owned())
+        })?;
+        let owned = super::super::OwnedPassphraseMutation::from_argument(&decoded)
+            .map_err(|_| RpcStatus::BadArguments("invalid passphrase boxes".to_owned()))?;
+        crate::services::generic::commit(
+            link,
             principal,
+            &self.host()?,
+            self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+            self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
+            &self.clock,
+            &self.hostchain_tail,
+            Some(crate::services::generic::PassphraseCompanion::Change(owned)),
         )
     }
 

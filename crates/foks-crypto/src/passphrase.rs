@@ -285,6 +285,36 @@ pub fn rotate_passphrase_for_puk(
     )
 }
 
+/// Proves that the stored PPE recovery parcel is authenticated to the given
+/// owner PUK and that its encrypted SKMWK history is internally consistent.
+pub fn verify_passphrase_puk_recovery(
+    uid: &EntityId,
+    host: &EntityId,
+    parcel: &PpeParcel,
+    owner_puk: &SecretSeed,
+) -> Result<()> {
+    drop(unlock_with_puk(uid, host, parcel, owner_puk)?);
+    Ok(())
+}
+
+/// Opens the current PUK recovery parcel into the compact package carried by
+/// interactive KEX. The returned SKMWK is secret and zeroizes on drop.
+pub fn export_kex_ppe(
+    uid: &EntityId,
+    host: &EntityId,
+    parcel: &PpeParcel,
+    owner_puk: &SecretSeed,
+) -> Result<foks_proto::KexPpe> {
+    let keyring = unlock_with_puk(uid, host, parcel, owner_puk)?;
+    let skmwk = *keyring.key(parcel.generation).ok_or(Error::Passphrase)?;
+    Ok(foks_proto::KexPpe {
+        skmwk,
+        passphrase_generation: parcel.generation,
+        salt: parcel.salt,
+        stretch_version: parcel.stretch_version,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_update(
     uid: &EntityId,
@@ -576,6 +606,13 @@ mod tests {
             stretch_version: update.stretch_version,
             verify_key: update.verify_key.clone(),
         };
+        verify_passphrase_puk_recovery(&uid, &host, &parcel, &puk1).unwrap();
+        let mut forged_generation = parcel.clone();
+        forged_generation.puk_box.as_mut().unwrap().puk_generation = 2;
+        assert!(verify_passphrase_puk_recovery(&uid, &host, &forged_generation, &puk2).is_err());
+        let mut forged_role = parcel.clone();
+        forged_role.puk_box.as_mut().unwrap().puk_role = Role::ADMIN;
+        assert!(verify_passphrase_puk_recovery(&uid, &host, &forged_role, &puk1).is_err());
         let rotated = rotate_passphrase_for_puk(&uid, &host, &parcel, &puk1, &puk2, 2).unwrap();
         assert_eq!(rotated.generation, 2);
         assert_eq!(rotated.verify_key, parcel.verify_key);

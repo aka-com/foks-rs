@@ -5,8 +5,8 @@ use std::io::Cursor;
 use std::path::PathBuf;
 
 use foks_client::{
-    FoksClient, KvWriteOptions, ProbeTarget, ProtectedMutationStore, ProtectedStoreError,
-    SoftwareAccountRequest, SoftwareAccountSecrets,
+    FoksClient, KexProvisionOffer, KvWriteOptions, ProbeTarget, ProtectedMutationStore,
+    ProtectedStoreError, SoftwareAccountRequest, SoftwareAccountSecrets,
 };
 use foks_proto::{InviteCode, Role, SecretSeed};
 use rustls::pki_types::CertificateDer;
@@ -142,7 +142,51 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Err("written file content differs after incremental synchronization".into());
     }
 
-    println!("verified FOKS v0.1.9 live account {username}, user chain, PUK, and KV round trip");
+    eprintln!("live compatibility: pairing a second Rust device through the Go KEX relay");
+    let paired_database = state_directory.join("paired-hard.sqlite3");
+    let paired_client = client.clone();
+    let paired_host = paired_client
+        .probe_and_pin(&target, &paired_database)?
+        .pinned;
+    let offer = KexProvisionOffer::generate(Role::OWNER)?;
+    let phrase = offer.phrase().expose_joined();
+    client.publish_kex_provision_offer(&host, &created.credential, &offer)?;
+    let provisioner = client.clone();
+    let provisioner_host = host.clone();
+    let expected_uid = created.credential.uid.clone();
+    let provisioner_credential = created.credential;
+    let finish = std::thread::spawn(move || {
+        let mut protected = EphemeralProtectedStore::default();
+        provisioner
+            .finish_kex_provisioning(
+                &provisioner_host,
+                &provisioner_credential,
+                &offer,
+                &mut protected,
+            )
+            .map_err(|error| error.to_string())
+    });
+    let accepted = paired_client.accept_kex_provisioning(
+        &paired_host,
+        &phrase,
+        "Rust live paired device",
+        2,
+        SecretSeed::new([0x63; 32]),
+    )?;
+    let finished = finish
+        .join()
+        .map_err(|_| "live KEX provisioner panicked")??;
+    let expected_device = foks_crypto::derive_device_public(&SecretSeed::new([0x63; 32]))?;
+    if accepted.authenticated.verified.chain_seqno() != 2
+        || accepted.credential.uid != expected_uid
+        || finished.device != expected_device
+    {
+        return Err("paired device did not authenticate the expected user transition".into());
+    }
+
+    println!(
+        "verified FOKS v0.1.9 live account {username}, user chain, PUK, KV, and KEX round trip"
+    );
     Ok(())
 }
 

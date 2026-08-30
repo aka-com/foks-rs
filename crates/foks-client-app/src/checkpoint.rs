@@ -1,4 +1,58 @@
 use super::*;
+
+thread_local! {
+    /// Checked profile operations are synchronous and their file locks are
+    /// held by the process, not the thread, so a recursive federation graph
+    /// that revisits a profile already on this thread's stack would block on
+    /// a lock it is itself holding. Remember what this thread holds so the
+    /// nested visit reuses the outer hold instead. The outermost operation
+    /// stays responsible for verifying and advancing the rollback checkpoint
+    /// once every nested mutation has completed.
+    static HELD_CHECKED_PROFILES: std::cell::RefCell<BTreeMap<PathBuf, usize>> =
+        const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+/// Resolves a profile directory to the identity the operation lock actually
+/// uses. The lock is a file lock, so it collides on the real directory rather
+/// than on how the path was spelled; keying the thread-local the same way
+/// keeps reentry detection from missing an equivalent spelling and
+/// deadlocking on the lock this thread already owns.
+fn held_profile_key(directory: &Path) -> PathBuf {
+    std::fs::canonicalize(directory).unwrap_or_else(|_| directory.to_owned())
+}
+
+struct HeldCheckedProfile {
+    key: PathBuf,
+}
+
+impl HeldCheckedProfile {
+    fn is_held(key: &Path) -> bool {
+        HELD_CHECKED_PROFILES.with(|held| held.borrow().contains_key(key))
+    }
+
+    fn enter(key: PathBuf) -> Self {
+        HELD_CHECKED_PROFILES.with(|held| {
+            *held.borrow_mut().entry(key.clone()).or_insert(0) += 1;
+        });
+        Self { key }
+    }
+}
+
+impl Drop for HeldCheckedProfile {
+    fn drop(&mut self) {
+        HELD_CHECKED_PROFILES.with(|held| {
+            let mut held = held.borrow_mut();
+            let count = held
+                .get_mut(&self.key)
+                .expect("checked-profile hold is balanced");
+            *count -= 1;
+            if *count == 0 {
+                held.remove(&self.key);
+            }
+        });
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CredentialBackend {
@@ -161,10 +215,18 @@ impl ClientCredentials {
         E: From<Error>,
     {
         self.ensure_session_root(session).map_err(E::from)?;
+        let key = held_profile_key(&session.paths.directory);
+        if HeldCheckedProfile::is_held(&key) {
+            // Already checked and locked further up this thread's stack.
+            let checked = CheckedProfileSession { session };
+            return operation(&checked);
+        }
         let lock = runtime::ProfileLock::operation(session.paths()).map_err(E::from)?;
         let database_lock = self.lock_and_verify_checkpoint(session).map_err(E::from)?;
         let checked = CheckedProfileSession { session };
+        let held = HeldCheckedProfile::enter(key);
         let result = operation(&checked);
+        drop(held);
         let checkpoint = self.advance_checkpoint(session);
         let database_unlock = database_lock
             .map(runtime::DatabaseLock::release)
@@ -199,6 +261,17 @@ impl ClientCredentials {
                 "cross-host operation requires two distinct profiles",
             )));
         }
+        let left_key = held_profile_key(&left.paths.directory);
+        let right_key = held_profile_key(&right.paths.directory);
+        if HeldCheckedProfile::is_held(&left_key) || HeldCheckedProfile::is_held(&right_key) {
+            // A paired operation takes both locks in a canonical order, so it
+            // cannot reuse a single hold this thread already owns without
+            // inverting that order. Return an error instead of blocking on an
+            // existing lock held by this thread.
+            return Err(E::from(Error::InvalidConfig(
+                "cross-host operation cannot nest inside a checked session for either profile",
+            )));
+        }
         let (first, second) = if left.paths.directory < right.paths.directory {
             (left, right)
         } else {
@@ -212,7 +285,11 @@ impl ClientCredentials {
 
         let left_checked = CheckedProfileSession { session: left };
         let right_checked = CheckedProfileSession { session: right };
+        let left_held = HeldCheckedProfile::enter(left_key);
+        let right_held = HeldCheckedProfile::enter(right_key);
         let result = operation(&left_checked, &right_checked);
+        drop(right_held);
+        drop(left_held);
 
         // Perform every durability and release step before selecting which
         // error to report. An early return here could strand the other
@@ -241,6 +318,11 @@ impl ClientCredentials {
         E: From<Error>,
     {
         self.ensure_session_root(session).map_err(E::from)?;
+        let key = held_profile_key(&session.paths.directory);
+        if HeldCheckedProfile::is_held(&key) {
+            let checked = CheckedProfileSession { session };
+            return operation(&checked).map(Some);
+        }
         let Some(lock) = runtime::ProfileLock::try_operation(session.paths()).map_err(E::from)?
         else {
             return Ok(None);
@@ -253,7 +335,9 @@ impl ClientCredentials {
             None => return Ok(None),
         };
         let checked = CheckedProfileSession { session };
+        let held = HeldCheckedProfile::enter(key);
         let result = operation(&checked);
+        drop(held);
         let checkpoint = self.advance_checkpoint(session);
         let database_unlock = database_lock
             .map(runtime::DatabaseLock::release)

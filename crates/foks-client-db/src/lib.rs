@@ -97,6 +97,17 @@ pub struct StoredUserSnapshot {
     pub shared_keys: Vec<foks_verify::VerifiedUserSharedKey>,
 }
 
+pub struct VerifiedUserGenericChainSnapshot<'a> {
+    pub host_id: &'a [u8],
+    pub uid: &'a [u8],
+    pub chain_type: u64,
+    pub sequence: u64,
+    pub tail_hash: Option<[u8; 32]>,
+    pub chain_bytes: &'a [u8],
+    pub merkle_epoch: u64,
+    pub merkle_root_hash: [u8; 32],
+}
+
 impl StoredUserSnapshot {
     pub fn parts(&self) -> VerifiedUserSnapshotParts<'_> {
         VerifiedUserSnapshotParts {
@@ -144,6 +155,7 @@ pub enum ScheduledJobKind {
     MutationReconcile = 2,
     YubiManagementRefresh = 3,
     FederationRefresh = 4,
+    TeamRefresh = 5,
 }
 
 impl ScheduledJobKind {
@@ -153,6 +165,7 @@ impl ScheduledJobKind {
             2 => Ok(Self::MutationReconcile),
             3 => Ok(Self::YubiManagementRefresh),
             4 => Ok(Self::FederationRefresh),
+            5 => Ok(Self::TeamRefresh),
             _ => Err(Error::InvalidScheduledJob("unknown scheduled job kind")),
         }
     }
@@ -556,6 +569,16 @@ pub enum Error {
     UserFork { seqno: u64 },
     #[error("user projection changed without a chain advance at sequence {seqno}")]
     UserProjectionChanged { seqno: u64 },
+    #[error(
+        "user generic chain type {chain_type} rolled back from sequence {stored} to {received}"
+    )]
+    UserGenericRollback {
+        chain_type: u64,
+        stored: u64,
+        received: u64,
+    },
+    #[error("user generic chain type {chain_type} forked at sequence {seqno}")]
+    UserGenericFork { chain_type: u64, seqno: u64 },
     #[error("invalid verified team snapshot: {0}")]
     InvalidTeam(&'static str),
     #[error("team chain rolled back from sequence {stored} to {received}")]
@@ -2142,6 +2165,41 @@ mod tests {
     }
 
     #[test]
+    fn user_chain_mutations_reserve_one_live_chain_position() {
+        let (_directory, mut store) = store();
+        let host = snapshot();
+        store.accept_host_parts(host.parts()).unwrap();
+        let first = MutationOperation {
+            operation_id: [6; 16],
+            kind: MutationKind::PukRotation,
+            host_id: host.host_id,
+            scope_id: vec![1; 33],
+            subject_id: vec![2; 33],
+            expected_version: Some(2),
+            request_hash: [3; 32],
+            material_ref: b"credential/puk/first".to_vec(),
+            material_hash: [4; 32],
+            state: MutationState::Prepared,
+            attempt_count: 0,
+            created_at: 100,
+            updated_at: 100,
+        };
+        let second = MutationOperation {
+            operation_id: [7; 16],
+            request_hash: [8; 32],
+            material_ref: b"credential/puk/second".to_vec(),
+            material_hash: [9; 32],
+            ..first.clone()
+        };
+        store.record_mutation(&first).unwrap();
+        assert!(store.record_mutation(&second).is_err());
+        store
+            .advance_mutation(&first.operation_id, MutationState::Rejected, 101)
+            .unwrap();
+        store.record_mutation(&second).unwrap();
+    }
+
+    #[test]
     fn application_binding_lookups_separate_pending_resume_from_finalizable_cleanup() {
         let directory = tempfile::tempdir().unwrap();
         let mut store = HardStateStore::open(&directory.path().join("hard.db")).unwrap();
@@ -2451,6 +2509,27 @@ mod tests {
                 304,
             )
             .unwrap();
+        // Multiple terminal attempts can legitimately occupy one sequence.
+        // Sequence lookup chooses the newest attempt, while recovery of
+        // caller-durable material must remain bound to its exact operation ID.
+        assert_eq!(
+            store
+                .team_mutation_at(
+                    &operation.host_id,
+                    &operation.team_id,
+                    operation.expected_seqno,
+                )
+                .unwrap()
+                .unwrap()
+                .operation_id,
+            duplicate_transition.operation_id
+        );
+        let original = store
+            .team_mutation(&operation.operation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(original.operation_id, operation.operation_id);
+        assert_eq!(original.state, TeamMutationState::Rejected);
         // Rejected is terminal and releases the chain position.
         assert!(store
             .advance_team_mutation(
@@ -3119,7 +3198,7 @@ mod tests {
         changed_projection.merkle_root_hash = changed_hash;
         assert!(matches!(
             store.accept_user_parts(changed_projection.parts()),
-            Err(Error::InvalidUser(_))
+            Err(Error::MerkleFork { epoch: 11 })
         ));
 
         let mut changed_device = user;
@@ -3127,6 +3206,135 @@ mod tests {
         assert!(matches!(
             store.accept_user_parts(changed_device.parts()),
             Err(Error::UserProjectionChanged { seqno: 1 })
+        ));
+    }
+
+    #[test]
+    fn no_passphrase_attestation_requires_an_accepted_user_and_is_durable() {
+        let (directory, mut store) = store();
+        let user = user_snapshot();
+        assert!(matches!(
+            store.attest_user_has_no_passphrase(&user.host_id, &user.uid),
+            Err(Error::InvalidUser(_))
+        ));
+        store.accept_host_parts(snapshot().parts()).unwrap();
+        store.accept_user_parts(user.parts()).unwrap();
+        store
+            .attest_user_has_no_passphrase(&user.host_id, &user.uid)
+            .unwrap();
+        assert!(store
+            .user_has_no_passphrase_attestation(&user.host_id, &user.uid)
+            .unwrap());
+        drop(store);
+        let mut reopened = HardStateStore::open(&directory.path().join("hard.sqlite")).unwrap();
+        assert!(reopened
+            .user_has_no_passphrase_attestation(&user.host_id, &user.uid)
+            .unwrap());
+        reopened
+            .clear_user_no_passphrase_attestation(&user.host_id, &user.uid)
+            .unwrap();
+        assert!(!reopened
+            .user_has_no_passphrase_attestation(&user.host_id, &user.uid)
+            .unwrap());
+        let trusted_hash = [0xa5; 32];
+        reopened
+            .trust_user_passphrase_parcel(&user.host_id, &user.uid, &trusted_hash)
+            .unwrap();
+        assert_eq!(
+            reopened
+                .trusted_user_passphrase_parcel_hash(&user.host_id, &user.uid)
+                .unwrap(),
+            Some(trusted_hash)
+        );
+        reopened
+            .attest_user_has_no_passphrase(&user.host_id, &user.uid)
+            .unwrap();
+        assert_eq!(
+            reopened
+                .trusted_user_passphrase_parcel_hash(&user.host_id, &user.uid)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn user_generic_chain_rejects_rollback_and_fork_at_a_new_merkle_head() {
+        let (_directory, mut store) = store();
+        let mut host = snapshot();
+        store.accept_host_parts(host.parts()).unwrap();
+        let mut user = user_snapshot();
+        store.accept_user_parts(user.parts()).unwrap();
+        let generic_chain = |links: &[u64]| {
+            let mut values = vec![Value::Unsigned(foks_proto::CHAIN_TYPE_USER_SETTINGS)];
+            values.extend(links.iter().copied().map(Value::Unsigned));
+            encode(&Value::Array(values)).unwrap()
+        };
+        let first_chain = generic_chain(&[0x41]);
+        store
+            .attest_user_has_no_passphrase(&user.host_id, &user.uid)
+            .unwrap();
+        assert_eq!(
+            store
+                .accept_verified_user_generic_chain(&VerifiedUserGenericChainSnapshot {
+                    host_id: &user.host_id,
+                    uid: &user.uid,
+                    chain_type: foks_proto::CHAIN_TYPE_USER_SETTINGS,
+                    sequence: 1,
+                    tail_hash: Some([0x42; 32]),
+                    chain_bytes: &first_chain,
+                    merkle_epoch: user.merkle_epoch,
+                    merkle_root_hash: user.merkle_root_hash,
+                })
+                .unwrap(),
+            Acceptance::Inserted
+        );
+        assert!(!store
+            .user_has_no_passphrase_attestation(&user.host_id, &user.uid)
+            .unwrap());
+
+        host.merkle_root.epoch = 12;
+        host.merkle_root.root_hash = [8; 32];
+        host.merkle_root.root_bytes = vec![10; 80];
+        host.merkle_root.authenticated_roots = vec![AuthenticatedMerkleRoot {
+            epoch: 12,
+            root_hash: [8; 32],
+            root_bytes: Some(vec![10; 80]),
+        }];
+        store.accept_host_parts(host.parts()).unwrap();
+        user.merkle_epoch = 12;
+        user.merkle_root_hash = [8; 32];
+        user.merkle_root_bytes = vec![10; 80];
+        store.accept_user_parts(user.parts()).unwrap();
+
+        assert!(matches!(
+            store.accept_verified_user_generic_chain(&VerifiedUserGenericChainSnapshot {
+                host_id: &user.host_id,
+                uid: &user.uid,
+                chain_type: foks_proto::CHAIN_TYPE_USER_SETTINGS,
+                sequence: 0,
+                tail_hash: None,
+                chain_bytes: &generic_chain(&[]),
+                merkle_epoch: 12,
+                merkle_root_hash: [8; 32],
+            }),
+            Err(Error::UserGenericRollback {
+                stored: 1,
+                received: 0,
+                ..
+            })
+        ));
+        assert!(matches!(
+            store.accept_verified_user_generic_chain(&VerifiedUserGenericChainSnapshot {
+                host_id: &user.host_id,
+                uid: &user.uid,
+                chain_type: foks_proto::CHAIN_TYPE_USER_SETTINGS,
+                sequence: 1,
+                tail_hash: Some([0x44; 32]),
+                chain_bytes: &generic_chain(&[0x43]),
+                merkle_epoch: 12,
+                merkle_root_hash: [8; 32],
+            }),
+            Err(Error::UserGenericFork { seqno: 1, .. })
         ));
     }
 
@@ -3182,6 +3390,56 @@ mod tests {
             store.accept_team_parts(fork.parts()),
             Err(Error::TeamFork { seqno: 1 })
         ));
+    }
+
+    #[test]
+    fn historical_root_cannot_win_a_race_with_the_current_host_head() {
+        let (_directory, mut store) = store();
+        let original = snapshot();
+        store.accept_host_parts(original.parts()).unwrap();
+
+        let mut advanced = original.clone();
+        advanced.merkle_root.epoch = 12;
+        advanced.merkle_root.root_hash = [12; 32];
+        advanced.merkle_root.root_bytes = vec![13; 80];
+        advanced.merkle_root.evidence = MerkleRootEvidence::SkipPath {
+            signed_root: vec![14; 96],
+            anchor_epoch: 11,
+            historical_response: vec![12; 96],
+            prior: Box::new(original.merkle_root.evidence.clone()),
+        };
+        advanced
+            .merkle_root
+            .authenticated_roots
+            .push(AuthenticatedMerkleRoot {
+                epoch: 12,
+                root_hash: [12; 32],
+                root_bytes: Some(vec![13; 80]),
+            });
+        store.accept_host_parts(advanced.parts()).unwrap();
+
+        assert!(matches!(
+            store.accept_user_parts(user_snapshot().parts()),
+            Err(Error::MerkleRollback {
+                stored: 12,
+                received: 11
+            })
+        ));
+        assert!(matches!(
+            store.accept_team_parts(team_snapshot().parts()),
+            Err(Error::MerkleRollback {
+                stored: 12,
+                received: 11
+            })
+        ));
+        assert!(store
+            .user_for_host(&original.host_id, &user_snapshot().uid)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .team_for_host(&original.host_id, &team_snapshot().team_id)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

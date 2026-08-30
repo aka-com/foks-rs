@@ -36,6 +36,7 @@ use foks_rpc::{
     encode_get_client_version_info_request, encode_get_current_merkle_root_hash_request,
     encode_get_current_merkle_root_signed_request, encode_get_device_nag_request,
     encode_get_historical_merkle_roots_request, encode_get_puk_for_role_request,
+    encode_load_user_chain_as_local_team_request, encode_load_user_chain_open_host_request,
     encode_load_user_chain_request_from, encode_merkle_check_key_exists_request,
     encode_merkle_lookup_request, encode_merkle_multi_lookup_request,
     encode_merkle_select_vhost_request, encode_probe_key_exists_request,
@@ -70,6 +71,7 @@ mod discovery;
 mod error;
 mod federation;
 mod host;
+mod kex;
 mod kv;
 mod mutation;
 mod passphrase;
@@ -88,6 +90,7 @@ pub use discovery::*;
 pub use error::*;
 pub use federation::*;
 pub use host::*;
+pub use kex::*;
 pub use kv::*;
 pub use mutation::*;
 pub use passphrase::*;
@@ -147,6 +150,26 @@ fn user_key_for_seed<'a>(
     Ok(key)
 }
 
+fn user_key_history_for_seed<'a>(
+    user: &'a VerifiedUserState,
+    seed: &SecretSeed,
+) -> Result<&'a foks_verify::VerifiedSharedKey> {
+    let verify_key = derive_shared_verify_key(seed, ENTITY_PUK_VERIFY)?;
+    let mut matches = user
+        .shared_key_history()
+        .iter()
+        .filter(|key| key.verify_key == verify_key);
+    let key = matches.next().ok_or(Error::KeyBinding(
+        "seed has no matching authenticated PUK history",
+    ))?;
+    if matches.next().is_some() {
+        return Err(Error::KeyBinding(
+            "seed matches more than one authenticated PUK generation",
+        ));
+    }
+    Ok(key)
+}
+
 fn current_owner_puk(user: &AuthenticatedUserOutcome) -> Result<&UserPrivateKey> {
     let matching = user
         .puks
@@ -161,6 +184,15 @@ fn current_owner_puk(user: &AuthenticatedUserOutcome) -> Result<&UserPrivateKey>
         return Err(Error::KeyBinding("expected exactly one current owner PUK"));
     };
     Ok(owner)
+}
+
+fn require_nonstale_shared_key(user: &VerifiedUserState, role: foks_proto::Role) -> Result<()> {
+    if user.stale_shared_key_roles().contains(&role) {
+        return Err(Error::KeyBinding(
+            "shared key is still readable by a revoked device",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use foks_crypto::verify_typed;
 use foks_proto::{ChangeMetadata, EntityId, Hepk, Role, UserMemberKeys, LINK_OUTER_V1_TYPE_ID};
@@ -46,9 +46,10 @@ pub fn verify_user_transition(
     {
         return Err(Error::UserChainContinuity);
     }
-    let mut replay = UserReplayState::from_verified(devices, shared_keys, shared_key_history);
+    let mut replay =
+        UserReplayState::from_verified(devices, shared_keys, shared_key_history, &BTreeSet::new());
     replay.replay(link, &change, hepks, expected_host)?;
-    let (devices, shared_keys, _) = replay.into_parts();
+    let (devices, shared_keys, _, _) = replay.into_parts();
     Ok(VerifiedUserTransition {
         change,
         devices,
@@ -60,6 +61,7 @@ pub(super) struct UserReplayState {
     devices: BTreeMap<Vec<u8>, VerifiedDevice>,
     shared_keys: BTreeMap<Role, VerifiedSharedKey>,
     shared_key_history: Vec<VerifiedSharedKey>,
+    stale_shared_key_roles: BTreeSet<Role>,
 }
 
 impl UserReplayState {
@@ -68,6 +70,7 @@ impl UserReplayState {
             devices: BTreeMap::from([(device.id.as_bytes().to_vec(), device)]),
             shared_keys: BTreeMap::from([(shared_key.role, shared_key.clone())]),
             shared_key_history: vec![shared_key],
+            stale_shared_key_roles: BTreeSet::new(),
         }
     }
 
@@ -75,6 +78,7 @@ impl UserReplayState {
         devices: &[VerifiedDevice],
         shared_keys: &[VerifiedSharedKey],
         shared_key_history: &[VerifiedSharedKey],
+        stale_shared_key_roles: &BTreeSet<Role>,
     ) -> Self {
         let mut history = shared_key_history.to_vec();
         for current in shared_keys {
@@ -96,6 +100,7 @@ impl UserReplayState {
                 .map(|key| (key.role, key))
                 .collect(),
             shared_key_history: history,
+            stale_shared_key_roles: stale_shared_key_roles.clone(),
         }
     }
 
@@ -151,11 +156,13 @@ impl UserReplayState {
         Vec<VerifiedDevice>,
         Vec<VerifiedSharedKey>,
         Vec<VerifiedSharedKey>,
+        BTreeSet<Role>,
     ) {
         (
             self.devices.into_values().collect(),
             self.shared_keys.into_values().collect(),
             self.shared_key_history,
+            self.stale_shared_key_roles,
         )
     }
 
@@ -181,6 +188,7 @@ impl UserReplayState {
         for key in rotated {
             self.shared_keys.insert(key.role, key.clone());
             self.shared_key_history.push(key.clone());
+            self.stale_shared_key_roles.remove(&key.role);
         }
         Ok(())
     }
@@ -225,6 +233,16 @@ impl UserReplayState {
                 == 1
         {
             return Err(invalid_transition(change, UserTransitionRule::LastOwner));
+        }
+        if self_revoke {
+            for role in self
+                .shared_keys
+                .keys()
+                .copied()
+                .filter(|role| *role <= target.role)
+            {
+                self.stale_shared_key_roles.insert(role);
+            }
         }
         self.devices.remove(member.entity.as_bytes());
         Ok(())
@@ -535,6 +553,47 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn unrotated_revocation_marks_readable_puks_stale_until_rotation() {
+        let chain = UserChain::decode(&user_fixture("user-chain.snowp")).unwrap();
+        let eldest = chain.links[0].decode_eldest().unwrap();
+        let mut state = UserReplayState::from_eldest(
+            VerifiedDevice {
+                id: eldest.member,
+                role: Role::OWNER,
+                hepk: find_hepk(&chain.hepks, eldest.member_hepk_fingerprint).unwrap(),
+                subkey: eldest.member_subkey,
+            },
+            VerifiedSharedKey {
+                role: Role::OWNER,
+                generation: 1,
+                verify_key: eldest.puk_verify_key,
+                hepk: find_hepk(&chain.hepks, eldest.puk_hepk_fingerprint).unwrap(),
+            },
+        );
+        let provision = chain.links[1].decode_group_change().unwrap();
+        state
+            .replay(&chain.links[1], &provision, &chain.hepks, &eldest.host)
+            .unwrap();
+        let mut revoke = chain.links[2].decode_group_change().unwrap();
+        revoke.shared_keys.clear();
+        let member = revoke.changes[0].clone();
+        revoke.signer = member.entity.clone();
+        let signer = state.devices.get(revoke.signer.as_bytes()).unwrap().clone();
+        state
+            .apply_revocation(&revoke, &member, &eldest.host, &signer, &[])
+            .unwrap();
+        assert_eq!(state.stale_shared_key_roles, BTreeSet::from([Role::OWNER]));
+
+        let mut rotated = state.shared_keys[&Role::OWNER].clone();
+        rotated.generation += 1;
+        revoke.changes.clear();
+        state
+            .apply_transition(&revoke, &eldest.host, &signer, &[rotated], None)
+            .unwrap();
+        assert!(state.stale_shared_key_roles.is_empty());
     }
 
     #[test]

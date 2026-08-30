@@ -84,6 +84,27 @@ pub(crate) fn go_client_activation_success() {
             .unwrap(),
         created.credential.uid
     );
+    let peer = fixture
+        .client
+        .create_account(
+            fixture.host(),
+            &TestAccountSpec::new("goactivationpeer", 0x32),
+        )
+        .unwrap();
+    assert_eq!(
+        fixture
+            .client
+            .foks()
+            .resolve_username(
+                fixture.host(),
+                &created.credential,
+                "GoActivationPeer",
+                false,
+            )
+            .unwrap(),
+        peer.credential.uid,
+        "AsLocalUser resolves another local account, not only self"
+    );
     assert_eq!(
         fixture
             .client

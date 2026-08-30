@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha512"
 	"crypto/tls"
 	"crypto/x509"
 	"net"
@@ -70,6 +71,11 @@ func TestGoClientAgainstRustServer(t *testing.T) {
 	defer closePublic()
 	regClient := core.NewRegClient(publicRPC, nil)
 	merkleClient := core.NewMerkleQueryClient(publicRPC, nil)
+	liveKexRelay(t, ctx, publicRPC, host)
+	if id, err := regClient.JoinWaitList(ctx, proto.Email("go-client@example.com")); err != nil || id[0] != 1 {
+		t.Fatalf("official waitlist registration: id=%v err=%v", id, err)
+	}
+	liveLogSend(t, ctx, publicRPC, "public-client.log")
 	config, err := regClient.GetServerConfig(ctx)
 	if err != nil {
 		t.Fatalf("registration config: %v", err)
@@ -107,6 +113,7 @@ func TestGoClientAgainstRustServer(t *testing.T) {
 	authRPC, closeAuthenticated := liveRPCClient(t, ctx, authenticatedAddress, serviceRoots, certificate)
 	defer closeAuthenticated()
 	userClient := core.NewUserClient(authRPC, nil)
+	liveLogSend(t, ctx, authRPC, "authenticated-client.log")
 	uid, err := userClient.Ping(ctx)
 	if err != nil || !uid.Eq(user.uid) {
 		t.Fatalf("activate user ping: uid=%v err=%v", uid, err)
@@ -123,6 +130,110 @@ func TestGoClientAgainstRustServer(t *testing.T) {
 	teamID := liveCreateAndLoadTeam(t, ctx, authRPC, &userClient, &merkleClient, &user)
 	liveKVPutGet(t, ctx, authRPC, &user)
 	t.Logf("official Go client completed user=%s team=%s", user.uid, teamID)
+}
+
+func liveLogSend(t *testing.T, ctx context.Context, client *rpc.Client, name proto.LocalFSPath) {
+	t.Helper()
+	logClient := core.NewLogSendClient(client, nil)
+	id, err := logClient.LogSendInit(ctx)
+	if err != nil {
+		t.Fatalf("official LogSend init: %v", err)
+	}
+	payload := rem.LogSendBlob("official Go diagnostic payload")
+	hash := proto.StdHash(sha512.Sum512_256(payload))
+	if err := logClient.LogSendInitFile(ctx, rem.LogSendInitFileArg{
+		Id: id, FileID: 1, Name: name, Len: proto.Size(len(payload)), Hash: hash, NBlocks: 1,
+	}); err != nil {
+		t.Fatalf("official LogSend file init: %v", err)
+	}
+	if err := logClient.LogSendUploadBlock(ctx, rem.LogSendUploadBlockArg{
+		Id: id, FileID: 1, BlockNo: 0, Block: payload,
+	}); err != nil {
+		t.Fatalf("official LogSend upload: %v", err)
+	}
+}
+
+func liveKexRelay(
+	t *testing.T,
+	ctx context.Context,
+	publicRPC *rpc.Client,
+	host proto.HostID,
+) {
+	t.Helper()
+	client := rem.KexClient{Cli: publicRPC, ErrorUnwrapper: core.StatusToError}
+	var senderSeed, receiverSeed proto.SecretSeed32
+	for index := range senderSeed {
+		senderSeed[index] = byte(index + 31)
+		receiverSeed[index] = byte(index + 131)
+	}
+	sender, err := core.NewPrivateSuite25519(
+		proto.EntityType_Device,
+		proto.OwnerRole,
+		senderSeed,
+		host,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver, err := core.NewPrivateSuite25519(
+		proto.EntityType_Device,
+		proto.OwnerRole,
+		receiverSeed,
+		host,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	senderPublic, err := sender.EntityPublic()
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiverPublic, err := receiver.EntityPublic()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var session proto.KexSessionID
+	for index := range session {
+		session[index] = byte(index + 1)
+	}
+	var nonce proto.NaclNonce
+	for index := range nonce {
+		nonce[index] = byte(index + 51)
+	}
+	wrapper := rem.KexWrapperMsg{
+		SessionID: session,
+		Sender:    senderPublic.GetEntityID(),
+		Seq:       0,
+		Payload: proto.NewSecretBoxWithNacl(proto.NaclSecretBox{
+			Nonce:      nonce,
+			Ciphertext: proto.NaclCiphertext([]byte("official-go-kex-payload")),
+		}),
+	}
+	signature, err := sender.Sign(&wrapper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Send(ctx, rem.SendArg{
+		Msg: wrapper, Sig: *signature, Actor: rem.KexActorType_Provisioner,
+	}); err != nil {
+		t.Fatalf("official KEX send: %v", err)
+	}
+	received, err := client.Receive(ctx, rem.ReceiveArg{
+		SessionID: session,
+		Receiver:  receiverPublic.GetEntityID(),
+		Seq:       0,
+		PollWait:  0,
+		Actor:     rem.KexActorType_Provisionee,
+	})
+	if err != nil {
+		t.Fatalf("official KEX receive: %v", err)
+	}
+	if !received.SessionID.Eq(&wrapper.SessionID) ||
+		!received.Sender.Eq(wrapper.Sender) ||
+		received.Seq != wrapper.Seq ||
+		!bytes.Equal(received.Payload.Nacl().Ciphertext, wrapper.Payload.Nacl().Ciphertext) {
+		t.Fatalf("official KEX relay changed packet: got=%v want=%v", received, wrapper)
+	}
 }
 
 func liveRootPool(t *testing.T, path string) *x509.CertPool {

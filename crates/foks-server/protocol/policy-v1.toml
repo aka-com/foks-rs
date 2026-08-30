@@ -8,12 +8,14 @@ bad_args = "BAD_ARGS_ERROR"
 bad_invite = "BAD_INVITE_CODE_ERROR"
 bad_passphrase = "BAD_PASSPHRASE_ERROR"
 device_already_provisioned = "DEVICE_ALREADY_PROVISIONED_ERROR"
+duplicate = "DUPLICATE_ERROR"
 expired = "EXPIRED_ERROR"
 locked = "KV_LOCK_ALREADY_HELD_ERROR"
 lock_timeout = "KV_LOCK_TIMEOUT_ERROR"
 kv_noent = "KV_NOENT_ERROR"
 kv_permission = "KV_PERM_ERROR"
 key_not_found = "KEY_NOT_FOUND_ERROR"
+kex_bad_secret = "KEX_BAD_SECRET"
 merkle_leaf_not_found = "MERKLE_LEAF_NOT_FOUND_ERROR"
 merkle_no_root = "MERKLE_NO_ROOT_ERROR"
 name_in_use = "USERNAME_IN_USE_ERROR"
@@ -88,6 +90,16 @@ name = "KvStore"
 upstream = "KVStore"
 id_constant = "KV_STORE_PROTOCOL_ID"
 
+[[protocol]]
+name = "Kex"
+upstream = "kex"
+id_constant = "KEX_PROTOCOL_ID"
+
+[[protocol]]
+name = "LogSend"
+upstream = "LogSend"
+id_constant = "LOG_SEND_PROTOCOL_ID"
+
 [[service]]
 name = "registration"
 upstream = "Reg"
@@ -136,6 +148,32 @@ statuses = ["unsupported"]
 max_request_bytes = 4096
 supported = false
 coverage = ["unsupported_federation_routes"]
+
+[[route]]
+protocol = "Kex"
+method = "send"
+position_constant = "KEX_SEND_METHOD_POSITION"
+listeners = ["public_services"]
+authentication = "public"
+request = "KexSendArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "rate_limited"]
+max_request_bytes = 262144
+supported = true
+coverage = ["kex_relay"]
+
+[[route]]
+protocol = "Kex"
+method = "receive"
+position_constant = "KEX_RECEIVE_METHOD_POSITION"
+listeners = ["public_services"]
+authentication = "public"
+request = "KexReceiveArgument"
+result = "KexWrapperMessage"
+statuses = ["ok", "bad_args", "kex_bad_secret", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+coverage = ["kex_relay"]
 
 [[route]]
 protocol = "Probe"
@@ -359,6 +397,20 @@ statuses = ["ok", "bad_args", "user_not_found", "tx_retry"]
 max_request_bytes = 4096
 supported = true
 coverage = ["go_client_identity"]
+
+
+[[route]]
+protocol = "Reg"
+method = "joinWaitList"
+position_constant = "REG_JOIN_WAIT_LIST_METHOD_POSITION"
+listeners = ["public_services"]
+authentication = "delegated_tls"
+request = "Email"
+result = "WaitListID"
+statuses = ["ok", "bad_args", "rate_limited", "tx_retry"]
+max_request_bytes = 1024
+supported = true
+coverage = ["go_client_peripheral"]
 
 
 [[route]]
@@ -713,6 +765,48 @@ coverage = ["yubikey_lifecycle"]
 
 
 [[route]]
+protocol = "LogSend"
+method = "logSendInit"
+position_constant = "LOG_SEND_INIT_METHOD_POSITION"
+listeners = ["public_services", "authenticated"]
+authentication = "transport_tls_optional_active_device"
+request = "Void"
+result = "LogSendID"
+statuses = ["ok", "bad_args", "rate_limited", "tx_retry"]
+max_request_bytes = 1024
+supported = true
+coverage = ["go_client_peripheral"]
+
+
+[[route]]
+protocol = "LogSend"
+method = "logSendInitFile"
+position_constant = "LOG_SEND_INIT_FILE_METHOD_POSITION"
+listeners = ["public_services", "authenticated"]
+authentication = "log_send_session_capability"
+request = "LogSendInitFileArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "not_found", "duplicate", "rate_limited", "tx_retry"]
+max_request_bytes = 4096
+supported = true
+coverage = ["go_client_peripheral"]
+
+
+[[route]]
+protocol = "LogSend"
+method = "logSendUploadBlock"
+position_constant = "LOG_SEND_UPLOAD_BLOCK_METHOD_POSITION"
+listeners = ["public_services", "authenticated"]
+authentication = "log_send_session_capability"
+request = "LogSendUploadBlockArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "not_found", "duplicate", "rate_limited", "tx_retry"]
+max_request_bytes = 4198400
+supported = true
+coverage = ["go_client_peripheral"]
+
+
+[[route]]
 protocol = "TeamLoader"
 method = "getTeamVOBearerTokenChallenge"
 position_constant = "TEAM_GET_VIEW_CHALLENGE_METHOD_POSITION"
@@ -784,14 +878,14 @@ coverage = ["go_client_generic"]
 [[route]]
 protocol = "TeamLoader"
 method = "loadRemovalForMember"
-listeners = ["authenticated"]
-authentication = "active_team_view_token"
-request = "Unsupported"
-result = "Unsupported"
-statuses = ["unsupported"]
+listeners = ["public_services", "authenticated"]
+authentication = "public"
+request = "LoadRemovalForMemberArgument"
+result = "TeamRemovalAndKeyBox"
+statuses = ["ok", "bad_args", "not_found", "permission_denied"]
 max_request_bytes = 4096
-supported = false
-coverage = ["unsupported_team_routes"]
+supported = true
+coverage = ["team_create_edit_and_kv"]
 
 
 [[route]]
@@ -811,14 +905,15 @@ coverage = ["federation_lifecycle"]
 [[route]]
 protocol = "TeamLoader"
 method = "getServerConfig"
+position_constant = "TEAM_GET_SERVER_CONFIG_METHOD_POSITION"
 listeners = ["authenticated"]
 authentication = "active_device_mtls"
-request = "Unsupported"
-result = "Unsupported"
-statuses = ["unsupported"]
+request = "Void"
+result = "RegServerConfig"
+statuses = ["ok", "bad_args", "permission_denied"]
 max_request_bytes = 1024
-supported = false
-coverage = ["unsupported_team_routes"]
+supported = true
+coverage = ["go_client_generic"]
 
 
 [[route]]
@@ -857,7 +952,7 @@ listeners = ["authenticated"]
 authentication = "current_team_admin"
 request = "TeamEditArgument"
 result = "TeamEditResult"
-statuses = ["ok", "bad_args", "team_error", "team_race", "team_roster", "team_key", "team_no_source_role", "team_removal_key", "team_adhoc_invalid_change", "stale_root", "tx_retry"]
+statuses = ["ok", "bad_args", "duplicate", "team_error", "team_race", "team_roster", "team_key", "team_no_source_role", "team_removal_key", "team_adhoc_invalid_change", "team_bearer_token_stale", "permission_denied", "stale_root", "tx_retry"]
 max_request_bytes = 8388608
 supported = true
 coverage = ["team_create_edit_and_kv"]
@@ -1013,14 +1108,15 @@ coverage = ["unsupported_team_routes"]
 [[route]]
 protocol = "TeamAdmin"
 method = "getTeamConfig"
+position_constant = "TEAM_GET_CONFIG_METHOD_POSITION"
 listeners = ["authenticated"]
 authentication = "active_device_mtls"
-request = "Unsupported"
-result = "Unsupported"
-statuses = ["unsupported"]
+request = "Void"
+result = "TeamConfig"
+statuses = ["ok", "bad_args", "permission_denied"]
 max_request_bytes = 1024
-supported = false
-coverage = ["unsupported_team_routes"]
+supported = true
+coverage = ["go_client_generic"]
 
 
 [[route]]
