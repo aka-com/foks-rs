@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use foks_rpc::{encode_success_response_at, encode_void_success_response_at, RpcStatus};
 
 use crate::rpc::{RouteId, RoutedCall};
@@ -9,6 +11,7 @@ pub(super) trait Operations {
     fn client_version_info(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn server_config(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn check_name_exists(&self, argument: &[u8]) -> Result<(), RpcStatus>;
+    fn join_waitlist(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn probe_key_exists(&self, argument: &[u8]) -> Result<(), RpcStatus>;
     fn reserve_username(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn signup(&self, argument: &[u8]) -> Result<(), RpcStatus>;
@@ -45,6 +48,15 @@ impl Operations for ServerData {
     fn check_name_exists(&self, argument: &[u8]) -> Result<(), RpcStatus> {
         let database = self.read_database()?;
         crate::services::registration::check_name_exists(argument, &database)
+    }
+
+    fn join_waitlist(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        crate::services::peripheral::join_waitlist(
+            argument,
+            self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+            Arc::clone(&self.clock),
+            self.entropy.as_ref(),
+        )
     }
 
     fn probe_key_exists(&self, argument: &[u8]) -> Result<(), RpcStatus> {
@@ -163,6 +175,10 @@ pub(super) fn response(
         RouteId::RegCheckNameExists => {
             operations.check_name_exists(call.call.argument())?;
             encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
+        }
+        RouteId::RegJoinWaitList => {
+            encode_success_response_at(&operations.join_waitlist(call.call.argument())?, sequence)
+                .map_err(|_| RpcStatus::Unsupported)
         }
         RouteId::RegGetClientVersionInfo => encode_success_response_at(
             &operations.client_version_info(call.call.argument())?,

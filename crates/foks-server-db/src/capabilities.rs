@@ -4,18 +4,7 @@ use crate::{error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Res
 
 type TeamTokenRow = (Vec<u8>, Vec<u8>, Vec<u8>, i64, i64, i64, i64, i64);
 type TeamTokenWithExpiryRow = (Vec<u8>, Vec<u8>, Vec<u8>, i64, i64, i64, i64, i64, i64);
-type AdminTokenRow = (
-    Vec<u8>,
-    Vec<u8>,
-    i64,
-    i64,
-    i64,
-    i64,
-    i64,
-    Vec<u8>,
-    i64,
-    Option<Vec<u8>>,
-);
+type AdminTokenRow = (Vec<u8>, Vec<u8>, i64, i64, i64, Option<Vec<u8>>);
 type StoredChallengeRow = (
     Vec<u8>,
     Vec<u8>,
@@ -45,12 +34,7 @@ pub struct TeamViewAuthoritySnapshot {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TeamAdminAuthoritySnapshot {
     pub team_id: Vec<u8>,
-    pub member_id: Vec<u8>,
-    pub member_source_role_type: u64,
-    pub member_source_visibility: i64,
-    pub member_generation: u64,
-    pub effective_role_type: u64,
-    pub effective_visibility: i64,
+    pub holder_id: Vec<u8>,
     pub ptk_role_type: u64,
     pub ptk_generation: u64,
     pub ptk_verify_key: Vec<u8>,
@@ -58,6 +42,14 @@ pub struct TeamAdminAuthoritySnapshot {
 }
 
 impl Database {
+    pub fn resolve_team_admin_token(
+        &self,
+        token_hash: &[u8; 32],
+        now: u64,
+    ) -> Result<Option<TeamAdminAuthoritySnapshot>> {
+        admin_token_query(&self.connection, token_hash, now, true)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn issue_team_view_challenge(
         &mut self,
@@ -236,7 +228,10 @@ impl Database {
     pub fn issue_team_admin_token(
         &mut self,
         token_hash: &[u8; 32],
-        authority: &TeamAdminAuthoritySnapshot,
+        team_id: &[u8],
+        holder_id: &[u8],
+        ptk_role_type: u64,
+        ptk_generation: u64,
         expires_at: u64,
         now: u64,
     ) -> Result<()> {
@@ -249,8 +244,8 @@ impl Database {
                 row.get(0)
             })?;
         let scoped: i64 = transaction.query_row(
-            "SELECT count(*) FROM team_admin_tokens WHERE team_id = ?1 AND member_id = ?2",
-            params![authority.team_id, authority.member_id],
+            "SELECT count(*) FROM team_admin_tokens WHERE team_id = ?1 AND holder_id = ?2",
+            params![team_id, holder_id],
             |row| row.get(0),
         )?;
         if usize::try_from(global).unwrap_or(usize::MAX)
@@ -260,23 +255,17 @@ impl Database {
         {
             return Err(Error::QuotaExceeded);
         }
-        ensure_current_admin_authority(&transaction, authority)?;
         transaction.execute(
             "INSERT INTO team_admin_tokens
-             (token_hash, team_id, member_id, member_source_role_type,
-              member_source_visibility, member_generation, ptk_role_type, ptk_visibility,
-              ptk_generation, ptk_verify_key, expires_at, activation_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, NULL)",
+             (token_hash, team_id, holder_id, ptk_role_type, ptk_visibility,
+              ptk_generation, expires_at, activation_hash)
+             VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, NULL)",
             params![
                 token_hash,
-                authority.team_id,
-                authority.member_id,
-                sql_integer(authority.member_source_role_type)?,
-                authority.member_source_visibility,
-                sql_integer(authority.member_generation)?,
-                sql_integer(authority.ptk_role_type)?,
-                sql_integer(authority.ptk_generation)?,
-                authority.ptk_verify_key,
+                team_id,
+                holder_id,
+                sql_integer(ptk_role_type)?,
+                sql_integer(ptk_generation)?,
                 sql_integer(expires_at)?
             ],
         )?;
@@ -290,7 +279,7 @@ impl Database {
         activation_hash: &[u8; 32],
         now: u64,
         expected_team_id: &[u8],
-        expected_member_id: &[u8],
+        expected_holder_id: &[u8],
         expected_ptk_role_type: u64,
         expected_ptk_generation: u64,
     ) -> Result<Option<TeamAdminAuthoritySnapshot>> {
@@ -301,13 +290,12 @@ impl Database {
             return Ok(None);
         };
         if authority.team_id != expected_team_id
-            || authority.member_id != expected_member_id
+            || authority.holder_id != expected_holder_id
             || authority.ptk_role_type != expected_ptk_role_type
             || authority.ptk_generation != expected_ptk_generation
         {
             return Ok(None);
         }
-        ensure_current_admin_authority(&transaction, &authority)?;
         let stored: Option<Vec<u8>> = transaction.query_row(
             "SELECT activation_hash FROM team_admin_tokens WHERE token_hash = ?1",
             [token_hash],
@@ -364,14 +352,14 @@ impl ReadDatabase {
     pub fn team_admin_authority(
         &self,
         team_id: &[u8],
-        member_id: &[u8],
+        holder_id: &[u8],
         ptk_role_type: u64,
         ptk_generation: u64,
     ) -> Result<Option<TeamAdminAuthoritySnapshot>> {
         admin_authority_query(
             &self.connection,
             team_id,
-            member_id,
+            holder_id,
             ptk_role_type,
             ptk_generation,
         )
@@ -468,59 +456,36 @@ fn resolve_team_view_token(
 fn admin_authority_query(
     connection: &rusqlite::Connection,
     team_id: &[u8],
-    member_id: &[u8],
+    holder_id: &[u8],
     ptk_role_type: u64,
     ptk_generation: u64,
 ) -> Result<Option<TeamAdminAuthoritySnapshot>> {
-    let row: Option<(i64, i64, i64, i64, i64, Vec<u8>)> = connection
+    let verify_key: Option<Vec<u8>> = connection
         .query_row(
-            "SELECT m.source_role_type, m.source_visibility, m.generation,
-                    m.role_type, m.visibility, k.verify_key
-             FROM team_members m JOIN team_shared_keys k
-               ON k.team_id = m.team_id AND k.role_type = ?3 AND k.visibility = 0
-              AND k.generation = ?4
-             WHERE m.team_id = ?1 AND m.party_id = ?2 AND m.scoped_host_id IS NULL
-               AND m.role_type >= 2 AND ?3 >= 2 AND ?3 <= m.role_type
+            "SELECT k.verify_key
+             FROM team_shared_keys k JOIN teams t ON t.team_id = k.team_id
+             WHERE k.team_id = ?1 AND k.role_type = ?2 AND k.visibility = 0
+               AND k.generation = ?3 AND ?2 IN (2, 3)
                AND k.generation = (
                  SELECT max(k2.generation) FROM team_shared_keys k2
                  WHERE k2.team_id = k.team_id AND k2.role_type = k.role_type
                    AND k2.visibility = k.visibility)",
             params![
                 team_id,
-                member_id,
                 sql_integer(ptk_role_type)?,
                 sql_integer(ptk_generation)?
             ],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
-            },
+            |row| row.get(0),
         )
         .optional()?;
-    row.map(
-        |(source_role, source_visibility, generation, role, visibility, verify_key)| {
-            Ok(TeamAdminAuthoritySnapshot {
-                team_id: team_id.to_vec(),
-                member_id: member_id.to_vec(),
-                member_source_role_type: crate::error::unsigned(source_role)?,
-                member_source_visibility: source_visibility,
-                member_generation: crate::error::unsigned(generation)?,
-                effective_role_type: crate::error::unsigned(role)?,
-                effective_visibility: visibility,
-                ptk_role_type,
-                ptk_generation,
-                ptk_verify_key: verify_key,
-                expires_at: None,
-            })
-        },
-    )
-    .transpose()
+    Ok(verify_key.map(|verify_key| TeamAdminAuthoritySnapshot {
+        team_id: team_id.to_vec(),
+        holder_id: holder_id.to_vec(),
+        ptk_role_type,
+        ptk_generation,
+        ptk_verify_key: verify_key,
+        expires_at: None,
+    }))
 }
 
 fn admin_token_query(
@@ -531,8 +496,7 @@ fn admin_token_query(
 ) -> Result<Option<TeamAdminAuthoritySnapshot>> {
     let row: Option<AdminTokenRow> = connection
         .query_row(
-            "SELECT team_id, member_id, member_source_role_type, member_source_visibility,
-                    member_generation, ptk_role_type, ptk_generation, ptk_verify_key,
+            "SELECT team_id, holder_id, ptk_role_type, ptk_generation,
                     expires_at, activation_hash
              FROM team_admin_tokens WHERE token_hash = ?1 AND expires_at > ?2",
             params![token_hash, sql_integer(now)?],
@@ -544,27 +508,11 @@ fn admin_token_query(
                     row.get(3)?,
                     row.get(4)?,
                     row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                    row.get(8)?,
-                    row.get(9)?,
                 ))
             },
         )
         .optional()?;
-    let Some((
-        team,
-        member,
-        source_role,
-        source_visibility,
-        generation,
-        ptk_role,
-        ptk_generation,
-        ptk_verify,
-        expires,
-        activation,
-    )) = row
-    else {
+    let Some((team, holder, ptk_role, ptk_generation, expires, activation)) = row else {
         return Ok(None);
     };
     if require_active && activation.is_none() {
@@ -573,45 +521,15 @@ fn admin_token_query(
     let Some(mut current) = admin_authority_query(
         connection,
         &team,
-        &member,
+        &holder,
         crate::error::unsigned(ptk_role)?,
         crate::error::unsigned(ptk_generation)?,
     )?
     else {
         return Ok(None);
     };
-    if current.member_source_role_type != crate::error::unsigned(source_role)?
-        || current.member_source_visibility != source_visibility
-        || current.member_generation != crate::error::unsigned(generation)?
-        || current.ptk_verify_key != ptk_verify
-    {
-        return Ok(None);
-    }
     current.expires_at = Some(crate::error::unsigned(expires)?);
     Ok(Some(current))
-}
-
-fn ensure_current_admin_authority(
-    connection: &rusqlite::Connection,
-    authority: &TeamAdminAuthoritySnapshot,
-) -> Result<()> {
-    if admin_authority_query(
-        connection,
-        &authority.team_id,
-        &authority.member_id,
-        authority.ptk_role_type,
-        authority.ptk_generation,
-    )?
-    .as_ref()
-    .is_none_or(|current| {
-        current.member_source_role_type != authority.member_source_role_type
-            || current.member_source_visibility != authority.member_source_visibility
-            || current.member_generation != authority.member_generation
-            || current.ptk_verify_key != authority.ptk_verify_key
-    }) {
-        return Err(Error::Invalid("stale team-admin authority"));
-    }
-    Ok(())
 }
 
 fn authority_query(
@@ -626,14 +544,28 @@ fn authority_query(
     let row: Option<(Vec<u8>, i64, i64)> = connection
         .query_row(
             "SELECT m.verify_key, m.role_type, m.visibility
-         FROM team_members m JOIN shared_keys k
-           ON k.uid = m.party_id AND k.role_type = m.source_role_type
-          AND k.visibility = m.source_visibility AND k.generation = m.generation
-          AND k.verify_key = m.verify_key
-         WHERE m.team_id = ?1 AND m.party_id = ?2
-           AND (m.scoped_host_id IS NULL OR m.scoped_host_id = ?3)
-           AND m.source_role_type = ?4 AND m.source_visibility = ?5
-           AND m.generation = ?6",
+             FROM team_members m JOIN teams target ON target.team_id = m.team_id
+             WHERE m.team_id = ?1 AND m.party_id = ?2
+               AND target.host_id = ?3
+               AND (m.scoped_host_id IS NULL OR m.scoped_host_id = ?3)
+               AND m.source_role_type = ?4 AND m.source_visibility = ?5
+               AND m.generation = ?6
+               AND (
+                 EXISTS (
+                   SELECT 1 FROM shared_keys k
+                   WHERE k.uid = m.party_id AND k.role_type = m.source_role_type
+                     AND k.visibility = m.source_visibility
+                     AND k.generation = m.generation AND k.verify_key = m.verify_key
+                 )
+                 OR EXISTS (
+                   SELECT 1 FROM team_shared_keys k
+                   JOIN teams source ON source.team_id = k.team_id
+                   WHERE k.team_id = m.party_id AND source.host_id = ?3
+                     AND k.role_type = m.source_role_type
+                     AND k.visibility = m.source_visibility
+                     AND k.generation = m.generation AND k.verify_key = m.verify_key
+                 )
+               )",
             params![
                 team_id,
                 member_id,

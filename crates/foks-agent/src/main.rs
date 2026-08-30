@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser as _;
-use foks_agent_proto::{ErrorCode, Operation, Request, Response, MAXIMUM_MESSAGE_BYTES};
+use foks_agent_proto::{ErrorCode, Operation, Request, Response, TeamRole, MAXIMUM_MESSAGE_BYTES};
 use foks_client_app::{
-    derive_vault_key, AccountVault, CancellationToken, CheckedProfileSession, ClientCredentials,
-    FederationDestinationRole, Passphrase, ProfileRegistry, ProfileSession, YubiProvisionInput,
-    YubiSignupInput,
+    derive_vault_key, AccountVault, CancellationToken, Capability, CheckedProfileSession,
+    ClientCredentials, FederationDestinationRole, KexAcceptanceInput, Passphrase, ProfileRegistry,
+    ProfileSession, TeamMemberRole, UnlockedYubiActor, YubiProvisionInput, YubiSignupInput,
 };
 use foks_keystore::EncryptedFileSecretStore;
 use foks_yubi::{
@@ -23,6 +23,7 @@ const MAXIMUM_REQUESTS_PER_CONNECTION: usize = 128;
 const CANCELLATION_GRACE: Duration = Duration::from_secs(1);
 const MAXIMUM_CANARY_BYTES: usize = 64 * 1024;
 const MAXIMUM_CANARY_FETCHES: usize = 4;
+const DEVICE_PAIRING_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 #[derive(clap::Parser)]
 #[command(
@@ -473,10 +474,16 @@ async fn handle_connection(
             }
         };
         let state = state_dir.clone();
-        let supervised = supervise_blocking(request.id, permit, timeout, move |cancellation| {
-            dispatch_controlled(&state, request, timeout, cancellation)
-        })
-        .await;
+        let operation_timeout = if request.operation.is_device_pairing_wait() {
+            timeout.max(DEVICE_PAIRING_TIMEOUT)
+        } else {
+            timeout
+        };
+        let supervised =
+            supervise_blocking(request.id, permit, operation_timeout, move |cancellation| {
+                dispatch_controlled(&state, request, operation_timeout, cancellation)
+            })
+            .await;
         write_response(&mut stream, &supervised.response, timeout).await?;
         if supervised.close_connection {
             return Ok(());
@@ -677,6 +684,77 @@ fn dispatch_result(
                 Ok(serde_json::to_value(session.sync_account(&alias, vault)?)?)
             })
         }
+        Operation::StartDevicePairing {
+            profile,
+            account_alias,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(
+                    session.start_owner_device_pairing(&account_alias, vault)?,
+                )?)
+            })
+        }
+        Operation::RepublishDevicePairing {
+            profile,
+            account_alias,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(
+                    session.republish_owner_device_pairing(&account_alias, vault)?,
+                )?)
+            })
+        }
+        Operation::FinishDevicePairing {
+            profile,
+            account_alias,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                Ok(serde_json::to_value(session.finish_owner_device_pairing(
+                    &account_alias,
+                    vault,
+                    master,
+                )?)?)
+            })
+        }
+        Operation::AcceptDevicePairing {
+            profile,
+            target_alias,
+            device_name,
+            serial,
+            phrase,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(session.accept_owner_device_pairing(
+                    KexAcceptanceInput {
+                        target_alias,
+                        device_name,
+                        serial,
+                        phrase: phrase.expose().to_owned(),
+                    },
+                    vault,
+                )?)?)
+            })
+        }
+        Operation::ResumeDevicePairingAcceptance {
+            profile,
+            target_alias,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(
+                    session.resume_owner_device_pairing_acceptance(&target_alias, vault)?,
+                )?)
+            })
+        }
         Operation::ListYubiCards { profile } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
@@ -810,16 +888,39 @@ fn dispatch_result(
             profile,
             alias,
             pin,
+            with_federation,
         } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
-            with_vault(state_dir, &session, |session, vault| {
-                Ok(serde_json::to_value(session.sync_yubi_account(
-                    &alias,
-                    Pin::new(pin.expose())?,
-                    &HardwareYubiProvider::new(),
-                    vault,
-                )?)?)
+            if !with_federation {
+                return with_vault_and_master(state_dir, &session, |session, vault, master| {
+                    Ok(serde_json::to_value(session.sync_yubi_account(
+                        &alias,
+                        Pin::new(pin.expose())?,
+                        &HardwareYubiProvider::new(),
+                        vault,
+                        master,
+                    )?)?)
+                });
+            }
+            let credentials = ClientCredentials::open(state_dir)?;
+            credentials.with_checked_session(&session, |session| {
+                let master = credentials.master_key()?;
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                Ok(serde_json::to_value(
+                    session.sync_yubi_account_with_federation(
+                        &alias,
+                        Pin::new(pin.expose())?,
+                        &HardwareYubiProvider::new(),
+                        &mut AccountVault::new(&mut store),
+                        &registry,
+                        &credentials,
+                        &master,
+                    )?,
+                )?)
             })
         }
         Operation::YubiPinStatus { profile, alias } => {
@@ -895,12 +996,13 @@ fn dispatch_result(
         } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
-            with_vault(state_dir, &session, |session, vault| {
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.rotate_yubi_management_key(
                     &alias,
                     Pin::new(pin.expose())?,
                     &HardwareYubiProvider::new(),
                     vault,
+                    master,
                 )?)?)
             })
         }
@@ -911,13 +1013,14 @@ fn dispatch_result(
         } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
-            with_vault(state_dir, &session, |session, vault| {
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let pin = pin.as_ref().map(|pin| Pin::new(pin.expose())).transpose()?;
                 Ok(serde_json::to_value(session.resume_yubi_management_key(
                     &alias,
                     pin,
                     &HardwareYubiProvider::new(),
                     vault,
+                    master,
                 )?)?)
             })
         }
@@ -943,12 +1046,13 @@ fn dispatch_result(
         } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
-            with_vault(state_dir, &session, |session, vault| {
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.recover_yubi_subkey(
                     &alias,
                     Pin::new(pin.expose())?,
                     &HardwareYubiProvider::new(),
                     vault,
+                    master,
                 )?)?)
             })
         }
@@ -991,6 +1095,104 @@ fn dispatch_result(
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(
                     session.sync_team(&team_alias, vault)?,
+                )?)
+            })
+        }
+        Operation::ListTeamMembers {
+            profile,
+            team_alias,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(
+                    session.list_team_members(&team_alias, vault)?,
+                )?)
+            })
+        }
+        Operation::AddTeamMember {
+            profile,
+            team_alias,
+            username,
+            role,
+            visibility,
+        } => {
+            let destination = team_destination(role, visibility)?;
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                Ok(serde_json::to_value(session.add_local_team_member(
+                    &team_alias,
+                    &username,
+                    destination,
+                    vault,
+                    master,
+                )?)?)
+            })
+        }
+        Operation::ResumeTeamMemberAddition {
+            profile,
+            team_alias,
+            username,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                Ok(serde_json::to_value(
+                    session.resume_local_team_member_addition(
+                        &team_alias,
+                        &username,
+                        vault,
+                        master,
+                    )?,
+                )?)
+            })
+        }
+        Operation::DemoteTeamMember {
+            profile,
+            team_alias,
+            username,
+            role,
+            visibility,
+        } => {
+            let destination = team_destination(role, visibility)?;
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                Ok(serde_json::to_value(session.demote_local_team_member(
+                    &team_alias,
+                    &username,
+                    destination,
+                    vault,
+                    master,
+                )?)?)
+            })
+        }
+        Operation::RemoveTeamMember {
+            profile,
+            team_alias,
+            username,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                Ok(serde_json::to_value(session.remove_local_team_member(
+                    &team_alias,
+                    &username,
+                    vault,
+                    master,
+                )?)?)
+            })
+        }
+        Operation::ResumeTeamMemberEdit {
+            profile,
+            team_alias,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                Ok(serde_json::to_value(
+                    session.resume_local_team_member_edit(&team_alias, vault, master)?,
                 )?)
             })
         }
@@ -1049,6 +1251,40 @@ fn dispatch_result(
                 )?)
             })
         }
+        Operation::RefreshFederatedSecurity {
+            profile,
+            team_alias,
+            local_yubi_alias,
+            local_pin,
+            remote_profile,
+            remote_yubi_alias,
+            remote_pin,
+            unlocks,
+        } => {
+            let session = ProfileSession::open_with_control(
+                &registry,
+                &profile,
+                timeout,
+                cancellation.clone(),
+            )?;
+            refresh_federated_security(
+                state_dir,
+                &registry,
+                &session,
+                &profile,
+                RefreshFederatedSecurityArguments {
+                    team_alias,
+                    local_yubi_alias,
+                    local_pin,
+                    remote_profile,
+                    remote_yubi_alias,
+                    remote_pin,
+                    unlocks,
+                },
+                timeout,
+                cancellation,
+            )
+        }
         Operation::RunDueJobs { profile } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
@@ -1081,16 +1317,162 @@ fn federation_destination(
         foks_agent_proto::FederationRole::Member => {
             Ok(FederationDestinationRole::Member { visibility })
         }
-        foks_agent_proto::FederationRole::Admin if visibility == 0 => {
-            Ok(FederationDestinationRole::Admin)
-        }
-        foks_agent_proto::FederationRole::Owner if visibility == 0 => {
-            Ok(FederationDestinationRole::Owner)
-        }
         foks_agent_proto::FederationRole::Admin | foks_agent_proto::FederationRole::Owner => {
-            Err("federation visibility applies only to member roles".into())
+            Err("federated teams can only hold member roles".into())
         }
     }
+}
+
+fn team_destination(
+    role: TeamRole,
+    visibility: i16,
+) -> Result<TeamMemberRole, Box<dyn std::error::Error>> {
+    match role {
+        TeamRole::Member => Ok(TeamMemberRole::Member { visibility }),
+        TeamRole::Admin if visibility == 0 => Ok(TeamMemberRole::Admin),
+        TeamRole::Owner if visibility == 0 => Ok(TeamMemberRole::Owner),
+        TeamRole::Admin | TeamRole::Owner => Err("visibility applies only to member roles".into()),
+    }
+}
+
+struct RefreshFederatedSecurityArguments {
+    team_alias: String,
+    local_yubi_alias: Option<String>,
+    local_pin: Option<foks_agent_proto::SecretString>,
+    remote_profile: Option<String>,
+    remote_yubi_alias: Option<String>,
+    remote_pin: Option<foks_agent_proto::SecretString>,
+    unlocks: Vec<foks_agent_proto::YubiFederationUnlockInput>,
+}
+
+fn requested_federation_unlocks(
+    profile: &str,
+    arguments: &RefreshFederatedSecurityArguments,
+) -> foks_client_app::Result<Vec<(String, String, Pin)>> {
+    let mut requested = Vec::new();
+    match (
+        arguments.local_yubi_alias.as_deref(),
+        arguments.local_pin.as_ref(),
+    ) {
+        (Some(alias), Some(pin)) => requested.push((
+            profile.to_owned(),
+            alias.to_owned(),
+            Pin::new(pin.expose())?,
+        )),
+        (None, None) => {}
+        _ => {
+            return Err(foks_client_app::Error::InvalidConfig(
+                "local Yubi alias and PIN must be supplied together",
+            ))
+        }
+    }
+    match (
+        arguments.remote_profile.as_deref(),
+        arguments.remote_yubi_alias.as_deref(),
+        arguments.remote_pin.as_ref(),
+    ) {
+        (Some(remote_profile), Some(alias), Some(pin)) => requested.push((
+            remote_profile.to_owned(),
+            alias.to_owned(),
+            Pin::new(pin.expose())?,
+        )),
+        (None, None, None) => {}
+        _ => {
+            return Err(foks_client_app::Error::InvalidConfig(
+                "remote profile, Yubi alias, and PIN must be supplied together",
+            ))
+        }
+    }
+    for unlock in &arguments.unlocks {
+        requested.push((
+            unlock.profile.clone(),
+            unlock.alias.clone(),
+            Pin::new(unlock.pin.expose())?,
+        ));
+    }
+    Ok(requested)
+}
+
+/// Runs one federated security responder with a YubiKey unlocked on any
+/// number of the profiles the refresh will touch.
+///
+/// Every profile's durable Yubi record is read under its own short-lived
+/// checked session, all of which are released before the refresh takes the
+/// local one. The refresh re-acquires the other profiles without waiting, so
+/// holding their operation locks across it would report each as permanently
+/// busy. The record only names the device; the credential built from it is
+/// re-checked against the authenticated user chain at every use. PINs are
+/// used to open the devices and are never persisted.
+fn refresh_federated_security(
+    state_dir: &Path,
+    registry: &ProfileRegistry,
+    session: &ProfileSession,
+    profile: &str,
+    arguments: RefreshFederatedSecurityArguments,
+    timeout: Duration,
+    cancellation: CancellationToken,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let provider = HardwareYubiProvider::new();
+    // Check authority before touching hardware. A denied profile must not
+    // consume a PIN attempt or make someone present a key for nothing.
+    session.profile().require(Capability::Teams)?;
+    session.profile().require(Capability::Federation)?;
+    let credentials = ClientCredentials::open(state_dir)?;
+    let master = credentials.master_key()?;
+
+    let requested = requested_federation_unlocks(profile, &arguments)?;
+
+    let mut opened = Vec::new();
+    for (unlock_profile, alias, pin) in requested {
+        let unlock_session = ProfileSession::open_with_control(
+            registry,
+            &unlock_profile,
+            timeout,
+            cancellation.clone(),
+        )?;
+        unlock_session.profile().require(Capability::Teams)?;
+        unlock_session.profile().require(Capability::Federation)?;
+        let loaded = credentials.with_checked_session(&unlock_session, |checked| {
+            let mut store = EncryptedFileSecretStore::open(
+                &checked.paths().credential_store,
+                derive_vault_key(&master),
+            )?;
+            AccountVault::new(&mut store).yubi_account(&alias)
+        })?;
+        let device = provider.open(&loaded.locator, Some(&pin))?;
+        opened.push((unlock_profile, alias, loaded, device));
+    }
+    let unlocked_credentials = opened
+        .iter()
+        .map(|(_, _, loaded, device)| loaded.credential(device.as_ref()))
+        .collect::<Vec<_>>();
+    let actors = opened
+        .iter()
+        .zip(&unlocked_credentials)
+        .map(
+            |((unlock_profile, alias, _, _), credential)| UnlockedYubiActor {
+                profile: unlock_profile,
+                alias,
+                credential,
+            },
+        )
+        .collect::<Vec<_>>();
+
+    credentials.with_checked_session(session, |session| {
+        let mut store = EncryptedFileSecretStore::open(
+            &session.paths().credential_store,
+            derive_vault_key(&master),
+        )?;
+        let report = session.refresh_federated_security_with_unlocked_yubi(
+            &arguments.team_alias,
+            &actors,
+            &mut AccountVault::new(&mut store),
+            registry,
+            &credentials,
+            &master,
+        )?;
+        Ok(serde_json::to_value(report)?)
+    })
 }
 
 fn with_vault(
@@ -1216,15 +1598,12 @@ fn now_microseconds() -> Result<u64, Box<dyn std::error::Error>> {
 fn bind_private_agent_socket(path: &Path) -> std::io::Result<tokio::net::UnixListener> {
     use std::os::unix::fs::PermissionsExt as _;
 
-    static NEXT_STAGING_SOCKET: std::sync::atomic::AtomicU64 =
-        std::sync::atomic::AtomicU64::new(0);
+    static NEXT_STAGING_SOCKET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let sequence = NEXT_STAGING_SOCKET.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let staging = path.with_extension(format!("binding-{}-{}", std::process::id(), sequence));
     let _ = std::fs::remove_file(&staging);
     let listener = tokio::net::UnixListener::bind(&staging)?;
-    if let Err(error) =
-        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o600))
-    {
+    if let Err(error) = std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o600)) {
         let _ = std::fs::remove_file(&staging);
         return Err(error);
     }
@@ -1422,6 +1801,85 @@ mod tests {
         let bounded = bounded_error(error);
         assert!(bounded.len() <= 1024);
         assert!(bounded.is_char_boundary(bounded.len()));
+    }
+
+    #[test]
+    fn federated_refresh_rejects_partial_unlock_tuples() {
+        let arguments =
+            |local_yubi_alias, local_pin, remote_profile, remote_yubi_alias, remote_pin| {
+                RefreshFederatedSecurityArguments {
+                    team_alias: "engineering".to_owned(),
+                    local_yubi_alias,
+                    local_pin,
+                    remote_profile,
+                    remote_yubi_alias,
+                    remote_pin,
+                    unlocks: Vec::new(),
+                }
+            };
+
+        for partial in [
+            arguments(Some("local-key".to_owned()), None, None, None, None),
+            arguments(
+                None,
+                Some(foks_agent_proto::SecretString::new("123456")),
+                None,
+                None,
+                None,
+            ),
+        ] {
+            assert!(matches!(
+                requested_federation_unlocks("local", &partial),
+                Err(foks_client_app::Error::InvalidConfig(
+                    "local Yubi alias and PIN must be supplied together"
+                ))
+            ));
+        }
+
+        for partial in [
+            arguments(
+                None,
+                None,
+                Some("remote".to_owned()),
+                Some("remote-key".to_owned()),
+                None,
+            ),
+            arguments(
+                None,
+                None,
+                None,
+                Some("remote-key".to_owned()),
+                Some(foks_agent_proto::SecretString::new("123456")),
+            ),
+        ] {
+            assert!(matches!(
+                requested_federation_unlocks("local", &partial),
+                Err(foks_client_app::Error::InvalidConfig(
+                    "remote profile, Yubi alias, and PIN must be supplied together"
+                ))
+            ));
+        }
+
+        let mut complete = arguments(
+            Some("local-key".to_owned()),
+            Some(foks_agent_proto::SecretString::new("123456")),
+            Some("remote".to_owned()),
+            Some("remote-key".to_owned()),
+            Some(foks_agent_proto::SecretString::new("123456")),
+        );
+        complete
+            .unlocks
+            .push(foks_agent_proto::YubiFederationUnlockInput {
+                profile: "third".to_owned(),
+                alias: "third-key".to_owned(),
+                pin: foks_agent_proto::SecretString::new("123456"),
+            });
+        assert_eq!(
+            requested_federation_unlocks("local", &complete)
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[test]

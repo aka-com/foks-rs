@@ -4,10 +4,10 @@ use super::{
     device_label_name_and_commitment_key, hepk, DeviceLabelNameAndCommitmentKey, Hepk, UserLink,
 };
 use crate::{
-    array, boolean, decode, encode, entity, expect_unsigned, fixed_blob, list, list_or_null, role,
-    text, unsigned, EntityId, Error, HybridBox, Result, Role, SecretSeed, SeedChainBox,
-    SharedKeyBoxSet, TeamRemoteMemberViewToken, TeamRemovalKeyBox, Value, ENTITY_AD_HOC_TEAM,
-    ENTITY_HOST, ENTITY_NAMED_TEAM, ENTITY_USER,
+    array, boolean, decode, encode, entity, expect_unsigned, fixed_blob, list, list_or_null,
+    option, role, text, unsigned, EntityId, Error, HybridBox, Result, Role, SecretSeed,
+    SeedChainBox, SharedKeyBoxSet, TeamRemoteMemberViewToken, TeamRemovalKeyBox, Value,
+    ENTITY_AD_HOC_TEAM, ENTITY_HOST, ENTITY_NAMED_TEAM, ENTITY_USER,
 };
 use zeroize::Zeroizing;
 
@@ -904,6 +904,8 @@ pub struct DecodedTeamEditArgument {
     pub removal_keys: Vec<TeamRemovalBoxData>,
     pub removals: Vec<TeamRemovalAndCommitment>,
     pub hepks: Vec<Hepk>,
+    pub new_key_on_rotate: Option<EntityId>,
+    pub team_bearer_token: Option<TeamBearerToken>,
     pub remote_member_view_tokens: Vec<TeamRemoteMemberViewToken>,
     pub local_permissions_for: Vec<EntityId>,
 }
@@ -956,7 +958,12 @@ impl TeamRemovalMacPayload {
         self.team.clone().require_type(ENTITY_NAMED_TEAM)?;
         self.host.clone().require_type(ENTITY_HOST)?;
         self.member_host.clone().require_type(ENTITY_HOST)?;
-        self.admin.clone().require_type(ENTITY_USER)?;
+        if !matches!(
+            self.admin.entity_type(),
+            ENTITY_USER | ENTITY_NAMED_TEAM | ENTITY_AD_HOC_TEAM
+        ) {
+            return Err(Error::EntityType(self.admin.entity_type()));
+        }
         self.admin_host.clone().require_type(ENTITY_HOST)?;
         if !matches!(
             self.member.entity_type(),
@@ -1006,11 +1013,52 @@ pub struct TeamRemovalProof {
 }
 
 impl TeamRemovalProof {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let fields = array(&value, 2)?;
+        Ok(Self {
+            mac: fixed_blob(&fields[0], "team removal MAC")?,
+            payload: TeamRemovalMacPayload::from_value(&fields[1])?,
+        })
+    }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        self.payload.validate()?;
+        Ok(encode(&self.to_value())?)
+    }
+
     fn to_value(&self) -> Value {
         Value::Array(vec![
             Value::Binary(self.mac.to_vec()),
             self.payload.to_value(),
         ])
+    }
+}
+
+/// Exact v0.1.9 TeamLoader removal response.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TeamRemovalAndKeyBox {
+    pub key_box: TeamRemovalKeyBox,
+    pub removal: TeamRemovalProof,
+}
+
+impl TeamRemovalAndKeyBox {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let fields = array(&value, 2)?;
+        Ok(Self {
+            key_box: TeamRemovalKeyBox::from_value(&fields[0])?,
+            removal: TeamRemovalProof::decode(&encode(&fields[1])?)?,
+        })
+    }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        self.key_box.validate()?;
+        self.removal.payload.validate()?;
+        Ok(encode(&Value::Array(vec![
+            self.key_box.to_value(),
+            self.removal.to_value(),
+        ]))?)
     }
 }
 
@@ -1055,11 +1103,41 @@ pub struct RemoveTeamMemberArgument<'a> {
     pub seed_chain: &'a [SeedChainBox],
     pub removals: &'a [TeamRemovalAndCommitment],
     pub hepks: &'a [Hepk],
+    /// Replacement sender key for an edit that advances the signing member's
+    /// own PUK/PTK generation. The link remains signed by the old key.
+    pub new_key_on_rotate: Option<&'a EntityId>,
+    pub team_bearer_token: Option<&'a TeamBearerToken>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TeamEditResult {
     pub local_invitees: Vec<(EntityId, Role)>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TeamConfig {
+    pub maximum_roles: u64,
+}
+
+impl TeamConfig {
+    pub fn encoded(self) -> Result<Vec<u8>> {
+        if self.maximum_roles == 0 {
+            return Err(Error::IntegerRange("team maximum roles"));
+        }
+        Ok(encode(&Value::Array(vec![Value::Unsigned(
+            self.maximum_roles,
+        )]))?)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let fields = array(&value, 1)?;
+        let maximum_roles = unsigned(&fields[0])?;
+        if maximum_roles == 0 {
+            return Err(Error::IntegerRange("team maximum roles"));
+        }
+        Ok(Self { maximum_roles })
+    }
 }
 
 impl TeamEditResult {
@@ -1357,9 +1435,6 @@ impl AddTeamMemberArgument<'_> {
 
 impl RemoveTeamMemberArgument<'_> {
     pub fn encoded(&self) -> Result<Vec<u8>> {
-        if self.seed_chain.is_empty() || self.removals.len() != 1 || self.hepks.is_empty() {
-            return Err(Error::IntegerRange("team removal edit contents"));
-        }
         for removal in self.removals {
             removal.removal.payload.validate()?;
         }
@@ -1380,14 +1455,16 @@ impl RemoveTeamMemberArgument<'_> {
             Value::Null,
             Value::Null,
             list_or_null(self.removals.iter().map(TeamRemovalAndCommitment::to_value)),
-            Value::Array(vec![Value::Array(hepks)]),
-            Value::Null,
+            Value::Array(vec![list_or_null(hepks.into_iter())]),
+            self.new_key_on_rotate
+                .map_or(Value::Null, |key| Value::Binary(key.as_bytes().to_vec())),
         ]);
         Ok(encode(&Value::Array(vec![
             decode(&self.link.encoded()?)?,
             Value::Binary(self.next_tree_location.to_vec()),
             offchain,
-            Value::Null,
+            self.team_bearer_token
+                .map_or(Value::Null, |token| Value::Binary(token.to_vec())),
             Value::Null,
         ]))?)
     }
@@ -1463,12 +1540,15 @@ impl DecodedRevokeDeviceArgument {
             Value::Null => None,
             value => {
                 let annex = array(value, 2)?;
-                // Go clients repeat their generic user-settings link here.
-                // This protocol slice accepts that canonical value but does
-                // not project the unsupported chain into local state.
-                Some(crate::PassphraseUpdateArgument::from_unbound_change_value(
-                    &annex[0],
-                )?)
+                let update = crate::PassphraseUpdateArgument::from_unbound_change_value(&annex[0])?;
+                let link = crate::PostGenericLinkArgument::from_value(&annex[1])?;
+                if update.user_settings_link.as_ref() != Some(&link) {
+                    return Err(Error::Type {
+                        expected: "matching passphrase user-settings links",
+                        found: "different links",
+                    });
+                }
+                Some(update)
             }
         };
         Ok(Self {
@@ -1492,9 +1572,13 @@ impl RevokeDeviceArgument<'_> {
         let passphrase = self
             .passphrase
             .map(|passphrase| -> Result<Value> {
+                let link = passphrase.user_settings_link.as_ref().ok_or(Error::Type {
+                    expected: "passphrase user-settings link",
+                    found: "null",
+                })?;
                 Ok(Value::Array(vec![
                     passphrase.to_change_value()?,
-                    Value::Null,
+                    link.to_value()?,
                 ]))
             })
             .transpose()?
@@ -1511,7 +1595,7 @@ impl RevokeDeviceArgument<'_> {
             })),
             Value::Binary(self.next_tree_location.to_vec()),
             passphrase,
-            Value::Array(vec![Value::Array(hepks)]),
+            Value::Array(vec![list_or_null(hepks.into_iter())]),
         ]))?)
     }
 }
@@ -1536,9 +1620,7 @@ fn decode_hepk_set(value: &Value) -> Result<Vec<Hepk>> {
 
 fn decode_team_edit_common(value: &Value) -> Result<DecodedTeamEditArgument> {
     let fields = array(value, 5)?;
-    require_null(&fields[3], "team edit invite links")?;
     let offchain = array(&fields[2], 7)?;
-    require_null(&offchain[6], "team edit remote join requests")?;
     Ok(DecodedTeamEditArgument {
         link: UserLink::decode(&encode(&fields[0])?)?,
         next_tree_location: fixed_blob(&fields[1], "team next tree location")?,
@@ -1551,6 +1633,10 @@ fn decode_team_edit_common(value: &Value) -> Result<DecodedTeamEditArgument> {
             TeamRemovalAndCommitment::decode(&encode(value)?)
         })?,
         hepks: decode_hepk_set(&offchain[5])?,
+        new_key_on_rotate: option(&offchain[6], entity)?,
+        team_bearer_token: option(&fields[3], |value| {
+            fixed_blob(value, "team edit bearer token")
+        })?,
         remote_member_view_tokens: list(&offchain[2], |value| {
             TeamRemoteMemberViewToken::decode(&encode(value)?)
         })?,

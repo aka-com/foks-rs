@@ -1,0 +1,591 @@
+//! Interactive software-device pairing over the public v0.1.9 KEX relay.
+
+use foks_client_db::{HardStateStore, MutationKind, MutationOperation, MutationState};
+use foks_crypto::{
+    countersign_software_kex_provision_link, derive_device_public,
+    finish_software_kex_provision_link, make_software_kex_provision_link, seal_software_puk_boxes,
+    sign_kex_wrapper, DevicePublicMaterial, KexPhrase, KexSecret, PukBoxRandomness,
+    SoftwareProvisionInput, SoftwarePukBoxInput, UserMutationBase,
+};
+use foks_proto::{
+    DeviceLabel, DeviceLabelNameAndCommitmentKey, DeviceType, KexActorType, KexCleartext,
+    KexDeviceLabelAndName, KexHelloMessage, KexMessage, KexPleaseSign, KexReceiveArgument,
+    KexSendArgument, KexWrapperMessage, ProvisionDeviceArgument, Role, SecretSeed,
+};
+use foks_rpc::{
+    encode_kex_receive_request, encode_kex_send_request, encode_provision_device_request,
+    encode_registration_select_vhost_request,
+};
+use zeroize::Zeroizing;
+
+use crate::{
+    now_milliseconds, random_bytes, DeviceCredential, Error, FoksClient, MutationCoordinator,
+    PinnedHost, ProtectedMutationStore, ProvisionedSoftwareDevice, Result,
+};
+
+const KEX_POLL_MILLISECONDS: u64 = 5 * 60 * 1_000;
+
+pub struct KexProvisionOffer {
+    secret: KexSecret,
+    pub role: Role,
+}
+
+impl std::fmt::Debug for KexProvisionOffer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("KexProvisionOffer")
+            .field("secret", &"[REDACTED]")
+            .field("role", &self.role)
+            .finish()
+    }
+}
+
+impl KexProvisionOffer {
+    pub fn generate(role: Role) -> Result<Self> {
+        if role == Role::NONE {
+            return Err(Error::Kex("provisioned role is empty"));
+        }
+        Ok(Self {
+            secret: KexSecret::generate()?,
+            role,
+        })
+    }
+
+    pub fn phrase(&self) -> KexPhrase {
+        self.secret.phrase()
+    }
+
+    pub fn into_secret_bytes(self) -> Zeroizing<[u8; foks_proto::KEX_SECRET_BYTES]> {
+        self.secret.secret_bytes()
+    }
+
+    pub fn from_secret_bytes(
+        bytes: [u8; foks_proto::KEX_SECRET_BYTES],
+        role: Role,
+    ) -> Result<Self> {
+        if role == Role::NONE {
+            return Err(Error::Kex("provisioned role is empty"));
+        }
+        Ok(Self {
+            secret: KexSecret::from_bytes(bytes)?,
+            role,
+        })
+    }
+}
+
+pub struct KexProvisioningReport {
+    pub operation_id: Option<[u8; 16]>,
+    pub device: DevicePublicMaterial,
+}
+
+impl FoksClient {
+    /// Creates a one-use pairing offer and publishes the KEX `Start` packet.
+    /// Persist the returned secret in protected storage before displaying its
+    /// phrase. The application should persist the offer before publishing it.
+    pub fn publish_kex_provision_offer(
+        &self,
+        host: &PinnedHost,
+        existing: &DeviceCredential,
+        offer: &KexProvisionOffer,
+    ) -> Result<()> {
+        self.kex_send(
+            host,
+            &existing.seed,
+            &offer.secret,
+            0,
+            KexActorType::Provisioner,
+            KexMessage::Start,
+        )
+    }
+
+    /// Completes the provisioner half after the other machine has entered the
+    /// offer phrase. The final identity mutation uses the normal durable WAL.
+    pub fn finish_kex_provisioning(
+        &self,
+        host: &PinnedHost,
+        existing: &DeviceCredential,
+        offer: &KexProvisionOffer,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<KexProvisioningReport> {
+        let hello = match self.kex_receive(
+            host,
+            &existing.seed,
+            &offer.secret,
+            0,
+            KexActorType::Provisioner,
+            KEX_POLL_MILLISECONDS,
+        )? {
+            KexMessage::Hello(hello) => hello,
+            KexMessage::Error(_) => return Err(Error::Kex("peer aborted pairing")),
+            _ => return Err(Error::Kex("expected the provisionee hello packet")),
+        };
+        validate_hello(&hello)?;
+        let new_device = DevicePublicMaterial {
+            id: hello.entity,
+            hepk: hello.hepk,
+        };
+        let authenticated = self.authenticate_and_pin(host, existing)?;
+        let signer = derive_device_public(&existing.seed)?;
+        if !authenticated
+            .verified
+            .devices()
+            .iter()
+            .any(|device| device.id == signer.id && device.role == Role::OWNER)
+        {
+            return Err(Error::Kex(
+                "device provisioning requires an enrolled owner signer",
+            ));
+        }
+        let enrolled = authenticated
+            .verified
+            .devices()
+            .iter()
+            .find(|device| device.id == new_device.id);
+        let prior = HardStateStore::open(&host.database_path)?.latest_mutation_for_binding(
+            host.host_id().as_bytes(),
+            MutationKind::DeviceProvision,
+            authenticated.verified.uid().as_bytes(),
+            new_device.id.as_bytes(),
+        )?;
+        if let Some(device) = enrolled {
+            if device.role != offer.role {
+                return Err(Error::OperationBinding(
+                    "paired device is enrolled with another role",
+                ));
+            }
+            let operation_id = self.reconcile_enrolled_kex_mutation(
+                host,
+                existing,
+                prior.as_ref(),
+                protected_store,
+            )?;
+            self.kex_send(
+                host,
+                &existing.seed,
+                &offer.secret,
+                2,
+                KexActorType::Provisioner,
+                KexMessage::Done,
+            )?;
+            return Ok(KexProvisioningReport {
+                operation_id,
+                device: new_device,
+            });
+        }
+        if let Some(operation) = prior
+            .as_ref()
+            .filter(|operation| !matches!(operation.state, MutationState::Rejected))
+        {
+            let operation = self.bound_user_mutation(
+                host,
+                operation.operation_id,
+                MutationKind::DeviceProvision,
+                &existing.uid,
+                protected_store,
+            )?;
+            if operation.subject_id != new_device.id.as_bytes() {
+                return Err(Error::OperationBinding(
+                    "paired device mutation subject changed",
+                ));
+            }
+            if matches!(
+                operation.state,
+                MutationState::RemoteVerified | MutationState::Finalized
+            ) {
+                return Err(Error::OperationBinding(
+                    "verified paired device is absent from the authenticated chain",
+                ));
+            }
+            let post_error =
+                self.resume_user_mutation_submission(host, existing, &operation, protected_store)?;
+            match self.wait_for_user_transition(host, existing, |user| {
+                user.devices()
+                    .iter()
+                    .any(|device| device.id == new_device.id && device.role == offer.role)
+            }) {
+                Ok(_) => {}
+                Err(_) if post_error.is_some() => {
+                    return Err(post_error.expect("checked above"));
+                }
+                Err(error) => return Err(error),
+            }
+            MutationCoordinator::new(&host.database_path, protected_store)
+                .remote_verified(&operation.operation_id)?;
+            self.kex_send(
+                host,
+                &existing.seed,
+                &offer.secret,
+                2,
+                KexActorType::Provisioner,
+                KexMessage::Done,
+            )?;
+            return Ok(KexProvisioningReport {
+                operation_id: Some(operation.operation_id),
+                device: new_device,
+            });
+        }
+        let public_puk = authenticated
+            .verified
+            .shared_key(offer.role)
+            .ok_or(Error::Kex("the provisioned role has no PUK"))?;
+        let private_puk = self
+            .load_puks_for_role(host, existing, &authenticated.verified, offer.role)?
+            .into_iter()
+            .find(|key| key.role == offer.role && key.generation == public_puk.generation)
+            .ok_or(Error::Kex("the current role PUK is unavailable"))?;
+        let next_tree_location = random_bytes()?;
+        let commitment_key = random_bytes()?;
+        let material = make_software_kex_provision_link(
+            &SoftwareProvisionInput {
+                base: UserMutationBase {
+                    uid: authenticated.verified.uid(),
+                    host: authenticated.verified.host(),
+                    seqno: authenticated
+                        .verified
+                        .chain_seqno()
+                        .checked_add(1)
+                        .ok_or(Error::Kex("user sequence overflow"))?,
+                    previous: authenticated.verified.chain_tail_hash(),
+                    root: &authenticated.verified.tree_root(),
+                    time: now_milliseconds()?,
+                    next_tree_location,
+                },
+                role: offer.role,
+                device_label: &hello.device_name.label,
+                device_name_commitment_key: commitment_key,
+            },
+            &existing.seed,
+            &new_device,
+        )?;
+        let puk_boxes = seal_software_puk_boxes(
+            host.host_id(),
+            &existing.seed,
+            random_bytes()?,
+            &[SoftwarePukBoxInput {
+                seed: &private_puk.seed,
+                generation: private_puk.generation,
+                role: private_puk.role,
+                receiver: &new_device,
+            }],
+            &[PukBoxRandomness {
+                kem_message: random_bytes()?,
+                nonce: random_bytes()?,
+            }],
+        )?;
+        let mut self_token: [u8; foks_proto::KEX_PERMISSION_TOKEN_BYTES] = random_bytes()?;
+        self_token[0] = 54;
+        let ppe = if offer.role == Role::OWNER {
+            self.kex_passphrase_package(host, existing, &authenticated, &private_puk.seed)?
+        } else {
+            None
+        };
+        self.kex_send(
+            host,
+            &existing.seed,
+            &offer.secret,
+            1,
+            KexActorType::Provisioner,
+            KexMessage::PleaseSign(KexPleaseSign {
+                link: material.link.clone(),
+                ppe,
+                self_token,
+            }),
+        )?;
+        let signed = match self.kex_receive(
+            host,
+            &existing.seed,
+            &offer.secret,
+            1,
+            KexActorType::Provisioner,
+            KEX_POLL_MILLISECONDS,
+        )? {
+            KexMessage::OkSigned(signature) => material.link.with_appended_signature(signature)?,
+            KexMessage::Error(_) => return Err(Error::Kex("peer aborted pairing")),
+            _ => return Err(Error::Kex("expected the provisionee signature packet")),
+        };
+        let link = finish_software_kex_provision_link(&signed, &existing.seed, &new_device)?;
+        let device_name = DeviceLabelNameAndCommitmentKey {
+            label: hello.device_name.label,
+            normalization_version: hello.device_name.normalization_version,
+            display_name: hello.device_name.display_name,
+            commitment_key,
+        };
+        let encoded = Zeroizing::new(encode_provision_device_request(&ProvisionDeviceArgument {
+            link: &link,
+            puk_boxes: &puk_boxes,
+            device_name: &device_name,
+            next_tree_location,
+            self_token,
+            hepks: std::slice::from_ref(&new_device.hepk),
+            subkey_box: None,
+            yubi_pq_hint: None,
+        })?);
+        let operation_id = self.prepare_user_mutation(
+            host,
+            MutationKind::DeviceProvision,
+            authenticated.verified.uid(),
+            &new_device.id,
+            authenticated.verified.chain_seqno() + 1,
+            &encoded,
+            protected_store,
+        )?;
+        if let Some(error) =
+            self.submit_user_mutation(host, existing, operation_id, &encoded, protected_store)?
+        {
+            return Err(error);
+        }
+        self.wait_for_user_transition(host, existing, |user| {
+            user.devices()
+                .iter()
+                .any(|device| device.id == new_device.id && device.role == offer.role)
+        })?;
+        self.kex_send(
+            host,
+            &existing.seed,
+            &offer.secret,
+            2,
+            KexActorType::Provisioner,
+            KexMessage::Done,
+        )?;
+        MutationCoordinator::new(&host.database_path, protected_store)
+            .remote_verified(&operation_id)?;
+        Ok(KexProvisioningReport {
+            operation_id: Some(operation_id),
+            device: new_device,
+        })
+    }
+
+    fn reconcile_enrolled_kex_mutation(
+        &self,
+        host: &PinnedHost,
+        existing: &DeviceCredential,
+        operation: Option<&MutationOperation>,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<Option<[u8; 16]>> {
+        let Some(operation) = operation else {
+            return Ok(None);
+        };
+        match operation.state {
+            MutationState::Submitting | MutationState::SubmissionUnknown => {
+                let operation = self.bound_user_mutation(
+                    host,
+                    operation.operation_id,
+                    MutationKind::DeviceProvision,
+                    &existing.uid,
+                    protected_store,
+                )?;
+                MutationCoordinator::new(&host.database_path, protected_store)
+                    .remote_verified(&operation.operation_id)?;
+                Ok(Some(operation.operation_id))
+            }
+            MutationState::RemoteVerified | MutationState::Finalized => {
+                Ok(Some(operation.operation_id))
+            }
+            MutationState::Prepared => Err(Error::OperationBinding(
+                "prepared pairing mutation cannot have changed remote state",
+            )),
+            MutationState::Rejected => Ok(None),
+        }
+    }
+
+    /// Runs the provisionee half on a fresh machine using the displayed HESP
+    /// phrase and returns a fully authenticated local device credential.
+    pub fn accept_kex_provisioning(
+        &self,
+        host: &PinnedHost,
+        phrase: &str,
+        device_name: &str,
+        serial: u64,
+        device_seed: SecretSeed,
+    ) -> Result<ProvisionedSoftwareDevice> {
+        if serial == 0 {
+            return Err(Error::Kex("device serial is zero"));
+        }
+        let secret = KexSecret::from_phrase(phrase)?;
+        let display_name = crate::fix_device_name(device_name);
+        let normalized_name = crate::normalize_device_name(display_name.as_bytes())
+            .ok_or(Error::Kex("device name is invalid"))?;
+        let public = derive_device_public(&device_seed)?;
+        match self.kex_receive(host, &device_seed, &secret, 0, KexActorType::Provisionee, 0)? {
+            KexMessage::Start => {}
+            _ => return Err(Error::Kex("pairing phrase has no Start packet")),
+        }
+        self.kex_send(
+            host,
+            &device_seed,
+            &secret,
+            0,
+            KexActorType::Provisionee,
+            KexMessage::Hello(KexHelloMessage {
+                entity: public.id.clone(),
+                hepk: public.hepk.clone(),
+                device_name: KexDeviceLabelAndName {
+                    label: DeviceLabel {
+                        device_type: DeviceType::Computer,
+                        normalized_name,
+                        serial,
+                    },
+                    normalization_version: 0,
+                    display_name: display_name.into_bytes(),
+                },
+            }),
+        )?;
+        let request = match self.kex_receive(
+            host,
+            &device_seed,
+            &secret,
+            1,
+            KexActorType::Provisionee,
+            KEX_POLL_MILLISECONDS,
+        )? {
+            KexMessage::PleaseSign(request) => request,
+            KexMessage::Error(_) => return Err(Error::Kex("peer aborted pairing")),
+            _ => return Err(Error::Kex("expected a provision link")),
+        };
+        let change = request.link.decode_group_change()?;
+        if change.host != *host.host_id() || change.changes.len() != 1 {
+            return Err(Error::Kex(
+                "provision link targets the wrong host or device set",
+            ));
+        }
+        let signed = countersign_software_kex_provision_link(&request.link, &device_seed)?;
+        let signature = signed
+            .signatures()
+            .last()
+            .cloned()
+            .ok_or(Error::Kex("provisionee signature is absent"))?;
+        self.kex_send(
+            host,
+            &device_seed,
+            &secret,
+            1,
+            KexActorType::Provisionee,
+            KexMessage::OkSigned(signature),
+        )?;
+        match self.kex_receive(
+            host,
+            &device_seed,
+            &secret,
+            2,
+            KexActorType::Provisionee,
+            KEX_POLL_MILLISECONDS,
+        )? {
+            KexMessage::Done => {}
+            KexMessage::Error(_) => return Err(Error::Kex("peer rejected pairing")),
+            _ => return Err(Error::Kex("expected the final Done packet")),
+        }
+        let uid = change.uid;
+        let role = change.changes[0].role;
+        let certificate_chain = self.fetch_device_certificate_chain(host, &uid, &device_seed)?;
+        let credential = DeviceCredential {
+            uid,
+            seed: device_seed,
+            certificate_chain,
+        };
+        self.probe_key_exists(
+            host,
+            &credential.uid,
+            &public.id,
+            &foks_proto::PermissionToken::new(request.self_token),
+        )?;
+        let authenticated = self.wait_for_user_transition(host, &credential, |user| {
+            user.devices()
+                .iter()
+                .any(|device| device.id == public.id && device.role == role)
+        })?;
+        Ok(ProvisionedSoftwareDevice {
+            operation_id: None,
+            credential,
+            authenticated,
+        })
+    }
+
+    fn kex_send(
+        &self,
+        host: &PinnedHost,
+        seed: &SecretSeed,
+        secret: &KexSecret,
+        sequence: u64,
+        actor: KexActorType,
+        message: KexMessage,
+    ) -> Result<()> {
+        let keys = secret.keys()?;
+        let sender = derive_device_public(seed)?.id;
+        let cleartext = KexCleartext {
+            session_id: keys.session_id,
+            sender: sender.clone(),
+            sequence,
+            message,
+        };
+        let wrapper = KexWrapperMessage {
+            session_id: keys.session_id,
+            sender,
+            sequence,
+            payload: keys.seal(&cleartext, random_bytes()?)?,
+        };
+        let request = encode_kex_send_request(&KexSendArgument {
+            signature: sign_kex_wrapper(seed, &wrapper)?,
+            message: wrapper,
+            actor,
+        })?;
+        self.call_void_after_vhost_selection(
+            host,
+            &host.registration,
+            &encode_registration_select_vhost_request(host.host_id())?,
+            &request,
+        )
+    }
+
+    fn kex_receive(
+        &self,
+        host: &PinnedHost,
+        seed: &SecretSeed,
+        secret: &KexSecret,
+        sequence: u64,
+        actor: KexActorType,
+        poll_wait_milliseconds: u64,
+    ) -> Result<KexMessage> {
+        let keys = secret.keys()?;
+        let receiver = derive_device_public(seed)?.id;
+        let response = self.call_after_vhost_selection(
+            host,
+            &host.registration,
+            &encode_registration_select_vhost_request(host.host_id())?,
+            &encode_kex_receive_request(&KexReceiveArgument {
+                session_id: keys.session_id,
+                receiver: receiver.clone(),
+                sequence,
+                poll_wait_milliseconds,
+                actor,
+            })?,
+        )?;
+        let wrapper = KexWrapperMessage::decode(&response)?;
+        if wrapper.session_id != keys.session_id
+            || wrapper.sequence != sequence
+            || wrapper.sender == receiver
+        {
+            return Err(Error::Kex("relay returned a rebound or reflected packet"));
+        }
+        // The relay verifies each wrapper signature before insertion. The
+        // signed wrapper does not carry that signature back on receive, so the
+        // client authenticates the sender again through the encrypted packet's
+        // exact sender/session/sequence bindings and, for Hello/OkSigned, the
+        // identity-chain countersignature before mutation acceptance.
+        Ok(keys.open(&wrapper)?.message)
+    }
+}
+
+fn validate_hello(hello: &KexHelloMessage) -> Result<()> {
+    hello
+        .entity
+        .clone()
+        .require_type(foks_proto::ENTITY_DEVICE)?;
+    if hello.device_name.label.device_type != DeviceType::Computer
+        || hello.device_name.label.serial == 0
+        || crate::normalize_device_name(&hello.device_name.display_name).as_deref()
+            != Some(hello.device_name.label.normalized_name.as_slice())
+    {
+        return Err(Error::Kex("provisionee device label is invalid"));
+    }
+    Ok(())
+}

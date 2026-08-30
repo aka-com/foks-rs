@@ -3,39 +3,49 @@
   "foks_version": "v0.1.9",
   "files": [
     {
+      "file": "software-mixed-puk-box-set.snowp",
+      "bytes": 2748,
+      "sha256": "63db5022f3ce2ef31cb08c7d8b2ee8115770e5dacf13008cc7423cc2a006e1aa"
+    },
+    {
       "file": "software-to-yubi-puk-parcel.snowp",
       "bytes": 1481,
-      "sha256": "a31ad1ca83c40a58b20d03f6f23deeaf6eac2cfaf4ddbedc5c1d27e2104ca8e4"
+      "sha256": "ad999cfd6c26956e609858913c024dc98d9c0bdf8a2ddcf604cb4c2210600785"
     },
     {
       "file": "subkey-box.snowp",
       "bytes": 1252,
-      "sha256": "e03f5790b00c88272ee0ec1f70b220060229934431f146e8f7544598dc75c5cf"
+      "sha256": "cf7bcf791a74dd61e36cd67aa2c89dc0f892c4bb373b7fbf76436cc7210021fa"
     },
     {
       "file": "subkey-id.snowp",
       "bytes": 35,
-      "sha256": "1c77a222a9506ca98a4936b4e2f9f3a156349e4bb4f615a31b6b11312da380f1"
+      "sha256": "fc789ff4089a6253ef8bf6a556127d9e39d4cdc2e00a1fc8b3fe14ff42ce6846"
     },
     {
       "file": "yubi-eldest-link.snowp",
-      "bytes": 745,
-      "sha256": "126f8367ff61e20a31597132851086f6cd370b6549cabe69640e4e17cd5c9648"
+      "bytes": 747,
+      "sha256": "b4c7f3c7a6b2323461992cdd5a884f99c34127870a9cdde250e48be2f7e68d10"
     },
     {
       "file": "yubi-hepk.snowp",
       "bytes": 1238,
-      "sha256": "04481a2c93646753fad62571ba06543e3e39c54bba74ee8d640f0c09869c4967"
+      "sha256": "9c85add94f83d7fe2aa539fb4c690488624f6c208d6ad83d3befc29f9120c411"
     },
     {
       "file": "yubi-id.snowp",
       "bytes": 36,
-      "sha256": "5ad2adbb14c60037cb77f3bc1bcf1bb0d2a14830107ca2cd5f619ae9c87baafd"
+      "sha256": "a353939d1bfae45caf7edb45f2c2bddc4062eb05393e294631bb2c49639cdb31"
+    },
+    {
+      "file": "yubi-mixed-puk-box-set.snowp",
+      "bytes": 2753,
+      "sha256": "ddc7d6d4e6588b7ada9596cc617c913e73bce6bf079392a62380a292805748be"
     },
     {
       "file": "yubi-to-software-puk-parcel.snowp",
-      "bytes": 1486,
-      "sha256": "5f6d430666d31db02f76b23eed132f8d9dafbb3fec0719c99821929ef48b018c"
+      "bytes": 1487,
+      "sha256": "1e2cdfa791ea6614c152ad29034c28d6a484487de31bd2a4e17bcde8e84e8434"
     }
   ],
   "raw_files": [

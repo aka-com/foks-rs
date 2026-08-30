@@ -3,6 +3,259 @@ use rusqlite::{params, OptionalExtension};
 use crate::*;
 
 impl HardStateStore {
+    pub fn accept_verified_user_generic_chain(
+        &mut self,
+        snapshot: &VerifiedUserGenericChainSnapshot<'_>,
+    ) -> Result<Acceptance> {
+        if snapshot.host_id.len() != 33
+            || snapshot.uid.len() != 33
+            || !matches!(snapshot.chain_type, 2 | 4)
+            || snapshot.tail_hash.is_some() != (snapshot.sequence > 0)
+        {
+            return Err(Error::InvalidUser("invalid generic-chain snapshot"));
+        }
+        let Value::Array(chain) = decode(snapshot.chain_bytes)? else {
+            return Err(Error::InvalidUser("generic-chain evidence is not an array"));
+        };
+        let Some((Value::Unsigned(encoded_type), links)) = chain.split_first() else {
+            return Err(Error::InvalidUser(
+                "generic-chain evidence omitted its type",
+            ));
+        };
+        if *encoded_type != snapshot.chain_type
+            || links.len()
+                != usize::try_from(snapshot.sequence).map_err(|_| Error::IntegerOutOfRange {
+                    field: "generic-chain sequence",
+                    value: snapshot.sequence,
+                })?
+        {
+            return Err(Error::InvalidUser(
+                "generic-chain evidence length does not match its sequence",
+            ));
+        }
+        let chain_type = sqlite_integer("generic-chain type", snapshot.chain_type)?;
+        let sequence = sqlite_integer("generic-chain sequence", snapshot.sequence)?;
+        let merkle_epoch = sqlite_integer("generic-chain Merkle epoch", snapshot.merkle_epoch)?;
+        let transaction = self.write_transaction()?;
+        let authority: Option<(i64, Vec<u8>)> = transaction
+            .query_row(
+                "SELECT h.epoch, r.root_hash FROM merkle_heads h
+                 JOIN merkle_roots r ON r.host_id = h.host_id AND r.epoch = h.epoch
+                 JOIN users u ON u.host_id = h.host_id
+                 WHERE h.host_id = ?1 AND u.uid = ?2",
+                params![snapshot.host_id, snapshot.uid],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((current_epoch, current_hash)) = authority else {
+            return Err(Error::InvalidUser(
+                "generic chain has no accepted user authority",
+            ));
+        };
+        if stored_unsigned("generic-chain Merkle epoch", current_epoch)? != snapshot.merkle_epoch
+            || current_hash.as_slice() != snapshot.merkle_root_hash
+        {
+            return Err(Error::InvalidUser(
+                "generic chain is not anchored at the current Merkle head",
+            ));
+        }
+        let stored: Option<(i64, Option<Vec<u8>>, Vec<u8>, i64, Vec<u8>)> = transaction
+            .query_row(
+                "SELECT seqno, tail_hash, chain_bytes, merkle_epoch, merkle_root_hash
+                 FROM user_generic_chains
+                 WHERE host_id = ?1 AND uid = ?2 AND chain_type = ?3",
+                params![snapshot.host_id, snapshot.uid, chain_type],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let acceptance = match stored {
+            None => Acceptance::Inserted,
+            Some((stored_sequence, stored_tail, stored_chain, stored_epoch, stored_root)) => {
+                let stored_sequence = stored_unsigned("generic-chain sequence", stored_sequence)?;
+                if snapshot.sequence < stored_sequence {
+                    return Err(Error::UserGenericRollback {
+                        chain_type: snapshot.chain_type,
+                        stored: stored_sequence,
+                        received: snapshot.sequence,
+                    });
+                }
+                if snapshot.sequence == stored_sequence {
+                    if stored_tail.as_deref()
+                        != snapshot.tail_hash.as_ref().map(<[u8; 32]>::as_slice)
+                        || stored_chain != snapshot.chain_bytes
+                    {
+                        return Err(Error::UserGenericFork {
+                            chain_type: snapshot.chain_type,
+                            seqno: snapshot.sequence,
+                        });
+                    }
+                    if stored_unsigned("generic-chain Merkle epoch", stored_epoch)?
+                        == snapshot.merkle_epoch
+                        && stored_root.as_slice() == snapshot.merkle_root_hash
+                    {
+                        Acceptance::Unchanged
+                    } else {
+                        Acceptance::Advanced
+                    }
+                } else {
+                    if !encoded_array_is_prefix(&stored_chain, snapshot.chain_bytes)? {
+                        return Err(Error::UserGenericFork {
+                            chain_type: snapshot.chain_type,
+                            seqno: stored_sequence.saturating_add(1),
+                        });
+                    }
+                    Acceptance::Advanced
+                }
+            }
+        };
+        if acceptance != Acceptance::Unchanged {
+            transaction.execute(
+                "INSERT INTO user_generic_chains
+                     (host_id, uid, chain_type, seqno, tail_hash, chain_bytes,
+                      merkle_epoch, merkle_root_hash)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(host_id, uid, chain_type) DO UPDATE SET
+                     seqno = excluded.seqno,
+                     tail_hash = excluded.tail_hash,
+                     chain_bytes = excluded.chain_bytes,
+                     merkle_epoch = excluded.merkle_epoch,
+                     merkle_root_hash = excluded.merkle_root_hash",
+                params![
+                    snapshot.host_id,
+                    snapshot.uid,
+                    chain_type,
+                    sequence,
+                    snapshot.tail_hash.as_ref().map(<[u8; 32]>::as_slice),
+                    snapshot.chain_bytes,
+                    merkle_epoch,
+                    snapshot.merkle_root_hash.as_slice(),
+                ],
+            )?;
+        }
+        if snapshot.chain_type == foks_proto::CHAIN_TYPE_USER_SETTINGS && snapshot.sequence > 0 {
+            transaction.execute(
+                "DELETE FROM user_local_security
+                 WHERE host_id = ?1 AND uid = ?2 AND passphrase_absence_attested = 1",
+                params![snapshot.host_id, snapshot.uid],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(acceptance)
+    }
+
+    /// Records that this client created the account from an exact signup
+    /// request with no passphrase. Server responses alone cannot establish
+    /// this fact for legacy Go accounts, whose initial PPE was not linked.
+    pub fn attest_user_has_no_passphrase(&mut self, host_id: &[u8], uid: &[u8]) -> Result<()> {
+        if uid.len() != 33 {
+            return Err(Error::InvalidUser("invalid passphrase-attestation UID"));
+        }
+        let transaction = self.write_transaction()?;
+        let inserted = transaction.execute(
+            "INSERT INTO user_local_security
+                 (host_id, uid, passphrase_absence_attested, trusted_ppe_hash)
+             SELECT ?1, ?2, 1, NULL
+             WHERE EXISTS (
+                 SELECT 1 FROM users WHERE host_id = ?1 AND uid = ?2
+             )
+             ON CONFLICT(host_id, uid) DO UPDATE SET
+                 passphrase_absence_attested = 1,
+                 trusted_ppe_hash = NULL",
+            params![host_id, uid],
+        )?;
+        if inserted == 0 {
+            return Err(Error::InvalidUser(
+                "passphrase attestation has no accepted user",
+            ));
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn user_has_no_passphrase_attestation(&self, host_id: &[u8], uid: &[u8]) -> Result<bool> {
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM user_local_security
+                 WHERE host_id = ?1 AND uid = ?2
+                    AND passphrase_absence_attested = 1
+             )",
+            params![host_id, uid],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn clear_user_no_passphrase_attestation(
+        &mut self,
+        host_id: &[u8],
+        uid: &[u8],
+    ) -> Result<()> {
+        let transaction = self.write_transaction()?;
+        transaction.execute(
+            "DELETE FROM user_local_security WHERE host_id = ?1 AND uid = ?2",
+            params![host_id, uid],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn trust_user_passphrase_parcel(
+        &mut self,
+        host_id: &[u8],
+        uid: &[u8],
+        parcel_hash: &[u8; 32],
+    ) -> Result<()> {
+        if uid.len() != 33 {
+            return Err(Error::InvalidUser("invalid trusted-PPE UID"));
+        }
+        let transaction = self.write_transaction()?;
+        let inserted = transaction.execute(
+            "INSERT INTO user_local_security
+                 (host_id, uid, passphrase_absence_attested, trusted_ppe_hash)
+             SELECT ?1, ?2, 0, ?3
+             WHERE EXISTS (
+                 SELECT 1 FROM users WHERE host_id = ?1 AND uid = ?2
+             )
+             ON CONFLICT(host_id, uid) DO UPDATE SET
+                 passphrase_absence_attested = 0,
+                 trusted_ppe_hash = excluded.trusted_ppe_hash",
+            params![host_id, uid, parcel_hash.as_slice()],
+        )?;
+        if inserted == 0 {
+            return Err(Error::InvalidUser("trusted PPE has no accepted user"));
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn trusted_user_passphrase_parcel_hash(
+        &self,
+        host_id: &[u8],
+        uid: &[u8],
+    ) -> Result<Option<[u8; 32]>> {
+        self.connection
+            .query_row(
+                "SELECT trusted_ppe_hash FROM user_local_security
+                 WHERE host_id = ?1 AND uid = ?2
+                   AND passphrase_absence_attested = 0",
+                params![host_id, uid],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()?
+            .map(|hash| {
+                hash.try_into()
+                    .map_err(|_| Error::InvalidUser("invalid trusted PPE hash"))
+            })
+            .transpose()
+    }
+
     /// Atomically pins a verified user chain, its authenticating Merkle root,
     /// and the public device/PUK projection. No private key material is stored.
     pub fn accept_verified_user(&mut self, snapshot: &VerifiedUserSnapshot) -> Result<Acceptance> {
@@ -41,18 +294,37 @@ impl HardStateStore {
         if !host_exists {
             return Err(Error::UnknownHost);
         }
-        let accepted_root = transaction
+        let current_root = transaction
             .query_row(
-                "SELECT root_hash FROM merkle_roots \
-                 WHERE host_id = ?1 AND epoch = ?2",
-                params![snapshot.host_id, merkle_epoch],
-                |row| row.get::<_, Vec<u8>>(0),
+                "SELECT epoch, root_hash FROM merkle_heads WHERE host_id = ?1",
+                [snapshot.host_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
             )
             .optional()?;
-        if accepted_root.as_deref() != Some(snapshot.merkle_root_hash.as_slice()) {
+        let Some((current_epoch, current_hash)) = current_root else {
             return Err(Error::InvalidUser(
-                "user projection is not bound to an accepted Merkle root",
+                "user projection host has no accepted Merkle head",
             ));
+        };
+        let current_epoch = stored_unsigned("current Merkle epoch", current_epoch)?;
+        match snapshot.merkle_epoch.cmp(&current_epoch) {
+            std::cmp::Ordering::Less => {
+                return Err(Error::MerkleRollback {
+                    stored: current_epoch,
+                    received: snapshot.merkle_epoch,
+                });
+            }
+            std::cmp::Ordering::Equal if current_hash.as_slice() != snapshot.merkle_root_hash => {
+                return Err(Error::MerkleFork {
+                    epoch: snapshot.merkle_epoch,
+                });
+            }
+            std::cmp::Ordering::Equal => {}
+            std::cmp::Ordering::Greater => {
+                return Err(Error::InvalidUser(
+                    "user projection is ahead of the accepted Merkle head",
+                ));
+            }
         }
         let stored = transaction
             .query_row(

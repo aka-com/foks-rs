@@ -233,6 +233,16 @@ impl FoksClient {
         host: &PinnedHost,
         credential: &LocatedBackupCredential,
     ) -> Result<AuthenticatedUserOutcome> {
+        self.retry_chain_load(host, |current| {
+            self.authenticate_backup_and_pin_once(current, credential)
+        })
+    }
+
+    fn authenticate_backup_and_pin_once(
+        &self,
+        host: &PinnedHost,
+        credential: &LocatedBackupCredential,
+    ) -> Result<AuthenticatedUserOutcome> {
         let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
         let chain_request = encode_load_user_chain_request(credential.uid.as_bytes(), 1)?;
         let chain_bytes = self.call_with_pkcs8_material(
@@ -249,7 +259,7 @@ impl FoksClient {
             &credential.uid,
             host.host_id(),
             &authenticated_roots,
-            &merkle.root().hostchain,
+            &merkle,
         )?;
         let enrolled = verified
             .devices()
@@ -274,24 +284,29 @@ impl FoksClient {
             &credential.certificate_chain,
         )?;
         let parcel = PukParcel::decode(&parcel_bytes)?;
-        let sender = verified
-            .devices()
-            .iter()
-            .find(|device| device.id == parcel.sender)
-            .ok_or(Error::UserBinding("PUK parcel sender is not enrolled"))?;
         let role_key = verified
             .shared_key(enrolled.role)
             .ok_or(Error::UserBinding("backup role has no PUK"))?;
-        let clear = open_puk_parcel_with_for_role(
-            &parcel,
-            &credential.key,
-            &sender.hepk,
-            &role_key.verify_key,
-            &role_key.hepk,
-            role_key.generation,
-            host.host_id(),
-            enrolled.role,
-        )?;
+        let senders = verified.device_history(&parcel.sender)?;
+        let clear = senders
+            .iter()
+            .rev()
+            .find_map(|sender| {
+                open_puk_parcel_with_for_role(
+                    &parcel,
+                    &credential.key,
+                    &sender.hepk,
+                    &role_key.verify_key,
+                    &role_key.hepk,
+                    role_key.generation,
+                    host.host_id(),
+                    enrolled.role,
+                )
+                .ok()
+            })
+            .ok_or(Error::KeyBinding(
+                "no authenticated historical sender opens the PUK parcel",
+            ))?;
         let puks = open_puk_seed_chain(clear, &parcel, verified.uid(), host.host_id())?
             .into_iter()
             .map(|key| UserPrivateKey {
@@ -525,21 +540,26 @@ impl FoksClient {
             &credential.certificate_chain,
         )?;
         let parcel = PukParcel::decode(&bytes)?;
-        let sender = verified
-            .devices()
+        let senders = verified.device_history(&parcel.sender)?;
+        let clear = senders
             .iter()
-            .find(|device| device.id == parcel.sender)
-            .ok_or(Error::UserBinding("PUK parcel sender is not enrolled"))?;
-        let clear = open_puk_parcel_with_for_role(
-            &parcel,
-            &credential.key,
-            &sender.hepk,
-            &role_key.verify_key,
-            &role_key.hepk,
-            role_key.generation,
-            host.host_id(),
-            role,
-        )?;
+            .rev()
+            .find_map(|sender| {
+                open_puk_parcel_with_for_role(
+                    &parcel,
+                    &credential.key,
+                    &sender.hepk,
+                    &role_key.verify_key,
+                    &role_key.hepk,
+                    role_key.generation,
+                    host.host_id(),
+                    role,
+                )
+                .ok()
+            })
+            .ok_or(Error::KeyBinding(
+                "no authenticated historical sender opens the PUK parcel",
+            ))?;
         Ok(
             open_puk_seed_chain(clear, &parcel, verified.uid(), host.host_id())?
                 .into_iter()

@@ -16,8 +16,10 @@ use crate::{Entropy, WriterHandle};
 const PERMISSION_TOKEN_TAG: u8 = 54;
 const USER_PERMISSION_TOKEN_AAD: &[u8] = b"foks-federation-user-view-token-v1";
 const TEAM_PERMISSION_TOKEN_AAD: &[u8] = b"foks-federation-team-view-token-v1";
-const PERMISSION_LIFETIME_MICROSECONDS: u64 = 30 * 24 * 60 * 60 * 1_000_000;
-const PERMISSION_RENEWAL_WINDOW_MICROSECONDS: u64 = 7 * 24 * 60 * 60 * 1_000_000;
+// Go v0.1.9 treats remote-view permissions as valid until explicit
+// revocation. SQLite stores this field as a signed integer, so its maximum is
+// the protocol-compatible stand-in for a non-expiring bearer.
+const PERMISSION_EXPIRY_MICROSECONDS: u64 = i64::MAX as u64;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn grant_remote_user_view(
@@ -299,12 +301,10 @@ fn prepare_permission_grant(
     existing: Option<ExistingPermission<'_>>,
     active_key: &SecretKey,
     keys: &dyn HostKeyProvider,
-    now: u64,
+    _now: u64,
     entropy: &dyn Entropy,
 ) -> Result<foks_server_db::RemoteUserViewGrant, RpcStatus> {
-    let full_expiry = now
-        .checked_add(PERMISSION_LIFETIME_MICROSECONDS)
-        .ok_or(RpcStatus::TransactionRetry)?;
+    let full_expiry = PERMISSION_EXPIRY_MICROSECONDS;
     let Some(existing) = existing else {
         let mut token_bytes = Zeroizing::new([0u8; 17]);
         entropy.fill(&mut token_bytes[1..]).map_err(internal)?;
@@ -321,10 +321,7 @@ fn prepare_permission_grant(
         );
     };
 
-    let renewal_cutoff = now
-        .checked_add(PERMISSION_RENEWAL_WINDOW_MICROSECONDS)
-        .ok_or(RpcStatus::TransactionRetry)?;
-    let extend = existing.expires_at <= renewal_cutoff;
+    let extend = existing.expires_at != full_expiry;
     let migrate = *existing.key_generation != active_key.generation().as_bytes();
     if !extend && !migrate {
         return Ok(foks_server_db::RemoteUserViewGrant {

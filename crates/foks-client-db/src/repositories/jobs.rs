@@ -3,6 +3,65 @@ use rusqlite::{params, OptionalExtension};
 use crate::*;
 
 impl HardStateStore {
+    /// Registers a default job only when its durable identity is absent.
+    /// Concurrent explicit registration wins without having its interval or
+    /// execution state replaced.
+    pub fn register_scheduled_job_if_missing(&mut self, job: &ScheduledJob) -> Result<bool> {
+        validate_scheduled_job(job)?;
+        if job.failure_count != 0
+            || job.lease_until.is_some()
+            || job.last_completed_at.is_some()
+            || job.last_error.is_some()
+        {
+            return Err(Error::InvalidScheduledJob(
+                "new jobs cannot contain execution state",
+            ));
+        }
+        let transaction = self.write_transaction()?;
+        let host_exists = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM hosts WHERE host_id = ?1)",
+            [&job.host_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !host_exists {
+            return Err(Error::UnknownHost);
+        }
+        let changed = transaction.execute(
+            "INSERT INTO scheduled_jobs (
+                job_id, job_kind, host_id, scope_id, interval_micros,
+                next_run_at, failure_count, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7)
+             ON CONFLICT(job_id) DO NOTHING",
+            params![
+                job.job_id.as_slice(),
+                job.kind as u8,
+                job.host_id,
+                job.scope_id,
+                sqlite_integer("scheduled interval", job.interval_micros)?,
+                sqlite_integer("scheduled next run", job.next_run_at)?,
+                sqlite_integer("scheduled update time", job.updated_at)?,
+            ],
+        )?;
+        if changed == 0 {
+            let binding = transaction.query_row(
+                "SELECT job_kind, host_id, scope_id FROM scheduled_jobs WHERE job_id = ?1",
+                [job.job_id.as_slice()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                    ))
+                },
+            )?;
+            if binding != (job.kind as i64, job.host_id.clone(), job.scope_id.clone()) {
+                return Err(Error::InvalidScheduledJob("job ID binding changed"));
+            }
+        }
+        transaction.commit()?;
+        Ok(changed == 1)
+    }
+
     /// Registers a resumable job, or refreshes its interval without delaying
     /// work that was already due. A job ID can never be rebound to another
     /// host, scope, or kind.

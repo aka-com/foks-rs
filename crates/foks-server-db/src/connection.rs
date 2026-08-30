@@ -16,6 +16,7 @@ pub struct Database {
 
 pub struct ReadDatabase {
     pub(crate) connection: Connection,
+    pub(crate) config: Config,
 }
 
 /// Stable identity for a regular, single-link SQLite database path.
@@ -220,7 +221,7 @@ impl ReadDatabase {
         configure_reader(&connection, &config)?;
         schema::validate_connection(&connection)?;
         crate::kv::validate_kv_tree_capacity(&connection, &config)?;
-        Ok(Self { connection })
+        Ok(Self { connection, config })
     }
 
     pub fn integrity_check(&self) -> Result<bool> {
@@ -228,6 +229,10 @@ impl ReadDatabase {
             self.connection
                 .pragma_query_value(None, "integrity_check", |row| row.get(0))?;
         Ok(result == "ok")
+    }
+
+    pub fn maximum_team_role_bands(&self) -> usize {
+        self.config.maximum_team_role_bands
     }
 
     /// Pins subsequent repository reads to one database state.

@@ -110,6 +110,15 @@ pub(crate) fn insert_generic_link(
     mutation: &GenericLinkMutation<'_>,
     publication_epoch: u64,
 ) -> Result<()> {
+    insert_generic_link_inner(transaction, config, mutation, publication_epoch)
+}
+
+fn insert_generic_link_inner(
+    transaction: &Transaction<'_>,
+    config: &Config,
+    mutation: &GenericLinkMutation<'_>,
+    publication_epoch: u64,
+) -> Result<()> {
     validate_link(config, mutation)?;
     let entity = foks_proto::EntityId::from_bytes(mutation.entity_id.to_vec())
         .map_err(|_| Error::Invalid("generic entity ID"))?;

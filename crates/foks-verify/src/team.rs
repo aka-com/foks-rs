@@ -7,11 +7,11 @@ use crate::{
     authenticated_user_chain_link_at, chain_merkle_key, commitment, encode, find_hepk,
     normalize_username, prefixed_hash, username_merkle_key, username_merkle_leaf,
     verify_hostchain_at_tail, verify_merkle_path, verify_merkle_path_present, verify_typed,
-    AuthenticatedMerkleRoots, BTreeMap, ChangeMetadata, EntityId, Error, HashSet, Hepk,
-    HostchainTail, Result, Role, RoleType, TeamChain, Value, VerifiedSharedKey,
-    VerifiedUserSharedKey, ENTITY_AD_HOC_TEAM, ENTITY_NAMED_TEAM, ENTITY_PTK_VERIFY, ENTITY_USER,
-    LINK_OUTER_TYPE_ID, LINK_OUTER_V1_TYPE_ID, MERKLE_ROOT_TYPE_ID, NAME_COMMITMENT_TYPE_ID,
-    TREE_LOCATION_TYPE_ID,
+    AuthenticatedMerkleRoots, BTreeMap, ChangeMetadata, EntityId, Error, HashSet, Hepk, Result,
+    Role, RoleType, TeamChain, UserDeviceProvisionLeaf, UserDeviceSigningBookends, Value,
+    VerifiedMerkleAdvance, VerifiedSharedKey, VerifiedUserSharedKey, ENTITY_AD_HOC_TEAM,
+    ENTITY_NAMED_TEAM, ENTITY_PTK_VERIFY, ENTITY_USER, LINK_OUTER_TYPE_ID, LINK_OUTER_V1_TYPE_ID,
+    MERKLE_ROOT_TYPE_ID, NAME_COMMITMENT_TYPE_ID, TREE_LOCATION_TYPE_ID,
 };
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -283,6 +283,88 @@ impl VerifiedTeamState {
     pub fn shared_key(&self, role: Role) -> Option<&VerifiedSharedKey> {
         self.shared_keys.iter().find(|key| key.role == role)
     }
+    pub fn shared_key_history(&self) -> Result<Vec<foks_proto::UserSharedKey>> {
+        let mut history = Vec::new();
+        for sequence in 1..=self.chain_seqno {
+            history.extend(self.group_change_at(sequence)?.shared_keys);
+        }
+        Ok(history)
+    }
+
+    /// Checks that `signer` was an authenticated PTK at `epoch` and returns
+    /// the team-chain Merkle bookends needed to prove its provisioning and,
+    /// for a rotated key, that the generic link preceded the rotation.
+    pub fn shared_key_signing_bookends(
+        &self,
+        signer: &EntityId,
+        epoch: u64,
+    ) -> Result<Option<UserDeviceSigningBookends>> {
+        let mut intervals = Vec::<(
+            Role,
+            EntityId,
+            foks_proto::TreeRoot,
+            UserDeviceProvisionLeaf,
+            Option<foks_proto::TreeRoot>,
+        )>::new();
+        let mut prior_location = None;
+        let mut sequence = 0_u64;
+        for segment in team_evidence_segments(&self.evidence_bytes)? {
+            let chain = TeamChain::decode(&segment)?;
+            let offset = match chain.locations.len().checked_sub(chain.links.len()) {
+                Some(0) if sequence == 0 => 0,
+                Some(1) if sequence > 0 && chain.locations.first() == prior_location.as_ref() => 1,
+                _ if chain.links.is_empty() => continue,
+                _ => return Err(Error::TeamChainContinuity),
+            };
+            for (index, link) in chain.links.iter().enumerate() {
+                sequence = sequence.checked_add(1).ok_or(Error::TeamChainContinuity)?;
+                let change = link.decode_team_group_change()?;
+                if change.seqno != sequence {
+                    return Err(Error::TeamChainContinuity);
+                }
+                let key = chain_merkle_key(3, &self.team, sequence, prior_location.as_ref())?;
+                let value = prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?)?;
+                for introduced in &change.shared_keys {
+                    if let Some((_, _, _, _, revoke)) =
+                        intervals.iter_mut().rev().find(|(role, _, _, _, revoke)| {
+                            *role == introduced.role && revoke.is_none()
+                        })
+                    {
+                        *revoke = Some(change.root.clone());
+                    }
+                    intervals.push((
+                        introduced.role,
+                        introduced.verify_key.clone(),
+                        change.root.clone(),
+                        UserDeviceProvisionLeaf { key, value },
+                        None,
+                    ));
+                }
+                prior_location = chain.locations.get(index + offset).copied();
+            }
+        }
+        if sequence != self.chain_seqno {
+            return Err(Error::TeamChainContinuity);
+        }
+        for (_, key, provision_root, provision, revoke_root) in intervals {
+            if key != *signer || epoch < provision_root.epoch {
+                continue;
+            }
+            if revoke_root.as_ref().is_none_or(|root| root.epoch >= epoch) {
+                return Ok(Some(UserDeviceSigningBookends {
+                    provision,
+                    revoke_root,
+                }));
+            }
+        }
+        Ok(None)
+    }
+    pub fn tree_root(&self) -> foks_proto::TreeRoot {
+        foks_proto::TreeRoot {
+            epoch: self.merkle_epoch,
+            hash: self.merkle_root_hash,
+        }
+    }
 
     /// Returns one already-authenticated chain transition by its one-based
     /// sequence number. This is intended for exact mutation reconciliation:
@@ -353,13 +435,31 @@ impl VerifiedTeamState {
 
 /// Replays a FOKS v0.1.9 team chain and authenticates its roster, PTK
 /// generations, name history, and every link against independently pinned
-/// Merkle roots.
+/// Merkle roots. The response-wide roster and terminal absence proofs must be
+/// anchored at `latest`; historical roots remain valid only for roots
+/// cited by individual links.
 pub fn verify_team_chain(
     chain_bytes: &[u8],
     expected_team: &EntityId,
     expected_host: &EntityId,
     authenticated_roots: &AuthenticatedMerkleRoots,
-    trusted_hostchain: &HostchainTail,
+    latest: &VerifiedMerkleAdvance,
+) -> Result<VerifiedTeamState> {
+    verify_team_chain_at_root(
+        chain_bytes,
+        expected_team,
+        expected_host,
+        authenticated_roots,
+        latest.root(),
+    )
+}
+
+fn verify_team_chain_at_root(
+    chain_bytes: &[u8],
+    expected_team: &EntityId,
+    expected_host: &EntityId,
+    authenticated_roots: &AuthenticatedMerkleRoots,
+    expected_root: &foks_proto::MerkleRoot,
 ) -> Result<VerifiedTeamState> {
     let chain = TeamChain::decode(chain_bytes)?;
     if chain.links.is_empty() || chain.locations.len() != chain.links.len() {
@@ -373,8 +473,8 @@ pub fn verify_team_chain(
     }
     let root_bytes = chain.merkle.encoded_root()?;
     let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes)?;
-    if authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
-        || &chain.merkle.root().hostchain != trusted_hostchain
+    if chain.merkle.root() != expected_root
+        || authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
     {
         return Err(Error::UntrustedUserRoot);
     }
@@ -484,14 +584,33 @@ pub fn verify_team_chain(
     })
 }
 
-/// Verifies and replays only the team links returned after a trusted tail.
+/// Verifies and replays only the team links returned after a trusted tail,
+/// requiring the response-wide proofs to use `latest`.
 pub fn verify_team_chain_increment(
     chain_bytes: &[u8],
     prior: &VerifiedTeamState,
     expected_team: &EntityId,
     expected_host: &EntityId,
     authenticated_roots: &AuthenticatedMerkleRoots,
-    trusted_hostchain: &HostchainTail,
+    latest: &VerifiedMerkleAdvance,
+) -> Result<VerifiedTeamState> {
+    verify_team_chain_increment_at_root(
+        chain_bytes,
+        prior,
+        expected_team,
+        expected_host,
+        authenticated_roots,
+        latest.root(),
+    )
+}
+
+fn verify_team_chain_increment_at_root(
+    chain_bytes: &[u8],
+    prior: &VerifiedTeamState,
+    expected_team: &EntityId,
+    expected_host: &EntityId,
+    authenticated_roots: &AuthenticatedMerkleRoots,
+    expected_root: &foks_proto::MerkleRoot,
 ) -> Result<VerifiedTeamState> {
     if prior.team != *expected_team || prior.host != *expected_host {
         return Err(Error::TeamChainContinuity);
@@ -504,8 +623,8 @@ pub fn verify_team_chain_increment(
     }
     let root_bytes = chain.merkle.encoded_root()?;
     let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes)?;
-    if authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
-        || &chain.merkle.root().hostchain != trusted_hostchain
+    if chain.merkle.root() != expected_root
+        || authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
     {
         return Err(Error::UntrustedUserRoot);
     }
@@ -699,6 +818,7 @@ pub(crate) fn verified_team_member(
 ) -> Result<VerifiedTeamMemberState> {
     let keys = change.keys.as_ref().ok_or(Error::TeamRoster)?;
     if change.role == Role::NONE
+        || change.source_role == Role::NONE
         || keys.generation == 0
         || !matches!(
             keys.verify_key.entity_type(),
@@ -708,9 +828,7 @@ pub(crate) fn verified_team_member(
         return Err(Error::TeamRoster);
     }
     let source_matches_key = match keys.verify_key.entity_type() {
-        foks_proto::ENTITY_PUK_VERIFY => {
-            change.party.entity_type() == ENTITY_USER && change.source_role == Role::OWNER
-        }
+        foks_proto::ENTITY_PUK_VERIFY => change.party.entity_type() == ENTITY_USER,
         ENTITY_PTK_VERIFY => {
             matches!(
                 change.party.entity_type(),
@@ -1221,27 +1339,40 @@ pub fn restore_verified_team(
     let host = EntityId::from_bytes(persisted.host_id.to_vec())?;
     let hostchain = foks_proto::decode_hostchain(trusted_hostchain_bytes)?;
     let segments = team_evidence_segments(persisted.evidence_bytes)?;
+    let last_segment = segments
+        .len()
+        .checked_sub(1)
+        .ok_or(Error::PersistedTeamEvidence)?;
     let mut segments = segments.into_iter();
     let first = segments.next().ok_or(Error::PersistedTeamEvidence)?;
     let first_chain = TeamChain::decode(&first)?;
     verify_hostchain_at_tail(&hostchain, &first_chain.merkle.root().hostchain)?;
-    let mut verified = verify_team_chain(
+    let persisted_root = foks_proto::MerkleRoot::decode(persisted.merkle_root_bytes)?;
+    let mut verified = verify_team_chain_at_root(
         &first,
         &team,
         &host,
         authenticated_roots,
-        &first_chain.merkle.root().hostchain,
+        if last_segment == 0 {
+            &persisted_root
+        } else {
+            first_chain.merkle.root()
+        },
     )?;
-    for segment in segments {
+    for (index, segment) in segments.enumerate() {
         let chain = TeamChain::decode(&segment)?;
         verify_hostchain_at_tail(&hostchain, &chain.merkle.root().hostchain)?;
-        verified = verify_team_chain_increment(
+        verified = verify_team_chain_increment_at_root(
             &segment,
             &verified,
             &team,
             &host,
             authenticated_roots,
-            &chain.merkle.root().hostchain,
+            if index.checked_add(1) == Some(last_segment) {
+                &persisted_root
+            } else {
+                chain.merkle.root()
+            },
         )?;
     }
     let snapshot = verified.hard_state_snapshot()?;

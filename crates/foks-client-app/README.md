@@ -34,7 +34,8 @@ The implemented application slice covers:
 - authenticated passphrase set/change and public-challenge verification;
 - personal KV list/read/write/mkdir/remove with streamed file I/O;
 - durable refresh jobs and bounded retry state;
-- owner software-device provisioning and resume;
+- owner software-device provisioning and resume, including interactive
+  13-token KEX pairing with protected offer/acceptance recovery state;
 - YubiKey-backed signup and software-owner provisioning, exact-card sync,
   delegated-subkey recovery, PIN/PUK administration, enrollment-only retry
   policy, crash-safe PIV management-key rotation and recovery, scheduled

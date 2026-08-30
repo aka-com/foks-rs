@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use foks_client_db::HardStateStore;
+use foks_client_db::{HardStateStore, TeamMutationState};
 use foks_crypto::{derive_shared_public, team_removal_key_commitment};
 use foks_proto::{EntityId, Role, SecretSeed, ENTITY_NAMED_TEAM, ENTITY_PTK_VERIFY};
 
@@ -12,7 +12,9 @@ use super::{
     ChangeTeamMemberRequest, FoksClient, RemoveLocalTeamMemberRequest, RotatedTeamPtks,
     RotationBinding, RotationOutcome, TeamPtkRotationSeed,
 };
-use crate::{AuthenticatedUserOutcome, Error, PinnedHost, Result, UserPrivateKey};
+use crate::{
+    AuthenticatedUserOutcome, Error, PinnedHost, ProtectedMutationStore, Result, UserPrivateKey,
+};
 
 impl FoksClient {
     #[allow(clippy::too_many_arguments)]
@@ -27,8 +29,14 @@ impl FoksClient {
         actor_puk_seed: &SecretSeed,
         team: &EntityId,
         expected_seqno: u64,
+        expected_operation_id: &[u8; 16],
         request: &ChangeTeamMemberRequest<'_>,
+        protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<RotatedTeamPtks> {
+        let recorded = HardStateStore::open(&host.database_path)?
+            .team_mutation(expected_operation_id)?
+            .ok_or(Error::TeamRequest("team transition is not recorded"))?;
+        validate_rotation_operation(&recorded, host, uid, team, expected_seqno)?;
         let authenticated = self.load_and_pin_team_with_material(
             host,
             uid,
@@ -39,9 +47,50 @@ impl FoksClient {
             team,
         )?;
         if authenticated.verified.chain_seqno() < expected_seqno {
-            return Err(Error::TransitionNotObserved(
-                "team chain has not reached the journaled member transition",
-            ));
+            let operation_id = super::prepared_rotation_operation_id(
+                uid,
+                team,
+                &authenticated,
+                request.target,
+                request.destination_role,
+                request.replacement,
+                request.rotations,
+            )?;
+            if operation_id != *expected_operation_id {
+                return Err(Error::OperationBinding(
+                    "resumed team transition differs from the recorded operation",
+                ));
+            }
+            let actor_puk = actor_user
+                .puks
+                .iter()
+                .find(|private| private.seed == *actor_puk_seed)
+                .ok_or(Error::KeyBinding(
+                    "journaled team editor PUK is unavailable",
+                ))?;
+            let replayed = self.change_with_material(
+                host,
+                uid,
+                device_id,
+                auth_seed,
+                certificate_chain,
+                actor_user,
+                actor_puk,
+                team,
+                request.target,
+                request.destination_role,
+                request.replacement,
+                None,
+                request.rotations,
+                request.remaining_parties,
+                protected_store,
+            )?;
+            if replayed.operation_id != *expected_operation_id {
+                return Err(Error::OperationBinding(
+                    "replayed team transition differs from the recorded operation",
+                ));
+            }
+            return Ok(replayed);
         }
         let change = authenticated.verified.group_change_at(expected_seqno)?;
         let [member] = change.changes.as_slice() else {
@@ -100,10 +149,32 @@ impl FoksClient {
         }
         let mut hard_store = HardStateStore::open(&host.database_path)?;
         let operation = hard_store
-            .team_mutation_at(host.host_id().as_bytes(), team.as_bytes(), expected_seqno)?
+            .team_mutation(expected_operation_id)?
             .ok_or(Error::TeamRequest("team transition is not recorded"))?;
-        validate_rotation_operation(&operation, host, uid, device_id, team, expected_seqno)?;
-        finish_team_mutation_journal(&mut hard_store, &operation.operation_id)?;
+        validate_rotation_operation(&operation, host, uid, team, expected_seqno)?;
+        let material_key = super::team_rotation_material_key(expected_operation_id);
+        if operation.state != TeamMutationState::Verified {
+            let exact_request = protected_store
+                .get(&material_key)
+                .map_err(super::protected_material_error)?;
+            if foks_crypto::prefixed_hash(crate::TEAM_MUTATION_REQUEST_HASH_TYPE_ID, &exact_request)
+                != operation.request_hash
+            {
+                return Err(Error::OperationBinding(
+                    "protected team transition changed before reconciliation",
+                ));
+            }
+            let protected = super::decode_protected_team_edit_request(&exact_request)?;
+            if protected.team_bearer_token.is_some()
+                || protected.link.decode_team_group_change()? != change
+            {
+                return Err(Error::OperationBinding(
+                    "authenticated transition differs from the exact recorded team request",
+                ));
+            }
+            finish_team_mutation_journal(&mut hard_store, &operation.operation_id)?;
+        }
+        super::remove_team_rekey_material(protected_store, &material_key)?;
         Ok(RotatedTeamPtks {
             operation_id: operation.operation_id,
             expected_seqno,
@@ -123,9 +194,15 @@ impl FoksClient {
         actor_puk: &UserPrivateKey,
         team: &EntityId,
         expected_seqno: u64,
+        expected_operation_id: &[u8; 16],
         request: &RemoveLocalTeamMemberRequest<'_>,
+        protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<RotatedTeamPtks> {
         team.clone().require_type(ENTITY_NAMED_TEAM)?;
+        let recorded = HardStateStore::open(&host.database_path)?
+            .team_mutation(expected_operation_id)?
+            .ok_or(Error::TeamRequest("PTK rotation is not recorded"))?;
+        validate_rotation_operation(&recorded, host, uid, team, expected_seqno)?;
         let observed = self.load_and_pin_team_with_material(
             host,
             uid,
@@ -136,9 +213,45 @@ impl FoksClient {
             team,
         )?;
         if observed.verified.chain_seqno() < expected_seqno {
-            return Err(Error::TransitionNotObserved(
-                "team chain has not reached the journaled PTK rotation",
-            ));
+            let operation_id =
+                self.remove_local_user_and_rotate_ptks_operation_id(uid, team, &observed, request)?;
+            if operation_id != *expected_operation_id {
+                return Err(Error::OperationBinding(
+                    "resumed team removal differs from the recorded operation",
+                ));
+            }
+            let remaining = request
+                .remaining_users
+                .iter()
+                .map(|user| super::VerifiedMemberParty::User(user))
+                .collect::<Vec<_>>();
+            let replayed = self.change_with_material(
+                host,
+                uid,
+                device_id,
+                auth_seed,
+                certificate_chain,
+                actor_user,
+                actor_puk,
+                team,
+                super::TeamMemberSelector {
+                    party: request.target_user,
+                    host: None,
+                    source_role: Role::OWNER,
+                },
+                Role::NONE,
+                None,
+                Some(request.removal_key),
+                request.rotations,
+                &remaining,
+                protected_store,
+            )?;
+            if replayed.operation_id != *expected_operation_id {
+                return Err(Error::OperationBinding(
+                    "replayed team removal differs from the recorded operation",
+                ));
+            }
+            return Ok(replayed);
         }
         let change = observed.verified.group_change_at(expected_seqno)?;
         let [removed] = change.changes.as_slice() else {
@@ -180,11 +293,16 @@ impl FoksClient {
             introduced,
         };
         let operation_id = rotation_operation_id(uid, team, &binding)?;
+        if operation_id != *expected_operation_id {
+            return Err(Error::OperationBinding(
+                "resumed team removal differs from the recorded operation",
+            ));
+        }
         let mut hard_store = HardStateStore::open(&host.database_path)?;
         let operation = hard_store
             .team_mutation(&operation_id)?
             .ok_or(Error::TeamRequest("PTK rotation is not recorded"))?;
-        validate_rotation_operation(&operation, host, uid, device_id, team, expected_seqno)?;
+        validate_rotation_operation(&operation, host, uid, team, expected_seqno)?;
         validate_rotation_transition(&observed.verified, &binding)?;
         if !request.rotations.iter().all(|rotation| {
             observed
@@ -196,7 +314,29 @@ impl FoksClient {
                 "caller-retained PTKs do not match the authenticated team state",
             ));
         }
-        finish_team_mutation_journal(&mut hard_store, &operation_id)?;
+        let material_key = super::team_rotation_material_key(&operation_id);
+        if operation.state != TeamMutationState::Verified {
+            let exact_request = protected_store
+                .get(&material_key)
+                .map_err(super::protected_material_error)?;
+            if foks_crypto::prefixed_hash(crate::TEAM_MUTATION_REQUEST_HASH_TYPE_ID, &exact_request)
+                != operation.request_hash
+            {
+                return Err(Error::OperationBinding(
+                    "protected team removal changed before reconciliation",
+                ));
+            }
+            let protected = super::decode_protected_team_edit_request(&exact_request)?;
+            if protected.team_bearer_token.is_some()
+                || protected.link.decode_team_group_change()? != change
+            {
+                return Err(Error::OperationBinding(
+                    "authenticated removal differs from the exact recorded team request",
+                ));
+            }
+            finish_team_mutation_journal(&mut hard_store, &operation_id)?;
+        }
+        super::remove_team_rekey_material(protected_store, &material_key)?;
         Ok(RotatedTeamPtks {
             operation_id,
             expected_seqno,
@@ -272,7 +412,7 @@ impl FoksClient {
         actor_puk_seed: &SecretSeed,
         team: &EntityId,
         binding: &RotationBinding,
-        _rotations: &[TeamPtkRotationSeed<'_>],
+        rotations: &[TeamPtkRotationSeed<'_>],
     ) -> Result<RotationOutcome> {
         let authenticated = self.load_and_pin_team_with_material(
             host,
@@ -290,7 +430,17 @@ impl FoksClient {
         // verify key, which validate_rotation_transition checks against the
         // binding — so an Ok result proves the on-chain rotation is ours.
         match validate_rotation_transition(&authenticated.verified, binding) {
-            Ok(()) => Ok(RotationOutcome::Committed(Box::new(authenticated))),
+            Ok(())
+                if rotations.iter().all(|rotation| {
+                    authenticated
+                        .ptks
+                        .iter()
+                        .any(|ptk| ptk.role == rotation.role && ptk.seed == *rotation.seed)
+                }) =>
+            {
+                Ok(RotationOutcome::Committed(Box::new(authenticated)))
+            }
+            Ok(()) => Ok(RotationOutcome::Unresolved),
             Err(Error::OperationBinding(_)) => Ok(RotationOutcome::Conflict),
             Err(error) => Err(error),
         }

@@ -43,6 +43,7 @@ impl CheckedProfileSession<'_> {
             &mut mutations,
         )?;
         vault.commit_created(alias, username, &created.credential)?;
+        self.register_default_refresh_jobs_for(&created.credential.uid, now_microseconds()?)?;
         MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
             .finalize(&created.operation_id)?;
         vault.remove_pending_signup(alias)?;
@@ -97,6 +98,7 @@ impl CheckedProfileSession<'_> {
             &mut mutations,
         )?;
         vault.commit_created(alias, &pending.username, &created.credential)?;
+        self.register_default_refresh_jobs_for(&created.credential.uid, now_microseconds()?)?;
         MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
             .finalize(&created.operation_id)?;
         vault.remove_pending_signup(alias)?;
@@ -161,6 +163,7 @@ impl CheckedProfileSession<'_> {
             &mut mutations,
         )?;
         vault.commit_created(target_alias, &source.username, &provisioned.credential)?;
+        self.register_default_refresh_jobs_for(&provisioned.credential.uid, now_microseconds()?)?;
         if let Some(operation_id) = provisioned.operation_id {
             MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
                 .finalize(&operation_id)?;
@@ -205,6 +208,7 @@ impl CheckedProfileSession<'_> {
             let authenticated = self
                 .client
                 .authenticate_and_pin(&host, &target.credential)?;
+            self.register_default_refresh_jobs_for(&target.credential.uid, now_microseconds()?)?;
             return Ok(DeviceProvisionReport {
                 alias: target_alias.to_owned(),
                 device_id_hex: hex(device.id.as_bytes()),
@@ -240,6 +244,7 @@ impl CheckedProfileSession<'_> {
             &mut mutations,
         )?;
         vault.commit_created(target_alias, &pending.username, &provisioned.credential)?;
+        self.register_default_refresh_jobs_for(&provisioned.credential.uid, now_microseconds()?)?;
         if let Some(operation_id) = provisioned.operation_id {
             MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
                 .finalize(&operation_id)?;
@@ -248,6 +253,175 @@ impl CheckedProfileSession<'_> {
         Ok(DeviceProvisionReport {
             alias: target_alias.to_owned(),
             device_id_hex: hex(device.id.as_bytes()),
+            user_chain_sequence: provisioned.authenticated.verified.chain_seqno(),
+        })
+    }
+
+    pub fn start_owner_device_pairing(
+        &self,
+        account_alias: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<KexOfferReport> {
+        self.profile.require(Capability::DeviceAdministration)?;
+        if vault
+            .store
+            .keys()?
+            .iter()
+            .any(|key| key == &kex_offer_key(account_alias))
+        {
+            return Err(Error::AccountExists);
+        }
+        let account = vault.account(account_alias)?;
+        let offer = foks_client::KexProvisionOffer::generate(Role::OWNER)?;
+        let phrase = offer.phrase().expose_joined();
+        let secret = *offer.into_secret_bytes();
+        vault.put_kex_offer(&StoredKexOffer {
+            version: CREDENTIAL_VERSION,
+            account_alias: account_alias.to_owned(),
+            secret,
+        })?;
+        let host = self.pinned_host()?;
+        let restored = foks_client::KexProvisionOffer::from_secret_bytes(secret, Role::OWNER)?;
+        self.client
+            .publish_kex_provision_offer(&host, &account.credential, &restored)?;
+        Ok(KexOfferReport {
+            account_alias: account_alias.to_owned(),
+            phrase: phrase.to_string(),
+        })
+    }
+
+    pub fn republish_owner_device_pairing(
+        &self,
+        account_alias: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<KexOfferReport> {
+        self.profile.require(Capability::DeviceAdministration)?;
+        let account = vault.account(account_alias)?;
+        let stored = vault.kex_offer(account_alias)?;
+        let offer = foks_client::KexProvisionOffer::from_secret_bytes(stored.secret, Role::OWNER)?;
+        let phrase = offer.phrase().expose_joined();
+        let host = self.pinned_host()?;
+        self.client
+            .publish_kex_provision_offer(&host, &account.credential, &offer)?;
+        Ok(KexOfferReport {
+            account_alias: account_alias.to_owned(),
+            phrase: phrase.to_string(),
+        })
+    }
+
+    pub fn finish_owner_device_pairing(
+        &self,
+        account_alias: &str,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<DeviceProvisionReport> {
+        self.profile.require(Capability::DeviceAdministration)?;
+        let account = vault.account(account_alias)?;
+        let stored = vault.kex_offer(account_alias)?;
+        let offer = foks_client::KexProvisionOffer::from_secret_bytes(stored.secret, Role::OWNER)?;
+        let host = self.pinned_host()?;
+        let mut mutations = EncryptedFileMutationStore::open(
+            &self.paths.protected_mutations,
+            derive_mutation_key(master_key),
+        )?;
+        let report = self.client.finish_kex_provisioning(
+            &host,
+            &account.credential,
+            &offer,
+            &mut mutations,
+        )?;
+        if let Some(operation_id) = report.operation_id {
+            MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
+                .finalize(&operation_id)?;
+        }
+        let authenticated = self
+            .client
+            .authenticate_and_pin(&host, &account.credential)?;
+        vault.remove_kex_offer(account_alias)?;
+        Ok(DeviceProvisionReport {
+            alias: account_alias.to_owned(),
+            device_id_hex: hex(report.device.id.as_bytes()),
+            user_chain_sequence: authenticated.verified.chain_seqno(),
+        })
+    }
+
+    pub fn accept_owner_device_pairing(
+        &self,
+        input: KexAcceptanceInput,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<DeviceProvisionReport> {
+        self.profile.require(Capability::DeviceAdministration)?;
+        validate_name(&input.target_alias)?;
+        if vault.contains(&input.target_alias)? {
+            return Err(Error::AccountExists);
+        }
+        foks_crypto::KexSecret::from_phrase(&input.phrase)?;
+        let pending = PendingKexAcceptance {
+            version: CREDENTIAL_VERSION,
+            target_alias: input.target_alias.clone(),
+            device_name: input.device_name.clone(),
+            serial: input.serial,
+            device_seed: random_array()?,
+            phrase: input.phrase.clone(),
+        };
+        vault.put_pending_kex(&pending)?;
+        self.finish_kex_acceptance(pending, vault)
+    }
+
+    pub fn resume_owner_device_pairing_acceptance(
+        &self,
+        target_alias: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<DeviceProvisionReport> {
+        self.profile.require(Capability::DeviceAdministration)?;
+        let pending = vault.pending_kex(target_alias)?;
+        if vault.account_record_exists(target_alias)? {
+            let account = vault.account(target_alias)?;
+            let expected = derive_device_public(&SecretSeed::new(pending.device_seed))?;
+            let actual = derive_device_public(&account.credential.seed)?;
+            if expected.id != actual.id {
+                return Err(Error::InvalidAccount(
+                    "completed KEX credential binding changed",
+                ));
+            }
+            let host = self.pinned_host()?;
+            let authenticated = self
+                .client
+                .authenticate_and_pin(&host, &account.credential)?;
+            self.register_default_refresh_jobs_for(&account.credential.uid, now_microseconds()?)?;
+            vault.remove_pending_kex(target_alias)?;
+            return Ok(DeviceProvisionReport {
+                alias: target_alias.to_owned(),
+                device_id_hex: hex(actual.id.as_bytes()),
+                user_chain_sequence: authenticated.verified.chain_seqno(),
+            });
+        }
+        self.finish_kex_acceptance(pending, vault)
+    }
+
+    fn finish_kex_acceptance(
+        &self,
+        pending: PendingKexAcceptance,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<DeviceProvisionReport> {
+        let host = self.pinned_host()?;
+        let provisioned = self.client.accept_kex_provisioning(
+            &host,
+            &pending.phrase,
+            &pending.device_name,
+            pending.serial,
+            SecretSeed::new(pending.device_seed),
+        )?;
+        let username = String::from_utf8_lossy(provisioned.authenticated.verified.username_utf8())
+            .into_owned();
+        vault.commit_created(&pending.target_alias, &username, &provisioned.credential)?;
+        self.register_default_refresh_jobs_for(&provisioned.credential.uid, now_microseconds()?)?;
+        vault.remove_pending_kex(&pending.target_alias)?;
+        Ok(DeviceProvisionReport {
+            alias: pending.target_alias.clone(),
+            device_id_hex: hex(derive_device_public(&provisioned.credential.seed)?
+                .id
+                .as_bytes()),
             user_chain_sequence: provisioned.authenticated.verified.chain_seqno(),
         })
     }
@@ -333,6 +507,7 @@ impl CheckedProfileSession<'_> {
         let username =
             String::from_utf8_lossy(recovered.authenticated.verified.username()).into_owned();
         vault.commit_created(&pending.target_alias, &username, &recovered.credential)?;
+        self.register_default_refresh_jobs_for(&recovered.credential.uid, now_microseconds()?)?;
         vault.remove_pending_recovery(&pending.target_alias)?;
         Ok(DeviceProvisionReport {
             alias: pending.target_alias.clone(),
@@ -345,6 +520,8 @@ impl CheckedProfileSession<'_> {
     pub fn sync_account(&self, alias: &str, vault: &mut AccountVault<'_>) -> Result<SyncReport> {
         self.profile.require(Capability::UserSync)?;
         self.profile.require(Capability::Kv)?;
+        let uid = vault.account(alias)?.credential.uid;
+        self.register_default_refresh_jobs_for(&uid, now_microseconds()?)?;
         let (_, authenticated, directories) = self.authenticated_tree(alias, vault)?;
         Ok(SyncReport::from_tree(
             authenticated.verified.username(),
@@ -527,6 +704,36 @@ struct PendingDevice {
     self_token: [u8; 17],
 }
 
+#[derive(Deserialize, Serialize)]
+struct StoredKexOffer {
+    version: u32,
+    account_alias: String,
+    secret: [u8; foks_proto::KEX_SECRET_BYTES],
+}
+
+impl Drop for StoredKexOffer {
+    fn drop(&mut self) {
+        self.secret.zeroize();
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+struct PendingKexAcceptance {
+    version: u32,
+    target_alias: String,
+    device_name: String,
+    serial: u64,
+    device_seed: [u8; 32],
+    phrase: String,
+}
+
+impl Drop for PendingKexAcceptance {
+    fn drop(&mut self) {
+        self.device_seed.zeroize();
+        self.phrase.zeroize();
+    }
+}
+
 impl PendingDevice {
     fn random(source_alias: &str, target_alias: &str, username: &str, serial: u64) -> Result<Self> {
         if serial == 0 {
@@ -648,6 +855,54 @@ pub struct LoadedAccount {
     pub credential: DeviceCredential,
 }
 
+#[derive(Clone, Eq, PartialEq, Serialize)]
+pub struct KexOfferReport {
+    pub account_alias: String,
+    pub phrase: String,
+}
+
+impl std::fmt::Debug for KexOfferReport {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("KexOfferReport")
+            .field("account_alias", &self.account_alias)
+            .field("phrase", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl Drop for KexOfferReport {
+    fn drop(&mut self) {
+        self.phrase.zeroize();
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct KexAcceptanceInput {
+    pub target_alias: String,
+    pub device_name: String,
+    pub serial: u64,
+    pub phrase: String,
+}
+
+impl std::fmt::Debug for KexAcceptanceInput {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("KexAcceptanceInput")
+            .field("target_alias", &self.target_alias)
+            .field("device_name", &self.device_name)
+            .field("serial", &self.serial)
+            .field("phrase", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl Drop for KexAcceptanceInput {
+    fn drop(&mut self) {
+        self.phrase.zeroize();
+    }
+}
+
 pub struct AccountVault<'a> {
     pub(super) store: &'a mut dyn SecretStore,
 }
@@ -673,9 +928,81 @@ impl<'a> AccountVault<'a> {
                 || key == &pending_key(alias)
                 || key == &pending_device_key(alias)
                 || key == &pending_recovery_key(alias)
+                || key == &pending_kex_key(alias)
                 || key == &super::yubi::yubi_account_key(alias)
                 || key == &super::yubi::pending_yubi_key(alias)
         }))
+    }
+
+    fn account_record_exists(&mut self, alias: &str) -> Result<bool> {
+        validate_name(alias)?;
+        Ok(self
+            .store
+            .keys()?
+            .iter()
+            .any(|key| key == &account_key(alias)))
+    }
+
+    fn put_kex_offer(&mut self, offer: &StoredKexOffer) -> Result<()> {
+        validate_name(&offer.account_alias)?;
+        if offer.version != CREDENTIAL_VERSION {
+            return Err(Error::InvalidAccount("KEX offer version is invalid"));
+        }
+        let encoded = Zeroizing::new(serde_json::to_vec(offer)?);
+        self.store
+            .put(&kex_offer_key(&offer.account_alias), &encoded)?;
+        Ok(())
+    }
+
+    fn kex_offer(&mut self, account_alias: &str) -> Result<StoredKexOffer> {
+        validate_name(account_alias)?;
+        let bytes = self
+            .store
+            .get(&kex_offer_key(account_alias))
+            .map_err(|error| match error {
+                foks_keystore::Error::Missing => Error::AccountMissing,
+                other => Error::Keystore(other),
+            })?;
+        let offer: StoredKexOffer = serde_json::from_slice(&bytes)?;
+        if offer.version != CREDENTIAL_VERSION || offer.account_alias != account_alias {
+            return Err(Error::InvalidAccount("KEX offer binding changed"));
+        }
+        Ok(offer)
+    }
+
+    fn remove_kex_offer(&mut self, account_alias: &str) -> Result<()> {
+        self.store.remove(&kex_offer_key(account_alias))?;
+        Ok(())
+    }
+
+    fn put_pending_kex(&mut self, pending: &PendingKexAcceptance) -> Result<()> {
+        validate_pending_kex(pending)?;
+        let encoded = Zeroizing::new(serde_json::to_vec(pending)?);
+        self.store
+            .put(&pending_kex_key(&pending.target_alias), &encoded)?;
+        Ok(())
+    }
+
+    fn pending_kex(&mut self, target_alias: &str) -> Result<PendingKexAcceptance> {
+        validate_name(target_alias)?;
+        let bytes =
+            self.store
+                .get(&pending_kex_key(target_alias))
+                .map_err(|error| match error {
+                    foks_keystore::Error::Missing => Error::AccountMissing,
+                    other => Error::Keystore(other),
+                })?;
+        let pending: PendingKexAcceptance = serde_json::from_slice(&bytes)?;
+        validate_pending_kex(&pending)?;
+        if pending.target_alias != target_alias {
+            return Err(Error::InvalidAccount("pending KEX alias binding changed"));
+        }
+        Ok(pending)
+    }
+
+    fn remove_pending_kex(&mut self, target_alias: &str) -> Result<()> {
+        self.store.remove(&pending_kex_key(target_alias))?;
+        Ok(())
     }
     pub fn account(&mut self, alias: &str) -> Result<LoadedAccount> {
         validate_name(alias)?;
@@ -878,6 +1205,21 @@ fn validate_pending_device(pending: &PendingDevice) -> Result<()> {
             "pending device username is missing or excessive",
         ));
     }
+    Ok(())
+}
+
+fn validate_pending_kex(pending: &PendingKexAcceptance) -> Result<()> {
+    if pending.version != CREDENTIAL_VERSION
+        || pending.serial == 0
+        || pending.device_name.is_empty()
+        || pending.device_name.len() > 256
+    {
+        return Err(Error::InvalidAccount(
+            "pending KEX version, device name, or serial is invalid",
+        ));
+    }
+    validate_name(&pending.target_alias)?;
+    foks_crypto::KexSecret::from_phrase(&pending.phrase)?;
     Ok(())
 }
 

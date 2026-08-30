@@ -41,17 +41,37 @@ impl HardStateStore {
         if !host_exists {
             return Err(Error::UnknownHost);
         }
-        let accepted_root = transaction
+        let current_root = transaction
             .query_row(
-                "SELECT root_hash FROM merkle_roots WHERE host_id = ?1 AND epoch = ?2",
-                params![snapshot.host_id, merkle_epoch],
-                |row| row.get::<_, Vec<u8>>(0),
+                "SELECT epoch, root_hash FROM merkle_heads WHERE host_id = ?1",
+                [snapshot.host_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
             )
             .optional()?;
-        if accepted_root.as_deref() != Some(snapshot.merkle_root_hash.as_slice()) {
+        let Some((current_epoch, current_hash)) = current_root else {
             return Err(Error::InvalidTeam(
-                "team projection is not bound to an accepted Merkle root",
+                "team projection host has no accepted Merkle head",
             ));
+        };
+        let current_epoch = stored_unsigned("current Merkle epoch", current_epoch)?;
+        match snapshot.merkle_epoch.cmp(&current_epoch) {
+            std::cmp::Ordering::Less => {
+                return Err(Error::MerkleRollback {
+                    stored: current_epoch,
+                    received: snapshot.merkle_epoch,
+                });
+            }
+            std::cmp::Ordering::Equal if current_hash.as_slice() != snapshot.merkle_root_hash => {
+                return Err(Error::MerkleFork {
+                    epoch: snapshot.merkle_epoch,
+                });
+            }
+            std::cmp::Ordering::Equal => {}
+            std::cmp::Ordering::Greater => {
+                return Err(Error::InvalidTeam(
+                    "team projection is ahead of the accepted Merkle head",
+                ));
+            }
         }
         let stored = load_team_snapshot(&transaction, snapshot.host_id, snapshot.team_id)?;
         let acceptance = match &stored {

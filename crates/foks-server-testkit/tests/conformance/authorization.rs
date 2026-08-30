@@ -1,6 +1,8 @@
 use foks_client::{AddLocalTeamMemberRequest, DeviceCredential, NamedTeamSecrets};
-use foks_proto::{EntityId, PermissionToken, Role, SecretSeed, ENTITY_USER};
-use foks_rpc::TeamChainLoadOptions;
+use foks_proto::{
+    EntityId, PermissionToken, Role, SecretSeed, TeamBearerTokenChallenge, ENTITY_USER,
+};
+use foks_rpc::{encode_load_team_chain_for_local_parent_request, TeamChainLoadOptions};
 use foks_server_testkit::{TestAccountSpec, TestClient};
 use foks_snowpack::Value;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
@@ -9,7 +11,7 @@ use std::sync::Arc;
 
 use crate::support::Fixture;
 
-const MAX_RESPONSE: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 
 #[test]
 pub(crate) fn authorization_and_unsupported_success() {
@@ -85,7 +87,7 @@ pub(crate) fn authorization_and_unsupported_success() {
 }
 
 #[test]
-pub(crate) fn local_team_view_tokens_require_their_authenticated_member() {
+pub(crate) fn local_team_view_tokens_require_authentication_not_transport_identity() {
     let fixture = Fixture::start("local-team-view-auth");
     let account = fixture
         .client
@@ -138,11 +140,7 @@ pub(crate) fn local_team_view_tokens_require_their_authenticated_member() {
         fixture.host().host_id(),
         &created.authenticated.view_token,
         1,
-        TeamChainLoadOptions {
-            load_removal_key: true,
-            load_remote_view_tokens: true,
-            ..TeamChainLoadOptions::default()
-        },
+        TeamChainLoadOptions::default(),
     )
     .unwrap();
     tls.write_all(&request).unwrap();
@@ -191,10 +189,263 @@ pub(crate) fn local_team_view_tokens_require_their_authenticated_member() {
     .unwrap();
     let mut tls = rustls::StreamOwned::new(connection, tcp);
     tls.write_all(&request).unwrap();
-    let error = foks_rpc::read_response(&mut tls, 1024 * 1024, 0).unwrap_err();
+    let response = foks_rpc::read_bare_response(&mut tls, 1024 * 1024, 0).unwrap();
+    assert!(
+        !response.is_empty(),
+        "an authenticated transport may present another roster party's valid token"
+    );
+}
+
+#[test]
+pub(crate) fn team_admin_bearer_is_held_by_transport_and_signed_by_target_ptk() {
+    let fixture = Fixture::start("team-admin-bearer-holder");
+    let owner = fixture
+        .client
+        .create_account(
+            fixture.host(),
+            &TestAccountSpec::new("bearerteamowner", 0x31),
+        )
+        .unwrap();
+    let secrets = NamedTeamSecrets {
+        member_min: SecretSeed::new([0x41; 32]),
+        member: SecretSeed::new([0x42; 32]),
+        admin: SecretSeed::new([0x43; 32]),
+        owner: SecretSeed::new([0x44; 32]),
+        removal_key: SecretSeed::new([0x45; 32]),
+        team_name_commitment_key: [0x46; 16],
+    };
+    let team = fixture
+        .client
+        .foks()
+        .create_single_owner_named_team(
+            fixture.host(),
+            &owner.credential,
+            "bearerholderteam",
+            &secrets,
+        )
+        .unwrap();
+    let holder_client = TestClient::new(&fixture.environment, "bearer-holder-client").unwrap();
+    let holder_host = holder_client.probe_and_pin().unwrap();
+    let holder = holder_client
+        .create_account(
+            &holder_host.pinned,
+            &TestAccountSpec::new("bearerholder", 0x51),
+        )
+        .unwrap();
+    assert!(team
+        .authenticated
+        .verified
+        .members()
+        .iter()
+        .all(|member| member.party != holder.credential.uid));
+
+    let signer = team
+        .authenticated
+        .ptks
+        .iter()
+        .find(|key| key.role == Role::OWNER)
+        .unwrap();
+    let mut stream = authenticated_stream(&fixture, &holder.credential);
+    stream
+        .write_all(
+            &foks_rpc::encode_make_team_bearer_token_request(
+                &team.team,
+                signer.role,
+                signer.generation,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let token = foks_rpc::decode_team_bearer_token(
+        &foks_rpc::read_bare_response(&mut stream, MAX_RESPONSE, 0).unwrap(),
+    )
+    .unwrap();
+    let now = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+
+    let wrong_holder_challenge = TeamBearerTokenChallenge {
+        user: owner.credential.uid.clone(),
+        user_host: fixture.host().host_id().clone(),
+        team: team.team.clone(),
+        role: signer.role,
+        generation: signer.generation,
+        token,
+        time: now,
+    };
+    let wrong_holder_signature =
+        foks_crypto::sign_team_bearer_token_challenge(&signer.seed, &wrong_holder_challenge)
+            .unwrap();
+    let mut stream = authenticated_stream(&fixture, &owner.credential);
+    stream
+        .write_all(
+            &foks_rpc::encode_activate_team_bearer_token_request(
+                &wrong_holder_challenge,
+                &wrong_holder_signature,
+            )
+            .unwrap(),
+        )
+        .unwrap();
     assert!(matches!(
-        error,
-        foks_rpc::Error::RemoteStatus { code: 1013, .. }
+        foks_rpc::read_bare_void_response(&mut stream, MAX_RESPONSE, 0),
+        Err(foks_rpc::Error::RemoteStatus { .. })
+    ));
+
+    let challenge = TeamBearerTokenChallenge {
+        user: holder.credential.uid.clone(),
+        ..wrong_holder_challenge
+    };
+    let signature =
+        foks_crypto::sign_team_bearer_token_challenge(&signer.seed, &challenge).unwrap();
+    let mut stream = authenticated_stream(&fixture, &holder.credential);
+    stream
+        .write_all(
+            &foks_rpc::encode_activate_team_bearer_token_request(&challenge, &signature).unwrap(),
+        )
+        .unwrap();
+    foks_rpc::read_bare_void_response(&mut stream, MAX_RESPONSE, 0).unwrap();
+
+    let founder = team
+        .authenticated
+        .verified
+        .members()
+        .iter()
+        .find(|member| member.party == owner.credential.uid)
+        .unwrap();
+    let load = foks_rpc::encode_load_team_removal_key_box_request(
+        &token,
+        &founder.party,
+        founder
+            .scoped_host
+            .as_ref()
+            .unwrap_or(fixture.host().host_id()),
+        founder.source_role,
+    )
+    .unwrap();
+    let mut stream = authenticated_stream(&fixture, &holder.credential);
+    stream.write_all(&load).unwrap();
+    let boxed = foks_rpc::read_bare_response(&mut stream, MAX_RESPONSE, 0).unwrap();
+    foks_rpc::decode_team_removal_key_box(&boxed).unwrap();
+
+    let mut stream = authenticated_stream(&fixture, &owner.credential);
+    stream.write_all(&load).unwrap();
+    assert!(matches!(
+        foks_rpc::read_bare_response(&mut stream, MAX_RESPONSE, 0),
+        Err(foks_rpc::Error::RemoteStatus { code: 1013, .. })
+    ));
+}
+
+#[test]
+pub(crate) fn local_parent_team_authorization_follows_the_parent_roster() {
+    let fixture = Fixture::start("local-parent-team-auth");
+    let account = fixture
+        .client
+        .create_account(
+            fixture.host(),
+            &TestAccountSpec::new("localparentviewer", 0xb2),
+        )
+        .unwrap();
+    let parent_secrets = NamedTeamSecrets {
+        member_min: SecretSeed::new([0xb3; 32]),
+        member: SecretSeed::new([0xb4; 32]),
+        admin: SecretSeed::new([0xb5; 32]),
+        owner: SecretSeed::new([0xb6; 32]),
+        removal_key: SecretSeed::new([0xb7; 32]),
+        team_name_commitment_key: [0xb8; 16],
+    };
+    let child_secrets = NamedTeamSecrets {
+        member_min: SecretSeed::new([0xc3; 32]),
+        member: SecretSeed::new([0xc4; 32]),
+        admin: SecretSeed::new([0xc5; 32]),
+        owner: SecretSeed::new([0xc6; 32]),
+        removal_key: SecretSeed::new([0xc7; 32]),
+        team_name_commitment_key: [0xc8; 16],
+    };
+    let parent = fixture
+        .client
+        .foks()
+        .create_single_owner_named_team(
+            fixture.host(),
+            &account.credential,
+            "localparentteam",
+            &parent_secrets,
+        )
+        .unwrap();
+    let child = fixture
+        .client
+        .foks()
+        .create_single_owner_named_team(
+            fixture.host(),
+            &account.credential,
+            "localchildteam",
+            &child_secrets,
+        )
+        .unwrap();
+
+    let connection = rusqlite::Connection::open(fixture.environment.database_path()).unwrap();
+    connection
+        .execute(
+            "INSERT INTO team_members
+             (team_id, party_id, scoped_host_id, source_role_type, source_visibility,
+              role_type, visibility, generation, verify_key, hepk_fingerprint,
+              removal_key_commitment)
+             SELECT team_id, ?2, NULL, source_role_type, source_visibility,
+                    role_type, visibility, generation, verify_key, hepk_fingerprint,
+                    removal_key_commitment
+             FROM team_members WHERE team_id = ?1 LIMIT 1",
+            rusqlite::params![parent.team.as_bytes(), child.team.as_bytes()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO team_local_view_permissions
+             (team_id, target_id, minimum_role_type, minimum_role_visibility)
+             VALUES (?1, ?2, 1, 0)",
+            rusqlite::params![parent.team.as_bytes(), child.team.as_bytes()],
+        )
+        .unwrap();
+
+    let request = encode_load_team_chain_for_local_parent_request(
+        &child.team,
+        fixture.host().host_id(),
+        &parent.authenticated.view_token,
+        1,
+        TeamChainLoadOptions::default(),
+    )
+    .unwrap();
+    let mut authenticated = authenticated_stream(&fixture, &account.credential);
+    authenticated.write_all(&request).unwrap();
+    foks_rpc::read_bare_response(&mut authenticated, MAX_RESPONSE, 0).unwrap();
+
+    connection
+        .execute(
+            "DELETE FROM team_members WHERE team_id = ?1 AND party_id = ?2",
+            rusqlite::params![parent.team.as_bytes(), child.team.as_bytes()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO team_members
+             (team_id, party_id, scoped_host_id, source_role_type, source_visibility,
+              role_type, visibility, generation, verify_key, hepk_fingerprint,
+              removal_key_commitment)
+             SELECT team_id, ?2, NULL, source_role_type, source_visibility,
+                    role_type, visibility, generation, verify_key, hepk_fingerprint,
+                    removal_key_commitment
+             FROM team_members WHERE team_id = ?1 LIMIT 1",
+            rusqlite::params![child.team.as_bytes(), parent.team.as_bytes()],
+        )
+        .unwrap();
+
+    let mut authenticated = authenticated_stream(&fixture, &account.credential);
+    authenticated.write_all(&request).unwrap();
+    assert!(matches!(
+        foks_rpc::read_bare_response(&mut authenticated, MAX_RESPONSE, 0),
+        Err(foks_rpc::Error::RemoteStatus { code: 1013, .. })
     ));
 }
 
@@ -313,6 +564,44 @@ pub(crate) fn go_chain_load_authorizations_follow_current_local_permissions() {
         .unwrap();
     foks_rpc::read_response(&mut authenticated, MAX_RESPONSE, 0).unwrap();
 
+    let member_team = member_client
+        .foks()
+        .load_and_pin_team(
+            &member_host.pinned,
+            &member.credential,
+            &member.authenticated.verified,
+            &member.authenticated.puks,
+            &team.team,
+        )
+        .unwrap();
+    rusqlite::Connection::open(fixture.environment.database_path())
+        .unwrap()
+        .execute(
+            "UPDATE team_local_view_permissions
+             SET minimum_role_type = 2, minimum_role_visibility = 0
+             WHERE team_id = ?1 AND target_id = ?2",
+            rusqlite::params![team.team.as_bytes(), owner.credential.uid.as_bytes()],
+        )
+        .unwrap();
+    let below_floor = Value::Array(vec![
+        Value::Unsigned(3),
+        Value::Variant(Some((
+            b"3".to_vec(),
+            Box::new(Value::Binary(member_team.view_token.to_vec())),
+        ))),
+    ]);
+    let mut authenticated = authenticated_stream(&fixture, &member.credential);
+    authenticated
+        .write_all(&user_load_request(
+            owner.credential.uid.as_bytes(),
+            below_floor,
+        ))
+        .unwrap();
+    assert!(matches!(
+        foks_rpc::read_response(&mut authenticated, MAX_RESPONSE, 0),
+        Err(foks_rpc::Error::RemoteStatus { code: 1013, .. })
+    ));
+
     let mut unrelated = vec![0x71; 33];
     unrelated[0] = ENTITY_USER;
     let mut authenticated = authenticated_stream(&fixture, &owner.credential);
@@ -402,7 +691,7 @@ fn user_load_request(uid: &[u8], authorization: Value) -> Vec<u8> {
     .unwrap()
 }
 
-fn authenticated_stream(
+pub(crate) fn authenticated_stream(
     fixture: &Fixture,
     credential: &DeviceCredential,
 ) -> rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream> {
@@ -431,7 +720,7 @@ fn authenticated_stream(
     rustls::StreamOwned::new(connection, tcp)
 }
 
-fn public_stream(
+pub(crate) fn public_stream(
     fixture: &Fixture,
 ) -> rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream> {
     let config = rustls::ClientConfig::builder_with_provider(Arc::new(

@@ -11,13 +11,13 @@ use std::io::{Read, Write};
 
 use foks_proto::{
     AdHocTeamCreateArgument, AddTeamMemberArgument, ClientVersionExt, EntityId, FqParty, FqTeam,
-    InviteCode, KvDirectory, KvDirent, KvLargeFileMetadata, KvNodeId, KvPathVersionVector,
-    KvSmallFileBox, KvUploadChunk, NamedTeamCreateArgument, PassphraseUpdateArgument,
-    PermissionToken, ProvisionDeviceArgument, RegistrationChallenge, RemoteViewPermissionPayload,
-    RemoveTeamMemberArgument, RevokeDeviceArgument, Role, RoleAndGeneration, Signature,
-    SoftwareSignupArgument, TeamBearerToken, TeamBearerTokenChallenge, TeamEditResult,
-    TeamNameReservation, TeamRemovalKeyBox, TeamViewChallenge, TeamViewRequest,
-    YubiEncryptedManagementKey, YubiSignupArgument,
+    InviteCode, KexReceiveArgument, KexSendArgument, KvDirectory, KvDirent, KvLargeFileMetadata,
+    KvNodeId, KvPathVersionVector, KvSmallFileBox, KvUploadChunk, NamedTeamCreateArgument,
+    PassphraseUpdateArgument, PermissionToken, ProvisionDeviceArgument, RegistrationChallenge,
+    RemoteViewPermissionPayload, RemoveTeamMemberArgument, RevokeDeviceArgument, Role,
+    RoleAndGeneration, Signature, SoftwareSignupArgument, TeamBearerToken,
+    TeamBearerTokenChallenge, TeamEditResult, TeamNameReservation, TeamRemovalKeyBox,
+    TeamViewChallenge, TeamViewRequest, YubiEncryptedManagementKey, YubiSignupArgument,
 };
 use foks_snowpack::{decode, encode, Value};
 use thiserror::Error;
@@ -298,6 +298,24 @@ pub fn encode_get_client_cert_chain_request(uid: &[u8], device_id: &[u8]) -> Res
     encode_get_client_cert_chain_request_at(uid, device_id, 0)
 }
 
+pub fn encode_kex_send_request(argument: &KexSendArgument) -> Result<Vec<u8>> {
+    encode_call(
+        KEX_PROTOCOL_ID,
+        KEX_SEND_METHOD_POSITION,
+        &argument.encoded()?,
+        0,
+    )
+}
+
+pub fn encode_kex_receive_request(argument: &KexReceiveArgument) -> Result<Vec<u8>> {
+    encode_call(
+        KEX_PROTOCOL_ID,
+        KEX_RECEIVE_METHOD_POSITION,
+        &argument.encoded()?,
+        0,
+    )
+}
+
 pub fn encode_reserve_username_request_at(name: &[u8], sequence: u64) -> Result<Vec<u8>> {
     let argument = encode(&Value::Array(vec![Value::Text(name.to_vec())]))?;
     encode_call(
@@ -439,6 +457,67 @@ pub fn encode_probe_key_exists_request(
     )
 }
 
+pub fn encode_join_waitlist_request_at(email: &[u8], sequence: u64) -> Result<Vec<u8>> {
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_JOIN_WAIT_LIST_METHOD_POSITION,
+        &encode(&Value::Array(vec![Value::Text(email.to_vec())]))?,
+        sequence,
+    )
+}
+
+pub fn encode_log_send_init_request_at(sequence: u64) -> Result<Vec<u8>> {
+    encode_call_with_validated_argument(
+        LOG_SEND_PROTOCOL_ID,
+        LOG_SEND_INIT_METHOD_POSITION,
+        &[0x90],
+        sequence,
+    )
+}
+
+pub fn encode_log_send_init_file_request_at(
+    argument: &arguments::LogSendInitFileArgument,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    encode_call(
+        LOG_SEND_PROTOCOL_ID,
+        LOG_SEND_INIT_FILE_METHOD_POSITION,
+        &encode(&Value::Array(vec![
+            Value::Binary(argument.id.to_vec()),
+            Value::Unsigned(argument.file_id),
+            Value::Text(argument.filename.clone()),
+            Value::Unsigned(argument.content_length),
+            Value::Binary(argument.content_hash.to_vec()),
+            Value::Unsigned(argument.block_count),
+        ]))?,
+        sequence,
+    )
+}
+
+pub fn encode_log_send_upload_block_request_at(
+    argument: &arguments::LogSendUploadBlockArgument,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    if argument.block.len() > arguments::MAXIMUM_LOG_SEND_BLOCK_BYTES {
+        return Err(Error::CollectionTooLarge {
+            kind: "log-send block byte",
+            received: argument.block.len(),
+            maximum: arguments::MAXIMUM_LOG_SEND_BLOCK_BYTES,
+        });
+    }
+    encode_call(
+        LOG_SEND_PROTOCOL_ID,
+        LOG_SEND_UPLOAD_BLOCK_METHOD_POSITION,
+        &encode(&Value::Array(vec![
+            Value::Binary(argument.id.to_vec()),
+            Value::Unsigned(argument.file_id),
+            Value::Unsigned(argument.block_number),
+            Value::Binary(argument.block.clone()),
+        ]))?,
+        sequence,
+    )
+}
+
 pub fn encode_get_client_version_info_request(version: &ClientVersionExt) -> Result<Vec<u8>> {
     let argument = encode(&Value::Array(vec![decode(&version.encoded()?)?]))?;
     encode_call(
@@ -481,6 +560,45 @@ pub fn encode_load_user_chain_request_from(
     current_name: Option<(&[u8], u64)>,
 ) -> Result<Vec<u8>> {
     let as_local_user = Value::Array(vec![Value::Unsigned(0), Value::Variant(None)]);
+    encode_load_user_chain_with_authorization(uid, start, current_name, as_local_user)
+}
+
+/// Encodes the `AsLocalTeam` form used while hydrating a local team roster.
+/// The token is the activated team-view token for the loading member.
+pub fn encode_load_user_chain_as_local_team_request(
+    uid: &[u8],
+    start: u64,
+    current_name: Option<(&[u8], u64)>,
+    token: &[u8; 16],
+) -> Result<Vec<u8>> {
+    let as_local_team = Value::Array(vec![
+        Value::Unsigned(3),
+        Value::Variant(Some((
+            b"3".to_vec(),
+            Box::new(Value::Binary(token.to_vec())),
+        ))),
+    ]);
+    encode_load_user_chain_with_authorization(uid, start, current_name, as_local_team)
+}
+
+/// Encodes the authenticated `OpenVHost` form used to inspect a prospective
+/// local member before admitting it to a team. The server still applies the
+/// virtual host's public-user-viewership policy.
+pub fn encode_load_user_chain_open_host_request(
+    uid: &[u8],
+    start: u64,
+    current_name: Option<(&[u8], u64)>,
+) -> Result<Vec<u8>> {
+    let open_host = Value::Array(vec![Value::Unsigned(4), Value::Variant(None)]);
+    encode_load_user_chain_with_authorization(uid, start, current_name, open_host)
+}
+
+fn encode_load_user_chain_with_authorization(
+    uid: &[u8],
+    start: u64,
+    current_name: Option<(&[u8], u64)>,
+    authorization: Value,
+) -> Result<Vec<u8>> {
     let name = current_name.map_or(Value::Null, |(name, next_sequence)| {
         Value::Array(vec![
             Value::Text(name.to_vec()),
@@ -491,7 +609,7 @@ pub fn encode_load_user_chain_request_from(
         Value::Binary(uid.to_vec()),
         Value::Unsigned(start),
         name,
-        as_local_user,
+        authorization,
     ])]))?;
     encode_call(
         USER_PROTOCOL_ID,
@@ -827,6 +945,24 @@ pub fn encode_create_adhoc_team_request(argument: &AdHocTeamCreateArgument<'_>) 
         TEAM_ADMIN_PROTOCOL_ID,
         TEAM_CREATE_AD_HOC_METHOD_POSITION,
         &argument.encoded()?,
+        0,
+    )
+}
+
+pub fn encode_team_loader_server_config_request() -> Result<Vec<u8>> {
+    encode_call_with_validated_argument(
+        TEAM_LOADER_PROTOCOL_ID,
+        TEAM_GET_SERVER_CONFIG_METHOD_POSITION,
+        &[0x90],
+        0,
+    )
+}
+
+pub fn encode_team_admin_config_request() -> Result<Vec<u8>> {
+    encode_call_with_validated_argument(
+        TEAM_ADMIN_PROTOCOL_ID,
+        TEAM_GET_CONFIG_METHOD_POSITION,
+        &[0x90],
         0,
     )
 }
@@ -1228,6 +1364,26 @@ pub fn encode_load_team_chain_request_with_options(
         ))),
     ]);
     encode_load_team_chain_with_authorization(team, host, token, start, options)
+}
+
+/// Loads a local child team's chain using a view token held by one of its
+/// parent teams. The request remains authenticated as the user represented by
+/// that parent-team token.
+pub fn encode_load_team_chain_for_local_parent_request(
+    team: &EntityId,
+    host: &EntityId,
+    parent_token: &[u8; 16],
+    start: u64,
+    options: TeamChainLoadOptions<'_>,
+) -> Result<Vec<u8>> {
+    let authorization = Value::Array(vec![
+        Value::Unsigned(3),
+        Value::Variant(Some((
+            b"2".to_vec(),
+            Box::new(Value::Binary(parent_token.to_vec())),
+        ))),
+    ]);
+    encode_load_team_chain_with_authorization(team, host, authorization, start, options)
 }
 
 /// Loads a team chain from the public TeamLoader service with a federation
@@ -2833,6 +2989,18 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(&error, Error::RemoteStatus { code: 1030, detail } if detail.0.as_deref() == Some("bad"))
+        );
+
+        let framed =
+            encode_status_response_at(&RpcStatus::Duplicate("block".to_owned()), 9).unwrap();
+        let error = read_response(
+            &mut std::io::Cursor::new(&framed),
+            DEFAULT_MAX_FRAME_LENGTH,
+            9,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, Error::RemoteStatus { code: 1001, detail } if detail.0.as_deref() == Some("block"))
         );
 
         // Stale-cache status: [8012, {"b": [Root, [ [Id, Vers, [[Id, Vers]]] ]]}].

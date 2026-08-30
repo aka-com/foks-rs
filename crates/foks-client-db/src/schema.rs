@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 19;
+pub(crate) const VERSION: u32 = 23;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -10,6 +10,8 @@ pub(crate) const REVISION_TABLES: &[&str] = &[
     "users",
     "user_devices",
     "user_shared_keys",
+    "user_local_security",
+    "user_generic_chains",
     "teams",
     "team_members",
     "team_shared_keys",
@@ -115,6 +117,40 @@ CREATE TABLE user_shared_keys (
     hepk_bytes BLOB NOT NULL CHECK (length(hepk_bytes) > 0),
     PRIMARY KEY (host_id, uid, role_type, role_visibility, generation),
     FOREIGN KEY (host_id, uid) REFERENCES users(host_id, uid) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+-- A local assertion derived from an exact signup request that omitted PPE.
+-- It lets an unattended owner rotation distinguish a genuinely passphrase-
+-- free Rust account from a legacy Go account whose server-only PPE has no
+-- UserSettings link.
+CREATE TABLE user_local_security (
+    host_id BLOB NOT NULL,
+    uid BLOB NOT NULL CHECK (length(uid) = 33),
+    passphrase_absence_attested INTEGER NOT NULL CHECK (passphrase_absence_attested IN (0, 1)),
+    trusted_ppe_hash BLOB CHECK (trusted_ppe_hash IS NULL OR length(trusted_ppe_hash) = 32),
+    CHECK (
+        (passphrase_absence_attested = 1 AND trusted_ppe_hash IS NULL) OR
+        (passphrase_absence_attested = 0 AND trusted_ppe_hash IS NOT NULL)
+    ),
+    PRIMARY KEY (host_id, uid),
+    FOREIGN KEY (host_id, uid) REFERENCES users(host_id, uid) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE user_generic_chains (
+    host_id BLOB NOT NULL,
+    uid BLOB NOT NULL CHECK (length(uid) = 33),
+    chain_type INTEGER NOT NULL CHECK (chain_type IN (2, 4)),
+    seqno INTEGER NOT NULL CHECK (seqno >= 0),
+    tail_hash BLOB CHECK (
+        (seqno = 0 AND tail_hash IS NULL) OR
+        (seqno > 0 AND length(tail_hash) = 32)
+    ),
+    chain_bytes BLOB NOT NULL CHECK (length(chain_bytes) > 0),
+    merkle_epoch INTEGER NOT NULL CHECK (merkle_epoch >= 0),
+    merkle_root_hash BLOB NOT NULL CHECK (length(merkle_root_hash) = 32),
+    PRIMARY KEY (host_id, uid, chain_type),
+    FOREIGN KEY (host_id, uid) REFERENCES users(host_id, uid) ON DELETE CASCADE,
+    FOREIGN KEY (host_id, merkle_epoch) REFERENCES merkle_roots(host_id, epoch)
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE teams (
@@ -251,6 +287,13 @@ CREATE INDEX mutation_operations_pending
 ON mutation_operations (host_id, state, updated_at)
 WHERE state IN (1, 2, 3, 4);
 
+-- Device and PUK operations all append to the user chain. At most one live
+-- request may reserve a given authenticated chain position, even when an
+-- alternate owner is reconciling an unavailable original signer.
+CREATE UNIQUE INDEX user_mutation_reserved_chain_position
+ON mutation_operations (host_id, scope_id, expected_version)
+WHERE operation_kind IN (2, 3, 4) AND state IN (1, 2, 3, 4);
+
 -- Cross-host coordination contains only public identities, capability hashes,
 -- and local journal references. Bearer tokens and removal keys remain in the
 -- caller's protected memory or credential store.
@@ -298,7 +341,7 @@ WHERE state BETWEEN 1 AND 4;
 -- application-owned account or reconciliation target.
 CREATE TABLE scheduled_jobs (
     job_id BLOB PRIMARY KEY CHECK (length(job_id) = 16),
-    job_kind INTEGER NOT NULL CHECK (job_kind IN (1, 2, 3, 4)),
+    job_kind INTEGER NOT NULL CHECK (job_kind IN (1, 2, 3, 4, 5)),
     host_id BLOB NOT NULL REFERENCES hosts(host_id) ON DELETE CASCADE,
     scope_id BLOB NOT NULL CHECK (length(scope_id) BETWEEN 0 AND 1024),
     interval_micros INTEGER NOT NULL CHECK (interval_micros > 0),

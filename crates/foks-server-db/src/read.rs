@@ -62,6 +62,7 @@ pub struct UserAuthoritySnapshot {
     pub current_root_hash: [u8; 32],
     pub devices: Vec<UserDeviceSnapshot>,
     pub shared_keys: Vec<UserSharedKeySnapshot>,
+    pub stale_shared_key_roles: Vec<(u64, i64)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -113,6 +114,12 @@ pub struct LocalTeamListEntrySnapshot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TeamRemovalSnapshot {
+    pub exact_box: Vec<u8>,
+    pub exact_removal: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PukMaterialSnapshot {
     pub exact_box_set: Vec<u8>,
     pub sender_id: Vec<u8>,
@@ -150,6 +157,8 @@ pub struct TeamSnapshot {
     pub team_name_utf8: Vec<u8>,
     pub team_name_sequence: u64,
     pub team_name_commitment_key: Option<[u8; 16]>,
+    pub member_load_floor_type: u64,
+    pub member_load_floor_visibility: i64,
     pub links: Vec<TeamLinkSnapshot>,
     pub members: Vec<TeamMemberSnapshot>,
     pub shared_keys: Vec<UserSharedKeySnapshot>,
@@ -190,6 +199,14 @@ impl Database {
         chain_type: u64,
     ) -> Result<Option<GenericChainSnapshot>> {
         generic_chain(&self.connection, entity_id, chain_type)
+    }
+
+    pub fn team_removal(
+        &self,
+        team_id: &[u8],
+        commitment: &[u8; 32],
+    ) -> Result<Option<TeamRemovalSnapshot>> {
+        team_removal(&self.connection, team_id, commitment)
     }
 }
 
@@ -250,12 +267,32 @@ impl ReadDatabase {
         local_team_list(&self.connection, uid, host_id)
     }
 
-    pub fn team_parcels(&self, team_id: &[u8], party_id: &[u8]) -> Result<Vec<Vec<u8>>> {
-        team_parcels(&self.connection, team_id, party_id)
+    pub fn team_parcels(
+        &self,
+        team_id: &[u8],
+        party_id: &[u8],
+        target_role_type: u64,
+        target_visibility: i64,
+    ) -> Result<Vec<Vec<u8>>> {
+        team_parcels(
+            &self.connection,
+            team_id,
+            party_id,
+            target_role_type,
+            target_visibility,
+        )
     }
 
     pub fn team_member_hepks(&self, team_id: &[u8]) -> Result<Vec<Vec<u8>>> {
         team_member_hepks(&self.connection, team_id)
+    }
+
+    pub fn team_local_view_permission(
+        &self,
+        team_id: &[u8],
+        target_id: &[u8],
+    ) -> Result<Option<(u64, i64)>> {
+        team_local_view_permission(&self.connection, team_id, target_id)
     }
 
     pub fn team_removal_box(
@@ -276,6 +313,14 @@ impl ReadDatabase {
         )
     }
 
+    pub fn team_removal(
+        &self,
+        team_id: &[u8],
+        commitment: &[u8; 32],
+    ) -> Result<Option<TeamRemovalSnapshot>> {
+        team_removal(&self.connection, team_id, commitment)
+    }
+
     pub fn puk_material(
         &self,
         uid: &[u8],
@@ -287,22 +332,70 @@ impl ReadDatabase {
     }
 }
 
-fn team_parcels(connection: &Connection, team_id: &[u8], party_id: &[u8]) -> Result<Vec<Vec<u8>>> {
+fn team_parcels(
+    connection: &Connection,
+    team_id: &[u8],
+    party_id: &[u8],
+    target_role_type: u64,
+    target_visibility: i64,
+) -> Result<Vec<Vec<u8>>> {
     let mut statement = connection.prepare(
-        "SELECT p.exact_parcel FROM team_parcels p
+        "SELECT p.role_type, p.visibility, p.generation, p.exact_parcel FROM team_parcels p
          WHERE p.team_id = ?1 AND p.party_id = ?2
+           AND p.target_role_type = ?3 AND p.target_visibility = ?4
            AND p.generation = (
                SELECT max(latest.generation) FROM team_parcels latest
                WHERE latest.team_id = p.team_id AND latest.party_id = p.party_id
+                 AND latest.target_role_type = p.target_role_type
+                 AND latest.target_visibility = p.target_visibility
                  AND latest.role_type = p.role_type
                  AND latest.visibility = p.visibility
            )
          ORDER BY role_type, visibility, generation",
     )?;
     let parcels = statement
-        .query_map(rusqlite::params![team_id, party_id], |row| row.get(0))?
+        .query_map(
+            rusqlite::params![
+                team_id,
+                party_id,
+                crate::error::sql_integer(target_role_type)?,
+                target_visibility
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                ))
+            },
+        )?
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(parcels)
+    parcels
+        .into_iter()
+        .map(|(role_type, visibility, generation, exact)| {
+            let mut parcel = foks_proto::PukParcel::decode(&exact)
+                .map_err(|_| crate::Error::Invalid("stored team parcel is malformed"))?;
+            let mut chain_statement = connection.prepare(
+                "SELECT exact_box FROM team_seed_chain_boxes
+                 WHERE team_id = ?1 AND role_type = ?2 AND visibility = ?3
+                   AND generation < ?4 ORDER BY generation",
+            )?;
+            parcel.seed_chain = chain_statement
+                .query_map(
+                    rusqlite::params![team_id, role_type, visibility, generation],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )?
+                .map(|exact| {
+                    foks_proto::SeedChainBox::decode(&exact?)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            parcel
+                .encoded()
+                .map_err(|_| crate::Error::Invalid("stored team parcel cannot be encoded"))
+        })
+        .collect()
 }
 
 fn team_member_hepks(connection: &Connection, team_id: &[u8]) -> Result<Vec<Vec<u8>>> {
@@ -341,6 +434,31 @@ fn team_removal_box(
                 source_visibility
             ],
             |row| row.get(0),
+        )
+        .optional()?)
+}
+
+fn team_removal(
+    connection: &Connection,
+    team_id: &[u8],
+    commitment: &[u8; 32],
+) -> Result<Option<TeamRemovalSnapshot>> {
+    Ok(connection
+        .query_row(
+            "SELECT b.exact_box, p.exact_removal
+             FROM team_removal_proofs AS p JOIN team_removal_boxes AS b
+               ON b.team_id = p.team_id AND b.member_id = p.member_id
+              AND b.member_host_id = p.member_host_id
+              AND b.source_role_type = p.source_role_type
+              AND b.source_visibility = p.source_visibility
+             WHERE p.team_id = ?1 AND p.commitment = ?2",
+            rusqlite::params![team_id, commitment],
+            |row| {
+                Ok(TeamRemovalSnapshot {
+                    exact_box: row.get(0)?,
+                    exact_removal: row.get(1)?,
+                })
+            },
         )
         .optional()?)
 }
@@ -402,12 +520,32 @@ impl ReadSnapshot<'_> {
         local_team_list_inner(self.connection(), uid, host_id)
     }
 
-    pub fn team_parcels(&self, team_id: &[u8], party_id: &[u8]) -> Result<Vec<Vec<u8>>> {
-        team_parcels(self.connection(), team_id, party_id)
+    pub fn team_parcels(
+        &self,
+        team_id: &[u8],
+        party_id: &[u8],
+        target_role_type: u64,
+        target_visibility: i64,
+    ) -> Result<Vec<Vec<u8>>> {
+        team_parcels(
+            self.connection(),
+            team_id,
+            party_id,
+            target_role_type,
+            target_visibility,
+        )
     }
 
     pub fn team_member_hepks(&self, team_id: &[u8]) -> Result<Vec<Vec<u8>>> {
         team_member_hepks(self.connection(), team_id)
+    }
+
+    pub fn team_local_view_permission(
+        &self,
+        team_id: &[u8],
+        target_id: &[u8],
+    ) -> Result<Option<(u64, i64)>> {
+        team_local_view_permission(self.connection(), team_id, target_id)
     }
 
     pub fn team_removal_box(
@@ -426,6 +564,14 @@ impl ReadSnapshot<'_> {
             source_role_type,
             source_visibility,
         )
+    }
+
+    pub fn team_removal(
+        &self,
+        team_id: &[u8],
+        commitment: &[u8; 32],
+    ) -> Result<Option<TeamRemovalSnapshot>> {
+        team_removal(self.connection(), team_id, commitment)
     }
 
     pub fn puk_material(
@@ -456,11 +602,21 @@ fn team_snapshot(connection: &Connection, team_id: &[u8]) -> Result<Option<TeamS
 }
 
 fn team_snapshot_inner(connection: &Connection, team_id: &[u8]) -> Result<Option<TeamSnapshot>> {
-    type TeamRow = (i64, Vec<u8>, Option<Vec<u8>>, Vec<u8>, i64, Option<Vec<u8>>);
+    type TeamRow = (
+        i64,
+        Vec<u8>,
+        Option<Vec<u8>>,
+        Vec<u8>,
+        i64,
+        Option<Vec<u8>>,
+        i64,
+        i64,
+    );
     let row: Option<TeamRow> = connection
         .query_row(
             "SELECT team_kind, host_id, normalized_name, team_name_utf8,
-                    team_name_sequence, team_name_commitment_key
+                    team_name_sequence, team_name_commitment_key,
+                    member_load_floor_type, member_load_floor_visibility
              FROM teams WHERE team_id = ?1",
             [team_id],
             |row| {
@@ -471,11 +627,22 @@ fn team_snapshot_inner(connection: &Connection, team_id: &[u8]) -> Result<Option
                     row.get(3)?,
                     row.get(4)?,
                     row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
                 ))
             },
         )
         .optional()?;
-    let Some((kind, host_id, normalized_name, team_name_utf8, name_sequence, commitment)) = row
+    let Some((
+        kind,
+        host_id,
+        normalized_name,
+        team_name_utf8,
+        name_sequence,
+        commitment,
+        member_load_floor_type,
+        member_load_floor_visibility,
+    )) = row
     else {
         return Ok(None);
     };
@@ -601,10 +768,30 @@ fn team_snapshot_inner(connection: &Connection, team_id: &[u8]) -> Result<Option
                     .map_err(|_| crate::Error::Invalid("stored team-name key"))
             })
             .transpose()?,
+        member_load_floor_type: unsigned(member_load_floor_type)?,
+        member_load_floor_visibility,
         links,
         members,
         shared_keys,
     }))
+}
+
+fn team_local_view_permission(
+    connection: &Connection,
+    team_id: &[u8],
+    target_id: &[u8],
+) -> Result<Option<(u64, i64)>> {
+    connection
+        .query_row(
+            "SELECT minimum_role_type, minimum_role_visibility
+             FROM team_local_view_permissions
+             WHERE team_id = ?1 AND target_id = ?2",
+            rusqlite::params![team_id, target_id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?
+        .map(|(role, visibility)| Ok((unsigned(role)?, visibility)))
+        .transpose()
 }
 
 pub fn user_chain(connection: &Connection, uid: &[u8]) -> Result<Option<UserChainSnapshot>> {
@@ -963,6 +1150,29 @@ fn user_authority_inner(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let mut stale_statement = connection.prepare(
+        "SELECT DISTINCT p.role_type, p.visibility
+         FROM parcels p
+         JOIN devices d ON d.uid = p.uid AND d.device_id = p.device_id
+         JOIN (
+             SELECT role_type, visibility, max(generation) AS generation
+             FROM shared_keys WHERE uid = ?1 GROUP BY role_type, visibility
+         ) current
+           ON current.role_type = p.role_type
+          AND current.visibility = p.visibility
+          AND current.generation = p.generation
+         WHERE p.uid = ?1 AND d.active = 0
+         ORDER BY p.role_type, p.visibility",
+    )?;
+    let stale_shared_key_roles = stale_statement
+        .query_map([uid], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .map(|row| {
+            let (role_type, visibility) = row?;
+            Ok((unsigned(role_type)?, visibility))
+        })
+        .collect::<Result<Vec<_>>>()?;
     Ok(Some(UserAuthoritySnapshot {
         uid: uid.to_vec(),
         chain_sequence: unsigned(sequence)?,
@@ -978,6 +1188,7 @@ fn user_authority_inner(
             .map_err(|_| crate::Error::Invalid("stored current root hash"))?,
         devices,
         shared_keys,
+        stale_shared_key_roles,
     }))
 }
 
@@ -1195,6 +1406,7 @@ mod tests {
 
         let database = ReadDatabase {
             connection: Connection::open(&path).unwrap(),
+            config: crate::Config::default(),
         };
         let (read_sender, read_receiver) = std::sync::mpsc::sync_channel(1);
         let (commit_sender, commit_receiver) = std::sync::mpsc::sync_channel(1);

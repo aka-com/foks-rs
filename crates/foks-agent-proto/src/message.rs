@@ -30,6 +30,24 @@ impl Drop for SecretString {
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+pub struct YubiFederationUnlockInput {
+    pub profile: String,
+    pub alias: String,
+    pub pin: SecretString,
+}
+
+impl std::fmt::Debug for YubiFederationUnlockInput {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("YubiFederationUnlockInput")
+            .field("profile", &self.profile)
+            .field("alias", &self.alias)
+            .field("pin", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct YubiRetryConfiguration {
     pub puk: SecretString,
     pub pin_attempts: u8,
@@ -57,6 +75,14 @@ pub struct Request {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FederationRole {
+    Member,
+    Admin,
+    Owner,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TeamRole {
     Member,
     Admin,
     Owner,
@@ -111,6 +137,29 @@ pub enum Operation {
         profile: String,
         alias: String,
     },
+    StartDevicePairing {
+        profile: String,
+        account_alias: String,
+    },
+    RepublishDevicePairing {
+        profile: String,
+        account_alias: String,
+    },
+    FinishDevicePairing {
+        profile: String,
+        account_alias: String,
+    },
+    AcceptDevicePairing {
+        profile: String,
+        target_alias: String,
+        device_name: String,
+        serial: u64,
+        phrase: SecretString,
+    },
+    ResumeDevicePairingAcceptance {
+        profile: String,
+        target_alias: String,
+    },
     ListYubiCards {
         profile: String,
     },
@@ -152,6 +201,10 @@ pub enum Operation {
         profile: String,
         alias: String,
         pin: SecretString,
+        /// Also run every federated security responder this unlocked key can
+        /// drive on the named profile.
+        #[serde(default)]
+        with_federation: bool,
     },
     YubiPinStatus {
         profile: String,
@@ -211,6 +264,38 @@ pub enum Operation {
         profile: String,
         team_alias: String,
     },
+    ListTeamMembers {
+        profile: String,
+        team_alias: String,
+    },
+    AddTeamMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+        role: TeamRole,
+        visibility: i16,
+    },
+    ResumeTeamMemberAddition {
+        profile: String,
+        team_alias: String,
+        username: String,
+    },
+    DemoteTeamMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+        role: TeamRole,
+        visibility: i16,
+    },
+    RemoveTeamMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+    },
+    ResumeTeamMemberEdit {
+        profile: String,
+        team_alias: String,
+    },
     AdmitFederatedTeam {
         local_profile: String,
         local_team_alias: String,
@@ -223,9 +308,41 @@ pub enum Operation {
         profile: String,
         team_alias: String,
     },
+    /// Runs the federated security responder for one local team. Either side
+    /// may supply an already-enrolled Yubi alias plus its PIN; supplying both
+    /// is the explicit two-key workflow that no unattended schedule performs.
+    RefreshFederatedSecurity {
+        profile: String,
+        team_alias: String,
+        #[serde(default)]
+        local_yubi_alias: Option<String>,
+        #[serde(default)]
+        local_pin: Option<SecretString>,
+        #[serde(default)]
+        remote_profile: Option<String>,
+        #[serde(default)]
+        remote_yubi_alias: Option<String>,
+        #[serde(default)]
+        remote_pin: Option<SecretString>,
+        /// Further hardware unlocks for the profiles a cascade reaches
+        /// beyond the immediate pair.
+        #[serde(default)]
+        unlocks: Vec<YubiFederationUnlockInput>,
+    },
     RunDueJobs {
         profile: String,
     },
+}
+
+impl Operation {
+    /// Interactive KEX can contain two sequential relay polls. Frontends and
+    /// the resident agent use a longer bounded deadline only for these calls.
+    pub fn is_device_pairing_wait(&self) -> bool {
+        matches!(
+            self,
+            Self::FinishDevicePairing { .. } | Self::AcceptDevicePairing { .. }
+        )
+    }
 }
 
 impl std::fmt::Debug for Operation {
@@ -281,6 +398,52 @@ impl std::fmt::Debug for Operation {
                 .debug_struct("SyncAccount")
                 .field("profile", profile)
                 .field("alias", alias)
+                .finish(),
+            Self::StartDevicePairing {
+                profile,
+                account_alias,
+            } => formatter
+                .debug_struct("StartDevicePairing")
+                .field("profile", profile)
+                .field("account_alias", account_alias)
+                .finish(),
+            Self::RepublishDevicePairing {
+                profile,
+                account_alias,
+            } => formatter
+                .debug_struct("RepublishDevicePairing")
+                .field("profile", profile)
+                .field("account_alias", account_alias)
+                .finish(),
+            Self::FinishDevicePairing {
+                profile,
+                account_alias,
+            } => formatter
+                .debug_struct("FinishDevicePairing")
+                .field("profile", profile)
+                .field("account_alias", account_alias)
+                .finish(),
+            Self::AcceptDevicePairing {
+                profile,
+                target_alias,
+                device_name,
+                serial,
+                phrase: _,
+            } => formatter
+                .debug_struct("AcceptDevicePairing")
+                .field("profile", profile)
+                .field("target_alias", target_alias)
+                .field("device_name", device_name)
+                .field("serial", serial)
+                .field("phrase", &"<redacted>")
+                .finish(),
+            Self::ResumeDevicePairingAcceptance {
+                profile,
+                target_alias,
+            } => formatter
+                .debug_struct("ResumeDevicePairingAcceptance")
+                .field("profile", profile)
+                .field("target_alias", target_alias)
                 .finish(),
             Self::ListYubiCards { profile } => formatter
                 .debug_struct("ListYubiCards")
@@ -356,11 +519,13 @@ impl std::fmt::Debug for Operation {
                 profile,
                 alias,
                 pin: _,
+                with_federation,
             } => formatter
                 .debug_struct("SyncYubiAccount")
                 .field("profile", profile)
                 .field("alias", alias)
                 .field("pin", &"<redacted>")
+                .field("with_federation", with_federation)
                 .finish(),
             Self::YubiPinStatus { profile, alias } => formatter
                 .debug_struct("YubiPinStatus")
@@ -470,6 +635,70 @@ impl std::fmt::Debug for Operation {
                 .field("profile", profile)
                 .field("team_alias", team_alias)
                 .finish(),
+            Self::ListTeamMembers {
+                profile,
+                team_alias,
+            } => formatter
+                .debug_struct("ListTeamMembers")
+                .field("profile", profile)
+                .field("team_alias", team_alias)
+                .finish(),
+            Self::AddTeamMember {
+                profile,
+                team_alias,
+                username,
+                role,
+                visibility,
+            } => formatter
+                .debug_struct("AddTeamMember")
+                .field("profile", profile)
+                .field("team_alias", team_alias)
+                .field("username", username)
+                .field("role", role)
+                .field("visibility", visibility)
+                .finish(),
+            Self::ResumeTeamMemberAddition {
+                profile,
+                team_alias,
+                username,
+            } => formatter
+                .debug_struct("ResumeTeamMemberAddition")
+                .field("profile", profile)
+                .field("team_alias", team_alias)
+                .field("username", username)
+                .finish(),
+            Self::DemoteTeamMember {
+                profile,
+                team_alias,
+                username,
+                role,
+                visibility,
+            } => formatter
+                .debug_struct("DemoteTeamMember")
+                .field("profile", profile)
+                .field("team_alias", team_alias)
+                .field("username", username)
+                .field("role", role)
+                .field("visibility", visibility)
+                .finish(),
+            Self::RemoveTeamMember {
+                profile,
+                team_alias,
+                username,
+            } => formatter
+                .debug_struct("RemoveTeamMember")
+                .field("profile", profile)
+                .field("team_alias", team_alias)
+                .field("username", username)
+                .finish(),
+            Self::ResumeTeamMemberEdit {
+                profile,
+                team_alias,
+            } => formatter
+                .debug_struct("ResumeTeamMemberEdit")
+                .field("profile", profile)
+                .field("team_alias", team_alias)
+                .finish(),
             Self::AdmitFederatedTeam {
                 local_profile,
                 local_team_alias,
@@ -493,6 +722,26 @@ impl std::fmt::Debug for Operation {
                 .debug_struct("ListFederatedTeams")
                 .field("profile", profile)
                 .field("team_alias", team_alias)
+                .finish(),
+            Self::RefreshFederatedSecurity {
+                profile,
+                team_alias,
+                local_yubi_alias,
+                local_pin: _,
+                remote_profile,
+                remote_yubi_alias,
+                remote_pin: _,
+                unlocks,
+            } => formatter
+                .debug_struct("RefreshFederatedSecurity")
+                .field("profile", profile)
+                .field("team_alias", team_alias)
+                .field("local_yubi_alias", local_yubi_alias)
+                .field("local_pin", &"<redacted>")
+                .field("remote_profile", remote_profile)
+                .field("remote_yubi_alias", remote_yubi_alias)
+                .field("remote_pin", &"<redacted>")
+                .field("unlocks", unlocks)
                 .finish(),
             Self::RunDueJobs { profile } => formatter
                 .debug_struct("RunDueJobs")

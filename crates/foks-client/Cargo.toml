@@ -6,6 +6,9 @@ license.workspace = true
 description = "Native FOKS v0.1.9 identity, recovery, team, and KV client"
 autotests = false
 
+[features]
+test-support = []
+
 [dependencies]
 chacha20poly1305 = { workspace = true }
 foks-client-db = { workspace = true }

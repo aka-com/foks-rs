@@ -21,6 +21,7 @@ mod maintenance;
 mod merkle;
 mod names;
 mod passphrases;
+mod peripheral;
 mod read;
 mod receipts;
 mod recovery;
@@ -65,19 +66,23 @@ pub use kv::{
 pub use maintenance::{CheckpointReport, MaintenanceReport, StorageReport};
 pub use merkle::SqliteNodeReader;
 pub use passphrases::{PassphraseMutation, PassphraseSnapshot};
+pub use peripheral::{
+    LogSendBlockMutation, LogSendFileMutation, MAXIMUM_LOG_SEND_BLOCKS,
+    MAXIMUM_LOG_SEND_BLOCK_BYTES, MAXIMUM_LOG_SEND_FILES, MAXIMUM_LOG_SEND_FILE_BYTES,
+};
 pub use read::{
     identity_snapshot, root_snapshot, GenericChainLinkSnapshot, GenericChainSnapshot,
     IdentitySnapshot, LocalTeamListEntrySnapshot, PukMaterialSnapshot, RootSnapshot,
-    TeamLinkSnapshot, TeamMemberSnapshot, TeamSnapshot, UserAuthoritySnapshot,
+    TeamLinkSnapshot, TeamMemberSnapshot, TeamRemovalSnapshot, TeamSnapshot, UserAuthoritySnapshot,
     UserChainLinkSnapshot, UserChainSnapshot, UserDeviceSnapshot, UserSharedKeySnapshot,
 };
 pub use receipts::Receipt;
 pub use recovery::RecoveryCredentialSnapshot;
 pub use schema::{APPLICATION_ID, SCHEMA_VERSION};
 pub use team::{
-    TeamHeader, TeamMemberMutation, TeamMutation, TeamMutationFailurePoint, TeamParcelMutation,
-    TeamRemoteMemberViewTokenMutation, TeamRemovalBoxMutation, TeamSeedChainMutation,
-    TeamSharedKeyMutation,
+    TeamHeader, TeamLocalViewPermissionMutation, TeamMemberMutation, TeamMutation,
+    TeamMutationFailurePoint, TeamParcelMutation, TeamRemoteMemberViewTokenMutation,
+    TeamRemovalBoxMutation, TeamRemovalProofMutation, TeamSeedChainMutation, TeamSharedKeyMutation,
 };
 pub use user_mutation::{
     AddedCredential, ParcelMutation, SeedChainMutation, SharedKeyMutation, UserMutation,

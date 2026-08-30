@@ -42,6 +42,12 @@ pub enum Error {
     KvLockTimeout,
     #[error("configured storage quota is exhausted")]
     QuotaExceeded,
+    #[error("{0} was not found")]
+    NotFound(&'static str),
+    #[error("{0} exceeds configured capacity")]
+    Capacity(&'static str),
+    #[error("{0} already exists")]
+    Duplicate(&'static str),
     #[error("injected transaction failure at {0:?}")]
     Injected(crate::FailurePoint),
     #[error("injected user-mutation failure at {0:?}")]

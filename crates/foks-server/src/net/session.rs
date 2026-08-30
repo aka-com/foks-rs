@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 mod handlers;
+mod kex;
 
 use foks_proto::{
     DecodedSignupArgument, EntityId, HistoricalMerkleRoots, InviteCode, MerkleExistsResponse,
@@ -40,7 +41,9 @@ pub(crate) struct ServerData {
     metrics: Arc<crate::ServerMetrics>,
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     execution: Arc<Semaphore>,
+    kex_execution: Arc<Semaphore>,
     request_memory: Arc<Semaphore>,
+    kex_relay: Arc<kex::Relay>,
 }
 
 pub(crate) struct OwnedPassphraseMutation {
@@ -51,6 +54,7 @@ pub(crate) struct OwnedPassphraseMutation {
     exact_passphrase_box: Vec<u8>,
     exact_puk_box: Option<Vec<u8>>,
     puk_generation: Option<u64>,
+    puk_role: Option<foks_proto::Role>,
     stretch_version: u64,
 }
 
@@ -68,6 +72,7 @@ impl OwnedPassphraseMutation {
                 .map(foks_proto::PpePukBox::encoded)
                 .transpose()?,
             puk_generation: argument.puk_box.as_ref().map(|boxed| boxed.puk_generation),
+            puk_role: argument.puk_box.as_ref().map(|boxed| boxed.puk_role),
             stretch_version: argument.stretch_version.protocol_value(),
         })
     }
@@ -81,6 +86,7 @@ impl OwnedPassphraseMutation {
             exact_passphrase_box: &self.exact_passphrase_box,
             exact_puk_box: self.exact_puk_box.as_deref(),
             puk_generation: self.puk_generation,
+            puk_role: self.puk_role,
             stretch_version: self.stretch_version,
             now,
         }
@@ -128,7 +134,9 @@ impl ServerData {
             metrics: Arc::clone(&config.metrics),
             rate_limiter,
             execution: Arc::new(Semaphore::new(config.limits.maximum_in_flight_requests)),
+            kex_execution: Arc::new(Semaphore::new(kex::MAXIMUM_WAITERS)),
             request_memory: Arc::new(Semaphore::new(config.limits.maximum_request_memory_bytes)),
+            kex_relay: Arc::new(kex::Relay::default()),
         })
     }
 
@@ -150,11 +158,11 @@ impl ServerData {
         };
         let reader = self.read_database()?;
         let exact_link = decoded.link().encoded().map_err(bad_arguments)?;
-        let signed_root = decoded
+        let submitted_change = decoded
             .link()
             .decode_group_change()
-            .map_err(bad_arguments)?
-            .root;
+            .map_err(bad_arguments)?;
+        let signed_root = submitted_change.root.clone();
         let idempotency_key =
             foks_crypto::prefixed_hash_signable(foks_proto::LINK_OUTER_TYPE_ID, &exact_link)
                 .map_err(bad_arguments)?;
@@ -191,6 +199,10 @@ impl ServerData {
             let authority = database
                 .user_authority(&uid)?
                 .ok_or(crate::Error::Signup("user mutation authority missing"))?;
+            if mutation_cites_superseded_user_head(database, &authority, &host, &submitted_change)?
+            {
+                return Err(crate::Error::Database(foks_server_db::Error::StaleRoot));
+            }
             let cited_root = require_cited_root(database, &signed_root)?;
             let command = crate::identity::mutation::validate(
                 &authority,
@@ -214,14 +226,49 @@ impl ServerData {
                 command.sequence,
                 Some(&authority.next_tree_location),
             )?;
-            let leaves = [(chain_key, command.link_hash)];
+            let mut leaves = vec![(chain_key, command.link_hash)];
+            let settings_location = command
+                .user_settings
+                .as_ref()
+                .map(|settings| {
+                    let state = database
+                        .generic_chain(&command.uid, foks_proto::CHAIN_TYPE_USER_SETTINGS)?
+                        .ok_or(crate::Error::Signup("user-settings subchain seed missing"))?;
+                    let location = if settings.sequence == 1 {
+                        foks_crypto::subchain_tree_location(
+                            &state.location_seed,
+                            foks_proto::CHAIN_TYPE_USER_SETTINGS,
+                        )?
+                    } else {
+                        let index = usize::try_from(settings.sequence.saturating_sub(2))
+                            .map_err(|_| crate::Error::Signup("settings sequence overflow"))?;
+                        state
+                            .links
+                            .get(index)
+                            .filter(|link| link.sequence.saturating_add(1) == settings.sequence)
+                            .map(|link| link.next_tree_location)
+                            .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?
+                    };
+                    let key = foks_merkle_store::chain_key(
+                        foks_proto::CHAIN_TYPE_USER_SETTINGS,
+                        &EntityId::from_bytes(command.uid.clone())?,
+                        settings.sequence,
+                        Some(&location),
+                    )?;
+                    leaves.push((key, settings.link_hash));
+                    Ok::<_, crate::Error>(location)
+                })
+                .transpose()?;
             let merkle_commit = foks_merkle_store::prepare(
                 &database.node_reader(),
                 authoritative_root.root_node,
-                &[foks_merkle_store::LeafChange::Set {
-                    key: chain_key,
-                    value: command.link_hash,
-                }],
+                &leaves
+                    .iter()
+                    .map(|(key, value)| foks_merkle_store::LeafChange::Set {
+                        key: *key,
+                        value: *value,
+                    })
+                    .collect::<Vec<_>>(),
             )?;
             let root_epoch = authoritative_root
                 .epoch
@@ -339,6 +386,30 @@ impl ServerData {
                     Ok::<_, crate::Error>(owned)
                 })
                 .transpose()?;
+            let user_settings = command
+                .user_settings
+                .as_ref()
+                .zip(settings_location.as_ref())
+                .map(
+                    |(settings, current_tree_location)| foks_server_db::GenericLinkMutation {
+                        entity_id: &command.uid,
+                        chain_type: foks_proto::CHAIN_TYPE_USER_SETTINGS,
+                        signer_credential_id: &settings.signer,
+                        sequence: settings.sequence,
+                        previous: settings.previous.as_ref(),
+                        link_root_epoch: settings.root.epoch,
+                        link_root_hash: &settings.root.hash,
+                        current_tree_location,
+                        next_tree_location: &settings.next_tree_location,
+                        link_hash: &settings.link_hash,
+                        exact_link: &settings.exact_link,
+                        passphrase_info: Some(foks_server_db::GenericPassphraseInfo {
+                            generation: settings.info.generation,
+                            salt: settings.info.salt.as_ref(),
+                            stretch_version: settings.info.stretch_version,
+                        }),
+                    },
+                );
             if command.link_hash != idempotency_key {
                 return Err(crate::Error::Signup("user mutation link hash changed"));
             }
@@ -349,6 +420,7 @@ impl ServerData {
                 expected_tail_hash: &command.expected_tail_hash,
                 link_hash: &command.link_hash,
                 exact_link: &command.exact_link,
+                current_tree_location: &authority.next_tree_location,
                 next_tree_location: &command.next_tree_location,
                 added_credential: added,
                 revoked_device_id: command.revoked.as_deref(),
@@ -358,6 +430,7 @@ impl ServerData {
                 passphrase: passphrase
                     .as_ref()
                     .map(|passphrase| passphrase.as_database(now)),
+                user_settings,
                 expected_root_epoch: authoritative_root.epoch,
                 expected_root_hash: &authoritative_root.root_hash,
                 merkle_commit: &merkle_commit,
@@ -377,9 +450,9 @@ impl ServerData {
         });
         match result {
             Ok(()) => Ok(()),
-            Err(crate::Error::Database(foks_server_db::Error::StaleRoot)) => {
-                Err(RpcStatus::StaleRoot)
-            }
+            Err(crate::Error::Database(foks_server_db::Error::StaleRoot)) => Err(
+                RpcStatus::RevokeRace("user chain or Merkle root changed".to_owned()),
+            ),
             Err(crate::Error::Database(foks_server_db::Error::QuotaExceeded)) => {
                 Err(RpcStatus::QuotaExceeded)
             }
@@ -1070,6 +1143,54 @@ fn require_cited_root(
     Ok(root)
 }
 
+fn mutation_cites_superseded_user_head(
+    database: &foks_server_db::Database,
+    authority: &foks_server_db::UserAuthoritySnapshot,
+    host: &EntityId,
+    change: &foks_proto::UserGroupChange,
+) -> Result<bool> {
+    if change.uid.as_bytes() != authority.uid
+        || &change.host != host
+        || change.seqno > authority.chain_sequence
+    {
+        return Ok(false);
+    }
+    let Some(previous_sequence) = change.seqno.checked_sub(1) else {
+        return Ok(false);
+    };
+    if change.previous.is_none() {
+        return Ok(false);
+    }
+    let chain = database
+        .user_chain(&authority.uid)?
+        .ok_or(crate::Error::Signup("user mutation chain missing"))?;
+    let Some(historical_head) = chain
+        .links
+        .iter()
+        .find(|link| link.sequence == previous_sequence)
+    else {
+        return Ok(false);
+    };
+    change_cites_historical_user_head(authority, host, change, historical_head)
+}
+
+fn change_cites_historical_user_head(
+    authority: &foks_server_db::UserAuthoritySnapshot,
+    host: &EntityId,
+    change: &foks_proto::UserGroupChange,
+    historical_head: &foks_server_db::UserChainLinkSnapshot,
+) -> Result<bool> {
+    let historical_hash = foks_crypto::prefixed_hash_signable(
+        foks_proto::LINK_OUTER_TYPE_ID,
+        &historical_head.exact_link,
+    )?;
+    Ok(change.uid.as_bytes() == authority.uid
+        && &change.host == host
+        && change.seqno <= authority.chain_sequence
+        && historical_head.sequence.checked_add(1) == Some(change.seqno)
+        && change.previous == Some(historical_hash))
+}
+
 fn decode_epochs(value: &Value) -> std::result::Result<Vec<u64>, RpcStatus> {
     let values = match value {
         Value::Null => return Ok(Vec::new()),
@@ -1196,9 +1317,24 @@ pub(crate) async fn serve(
         let sequence = call.sequence();
         let data = Arc::clone(service_data);
         let certificate = peer_certificate.clone();
+        let routed = route_call(call, listener);
+        let kex_receive = matches!(
+            &routed,
+            Ok(call) if call.route.id == crate::rpc::RouteId::KexReceive
+        );
+        let execution = if kex_receive {
+            Arc::clone(&service_data.kex_execution)
+        } else {
+            Arc::clone(&service_data.execution)
+        };
+        let request_timeout = if kex_receive {
+            kex::MAX_BLOCKING_WAIT.saturating_add(std::time::Duration::from_secs(5))
+        } else {
+            limits.request_timeout
+        };
         let outcome = match execute_bounded(
-            Arc::clone(&service_data.execution),
-            limits.request_timeout,
+            execution,
+            request_timeout,
             &mut stop,
             move || -> Result<RequestOutcome> {
                 // A timed-out blocking handler can still own decoded request
@@ -1225,7 +1361,7 @@ pub(crate) async fn serve(
                     None
                 };
                 let mut route = None;
-                let response = match route_call(call, listener) {
+                let response = match routed {
                     Ok(call) => {
                         let protocol = call.route.protocol;
                         let method = call.route.method;
@@ -1516,6 +1652,78 @@ fn endpoint_host(endpoint: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_exact_historical_user_head_is_a_retryable_race() {
+        let uid = EntityId::from_bytes(
+            std::iter::once(foks_proto::ENTITY_USER)
+                .chain([0x31; 32])
+                .collect(),
+        )
+        .unwrap();
+        let host = EntityId::from_bytes(
+            std::iter::once(foks_proto::ENTITY_HOST)
+                .chain([0x41; 32])
+                .collect(),
+        )
+        .unwrap();
+        let historical = foks_server_db::UserChainLinkSnapshot {
+            sequence: 2,
+            exact_link: vec![0x91, 0x01],
+            root_epoch: 2,
+            next_tree_location: [0x51; 32],
+        };
+        let historical_hash = foks_crypto::prefixed_hash_signable(
+            foks_proto::LINK_OUTER_TYPE_ID,
+            &historical.exact_link,
+        )
+        .unwrap();
+        let authority = foks_server_db::UserAuthoritySnapshot {
+            uid: uid.as_bytes().to_vec(),
+            chain_sequence: 3,
+            chain_tail_hash: [0x61; 32],
+            next_tree_location: [0x71; 32],
+            current_root_epoch: 3,
+            current_root_hash: [0x81; 32],
+            devices: Vec::new(),
+            shared_keys: Vec::new(),
+            stale_shared_key_roles: Vec::new(),
+        };
+        let mut change = foks_proto::UserGroupChange {
+            seqno: 3,
+            previous: Some(historical_hash),
+            root: TreeRoot {
+                epoch: 2,
+                hash: [0x91; 32],
+            },
+            time: 1,
+            next_location_commitment: [0xa1; 32],
+            uid,
+            host: host.clone(),
+            signer: EntityId::from_bytes(
+                std::iter::once(foks_proto::ENTITY_DEVICE)
+                    .chain([0xb1; 32])
+                    .collect(),
+            )
+            .unwrap(),
+            changes: Vec::new(),
+            shared_keys: Vec::new(),
+            metadata: Vec::new(),
+        };
+
+        assert!(
+            change_cites_historical_user_head(&authority, &host, &change, &historical).unwrap()
+        );
+        change.previous = Some([0xc1; 32]);
+        assert!(
+            !change_cites_historical_user_head(&authority, &host, &change, &historical).unwrap()
+        );
+        change.previous = Some(historical_hash);
+        change.seqno = 4;
+        assert!(
+            !change_cites_historical_user_head(&authority, &host, &change, &historical).unwrap()
+        );
+    }
 
     #[test]
     fn current_root_host_may_be_omitted_but_vhost_selection_remains_strict() {

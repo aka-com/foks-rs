@@ -224,6 +224,13 @@ pub struct YubiCardSummary {
     pub serial: u32,
 }
 
+/// A Yubi security-sync that also drove the federated responders.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct YubiFederationSyncReport {
+    pub sync: SyncReport,
+    pub federation: Vec<super::federation::FederationRefreshReport>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct YubiAccountReport {
     pub alias: String,
@@ -372,6 +379,11 @@ impl AccountVault<'_> {
         })
     }
 
+    #[cfg(test)]
+    pub(super) fn yubi_management_generation(&mut self, alias: &str) -> Result<Option<u64>> {
+        Ok(self.stored_yubi(alias)?.management_generation)
+    }
+
     fn commit_created_yubi(
         &mut self,
         alias: &str,
@@ -502,10 +514,25 @@ impl CheckedProfileSession<'_> {
         MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
             .finalize(&created.operation_id)?;
         vault.remove_pending_yubi(&input.alias)?;
-        let sequence = created.authenticated.verified.chain_seqno();
         drop(created);
-        self.finish_management_rotation(&input.alias, provider, vault, Some(&pin))?;
+        self.finish_management_rotation(
+            &input.alias,
+            provider,
+            vault,
+            Some(&pin),
+            Some(master_key),
+        )?;
+        let loaded = vault.yubi_account(&input.alias)?;
+        let sequence = self
+            .client
+            .authenticate_yubi_and_pin(&host, &loaded.credential(prepared.device.as_ref()))?
+            .verified
+            .chain_seqno();
         let stored = vault.stored_yubi(&input.alias)?;
+        self.register_default_refresh_jobs_for(
+            &EntityId::from_bytes(stored.uid.clone())?,
+            now_microseconds()?,
+        )?;
         Ok(YubiAccountReport {
             alias: input.alias,
             username: input.username,
@@ -562,15 +589,32 @@ impl CheckedProfileSession<'_> {
                         .finalize(&operation.operation_id)?;
                 }
             }
-            let authenticated = self
-                .client
-                .authenticate_yubi_and_pin(&host, &loaded.credential(device.as_ref()))?;
+            let credential = loaded.credential(device.as_ref());
+            let authenticated = self.client.authenticate_yubi_and_pin(&host, &credential)?;
+            self.register_default_refresh_jobs_for(&loaded.uid, now_microseconds()?)?;
             let _ = vault.store.remove(&pending_yubi_key(alias))?;
-            self.finish_management_rotation(alias, provider, vault, Some(&pin))?;
+            let responder_runs_in_finish = {
+                let stored = vault.stored_yubi(alias)?;
+                stored.pending_management_key.is_some() || !stored.management_enrolled
+            };
+            self.finish_management_rotation(alias, provider, vault, Some(&pin), Some(master_key))?;
             let stored = vault.stored_yubi(alias)?;
             if let Some(source) = stored.management_refresh_source.as_deref() {
                 self.register_yubi_management_refresh(alias, source)?;
             }
+            let authenticated = if responder_runs_in_finish {
+                self.client.authenticate_yubi_and_pin(&host, &credential)?
+            } else {
+                self.run_unlocked_yubi_security_responders(
+                    alias,
+                    &host,
+                    &credential,
+                    authenticated,
+                    vault,
+                    master_key,
+                )?
+            };
+            let stored = vault.stored_yubi(alias)?;
             return Ok(YubiAccountReport {
                 alias: alias.to_owned(),
                 username: stored.username.clone(),
@@ -593,7 +637,7 @@ impl CheckedProfileSession<'_> {
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
         )?;
-        let (sequence, refresh_source) =
+        let refresh_source =
             match &pending.purpose {
                 PendingYubiPurpose::Signup {
                     device_name,
@@ -655,7 +699,6 @@ impl CheckedProfileSession<'_> {
                             &mut mutations,
                         )?
                     };
-                    let sequence = created.authenticated.verified.chain_seqno();
                     vault.commit_created_yubi(
                         alias,
                         &pending.username,
@@ -666,7 +709,7 @@ impl CheckedProfileSession<'_> {
                     MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
                         .finalize(&created.operation_id)?;
                     vault.remove_pending_yubi(alias)?;
-                    (sequence, None)
+                    None
                 }
                 PendingYubiPurpose::Provision {
                     source_alias,
@@ -729,7 +772,6 @@ impl CheckedProfileSession<'_> {
                                 &mut mutations,
                             )?
                         };
-                    let sequence = provisioned.authenticated.verified.chain_seqno();
                     vault.commit_created_yubi(
                         alias,
                         &pending.username,
@@ -740,14 +782,24 @@ impl CheckedProfileSession<'_> {
                     MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
                         .finalize(&provisioned.operation_id)?;
                     vault.remove_pending_yubi(alias)?;
-                    (sequence, Some(source_alias.clone()))
+                    Some(source_alias.clone())
                 }
             };
-        self.finish_management_rotation(alias, provider, vault, Some(&pin))?;
+        self.finish_management_rotation(alias, provider, vault, Some(&pin), Some(master_key))?;
+        let loaded = vault.yubi_account(alias)?;
+        let sequence = self
+            .client
+            .authenticate_yubi_and_pin(&host, &loaded.credential(device.as_ref()))?
+            .verified
+            .chain_seqno();
         if let Some(source) = refresh_source.as_deref() {
             self.register_yubi_management_refresh(alias, source)?;
         }
         let stored = vault.stored_yubi(alias)?;
+        self.register_default_refresh_jobs_for(
+            &EntityId::from_bytes(stored.uid.clone())?,
+            now_microseconds()?,
+        )?;
         Ok(YubiAccountReport {
             alias: alias.to_owned(),
             username: pending.username.clone(),
@@ -829,7 +881,6 @@ impl CheckedProfileSession<'_> {
             NewYubiDeviceSecrets::new(SecretSeed::new(pending.subkey_seed), pending.self_token),
             &mut mutations,
         )?;
-        let sequence = provisioned.authenticated.verified.chain_seqno();
         vault.commit_created_yubi(
             &input.target_alias,
             &source.username,
@@ -841,7 +892,19 @@ impl CheckedProfileSession<'_> {
             .finalize(&provisioned.operation_id)?;
         vault.remove_pending_yubi(&input.target_alias)?;
         drop(provisioned);
-        self.finish_management_rotation(&input.target_alias, provider, vault, Some(&pin))?;
+        self.finish_management_rotation(
+            &input.target_alias,
+            provider,
+            vault,
+            Some(&pin),
+            Some(master_key),
+        )?;
+        let loaded = vault.yubi_account(&input.target_alias)?;
+        let sequence = self
+            .client
+            .authenticate_yubi_and_pin(&host, &loaded.credential(prepared.device.as_ref()))?
+            .verified
+            .chain_seqno();
         self.register_yubi_management_refresh(&input.target_alias, &input.source_alias)?;
         let stored = vault.stored_yubi(&input.target_alias)?;
         Ok(YubiAccountReport {
@@ -854,23 +917,102 @@ impl CheckedProfileSession<'_> {
         })
     }
 
+    /// Opens one enrolled YubiKey and lends the unlocked credential to
+    /// `operation` as a federation actor. The PIN and the hardware handle live
+    /// only for the duration of this call; neither is stored, journaled, or
+    /// returned. Nesting two calls is the supported way to drive a refresh
+    /// whose two sides need two different YubiKeys.
+    pub fn with_unlocked_yubi<T>(
+        &self,
+        alias: &str,
+        pin: &Pin,
+        provider: &dyn YubiProvider,
+        vault: &mut AccountVault<'_>,
+        operation: impl FnOnce(UnlockedYubiActor<'_, '_>, &mut AccountVault<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let loaded = vault.yubi_account(alias)?;
+        let parent = provider.open(&loaded.locator, Some(pin))?;
+        let credential = loaded.credential(parent.as_ref());
+        operation(
+            UnlockedYubiActor {
+                profile: &self.profile.name,
+                alias,
+                credential: &credential,
+            },
+            vault,
+        )
+    }
+
+    /// Synchronizes a Yubi account and additionally runs every federated
+    /// security responder this unlocked device can drive. Remote sides that
+    /// still need their own locked hardware are reported as deferred rather
+    /// than failing the sync.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sync_yubi_account_with_federation(
+        &self,
+        alias: &str,
+        pin: Pin,
+        provider: &dyn YubiProvider,
+        vault: &mut AccountVault<'_>,
+        registry: &ProfileRegistry,
+        credentials: &ClientCredentials,
+        master_key: &[u8; 32],
+    ) -> Result<YubiFederationSyncReport> {
+        // Check authority before touching hardware. A denied profile must not
+        // consume a PIN attempt or make the user present a key for nothing.
+        self.profile.require(Capability::UserSync)?;
+        self.profile.require(Capability::Kv)?;
+        self.with_unlocked_yubi(alias, &pin, provider, vault, |actor, vault| {
+            let sync =
+                self.sync_unlocked_yubi_account(actor.alias, actor.credential, vault, master_key)?;
+            let federation = self.refresh_all_federated_security_with_unlocked_yubi(
+                &[actor],
+                vault,
+                registry,
+                credentials,
+                master_key,
+            )?;
+            Ok(YubiFederationSyncReport { sync, federation })
+        })
+    }
+
     pub fn sync_yubi_account(
         &self,
         alias: &str,
         pin: Pin,
         provider: &dyn YubiProvider,
         vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
     ) -> Result<SyncReport> {
         self.profile.require(Capability::UserSync)?;
         self.profile.require(Capability::Kv)?;
-        let loaded = vault.yubi_account(alias)?;
-        let device = provider.open(&loaded.locator, Some(&pin))?;
-        let credential = loaded.credential(device.as_ref());
+        self.with_unlocked_yubi(alias, &pin, provider, vault, |actor, vault| {
+            self.sync_unlocked_yubi_account(actor.alias, actor.credential, vault, master_key)
+        })
+    }
+
+    fn sync_unlocked_yubi_account(
+        &self,
+        alias: &str,
+        credential: &YubiCredential<'_>,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<SyncReport> {
+        self.profile.require(Capability::UserSync)?;
+        self.profile.require(Capability::Kv)?;
         let host = self.pinned_host()?;
-        let authenticated = self.client.authenticate_yubi_and_pin(&host, &credential)?;
+        let authenticated = self.client.authenticate_yubi_and_pin(&host, credential)?;
+        let authenticated = self.run_unlocked_yubi_security_responders(
+            alias,
+            &host,
+            credential,
+            authenticated,
+            vault,
+            master_key,
+        )?;
         let directories = self.client.sync_user_kv_yubi(
             &host,
-            &credential,
+            credential,
             &authenticated.verified,
             &authenticated.puks,
             &self.paths.soft_database,
@@ -882,6 +1024,212 @@ impl CheckedProfileSession<'_> {
         ))
     }
 
+    pub(super) fn run_unlocked_yubi_security_responders(
+        &self,
+        alias: &str,
+        host: &foks_client::PinnedHost,
+        credential: &YubiCredential<'_>,
+        authenticated: foks_client::AuthenticatedUserOutcome,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<foks_client::AuthenticatedUserOutcome> {
+        let authenticated =
+            self.refresh_yubi_user_security(host, credential, authenticated, master_key)?;
+        if self
+            .profile
+            .require(Capability::DeviceAdministration)
+            .is_ok()
+        {
+            self.refresh_unlocked_yubi_management_envelope(
+                alias,
+                host,
+                credential,
+                &authenticated,
+                vault,
+            )?;
+        }
+        self.refresh_yubi_team_chains(host, credential, authenticated, vault, master_key)
+    }
+
+    fn refresh_yubi_user_security(
+        &self,
+        host: &foks_client::PinnedHost,
+        credential: &YubiCredential<'_>,
+        authenticated: foks_client::AuthenticatedUserOutcome,
+        master_key: &[u8; 32],
+    ) -> Result<foks_client::AuthenticatedUserOutcome> {
+        let mut mutations = EncryptedFileMutationStore::open(
+            &self.paths.protected_mutations,
+            derive_mutation_key(master_key),
+        )?;
+        let pending = HardStateStore::open(&self.paths.hard_database)?
+            .pending_mutations(host.host_id().as_bytes())?
+            .into_iter()
+            .find(|operation| {
+                operation.kind == MutationKind::PukRotation
+                    && operation.scope_id == credential.uid.as_bytes()
+            });
+        let mut refreshed = authenticated;
+        if let Some(operation) = pending {
+            self.profile.require(Capability::DeviceAdministration)?;
+            if self
+                .client
+                .journaled_yubi_puk_rotation_requires_passphrase_capability(
+                    host,
+                    credential,
+                    operation.operation_id,
+                    &mut mutations,
+                )?
+            {
+                self.profile.require(Capability::Passphrases)?;
+            }
+            refreshed = if operation.subject_id == credential.parent.entity_id().as_bytes() {
+                self.client.resume_yubi_puk_rotation_from_journal(
+                    host,
+                    credential,
+                    operation.operation_id,
+                    &mut mutations,
+                )
+            } else {
+                self.client.reconcile_yubi_puk_rotation_from_journal(
+                    host,
+                    credential,
+                    operation.operation_id,
+                    &mut mutations,
+                )
+            }?;
+            if HardStateStore::open(&self.paths.hard_database)?
+                .mutation(&operation.operation_id)?
+                .is_some_and(|operation| {
+                    matches!(
+                        operation.state,
+                        foks_client_db::MutationState::Prepared
+                            | foks_client_db::MutationState::Submitting
+                            | foks_client_db::MutationState::SubmissionUnknown
+                            | foks_client_db::MutationState::RemoteVerified
+                    )
+                })
+            {
+                return Err(Error::InvalidAccount(
+                    "journaled PUK rotation remains ambiguous",
+                ));
+            }
+        }
+        if let Some(upper) = refreshed
+            .verified
+            .stale_shared_key_roles()
+            .iter()
+            .next_back()
+            .copied()
+        {
+            let expected_version = refreshed
+                .verified
+                .chain_seqno()
+                .checked_add(1)
+                .ok_or(Error::InvalidAccount("user chain sequence overflow"))?;
+            if HardStateStore::open(&self.paths.hard_database)?
+                .pending_mutations(host.host_id().as_bytes())?
+                .into_iter()
+                .any(|operation| {
+                    operation.scope_id == credential.uid.as_bytes()
+                        && operation.expected_version == Some(expected_version)
+                        && matches!(
+                            operation.kind,
+                            MutationKind::DeviceProvision
+                                | MutationKind::DeviceRevoke
+                                | MutationKind::PukRotation
+                        )
+                })
+            {
+                return Err(Error::InvalidAccount(
+                    "an active user-chain mutation reserves the stale-PUK rotation position",
+                ));
+            }
+            self.profile.require(Capability::DeviceAdministration)?;
+            let rotations = refreshed
+                .verified
+                .shared_keys()
+                .iter()
+                .filter(|key| key.role <= upper)
+                .map(|key| {
+                    let role_history = self.client.load_puks_for_role_yubi(
+                        host,
+                        credential,
+                        &refreshed.verified,
+                        key.role,
+                    )?;
+                    let previous = role_history
+                        .into_iter()
+                        .find(|private| {
+                            private.role == key.role && private.generation == key.generation
+                        })
+                        .ok_or(Error::InvalidAccount(
+                            "current stale PUK material is unavailable",
+                        ))?;
+                    Ok(foks_client::UserPukRotation {
+                        role: key.role,
+                        previous_generation: key.generation,
+                        previous_seed: previous.seed,
+                        new_seed: SecretSeed::new(random_array()?),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let rotates_owner = rotations
+                .iter()
+                .any(|rotation| rotation.role == Role::OWNER);
+            let no_passphrase = if rotates_owner {
+                self.profile.require(Capability::Passphrases)?;
+                (!self
+                    .client
+                    .passphrase_is_configured_yubi(host, credential)?)
+                .then_some(foks_client::NoPassphraseConfigured)
+            } else {
+                None
+            };
+            refreshed = self.client.rotate_yubi_puks(
+                host,
+                credential,
+                &rotations,
+                no_passphrase,
+                &mut mutations,
+            )?;
+        }
+        if self.profile.require(Capability::Passphrases).is_ok() {
+            self.client
+                .refresh_passphrase_for_current_puk_yubi(host, credential, &refreshed)?;
+        }
+        Ok(refreshed)
+    }
+
+    fn refresh_unlocked_yubi_management_envelope(
+        &self,
+        alias: &str,
+        host: &foks_client::PinnedHost,
+        credential: &YubiCredential<'_>,
+        authenticated: &foks_client::AuthenticatedUserOutcome,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<()> {
+        let mut stored = vault.stored_yubi(alias)?;
+        if !stored.management_enrolled {
+            return Ok(());
+        }
+        stored.require_completed_management_rotation()?;
+        let current = authenticated
+            .puks
+            .iter()
+            .filter(|puk| puk.role == Role::OWNER)
+            .max_by_key(|puk| puk.generation)
+            .ok_or(Error::InvalidAccount("current owner PUK is unavailable"))?;
+        self.client.refresh_yubi_management_key_yubi(
+            host,
+            credential,
+            current,
+            &authenticated.puks,
+        )?;
+        stored.management_generation = Some(current.generation);
+        vault.put_stored_yubi(&stored)
+    }
+
     pub fn set_yubi_passphrase(
         &self,
         alias: &str,
@@ -889,12 +1237,22 @@ impl CheckedProfileSession<'_> {
         passphrase: Passphrase,
         provider: &dyn YubiProvider,
         vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
     ) -> Result<PassphraseReport> {
         self.profile.require(Capability::Passphrases)?;
         let loaded = vault.yubi_account(alias)?;
         let parent = provider.open(&loaded.locator, Some(&pin))?;
         let credential = loaded.credential(parent.as_ref());
         let host = self.pinned_host()?;
+        let authenticated = self.client.authenticate_yubi_and_pin(&host, &credential)?;
+        self.run_unlocked_yubi_security_responders(
+            alias,
+            &host,
+            &credential,
+            authenticated,
+            vault,
+            master_key,
+        )?;
         let metadata = self
             .client
             .set_passphrase_yubi(&host, &credential, &passphrase)?;
@@ -911,12 +1269,22 @@ impl CheckedProfileSession<'_> {
         passphrase: Passphrase,
         provider: &dyn YubiProvider,
         vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
     ) -> Result<PassphraseReport> {
         self.profile.require(Capability::Passphrases)?;
         let loaded = vault.yubi_account(alias)?;
         let parent = provider.open(&loaded.locator, Some(&pin))?;
         let credential = loaded.credential(parent.as_ref());
         let host = self.pinned_host()?;
+        let authenticated = self.client.authenticate_yubi_and_pin(&host, &credential)?;
+        self.run_unlocked_yubi_security_responders(
+            alias,
+            &host,
+            &credential,
+            authenticated,
+            vault,
+            master_key,
+        )?;
         let metadata = self
             .client
             .change_passphrase_yubi(&host, &credential, &passphrase)?;
@@ -933,6 +1301,7 @@ impl CheckedProfileSession<'_> {
         passphrase: Passphrase,
         provider: &dyn YubiProvider,
         vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
     ) -> Result<PassphraseReport> {
         self.profile.require(Capability::Passphrases)?;
         let loaded = vault.yubi_account(alias)?;
@@ -942,8 +1311,25 @@ impl CheckedProfileSession<'_> {
         let verification = self
             .client
             .verify_passphrase_yubi(&host, &credential, &passphrase)?;
+        let authenticated = self.client.authenticate_yubi_and_pin(&host, &credential)?;
+        self.run_unlocked_yubi_security_responders(
+            alias,
+            &host,
+            &credential,
+            authenticated,
+            vault,
+            master_key,
+        )?;
+        let current = self
+            .client
+            .verify_passphrase_yubi(&host, &credential, &passphrase)?;
+        if current.generation < verification.generation {
+            return Err(Error::InvalidAccount(
+                "passphrase generation rolled back during security refresh",
+            ));
+        }
         Ok(PassphraseReport {
-            generation: verification.generation,
+            generation: current.generation,
             stretch_version: "v1",
             verified: true,
         })
@@ -955,6 +1341,7 @@ impl CheckedProfileSession<'_> {
         pin: Pin,
         provider: &dyn YubiProvider,
         vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
     ) -> Result<YubiSubkeyRecoveryReport> {
         self.profile.require(Capability::Recovery)?;
         let mut stored = vault.stored_yubi(alias)?;
@@ -973,9 +1360,18 @@ impl CheckedProfileSession<'_> {
             ));
         }
         stored.subkey_seed = *recovered.subkey_seed.as_bytes();
-        stored.certificate_chain = recovered.certificate_chain;
+        stored.certificate_chain = recovered.certificate_chain.clone();
         let certificate_count = stored.certificate_chain.len();
         vault.put_stored_yubi(&stored)?;
+        let authenticated = self.client.authenticate_yubi_and_pin(&host, &recovered)?;
+        self.run_unlocked_yubi_security_responders(
+            alias,
+            &host,
+            &recovered,
+            authenticated,
+            vault,
+            master_key,
+        )?;
         Ok(YubiSubkeyRecoveryReport {
             alias: alias.to_owned(),
             subkey_id_hex: hex(expected.as_bytes()),
@@ -1039,9 +1435,15 @@ impl CheckedProfileSession<'_> {
             .iter()
             .filter(|key| key.role <= target_role)
         {
-            let previous = authenticated
-                .puks
-                .iter()
+            let previous = self
+                .client
+                .load_puks_for_role(
+                    &host,
+                    &software.credential,
+                    &authenticated.verified,
+                    public.role,
+                )?
+                .into_iter()
                 .find(|puk| puk.role == public.role && puk.generation == public.generation)
                 .ok_or(Error::InvalidAccount(
                     "current PUK required for Yubi revocation is unavailable",
@@ -1049,14 +1451,38 @@ impl CheckedProfileSession<'_> {
             rotations.push(foks_client::UserPukRotation {
                 role: public.role,
                 previous_generation: public.generation,
-                previous_seed: SecretSeed::new(*previous.seed.as_bytes()),
+                previous_seed: previous.seed,
                 new_seed: SecretSeed::new(random_array()?),
             });
         }
-        let no_passphrase = (!self
-            .client
-            .passphrase_is_configured(&host, &software.credential)?)
-        .then_some(foks_client::NoPassphraseConfigured);
+        let no_passphrase = if rotations
+            .iter()
+            .any(|rotation| rotation.role == Role::OWNER)
+        {
+            self.profile.require(Capability::Passphrases)?;
+            match self.client.authenticated_passphrase_settings(
+                &host,
+                &software.credential,
+                &authenticated,
+            )? {
+                Some(_) => None,
+                None => {
+                    if !HardStateStore::open(&self.paths.hard_database)?
+                        .user_has_no_passphrase_attestation(
+                            host.host_id().as_bytes(),
+                            software.credential.uid.as_bytes(),
+                        )?
+                    {
+                        return Err(Error::InvalidAccount(
+                            "legacy unlinked passphrase state must be verified before owner rotation",
+                        ));
+                    }
+                    Some(foks_client::NoPassphraseConfigured)
+                }
+            }
+        } else {
+            None
+        };
         let mut mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
@@ -1158,6 +1584,7 @@ impl CheckedProfileSession<'_> {
         pin: Pin,
         provider: &dyn YubiProvider,
         vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
     ) -> Result<YubiLifecycleReport> {
         self.profile.require(Capability::DeviceAdministration)?;
         let mut stored = vault.stored_yubi(alias)?;
@@ -1167,7 +1594,7 @@ impl CheckedProfileSession<'_> {
             stored.management_generation = None;
             vault.put_stored_yubi(&stored)?;
         }
-        self.finish_management_rotation(alias, provider, vault, Some(&pin))
+        self.finish_management_rotation(alias, provider, vault, Some(&pin), Some(master_key))
     }
 
     pub fn resume_yubi_management_key(
@@ -1176,9 +1603,10 @@ impl CheckedProfileSession<'_> {
         pin: Option<Pin>,
         provider: &dyn YubiProvider,
         vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
     ) -> Result<YubiLifecycleReport> {
         self.profile.require(Capability::DeviceAdministration)?;
-        self.finish_management_rotation(alias, provider, vault, pin.as_ref())
+        self.finish_management_rotation(alias, provider, vault, pin.as_ref(), Some(master_key))
     }
 
     fn finish_management_rotation(
@@ -1187,6 +1615,7 @@ impl CheckedProfileSession<'_> {
         provider: &dyn YubiProvider,
         vault: &mut AccountVault<'_>,
         pin: Option<&Pin>,
+        master_key: Option<&[u8; 32]>,
     ) -> Result<YubiLifecycleReport> {
         let mut stored = vault.stored_yubi(alias)?;
         if let Some(next) = stored.pending_management_key {
@@ -1216,7 +1645,13 @@ impl CheckedProfileSession<'_> {
                 certificate_chain: stored.certificate_chain.clone(),
             };
             let host = self.pinned_host()?;
-            let authenticated = self.client.authenticate_yubi_and_pin(&host, &credential)?;
+            let mut authenticated = self.client.authenticate_yubi_and_pin(&host, &credential)?;
+            if let Some(master_key) = master_key {
+                // Close stale-PUK and PPE gaps before encrypting a newly
+                // generated management key to the owner role.
+                authenticated =
+                    self.refresh_yubi_user_security(&host, &credential, authenticated, master_key)?;
+            }
             let owner = authenticated
                 .puks
                 .iter()
@@ -1240,6 +1675,16 @@ impl CheckedProfileSession<'_> {
             // prove either side of the card replacement and republish safely.
             stored.complete_management_publication(owner.generation);
             vault.put_stored_yubi(&stored)?;
+            if let Some(master_key) = master_key {
+                self.refresh_yubi_team_chains(
+                    &host,
+                    &credential,
+                    authenticated,
+                    vault,
+                    master_key,
+                )?;
+                stored = vault.stored_yubi(alias)?;
+            }
         }
         Ok(YubiLifecycleReport {
             alias: alias.to_owned(),
@@ -1375,7 +1820,11 @@ impl CheckedProfileSession<'_> {
 }
 
 impl LoadedYubiAccount {
-    fn credential<'a>(&self, parent: &'a dyn YubiDevice) -> YubiCredential<'a> {
+    /// Binds this durable record to an already-opened hardware parent. The
+    /// caller owns the device handle, so the credential can be assembled
+    /// outside a checked profile session and used as the far side of a
+    /// two-key federation refresh.
+    pub fn credential<'a>(&self, parent: &'a dyn YubiDevice) -> YubiCredential<'a> {
         YubiCredential {
             uid: self.uid.clone(),
             parent,

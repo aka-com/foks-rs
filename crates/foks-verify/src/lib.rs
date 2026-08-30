@@ -265,6 +265,8 @@ mod tests {
             &trusted_tail(&public),
         )
         .unwrap();
+        let mut newer_advance = advance.clone();
+        newer_advance.root.epoch = newer_advance.root.epoch.checked_add(1).unwrap();
         assert_eq!(advance.snapshot.epoch, 998);
         assert_eq!(
             merkle_history_requirements(998, 995).unwrap(),
@@ -278,9 +280,19 @@ mod tests {
             &uid,
             &host,
             advance.authenticated_roots(),
-            &chain.merkle.root().hostchain,
+            &advance,
         )
         .unwrap();
+        assert!(matches!(
+            verify_user_chain(
+                USER_CHAIN,
+                &uid,
+                &host,
+                advance.authenticated_roots(),
+                &newer_advance,
+            ),
+            Err(Error::UntrustedUserRoot)
+        ));
         assert_eq!(verified.uid(), &uid);
         assert_eq!(verified.chain_seqno(), 3);
         assert_eq!(verified.devices().len(), 1);
@@ -410,14 +422,7 @@ mod tests {
             &history,
         )
         .unwrap();
-        verify_user_chain(
-            USER_CHAIN,
-            &uid,
-            &host,
-            &roots,
-            &chain.merkle.root().hostchain,
-        )
-        .unwrap();
+        verify_user_chain(USER_CHAIN, &uid, &host, &roots, &latest_only).unwrap();
 
         let mut tampered = HistoricalMerkleRoots::decode(&history).unwrap();
         tampered.hashes[0][0] ^= 1;
@@ -451,7 +456,7 @@ mod tests {
             &uid,
             &host,
             advance.authenticated_roots(),
-            &chain.merkle.root().hostchain,
+            &advance,
         )
         .unwrap();
         let no_op = incremental_noop_response(
@@ -465,10 +470,23 @@ mod tests {
             &uid,
             &host,
             advance.authenticated_roots(),
-            &chain.merkle.root().hostchain,
+            &advance,
         )
         .unwrap();
+        let mut newer_advance = advance.clone();
+        newer_advance.root.epoch = newer_advance.root.epoch.checked_add(1).unwrap();
         assert_eq!(refreshed, verified);
+        assert!(matches!(
+            verify_user_chain_increment(
+                &no_op,
+                &verified,
+                &uid,
+                &host,
+                advance.authenticated_roots(),
+                &newer_advance,
+            ),
+            Err(Error::UntrustedUserRoot)
+        ));
 
         let snapshot = refreshed.hard_state_snapshot().unwrap();
         assert_eq!(
@@ -486,7 +504,7 @@ mod tests {
             &uid,
             &host,
             advance.authenticated_roots(),
-            &chain.merkle.root().hostchain,
+            &advance,
         )
         .is_err());
     }
@@ -511,9 +529,21 @@ mod tests {
             &team,
             &host,
             advance.authenticated_roots(),
-            &chain.merkle.root().hostchain,
+            &advance,
         )
         .unwrap();
+        let mut newer_advance = advance.clone();
+        newer_advance.root.epoch = newer_advance.root.epoch.checked_add(1).unwrap();
+        assert!(matches!(
+            verify_team_chain(
+                TEAM_CHAIN,
+                &team,
+                &host,
+                advance.authenticated_roots(),
+                &newer_advance,
+            ),
+            Err(Error::UntrustedUserRoot)
+        ));
         assert_eq!(verified.team(), &team);
         assert_eq!(verified.chain_seqno(), 1);
         assert_eq!(verified.team_name(), b"fixtureteam");
@@ -565,7 +595,7 @@ mod tests {
             &team,
             &host,
             advance.authenticated_roots(),
-            &chain.merkle.root().hostchain,
+            &advance,
         )
         .unwrap();
         let no_op = incremental_noop_response(
@@ -579,10 +609,23 @@ mod tests {
             &team,
             &host,
             advance.authenticated_roots(),
-            &chain.merkle.root().hostchain,
+            &advance,
         )
         .unwrap();
+        let mut newer_advance = advance.clone();
+        newer_advance.root.epoch = newer_advance.root.epoch.checked_add(1).unwrap();
         assert_eq!(refreshed, verified);
+        assert!(matches!(
+            verify_team_chain_increment(
+                &no_op,
+                &verified,
+                &team,
+                &host,
+                advance.authenticated_roots(),
+                &newer_advance,
+            ),
+            Err(Error::UntrustedUserRoot)
+        ));
         assert_eq!(
             refreshed.group_change_at(1).unwrap(),
             chain.links[0].decode_team_group_change().unwrap()
@@ -604,7 +647,7 @@ mod tests {
             &team,
             &host,
             advance.authenticated_roots(),
-            &chain.merkle.root().hostchain,
+            &advance,
         )
         .is_err());
     }
@@ -796,16 +839,10 @@ mod tests {
             &trusted_tail(&public),
         )
         .unwrap();
-        let mut wrong_roots = advance.authenticated_roots;
+        let mut wrong_roots = advance.authenticated_roots().clone();
         wrong_roots.0.get_mut(&998).unwrap()[0] ^= 1;
         assert!(matches!(
-            verify_user_chain(
-                USER_CHAIN,
-                &uid,
-                &host,
-                &wrong_roots,
-                &chain.merkle.root().hostchain,
-            ),
+            verify_user_chain(USER_CHAIN, &uid, &host, &wrong_roots, &advance),
             Err(Error::UntrustedUserRoot)
         ));
 
@@ -843,14 +880,7 @@ mod tests {
         let mut tampered_chain = USER_CHAIN.to_vec();
         let midpoint = tampered_chain.len() / 2;
         tampered_chain[midpoint] ^= 1;
-        assert!(verify_user_chain(
-            &tampered_chain,
-            &uid,
-            &host,
-            &wrong_roots,
-            &chain.merkle.root().hostchain,
-        )
-        .is_err());
+        assert!(verify_user_chain(&tampered_chain, &uid, &host, &wrong_roots, &advance).is_err());
     }
 
     #[test]
@@ -873,7 +903,7 @@ mod tests {
             &uid,
             &host,
             advance.authenticated_roots(),
-            &chain.merkle.root().hostchain,
+            &advance,
         )
         .unwrap();
 
@@ -885,7 +915,7 @@ mod tests {
                 &uid,
                 &host,
                 advance.authenticated_roots(),
-                &chain.merkle.root().hostchain,
+                &advance,
             ) {
                 assert_eq!(
                     candidate, baseline,
@@ -930,7 +960,7 @@ mod tests {
                         &uid,
                         &host,
                         advance.authenticated_roots(),
-                        &chain.merkle.root().hostchain,
+                        &advance,
                     )
                     .is_err(),
                     "disclosed field mutation at {offset} was accepted"

@@ -24,11 +24,20 @@ pub(crate) fn issue_challenge(
     let request = foks_rpc::arguments::decode_team_view_request(argument).map_err(bad_arguments)?;
     if request.host != *host
         || request.member_host != *host
-        || request.member.as_bytes() != principal.uid()
         || !matches!(
             request.team.entity_type(),
             foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
         )
+        || !matches!(
+            request.member.entity_type(),
+            foks_proto::ENTITY_USER
+                | foks_proto::ENTITY_NAMED_TEAM
+                | foks_proto::ENTITY_AD_HOC_TEAM
+        )
+        || reader
+            .active_credential_owner(principal.uid(), principal.device_id())
+            .map_err(|_| RpcStatus::TransactionRetry)?
+            .is_none()
     {
         return Err(permission_denied());
     }
@@ -114,7 +123,10 @@ pub(crate) fn activate(
     let challenge = &activation.challenge;
     if challenge.request.host != *host
         || challenge.request.member_host != *host
-        || challenge.request.member.as_bytes() != principal.uid()
+        || reader
+            .active_credential_owner(principal.uid(), principal.device_id())
+            .map_err(|_| RpcStatus::TransactionRetry)?
+            .is_none()
     {
         return Err(permission_denied());
     }
@@ -169,7 +181,13 @@ pub(crate) fn activate(
         })
         .map_err(map_write_error)?
         .ok_or(RpcStatus::Expired)?;
-    if activated.member_id.as_slice() != principal.uid() {
+    if activated.team_id != challenge.request.team.as_bytes()
+        || activated.member_id != challenge.request.member.as_bytes()
+        || activated.member_host_id != challenge.request.member_host.as_bytes()
+        || activated.source_role_type != role
+        || activated.source_visibility != visibility
+        || activated.source_generation != challenge.request.generation
+    {
         return Err(permission_denied());
     }
     ActivatedTeamView {
@@ -203,7 +221,7 @@ pub(crate) fn load_chain(
                 .map_err(|_| RpcStatus::TransactionRetry)?
                 .ok_or(RpcStatus::Expired)?;
             if authority.team_id != request.team.as_bytes()
-                || authority.member_id != principal.uid()
+                || authority.member_host_id != host.as_bytes()
                 || reader
                     .active_credential_owner(principal.uid(), principal.device_id())
                     .map_err(|_| RpcStatus::TransactionRetry)?
@@ -236,9 +254,17 @@ pub(crate) fn load_chain(
                 .resolve_team_view_token(&team::token_hash(token), now)
                 .map_err(|_| RpcStatus::TransactionRetry)?
                 .ok_or(RpcStatus::Expired)?;
-            if authority.member_id != principal.uid()
-                || authority.member_host_id != host.as_bytes()
-                || !super::user::role_can_load_members(&authority)
+            let parent = reader
+                .team(&authority.team_id)
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .ok_or_else(permission_denied)?;
+            let minimum = reader
+                .team_local_view_permission(&authority.team_id, request.team.as_bytes())
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .ok_or_else(permission_denied)?;
+            if authority.member_host_id != host.as_bytes()
+                || parent.host_id != host.as_bytes()
+                || !super::user::role_can_load_members(&authority, minimum.0, minimum.1)
                 || reader
                     .active_credential_owner(principal.uid(), principal.device_id())
                     .map_err(|_| RpcStatus::TransactionRetry)?
@@ -251,8 +277,8 @@ pub(crate) fn load_chain(
                 .map_err(|_| RpcStatus::TransactionRetry)?
                 .ok_or(RpcStatus::TeamNotFound)?;
             if target.host_id != host.as_bytes()
-                || !target.members.iter().any(|member| {
-                    member.party_id == authority.team_id
+                || !parent.members.iter().any(|member| {
+                    member.party_id == request.team.as_bytes()
                         && member
                             .scoped_host_id
                             .as_deref()
@@ -383,7 +409,12 @@ fn encode_team_chain(
             )
             .ok_or(RpcStatus::TransactionRetry)?;
             database
-                .team_parcels(request.team.as_bytes(), &authority.member_id)
+                .team_parcels(
+                    request.team.as_bytes(),
+                    &authority.member_id,
+                    authority.source_role_type,
+                    authority.source_visibility,
+                )
                 .map_err(|_| RpcStatus::TransactionRetry)?
                 .into_iter()
                 .map(|exact| {
@@ -505,7 +536,11 @@ pub(crate) fn load_remote_view_tokens(
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or(RpcStatus::Expired)?;
     if authority.team_id != request.team.team.as_bytes()
-        || authority.member_id.as_slice() != principal.uid()
+        || authority.member_host_id != host.as_bytes()
+        || reader
+            .active_credential_owner(principal.uid(), principal.device_id())
+            .map_err(|_| RpcStatus::TransactionRetry)?
+            .is_none()
         || team::stored_role(
             authority.effective_role_type,
             authority.effective_visibility,
@@ -552,6 +587,43 @@ pub(crate) fn load_remote_view_tokens(
         .map_err(|_| RpcStatus::TransactionRetry)
 }
 
+pub(crate) fn load_removal_for_member(
+    argument: &[u8],
+    principal: Option<&Principal>,
+    host: &EntityId,
+    reader: &foks_server_db::ReadSnapshot<'_>,
+) -> Result<Vec<u8>, RpcStatus> {
+    if let Some(principal) = principal {
+        principal.require_ordinary_device()?;
+    }
+    let request =
+        foks_rpc::arguments::decode_load_removal_for_member(argument).map_err(bad_arguments)?;
+    if request.team.host != *host {
+        return Err(permission_denied());
+    }
+    let stored = reader
+        .team_removal(request.team.team.as_bytes(), &request.commitment)
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or_else(|| RpcStatus::NotFound("team removal key not found".to_owned()))?;
+    let boxed = foks_proto::TeamRemovalBoxData::decode(&stored.exact_box)
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let response = foks_proto::TeamRemovalAndKeyBox {
+        key_box: boxed.member_box,
+        removal: foks_proto::TeamRemovalProof::decode(&stored.exact_removal)
+            .map_err(|_| RpcStatus::TransactionRetry)?,
+    };
+    if response.removal.payload.team != request.team.team
+        || response.removal.payload.host != *host
+        || boxed.commitment != request.commitment
+        || boxed.metadata.member != response.removal.payload.member
+        || boxed.metadata.member_host != response.removal.payload.member_host
+        || boxed.metadata.source_role != response.removal.payload.source_role
+    {
+        return Err(RpcStatus::TransactionRetry);
+    }
+    response.encoded().map_err(|_| RpcStatus::TransactionRetry)
+}
+
 pub(crate) fn load_team_membership_chain(
     argument: &[u8],
     principal: Option<&Principal>,
@@ -577,7 +649,11 @@ pub(crate) fn load_team_membership_chain(
     if authority.member_host_id == host.as_bytes() {
         let principal = principal.ok_or_else(permission_denied)?;
         principal.require_ordinary_device()?;
-        if authority.member_id.as_slice() != principal.uid() {
+        if reader
+            .active_credential_owner(principal.uid(), principal.device_id())
+            .map_err(|_| RpcStatus::TransactionRetry)?
+            .is_none()
+        {
             return Err(permission_denied());
         }
     } else if let Some(principal) = principal {
@@ -590,6 +666,7 @@ pub(crate) fn load_team_membership_chain(
         request.start,
     )
 }
+
 fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
     RpcStatus::BadArguments(error.to_string())
 }

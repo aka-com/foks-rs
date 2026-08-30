@@ -24,15 +24,16 @@ retain the existing short lease; expiry still revokes, while an authenticated
 drift artifact revokes on the next successful poll.
 The agent accepts software signup, including an optional invite and PPE
 passphrase, so the GPUI desktop can complete onboarding without opening
-credentials or SQLite. It also dispatches passphrase set, change, and public
+credentials or SQLite. It also dispatches interactive software-device KEX,
+passphrase set, change, and public
 challenge verification, protected remote-team admission/listing, and
 federation-aware due-job runs. Cross-host admission locks both profiles in
 canonical order and advances both native rollback checkpoints. It generates
 device/PUK secrets inside the checked
 profile session and receives invite/passphrase values only over its
 authenticated private Unix socket; serialized request frames and decoded
-secret strings are zeroized. Software-device provisioning and backup recovery
-phrases remain outside the agent protocol.
+secret strings are zeroized. Backup recovery phrases remain outside the agent
+protocol.
 
 ```text
 foks-agent --state-dir /private/client

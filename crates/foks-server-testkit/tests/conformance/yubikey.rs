@@ -291,4 +291,50 @@ fn yubikey_signup_supports_passphrase_and_delegated_subkey_recovery() {
             .generation,
         1
     );
+
+    let before = fixture
+        .client
+        .foks()
+        .authenticate_yubi_and_pin(fixture.host(), &recovered)
+        .unwrap();
+    let rotated = fixture
+        .client
+        .foks()
+        .rotate_yubi_puks_without_passphrase_annex_for_test(
+            fixture.host(),
+            &recovered,
+            &[UserPukRotation {
+                role: Role::OWNER,
+                previous_generation: 1,
+                previous_seed: SecretSeed::new([0x62; 32]),
+                new_seed: SecretSeed::new([0x64; 32]),
+            }],
+            &mut protected,
+        )
+        .unwrap();
+    assert_eq!(rotated.verified.chain_seqno(), 2);
+    assert_eq!(
+        fixture
+            .client
+            .foks()
+            .passphrase_metadata_yubi(fixture.host(), &recovered)
+            .unwrap()
+            .generation,
+        1,
+        "the test transition intentionally omitted its PPE annex"
+    );
+    assert!(fixture
+        .client
+        .foks()
+        .refresh_passphrase_for_current_puk_yubi(fixture.host(), &recovered, &before)
+        .unwrap());
+    assert_eq!(
+        fixture
+            .client
+            .foks()
+            .passphrase_metadata_yubi(fixture.host(), &recovered)
+            .unwrap()
+            .generation,
+        2
+    );
 }

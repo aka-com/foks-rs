@@ -287,3 +287,32 @@ fn expect_account_error(
         Err(error) => error,
     }
 }
+
+/// A kept-alive connection that outlives the server's idle timeout must be
+/// replaced before it is reused, not handed out to fail on its first write.
+/// Operations that pause between calls -- a hardware credential waiting on a
+/// person, above all -- would otherwise fail on their first call after the
+/// pause, and the failed request could not be retried safely because the
+/// server may already have processed it.
+#[test]
+fn a_pooled_connection_closed_while_idle_is_replaced_before_reuse() {
+    let environment = TestEnvironment::new().unwrap();
+    let _server = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "idle-pool-client").unwrap();
+    let host = client.probe_and_pin().unwrap().pinned;
+    let account = client
+        .create_account(&host, &TestAccountSpec::new("idlepooluser", 0x2b))
+        .unwrap();
+    client
+        .foks()
+        .authenticate_and_pin(&host, &account.credential)
+        .unwrap();
+
+    // The default test server closes a session that reads nothing for fifteen
+    // seconds. Idle past that, then reuse the same authenticated endpoint.
+    std::thread::sleep(std::time::Duration::from_secs(17));
+    client
+        .foks()
+        .authenticate_and_pin(&host, &account.credential)
+        .expect("a stale pooled connection must be replaced rather than reused");
+}

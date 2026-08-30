@@ -70,9 +70,6 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
         material: Zeroizing<Vec<u8>>,
     ) -> Result<MutationOperation> {
         let material_ref = draft.operation_id.to_vec();
-        self.protected
-            .put_if_absent(&material_ref, &material)
-            .map_err(material_error)?;
         let now = now_microseconds()?;
         let operation = MutationOperation {
             operation_id: draft.operation_id,
@@ -82,14 +79,35 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
             subject_id: draft.subject_id,
             expected_version: draft.expected_version,
             request_hash: draft.request_hash,
-            material_ref,
+            material_ref: material_ref.clone(),
             material_hash: prefixed_hash(MATERIAL_HASH_TYPE_ID, &material),
             state: MutationState::Prepared,
             attempt_count: 0,
             created_at: now,
             updated_at: now,
         };
-        HardStateStore::open(self.hard_database)?.record_mutation(&operation)?;
+        let mut hard_store = HardStateStore::open(self.hard_database)?;
+        if hard_store.mutation(&operation.operation_id)?.is_some() {
+            return Err(Error::OperationBinding(
+                "mutation operation identity is already recorded",
+            ));
+        }
+        self.protected
+            .put_if_absent(&material_ref, &material)
+            .map_err(material_error)?;
+        if let Err(error) = hard_store.record_mutation(&operation) {
+            // If another writer did not claim this exact operation ID, there
+            // is no public journal that can refer to the newly installed
+            // material. Remove it so a chain-position conflict cannot leak a
+            // fresh encrypted request on every scheduler tick.
+            if hard_store
+                .mutation(&operation.operation_id)
+                .is_ok_and(|recorded| recorded.is_none())
+            {
+                remove_terminal_material(self.protected, &material_ref)?;
+            }
+            return Err(error.into());
+        }
         Ok(operation)
     }
 
@@ -528,6 +546,34 @@ mod tests {
             .finalize(&operation.operation_id)
             .unwrap();
         assert!(!material_present(&protected));
+    }
+
+    #[test]
+    fn rejected_chain_position_does_not_leave_orphaned_material() {
+        let (_temporary, database, host_id) = initialized_database();
+        let mut protected = MemoryProtectedStore::default();
+        {
+            let mut coordinator = MutationCoordinator::new(&database, &mut protected);
+            coordinator
+                .prepare(
+                    draft([31; 16], &host_id),
+                    Zeroizing::new(b"first protected request".to_vec()),
+                )
+                .unwrap();
+            assert!(coordinator
+                .prepare(
+                    draft([32; 16], &host_id),
+                    Zeroizing::new(b"conflicting protected request".to_vec()),
+                )
+                .is_err());
+        }
+        assert!(protected.0.contains_key([31; 16].as_slice()));
+        assert!(!protected.0.contains_key([32; 16].as_slice()));
+        assert!(HardStateStore::open(&database)
+            .unwrap()
+            .mutation(&[32; 16])
+            .unwrap()
+            .is_none());
     }
 
     #[test]

@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser as _, ValueEnum};
 use foks_client_app::{
-    derive_vault_key, AccountVault, CheckedProfileSession, ClientCredentials, CredentialBackend,
-    FederationDestinationRole, Passphrase, Profile, ProfileRegistry, ProfileSession,
-    ProtocolPolicy, TrustRoot, YubiProvisionInput, YubiSignupInput,
+    derive_vault_key, AccountVault, Capability, CheckedProfileSession, ClientCredentials,
+    CredentialBackend, FederationDestinationRole, KexAcceptanceInput, Passphrase, Profile,
+    ProfileRegistry, ProfileSession, ProtocolPolicy, TeamMemberRole, TrustRoot, UnlockedYubiActor,
+    YubiProvisionInput, YubiSignupInput,
 };
 use foks_keystore::EncryptedFileSecretStore;
 use foks_yubi::{
@@ -202,6 +203,32 @@ enum DeviceCommand {
         profile: String,
         target_alias: String,
     },
+    PairOffer {
+        profile: String,
+        account_alias: String,
+    },
+    PairRepublish {
+        profile: String,
+        account_alias: String,
+    },
+    PairFinish {
+        profile: String,
+        account_alias: String,
+    },
+    PairAccept {
+        profile: String,
+        target_alias: String,
+        #[arg(long)]
+        phrase_file: PathBuf,
+        #[arg(long)]
+        device_name: String,
+        #[arg(long, default_value_t = 1)]
+        serial: u64,
+    },
+    PairResumeAccept {
+        profile: String,
+        target_alias: String,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -258,6 +285,43 @@ enum TeamCommand {
         profile: String,
         team_alias: String,
     },
+    ListMembers {
+        profile: String,
+        team_alias: String,
+    },
+    AddMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+        #[arg(long, value_enum, default_value_t = FederationRoleArgument::Member)]
+        role: FederationRoleArgument,
+        #[arg(long, default_value_t = 0)]
+        visibility: i16,
+    },
+    ResumeAddMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+    },
+    /// Strictly demotes a member; promotion needs a separate PTK distribution flow.
+    DemoteMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+        #[arg(long, value_enum, default_value_t = FederationRoleArgument::Member)]
+        role: FederationRoleArgument,
+        #[arg(long, default_value_t = 0)]
+        visibility: i16,
+    },
+    RemoveMember {
+        profile: String,
+        team_alias: String,
+        username: String,
+    },
+    ResumeMemberEdit {
+        profile: String,
+        team_alias: String,
+    },
     /// Admits a team from another pinned profile to a local named team.
     AdmitRemote {
         local_profile: String,
@@ -273,6 +337,31 @@ enum TeamCommand {
     ListRemote {
         profile: String,
         team_alias: String,
+    },
+    /// Runs the federated post-revocation security responder for one local
+    /// team. Supply `--local-pin-file` and/or `--remote-pin-file` when either
+    /// side's only remaining administrator is a YubiKey; this command is the
+    /// explicit workflow for a refresh that needs two different keys, which an
+    /// unattended scheduler can never perform on its own. A cascade that
+    /// reaches further than the immediate pair takes an additional
+    /// `--unlock PROFILE=ALIAS=PIN_FILE` per hardware-only profile it visits.
+    RefreshRemote {
+        profile: String,
+        team_alias: String,
+        #[arg(long, requires = "local_pin_file")]
+        local_yubi_alias: Option<String>,
+        #[arg(long, requires = "local_yubi_alias")]
+        local_pin_file: Option<PathBuf>,
+        #[arg(long, requires = "remote_yubi_alias")]
+        remote_profile: Option<String>,
+        #[arg(long, requires_all = ["remote_profile", "remote_pin_file"])]
+        remote_yubi_alias: Option<String>,
+        #[arg(long, requires = "remote_yubi_alias")]
+        remote_pin_file: Option<PathBuf>,
+        /// Additional PROFILE=ALIAS=PIN_FILE hardware unlock. Repeat for
+        /// every further hardware-only profile the cascade reaches.
+        #[arg(long = "unlock")]
+        unlocks: Vec<String>,
     },
 }
 
@@ -332,6 +421,11 @@ enum YubiCommand {
         alias: String,
         #[arg(long)]
         pin_file: PathBuf,
+        /// Also run every federated security responder this unlocked key can
+        /// drive. Bindings whose remote side needs its own locked hardware are
+        /// reported as deferred rather than failing the sync.
+        #[arg(long)]
+        with_federation: bool,
     },
     PinStatus {
         profile: String,
@@ -684,7 +778,7 @@ fn account_command(
         }
         AccountCommand::Sync { profile, alias } => {
             let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |session, vault, _| {
+            with_vault(state_dir, &session, |session, vault, _master| {
                 let report = session.sync_account(&alias, vault)?;
                 output(json, &report, "account synchronized")
             })
@@ -702,7 +796,7 @@ fn passphrase_command(
     match command {
         PassphraseCommand::Set(arguments) => {
             let session = ProfileSession::open(&registry, &arguments.profile)?;
-            with_vault(state_dir, &session, |session, vault, _| {
+            with_vault(state_dir, &session, |session, vault, master| {
                 let passphrase = confirmed_passphrase(
                     &arguments.passphrase_file,
                     &arguments.passphrase_confirmation_file,
@@ -714,6 +808,7 @@ fn passphrase_command(
                         passphrase,
                         &provider,
                         vault,
+                        master,
                     )?,
                     None => session.set_passphrase(&arguments.alias, passphrase, vault)?,
                 };
@@ -722,7 +817,7 @@ fn passphrase_command(
         }
         PassphraseCommand::Change(arguments) => {
             let session = ProfileSession::open(&registry, &arguments.profile)?;
-            with_vault(state_dir, &session, |session, vault, _| {
+            with_vault(state_dir, &session, |session, vault, master| {
                 let passphrase = confirmed_passphrase(
                     &arguments.passphrase_file,
                     &arguments.passphrase_confirmation_file,
@@ -734,6 +829,7 @@ fn passphrase_command(
                         passphrase,
                         &provider,
                         vault,
+                        master,
                     )?,
                     None => session.change_passphrase(&arguments.alias, passphrase, vault)?,
                 };
@@ -742,7 +838,7 @@ fn passphrase_command(
         }
         PassphraseCommand::Verify(arguments) => {
             let session = ProfileSession::open(&registry, &arguments.profile)?;
-            with_vault(state_dir, &session, |session, vault, _| {
+            with_vault(state_dir, &session, |session, vault, master| {
                 let passphrase = Passphrase::new(read_passphrase(&arguments.passphrase_file)?)?;
                 let report = match arguments.pin_file.as_deref() {
                     Some(path) => session.verify_yubi_passphrase(
@@ -751,6 +847,7 @@ fn passphrase_command(
                         passphrase,
                         &provider,
                         vault,
+                        master,
                     )?,
                     None => session.verify_passphrase(&arguments.alias, passphrase, vault)?,
                 };
@@ -902,11 +999,26 @@ fn job_command(
                     &credentials,
                     &master,
                 )?;
-                output(
-                    json,
-                    &report,
-                    &format!("{} scheduled job(s) processed", report.runs.len()),
-                )
+                // A deferred run is neither a success nor a failure: it is
+                // work waiting on a person. Saying so in the human output
+                // keeps a binding from sitting stuck and invisible to
+                // anyone not reading --json.
+                let deferred = report
+                    .runs
+                    .iter()
+                    .filter_map(|run| run.deferred.as_deref())
+                    .collect::<Vec<_>>();
+                let human = if deferred.is_empty() {
+                    format!("{} scheduled job(s) processed", report.runs.len())
+                } else {
+                    format!(
+                        "{} scheduled job(s) processed; {} deferred: {}",
+                        report.runs.len(),
+                        deferred.len(),
+                        deferred.join("; ")
+                    )
+                };
+                output(json, &report, &human)
             })
         }
     }
@@ -958,6 +1070,69 @@ fn device_command(
             with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.resume_owner_device_provision(&target_alias, vault, master)?;
                 output(json, &report, "owner device provision reconciled")
+            })
+        }
+        DeviceCommand::PairOffer {
+            profile,
+            account_alias,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let report = session.start_owner_device_pairing(&account_alias, vault)?;
+                output(json, &report, &report.phrase)
+            })
+        }
+        DeviceCommand::PairRepublish {
+            profile,
+            account_alias,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let report = session.republish_owner_device_pairing(&account_alias, vault)?;
+                output(json, &report, &report.phrase)
+            })
+        }
+        DeviceCommand::PairFinish {
+            profile,
+            account_alias,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report = session.finish_owner_device_pairing(&account_alias, vault, master)?;
+                output(json, &report, "interactive owner-device pairing completed")
+            })
+        }
+        DeviceCommand::PairAccept {
+            profile,
+            target_alias,
+            phrase_file,
+            device_name,
+            serial,
+        } => {
+            let phrase = read_kex_phrase(&phrase_file)?;
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let report = session.accept_owner_device_pairing(
+                    KexAcceptanceInput {
+                        target_alias,
+                        device_name,
+                        serial,
+                        phrase: phrase.to_string(),
+                    },
+                    vault,
+                )?;
+                output(json, &report, "interactive owner-device pairing accepted")
+            })
+        }
+        DeviceCommand::PairResumeAccept {
+            profile,
+            target_alias,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let report =
+                    session.resume_owner_device_pairing_acceptance(&target_alias, vault)?;
+                output(json, &report, "interactive pairing acceptance resumed")
             })
         }
     }
@@ -1139,12 +1314,41 @@ fn yubi_command(
             profile,
             alias,
             pin_file,
+            with_federation,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             let pin = read_pin(&pin_file)?;
-            with_vault(state_dir, &session, |session, vault, _| {
-                let report = session.sync_yubi_account(&alias, pin, &provider, vault)?;
-                output(json, &report, "YubiKey account synchronized")
+            if !with_federation {
+                return with_vault(state_dir, &session, |session, vault, master| {
+                    let report =
+                        session.sync_yubi_account(&alias, pin, &provider, vault, master)?;
+                    output(json, &report, "YubiKey account synchronized")
+                });
+            }
+            let credentials = ClientCredentials::open(state_dir)?;
+            credentials.with_checked_session(&session, |session| {
+                let master = credentials.master_key()?;
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                let report = session.sync_yubi_account_with_federation(
+                    &alias,
+                    pin,
+                    &provider,
+                    &mut AccountVault::new(&mut store),
+                    &registry,
+                    &credentials,
+                    &master,
+                )?;
+                output(
+                    json,
+                    &report,
+                    &format!(
+                        "YubiKey account synchronized; {} federated binding(s) processed",
+                        report.federation.len()
+                    ),
+                )
             })
         }
         YubiCommand::PinStatus { profile, alias } => {
@@ -1207,8 +1411,9 @@ fn yubi_command(
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             let pin = read_pin(&pin_file)?;
-            with_vault(state_dir, &session, |session, vault, _| {
-                let report = session.rotate_yubi_management_key(&alias, pin, &provider, vault)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report =
+                    session.rotate_yubi_management_key(&alias, pin, &provider, vault, master)?;
                 output(json, &report, "YubiKey management key rotated")
             })
         }
@@ -1219,8 +1424,9 @@ fn yubi_command(
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             let pin = pin_file.as_deref().map(read_pin).transpose()?;
-            with_vault(state_dir, &session, |session, vault, _| {
-                let report = session.resume_yubi_management_key(&alias, pin, &provider, vault)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report =
+                    session.resume_yubi_management_key(&alias, pin, &provider, vault, master)?;
                 output(json, &report, "YubiKey management-key rotation reconciled")
             })
         }
@@ -1243,8 +1449,8 @@ fn yubi_command(
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             let pin = read_pin(&pin_file)?;
-            with_vault(state_dir, &session, |session, vault, _| {
-                let report = session.recover_yubi_subkey(&alias, pin, &provider, vault)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report = session.recover_yubi_subkey(&alias, pin, &provider, vault, master)?;
                 output(json, &report, "YubiKey delegated subkey recovered")
             })
         }
@@ -1412,6 +1618,94 @@ fn team_command(
                 output(json, &report, "team and team KV synchronized")
             })
         }
+        TeamCommand::ListMembers {
+            profile,
+            team_alias,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let members = session.list_team_members(&team_alias, vault)?;
+                output(json, &members, &format!("{} team member(s)", members.len()))
+            })
+        }
+        TeamCommand::AddMember {
+            profile,
+            team_alias,
+            username,
+            role,
+            visibility,
+        } => {
+            let destination = local_team_destination(role, visibility)?;
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report = session.add_local_team_member(
+                    &team_alias,
+                    &username,
+                    destination,
+                    vault,
+                    master,
+                )?;
+                output(json, &report, "local team member added")
+            })
+        }
+        TeamCommand::ResumeAddMember {
+            profile,
+            team_alias,
+            username,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report = session.resume_local_team_member_addition(
+                    &team_alias,
+                    &username,
+                    vault,
+                    master,
+                )?;
+                output(json, &report, "local team-member addition reconciled")
+            })
+        }
+        TeamCommand::DemoteMember {
+            profile,
+            team_alias,
+            username,
+            role,
+            visibility,
+        } => {
+            let destination = local_team_destination(role, visibility)?;
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report = session.demote_local_team_member(
+                    &team_alias,
+                    &username,
+                    destination,
+                    vault,
+                    master,
+                )?;
+                output(json, &report, "local team member demoted")
+            })
+        }
+        TeamCommand::RemoveMember {
+            profile,
+            team_alias,
+            username,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report =
+                    session.remove_local_team_member(&team_alias, &username, vault, master)?;
+                output(json, &report, "local team member removed")
+            })
+        }
+        TeamCommand::ResumeMemberEdit {
+            profile,
+            team_alias,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report = session.resume_local_team_member_edit(&team_alias, vault, master)?;
+                output(json, &report, "team member edit reconciled")
+            })
+        }
         TeamCommand::AdmitRemote {
             local_profile,
             local_team_alias,
@@ -1450,6 +1744,30 @@ fn team_command(
                 "remote team admitted and reconciliation scheduled",
             )
         }
+        TeamCommand::RefreshRemote {
+            profile,
+            team_alias,
+            local_yubi_alias,
+            local_pin_file,
+            remote_profile,
+            remote_yubi_alias,
+            remote_pin_file,
+            unlocks,
+        } => refresh_remote_command(
+            state_dir,
+            json,
+            &registry,
+            RefreshRemoteArguments {
+                profile,
+                team_alias,
+                local_yubi_alias,
+                local_pin_file,
+                remote_profile,
+                remote_yubi_alias,
+                remote_pin_file,
+                unlocks,
+            },
+        ),
         TeamCommand::ListRemote {
             profile,
             team_alias,
@@ -1467,14 +1785,165 @@ fn team_command(
     }
 }
 
+struct RefreshRemoteArguments {
+    profile: String,
+    team_alias: String,
+    local_yubi_alias: Option<String>,
+    local_pin_file: Option<PathBuf>,
+    remote_profile: Option<String>,
+    remote_yubi_alias: Option<String>,
+    remote_pin_file: Option<PathBuf>,
+    unlocks: Vec<String>,
+}
+
+/// One `PROFILE=ALIAS=PIN_FILE` unlock, parsed but not yet opened.
+struct RequestedUnlock {
+    profile: String,
+    alias: String,
+    pin_file: PathBuf,
+}
+
+fn parse_unlock(value: &str) -> Result<RequestedUnlock, Box<dyn std::error::Error>> {
+    let mut fields = value.splitn(3, '=');
+    let profile = fields.next().unwrap_or_default();
+    let alias = fields.next().unwrap_or_default();
+    let pin_file = fields.next().unwrap_or_default();
+    if profile.is_empty() || alias.is_empty() || pin_file.is_empty() {
+        return Err("--unlock must be PROFILE=ALIAS=PIN_FILE".into());
+    }
+    Ok(RequestedUnlock {
+        profile: profile.to_owned(),
+        alias: alias.to_owned(),
+        pin_file: PathBuf::from(pin_file),
+    })
+}
+
+/// Drives one federated security responder with a YubiKey unlocked on any
+/// number of the profiles the refresh will touch.
+///
+/// Lock ordering matters here. Every profile's durable Yubi record is read
+/// under its own short-lived checked session, all of which are released before
+/// the refresh takes the local one, because the refresh re-acquires the other
+/// profiles without waiting. Holding their operation locks across it would
+/// make each of them look permanently busy. The record only names the device;
+/// the credential built from it is re-checked against the authenticated user
+/// chain at every use, so reading it ahead of the refresh grants nothing.
+fn refresh_remote_command(
+    state_dir: &Path,
+    json: bool,
+    registry: &ProfileRegistry,
+    arguments: RefreshRemoteArguments,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let provider = HardwareYubiProvider::new();
+    let session = ProfileSession::open(registry, &arguments.profile)?;
+    // Check authority before touching hardware. A denied profile must not
+    // consume a PIN attempt or make someone present a key for nothing.
+    session.profile().require(Capability::Teams)?;
+    session.profile().require(Capability::Federation)?;
+    let credentials = ClientCredentials::open(state_dir)?;
+    let master = credentials.master_key()?;
+
+    let mut requested = Vec::new();
+    if let (Some(alias), Some(pin_file)) = (
+        arguments.local_yubi_alias.as_deref(),
+        arguments.local_pin_file.as_deref(),
+    ) {
+        requested.push(RequestedUnlock {
+            profile: arguments.profile.clone(),
+            alias: alias.to_owned(),
+            pin_file: pin_file.to_owned(),
+        });
+    }
+    if let (Some(profile), Some(alias), Some(pin_file)) = (
+        arguments.remote_profile.as_deref(),
+        arguments.remote_yubi_alias.as_deref(),
+        arguments.remote_pin_file.as_deref(),
+    ) {
+        requested.push(RequestedUnlock {
+            profile: profile.to_owned(),
+            alias: alias.to_owned(),
+            pin_file: pin_file.to_owned(),
+        });
+    }
+    for unlock in &arguments.unlocks {
+        requested.push(parse_unlock(unlock)?);
+    }
+
+    // Read each record, then release that profile's lock before opening the
+    // next, so no two operation locks are ever held at once here.
+    let mut opened = Vec::new();
+    for unlock in requested {
+        let unlock_session = ProfileSession::open(registry, &unlock.profile)?;
+        // Every profile contributing a hardware credential must authorize
+        // the responder before its PIN is read or the device is opened.
+        unlock_session.profile().require(Capability::Teams)?;
+        unlock_session.profile().require(Capability::Federation)?;
+        let loaded = credentials.with_checked_session(&unlock_session, |checked| {
+            let mut store = EncryptedFileSecretStore::open(
+                &checked.paths().credential_store,
+                derive_vault_key(&master),
+            )?;
+            AccountVault::new(&mut store).yubi_account(&unlock.alias)
+        })?;
+        let pin = read_pin(&unlock.pin_file)?;
+        let device = provider.open(&loaded.locator, Some(&pin))?;
+        opened.push((unlock.profile, unlock.alias, loaded, device));
+    }
+    let unlocked_credentials = opened
+        .iter()
+        .map(|(_, _, loaded, device)| loaded.credential(device.as_ref()))
+        .collect::<Vec<_>>();
+    let actors = opened
+        .iter()
+        .zip(&unlocked_credentials)
+        .map(|((profile, alias, _, _), credential)| UnlockedYubiActor {
+            profile,
+            alias,
+            credential,
+        })
+        .collect::<Vec<_>>();
+
+    credentials.with_checked_session(&session, |session| {
+        let mut store = EncryptedFileSecretStore::open(
+            &session.paths().credential_store,
+            derive_vault_key(&master),
+        )?;
+        let report = session.refresh_federated_security_with_unlocked_yubi(
+            &arguments.team_alias,
+            &actors,
+            &mut AccountVault::new(&mut store),
+            registry,
+            &credentials,
+            &master,
+        )?;
+        let human = match report.deferred.as_deref() {
+            Some(reason) => format!("federated security refresh deferred: {reason}"),
+            None => "federated security refreshed".to_owned(),
+        };
+        output(json, &report, &human)
+    })
+}
+
 fn federation_destination(
     role: FederationRoleArgument,
     visibility: i16,
 ) -> Result<FederationDestinationRole, Box<dyn std::error::Error>> {
     match role {
         FederationRoleArgument::Member => Ok(FederationDestinationRole::Member { visibility }),
-        FederationRoleArgument::Admin if visibility == 0 => Ok(FederationDestinationRole::Admin),
-        FederationRoleArgument::Owner if visibility == 0 => Ok(FederationDestinationRole::Owner),
+        FederationRoleArgument::Admin | FederationRoleArgument::Owner => {
+            Err("federated teams can only hold member roles".into())
+        }
+    }
+}
+
+fn local_team_destination(
+    role: FederationRoleArgument,
+    visibility: i16,
+) -> Result<TeamMemberRole, Box<dyn std::error::Error>> {
+    match role {
+        FederationRoleArgument::Member => Ok(TeamMemberRole::Member { visibility }),
+        FederationRoleArgument::Admin if visibility == 0 => Ok(TeamMemberRole::Admin),
+        FederationRoleArgument::Owner if visibility == 0 => Ok(TeamMemberRole::Owner),
         FederationRoleArgument::Admin | FederationRoleArgument::Owner => {
             Err("--visibility applies only to member roles".into())
         }
@@ -1482,15 +1951,29 @@ fn federation_destination(
 }
 
 fn read_phrase(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
+    read_phrase_tokens(path, 17, "backup")
+}
+
+fn read_kex_phrase(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
+    read_phrase_tokens(path, 13, "KEX")
+}
+
+fn read_phrase_tokens(
+    path: &Path,
+    expected_tokens: usize,
+    kind: &str,
+) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 4096 {
-        return Err("backup phrase file is not a bounded regular file".into());
+        return Err(format!("{kind} phrase file is not a bounded regular file").into());
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         if metadata.permissions().mode() & 0o077 != 0 {
-            return Err("backup phrase file permissions allow group or other access".into());
+            return Err(
+                format!("{kind} phrase file permissions allow group or other access").into(),
+            );
         }
     }
     let mut options = OpenOptions::new();
@@ -1504,10 +1987,13 @@ fn read_phrase(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error::Err
     let mut phrase = Zeroizing::new(String::new());
     file.take(4097).read_to_string(&mut phrase)?;
     if phrase.len() > 4096 {
-        return Err("backup phrase file grew beyond the size limit".into());
+        return Err(format!("{kind} phrase file grew beyond the size limit").into());
     }
-    if phrase.split_whitespace().count() != 17 {
-        return Err("backup phrase file does not contain exactly 17 tokens".into());
+    if phrase.split_whitespace().count() != expected_tokens {
+        return Err(format!(
+            "{kind} phrase file does not contain exactly {expected_tokens} tokens"
+        )
+        .into());
     }
     Ok(phrase)
 }
@@ -1772,5 +2258,69 @@ mod tests {
             "hardware",
         ])
         .is_err());
+    }
+
+    /// A cascade can reach further than the immediate federation pair, so the
+    /// responder has to accept one hardware unlock per profile it visits, not
+    /// just a local and a remote one.
+    #[test]
+    fn refresh_remote_accepts_repeated_profile_qualified_unlocks() {
+        assert!(Arguments::try_parse_from([
+            "foks-rs",
+            "--state-dir",
+            "/tmp/foks-cli-test",
+            "team",
+            "refresh-remote",
+            "local",
+            "engineering",
+        ])
+        .is_ok());
+        let parsed = Arguments::try_parse_from([
+            "foks-rs",
+            "--state-dir",
+            "/tmp/foks-cli-test",
+            "team",
+            "refresh-remote",
+            "local",
+            "engineering",
+            "--local-yubi-alias",
+            "local-hardware",
+            "--local-pin-file",
+            "/tmp/local-pin",
+            "--unlock",
+            "third=third-hardware=/tmp/third-pin",
+            "--unlock",
+            "fourth=fourth-hardware=/tmp/fourth-pin",
+        ])
+        .unwrap();
+        let Command::Team(TeamCommand::RefreshRemote {
+            profile,
+            team_alias,
+            local_yubi_alias,
+            unlocks,
+            ..
+        }) = parsed.command
+        else {
+            panic!("expected the federated refresh command");
+        };
+        assert_eq!(profile, "local");
+        assert_eq!(team_alias, "engineering");
+        assert_eq!(local_yubi_alias.as_deref(), Some("local-hardware"));
+        assert_eq!(
+            unlocks,
+            [
+                "third=third-hardware=/tmp/third-pin",
+                "fourth=fourth-hardware=/tmp/fourth-pin",
+            ]
+        );
+
+        // An unlock that does not name all three fields is a typo, not a
+        // partial instruction to guess at.
+        assert!(parse_unlock("third=third-hardware").is_err());
+        assert!(parse_unlock("=alias=/tmp/pin").is_err());
+        let unlock = parse_unlock("third=third-hardware=/tmp/third-pin").unwrap();
+        assert_eq!(unlock.profile, "third");
+        assert_eq!(unlock.alias, "third-hardware");
+        assert_eq!(unlock.pin_file, std::path::Path::new("/tmp/third-pin"));
     }
 }

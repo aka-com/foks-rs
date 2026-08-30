@@ -1,7 +1,8 @@
 use foks_proto::{
     decode_merkle_back_pointers, ChangeMetadata, EntityId, FqParty, Hepk, HistoricalMerkleRoots,
-    PukParcel, Role, SecretBox, SharedKeySeed, SoftwareEldestPublic, TeamChain, TeamChainResponse,
-    TeamRemoteMemberViewTokenInner, UnsignedUserLink, UserChain, UserChainResponse, UserLink,
+    PassphraseInfo, PukParcel, Role, SecretBox, SharedKeyBoxSet, SharedKeySeed, Signature,
+    SoftwareEldestPublic, TeamChain, TeamChainResponse, TeamRemoteMemberViewTokenInner, TreeRoot,
+    UnsignedUserLink, UserChain, UserChainResponse, UserLink, UserSettingsLinkPublic,
 };
 
 const DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user";
@@ -93,6 +94,41 @@ fn official_eldest_user_chain_decodes() {
         .encoded()
         .unwrap(),
         exact
+    );
+}
+
+#[test]
+fn user_settings_builder_round_trips_the_generic_payload() {
+    let chain = UserChain::decode(&fixture("user-chain.snowp")).unwrap();
+    let eldest = chain.links[0].decode_eldest().unwrap();
+    let info = PassphraseInfo {
+        generation: 3,
+        salt: Some([0x71; 16]),
+        stretch_version: 1,
+    };
+    let link = UnsignedUserLink::user_settings(&UserSettingsLinkPublic {
+        user: &eldest.uid,
+        host: &eldest.host,
+        signer: &eldest.member,
+        sequence: 1,
+        previous: None,
+        root: &TreeRoot {
+            epoch: 998,
+            hash: [0x72; 32],
+        },
+        time: 123,
+        next_location_commitment: [0x73; 32],
+        passphrase: &info,
+    })
+    .unwrap()
+    .finish(vec![Signature::Ed25519([0x74; 64])])
+    .unwrap();
+    let decoded = link.decode_generic().unwrap();
+    assert_eq!(decoded.entity, eldest.uid);
+    assert_eq!(decoded.signer, eldest.member);
+    assert_eq!(
+        decoded.payload,
+        foks_proto::GenericLinkPayload::UserSettings(info)
     );
 }
 
@@ -339,4 +375,15 @@ fn team_chain_response_round_trips_removal_and_remote_token_fields() {
     let decoded = TeamChain::decode(&encoded).unwrap();
     assert!(decoded.removal_key.is_some());
     assert_eq!(decoded.remote_view_tokens, vec![remote]);
+}
+
+#[test]
+fn go_self_revoke_empty_box_set_uses_the_canonical_null_list() {
+    let set = SharedKeyBoxSet::new([0; 16], Vec::new(), None).unwrap();
+    let encoded = set.encoded();
+    let foks_snowpack::Value::Array(fields) = foks_snowpack::decode(&encoded).unwrap() else {
+        panic!("box set is not an array");
+    };
+    assert!(matches!(fields[1], foks_snowpack::Value::Null));
+    assert_eq!(SharedKeyBoxSet::decode(&encoded).unwrap(), set);
 }

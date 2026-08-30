@@ -13,12 +13,10 @@ use foks_verify::{
 use super::super::membership::{current_team_private_key, random_box_randomness};
 use super::super::AuthenticatedTeamOutcome;
 use super::{
-    Receiver, RotationBinding, TeamMemberSelector, TeamPtkRotationSeed, ValidatedRotation,
-    VerifiedMemberParty,
+    Receiver, RotationBinding, TeamMemberKeyRefresh, TeamMemberSelector, TeamPtkRotationSeed,
+    ValidatedRotation, VerifiedMemberParty,
 };
-use crate::{
-    random_bytes, Error, PinnedHost, Result, UserPrivateKey, TEAM_MUTATION_OPERATION_ID_TYPE_ID,
-};
+use crate::{random_bytes, Error, PinnedHost, Result, TEAM_MUTATION_OPERATION_ID_TYPE_ID};
 
 pub(super) fn unique_target<'a>(
     team: &'a VerifiedTeamState,
@@ -155,6 +153,90 @@ pub(super) fn validate_rotation_seeds<'a>(
     Ok(rotations)
 }
 
+pub(super) fn validate_refresh_rotation_seeds<'a>(
+    team: &'a AuthenticatedTeamOutcome,
+    changes: &[TeamMemberKeyRefresh<'_>],
+    supplied: &'a [TeamPtkRotationSeed<'a>],
+) -> Result<Vec<ValidatedRotation<'a>>> {
+    let mut expected_roles = std::collections::BTreeSet::new();
+    for change in changes {
+        let target = unique_target(&team.verified, change.target)?;
+        let (_, replacement) =
+            validate_replacement(target, change.destination_role, change.replacement)?.ok_or(
+                Error::TeamRequest("member-key refresh lacks replacement keys"),
+            )?;
+        if change.destination_role != target.role
+            || replacement.generation <= target.generation
+            || replacement.generation != change.replacement_generation
+            || replacement.verify_key != *change.replacement_verify_key
+            || foks_crypto::hepk_fingerprint(&replacement.hepk)?
+                != change.replacement_hepk_fingerprint
+        {
+            return Err(Error::TeamRequest(
+                "member-key refresh must advance the roster generation",
+            ));
+        }
+        expected_roles.extend(
+            team.verified
+                .shared_keys()
+                .iter()
+                .filter(|key| key.role <= target.role)
+                .map(|key| key.role),
+        );
+    }
+    let expected = expected_roles
+        .iter()
+        .map(|role| {
+            team.verified
+                .shared_keys()
+                .iter()
+                .find(|key| key.role == *role)
+                .expect("required refresh role comes from current keys")
+        })
+        .collect::<Vec<_>>();
+    if supplied.len() != expected.len() {
+        return Err(Error::TeamRequest(
+            "PTK rotation roles do not match the member-refresh schedule",
+        ));
+    }
+    let current_verify_keys = team
+        .verified
+        .shared_keys()
+        .iter()
+        .map(|key| key.verify_key.as_bytes().to_vec())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut new_verify_keys = std::collections::BTreeSet::new();
+    let mut rotations = Vec::with_capacity(expected.len());
+    for (public, supplied) in expected.into_iter().zip(supplied) {
+        if supplied.role != public.role {
+            return Err(Error::TeamRequest(
+                "PTK rotation roles are missing, duplicated, or out of order",
+            ));
+        }
+        let previous = current_team_private_key(team, public)?;
+        let verify_key = derive_shared_public(supplied.seed, ENTITY_PTK_VERIFY)?.verify_key;
+        if supplied.seed == &previous.seed
+            || current_verify_keys.contains(verify_key.as_bytes())
+            || !new_verify_keys.insert(verify_key.as_bytes().to_vec())
+        {
+            return Err(Error::KeyBinding(
+                "replacement PTKs must be fresh and distinct",
+            ));
+        }
+        rotations.push(ValidatedRotation {
+            role: public.role,
+            generation: public
+                .generation
+                .checked_add(1)
+                .ok_or(Error::TeamRequest("PTK generation overflow"))?,
+            seed: supplied.seed,
+            previous,
+            verify_key,
+        });
+    }
+    Ok(rotations)
+}
+
 pub(super) fn required_rotation_roles(
     current: impl IntoIterator<Item = Role>,
     old_role: Role,
@@ -182,12 +264,11 @@ pub(super) fn resolve_remaining_receivers<'a>(
     replacement: Option<VerifiedMemberParty<'a>>,
     actor: &'a VerifiedUserState,
     supplied: &'a [VerifiedMemberParty<'a>],
+    rotated_roles: &[Role],
 ) -> Result<Vec<Receiver<'a>>> {
     let actor = VerifiedMemberParty::User(actor);
     let mut parties = Vec::with_capacity(supplied.len() + 2);
-    let actor_is_changed = changed.party == *actor.party()
-        && changed.scoped_host.is_none()
-        && changed.source_role == Role::OWNER;
+    let actor_is_changed = changed.party == *actor.party() && changed.scoped_host.is_none();
     if !actor_is_changed {
         parties.push(actor);
     }
@@ -239,21 +320,24 @@ pub(super) fn resolve_remaining_receivers<'a>(
                 "remaining party state is missing or duplicated",
             ));
         };
+        if rotated_roles.iter().any(|role| *role <= member.role)
+            && party.has_stale_shared_key(member.source_role)
+        {
+            return Err(Error::TeamBinding(
+                "team PTK recipient has an unrotated revoked-device PUK",
+            ));
+        }
         let key = party
             .shared_key(member.source_role)
+            .filter(|key| {
+                key.generation == member.generation
+                    && key.verify_key == member.verify_key
+                    && foks_crypto::hepk_fingerprint(&key.hepk).ok()
+                        == Some(member.hepk_fingerprint)
+            })
             .ok_or(Error::TeamBinding(
-                "remaining party lacks the roster's source-role key",
+                "remaining party roster key is not current",
             ))?;
-        if key.generation != member.generation || key.verify_key != member.verify_key {
-            return Err(Error::TeamBinding(
-                "remaining party key does not match the team roster",
-            ));
-        }
-        if foks_crypto::hepk_fingerprint(&key.hepk)? != member.hepk_fingerprint {
-            return Err(Error::TeamBinding(
-                "remaining user's HEPK does not match the team roster",
-            ));
-        }
         receivers.push(Receiver {
             member: member.clone(),
             key,
@@ -276,9 +360,172 @@ pub(super) fn resolve_remaining_receivers<'a>(
     Ok(receivers)
 }
 
+pub(super) fn resolve_refresh_receivers<'a>(
+    team: &VerifiedTeamState,
+    changes: &[TeamMemberKeyRefresh<'a>],
+    actor: VerifiedMemberParty<'a>,
+    supplied: &'a [VerifiedMemberParty<'a>],
+    rotated_roles: &[Role],
+) -> Result<Vec<Receiver<'a>>> {
+    let actor_party = actor;
+    let changed_keys = changes
+        .iter()
+        .map(|change| {
+            (
+                change.target.party.as_bytes().to_vec(),
+                change
+                    .target
+                    .host
+                    .map(EntityId::as_bytes)
+                    .map(<[u8]>::to_vec),
+                change.target.source_role,
+            )
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    if changed_keys.len() != changes.len() {
+        return Err(Error::TeamRequest(
+            "member-key refresh targets are duplicated",
+        ));
+    }
+    let actor_is_changed = changes
+        .iter()
+        .any(|change| change.target.party == actor_party.party() && change.target.host.is_none());
+    let mut parties = Vec::with_capacity(supplied.len() + changes.len() + 1);
+    if !actor_is_changed {
+        parties.push(actor_party);
+    }
+    parties.extend_from_slice(supplied);
+    parties.extend(changes.iter().filter_map(|change| change.replacement));
+    let mut unique_parties = Vec::with_capacity(parties.len());
+    for party in parties {
+        if !unique_parties
+            .iter()
+            .any(|known: &VerifiedMemberParty<'_>| {
+                known.party() == party.party() && known.host() == party.host()
+            })
+        {
+            unique_parties.push(party);
+        }
+    }
+    let parties = unique_parties;
+
+    let mut remaining = team
+        .members()
+        .iter()
+        .filter(|member| {
+            !changed_keys.contains(&(
+                member.party.as_bytes().to_vec(),
+                member
+                    .scoped_host
+                    .as_ref()
+                    .map(EntityId::as_bytes)
+                    .map(<[u8]>::to_vec),
+                member.source_role,
+            ))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for change in changes {
+        let target = unique_target(team, change.target)?;
+        if change.destination_role != target.role {
+            return Err(Error::TeamRequest(
+                "member-key refresh cannot change the member role",
+            ));
+        }
+        let replacement_key = change
+            .replacement
+            .ok_or(Error::TeamRequest(
+                "member-key refresh lacks replacement state",
+            ))?
+            .key_at(
+                target.source_role,
+                change.replacement_generation,
+                change.replacement_verify_key,
+                change.replacement_hepk_fingerprint,
+            )
+            .ok_or(Error::TeamRequest(
+                "member-key refresh lacks replacement keys",
+            ))?;
+        let mut replacement_member = target.clone();
+        replacement_member.generation = replacement_key.generation;
+        replacement_member.verify_key = replacement_key.verify_key.clone();
+        replacement_member.hepk_fingerprint = foks_crypto::hepk_fingerprint(&replacement_key.hepk)?;
+        remaining.push(replacement_member);
+    }
+    let mut receivers = Vec::with_capacity(remaining.len());
+    for member in &remaining {
+        let matching = parties
+            .iter()
+            .filter(|party| {
+                party.party() == &member.party
+                    && member
+                        .scoped_host
+                        .as_ref()
+                        .is_none_or(|host| party.host() == host)
+                    && (member.scoped_host.is_some() || party.host() == team.host())
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        let [party] = matching.as_slice() else {
+            return Err(Error::TeamRequest(
+                "refreshed party state is missing or duplicated",
+            ));
+        };
+        if rotated_roles.iter().any(|role| *role <= member.role)
+            && party.has_stale_shared_key(member.source_role)
+        {
+            return Err(Error::TeamBinding(
+                "team PTK recipient has an unrotated revoked-device PUK",
+            ));
+        }
+        let is_changed = changed_keys.contains(&(
+            member.party.as_bytes().to_vec(),
+            member
+                .scoped_host
+                .as_ref()
+                .map(EntityId::as_bytes)
+                .map(<[u8]>::to_vec),
+            member.source_role,
+        ));
+        let key = party
+            .shared_key(member.source_role)
+            .filter(|key| {
+                key.generation == member.generation
+                    && key.verify_key == member.verify_key
+                    && foks_crypto::hepk_fingerprint(&key.hepk).ok()
+                        == Some(member.hepk_fingerprint)
+            })
+            .ok_or(Error::TeamBinding(if is_changed {
+                "refreshed party lacks its replacement roster key"
+            } else {
+                "unchanged roster recipient key is not current"
+            }))?;
+        receivers.push(Receiver {
+            member: member.clone(),
+            key,
+        });
+    }
+    receivers.sort_by(|left, right| {
+        left.member
+            .party
+            .as_bytes()
+            .cmp(right.member.party.as_bytes())
+            .then(
+                left.member
+                    .scoped_host
+                    .as_ref()
+                    .map(EntityId::as_bytes)
+                    .cmp(&right.member.scoped_host.as_ref().map(EntityId::as_bytes)),
+            )
+            .then(left.member.source_role.cmp(&right.member.source_role))
+    });
+    Ok(receivers)
+}
+
 pub(super) fn box_rotated_ptks(
     host: &PinnedHost,
-    actor: &UserPrivateKey,
+    actor: &EntityId,
+    actor_seed: &foks_proto::SecretSeed,
     rotations: &[ValidatedRotation<'_>],
     receivers: &[Receiver<'_>],
 ) -> Result<foks_proto::SharedKeyBoxSet> {
@@ -303,10 +550,15 @@ pub(super) fn box_rotated_ptks(
     let randomness = (0..inputs.len())
         .map(|_| random_box_randomness())
         .collect::<Result<Vec<PukBoxRandomness>>>()?;
-    let sender = derive_shared_public(&actor.seed, ENTITY_PUK_VERIFY)?;
+    let sender_type = match actor.entity_type() {
+        foks_proto::ENTITY_USER => ENTITY_PUK_VERIFY,
+        foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM => ENTITY_PTK_VERIFY,
+        _ => return Err(Error::TeamBinding("team editor party type is invalid")),
+    };
+    let sender = derive_shared_public(actor_seed, sender_type)?;
     Ok(seal_shared_key_boxes(
         host.host_id(),
-        &actor.seed,
+        actor_seed,
         &sender.hepk,
         random_bytes()?,
         &inputs,
@@ -433,14 +685,12 @@ pub(super) fn validate_rotation_operation(
     operation: &TeamMutationOperation,
     host: &PinnedHost,
     actor: &EntityId,
-    device_id: &EntityId,
     team: &EntityId,
     expected_seqno: u64,
 ) -> Result<()> {
     if operation.kind != TeamMutationKind::PtkRotation
         || operation.host_id != host.host_id().as_bytes()
         || operation.actor_id != actor.as_bytes()
-        || operation.device_id != device_id.as_bytes()
         || operation.team_id != team.as_bytes()
         || operation.expected_seqno != expected_seqno
     {

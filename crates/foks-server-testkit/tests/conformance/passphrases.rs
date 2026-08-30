@@ -1,6 +1,6 @@
-use foks_client::{NoPassphraseConfigured, Passphrase, UserPukRotation};
-use foks_proto::{Role, SecretSeed};
-use foks_server_testkit::TestAccountSpec;
+use foks_client::{DeviceCredential, NoPassphraseConfigured, Passphrase, UserPukRotation};
+use foks_proto::{GenericLinkPayload, Role, SecretSeed, CHAIN_TYPE_USER_SETTINGS};
+use foks_server_testkit::{TestAccountSpec, TestClient};
 
 use super::support::Fixture;
 
@@ -29,7 +29,6 @@ pub(crate) fn signup_set_change_and_public_login_cover_the_passphrase_lifecycle(
             .generation,
         1
     );
-
     let later = fixture
         .client
         .create_account(fixture.host(), &TestAccountSpec::new("laterphrase", 0xa1))
@@ -44,6 +43,36 @@ pub(crate) fn signup_set_change_and_public_login_cover_the_passphrase_lifecycle(
             .generation,
         1
     );
+    let settings = fixture
+        .client
+        .foks()
+        .load_generic_chain(
+            fixture.host(),
+            &later.credential,
+            CHAIN_TYPE_USER_SETTINGS,
+            1,
+        )
+        .unwrap();
+    assert_eq!(settings.links.len(), 1);
+    assert!(matches!(
+        settings.links[0].decode_generic().unwrap().payload,
+        GenericLinkPayload::UserSettings(ref info) if info.generation == 1
+    ));
+    let secondary = TestClient::new(&fixture.environment, "passphrase-secondary").unwrap();
+    let secondary_host = secondary.probe_and_pin().unwrap().pinned;
+    let secondary_credential = DeviceCredential {
+        uid: later.credential.uid.clone(),
+        seed: SecretSeed::new([0xa1; 32]),
+        certificate_chain: later.credential.certificate_chain.clone(),
+    };
+    assert_eq!(
+        secondary
+            .foks()
+            .verify_passphrase(&secondary_host, &secondary_credential, &first)
+            .unwrap()
+            .generation,
+        1
+    );
     let second = Passphrase::new("rotated passphrase two").unwrap();
     assert_eq!(
         fixture
@@ -54,6 +83,35 @@ pub(crate) fn signup_set_change_and_public_login_cover_the_passphrase_lifecycle(
             .generation,
         2
     );
+    let secondary_user = secondary
+        .foks()
+        .authenticate_and_pin(&secondary_host, &secondary_credential)
+        .unwrap();
+    assert!(
+        !secondary
+            .foks()
+            .refresh_passphrase_for_current_puk(
+                &secondary_host,
+                &secondary_credential,
+                &secondary_user,
+            )
+            .unwrap()
+    );
+    let settings = fixture
+        .client
+        .foks()
+        .load_generic_chain(
+            fixture.host(),
+            &later.credential,
+            CHAIN_TYPE_USER_SETTINGS,
+            1,
+        )
+        .unwrap();
+    assert_eq!(settings.links.len(), 2);
+    assert!(matches!(
+        settings.links[1].decode_generic().unwrap().payload,
+        GenericLinkPayload::UserSettings(ref info) if info.generation == 2
+    ));
     assert_eq!(
         fixture
             .client
@@ -128,4 +186,19 @@ pub(crate) fn signup_set_change_and_public_login_cover_the_passphrase_lifecycle(
             .generation,
         3
     );
+    let settings = fixture
+        .client
+        .foks()
+        .load_generic_chain(
+            fixture.host(),
+            &later.credential,
+            CHAIN_TYPE_USER_SETTINGS,
+            1,
+        )
+        .unwrap();
+    assert_eq!(settings.links.len(), 3);
+    assert!(matches!(
+        settings.links[2].decode_generic().unwrap().payload,
+        GenericLinkPayload::UserSettings(ref info) if info.generation == 3
+    ));
 }

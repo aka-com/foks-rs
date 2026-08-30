@@ -108,6 +108,50 @@ func TestGenerateYubiFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	softwareMixedBoxer, err := core.NewSharedKeyBoxer(host, software)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := softwareMixedBoxer.Box(puk, softwarePublic); err != nil {
+		t.Fatal(err)
+	}
+	if err := softwareMixedBoxer.Box(puk, yubiPublic); err != nil {
+		t.Fatal(err)
+	}
+	softwareMixed, err := softwareMixedBoxer.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	yubiMixedBoxer, err := core.NewSharedKeyBoxer(host, yubi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yubiMixedBoxer.Box(puk, yubiPublic); err != nil {
+		t.Fatal(err)
+	}
+	if err := yubiMixedBoxer.Box(puk, softwarePublic); err != nil {
+		t.Fatal(err)
+	}
+	yubiMixed, err := yubiMixedBoxer.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clear proto.SharedKeySeed
+	if softwareMixed.TempDHKeySigned == nil || yubiMixed.TempDHKeySigned == nil {
+		t.Fatal("mixed-curve box sets must carry an authenticated temporary key")
+	}
+	if err := core.OpenBoxInSet(
+		&clear, softwareMixed.Boxes[0].Box, softwareMixed.TempDHKeySigned,
+		&softwareMixed.Id, softwarePublic, software,
+	); err != nil {
+		t.Fatalf("official same-curve software box in mixed set: %v", err)
+	}
+	if err := core.OpenBoxInSet(
+		&clear, yubiMixed.Boxes[1].Box, yubiMixed.TempDHKeySigned,
+		&yubiMixed.Id, yubiPublic, software,
+	); err != nil {
+		t.Fatalf("official cross-curve software box in mixed set: %v", err)
+	}
 	toYubiParcel := proto.SharedKeyParcel{
 		Box:             toYubi.Boxes[0],
 		Sender:          mustEntityID(t, software),
@@ -120,7 +164,6 @@ func TestGenerateYubiFixtures(t *testing.T) {
 		BoxId:           toSoftware.Id,
 		TempDHKeySigned: toSoftware.TempDHKeySigned,
 	}
-	var clear proto.SharedKeySeed
 	if err := core.OpenBoxInSet(
 		&clear, toYubiParcel.Box.Box, toYubiParcel.TempDHKeySigned,
 		&toYubiParcel.BoxId, softwarePublic, yubi,
@@ -147,6 +190,8 @@ func TestGenerateYubiFixtures(t *testing.T) {
 		{"yubi-eldest-link.snowp", eldest.Link},
 		{"software-to-yubi-puk-parcel.snowp", &toYubiParcel},
 		{"yubi-to-software-puk-parcel.snowp", &toSoftwareParcel},
+		{"software-mixed-puk-box-set.snowp", softwareMixed},
+		{"yubi-mixed-puk-box-set.snowp", yubiMixed},
 	}
 	for _, object := range objects {
 		if err := w.object(object.name, object.obj); err != nil {

@@ -8,7 +8,7 @@ mod message;
 pub use frame::{decode_request, decode_response, encode, Error, Result, MAXIMUM_MESSAGE_BYTES};
 pub use message::{
     ErrorCode, FederationRole, Operation, Request, Response, ResponseResult, SecretString,
-    YubiRetryConfiguration, PROTOCOL_VERSION,
+    TeamRole, YubiFederationUnlockInput, YubiRetryConfiguration, PROTOCOL_VERSION,
 };
 
 #[cfg(test)]
@@ -139,6 +139,48 @@ mod tests {
     }
 
     #[test]
+    fn local_team_member_operations_round_trip_with_roles_and_recovery() {
+        let operations = [
+            Operation::ListTeamMembers {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+            },
+            Operation::AddTeamMember {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+                username: "alice".to_owned(),
+                role: TeamRole::Admin,
+                visibility: 0,
+            },
+            Operation::ResumeTeamMemberAddition {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+                username: "alice".to_owned(),
+            },
+            Operation::DemoteTeamMember {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+                username: "alice".to_owned(),
+                role: TeamRole::Member,
+                visibility: -1,
+            },
+            Operation::RemoveTeamMember {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+                username: "alice".to_owned(),
+            },
+            Operation::ResumeTeamMemberEdit {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+            },
+        ];
+        for (index, operation) in operations.into_iter().enumerate() {
+            let request = Request::new(20 + index as u64, operation);
+            assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
+        }
+    }
+
+    #[test]
     fn signup_invites_are_serialized_but_redacted_from_debug_output() {
         let operation = Operation::CreateAccount {
             profile: "local".to_owned(),
@@ -194,6 +236,30 @@ mod tests {
     }
 
     #[test]
+    fn device_pairing_phrase_round_trips_without_entering_debug_output() {
+        let operation = Operation::AcceptDevicePairing {
+            profile: "local".to_owned(),
+            target_alias: "laptop".to_owned(),
+            device_name: "paired laptop".to_owned(),
+            serial: 2,
+            phrase: SecretString::new(
+                "cage 32 advice 4 letter 128 avoid 16 acoustic 2 doctor 64 amount",
+            ),
+        };
+        let encoded = encode(&Request::new(17, operation.clone())).unwrap();
+        assert_eq!(decode_request(&encoded).unwrap().operation, operation);
+        let debug = format!("{operation:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("cage"));
+        assert!(operation.is_device_pairing_wait());
+        assert!(!Operation::StartDevicePairing {
+            profile: "local".to_owned(),
+            account_alias: "owner".to_owned(),
+        }
+        .is_device_pairing_wait());
+    }
+
+    #[test]
     fn every_yubikey_operation_redacts_pin_puk_and_signup_secrets() {
         let operations = [
             Operation::CreateYubiAccount {
@@ -235,6 +301,21 @@ mod tests {
                 profile: "local".to_owned(),
                 alias: "hardware".to_owned(),
                 pin: SecretString::new("sync-pin"),
+                with_federation: true,
+            },
+            Operation::RefreshFederatedSecurity {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+                local_yubi_alias: Some("hardware".to_owned()),
+                local_pin: Some(SecretString::new("federation-local-pin")),
+                remote_profile: Some("partner".to_owned()),
+                remote_yubi_alias: Some("partner-hardware".to_owned()),
+                remote_pin: Some(SecretString::new("federation-remote-pin")),
+                unlocks: vec![YubiFederationUnlockInput {
+                    profile: "third".to_owned(),
+                    alias: "third-hardware".to_owned(),
+                    pin: SecretString::new("federation-third-pin"),
+                }],
             },
             Operation::ChangeYubiPin {
                 profile: "local".to_owned(),
@@ -294,6 +375,9 @@ mod tests {
                 "890123",
                 "rotate-pin",
                 "management-resume-pin",
+                "federation-local-pin",
+                "federation-remote-pin",
+                "federation-third-pin",
             ] {
                 assert!(!debug.contains(secret));
             }

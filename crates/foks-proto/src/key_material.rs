@@ -155,15 +155,14 @@ impl SharedKeyBoxSet {
         boxes: Vec<SharedKeyBox>,
         temp_dh_key: Option<TempDhKeySigned>,
     ) -> Result<Self> {
-        if boxes.is_empty() {
-            return Err(Error::FieldCount {
-                expected: 1,
-                found: 0,
-            });
-        }
+        let boxes_value = if boxes.is_empty() {
+            Value::Null
+        } else {
+            Value::Array(boxes.iter().map(shared_key_box_value).collect())
+        };
         let value = Value::Array(vec![
             Value::Binary(box_id.to_vec()),
-            Value::Array(boxes.iter().map(shared_key_box_value).collect()),
+            boxes_value,
             temp_dh_key.as_ref().map_or(Value::Null, temp_dh_key_value),
         ]);
         Ok(Self {
@@ -178,12 +177,6 @@ impl SharedKeyBoxSet {
         let value = decode(bytes)?;
         let fields = array(&value, 3)?;
         let boxes = list_values(&fields[1])?;
-        if boxes.is_empty() {
-            return Err(Error::FieldCount {
-                expected: 1,
-                found: 0,
-            });
-        }
         Ok(Self {
             box_id: fixed_blob(&fields[0], "box set ID")?,
             boxes: boxes

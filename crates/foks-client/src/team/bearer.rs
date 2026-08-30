@@ -112,24 +112,18 @@ impl FoksClient {
 }
 
 fn bearer_signer(team: &AuthenticatedTeamOutcome) -> Result<(Role, u64, &SecretSeed)> {
-    let public = team
-        .verified
-        .shared_keys()
-        .iter()
-        .filter(|key| {
-            matches!(
-                key.role.kind(),
-                foks_proto::RoleType::Admin | foks_proto::RoleType::Owner
-            )
-        })
-        .max_by_key(|key| key.role)
-        .ok_or(Error::KeyBinding(
-            "team administrator has no current bearer-token PTK",
-        ))?;
     let signer: &TeamPrivateKey = team
         .ptks
         .iter()
-        .find(|key| key.role == public.role && key.generation == public.generation)
+        .filter(|private| {
+            matches!(
+                private.role.kind(),
+                foks_proto::RoleType::Admin | foks_proto::RoleType::Owner
+            ) && team.verified.shared_keys().iter().any(|public| {
+                public.role == private.role && public.generation == private.generation
+            })
+        })
+        .max_by_key(|private| private.role)
         .ok_or(Error::KeyBinding(
             "current bearer-token PTK secret is unavailable",
         ))?;

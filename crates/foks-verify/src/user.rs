@@ -1,5 +1,6 @@
 //! User-chain replay, disclosure verification, and sealed user state.
 
+use foks_proto::UserMemberKeys;
 use unicode_normalization::{char::is_combining_mark, UnicodeNormalization as _};
 
 use std::collections::BTreeSet;
@@ -7,8 +8,8 @@ use std::collections::BTreeSet;
 use crate::{
     commitment, encode, prefixed_hash, user_transition::user_member_hepk_matches,
     verify_hostchain_at_tail, verify_merkle_path, verify_merkle_path_present, verify_typed,
-    AuthenticatedMerkleRoots, ChangeMetadata, EntityId, Error, Hepk, HostchainTail, Result, Role,
-    TreeRoot, UserChain, UserEldest, UserReplayState, UserTransitionRule, Value,
+    AuthenticatedMerkleRoots, ChangeMetadata, EntityId, Error, Hepk, Result, Role, TreeRoot,
+    UserChain, UserEldest, UserReplayState, UserTransitionRule, Value, VerifiedMerkleAdvance,
     DEVICE_LABEL_TYPE_ID, ENTITY_ID_MERKLE_VALUE_TYPE_ID, HEPK_TYPE_ID, LINK_OUTER_TYPE_ID,
     LINK_OUTER_V1_TYPE_ID, MERKLE_ROOT_TYPE_ID, MERKLE_TREE_RF_INPUT_TYPE_ID,
     NAME_COMMITMENT_TYPE_ID, NAME_HASH_PREIMAGE_TYPE_ID, TREE_LOCATION_TYPE_ID,
@@ -66,13 +67,13 @@ pub struct UserDeviceProvisionLeaf {
     pub value: [u8; 32],
 }
 
-/// Historical bookends for a device that signed a generic link before it was
-/// revoked. The generic leaf must be present at `revoke_root`, and the
-/// provisioning leaf must be present at the generic link's cited root.
+/// Historical bookends for a device that signed a generic link. The
+/// provisioning leaf must be present at the generic link's cited root. For a
+/// revoked signer, the generic leaf must also be present at `revoke_root`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UserDeviceSigningBookends {
     pub provision: UserDeviceProvisionLeaf,
-    pub revoke_root: TreeRoot,
+    pub revoke_root: Option<TreeRoot>,
 }
 
 impl VerifiedUserSharedKey {
@@ -209,6 +210,7 @@ pub struct VerifiedUserState {
     devices: Vec<VerifiedDevice>,
     shared_keys: Vec<VerifiedSharedKey>,
     shared_key_history: Vec<VerifiedSharedKey>,
+    stale_shared_key_roles: BTreeSet<Role>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -274,6 +276,63 @@ impl VerifiedUserState {
         &self.devices
     }
 
+    /// Returns every authenticated provisioning incarnation for `device`.
+    ///
+    /// PUK parcels can remain encrypted by a sender after that sender
+    /// self-revokes. Consumers try these historical HEPKs and still require
+    /// the parcel to open against the current authenticated PUK.
+    pub fn device_history(&self, device: &EntityId) -> Result<Vec<VerifiedDevice>> {
+        let mut result = Vec::new();
+        for segment in user_evidence_segments(&self.evidence_bytes)? {
+            let chain = UserChain::decode(&segment)?;
+            for link in &chain.links {
+                let change = link.decode_group_change()?;
+                let candidate = if change.seqno == 1 {
+                    let eldest = link.decode_eldest()?;
+                    (eldest.member == *device).then(|| {
+                        Ok(VerifiedDevice {
+                            id: eldest.member,
+                            role: Role::OWNER,
+                            hepk: find_hepk(&chain.hepks, eldest.member_hepk_fingerprint)?,
+                            subkey: eldest.member_subkey,
+                        })
+                    })
+                } else {
+                    change
+                        .changes
+                        .first()
+                        .filter(|member| member.entity == *device && member.role != Role::NONE)
+                        .map(|member| {
+                            let UserMemberKeys::User {
+                                hepk_fingerprint,
+                                subkey,
+                            } = &member.keys
+                            else {
+                                return Err(Error::UserChainContinuity);
+                            };
+                            Ok(VerifiedDevice {
+                                id: member.entity.clone(),
+                                role: member.role,
+                                hepk: find_hepk(&chain.hepks, *hepk_fingerprint)?,
+                                subkey: subkey.clone(),
+                            })
+                        })
+                };
+                if let Some(candidate) = candidate {
+                    let candidate = candidate?;
+                    if !result.contains(&candidate) {
+                        result.push(candidate);
+                    }
+                }
+            }
+        }
+        if result.is_empty() {
+            Err(Error::UserBinding)
+        } else {
+            Ok(result)
+        }
+    }
+
     pub fn shared_keys(&self) -> &[VerifiedSharedKey] {
         &self.shared_keys
     }
@@ -287,6 +346,13 @@ impl VerifiedUserState {
     /// reintroducing previously retired key material.
     pub fn shared_key_history(&self) -> &[VerifiedSharedKey] {
         &self.shared_key_history
+    }
+
+    /// PUK roles that a revoked credential could read and that have not been
+    /// rotated since that revocation. The set is derived from authenticated
+    /// chain replay, so it remains durable with the stored chain evidence.
+    pub fn stale_shared_key_roles(&self) -> &BTreeSet<Role> {
+        &self.stale_shared_key_roles
     }
 
     pub fn hard_state_snapshot(&self) -> Result<VerifiedUserSnapshot> {
@@ -333,9 +399,9 @@ impl VerifiedUserState {
         })
     }
 
-    /// Checks whether `signer` was active at `epoch`. A currently active
-    /// interval needs no additional proof; a since-revoked interval returns
-    /// the same provision/revoke bookends used by the Go generic-chain loader.
+    /// Checks whether `signer` was active at `epoch` and returns the Merkle
+    /// bookends needed to prove causal provisioning (and, when applicable,
+    /// publication before revocation).
     pub fn device_signing_bookends(
         &self,
         signer: &EntityId,
@@ -385,17 +451,36 @@ impl VerifiedUserState {
                 continue;
             }
             match revoke {
-                None => return Ok(None),
+                None => {
+                    return Ok(Some(UserDeviceSigningBookends {
+                        provision: provision.leaf,
+                        revoke_root: None,
+                    }));
+                }
                 Some(revoke_root) if revoke_root.epoch >= epoch => {
                     return Ok(Some(UserDeviceSigningBookends {
                         provision: provision.leaf,
-                        revoke_root,
+                        revoke_root: Some(revoke_root),
                     }));
                 }
                 Some(_) => {}
             }
         }
         Err(Error::UserBinding)
+    }
+
+    /// Reports whether the persisted, independently authenticated evidence
+    /// contains this exact user-chain link. This is used to reconcile an
+    /// ambiguous mutation without retaining the private rotation seeds.
+    pub fn contains_authenticated_link(&self, sequence: u64, link_hash: &[u8; 32]) -> Result<bool> {
+        for evidence in authenticated_user_link_evidence(self)? {
+            if evidence.link.decode_group_change()?.seqno == sequence
+                && prefixed_hash(LINK_OUTER_TYPE_ID, &evidence.link.encoded()?)? == *link_hash
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -468,13 +553,31 @@ fn authenticated_user_link_evidence(
 /// Replays an arbitrary v0.1.9 user group-change chain from eldest through
 /// device provisioning, revocation, and PUK rotation. Every link must be
 /// committed by the final Merkle root and must cite an independently
-/// authenticated historical root.
+/// authenticated historical root. The response-wide inclusion and terminal
+/// absence proofs must be anchored at `latest`; historical roots are
+/// accepted only for the roots cited by individual links.
 pub fn verify_user_chain(
     chain_bytes: &[u8],
     expected_uid: &EntityId,
     expected_host: &EntityId,
     authenticated_roots: &AuthenticatedMerkleRoots,
-    trusted_hostchain: &HostchainTail,
+    latest: &VerifiedMerkleAdvance,
+) -> Result<VerifiedUserState> {
+    verify_user_chain_at_root(
+        chain_bytes,
+        expected_uid,
+        expected_host,
+        authenticated_roots,
+        latest.root(),
+    )
+}
+
+fn verify_user_chain_at_root(
+    chain_bytes: &[u8],
+    expected_uid: &EntityId,
+    expected_host: &EntityId,
+    authenticated_roots: &AuthenticatedMerkleRoots,
+    expected_root: &foks_proto::MerkleRoot,
 ) -> Result<VerifiedUserState> {
     let chain = UserChain::decode(chain_bytes)?;
     if chain.links.is_empty() || chain.locations.len() != chain.links.len() {
@@ -483,8 +586,8 @@ pub fn verify_user_chain(
     let root_bytes = chain.merkle.encoded_root()?;
     let authenticated_chain_bytes = authenticated_user_chain_bytes(&chain.links)?;
     let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes)?;
-    if authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
-        || &chain.merkle.root().hostchain != trusted_hostchain
+    if chain.merkle.root() != expected_root
+        || authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
     {
         return Err(Error::UntrustedUserRoot);
     }
@@ -626,7 +729,8 @@ pub fn verify_user_chain(
             rule: UserTransitionRule::EmptyResult,
         });
     }
-    let (devices, shared_keys, shared_key_history) = replay_state.into_parts();
+    let (devices, shared_keys, shared_key_history, stale_shared_key_roles) =
+        replay_state.into_parts();
     Ok(VerifiedUserState {
         uid: expected_uid.clone(),
         host: expected_host.clone(),
@@ -644,20 +748,40 @@ pub fn verify_user_chain(
         devices,
         shared_keys,
         shared_key_history,
+        stale_shared_key_roles,
     })
 }
 
 /// Verifies a server response beginning immediately after an already verified
 /// user-chain tail. Only the returned suffix is replayed, while the resulting
 /// evidence retains every independently authenticated response needed to
-/// reconstruct the state after restart.
+/// reconstruct the state after restart. As with a full load, the response-wide
+/// proofs must use `latest` even when its links cite older roots.
 pub fn verify_user_chain_increment(
     chain_bytes: &[u8],
     prior: &VerifiedUserState,
     expected_uid: &EntityId,
     expected_host: &EntityId,
     authenticated_roots: &AuthenticatedMerkleRoots,
-    trusted_hostchain: &HostchainTail,
+    latest: &VerifiedMerkleAdvance,
+) -> Result<VerifiedUserState> {
+    verify_user_chain_increment_at_root(
+        chain_bytes,
+        prior,
+        expected_uid,
+        expected_host,
+        authenticated_roots,
+        latest.root(),
+    )
+}
+
+fn verify_user_chain_increment_at_root(
+    chain_bytes: &[u8],
+    prior: &VerifiedUserState,
+    expected_uid: &EntityId,
+    expected_host: &EntityId,
+    authenticated_roots: &AuthenticatedMerkleRoots,
+    expected_root: &foks_proto::MerkleRoot,
 ) -> Result<VerifiedUserState> {
     if prior.uid != *expected_uid || prior.host != *expected_host {
         return Err(Error::UserChainContinuity);
@@ -670,8 +794,8 @@ pub fn verify_user_chain_increment(
     }
     let root_bytes = chain.merkle.encoded_root()?;
     let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes)?;
-    if authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
-        || &chain.merkle.root().hostchain != trusted_hostchain
+    if chain.merkle.root() != expected_root
+        || authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
     {
         return Err(Error::UntrustedUserRoot);
     }
@@ -683,6 +807,7 @@ pub fn verify_user_chain_increment(
         &prior.devices,
         &prior.shared_keys,
         &prior.shared_key_history,
+        &prior.stale_shared_key_roles,
     );
     let mut previous_hash = prior.chain_tail_hash;
     let start_sequence = prior
@@ -751,7 +876,8 @@ pub fn verify_user_chain_increment(
     {
         return Ok(prior.clone());
     }
-    let (devices, shared_keys, shared_key_history) = replay_state.into_parts();
+    let (devices, shared_keys, shared_key_history, stale_shared_key_roles) =
+        replay_state.into_parts();
     Ok(VerifiedUserState {
         uid: expected_uid.clone(),
         host: expected_host.clone(),
@@ -772,6 +898,7 @@ pub fn verify_user_chain_increment(
         devices,
         shared_keys,
         shared_key_history,
+        stale_shared_key_roles,
     })
 }
 
@@ -787,27 +914,40 @@ pub fn restore_verified_user(
     let host = EntityId::from_bytes(persisted.host_id.to_vec())?;
     let hostchain = foks_proto::decode_hostchain(trusted_hostchain_bytes)?;
     let segments = user_evidence_segments(persisted.evidence_bytes)?;
+    let last_segment = segments
+        .len()
+        .checked_sub(1)
+        .ok_or(Error::PersistedUserEvidence)?;
     let mut segments = segments.into_iter();
     let first = segments.next().ok_or(Error::PersistedUserEvidence)?;
     let first_chain = UserChain::decode(&first)?;
     verify_hostchain_at_tail(&hostchain, &first_chain.merkle.root().hostchain)?;
-    let mut verified = verify_user_chain(
+    let persisted_root = foks_proto::MerkleRoot::decode(persisted.merkle_root_bytes)?;
+    let mut verified = verify_user_chain_at_root(
         &first,
         &uid,
         &host,
         authenticated_roots,
-        &first_chain.merkle.root().hostchain,
+        if last_segment == 0 {
+            &persisted_root
+        } else {
+            first_chain.merkle.root()
+        },
     )?;
-    for segment in segments {
+    for (index, segment) in segments.enumerate() {
         let chain = UserChain::decode(&segment)?;
         verify_hostchain_at_tail(&hostchain, &chain.merkle.root().hostchain)?;
-        verified = verify_user_chain_increment(
+        verified = verify_user_chain_increment_at_root(
             &segment,
             &verified,
             &uid,
             &host,
             authenticated_roots,
-            &chain.merkle.root().hostchain,
+            if index.checked_add(1) == Some(last_segment) {
+                &persisted_root
+            } else {
+                chain.merkle.root()
+            },
         )?;
     }
     let reproduced = verified.hard_state_snapshot()?;
@@ -1331,7 +1471,7 @@ mod incremental_tests {
             public.snapshot.merkle_root(),
             USER_ROOT,
             USER_HISTORY,
-            &HostchainTail {
+            &foks_proto::HostchainTail {
                 seqno: public.snapshot.chain_seqno,
                 hash: public.snapshot.chain_tail_hash,
             },
@@ -1342,7 +1482,7 @@ mod incremental_tests {
             &uid,
             &host,
             advance.authenticated_roots(),
-            &chain.merkle.root().hostchain,
+            &advance,
         )
         .unwrap();
         let replay = UserReplayState::from_eldest(
@@ -1359,7 +1499,8 @@ mod incremental_tests {
                 hepk: find_hepk(&chain.hepks, eldest.puk_hepk_fingerprint).unwrap(),
             },
         );
-        let (devices, shared_keys, shared_key_history) = replay.into_parts();
+        let (devices, shared_keys, shared_key_history, stale_shared_key_roles) =
+            replay.into_parts();
         let first_hash =
             prefixed_hash(LINK_OUTER_TYPE_ID, &chain.links[0].encoded().unwrap()).unwrap();
         let prior = VerifiedUserState {
@@ -1379,6 +1520,7 @@ mod incremental_tests {
             devices,
             shared_keys,
             shared_key_history,
+            stale_shared_key_roles,
         };
         let suffix = suffix_after_eldest(&chain);
         assert_eq!(UserChain::decode(&suffix).unwrap().links.len(), 2);
@@ -1388,7 +1530,7 @@ mod incremental_tests {
             &uid,
             &host,
             advance.authenticated_roots(),
-            &chain.merkle.root().hostchain,
+            &advance,
         )
         .unwrap();
         assert_eq!(incremented.chain_seqno, final_state.chain_seqno);
@@ -1405,7 +1547,7 @@ mod incremental_tests {
                 &uid,
                 &host,
                 advance.authenticated_roots(),
-                &chain.merkle.root().hostchain,
+                &advance,
             ),
             Err(Error::UserChainContinuity)
         ));

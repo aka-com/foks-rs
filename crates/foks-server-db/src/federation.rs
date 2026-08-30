@@ -1117,8 +1117,9 @@ mod tests {
             .execute(
                 "INSERT INTO teams
                  (team_id, team_kind, host_id, normalized_name, team_name_utf8,
-                  team_name_sequence, team_name_commitment_key, created_at)
-                 VALUES (?1, 20, ?2, NULL, x'2d', 0, NULL, 1)",
+                  team_name_sequence, team_name_commitment_key,
+                  member_load_floor_type, member_load_floor_visibility, created_at)
+                 VALUES (?1, 20, ?2, NULL, x'2d', 0, NULL, 1, 0, 1)",
                 params![team, host],
             )
             .unwrap();

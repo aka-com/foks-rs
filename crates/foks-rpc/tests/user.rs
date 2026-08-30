@@ -6,9 +6,9 @@ use foks_proto::{
     NamedTeamCreateArgument, PermissionToken, ProvisionDeviceArgument, PukParcel, RegServerConfig,
     RegistrationChallenge, RemoveTeamMemberArgument, RevokeDeviceArgument, Role, RoleAndGeneration,
     SecretSeed, SeedChainBox, SemVer, ServerClientVersionInfo, SharedKeyBoxSet,
-    SoftwareSignupArgument, TeamBearerTokenChallenge, TeamChain, TeamRemovalAndCommitment,
-    TeamRemovalBoxData, TeamViewChallenge, TeamViewRequest, UserChain, UserLink,
-    UsernameReservation, ViewershipMode, TEAM_VIEW_CHALLENGE_TYPE_ID,
+    SoftwareSignupArgument, TeamBearerTokenChallenge, TeamChain, TeamConfig,
+    TeamRemovalAndCommitment, TeamRemovalBoxData, TeamViewChallenge, TeamViewRequest, UserChain,
+    UserLink, UsernameReservation, ViewershipMode, TEAM_VIEW_CHALLENGE_TYPE_ID,
 };
 use foks_rpc::{
     decode_team_bearer_token, decode_team_edit_result, decode_team_removal_key_box,
@@ -22,14 +22,16 @@ use foks_rpc::{
     encode_get_owner_puk_request, encode_get_puk_for_role_request,
     encode_get_uid_lookup_challenge_request, encode_load_team_chain_request,
     encode_load_team_chain_request_with_options, encode_load_team_removal_key_box_request,
-    encode_load_user_chain_request, encode_lookup_uid_by_device_request,
-    encode_make_team_bearer_token_request, encode_merkle_select_vhost_request,
-    encode_probe_key_exists_request, encode_provision_device_request,
-    encode_registration_select_vhost_request, encode_registration_server_config_request,
-    encode_remove_team_member_request, encode_reserve_team_name_request,
-    encode_reserve_username_request_at, encode_resolve_username_request,
-    encode_revoke_device_request, encode_signup_request_at, encode_team_view_challenge_request,
-    encode_user_ping_request, read_call, TeamChainLoadOptions, DEFAULT_MAX_FRAME_LENGTH,
+    encode_load_user_chain_as_local_team_request, encode_load_user_chain_request,
+    encode_lookup_uid_by_device_request, encode_make_team_bearer_token_request,
+    encode_merkle_select_vhost_request, encode_probe_key_exists_request,
+    encode_provision_device_request, encode_registration_select_vhost_request,
+    encode_registration_server_config_request, encode_remove_team_member_request,
+    encode_reserve_team_name_request, encode_reserve_username_request_at,
+    encode_resolve_username_request, encode_revoke_device_request, encode_signup_request_at,
+    encode_team_admin_config_request, encode_team_loader_server_config_request,
+    encode_team_view_challenge_request, encode_user_ping_request, read_call, TeamChainLoadOptions,
+    DEFAULT_MAX_FRAME_LENGTH,
 };
 use foks_snowpack::{decode, encode, Value};
 
@@ -55,6 +57,31 @@ fn request_argument(name: &str) -> Vec<u8> {
         .unwrap()
         .argument()
         .to_vec()
+}
+
+#[test]
+fn team_config_calls_and_result_use_go_headerless_shapes() {
+    for (frame, protocol, position) in [
+        (
+            encode_team_loader_server_config_request().unwrap(),
+            foks_rpc::TEAM_LOADER_PROTOCOL_ID,
+            foks_rpc::TEAM_GET_SERVER_CONFIG_METHOD_POSITION,
+        ),
+        (
+            encode_team_admin_config_request().unwrap(),
+            foks_rpc::TEAM_ADMIN_PROTOCOL_ID,
+            foks_rpc::TEAM_GET_CONFIG_METHOD_POSITION,
+        ),
+    ] {
+        let call = read_call(&mut std::io::Cursor::new(frame), DEFAULT_MAX_FRAME_LENGTH).unwrap();
+        assert_eq!(call.protocol_id(), protocol);
+        assert_eq!(call.method_position(), position);
+        assert_eq!(call.argument(), [0x90]);
+    }
+
+    let encoded = TeamConfig { maximum_roles: 16 }.encoded().unwrap();
+    assert_eq!(encoded, vec![0x91, 0x10]);
+    assert_eq!(TeamConfig::decode(&encoded).unwrap().maximum_roles, 16);
 }
 
 #[test]
@@ -438,21 +465,25 @@ fn removal_and_ptk_rotation_edit_matches_go_v019() {
         seed_chain: &seed_chain,
         removals: &[removal],
         hepks: &hepks,
+        new_key_on_rotate: None,
+        team_bearer_token: None,
     };
     assert_eq!(
         encode_remove_team_member_request(&argument).unwrap(),
         mutation_fixture("remove-member-request.frame")
     );
-    assert!(RemoveTeamMemberArgument {
+    let role_only = RemoveTeamMemberArgument {
         link: &link,
         next_tree_location: [0; 32],
         ptk_boxes: &boxes,
         seed_chain: &[],
         removals: &[],
-        hepks: &hepks,
+        hepks: &[],
+        new_key_on_rotate: None,
+        team_bearer_token: None,
     }
-    .encoded()
-    .is_err());
+    .encoded();
+    assert!(role_only.is_ok(), "{role_only:?}");
 }
 
 #[test]
@@ -859,6 +890,39 @@ fn incremental_chain_requests_carry_go_v019_name_cursors() {
             foks_rpc::TEAM_LOADER_PROTOCOL_ID,
             foks_rpc::TEAM_LOAD_CHAIN_METHOD_POSITION,
             &team_argument,
+            0,
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn local_team_user_chain_requests_use_the_go_authorization_variant() {
+    let uid = binary_fixture("uid.snowp");
+    let token = [0x5a; 16];
+    let argument = encode(&Value::Array(vec![Value::Array(vec![
+        Value::Binary(uid.clone()),
+        Value::Unsigned(4),
+        Value::Array(vec![
+            Value::Text(b"fixtureuser".to_vec()),
+            Value::Unsigned(2),
+        ]),
+        Value::Array(vec![
+            Value::Unsigned(3),
+            Value::Variant(Some((
+                b"3".to_vec(),
+                Box::new(Value::Binary(token.to_vec())),
+            ))),
+        ]),
+    ])]))
+    .unwrap();
+    assert_eq!(
+        encode_load_user_chain_as_local_team_request(&uid, 4, Some((b"fixtureuser", 2)), &token,)
+            .unwrap(),
+        foks_rpc::encode_call(
+            foks_rpc::USER_PROTOCOL_ID,
+            foks_rpc::USER_LOAD_USER_CHAIN_METHOD_POSITION,
+            &argument,
             0,
         )
         .unwrap()
