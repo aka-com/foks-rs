@@ -96,7 +96,7 @@ fn maintenance_reclaims_only_expired_or_abandoned_state() {
 
     let report = test.database.run_maintenance(21, 11).unwrap();
     assert_eq!(report.reservations, 1);
-    assert_eq!(report.locks, 1);
+    assert_eq!(report.locks, 0);
     assert_eq!(report.uploads, 2);
     assert_eq!(report.receipts, 0);
     assert_eq!(report.challenges, 0);

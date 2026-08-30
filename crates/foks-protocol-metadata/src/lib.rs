@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-pub const ARTIFACT_SCHEMA_VERSION: u64 = 1;
+pub const ARTIFACT_SCHEMA_VERSION: u64 = 2;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -39,6 +39,8 @@ pub struct Protocol {
     pub name: String,
     pub unique_id: u64,
     pub go_file: String,
+    pub argument_header: bool,
+    pub result_header: bool,
     pub methods: Vec<Method>,
 }
 
@@ -48,6 +50,7 @@ pub struct Method {
     pub name: String,
     pub position: u64,
     pub qualified_name: String,
+    pub result_type: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -127,6 +130,9 @@ pub struct MergedRoute<'a> {
     pub policy: &'a RoutePolicy,
     pub protocol_id: u64,
     pub position: u64,
+    pub upstream_result: &'a str,
+    pub argument_header: bool,
+    pub result_header: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -232,6 +238,7 @@ pub fn validate_artifact(artifact: &Artifact) -> Result<(), MetadataError> {
             }
             if method.position > u32::MAX.into()
                 || method.qualified_name != format!("{}.{}", protocol.name, method.name)
+                || method.result_type.is_empty()
             {
                 return invalid(format!(
                     "invalid method identity {}.{}",
@@ -304,6 +311,13 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
         }
         if !upstream_protocols.contains_key(protocol.upstream.as_str()) {
             return invalid(format!("unknown upstream protocol {}", protocol.upstream));
+        }
+        let upstream_protocol = upstream_protocols[protocol.upstream.as_str()];
+        if upstream_protocol.argument_header != upstream_protocol.result_header {
+            return invalid(format!(
+                "protocol {} uses asymmetric argument/result headers",
+                protocol.upstream
+            ));
         }
         validate_constant(&protocol.id_constant)?;
         if !constants.insert(protocol.id_constant.as_str()) {
@@ -451,6 +465,9 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
             policy: route,
             protocol_id: protocol.unique_id,
             position: method.position,
+            upstream_result: method.result_type.as_str(),
+            argument_header: protocol.argument_header,
+            result_header: protocol.result_header,
         });
     }
     Ok(Merged {
@@ -529,6 +546,30 @@ pub fn render_protocol_ids(merged: &Merged<'_>) -> String {
     if output.ends_with("\n\n") {
         output.pop();
     }
+
+    output.push_str(
+        "\n/// Reports whether go-foks sends this protocol without argument/result headers.\n",
+    );
+    output.push_str("pub const fn is_headerless_protocol(protocol_id: u64) -> bool {\n");
+    let headerless = merged
+        .artifact
+        .protocols
+        .iter()
+        .filter(|protocol| !protocol.argument_header && !protocol.result_header)
+        .collect::<Vec<_>>();
+    if headerless.is_empty() {
+        output.push_str("    let _ = protocol_id;\n    false\n");
+    } else {
+        output.push_str("    matches!(\n        protocol_id,\n        ");
+        for (index, protocol) in headerless.into_iter().enumerate() {
+            if index != 0 {
+                output.push_str(" | ");
+            }
+            write!(output, "{:#010x}", protocol.unique_id).expect("write String");
+        }
+        output.push_str("\n    )\n");
+    }
+    output.push_str("}\n");
     output
 }
 
@@ -620,6 +661,19 @@ pub fn render_routes(merged: &Merged<'_>) -> String {
         writeln!(output, "        request: {},", rust_string(&policy.request))
             .expect("write String");
         writeln!(output, "        result: {},", rust_string(&policy.result)).expect("write String");
+        writeln!(
+            output,
+            "        upstream_result: {},",
+            rust_string(route.upstream_result)
+        )
+        .expect("write String");
+        writeln!(
+            output,
+            "        argument_header: {},",
+            route.argument_header
+        )
+        .expect("write String");
+        writeln!(output, "        result_header: {},", route.result_header).expect("write String");
         write!(output, "        statuses: &[").expect("write String");
         write_strings(&mut output, &policy.statuses, rust_string);
         output.push_str("],\n");
@@ -691,6 +745,20 @@ pub fn render_contract(merged: &Merged<'_>) -> String {
     for (name, value) in &merged.status_codes {
         writeln!(output, "{name} = {value}").expect("write String");
     }
+    for policy in &merged.policy.protocols {
+        let protocol = merged
+            .artifact
+            .protocols
+            .iter()
+            .find(|protocol| protocol.name == policy.upstream)
+            .expect("validated protocol");
+        output.push_str("\n[[protocol]]\n");
+        writeln!(output, "name = {}", toml_string(&policy.name)).expect("write String");
+        writeln!(output, "upstream = {}", toml_string(&policy.upstream)).expect("write String");
+        writeln!(output, "protocol_id = {:#010x}", protocol.unique_id).expect("write String");
+        writeln!(output, "argument_header = {}", protocol.argument_header).expect("write String");
+        writeln!(output, "result_header = {}", protocol.result_header).expect("write String");
+    }
     for service in &merged.services {
         output.push_str("\n[[service]]\n");
         writeln!(output, "name = {}", toml_string(&service.policy.name)).expect("write String");
@@ -721,6 +789,14 @@ pub fn render_contract(merged: &Merged<'_>) -> String {
         .expect("write String");
         writeln!(output, "request = {}", toml_string(&policy.request)).expect("write String");
         writeln!(output, "result = {}", toml_string(&policy.result)).expect("write String");
+        writeln!(
+            output,
+            "upstream_result = {}",
+            toml_string(route.upstream_result)
+        )
+        .expect("write String");
+        writeln!(output, "argument_header = {}", route.argument_header).expect("write String");
+        writeln!(output, "result_header = {}", route.result_header).expect("write String");
         write!(output, "statuses = [").expect("write String");
         write_strings(&mut output, &policy.statuses, toml_string);
         output.push_str("]\n");

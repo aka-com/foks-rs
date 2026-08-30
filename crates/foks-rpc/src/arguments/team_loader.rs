@@ -28,8 +28,35 @@ pub struct LoadTeamChainArgument {
 pub enum TeamChainAuthorization {
     LocalView([u8; 16]),
     RemotePermission(PermissionToken),
+    LocalParentTeam([u8; 16]),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoadTeamMembershipChainArgument {
+    pub team: FqTeam,
+    pub token: [u8; 16],
+    pub start: u64,
+}
+
+pub fn decode_load_team_membership_chain(bytes: &[u8]) -> Result<LoadTeamMembershipChainArgument> {
+    let Value::Array(fields) = decode(bytes)? else {
+        return Err(shape("team membership-chain load argument"));
+    };
+    let [team, Value::Binary(token), Value::Unsigned(start)] = fields.as_slice() else {
+        return Err(shape("team membership-chain load fields"));
+    };
+    if *start == 0 {
+        return Err(shape("positive team membership-chain start"));
+    }
+    Ok(LoadTeamMembershipChainArgument {
+        team: FqTeam::decode(&encode(team)?)?,
+        token: token
+            .as_slice()
+            .try_into()
+            .map_err(|_| shape("16-byte team-view bearer token"))?,
+        start: *start,
+    })
+}
 pub fn decode_team_view_request(bytes: &[u8]) -> Result<TeamViewRequest> {
     let Value::Array(fields) = decode(bytes)? else {
         return Err(shape("team-view challenge argument"));
@@ -139,6 +166,17 @@ fn decode_view_token(value: &Value) -> Result<TeamChainAuthorization> {
         (2, b"1") => Ok(TeamChainAuthorization::RemotePermission(
             PermissionToken::decode(&encode(value.as_ref())?)?,
         )),
+        (3, b"2") => {
+            let Value::Binary(token) = value.as_ref() else {
+                return Err(shape("local parent team-view token bytes"));
+            };
+            Ok(TeamChainAuthorization::LocalParentTeam(
+                token
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| shape("16-byte team-view token"))?,
+            ))
+        }
         _ => Err(shape("supported team-chain authorization")),
     }
 }
@@ -147,5 +185,22 @@ fn shape(expected: &'static str) -> Error {
     Error::Envelope {
         expected,
         found: "another Snowpack value",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn go_v019_local_parent_team_token_decodes() {
+        let value = Value::Array(vec![
+            Value::Unsigned(3),
+            Value::Variant(Some((b"2".to_vec(), Box::new(Value::Binary(vec![7; 16]))))),
+        ]);
+        assert_eq!(
+            decode_view_token(&value).unwrap(),
+            TeamChainAuthorization::LocalParentTeam([7; 16])
+        );
     }
 }

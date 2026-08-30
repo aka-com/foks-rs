@@ -1,6 +1,8 @@
 use std::io::Cursor;
 
-use foks_client::{KvWriteOptions, Passphrase, SoftwareAccountRequest, SoftwareAccountSecrets};
+use foks_client::{
+    KvWriteOptions, MutationCoordinator, Passphrase, SoftwareAccountRequest, SoftwareAccountSecrets,
+};
 use foks_client_db::HardStateStore;
 use foks_proto::{EntityId, InviteCode, Role, SecretSeed};
 use foks_server_testkit::{TestAccountSpec, TestClient, TestEnvironment, TestFault};
@@ -105,6 +107,9 @@ fn signup_commit_with_lost_or_partial_response_reconciles_without_replay() {
             .unwrap();
         assert_eq!(recovered.credential.uid, uid);
         assert_eq!(server.current_root().unwrap().unwrap().epoch, 2);
+        MutationCoordinator::new(reconstructed.hard_state_path(), &mut reopened)
+            .finalize(&recovered.operation_id)
+            .unwrap();
         assert!(HardStateStore::open(reconstructed.hard_state_path())
             .unwrap()
             .pending_mutations(probe.pinned.host_id().as_bytes())

@@ -115,6 +115,6 @@ CREATE TABLE kv_locks (
     parent_id BLOB NOT NULL CHECK (length(parent_id) = 16),
     dirent_id BLOB NOT NULL CHECK (length(dirent_id) = 16),
     lock_id BLOB NOT NULL CHECK (length(lock_id) = 16),
-    expires_at INTEGER NOT NULL CHECK (expires_at >= 0),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
     PRIMARY KEY (uid, parent_id, dirent_id)
 ) STRICT;

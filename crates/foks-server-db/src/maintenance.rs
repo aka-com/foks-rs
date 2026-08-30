@@ -67,10 +67,9 @@ impl Database {
             "DELETE FROM team_admin_tokens WHERE expires_at <= ?1",
             [sql_integer(now)?],
         )?;
-        let locks = transaction.execute(
-            "DELETE FROM kv_locks WHERE expires_at <= ?1",
-            [sql_integer(now)?],
-        )?;
+        // Lock expiry is evaluated against the timeout supplied by the next
+        // acquirer, matching go-foks. There is no absolute expiry to reap.
+        let locks = 0;
         let uploads = transaction.execute(
             "DELETE FROM kv_file_uploads
              WHERE updated_at <= ?1

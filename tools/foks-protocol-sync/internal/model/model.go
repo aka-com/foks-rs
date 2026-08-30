@@ -7,7 +7,7 @@ import (
 	"sort"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 type SourceIdentity struct {
 	Module   string `json:"module"`
@@ -21,13 +21,16 @@ type Method struct {
 	Name          string `json:"name"`
 	Position      uint32 `json:"position"`
 	QualifiedName string `json:"qualified_name"`
+	ResultType    string `json:"result_type"`
 }
 
 type Protocol struct {
-	Name     string   `json:"name"`
-	UniqueID uint32   `json:"unique_id"`
-	GoFile   string   `json:"go_file"`
-	Methods  []Method `json:"methods"`
+	Name           string   `json:"name"`
+	UniqueID       uint32   `json:"unique_id"`
+	GoFile         string   `json:"go_file"`
+	ArgumentHeader bool     `json:"argument_header"`
+	ResultHeader   bool     `json:"result_header"`
+	Methods        []Method `json:"methods"`
 }
 
 type NamedValue struct {
@@ -85,7 +88,7 @@ func (a Artifact) Validate() error {
 		positions := make(map[uint32]string)
 		names := make(map[string]bool)
 		for _, method := range protocol.Methods {
-			if method.Name == "" || names[method.Name] {
+			if method.Name == "" || method.ResultType == "" || names[method.Name] {
 				return fmt.Errorf("duplicate or empty method %s.%s", protocol.Name, method.Name)
 			}
 			names[method.Name] = true

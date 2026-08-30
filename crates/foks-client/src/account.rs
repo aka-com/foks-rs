@@ -2,16 +2,19 @@
 
 use super::{
     derive_device_public, derive_shared_verify_key, encode_check_invite_code_request,
-    encode_registration_select_vhost_request, encode_reserve_username_request_at,
+    encode_check_name_exists_request, encode_get_client_version_info_request,
+    encode_probe_key_exists_request, encode_registration_select_vhost_request,
+    encode_registration_server_config_request, encode_reserve_username_request_at,
     encode_signup_request_at, fix_device_name, make_software_eldest_link, normalize_device_name,
-    normalize_username, now_microseconds, prefixed_hash, random_bytes, seal_initial_puk_box,
-    AuthenticatedUserOutcome, DeviceCredential, DeviceLabel, DeviceLabelNameAndCommitmentKey,
-    DeviceType, Duration, EntityId, Error, FoksClient, HardStateStore, InitialPukBoxRandomness,
-    InviteCode, KvDirectoryProjection, MutationCoordinator, MutationDraft, MutationKind,
-    MutationOperation, MutationState, PassphraseUpdateArgument, Path, PinnedHost,
-    ProtectedMutationStore, Result, Role, SecretSeed, SharedKeyBoxSet, SoftwareEldestInput,
-    SoftwareEldestMaterial, SoftwareSignupArgument, TreeRoot, UsernameReservation,
-    VerifiedMerkleAdvance, Zeroizing, ENTITY_PUK_VERIFY, ENTITY_USER,
+    normalize_username, now_milliseconds, prefixed_hash, random_bytes, seal_initial_puk_box,
+    AuthenticatedUserOutcome, ClientVersionExt, DeviceCredential, DeviceLabel,
+    DeviceLabelNameAndCommitmentKey, DeviceType, Duration, EntityId, Error, FoksClient,
+    HardStateStore, InitialPukBoxRandomness, InviteCode, KvDirectoryProjection,
+    MutationCoordinator, MutationDraft, MutationKind, MutationOperation, MutationState,
+    PassphraseUpdateArgument, Path, PermissionToken, PinnedHost, ProtectedMutationStore,
+    RegServerConfig, Result, Role, SecretSeed, ServerClientVersionInfo, SharedKeyBoxSet,
+    SoftwareEldestInput, SoftwareEldestMaterial, SoftwareSignupArgument, TreeRoot,
+    UsernameReservation, VerifiedMerkleAdvance, Zeroizing, ENTITY_PUK_VERIFY, ENTITY_USER,
 };
 
 const SIGNUP_REQUEST_HASH_TYPE_ID: u64 = 0x8f4b_8ab7_464f_4b53;
@@ -66,6 +69,57 @@ pub struct CreatedSoftwareAccount {
 }
 
 impl FoksClient {
+    pub fn check_name_exists(&self, host: &PinnedHost, username_utf8: &str) -> Result<()> {
+        let normalized = normalize_username(username_utf8.as_bytes()).ok_or(
+            Error::AccountRequest("username is not valid after normalization"),
+        )?;
+        self.call_void_after_vhost_selection(
+            host,
+            &host.registration,
+            &encode_registration_select_vhost_request(host.host_id())?,
+            &encode_check_name_exists_request(&normalized)?,
+        )
+    }
+
+    pub fn probe_key_exists(
+        &self,
+        host: &PinnedHost,
+        uid: &EntityId,
+        device_id: &EntityId,
+        self_token: &PermissionToken,
+    ) -> Result<()> {
+        self.call_void_after_vhost_selection(
+            host,
+            &host.registration,
+            &encode_registration_select_vhost_request(host.host_id())?,
+            &encode_probe_key_exists_request(uid, device_id, self_token)?,
+        )
+    }
+
+    pub fn client_version_info(
+        &self,
+        host: &PinnedHost,
+        version: &ClientVersionExt,
+    ) -> Result<ServerClientVersionInfo> {
+        let response = self.call_after_vhost_selection(
+            host,
+            &host.registration,
+            &encode_registration_select_vhost_request(host.host_id())?,
+            &encode_get_client_version_info_request(version)?,
+        )?;
+        ServerClientVersionInfo::decode(&response).map_err(Into::into)
+    }
+
+    pub fn registration_server_config(&self, host: &PinnedHost) -> Result<RegServerConfig> {
+        let response = self.call_after_vhost_selection(
+            host,
+            &host.registration,
+            &encode_registration_select_vhost_request(host.host_id())?,
+            &encode_registration_server_config_request()?,
+        )?;
+        RegServerConfig::decode(&response).map_err(Into::into)
+    }
+
     pub fn check_invite_code(&self, host: &PinnedHost, code: &InviteCode) -> Result<()> {
         code.validate()?;
         self.call_void_after_vhost_selection(
@@ -142,7 +196,7 @@ impl FoksClient {
             &SoftwareEldestInput {
                 host: host.host_id(),
                 root: &tree_root,
-                time: now_microseconds()?,
+                time: now_milliseconds()?,
                 next_tree_location,
                 subchain_tree_location,
                 normalized_username: &normalized_username,

@@ -122,6 +122,7 @@ impl PassphraseUpdate {
             passphrase_box: self.passphrase_box.clone(),
             puk_box: Some(self.puk_box.clone()),
             stretch_version: self.stretch_version,
+            user_settings_link: None,
         }
     }
 }

@@ -76,8 +76,8 @@ fn passphrase_mutations_require_an_owner_role_device() {
         .execute(
             "INSERT INTO devices
              (device_id, uid, active, role_type, visibility, subkey_id,
-              hepk_fingerprint, exact_hepk, exact_name)
-             VALUES (?1, ?2, 1, 1, 0, NULL, ?3, ?4, ?5)",
+              hepk_fingerprint, self_token, exact_hepk, exact_name)
+             VALUES (?1, ?2, 1, 1, 0, NULL, ?3, zeroblob(17), ?4, ?5)",
             rusqlite::params![MEMBER, UID, [0x11u8; 32], b"member-hepk", b"member"],
         )
         .unwrap();

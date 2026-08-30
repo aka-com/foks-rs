@@ -1,9 +1,9 @@
 use foks_protocol_metadata::{merge, parse_artifact, parse_policy, MetadataError};
 
 const ARTIFACT: &str = r#"{
-  "schema_version": 1,
+  "schema_version": 2,
   "source": {"module":"github.com/foks-proj/go-foks","version":"v0.1.9","sum":"sum","go_mod_sum":"mod","commit":"abc"},
-  "protocols": [{"name":"Probe","unique_id":1,"go_file":"proto/rem/probe.go","methods":[{"name":"probe","position":1,"qualified_name":"Probe.probe"}]}],
+  "protocols": [{"name":"Probe","unique_id":1,"go_file":"proto/rem/probe.go","argument_header":true,"result_header":true,"methods":[{"name":"probe","position":1,"qualified_name":"Probe.probe","result_type":"rem.ProbeRes"}]}],
   "statuses": [{"name":"NOT_IMPLEMENTED","value":1020,"go_file":"proto/lib/status.go"},{"name":"OK","value":0,"go_file":"proto/lib/status.go"}],
   "services": [{"name":"Probe","value":10,"go_file":"proto/lib/common.go"}],
   "sources": [{"path":"proto-src/rem/probe.snowp","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","semantic_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]
@@ -64,7 +64,7 @@ fn rejects_unknown_policy_method() {
 fn rejects_duplicate_wire_positions() {
     let duplicate = ARTIFACT.replace(
         "]}],\n  \"statuses\"",
-        ",{\"name\":\"other\",\"position\":1,\"qualified_name\":\"Probe.other\"}]}],\n  \"statuses\"",
+        ",{\"name\":\"other\",\"position\":1,\"qualified_name\":\"Probe.other\",\"result_type\":\"void\"}]}],\n  \"statuses\"",
     );
     assert!(matches!(
         parse_artifact(&duplicate),
@@ -110,6 +110,18 @@ fn principal_bound_routes_must_use_the_authenticated_listener() {
         "authentication = \"active_device_mtls\"",
     );
     let policy = parse_policy(&malformed).unwrap();
+    assert!(matches!(
+        merge(&artifact, &policy),
+        Err(MetadataError::Invalid(_))
+    ));
+}
+
+#[test]
+fn rejects_asymmetric_protocol_headers() {
+    let artifact =
+        parse_artifact(&ARTIFACT.replace("\"result_header\":true", "\"result_header\":false"))
+            .unwrap();
+    let policy = parse_policy(POLICY).unwrap();
     assert!(matches!(
         merge(&artifact, &policy),
         Err(MetadataError::Invalid(_))

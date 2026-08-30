@@ -20,6 +20,7 @@ struct Contract {
     upstream_sum: String,
     upstream_commit: String,
     status_codes: BTreeMap<String, u64>,
+    protocol: Vec<Protocol>,
     service: Vec<Service>,
     route: Vec<Route>,
 }
@@ -115,6 +116,9 @@ fn authentication_policy_matches_listener_principal_availability() {
         "signed_signup",
         "signed_subkey_challenge",
         "remote_view_token",
+        "team_view_token",
+        "self_view_token",
+        "delegated_tls_and_view_policy",
     ];
     for route in ROUTES.iter() {
         let principal_bound = route.authentication.starts_with("active_")
@@ -188,6 +192,16 @@ struct Service {
 
 #[derive(Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]
+struct Protocol {
+    name: String,
+    upstream: String,
+    protocol_id: u64,
+    argument_header: bool,
+    result_header: bool,
+}
+
+#[derive(Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(deny_unknown_fields)]
 struct Route {
     protocol: String,
     protocol_id: u64,
@@ -197,6 +211,9 @@ struct Route {
     authentication: String,
     request: String,
     result: String,
+    upstream_result: String,
+    argument_header: bool,
+    result_header: bool,
     statuses: Vec<String>,
     max_request_bytes: usize,
     supported: bool,
@@ -226,9 +243,13 @@ fn protocol_contract_is_valid_and_exactly_registered() {
             ("bad_passphrase".to_owned(), 1011),
             ("device_already_provisioned".to_owned(), 1072),
             ("expired".to_owned(), 1062),
+            ("key_not_found".to_owned(), 1025),
             ("kv_noent".to_owned(), 8016),
             ("kv_permission".to_owned(), 8011),
+            ("lock_timeout".to_owned(), 8015),
             ("locked".to_owned(), 8014),
+            ("merkle_leaf_not_found".to_owned(), 4002),
+            ("merkle_no_root".to_owned(), 4001),
             ("name_in_use".to_owned(), 1023),
             ("not_found".to_owned(), 1049),
             ("ok".to_owned(), 0),
@@ -236,6 +257,7 @@ fn protocol_contract_is_valid_and_exactly_registered() {
             ("permission_denied".to_owned(), 1013),
             ("quota_exceeded".to_owned(), 1060),
             ("rate_limited".to_owned(), 1012),
+            ("revoke_race".to_owned(), 1044),
             ("stale_cache".to_owned(), 8012),
             ("stale_root".to_owned(), 1014),
             ("tx_retry".to_owned(), 1014),
@@ -254,6 +276,7 @@ fn protocol_contract_is_valid_and_exactly_registered() {
             ("team_adhoc_invalid_change".to_owned(), 7103),
             ("team_adhoc_duplicate".to_owned(), 7104),
             ("unsupported".to_owned(), 1020),
+            ("user_not_found".to_owned(), 1027),
         ])
     );
 
@@ -293,6 +316,9 @@ fn protocol_contract_is_valid_and_exactly_registered() {
             authentication: route.authentication.into(),
             request: route.request.into(),
             result: route.result.into(),
+            upstream_result: route.upstream_result.into(),
+            argument_header: route.argument_header,
+            result_header: route.result_header,
             statuses: route
                 .statuses
                 .iter()
@@ -311,6 +337,13 @@ fn protocol_contract_is_valid_and_exactly_registered() {
 }
 
 fn validate_unique_contract_entries(contract: &Contract) {
+    let mut protocol_names = BTreeSet::new();
+    let mut protocol_ids = BTreeSet::new();
+    for protocol in &contract.protocol {
+        assert!(protocol_names.insert(&protocol.name));
+        assert!(protocol_ids.insert(protocol.protocol_id));
+        assert!(!protocol.upstream.is_empty());
+    }
     let mut service_names = BTreeSet::new();
     let mut service_types = BTreeSet::new();
     for service in &contract.service {
@@ -325,6 +358,14 @@ fn validate_unique_contract_entries(contract: &Contract) {
     let mut route_keys = BTreeSet::new();
     let mut route_names = BTreeSet::new();
     for route in &contract.route {
+        let protocol = contract
+            .protocol
+            .iter()
+            .find(|protocol| protocol.name == route.protocol)
+            .expect("route references a declared protocol");
+        assert_eq!(route.protocol_id, protocol.protocol_id);
+        assert_eq!(route.argument_header, protocol.argument_header);
+        assert_eq!(route.result_header, protocol.result_header);
         assert!(route_keys.insert((route.protocol_id, route.position)));
         assert!(route_names.insert((&route.protocol, &route.method)));
         assert!(!route.listeners.is_empty());

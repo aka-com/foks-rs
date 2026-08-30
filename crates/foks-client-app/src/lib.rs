@@ -54,7 +54,7 @@ const STATE_ROOT_RECORD: &str = "state-root-v1";
 const STATE_ROOT_BINDING_TYPE_ID: u64 = 0xf8d8_c42e_96e0_4734;
 const REGISTRY_LOCK_FILE: &str = ".profiles.lock";
 pub const PINNED_PROTOCOL_METADATA_SHA256: &str =
-    "071c2548f30b9a7f20e06eb71d99b92c47d845453b8a832651631ade7ede2ef1";
+    "cc3c55378ec57b77bbb951c35723bc198c112563909178806d8db33762ed7939";
 
 #[derive(Debug, Error)]
 pub enum Error {

@@ -489,6 +489,29 @@ pub fn capability_mac(key: &[u8], type_id: u64, object: &[u8]) -> [u8; 32] {
     typed_hmac(key, type_id, object)
 }
 
+/// Derives the hidden first Merkle location for a user or team subchain.
+pub fn subchain_tree_location(seed: &[u8; 32], chain_type: u64) -> Result<[u8; 32]> {
+    if !matches!(
+        chain_type,
+        foks_proto::CHAIN_TYPE_USER_SETTINGS | foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP
+    ) {
+        return Err(foks_proto::Error::UnknownEnum {
+            kind: "subchain type",
+            value: chain_type,
+        }
+        .into());
+    }
+    let object = encode(&Value::Array(vec![
+        Value::Unsigned(chain_type),
+        Value::Variant(None),
+    ]))?;
+    Ok(typed_hmac(
+        seed,
+        foks_proto::CHAIN_LOCATION_DERIVATION_TYPE_ID,
+        &object,
+    ))
+}
+
 /// Verifies a capability MAC in constant time.
 pub fn verify_capability_mac(
     key: &[u8],
@@ -739,6 +762,8 @@ pub struct AdHocTeamInput<'a> {
     pub root: &'a TreeRoot,
     pub time: u64,
     pub owner_puk_generation: u64,
+    pub membership_sequence: u64,
+    pub membership_previous: Option<[u8; 32]>,
     pub next_tree_location: [u8; 32],
     pub subchain_tree_location: [u8; 32],
     pub membership_next_tree_location: [u8; 32],
@@ -760,6 +785,8 @@ pub struct NamedTeamInput<'a> {
     pub root: &'a TreeRoot,
     pub time: u64,
     pub owner_puk_generation: u64,
+    pub membership_sequence: u64,
+    pub membership_previous: Option<[u8; 32]>,
     pub normalized_name: &'a [u8],
     pub name_sequence: u64,
     pub team_name_commitment_key: [u8; 16],
@@ -927,6 +954,8 @@ fn make_single_owner_adhoc_team_with_signer(
     sign_membership: impl FnOnce(&[u8]) -> Result<Signature>,
 ) -> Result<AdHocTeamMaterial> {
     if input.owner_puk_generation == 0
+        || input.membership_sequence == 0
+        || (input.membership_sequence == 1) != input.membership_previous.is_none()
         || input.next_tree_location == input.subchain_tree_location
         || input.next_tree_location == input.membership_next_tree_location
         || input.subchain_tree_location == input.membership_next_tree_location
@@ -1036,8 +1065,8 @@ fn make_single_owner_adhoc_team_with_signer(
             user: input.user,
             host: input.host,
             signer: device_id,
-            sequence: 1,
-            previous: None,
+            sequence: input.membership_sequence,
+            previous: input.membership_previous,
             root: input.root,
             time: 0,
             next_location_commitment: tree_location_commitment(
@@ -1111,6 +1140,8 @@ fn make_single_owner_named_team_with_signer(
     sign_membership: impl FnOnce(&[u8]) -> Result<Signature>,
 ) -> Result<NamedTeamMaterial> {
     if input.owner_puk_generation == 0
+        || input.membership_sequence == 0
+        || (input.membership_sequence == 1) != input.membership_previous.is_none()
         || input.normalized_name.is_empty()
         || input.name_sequence == 0
         || input.next_tree_location == input.subchain_tree_location
@@ -1231,8 +1262,8 @@ fn make_single_owner_named_team_with_signer(
             user: input.user,
             host: input.host,
             signer: device_id,
-            sequence: 1,
-            previous: None,
+            sequence: input.membership_sequence,
+            previous: input.membership_previous,
             root: input.root,
             time: 0,
             next_location_commitment: tree_location_commitment(
@@ -3680,6 +3711,18 @@ mod tests {
     }
 
     #[test]
+    fn subchain_location_matches_the_go_reference() {
+        assert_eq!(
+            subchain_tree_location(&[0x35; 32], foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP).unwrap(),
+            [
+                0x90, 0xde, 0x90, 0x44, 0xfc, 0xee, 0x5b, 0x28, 0x84, 0xe0, 0xd0, 0x4f, 0x7c, 0x71,
+                0xd6, 0xaf, 0x83, 0xce, 0x04, 0x7b, 0x05, 0x1f, 0x56, 0xc2, 0x07, 0xb5, 0x0b, 0xdb,
+                0x9d, 0x7f, 0x40, 0x96,
+            ]
+        );
+    }
+
+    #[test]
     fn signing_and_verification_reject_a_non_canonical_signable_object() {
         // array16 with 16..=31 elements is canonical for RPC arguments (the
         // signup argument is array16(16)) but not for signed, verified, or
@@ -3906,6 +3949,8 @@ mod tests {
                 root: &change.root,
                 time: change.time,
                 owner_puk_generation: owner.keys.as_ref().unwrap().generation,
+                membership_sequence: 1,
+                membership_previous: None,
                 next_tree_location: mutation_fixture("adhoc-next-tree-location.bin")
                     .try_into()
                     .unwrap(),
@@ -4022,6 +4067,8 @@ mod tests {
                 root: &change.root,
                 time: change.time,
                 owner_puk_generation: 0,
+                membership_sequence: 1,
+                membership_previous: None,
                 next_tree_location: [1; 32],
                 subchain_tree_location: [1; 32],
                 membership_next_tree_location: [1; 32],
@@ -4061,6 +4108,8 @@ mod tests {
                 root: &change.root,
                 time: change.time,
                 owner_puk_generation: owner.keys.as_ref().unwrap().generation,
+                membership_sequence: 1,
+                membership_previous: None,
                 normalized_name: b"auditteam",
                 name_sequence: 7,
                 team_name_commitment_key: mutation_fixture("named-team-name-commitment-key.bin")
@@ -4603,6 +4652,8 @@ mod tests {
                 root: &change.root,
                 time: change.time,
                 owner_puk_generation: owner.keys.as_ref().unwrap().generation,
+                membership_sequence: 1,
+                membership_previous: None,
                 next_tree_location: mutation_fixture("adhoc-next-tree-location.bin")
                     .try_into()
                     .unwrap(),
@@ -4648,6 +4699,8 @@ mod tests {
                     root: &change.root,
                     time: change.time,
                     owner_puk_generation: owner.keys.as_ref().unwrap().generation,
+                    membership_sequence: 1,
+                    membership_previous: None,
                     next_tree_location: [1; 32],
                     subchain_tree_location: [2; 32],
                     membership_next_tree_location: [3; 32],

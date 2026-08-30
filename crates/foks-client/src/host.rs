@@ -20,31 +20,55 @@ impl ProbeTarget {
         if input.is_empty() {
             return Err(Error::Target("hostname is empty"));
         }
-        let (hostname, port) = match input.rsplit_once(':') {
-            Some((hostname, port)) if !hostname.contains(':') => {
-                let port = port
+        let (hostname, port, is_ipv6) = if let Some(bracketed) = input.strip_prefix('[') {
+            let (hostname, suffix) = bracketed
+                .split_once(']')
+                .ok_or(Error::Target("invalid bracketed IPv6 literal"))?;
+            let port = match suffix {
+                "" => DEFAULT_PROBE_PORT,
+                suffix => suffix
+                    .strip_prefix(':')
+                    .ok_or(Error::Target("invalid bracketed IPv6 literal"))?
                     .parse::<u16>()
-                    .map_err(|_| Error::Target("port must be an integer from 1 through 65535"))?;
-                (hostname, port)
-            }
-            Some(_) if input.contains(':') => {
-                return Err(Error::Target("IPv6 literals are not FOKS hostnames"));
-            }
-            _ => (input, DEFAULT_PROBE_PORT),
+                    .map_err(|_| Error::Target("port must be an integer from 1 through 65535"))?,
+            };
+            let hostname = hostname
+                .parse::<std::net::Ipv6Addr>()
+                .map_err(|_| Error::Target("invalid IPv6 literal"))?
+                .to_string();
+            (hostname, port, true)
+        } else if let Ok(address) = input.parse::<std::net::Ipv6Addr>() {
+            (address.to_string(), DEFAULT_PROBE_PORT, true)
+        } else {
+            let (hostname, port) = match input.rsplit_once(':') {
+                Some((hostname, port)) if !hostname.contains(':') => {
+                    let port = port.parse::<u16>().map_err(|_| {
+                        Error::Target("port must be an integer from 1 through 65535")
+                    })?;
+                    (hostname, port)
+                }
+                Some(_) => return Err(Error::Target("invalid IPv6 literal")),
+                _ => (input, DEFAULT_PROBE_PORT),
+            };
+            (
+                hostname.trim_end_matches('.').to_ascii_lowercase(),
+                port,
+                false,
+            )
         };
-        let hostname = hostname.trim_end_matches('.').to_ascii_lowercase();
-        if hostname.is_empty()
-            || !hostname.is_ascii()
-            || hostname.len() > 253
-            || hostname.split('.').any(|label| {
-                label.is_empty()
-                    || label.len() > 63
-                    || label.starts_with('-')
-                    || label.ends_with('-')
-                    || !label
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-            })
+        if !is_ipv6
+            && (hostname.is_empty()
+                || !hostname.is_ascii()
+                || hostname.len() > 253
+                || hostname.split('.').any(|label| {
+                    label.is_empty()
+                        || label.len() > 63
+                        || label.starts_with('-')
+                        || label.ends_with('-')
+                        || !label
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                }))
         {
             return Err(Error::Target("invalid DNS hostname"));
         }
@@ -63,7 +87,11 @@ impl ProbeTarget {
     }
 
     pub fn address(&self) -> String {
-        format!("{}:{}", self.hostname, self.port)
+        if self.hostname.contains(':') {
+            format!("[{}]:{}", self.hostname, self.port)
+        } else {
+            format!("{}:{}", self.hostname, self.port)
+        }
     }
 }
 
@@ -84,6 +112,7 @@ pub struct PinnedHost {
     pub(crate) lookup_name: String,
     pub(crate) host_id: EntityId,
     pub(crate) database_path: PathBuf,
+    pub(crate) probe: ProbeTarget,
     pub(crate) registration: ProbeTarget,
     pub(crate) user: ProbeTarget,
     pub(crate) merkle_query: ProbeTarget,
@@ -271,6 +300,7 @@ fn pinned_host_from_snapshot(snapshot: StoredHostSnapshot, path: &Path) -> Resul
             "stored host projection does not match authenticated evidence",
         ));
     }
+    let probe = service_target(identity.services(), ServiceType::Probe, "probe")?;
     let registration = service_target(
         identity.services(),
         ServiceType::Registration,
@@ -292,6 +322,7 @@ fn pinned_host_from_snapshot(snapshot: StoredHostSnapshot, path: &Path) -> Resul
         lookup_name: snapshot.lookup_name,
         host_id,
         database_path: path.to_owned(),
+        probe,
         registration,
         user,
         merkle_query,

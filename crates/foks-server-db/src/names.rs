@@ -1,6 +1,6 @@
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
-use crate::{error::sql_integer, Database, Error, Result};
+use crate::{error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result};
 
 impl Database {
     pub fn reserve_name(
@@ -58,4 +58,89 @@ impl Database {
             params![sql_integer(now)?, maximum],
         )?)
     }
+}
+
+impl ReadDatabase {
+    pub fn uid_by_normalized_name(&self, normalized_name: &[u8]) -> Result<Option<Vec<u8>>> {
+        uid_by_normalized_name(&self.connection, normalized_name)
+    }
+
+    pub fn device_self_token_matches(
+        &self,
+        uid: &[u8],
+        device_id: &[u8],
+        self_token: &[u8; 17],
+    ) -> Result<bool> {
+        device_self_token_matches(&self.connection, uid, device_id, self_token)
+    }
+
+    pub fn self_token_matches(&self, uid: &[u8], self_token: &[u8; 17]) -> Result<bool> {
+        self_token_matches(&self.connection, uid, self_token)
+    }
+}
+
+impl ReadSnapshot<'_> {
+    pub fn uid_by_normalized_name(&self, normalized_name: &[u8]) -> Result<Option<Vec<u8>>> {
+        uid_by_normalized_name(self.connection(), normalized_name)
+    }
+
+    pub fn device_self_token_matches(
+        &self,
+        uid: &[u8],
+        device_id: &[u8],
+        self_token: &[u8; 17],
+    ) -> Result<bool> {
+        device_self_token_matches(self.connection(), uid, device_id, self_token)
+    }
+
+    pub fn self_token_matches(&self, uid: &[u8], self_token: &[u8; 17]) -> Result<bool> {
+        self_token_matches(self.connection(), uid, self_token)
+    }
+}
+
+fn uid_by_normalized_name(
+    connection: &rusqlite::Connection,
+    normalized_name: &[u8],
+) -> Result<Option<Vec<u8>>> {
+    Ok(connection
+        .query_row(
+            "SELECT uid FROM names WHERE normalized_name = ?1 AND uid IS NOT NULL",
+            [normalized_name],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+fn device_self_token_matches(
+    connection: &rusqlite::Connection,
+    uid: &[u8],
+    device_id: &[u8],
+    self_token: &[u8; 17],
+) -> Result<bool> {
+    Ok(connection
+        .query_row(
+            "SELECT 1 FROM devices
+             WHERE uid = ?1 AND device_id = ?2 AND self_token = ?3",
+            params![uid, device_id, self_token],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+fn self_token_matches(
+    connection: &rusqlite::Connection,
+    uid: &[u8],
+    self_token: &[u8; 17],
+) -> Result<bool> {
+    // Go retains self-view tokens after revocation so the revoked device can
+    // still reload and verify the public chain that revoked it.
+    Ok(connection
+        .query_row(
+            "SELECT 1 FROM devices WHERE uid = ?1 AND self_token = ?2",
+            params![uid, self_token],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }

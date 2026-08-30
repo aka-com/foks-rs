@@ -14,7 +14,7 @@ func TestCompareClassifiesWireBehaviorAndAdditiveChanges(t *testing.T) {
 	candidate.Source.Version = "mainline"
 	candidate.Protocols[0].UniqueID++
 	candidate.Protocols[0].Methods = append(candidate.Protocols[0].Methods, model.Method{
-		Name: "added", Position: 9, QualifiedName: "Probe.added",
+		Name: "added", Position: 9, QualifiedName: "Probe.added", ResultType: "void",
 	})
 	candidate.Sources[0].SHA256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	candidate.Sources[0].SemanticSHA256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -36,7 +36,7 @@ func TestCompareClassifiesWireBehaviorAndAdditiveChanges(t *testing.T) {
 func TestCompareMarksUnsupportedMethodRemovalOutsideSlice(t *testing.T) {
 	baseline := fixtureArtifact()
 	baseline.Protocols[0].Methods = append(baseline.Protocols[0].Methods, model.Method{
-		Name: "legacy", Position: 7, QualifiedName: "Probe.legacy",
+		Name: "legacy", Position: 7, QualifiedName: "Probe.legacy", ResultType: "void",
 	})
 	report := Compare(baseline, fixtureArtifact(), Policy{
 		Protocols: map[string]string{"Probe": "Probe"},
@@ -91,12 +91,12 @@ func TestCompareKeepsUnsupportedProtocolNumericDriftOutsideSlice(t *testing.T) {
 	baseline := fixtureArtifact()
 	baseline.Protocols = append(baseline.Protocols, model.Protocol{
 		Name: "Git", UniqueID: 22, GoFile: "proto/rem/git.go",
-		Methods: []model.Method{{Name: "fetch", Position: 1, QualifiedName: "Git.fetch"}},
+		Methods: []model.Method{{Name: "fetch", Position: 1, QualifiedName: "Git.fetch", ResultType: "GitPack"}},
 	})
 	candidate := baseline
 	candidate.Protocols = append([]model.Protocol(nil), baseline.Protocols...)
 	candidate.Protocols[1].UniqueID = 23
-	candidate.Protocols[1].Methods = []model.Method{{Name: "pull", Position: 1, QualifiedName: "Git.pull"}}
+	candidate.Protocols[1].Methods = []model.Method{{Name: "pull", Position: 1, QualifiedName: "Git.pull", ResultType: "GitPack"}}
 	report := Compare(baseline, candidate, Policy{
 		Protocols: map[string]string{"Probe": "Probe"},
 		Supported: map[string]bool{"Probe.probe": true},
@@ -120,13 +120,29 @@ func TestCompareSerializesNoChangesAsAnEmptyArray(t *testing.T) {
 	}
 }
 
+func TestCompareClassifiesHeaderAndResultDriftAsWireBreaking(t *testing.T) {
+	baseline := fixtureArtifact()
+	candidate := fixtureArtifact()
+	candidate.Protocols[0].ArgumentHeader = false
+	candidate.Protocols[0].ResultHeader = false
+	candidate.Protocols[0].Methods[0].ResultType = "lib.SignedMerkleRoot"
+	report := Compare(baseline, candidate, Policy{
+		Protocols: map[string]string{"Probe": "Probe"},
+		Supported: map[string]bool{"Probe.probe": true},
+	})
+	if report.Counts[WireBreaking] != 3 {
+		t.Fatalf("wire-breaking count = %d, changes = %#v", report.Counts[WireBreaking], report.Changes)
+	}
+}
+
 func fixtureArtifact() model.Artifact {
 	return model.Artifact{
-		SchemaVersion: 1,
+		SchemaVersion: model.SchemaVersion,
 		Source:        model.SourceIdentity{Module: "github.com/foks-proj/go-foks", Version: "v0.1.9"},
 		Protocols: []model.Protocol{{
 			Name: "Probe", UniqueID: 1, GoFile: "proto/rem/probe.go",
-			Methods: []model.Method{{Name: "probe", Position: 1, QualifiedName: "Probe.probe"}},
+			ArgumentHeader: true, ResultHeader: true,
+			Methods: []model.Method{{Name: "probe", Position: 1, QualifiedName: "Probe.probe", ResultType: "rem.ProbeRes"}},
 		}},
 		Statuses: []model.NamedValue{{Name: "OK", Value: 0, GoFile: "proto/lib/status.go"}},
 		Services: []model.NamedValue{{Name: "Probe", Value: 10, GoFile: "proto/lib/common.go"}},

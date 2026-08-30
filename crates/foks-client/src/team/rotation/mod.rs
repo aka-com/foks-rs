@@ -26,9 +26,9 @@ use foks_verify::{VerifiedSharedKey, VerifiedTeamMemberState};
 use super::membership::{authorized_actor_member, finish_team_mutation_journal};
 use super::{AuthenticatedTeamOutcome, TeamPrivateKey};
 use crate::{
-    current_owner_puk, now_microseconds, random_bytes, user_key_for_seed, AuthenticatedUserOutcome,
-    DeviceCredential, Error, FoksClient, PinnedHost, Result, UserPrivateKey, YubiCredential,
-    TEAM_MUTATION_REQUEST_HASH_TYPE_ID,
+    current_owner_puk, now_microseconds, now_milliseconds, random_bytes, user_key_for_seed,
+    AuthenticatedUserOutcome, DeviceCredential, Error, FoksClient, PinnedHost, Result,
+    UserPrivateKey, YubiCredential, TEAM_MUTATION_REQUEST_HASH_TYPE_ID,
 };
 
 struct RotationBinding {
@@ -476,7 +476,7 @@ impl FoksClient {
                 &merkle.root().encoded()?,
             )?,
         };
-        let time = now_microseconds()?;
+        let time = now_milliseconds()?;
         let next_tree_location = random_bytes()?;
         let crypto_rotations = rotation_keys
             .iter()

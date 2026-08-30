@@ -1,30 +1,35 @@
 use foks_proto::{
-    AdHocTeamCreateArgument, AddTeamMemberArgument, DecodedAdHocTeamCreateArgument,
-    DecodedNamedTeamCreateArgument, DecodedProvisionDeviceArgument, DecodedRevokeDeviceArgument,
-    DecodedSignupArgument, DecodedTeamEditArgument, DeviceLabel, DeviceLabelNameAndCommitmentKey,
-    DeviceType, EntityId, HostConfig, InviteCode, NamedTeamCreateArgument, ProvisionDeviceArgument,
-    PukParcel, RegistrationChallenge, RemoveTeamMemberArgument, RevokeDeviceArgument, Role,
-    RoleAndGeneration, SecretSeed, SeedChainBox, SharedKeyBoxSet, SoftwareSignupArgument,
-    TeamBearerTokenChallenge, TeamChain, TeamRemovalAndCommitment, TeamRemovalBoxData,
-    TeamViewChallenge, TeamViewRequest, UserChain, UserLink, UsernameReservation, ViewershipMode,
-    TEAM_VIEW_CHALLENGE_TYPE_ID,
+    AdHocTeamCreateArgument, AddTeamMemberArgument, ClientVersionExt,
+    DecodedAdHocTeamCreateArgument, DecodedNamedTeamCreateArgument, DecodedProvisionDeviceArgument,
+    DecodedRevokeDeviceArgument, DecodedSignupArgument, DecodedTeamEditArgument, DeviceLabel,
+    DeviceLabelNameAndCommitmentKey, DeviceNagInfo, DeviceType, EntityId, HostConfig, InviteCode,
+    NamedTeamCreateArgument, PermissionToken, ProvisionDeviceArgument, PukParcel, RegServerConfig,
+    RegistrationChallenge, RemoveTeamMemberArgument, RevokeDeviceArgument, Role, RoleAndGeneration,
+    SecretSeed, SeedChainBox, SemVer, ServerClientVersionInfo, SharedKeyBoxSet,
+    SoftwareSignupArgument, TeamBearerTokenChallenge, TeamChain, TeamRemovalAndCommitment,
+    TeamRemovalBoxData, TeamViewChallenge, TeamViewRequest, UserChain, UserLink,
+    UsernameReservation, ViewershipMode, TEAM_VIEW_CHALLENGE_TYPE_ID,
 };
 use foks_rpc::{
     decode_team_bearer_token, decode_team_edit_result, decode_team_removal_key_box,
     encode_activate_team_bearer_token_request, encode_activate_team_view_request,
-    encode_add_team_member_request, encode_create_adhoc_team_request,
+    encode_add_team_member_request, encode_check_name_exists_request,
+    encode_clear_device_nag_request, encode_create_adhoc_team_request,
     encode_create_named_team_request, encode_get_client_cert_chain_request,
-    encode_get_client_cert_chain_request_at, encode_get_current_merkle_root_request,
+    encode_get_client_cert_chain_request_at, encode_get_client_version_info_request,
+    encode_get_current_merkle_root_request, encode_get_device_nag_request,
     encode_get_historical_merkle_roots_request, encode_get_host_config_request,
     encode_get_owner_puk_request, encode_get_puk_for_role_request,
     encode_get_uid_lookup_challenge_request, encode_load_team_chain_request,
     encode_load_team_chain_request_with_options, encode_load_team_removal_key_box_request,
     encode_load_user_chain_request, encode_lookup_uid_by_device_request,
     encode_make_team_bearer_token_request, encode_merkle_select_vhost_request,
-    encode_provision_device_request, encode_registration_select_vhost_request,
+    encode_probe_key_exists_request, encode_provision_device_request,
+    encode_registration_select_vhost_request, encode_registration_server_config_request,
     encode_remove_team_member_request, encode_reserve_team_name_request,
-    encode_reserve_username_request_at, encode_revoke_device_request, encode_signup_request_at,
-    encode_team_view_challenge_request, read_call, TeamChainLoadOptions, DEFAULT_MAX_FRAME_LENGTH,
+    encode_reserve_username_request_at, encode_resolve_username_request,
+    encode_revoke_device_request, encode_signup_request_at, encode_team_view_challenge_request,
+    encode_user_ping_request, read_call, TeamChainLoadOptions, DEFAULT_MAX_FRAME_LENGTH,
 };
 use foks_snowpack::{decode, encode, Value};
 
@@ -189,6 +194,91 @@ fn host_config_request_matches_go_v019() {
     assert_eq!(config.team_viewership, ViewershipMode::OpenToAdmin);
     assert_eq!(config.host_type, 4);
     assert_eq!(config.invite_code_regime, 2);
+}
+
+#[test]
+fn go_activation_requests_and_registration_config_match_v019() {
+    assert_eq!(
+        encode_registration_server_config_request().unwrap(),
+        fixture("reg-server-config-request.frame")
+    );
+    assert_eq!(
+        encode_user_ping_request().unwrap(),
+        fixture("user-ping-request.frame")
+    );
+    let bytes = fixture("reg-server-config-open.snowp");
+    let config = RegServerConfig::decode(&bytes).unwrap();
+    assert_eq!(config.sso, None);
+    assert_eq!(config.host_type, 4);
+    assert_eq!(config.user_viewership, ViewershipMode::Open);
+    assert_eq!(config.team_viewership, ViewershipMode::Open);
+    assert_eq!(config.invite_code_regime, 2);
+    assert_eq!(config.encoded().unwrap(), bytes);
+}
+
+#[test]
+fn go_housekeeping_requests_and_results_match_v019() {
+    let client_version = ClientVersionExt {
+        version: SemVer {
+            major: 0,
+            minor: 1,
+            patch: 9,
+        },
+        linker_version: b"go1.25".to_vec(),
+        linker_packaging: b"test".to_vec(),
+    };
+    assert_eq!(
+        encode_get_client_version_info_request(&client_version).unwrap(),
+        fixture("reg-client-version-request.frame")
+    );
+    let version_bytes = fixture("reg-client-version-empty.snowp");
+    let version = ServerClientVersionInfo::decode(&version_bytes).unwrap();
+    assert_eq!(version.minimum, None);
+    assert_eq!(version.newest, None);
+    assert!(version.message.is_empty());
+    assert_eq!(version.encoded().unwrap(), version_bytes);
+
+    assert_eq!(
+        encode_get_device_nag_request().unwrap(),
+        fixture("user-device-nag-request.frame")
+    );
+    assert_eq!(
+        encode_clear_device_nag_request(true).unwrap(),
+        fixture("user-clear-device-nag-request.frame")
+    );
+    let nag_bytes = fixture("user-device-nag-one.snowp");
+    assert_eq!(
+        DeviceNagInfo::decode(&nag_bytes).unwrap(),
+        DeviceNagInfo {
+            num_devices: 1,
+            cleared: false,
+        }
+    );
+    assert_eq!(
+        DeviceNagInfo::decode(&nag_bytes)
+            .unwrap()
+            .encoded()
+            .unwrap(),
+        nag_bytes
+    );
+}
+
+#[test]
+fn go_identity_requests_match_v019() {
+    assert_eq!(
+        encode_check_name_exists_request(b"alice").unwrap(),
+        fixture("reg-check-name-request.frame")
+    );
+    assert_eq!(
+        encode_resolve_username_request(b"alice", true).unwrap(),
+        fixture("user-resolve-username-open-request.frame")
+    );
+    let uid = EntityId::from_bytes(binary_fixture("uid.snowp")).unwrap();
+    let device = EntityId::from_bytes(binary_fixture("device-id.snowp")).unwrap();
+    assert_eq!(
+        encode_probe_key_exists_request(&uid, &device, &PermissionToken::new([0x33; 17]),).unwrap(),
+        fixture("reg-probe-key-exists-request.frame")
+    );
 }
 
 #[test]

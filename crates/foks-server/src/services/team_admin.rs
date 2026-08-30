@@ -128,8 +128,7 @@ pub(crate) fn activate_token(
     )
     .map_err(|_| permission_denied())?;
     let now = clock.now_micros().map_err(internal)?;
-    let maximum_future = now.saturating_add(5 * 60 * 1_000_000);
-    if challenge.time > maximum_future {
+    if !super::protocol_time_is_nowish(challenge.time, now) {
         return Err(permission_denied());
     }
     let token_hash = crate::auth::team::admin_token_hash(&challenge.token);
@@ -201,6 +200,46 @@ pub(crate) fn load_removal_box(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(crate) fn post_team_membership_link(
+    argument: &[u8],
+    principal: &Principal,
+    host: &EntityId,
+    reader: &foks_server_db::ReadDatabase,
+    writer: &WriterHandle,
+    keys: &Arc<dyn HostKeyProvider>,
+    clock: &Arc<dyn foks_server_db::Clock>,
+    hostchain_tail: &foks_proto::HostchainTail,
+) -> Result<(), RpcStatus> {
+    principal.require_ordinary_device()?;
+    let request =
+        foks_rpc::arguments::decode_post_team_membership_link(argument).map_err(bad_arguments)?;
+    let now = clock.now_micros().map_err(internal)?;
+    let authority = reader
+        .resolve_team_admin_token(&crate::auth::team::admin_token_hash(&request.token), now)
+        .map_err(internal)?
+        .ok_or(RpcStatus::Expired)?;
+    if authority.member_id.as_slice() != principal.uid()
+        || authority.effective_role_type < 2
+        || authority.effective_visibility != 0
+    {
+        return Err(permission_denied());
+    }
+    let team = EntityId::from_bytes(authority.team_id).map_err(internal)?;
+    super::generic::commit_for_entity(
+        request.link,
+        principal,
+        &team,
+        Some(&authority.ptk_verify_key),
+        host,
+        writer,
+        keys,
+        clock,
+        hostchain_tail,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create(
     argument: &[u8],
     named: bool,
@@ -227,6 +266,12 @@ pub(crate) fn create(
         Argument::AdHoc(argument) => argument.link.encoded(),
     }
     .map_err(bad_arguments)?;
+    let signed_root = match &decoded {
+        Argument::Named(argument) => argument.edit.link.decode_team_group_change(),
+        Argument::AdHoc(argument) => argument.link.decode_team_group_change(),
+    }
+    .map_err(bad_arguments)?
+    .root;
     let idempotency_key =
         foks_crypto::prefixed_hash_signable(foks_proto::LINK_OUTER_TYPE_ID, &exact_link)
             .map_err(bad_arguments)?;
@@ -260,11 +305,19 @@ pub(crate) fn create(
             let authority = database
                 .user_authority(&uid)?
                 .ok_or(crate::Error::Signup("team creator authority missing"))?;
+            let membership_chain = database
+                .generic_chain(&uid, foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP)?
+                .ok_or(crate::Error::Signup(
+                    "team membership subchain seed missing",
+                ))?;
+            let cited_root = require_cited_root(database, &signed_root)?;
             let command = team_create::validate(
                 decoded,
                 &authority,
+                &membership_chain,
                 &host,
                 &EntityId::from_bytes(owner.clone())?,
+                signed_root,
             )?;
             if command.link_hash != idempotency_key {
                 return Err(crate::Error::Signup("team creation identity changed"));
@@ -273,14 +326,35 @@ pub(crate) fn create(
                 .current_root()?
                 .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?;
             let decoded_root = decode_root(&authoritative)?;
-            if authoritative.epoch != command.expected_root_epoch
-                || authoritative.root_hash != command.expected_root_hash
-                || now < decoded_root.time
-            {
+            if cited_root.epoch > authoritative.epoch || now / 1_000 < decoded_root.time {
                 return Err(crate::Error::Database(foks_server_db::Error::StaleRoot));
             }
             let chain_key = foks_merkle_store::chain_key(3, &command.team, 1, None)?;
             let mut leaves = vec![(chain_key, command.link_hash)];
+            let membership_location = if command.membership_link.sequence == 1 {
+                foks_crypto::subchain_tree_location(
+                    &membership_chain.location_seed,
+                    foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP,
+                )?
+            } else {
+                membership_chain
+                    .links
+                    .last()
+                    .filter(|link| {
+                        link.sequence.saturating_add(1) == command.membership_link.sequence
+                    })
+                    .map(|link| link.next_tree_location)
+                    .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?
+            };
+            leaves.push((
+                foks_merkle_store::chain_key(
+                    foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP,
+                    &EntityId::from_bytes(command.membership_link.user.clone())?,
+                    command.membership_link.sequence,
+                    Some(&membership_location),
+                )?,
+                command.membership_link.link_hash,
+            ));
             if let Some(name) = &command.header.normalized_name {
                 leaves.push((
                     foks_merkle_store::username_key(name, &host, command.header.name_sequence)?,
@@ -316,10 +390,11 @@ pub(crate) fn create(
                 .collect::<Vec<_>>();
             let root = MerkleRoot {
                 epoch: root_epoch,
-                time: now,
+                time: now / 1_000,
                 back_pointers: foks_merkle_store::back_pointer_hash(&back_pointers)?,
                 root_node: merkle_commit.root,
                 hostchain: hostchain_tail,
+                extensions: Vec::new(),
             };
             let exact_root = root.encoded()?;
             let root_hash =
@@ -410,6 +485,7 @@ pub(crate) fn create(
                     name_commitment_key: command.header.name_commitment_key.as_ref(),
                     reservation_token: command.header.reservation_token.as_ref(),
                     reservation_expires_at: command.header.reservation_expires_at,
+                    subchain_tree_location_seed: &command.header.subchain_tree_location_seed,
                 }),
                 expected_sequence: 1,
                 expected_tail_hash: None,
@@ -422,8 +498,22 @@ pub(crate) fn create(
                 seed_chain: &[],
                 removal_boxes: &removal_boxes,
                 remote_member_view_tokens: &[],
-                expected_root_epoch: command.expected_root_epoch,
-                expected_root_hash: &command.expected_root_hash,
+                generic_link: Some(foks_server_db::GenericLinkMutation {
+                    entity_id: &command.membership_link.user,
+                    chain_type: foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP,
+                    signer_credential_id: &command.membership_link.signer,
+                    sequence: command.membership_link.sequence,
+                    previous: command.membership_link.previous.as_ref(),
+                    link_root_epoch: command.membership_link.root.epoch,
+                    link_root_hash: &command.membership_link.root.hash,
+                    current_tree_location: &membership_location,
+                    next_tree_location: &command.membership_link.next_tree_location,
+                    link_hash: &command.membership_link.link_hash,
+                    exact_link: &command.membership_link.exact_link,
+                    passphrase_info: None,
+                }),
+                expected_root_epoch: authoritative.epoch,
+                expected_root_hash: &authoritative.root_hash,
                 merkle_commit: &merkle_commit,
                 merkle_leaves: &leaves,
                 root_epoch,
@@ -494,7 +584,7 @@ pub(crate) fn edit(
                 .current_root()?
                 .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?;
             let decoded_root = decode_root(&root)?;
-            if now < decoded_root.time {
+            if now / 1_000 < decoded_root.time {
                 return Err(crate::Error::Signup("system clock moved backwards"));
             }
             let team_id = decoded.link.decode_team_group_change()?.team;
@@ -506,7 +596,12 @@ pub(crate) fn edit(
             if team.host_id != host.as_bytes() {
                 return Err(crate::Error::Signup("team belongs to another host"));
             }
-            let command = crate::identity::team_edit::validate(decoded, &team, &root, &uid)?;
+            let signed_root = decoded.link.decode_team_group_change()?.root;
+            let cited_root = require_cited_root(database, &signed_root)?;
+            if cited_root.epoch > root.epoch {
+                return Err(crate::Error::Database(foks_server_db::Error::StaleRoot));
+            }
+            let command = crate::identity::team_edit::validate(decoded, &team, &cited_root, &uid)?;
             validate_local_member_keys(database, &command.members, &host)?;
             if command.link_hash != idempotency_key || command.team != team_id {
                 return Err(crate::Error::Signup("team edit identity changed"));
@@ -548,10 +643,11 @@ pub(crate) fn edit(
                 .collect::<Vec<_>>();
             let next_root = MerkleRoot {
                 epoch: root_epoch,
-                time: now,
+                time: now / 1_000,
                 back_pointers: foks_merkle_store::back_pointer_hash(&back_pointers)?,
                 root_node: merkle_commit.root,
                 hostchain: hostchain_tail,
+                extensions: Vec::new(),
             };
             let exact_root = next_root.encoded()?;
             let root_hash =
@@ -696,8 +792,9 @@ pub(crate) fn edit(
                     seed_chain: &seed_chain,
                     removal_boxes: &removal_boxes,
                     remote_member_view_tokens: &remote_member_view_tokens,
-                    expected_root_epoch: command.expected_root_epoch,
-                    expected_root_hash: &command.expected_root_hash,
+                    generic_link: None,
+                    expected_root_epoch: root.epoch,
+                    expected_root_hash: &root.root_hash,
                     merkle_commit: &merkle_commit,
                     merkle_leaves: &leaves,
                     root_epoch,
@@ -774,12 +871,28 @@ fn decode_root(root: &foks_server_db::RootSnapshot) -> crate::Result<MerkleRoot>
     Ok(decoded)
 }
 
+fn require_cited_root(
+    database: &foks_server_db::Database,
+    cited: &foks_proto::TreeRoot,
+) -> crate::Result<foks_server_db::RootSnapshot> {
+    let root = database
+        .root_at(cited.epoch)?
+        .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?;
+    decode_root(&root)?;
+    if root.root_hash != cited.hash {
+        return Err(crate::Error::Database(foks_server_db::Error::StaleRoot));
+    }
+    Ok(root)
+}
+
 fn map_create_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::WriterQueue => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::NameInUse) => RpcStatus::NameInUse,
         crate::Error::Database(foks_server_db::Error::Reservation) => RpcStatus::Expired,
-        crate::Error::Database(foks_server_db::Error::StaleRoot) => RpcStatus::StaleRoot,
+        crate::Error::Database(foks_server_db::Error::StaleRoot) => {
+            RpcStatus::RevokeRace("team creation chain or Merkle root changed".to_owned())
+        }
         crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
         crate::Error::Database(foks_server_db::Error::ReceiptConflict) => {
             bad_arguments("team creation retry binding failed")

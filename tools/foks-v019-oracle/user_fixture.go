@@ -353,9 +353,27 @@ func rpcRequestFrameAt[D any](protocol rpc.ProtocolUniqueID, position rpc.Positi
 	return append(length, content...), nil
 }
 
-func rpcVoidResponseFrame(sequence rpc.SeqNumber) ([]byte, error) {
-	wrapped := &rpc.DataWrap[proto.Header, interface{}]{Header: core.MakeProtoHeader()}
-	frame := []interface{}{rpc.MethodResponse, sequence, (*proto.Status)(nil), wrapped}
+func rpcVoidResponseFrame(protocol rpc.ProtocolUniqueID, position rpc.Position, sequence rpc.SeqNumber) ([]byte, error) {
+	definition, err := generatedProtocol(protocol)
+	if err != nil {
+		return nil, err
+	}
+	method, ok := definition.Methods[position]
+	if !ok {
+		return nil, fmt.Errorf("protocol %s has no method at position %d", definition.Name, position)
+	}
+	argument := reflect.ValueOf(method.MakeArg())
+	if !argument.IsValid() || argument.Kind() != reflect.Pointer {
+		return nil, fmt.Errorf("protocol %s method %s has an invalid generated argument", definition.Name, method.Name)
+	}
+	result := interface{}(nil)
+	wrapper := argument.Elem()
+	dataWrapType := reflect.TypeOf(rpc.DataWrap[proto.Header, interface{}]{})
+	if wrapper.Kind() == reflect.Struct && wrapper.Type().PkgPath() == dataWrapType.PkgPath() &&
+		strings.HasPrefix(wrapper.Type().Name(), "DataWrap[") {
+		result = &rpc.DataWrap[proto.Header, interface{}]{Header: core.MakeProtoHeader()}
+	}
+	frame := []interface{}{rpc.MethodResponse, sequence, (*proto.Status)(nil), result}
 	handle := core.Codec()
 	var content []byte
 	if err := codec.NewEncoderBytes(&content, handle).Encode(frame); err != nil {
@@ -1069,7 +1087,7 @@ func writeUserFixtures(output string, address proto.TCPAddr, hostID proto.HostID
 	if err != nil {
 		return err
 	}
-	kvSelectResponseFrame, err := rpcVoidResponseFrame(0)
+	kvSelectResponseFrame, err := rpcVoidResponseFrame(rem.KVStoreProtocolID, 18, 0)
 	if err != nil {
 		return err
 	}
@@ -1226,7 +1244,7 @@ func writeUserFixtures(output string, address proto.TCPAddr, hostID proto.HostID
 	if err != nil {
 		return err
 	}
-	regSelectResponseFrame, err := rpcVoidResponseFrame(0)
+	regSelectResponseFrame, err := rpcVoidResponseFrame(rem.RegProtocolID, 15, 0)
 	if err != nil {
 		return err
 	}
@@ -1238,7 +1256,7 @@ func writeUserFixtures(output string, address proto.TCPAddr, hostID proto.HostID
 	if err != nil {
 		return err
 	}
-	merkleSelectResponseFrame, err := rpcVoidResponseFrame(0)
+	merkleSelectResponseFrame, err := rpcVoidResponseFrame(rem.MerkleQueryProtocolID, 8, 0)
 	if err != nil {
 		return err
 	}

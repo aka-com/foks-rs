@@ -172,6 +172,12 @@ impl HostchainState {
     }
 
     fn add_key(&mut self, key: EntityId) {
+        // Go permits delegated metadata, Merkle, and TLS keys to be restored
+        // after revocation. The hostchain signer is the exception: once a host
+        // signing key is revoked, it must remain unusable as a chain signer.
+        if key.entity_type() != ENTITY_HOST {
+            self.revoked.remove(&key);
+        }
         self.keys.entry(key.entity_type()).or_default().push(key);
     }
 
@@ -477,8 +483,17 @@ pub(crate) fn canonical_host(address: &str) -> Result<&str> {
             .map_err(|_| Error::InvalidProbeAddress)?;
         return Ok(host);
     }
-    let (host, port) = address.rsplit_once(':').ok_or(Error::InvalidProbeAddress)?;
+    let Some((host, port)) = address.rsplit_once(':') else {
+        return if address.is_empty() {
+            Err(Error::InvalidProbeAddress)
+        } else {
+            Ok(address)
+        };
+    };
     if host.is_empty() {
+        return Err(Error::InvalidProbeAddress);
+    }
+    if host.contains(':') {
         return Err(Error::InvalidProbeAddress);
     }
     port.parse::<u16>()

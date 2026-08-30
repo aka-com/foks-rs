@@ -147,6 +147,23 @@ impl AuthenticatedMerkleRoots {
         self.0.contains_key(&epoch)
     }
 
+    pub fn root_hash(&self, epoch: u64) -> Option<[u8; 32]> {
+        self.0.get(&epoch).copied()
+    }
+
+    /// Merges two independently authenticated root sets, rejecting any epoch
+    /// that was proved to two different hashes.
+    pub fn merge(&mut self, other: &Self) -> Result<()> {
+        for (&epoch, &hash) in &other.0 {
+            if self.0.get(&epoch).is_some_and(|known| known != &hash) {
+                return Err(Error::MerkleFork(epoch));
+            }
+        }
+        self.0
+            .extend(other.0.iter().map(|(&epoch, &hash)| (epoch, hash)));
+        Ok(())
+    }
+
     pub(crate) fn get(&self, epoch: &u64) -> Option<&[u8; 32]> {
         self.0.get(epoch)
     }
@@ -163,9 +180,6 @@ pub fn authenticate_historical_roots_from_latest(
     hash_epochs: &[u64],
     historical_bytes: &[u8],
 ) -> Result<AuthenticatedMerkleRoots> {
-    if targets.len() > 64 || full_epochs.len() > 64 || hash_epochs.len() > 64 {
-        return Err(Error::MerkleHistoryShape);
-    }
     let historical = HistoricalMerkleRoots::decode(historical_bytes)?;
     if historical.roots.len() != full_epochs.len() || historical.hashes.len() != hash_epochs.len() {
         return Err(Error::MerkleHistoryShape);

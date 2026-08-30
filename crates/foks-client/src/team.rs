@@ -19,24 +19,30 @@ use foks_crypto::{
     AdHocTeamInput, AdHocTeamMaterial, PukBoxRandomness, SharedKeyBoxInput, SharedKeyDecapsulator,
 };
 use foks_proto::{
-    ActivatedTeamView, AdHocTeamCreateArgument, EntityId, HostConfig, Role, SecretSeed, TeamChain,
-    TeamViewChallenge, TeamViewRequest, ViewershipMode, ENTITY_PTK_VERIFY, ENTITY_PUK_VERIFY,
-    TEAM_VIEW_CHALLENGE_TYPE_ID,
+    ActivatedTeamView, AdHocTeamCreateArgument, ChangeMetadata, EntityId, GenericChain,
+    GenericLinkPayload, HostConfig, Role, SecretSeed, TeamChain, TeamViewChallenge,
+    TeamViewRequest, UserLink, ViewershipMode, CHAIN_TYPE_TEAM_MEMBERSHIP, ENTITY_PTK_VERIFY,
+    ENTITY_PUK_VERIFY, LINK_OUTER_TYPE_ID, LINK_OUTER_V1_TYPE_ID, TEAM_VIEW_CHALLENGE_TYPE_ID,
+    TREE_LOCATION_TYPE_ID,
 };
 use foks_rpc::{
     encode_activate_team_view_request, encode_create_adhoc_team_request,
-    encode_get_host_config_request, encode_load_team_chain_request_from,
-    encode_team_view_challenge_request, STATUS_TX_RETRY_ERROR,
+    encode_get_host_config_request, encode_get_team_list_server_trust_request,
+    encode_load_generic_chain_request, encode_load_team_chain_request_from,
+    encode_load_team_membership_chain_request, encode_post_generic_link_request,
+    encode_post_team_membership_link_request, encode_team_view_challenge_request,
+    STATUS_TX_RETRY_ERROR,
 };
 use foks_verify::{
-    team_chain_root_epochs, verify_team_chain, verify_team_chain_increment, VerifiedTeamState,
-    VerifiedUserState,
+    team_chain_root_epochs, verify_merkle_path, verify_team_chain, verify_team_chain_increment,
+    AuthenticatedMerkleRoots, UserDeviceSigningBookends, VerifiedTeamState, VerifiedUserState,
 };
 
 use crate::{
-    current_owner_puk, now_microseconds, random_bytes, user_key_for_seed, AuthenticatedUserOutcome,
-    DeviceCredential, Error, FoksClient, PinnedHost, Result, UserPrivateKey, YubiCredential,
-    ADHOC_TEAM_OPERATION_ID_TYPE_ID, ADHOC_TEAM_REQUEST_HASH_TYPE_ID,
+    current_owner_puk, now_microseconds, now_milliseconds, random_bytes, user_key_for_seed,
+    AuthenticatedUserOutcome, DeviceCredential, Error, FoksClient, PinnedHost, Result,
+    UserPrivateKey, YubiCredential, ADHOC_TEAM_OPERATION_ID_TYPE_ID,
+    ADHOC_TEAM_REQUEST_HASH_TYPE_ID,
 };
 
 pub struct TeamPrivateKey {
@@ -83,6 +89,321 @@ pub struct CreatedAdHocTeam {
     pub operation_id: [u8; 16],
     pub team: EntityId,
     pub authenticated: AuthenticatedTeamOutcome,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct MembershipChainTail {
+    pub sequence: u64,
+    pub previous: Option<[u8; 32]>,
+}
+
+struct HistoricalMembershipSigner {
+    generic_root: foks_proto::TreeRoot,
+    generic_key: [u8; 32],
+    generic_value: [u8; 32],
+    bookends: UserDeviceSigningBookends,
+}
+
+impl FoksClient {
+    pub fn load_generic_chain(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        chain_type: u64,
+        start: u64,
+    ) -> Result<GenericChain> {
+        let response = self.call(
+            host,
+            &host.user,
+            &encode_load_generic_chain_request(&credential.uid, chain_type, start)?,
+            Some(credential),
+        )?;
+        GenericChain::decode(&response).map_err(Into::into)
+    }
+
+    pub fn post_generic_link(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        argument: &foks_proto::PostGenericLinkArgument,
+    ) -> Result<()> {
+        self.call_void_with_material(
+            host,
+            &host.user,
+            &encode_post_generic_link_request(argument)?,
+            &credential.seed,
+            &credential.certificate_chain,
+        )
+    }
+
+    pub fn load_team_membership_chain(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team: &AuthenticatedTeamOutcome,
+        start: u64,
+    ) -> Result<GenericChain> {
+        let response = self.call(
+            host,
+            &host.user,
+            &encode_load_team_membership_chain_request(
+                team.verified.team(),
+                host.host_id(),
+                &team.view_token,
+                start,
+            )?,
+            Some(credential),
+        )?;
+        GenericChain::decode(&response).map_err(Into::into)
+    }
+
+    pub fn post_team_membership_link(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team: &AuthenticatedTeamOutcome,
+        argument: &foks_proto::PostGenericLinkArgument,
+    ) -> Result<()> {
+        let token = self.activate_team_admin_bearer(
+            host,
+            &credential.uid,
+            &credential.seed,
+            &credential.certificate_chain,
+            team,
+        )?;
+        self.call_void_with_material(
+            host,
+            &host.user,
+            &encode_post_team_membership_link_request(&token, argument)?,
+            &credential.seed,
+            &credential.certificate_chain,
+        )
+    }
+
+    pub fn local_team_list(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+    ) -> Result<Vec<foks_proto::LocalTeamListEntry>> {
+        let response = self.call(
+            host,
+            &host.user,
+            &encode_get_team_list_server_trust_request()?,
+            Some(credential),
+        )?;
+        foks_proto::decode_local_team_list(&response).map_err(Into::into)
+    }
+
+    pub(super) fn load_membership_chain_tail(
+        &self,
+        host: &PinnedHost,
+        uid: &EntityId,
+        auth_seed: &SecretSeed,
+        certificate_chain: &[Vec<u8>],
+        user: &VerifiedUserState,
+    ) -> Result<MembershipChainTail> {
+        let response = self.call_with_material(
+            host,
+            &host.user,
+            &encode_load_generic_chain_request(uid, CHAIN_TYPE_TEAM_MEMBERSHIP, 1)?,
+            auth_seed,
+            certificate_chain,
+        )?;
+        let (tail, historical_signers) =
+            verify_membership_chain_tail(&response, uid, host.host_id(), user)?;
+        self.verify_historical_membership_signers(host, &historical_signers)?;
+        Ok(tail)
+    }
+
+    fn verify_historical_membership_signers(
+        &self,
+        host: &PinnedHost,
+        signers: &[HistoricalMembershipSigner],
+    ) -> Result<()> {
+        if signers.is_empty() {
+            return Ok(());
+        }
+        let (_, latest) = self.advance_merkle_root(host)?;
+        let mut targets = std::collections::BTreeSet::new();
+        for signer in signers {
+            targets.insert(signer.generic_root.epoch);
+            targets.insert(signer.bookends.revoke_root.epoch);
+        }
+        targets.retain(|epoch| !latest.authenticated_roots().contains_epoch(*epoch));
+        let authenticated = self.authenticate_chain_roots(
+            host,
+            &latest,
+            targets.into_iter().collect(),
+            Error::TeamBinding,
+        )?;
+        for signer in signers {
+            self.verify_historical_leaf(
+                host,
+                &authenticated,
+                &signer.bookends.revoke_root,
+                signer.generic_key,
+                signer.generic_value,
+            )?;
+            self.verify_historical_leaf(
+                host,
+                &authenticated,
+                &signer.generic_root,
+                signer.bookends.provision.key,
+                signer.bookends.provision.value,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn verify_historical_leaf(
+        &self,
+        host: &PinnedHost,
+        authenticated: &AuthenticatedMerkleRoots,
+        root: &foks_proto::TreeRoot,
+        key: [u8; 32],
+        value: [u8; 32],
+    ) -> Result<()> {
+        if authenticated.root_hash(root.epoch) != Some(root.hash) {
+            return Err(Error::TeamBinding(
+                "generic signer bookend root is unauthenticated",
+            ));
+        }
+        let lookup = self.merkle_lookup(host, key, false, Some(root.epoch))?;
+        let encoded_root = lookup.root.encoded()?;
+        if lookup.root.epoch != root.epoch
+            || foks_crypto::prefixed_hash_signable(foks_proto::MERKLE_ROOT_TYPE_ID, &encoded_root)?
+                != root.hash
+        {
+            return Err(Error::TeamBinding(
+                "generic signer bookend lookup returned the wrong root",
+            ));
+        }
+        verify_merkle_path(&lookup.path, &key, Some(&value), &lookup.root.root_node)?;
+        Ok(())
+    }
+}
+
+fn verify_membership_chain_tail(
+    response: &[u8],
+    uid: &EntityId,
+    host: &EntityId,
+    user: &VerifiedUserState,
+) -> Result<(MembershipChainTail, Vec<HistoricalMembershipSigner>)> {
+    let chain = GenericChain::decode(response)?;
+    let seed = chain.location_seed.ok_or(Error::TeamBinding(
+        "membership chain omitted its location seed",
+    ))?;
+    let snapshot = user.hard_state_snapshot()?;
+    let snapshot = snapshot.parts();
+    if chain.merkle.encoded_root()? != snapshot.merkle_root_bytes {
+        return Err(Error::TeamBinding(
+            "membership chain is not bound to the authenticated user root",
+        ));
+    }
+    let foks_snowpack::Value::Array(user_links) = foks_snowpack::decode(snapshot.chain_bytes)?
+    else {
+        return Err(Error::TeamBinding("authenticated user chain is malformed"));
+    };
+    let eldest = user_links
+        .first()
+        .ok_or(Error::TeamBinding("authenticated user chain has no eldest"))?;
+    let eldest = UserLink::decode(&foks_snowpack::encode(eldest)?)?.decode_eldest()?;
+    let seed_wire = foks_snowpack::encode(&foks_snowpack::Value::Binary(seed.to_vec()))?;
+    let seed_commitment = foks_crypto::prefixed_hash_signable(TREE_LOCATION_TYPE_ID, &seed_wire)?;
+    if !eldest.metadata.iter().any(|metadata| {
+        matches!(metadata, ChangeMetadata::Eldest { subchain_location_commitment } if *subchain_location_commitment == seed_commitment)
+    }) {
+        return Err(Error::TeamBinding(
+            "membership chain seed is not committed by the user eldest",
+        ));
+    }
+    let mut location = foks_crypto::subchain_tree_location(&seed, CHAIN_TYPE_TEAM_MEMBERSHIP)?;
+    let mut previous = None;
+    let mut historical_signers = Vec::new();
+    for (index, ((link, next_location), path)) in chain
+        .links
+        .iter()
+        .zip(&chain.locations)
+        .zip(&chain.merkle.paths()[..chain.links.len()])
+        .enumerate()
+    {
+        let sequence = u64::try_from(index)
+            .ok()
+            .and_then(|value| value.checked_add(1))
+            .ok_or(Error::TeamBinding("membership chain sequence overflow"))?;
+        let decoded = link.decode_generic()?;
+        if decoded.entity != *uid
+            || decoded.host != *host
+            || decoded.sequence != sequence
+            || decoded.previous != previous
+            || !matches!(decoded.payload, GenericLinkPayload::TeamMembership)
+            || link.signatures().len() != 1
+            || foks_crypto::verify_typed(
+                &decoded.signer,
+                &link.signatures()[0],
+                LINK_OUTER_V1_TYPE_ID,
+                &link.signing_bytes(0)?,
+            )
+            .is_err()
+        {
+            return Err(Error::TeamBinding(
+                "membership chain continuity or signer is invalid",
+            ));
+        }
+        let next_wire =
+            foks_snowpack::encode(&foks_snowpack::Value::Binary(next_location.to_vec()))?;
+        if foks_crypto::prefixed_hash_signable(TREE_LOCATION_TYPE_ID, &next_wire)?
+            != decoded.next_location_commitment
+        {
+            return Err(Error::TeamBinding(
+                "membership chain location disclosure is invalid",
+            ));
+        }
+        let exact = link.encoded()?;
+        let link_hash = foks_crypto::prefixed_hash_signable(LINK_OUTER_TYPE_ID, &exact)?;
+        let key = foks_merkle_store::chain_key(
+            CHAIN_TYPE_TEAM_MEMBERSHIP,
+            uid,
+            sequence,
+            Some(&location),
+        )
+        .map_err(|_| Error::TeamBinding("membership Merkle key is invalid"))?;
+        verify_merkle_path(path, &key, Some(&link_hash), &chain.merkle.root().root_node)?;
+        if let Some(bookends) = user
+            .device_signing_bookends(&decoded.signer, decoded.root.epoch)
+            .map_err(|_| Error::TeamBinding("membership signer was not active at its cited root"))?
+        {
+            historical_signers.push(HistoricalMembershipSigner {
+                generic_root: decoded.root,
+                generic_key: key,
+                generic_value: link_hash,
+                bookends,
+            });
+        }
+        previous = Some(link_hash);
+        location = *next_location;
+    }
+    let sequence = u64::try_from(chain.links.len())
+        .ok()
+        .and_then(|value| value.checked_add(1))
+        .ok_or(Error::TeamBinding("membership chain sequence overflow"))?;
+    let key =
+        foks_merkle_store::chain_key(CHAIN_TYPE_TEAM_MEMBERSHIP, uid, sequence, Some(&location))
+            .map_err(|_| Error::TeamBinding("membership bookend key is invalid"))?;
+    verify_merkle_path(
+        chain
+            .merkle
+            .paths()
+            .last()
+            .ok_or(Error::TeamBinding("membership chain omitted its bookend"))?,
+        &key,
+        None,
+        &chain.merkle.root().root_node,
+    )?;
+    Ok((
+        MembershipChainTail { sequence, previous },
+        historical_signers,
+    ))
 }
 
 impl FoksClient {
@@ -187,7 +508,17 @@ impl FoksClient {
         credential: &DeviceCredential,
         secrets: &AdHocTeamSecrets,
     ) -> Result<CreatedAdHocTeam> {
-        let authenticated_user = self.authenticate_and_pin(host, credential)?;
+        let (authenticated_user, membership) = self.retry_chain_load(host, |current| {
+            let authenticated = self.authenticate_and_pin(current, credential)?;
+            let membership = self.load_membership_chain_tail(
+                current,
+                &credential.uid,
+                &credential.seed,
+                &credential.certificate_chain,
+                &authenticated.verified,
+            )?;
+            Ok((authenticated, membership))
+        })?;
         self.require_open_user_viewership(host, &credential.seed, &credential.certificate_chain)?;
         let owner = current_owner_puk(&authenticated_user)?;
         let device_id = derive_device_public(&credential.seed)?.id;
@@ -204,15 +535,16 @@ impl FoksClient {
                 "team creator device is not an owner",
             ));
         }
-
         let ordered_seeds = secrets.ordered();
         let material = make_single_owner_adhoc_team(
             &AdHocTeamInput {
                 user: &credential.uid,
                 host: host.host_id(),
                 root: &authenticated_user.verified.tree_root(),
-                time: now_microseconds()?,
+                time: now_milliseconds()?,
                 owner_puk_generation: owner.generation,
+                membership_sequence: membership.sequence,
+                membership_previous: membership.previous,
                 next_tree_location: random_bytes()?,
                 subchain_tree_location: random_bytes()?,
                 membership_next_tree_location: random_bytes()?,
@@ -243,7 +575,17 @@ impl FoksClient {
         credential: &YubiCredential<'_>,
         secrets: &AdHocTeamSecrets,
     ) -> Result<CreatedAdHocTeam> {
-        let authenticated_user = self.authenticate_yubi_and_pin(host, credential)?;
+        let (authenticated_user, membership) = self.retry_chain_load(host, |current| {
+            let authenticated = self.authenticate_yubi_and_pin(current, credential)?;
+            let membership = self.load_membership_chain_tail(
+                current,
+                &credential.uid,
+                &credential.subkey_seed,
+                &credential.certificate_chain,
+                &authenticated.verified,
+            )?;
+            Ok((authenticated, membership))
+        })?;
         self.require_open_user_viewership(
             host,
             &credential.subkey_seed,
@@ -274,8 +616,10 @@ impl FoksClient {
                 user: &credential.uid,
                 host: host.host_id(),
                 root: &authenticated_user.verified.tree_root(),
-                time: now_microseconds()?,
+                time: now_milliseconds()?,
                 owner_puk_generation: owner.generation,
+                membership_sequence: membership.sequence,
+                membership_previous: membership.previous,
                 next_tree_location: random_bytes()?,
                 subchain_tree_location: random_bytes()?,
                 membership_next_tree_location: random_bytes()?,
@@ -697,67 +1041,70 @@ impl FoksClient {
             ));
         }
 
-        let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
-        let prior = match self.pinned_team(host, team) {
-            Ok(prior) => prior,
-            Err(Error::Verify(
-                foks_verify::Error::PersistedMerkleEvidence
-                | foks_verify::Error::TeamChainContinuity,
-            )) => None,
-            Err(error) => return Err(error),
-        };
-        let (start, name) = match prior.as_ref() {
-            Some(prior) => (
-                prior
-                    .chain_seqno()
-                    .checked_add(1)
-                    .ok_or(Error::TeamBinding("team chain sequence overflow"))?,
-                Some((
-                    prior.team_name(),
+        let (merkle_acceptance, chain_bytes, verified) = self.retry_chain_load(host, |host| {
+            let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
+            let prior = match self.pinned_team(host, team) {
+                Ok(prior) => prior,
+                Err(Error::Verify(
+                    foks_verify::Error::PersistedMerkleEvidence
+                    | foks_verify::Error::TeamChainContinuity,
+                )) => None,
+                Err(error) => return Err(error),
+            };
+            let (start, name) = match prior.as_ref() {
+                Some(prior) => (
                     prior
-                        .team_name_sequence()
+                        .chain_seqno()
                         .checked_add(1)
-                        .ok_or(Error::TeamBinding("team name sequence overflow"))?,
-                )),
-            ),
-            None => (1, None),
-        };
-        let chain_bytes = self.call_with_material(
-            host,
-            &host.user,
-            &encode_load_team_chain_request_from(
-                team,
-                host.host_id(),
-                &activated.token,
-                start,
-                name,
-            )?,
-            auth_seed,
-            certificate_chain,
-        )?;
-        let targets = team_chain_root_epochs(&chain_bytes)?
-            .into_iter()
-            .filter(|epoch| !merkle.authenticated_roots().contains_epoch(*epoch))
-            .collect();
-        let authenticated_roots =
-            self.authenticate_chain_roots(host, &merkle, targets, Error::TeamBinding)?;
-        let verified = match prior.as_ref() {
-            Some(prior) => verify_team_chain_increment(
-                &chain_bytes,
-                prior,
-                team,
-                host.host_id(),
-                &authenticated_roots,
-                &merkle.root().hostchain,
-            )?,
-            None => verify_team_chain(
-                &chain_bytes,
-                team,
-                host.host_id(),
-                &authenticated_roots,
-                &merkle.root().hostchain,
-            )?,
-        };
+                        .ok_or(Error::TeamBinding("team chain sequence overflow"))?,
+                    Some((
+                        prior.team_name(),
+                        prior
+                            .team_name_sequence()
+                            .checked_add(1)
+                            .ok_or(Error::TeamBinding("team name sequence overflow"))?,
+                    )),
+                ),
+                None => (1, None),
+            };
+            let chain_bytes = self.call_with_material(
+                host,
+                &host.user,
+                &encode_load_team_chain_request_from(
+                    team,
+                    host.host_id(),
+                    &activated.token,
+                    start,
+                    name,
+                )?,
+                auth_seed,
+                certificate_chain,
+            )?;
+            let targets = team_chain_root_epochs(&chain_bytes)?
+                .into_iter()
+                .filter(|epoch| !merkle.authenticated_roots().contains_epoch(*epoch))
+                .collect();
+            let authenticated_roots =
+                self.authenticate_chain_roots(host, &merkle, targets, Error::TeamBinding)?;
+            let verified = match prior.as_ref() {
+                Some(prior) => verify_team_chain_increment(
+                    &chain_bytes,
+                    prior,
+                    team,
+                    host.host_id(),
+                    &authenticated_roots,
+                    &merkle.root().hostchain,
+                )?,
+                None => verify_team_chain(
+                    &chain_bytes,
+                    team,
+                    host.host_id(),
+                    &authenticated_roots,
+                    &merkle.root().hostchain,
+                )?,
+            };
+            Ok((merkle_acceptance, chain_bytes, verified))
+        })?;
         let member = verified
             .members()
             .iter()

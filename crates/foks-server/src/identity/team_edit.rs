@@ -32,8 +32,6 @@ pub(crate) struct Command {
     pub seed_chain: Vec<SeedChainBox>,
     pub removal_boxes: Vec<RemovalBox>,
     pub remote_member_view_tokens: Vec<TeamRemoteMemberViewToken>,
-    pub expected_root_epoch: u64,
-    pub expected_root_hash: [u8; 32],
 }
 
 pub(crate) fn validate(
@@ -259,8 +257,6 @@ pub(crate) fn validate(
         seed_chain: argument.seed_chain,
         removal_boxes,
         remote_member_view_tokens,
-        expected_root_epoch: root.epoch,
-        expected_root_hash: root.root_hash,
     })
 }
 

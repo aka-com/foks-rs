@@ -6,12 +6,27 @@ use crate::rpc::{RouteId, RoutedCall};
 use super::super::{permission_denied, ServerData};
 
 pub(super) trait Operations {
+    fn resolve_username(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus>;
+    fn ping(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus>;
+    fn device_nag(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus>;
+    fn clear_device_nag(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus>;
     fn load_user_chain(&self, argument: &[u8], principal: &Principal)
         -> Result<Vec<u8>, RpcStatus>;
     fn puk_for_role(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus>;
     fn provision_device(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus>;
     fn revoke_device(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus>;
     fn host_config(&self, principal: &Principal) -> Result<Vec<u8>, RpcStatus>;
+    fn post_generic_link(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus>;
+    fn load_generic_chain(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus>;
+    fn team_list(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus>;
     fn set_passphrase(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus>;
     fn change_passphrase(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus>;
     fn passphrase_salt(&self, argument: &[u8], principal: &Principal)
@@ -47,6 +62,44 @@ pub(super) trait Operations {
 }
 
 impl Operations for ServerData {
+    fn resolve_username(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        crate::services::user::resolve_username(&snapshot, argument, Some(principal))
+    }
+
+    fn ping(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        crate::services::user::ping(&snapshot, argument, principal)
+    }
+
+    fn device_nag(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        crate::services::user::device_nag(&snapshot, argument, principal)
+    }
+
+    fn clear_device_nag(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
+        let database = self.read_database()?;
+        crate::services::user::clear_device_nag(
+            &database,
+            self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+            argument,
+            principal,
+        )
+    }
+
     fn load_user_chain(
         &self,
         argument: &[u8],
@@ -56,7 +109,11 @@ impl Operations for ServerData {
         let snapshot = database
             .snapshot()
             .map_err(|_| RpcStatus::TransactionRetry)?;
-        crate::services::user::load_user_chain(&snapshot, &self.host()?, argument, principal)
+        let now = self
+            .clock
+            .now_micros()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        crate::services::user::load_user_chain(&snapshot, &self.host()?, argument, principal, now)
     }
 
     fn puk_for_role(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus> {
@@ -84,7 +141,55 @@ impl Operations for ServerData {
         crate::services::user::host_config(&snapshot, principal)
     }
 
+    fn post_generic_link(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
+        crate::services::generic::post(
+            argument,
+            principal,
+            &self.host()?,
+            self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+            self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
+            &self.clock,
+            &self.hostchain_tail,
+        )
+    }
+
+    fn load_generic_chain(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        crate::services::generic::load(&snapshot, argument, principal)
+    }
+
+    fn team_list(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        crate::services::generic::team_list(&snapshot, &self.host()?, argument, principal)
+    }
+
     fn set_passphrase(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
+        let decoded = foks_rpc::arguments::decode_set_passphrase(argument)
+            .map_err(|_| RpcStatus::BadArguments("invalid passphrase boxes".to_owned()))?;
+        if let Some(link) = decoded.user_settings_link.clone() {
+            let owned = super::super::OwnedPassphraseMutation::from_argument(&decoded)
+                .map_err(|_| RpcStatus::BadArguments("invalid passphrase boxes".to_owned()))?;
+            return crate::services::generic::commit(
+                link,
+                principal,
+                &self.host()?,
+                self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+                self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
+                &self.clock,
+                &self.hostchain_tail,
+                Some(crate::services::generic::PassphraseCompanion::Set(owned)),
+            );
+        }
         let database = self.read_database()?;
         crate::services::user::set_passphrase(
             &database,
@@ -97,6 +202,26 @@ impl Operations for ServerData {
 
     fn change_passphrase(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
         let database = self.read_database()?;
+        let current = database
+            .passphrase(principal.uid())
+            .map_err(|_| RpcStatus::TransactionRetry)?
+            .ok_or(RpcStatus::PassphraseNotFound)?;
+        let decoded = foks_rpc::arguments::decode_change_passphrase(argument, current.salt)
+            .map_err(|_| RpcStatus::BadArguments("invalid passphrase boxes".to_owned()))?;
+        if let Some(link) = decoded.user_settings_link.clone() {
+            let owned = super::super::OwnedPassphraseMutation::from_argument(&decoded)
+                .map_err(|_| RpcStatus::BadArguments("invalid passphrase boxes".to_owned()))?;
+            return crate::services::generic::commit(
+                link,
+                principal,
+                &self.host()?,
+                self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+                self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
+                &self.clock,
+                &self.hostchain_tail,
+                Some(crate::services::generic::PassphraseCompanion::Change(owned)),
+            );
+        }
         crate::services::user::change_passphrase(
             &database,
             self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
@@ -214,6 +339,24 @@ pub(super) fn response(
     let principal = principal.ok_or_else(permission_denied)?;
     let sequence = call.call.sequence();
     match call.route.id {
+        RouteId::UserResolveUsername => encode_success_response_at(
+            &operations.resolve_username(call.call.argument(), principal)?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
+        RouteId::UserPing => {
+            encode_success_response_at(&operations.ping(call.call.argument(), principal)?, sequence)
+                .map_err(|_| RpcStatus::Unsupported)
+        }
+        RouteId::UserGetDeviceNag => encode_success_response_at(
+            &operations.device_nag(call.call.argument(), principal)?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
+        RouteId::UserClearDeviceNag => {
+            operations.clear_device_nag(call.call.argument(), principal)?;
+            encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
+        }
         RouteId::UserSetPassphrase => {
             operations.set_passphrase(call.call.argument(), principal)?;
             encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
@@ -264,6 +407,20 @@ pub(super) fn response(
             encode_success_response_at(&operations.host_config(principal)?, sequence)
                 .map_err(|_| RpcStatus::Unsupported)
         }
+        RouteId::UserPostGenericLink => {
+            operations.post_generic_link(call.call.argument(), principal)?;
+            encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
+        }
+        RouteId::UserLoadGenericChain => encode_success_response_at(
+            &operations.load_generic_chain(call.call.argument(), principal)?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
+        RouteId::UserGetTeamListServerTrust => encode_success_response_at(
+            &operations.team_list(call.call.argument(), principal)?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
         RouteId::UserPutYubiManagementKey => {
             operations.put_yubi_management_key(call.call.argument(), principal)?;
             encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)

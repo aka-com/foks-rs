@@ -1,8 +1,8 @@
 use std::io::Read;
 
 use super::{
-    is_headerless_protocol, read_frame, text, unsigned, Cursor, Error, Result, METHOD_CALL_V2,
-    RESPONSE_HEADER,
+    check_compatibility_header, is_headerless_protocol, read_frame, text, unsigned, Cursor, Error,
+    Result, METHOD_CALL_V2,
 };
 
 /// A validated v0.1.9 RPC call whose protocol argument remains byte-exact.
@@ -195,9 +195,7 @@ fn decode_wrapped_argument(payload: &[u8]) -> Result<Vec<u8>> {
             found: "another field",
         });
     }
-    if wrapped.value()? != RESPONSE_HEADER {
-        return Err(Error::Compatibility);
-    }
+    check_compatibility_header(wrapped.value()?)?;
     if !wrapped.done() {
         return Err(Error::Envelope {
             expected: "end of RPC data wrapper",

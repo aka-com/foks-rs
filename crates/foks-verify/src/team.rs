@@ -26,14 +26,12 @@ pub struct VerifiedTeamMember {
     pub removal_key_commitment: Option<[u8; 32]>,
 }
 
-/// Extracts the bounded Merkle epochs referenced by an untrusted team-chain
-/// response. The returned epochs carry no authority; callers must prove them
-/// from an already authenticated later root before replaying the chain.
+/// Extracts the Merkle epochs referenced by an untrusted team-chain response.
+/// The returned epochs carry no authority; callers must prove them from an
+/// already authenticated later root before replaying the chain. Network
+/// callers bound the encoded chain with the RPC frame limit.
 pub fn team_chain_root_epochs(chain_bytes: &[u8]) -> Result<Vec<u64>> {
     let chain = TeamChain::decode(chain_bytes)?;
-    if chain.links.len() > 4096 {
-        return Err(Error::TeamChainContinuity);
-    }
     let mut epochs = BTreeSet::from([chain.merkle.root().epoch]);
     for link in &chain.links {
         epochs.insert(link.decode_team_group_change()?.root.epoch);
@@ -113,6 +111,7 @@ pub struct VerifiedTeamState {
     team_name: Vec<u8>,
     team_name_utf8: Vec<u8>,
     team_name_sequence: u64,
+    member_load_floor: Role,
     members: Vec<VerifiedTeamMemberState>,
     shared_keys: Vec<VerifiedSharedKey>,
 }
@@ -132,6 +131,7 @@ pub struct VerifiedTeamMemberState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedTeamFounding {
     pub link_hash: [u8; 32],
+    pub member_load_floor: Role,
     pub members: Vec<VerifiedTeamMemberState>,
     pub shared_keys: Vec<VerifiedSharedKey>,
 }
@@ -236,9 +236,11 @@ pub fn verify_team_founding(
     let current = BTreeMap::new();
     let shared_keys = validate_team_shared_keys(&change, hepks, &current, true)?;
     let mut members = BTreeMap::new();
-    verify_team_eldest(link, &change, expected_team, &shared_keys, &mut members)?;
+    let member_load_floor =
+        verify_team_eldest(link, &change, expected_team, &shared_keys, &mut members)?;
     Ok(VerifiedTeamFounding {
         link_hash: prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?)?,
+        member_load_floor,
         members: members.into_values().collect(),
         shared_keys,
     })
@@ -268,6 +270,9 @@ impl VerifiedTeamState {
     }
     pub fn team_name_sequence(&self) -> u64 {
         self.team_name_sequence
+    }
+    pub fn member_load_floor(&self) -> Role {
+        self.member_load_floor
     }
     pub fn members(&self) -> &[VerifiedTeamMemberState] {
         &self.members
@@ -387,6 +392,7 @@ pub fn verify_team_chain(
     let mut members = BTreeMap::<Vec<u8>, VerifiedTeamMemberState>::new();
     let mut shared_keys = BTreeMap::<Role, VerifiedSharedKey>::new();
     let mut previous_hash = None;
+    let mut member_load_floor = Role::member(0);
 
     for (index, ((link, location), path)) in chain
         .links
@@ -427,7 +433,8 @@ pub fn verify_team_chain(
         let introduced =
             validate_team_shared_keys(&change, &chain.hepks, &shared_keys, index == 0)?;
         if index == 0 {
-            verify_team_eldest(link, &change, expected_team, &introduced, &mut members)?;
+            member_load_floor =
+                verify_team_eldest(link, &change, expected_team, &introduced, &mut members)?;
         } else {
             validate_team_rotation_schedule(&change, &members, &shared_keys, &introduced)?;
             replay_team_transition(link, &change, &introduced, &mut members)?;
@@ -471,6 +478,7 @@ pub fn verify_team_chain(
         team_name,
         team_name_utf8,
         team_name_sequence,
+        member_load_floor,
         members: members.into_values().collect(),
         shared_keys: shared_keys.into_values().collect(),
     })
@@ -621,6 +629,7 @@ pub fn verify_team_chain_increment(
         team_name,
         team_name_utf8,
         team_name_sequence,
+        member_load_floor: prior.member_load_floor,
         members: members.into_values().collect(),
         shared_keys: shared_keys.into_values().collect(),
     })
@@ -731,31 +740,10 @@ fn verify_team_eldest(
     expected_team: &EntityId,
     introduced: &[VerifiedSharedKey],
     members: &mut BTreeMap<Vec<u8>, VerifiedTeamMemberState>,
-) -> Result<()> {
+) -> Result<Role> {
+    let member_load_floor = team_eldest_member_load_floor(change, expected_team)?;
     let named = expected_team.entity_type() == ENTITY_NAMED_TEAM;
-    let expected_metadata = if named { 4 } else { 3 };
-    if change.seqno != 1
-        || change.previous.is_some()
-        || change.metadata.len() != expected_metadata
-        || (named && !matches!(change.metadata[0], ChangeMetadata::TeamName(_)))
-        || !matches!(
-            change.metadata[usize::from(named)],
-            ChangeMetadata::Eldest { .. }
-        )
-        || !matches!(
-            change.metadata[usize::from(named) + 1],
-            ChangeMetadata::TeamIndexRange(_)
-        )
-        || !matches!(
-            change.metadata[usize::from(named) + 2],
-            ChangeMetadata::MemberLoadFloor(_)
-        )
-        || !matches!(
-            change.metadata[usize::from(named) + 2],
-            ChangeMetadata::MemberLoadFloor(role) if role == Role::member(0)
-        )
-        || (named && change.changes.len() != 1)
-    {
+    if change.seqno != 1 || change.previous.is_some() || (named && change.changes.len() != 1) {
         return Err(Error::TeamBinding);
     }
     let admin = introduced
@@ -809,7 +797,32 @@ fn verify_team_eldest(
         members.insert(key, verified);
     }
     let signer = signer.ok_or(Error::TeamSigner)?;
-    verify_team_signature_stack(link, introduced, &signer)
+    verify_team_signature_stack(link, introduced, &signer)?;
+    Ok(member_load_floor)
+}
+
+fn team_eldest_member_load_floor(
+    change: &foks_proto::TeamGroupChange,
+    expected_team: &EntityId,
+) -> Result<Role> {
+    let named = expected_team.entity_type() == ENTITY_NAMED_TEAM;
+    let offset = usize::from(named);
+    let minimum = offset + 2;
+    if change.metadata.len() < minimum
+        || (named && !matches!(change.metadata[0], ChangeMetadata::TeamName(_)))
+        || !matches!(change.metadata[offset], ChangeMetadata::Eldest { .. })
+        || !matches!(
+            change.metadata[offset + 1],
+            ChangeMetadata::TeamIndexRange(_)
+        )
+    {
+        return Err(Error::TeamBinding);
+    }
+    match change.metadata.get(offset + 2) {
+        None => Ok(Role::member(0)),
+        Some(ChangeMetadata::MemberLoadFloor(role)) => Ok(*role),
+        Some(_) => Err(Error::TeamBinding),
+    }
 }
 
 fn replay_team_transition(
@@ -1256,16 +1269,52 @@ pub fn restore_verified_team(
 #[cfg(test)]
 mod transition_tests {
     use super::{
-        replay_team_transition, team_member_key, validate_team_rotation_schedule,
-        verified_team_member, BTreeMap, EntityId, Error, Role, VerifiedSharedKey,
+        replay_team_transition, team_eldest_member_load_floor, team_member_key,
+        validate_team_rotation_schedule, verified_team_member, BTreeMap, EntityId, Error, Role,
+        VerifiedSharedKey,
     };
     use foks_crypto::derive_shared_public;
-    use foks_proto::{SecretSeed, UserLink, ENTITY_PTK_VERIFY};
+    use foks_proto::{ChangeMetadata, SecretSeed, UserLink, ENTITY_PTK_VERIFY};
 
     const MUTATION_DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user-mutations";
 
     fn fixture(name: &str) -> Vec<u8> {
         std::fs::read(format!("{MUTATION_DIR}/{name}")).unwrap()
+    }
+
+    #[test]
+    fn historical_and_evolved_team_eldest_metadata_preserves_the_load_floor() {
+        let link = UserLink::decode(&fixture("named-team-link.snowp")).unwrap();
+        let change = link.decode_team_group_change().unwrap();
+        assert_eq!(
+            team_eldest_member_load_floor(&change, &change.team).unwrap(),
+            Role::member(0)
+        );
+
+        let mut historical = change.clone();
+        historical.metadata.truncate(3);
+        assert_eq!(
+            team_eldest_member_load_floor(&historical, &historical.team).unwrap(),
+            Role::member(0)
+        );
+
+        let mut nondefault = change.clone();
+        nondefault.metadata[3] = ChangeMetadata::MemberLoadFloor(Role::ADMIN);
+        nondefault
+            .metadata
+            .push(ChangeMetadata::DeviceName([7; 32]));
+        assert_eq!(
+            team_eldest_member_load_floor(&nondefault, &nondefault.team).unwrap(),
+            Role::ADMIN
+        );
+
+        historical
+            .metadata
+            .push(ChangeMetadata::DeviceName([8; 32]));
+        assert!(matches!(
+            team_eldest_member_load_floor(&historical, &historical.team),
+            Err(Error::TeamBinding)
+        ));
     }
 
     #[test]

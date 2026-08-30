@@ -68,7 +68,7 @@ pub fn bootstrap(
                 epoch: 0,
                 hash: [0; 32],
             },
-            time: input.now_microseconds,
+            time: input.now_microseconds / 1_000,
         },
         host: host_id.clone(),
         signer: host_id.clone(),
@@ -122,7 +122,7 @@ pub fn bootstrap(
     let empty_back_pointers = encode(&Value::Null)?;
     let merkle_root = MerkleRoot {
         epoch: 1,
-        time: input.now_microseconds,
+        time: input.now_microseconds / 1_000,
         back_pointers: foks_crypto::prefixed_hash_signable(
             MERKLE_BACK_POINTERS_TYPE_ID,
             &empty_back_pointers,
@@ -132,6 +132,7 @@ pub fn bootstrap(
             seqno: 1,
             hash: hostchain_hash,
         },
+        extensions: Vec::new(),
     };
     let exact_root = merkle_root.encoded()?;
     let root_hash = foks_crypto::prefixed_hash_signable(MERKLE_ROOT_TYPE_ID, &exact_root)?;

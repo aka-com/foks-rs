@@ -22,13 +22,22 @@ pub(super) fn response(
 
     match call.route.id {
         ProbeProbe
+        | MerkleQueryLookup
         | MerkleQueryGetHistoricalRoots
         | MerkleQueryGetCurrentRoot
+        | MerkleQueryGetCurrentRootHash
+        | MerkleQueryCheckKeyExists
         | MerkleQueryGetCurrentRootSigned
+        | MerkleQueryMLookup
         | MerkleQuerySelectVHost
         | RegSelectVHost
         | KvStoreSelectVHost => probe::response(data, call),
         RegReserveUsername
+        | RegCheckNameExists
+        | RegResolveUsername
+        | RegProbeKeyExists
+        | RegGetClientVersionInfo
+        | RegGetServerConfig
         | RegGetLoginChallenge
         | RegLogin
         | RegStretchVersion
@@ -40,7 +49,11 @@ pub(super) fn response(
         | RegGetUIDLookupChallege
         | RegLookupUIDByDevice
         | RegLoadUserChain => registration::response(data, call),
-        UserSetPassphrase
+        UserResolveUsername
+        | UserPing
+        | UserGetDeviceNag
+        | UserClearDeviceNag
+        | UserSetPassphrase
         | UserChangePassphrase
         | UserGetSalt
         | UserNextPassphraseGeneration
@@ -54,10 +67,14 @@ pub(super) fn response(
         | UserGetYubiManagementKey
         | UserGetAllYubiManagementKeys
         | UserGetHostConfig
+        | UserPostGenericLink
+        | UserLoadGenericChain
+        | UserGetTeamListServerTrust
         | UserGrantRemoteViewPermissionForUser => user::response(data, call, principal),
         TeamLoaderGetTeamVOBearerTokenChallenge
         | TeamLoaderActivateTeamVOBearerToken
         | TeamLoaderLoadTeamChain
+        | TeamLoaderLoadTeamMembershipChain
         | TeamLoaderLoadTeamRemoteViewTokens
         | TeamMemberGrantRemoteViewPermissionForTeam
         | TeamAdminReserveTeamname
@@ -66,6 +83,7 @@ pub(super) fn response(
         | TeamAdminMakeInertTeamBearerToken
         | TeamAdminActivateTeamBearerToken
         | TeamAdminLoadRemovalKeyBoxForTeamAdmin
+        | TeamAdminPostTeamMembershipLink
         | TeamAdminCreateTeamAdHoc => team::response(data, call, principal),
         KvStoreMkdir
         | KvStorePut
@@ -74,23 +92,23 @@ pub(super) fn response(
         | KvStoreFileUploadChunk
         | KvStorePutSmallFileOrSymlink
         | KvStoreGetRoot
+        | KvStoreGet
         | KvStoreGetNode
         | KvStoreGetEncryptedChunk
         | KvStoreGetDir
         | KvStoreCacheCheck
         | KvStoreList
         | KvStoreLockAcquire
-        | KvStoreLockRelease => kv::response(data, call, principal),
+        | KvStoreLockRelease
+        | KvStoreUsage => kv::response(data, call, principal),
         BeaconBeaconLookup
         | TeamLoaderCheckTeamVOBearerToken
-        | TeamLoaderLoadTeamMembershipChain
         | TeamLoaderLoadRemovalForMember
         | TeamLoaderGetServerConfig
         | TeamAdminCheckTeamBearerToken
         | TeamAdminPutTeamCert
         | TeamAdminGetCurrentTeamCerts
         | TeamAdminLoadTeamRemoteJoinReq
-        | TeamAdminPostTeamMembershipLink
         | TeamAdminPostTeamRemoval
         | TeamAdminLoadTeamRawInbox
         | TeamAdminRejectJoinReq

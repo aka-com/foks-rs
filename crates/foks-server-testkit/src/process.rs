@@ -127,6 +127,14 @@ impl InProcessServer {
         .current_root()
     }
 
+    #[doc(hidden)]
+    pub fn read_database(&self) -> foks_server_db::Result<foks_server_db::ReadDatabase> {
+        foks_server_db::ReadDatabase::open(
+            self.environment.inner.paths.database(),
+            foks_server_db::Config::default(),
+        )
+    }
+
     pub fn request_receipt(
         &self,
         idempotency_key: &[u8],

@@ -15,14 +15,19 @@ pub enum RpcStatus {
     DeviceAlreadyProvisioned,
     Expired,
     Locked,
+    LockTimeout,
+    MerkleLeafNotFound,
+    MerkleNoRoot,
     KvNoEnt,
     KvPermission { operation: u64, resource: u64 },
+    KeyNotFound(String),
     NameInUse,
     NotFound(String),
     PermissionDenied(String),
     PassphraseNotFound,
     QuotaExceeded,
     RateLimited,
+    RevokeRace(String),
     StaleCache(KvPathVersionVector),
     StaleRoot,
     TransactionRetry,
@@ -40,6 +45,7 @@ pub enum RpcStatus {
     TeamAdHocOpenViewership,
     TeamAdHocInvalidChange(String),
     TeamAdHocDuplicate,
+    UserNotFound,
     Unsupported,
 }
 
@@ -52,14 +58,19 @@ impl RpcStatus {
             Self::Expired => 1062,
             Self::DeviceAlreadyProvisioned => 1072,
             Self::Locked => 8014,
+            Self::LockTimeout => 8015,
+            Self::MerkleLeafNotFound => 4002,
+            Self::MerkleNoRoot => 4001,
             Self::KvNoEnt => 8016,
             Self::KvPermission { .. } => 8011,
+            Self::KeyNotFound(_) => 1025,
             Self::NameInUse => 1023,
             Self::NotFound(_) => 1049,
             Self::PermissionDenied(_) => 1013,
             Self::PassphraseNotFound => STATUS_PASSPHRASE_NOT_FOUND_ERROR,
             Self::QuotaExceeded => 1060,
             Self::RateLimited => 1012,
+            Self::RevokeRace(_) => 1044,
             Self::StaleCache(_) => 8012,
             Self::StaleRoot | Self::TransactionRetry => 1014,
             Self::TeamError(_) => 7001,
@@ -76,6 +87,7 @@ impl RpcStatus {
             Self::TeamAdHocOpenViewership => 7102,
             Self::TeamAdHocInvalidChange(_) => 7103,
             Self::TeamAdHocDuplicate => 7104,
+            Self::UserNotFound => 1027,
             Self::Unsupported => 1020,
         }
     }
@@ -128,7 +140,9 @@ fn status_switch_variant(status: &RpcStatus) -> Value {
     match status {
         RpcStatus::BadArguments(message)
         | RpcStatus::NotFound(message)
+        | RpcStatus::KeyNotFound(message)
         | RpcStatus::PermissionDenied(message)
+        | RpcStatus::RevokeRace(message)
         | RpcStatus::TeamError(message)
         | RpcStatus::TeamRace(message)
         | RpcStatus::TeamBearerTokenStale(message)

@@ -1,5 +1,5 @@
 use foks_merkle_store::{NodeReader, Result as MerkleResult};
-use rusqlite::{Connection, OptionalExtension as _};
+use rusqlite::{params, Connection, OptionalExtension as _};
 
 use crate::{Database, ReadDatabase, ReadSnapshot};
 
@@ -28,6 +28,18 @@ impl ReadSnapshot<'_> {
         SqliteNodeReader {
             connection: self.connection(),
         }
+    }
+
+    pub fn merkle_leaf_epoch(&self, key: &[u8; 32]) -> crate::Result<Option<u64>> {
+        self.connection()
+            .query_row(
+                "SELECT epoch FROM merkle_leaves WHERE leaf_key = ?1",
+                params![key],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(crate::error::unsigned)
+            .transpose()
     }
 }
 

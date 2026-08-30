@@ -21,6 +21,7 @@ impl Argument {
 
 pub(crate) struct AddedCredential {
     pub device_id: Vec<u8>,
+    pub self_token: [u8; 17],
     pub hepk_fingerprint: [u8; 32],
     pub exact_hepk: Vec<u8>,
     pub exact_name: Vec<u8>,
@@ -58,8 +59,6 @@ pub(crate) struct Command {
     pub parcels: Vec<Parcel>,
     pub seed_chain: Vec<SeedChainBox>,
     pub passphrase: Option<foks_proto::PassphraseUpdateArgument>,
-    pub expected_root_epoch: u64,
-    pub expected_root_hash: [u8; 32],
 }
 
 pub(crate) fn validate(
@@ -67,7 +66,12 @@ pub(crate) fn validate(
     host: &EntityId,
     principal: &[u8],
     argument: Argument,
+    signed_root: foks_proto::TreeRoot,
 ) -> Result<Command> {
+    let provision_self_token = match &argument {
+        Argument::Provision(argument) => Some(argument.self_token),
+        Argument::Revoke(_) => None,
+    };
     let (
         link,
         next_tree_location,
@@ -146,10 +150,7 @@ pub(crate) fn validate(
         host,
         expected_sequence,
         authority.chain_tail_hash,
-        foks_proto::TreeRoot {
-            epoch: authority.current_root_epoch,
-            hash: authority.current_root_hash,
-        },
+        signed_root.clone(),
         next_tree_location,
         &devices,
         &shared_keys,
@@ -180,6 +181,8 @@ pub(crate) fn validate(
             (
                 Some(AddedCredential {
                     device_id: member.entity.as_bytes().to_vec(),
+                    self_token: provision_self_token
+                        .ok_or(Error::Signup("provisioning request has no self token"))?,
                     hepk_fingerprint,
                     exact_hepk: hepk.encoded()?,
                     exact_name,
@@ -235,8 +238,6 @@ pub(crate) fn validate(
         parcels,
         seed_chain,
         passphrase,
-        expected_root_epoch: authority.current_root_epoch,
-        expected_root_hash: authority.current_root_hash,
     })
 }
 

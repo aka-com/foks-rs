@@ -18,6 +18,19 @@ pub(crate) fn array(value: &Value, expected: usize) -> Result<&[Value]> {
     Ok(values)
 }
 
+pub(crate) fn array_at_least(value: &Value, expected: usize) -> Result<&[Value]> {
+    let Value::Array(values) = value else {
+        return Err(type_error("array", value));
+    };
+    if values.len() < expected {
+        return Err(Error::FieldCount {
+            expected,
+            found: values.len(),
+        });
+    }
+    Ok(values)
+}
+
 pub(crate) fn list<T>(value: &Value, parser: fn(&Value) -> Result<T>) -> Result<Vec<T>> {
     match value {
         Value::Null => Ok(Vec::new()),

@@ -1,6 +1,7 @@
 //! User and team chains, mutations, metadata, and Merkle proofs.
 
 mod chain;
+mod generic;
 mod hepk;
 mod merkle;
 mod mutation;
@@ -9,6 +10,7 @@ mod team;
 mod user;
 
 pub use chain::*;
+pub use generic::*;
 pub use hepk::*;
 pub use merkle::*;
 pub use mutation::*;

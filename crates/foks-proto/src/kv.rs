@@ -393,6 +393,12 @@ impl KvDirent {
         &self.exact
     }
 
+    pub fn set_creation_time(&mut self, creation_time: u64) -> Result<()> {
+        self.creation_time = creation_time;
+        self.exact = encode(&self.to_value())?;
+        Ok(())
+    }
+
     /// `kvList` omits the parent directory and relies on the request context.
     /// Reconstruct it before verifying the name and binding MAC, matching the
     /// v0.1.9 Go client. A nonzero conflicting parent is never accepted.
@@ -436,6 +442,44 @@ impl KvDirent {
 
     pub fn encode(&self) -> Result<Vec<u8>> {
         Ok(encode(&self.to_value())?)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KvGetResponse {
+    pub dirent: KvDirent,
+    pub node: Option<KvNode>,
+    exact: Vec<u8>,
+}
+
+impl KvGetResponse {
+    pub fn new(dirent: KvDirent, node: Option<KvNode>) -> Result<Self> {
+        let exact = encode(&Value::Array(vec![
+            dirent.to_value(),
+            node.as_ref()
+                .map(KvNode::to_value)
+                .transpose()?
+                .unwrap_or(Value::Null),
+        ]))?;
+        Ok(Self {
+            dirent,
+            node,
+            exact,
+        })
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let fields = array(&value, 2)?;
+        Ok(Self {
+            dirent: kv_dirent(&fields[0])?,
+            node: option(&fields[1], KvNode::from_value)?,
+            exact: bytes.to_vec(),
+        })
+    }
+
+    pub fn encoded(&self) -> &[u8] {
+        &self.exact
     }
 }
 
@@ -621,8 +665,11 @@ pub enum KvNode {
 
 impl KvNode {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let value = decode(bytes)?;
-        let fields = array(&value, 2)?;
+        Self::from_value(&decode(bytes)?)
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        let fields = array(value, 2)?;
         let tag = unsigned(&fields[0])?;
         match tag {
             2 => Ok(Self::File(kv_large_file_metadata(variant(
@@ -644,6 +691,10 @@ impl KvNode {
     }
 
     pub fn encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&self.to_value()?)?)
+    }
+
+    fn to_value(&self) -> Result<Value> {
         let (kind, tag, payload) = match self {
             Self::File(metadata) => (2, b"0".to_vec(), metadata.to_value()),
             Self::SmallFile(boxed) => (3, b"2".to_vec(), boxed.to_value()),
@@ -653,10 +704,71 @@ impl KvNode {
                 (1, b"4".to_vec(), payload)
             }
         };
-        Ok(encode(&Value::Array(vec![
+        Ok(Value::Array(vec![
             Value::Unsigned(kind),
             Value::Variant(Some((tag, Box::new(payload)))),
-        ]))?)
+        ]))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct KvUsageStats {
+    pub number: u64,
+    pub bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct KvChunkedUsageStats {
+    pub base: KvUsageStats,
+    pub chunks: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct KvUsage {
+    pub small: KvUsageStats,
+    pub large: KvChunkedUsageStats,
+}
+
+impl KvUsage {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let fields = array(&value, 2)?;
+        let small = array(&fields[0], 2)?;
+        let large = array(&fields[1], 2)?;
+        let large_base = array(&large[0], 2)?;
+        Ok(Self {
+            small: KvUsageStats {
+                number: unsigned(&small[0])?,
+                bytes: unsigned(&small[1])?,
+            },
+            large: KvChunkedUsageStats {
+                base: KvUsageStats {
+                    number: unsigned(&large_base[0])?,
+                    bytes: unsigned(&large_base[1])?,
+                },
+                chunks: unsigned(&large[1])?,
+            },
+        })
+    }
+
+    pub fn to_value(self) -> Value {
+        Value::Array(vec![
+            Value::Array(vec![
+                Value::Unsigned(self.small.number),
+                Value::Unsigned(self.small.bytes),
+            ]),
+            Value::Array(vec![
+                Value::Array(vec![
+                    Value::Unsigned(self.large.base.number),
+                    Value::Unsigned(self.large.base.bytes),
+                ]),
+                Value::Unsigned(self.large.chunks),
+            ]),
+        ])
+    }
+
+    pub fn encode(self) -> Result<Vec<u8>> {
+        Ok(encode(&self.to_value())?)
     }
 }
 

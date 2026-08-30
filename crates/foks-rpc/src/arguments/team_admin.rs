@@ -1,6 +1,6 @@
 use foks_proto::{
     DecodedAdHocTeamCreateArgument, DecodedNamedTeamCreateArgument, DecodedTeamEditArgument,
-    EntityId, Role, Signature, TeamBearerToken, TeamBearerTokenChallenge,
+    EntityId, PostGenericLinkArgument, Role, Signature, TeamBearerToken, TeamBearerTokenChallenge,
 };
 use foks_snowpack::{decode, encode, Value};
 
@@ -25,6 +25,28 @@ pub struct LoadRemovalKeyBoxArgument {
     pub member: EntityId,
     pub member_host: EntityId,
     pub source_role: Role,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PostTeamMembershipLinkArgument {
+    pub token: TeamBearerToken,
+    pub link: PostGenericLinkArgument,
+}
+
+pub fn decode_post_team_membership_link(bytes: &[u8]) -> Result<PostTeamMembershipLinkArgument> {
+    let Value::Array(fields) = decode(bytes)? else {
+        return Err(shape("team membership-link post argument"));
+    };
+    let [Value::Binary(token), link] = fields.as_slice() else {
+        return Err(shape("team membership-link post fields"));
+    };
+    Ok(PostTeamMembershipLinkArgument {
+        token: token
+            .as_slice()
+            .try_into()
+            .map_err(|_| shape("16-byte team admin bearer token"))?,
+        link: PostGenericLinkArgument::decode(&encode(link)?)?,
+    })
 }
 
 pub fn decode_team_name_reservation_request(bytes: &[u8]) -> Result<Vec<u8>> {

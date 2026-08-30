@@ -11,6 +11,74 @@ use crate::{Entropy, WriterHandle};
 
 const CHALLENGE_LIFETIME_MICROSECONDS: u64 = 10 * 60 * 1_000_000;
 
+pub(crate) fn client_version_info(argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+    foks_rpc::arguments::decode_client_version_info(argument).map_err(bad_arguments)?;
+    foks_proto::ServerClientVersionInfo {
+        minimum: None,
+        newest: None,
+        message: Vec::new(),
+    }
+    .encoded()
+    .map_err(|_| RpcStatus::TransactionRetry)
+}
+
+pub(crate) fn server_config(
+    argument: &[u8],
+    database: &foks_server_db::ReadDatabase,
+) -> Result<Vec<u8>, RpcStatus> {
+    foks_rpc::arguments::decode_void(argument).map_err(bad_arguments)?;
+    let invite_code_regime = database
+        .invite_policy()
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .regime
+        .protocol_value();
+    foks_proto::RegServerConfig {
+        sso: None,
+        host_type: 4,
+        user_viewership: foks_proto::ViewershipMode::Open,
+        team_viewership: foks_proto::ViewershipMode::Open,
+        invite_code_regime,
+    }
+    .encoded()
+    .map_err(|_| RpcStatus::TransactionRetry)
+}
+
+pub(crate) fn check_name_exists(
+    argument: &[u8],
+    database: &foks_server_db::ReadDatabase,
+) -> Result<(), RpcStatus> {
+    let name = foks_rpc::arguments::decode_check_name_exists(argument).map_err(bad_arguments)?;
+    require_normalized_name(&name)?;
+    if database
+        .uid_by_normalized_name(&name)
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .is_some()
+    {
+        Ok(())
+    } else {
+        Err(RpcStatus::UserNotFound)
+    }
+}
+
+pub(crate) fn probe_key_exists(
+    argument: &[u8],
+    database: &foks_server_db::ReadDatabase,
+) -> Result<(), RpcStatus> {
+    let request = foks_rpc::arguments::decode_probe_key_exists(argument).map_err(bad_arguments)?;
+    if database
+        .device_self_token_matches(
+            request.uid.as_bytes(),
+            request.device_id.as_bytes(),
+            request.self_token.expose(),
+        )
+        .map_err(|_| RpcStatus::TransactionRetry)?
+    {
+        Ok(())
+    } else {
+        Err(RpcStatus::KeyNotFound("probed key".to_owned()))
+    }
+}
+
 pub(crate) fn stretch_version(argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
     foks_rpc::arguments::decode_void(argument).map_err(bad_arguments)?;
     foks_snowpack::encode(&foks_proto::StretchVersion::V1.to_value())
@@ -468,6 +536,14 @@ fn permission_denied() -> RpcStatus {
 
 fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
     RpcStatus::BadArguments(error.to_string())
+}
+
+fn require_normalized_name(name: &[u8]) -> Result<(), RpcStatus> {
+    if foks_verify::normalize_username(name).as_deref() == Some(name) {
+        Ok(())
+    } else {
+        Err(bad_arguments("username is not normalized"))
+    }
 }
 
 fn map_write_error(error: crate::Error) -> RpcStatus {

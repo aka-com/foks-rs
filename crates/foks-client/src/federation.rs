@@ -24,9 +24,9 @@ use foks_verify::{
 
 use crate::auth::user_chain_cursor;
 use crate::{
-    current_owner_puk, now_microseconds, AddRemoteTeamMemberRequest, AddedRemoteTeamMember,
-    DeviceCredential, Error, FoksClient, PinnedHost, ProtectedMutationStore, ProtectedStoreError,
-    Result,
+    current_owner_puk, now_microseconds, now_milliseconds, AddRemoteTeamMemberRequest,
+    AddedRemoteTeamMember, DeviceCredential, Error, FoksClient, PinnedHost, ProtectedMutationStore,
+    ProtectedStoreError, Result,
 };
 
 const FEDERATION_SAGA_OPERATION_ID_TYPE_ID: u64 = 0x14db_10fd_97c7_08ac;
@@ -348,7 +348,7 @@ impl FoksClient {
     ) -> Result<PermissionToken> {
         credential.uid.clone().require_type(ENTITY_USER)?;
         let payload =
-            RemoteViewPermissionPayload::new(credential.uid.clone(), viewer, now_microseconds()?)?;
+            RemoteViewPermissionPayload::new(credential.uid.clone(), viewer, now_milliseconds()?)?;
         let request = encode_grant_remote_view_permission_for_user_request(&payload)?;
         let response = self.call(host, &host.user, &request, Some(credential))?;
         PermissionToken::decode(&response).map_err(Into::into)
@@ -452,7 +452,7 @@ impl FoksClient {
                 "current admin PTK does not match team state",
             ));
         }
-        let payload = RemoteViewPermissionPayload::new(team.clone(), viewer, now_microseconds()?)?;
+        let payload = RemoteViewPermissionPayload::new(team.clone(), viewer, now_milliseconds()?)?;
         let signature = sign_shared_key_typed(
             &private.seed,
             REMOTE_VIEW_PERMISSION_PAYLOAD_TYPE_ID,

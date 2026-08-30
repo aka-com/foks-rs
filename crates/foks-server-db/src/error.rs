@@ -38,6 +38,8 @@ pub enum Error {
     KvConflict,
     #[error("KV lock is held by another token")]
     KvLocked,
+    #[error("KV lock was already released or timed out")]
+    KvLockTimeout,
     #[error("configured storage quota is exhausted")]
     QuotaExceeded,
     #[error("injected transaction failure at {0:?}")]

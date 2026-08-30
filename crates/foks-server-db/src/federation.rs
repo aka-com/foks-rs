@@ -903,8 +903,8 @@ mod tests {
             .execute(
                 "INSERT INTO devices
                  (device_id, uid, active, role_type, visibility, subkey_id,
-                  hepk_fingerprint, exact_hepk, exact_name)
-                 VALUES (?1, ?2, 1, 3, 0, NULL, zeroblob(32), x'01', x'01')",
+                  hepk_fingerprint, self_token, exact_hepk, exact_name)
+                 VALUES (?1, ?2, 1, 3, 0, NULL, zeroblob(32), zeroblob(17), x'01', x'01')",
                 params![device, uid],
             )
             .unwrap();

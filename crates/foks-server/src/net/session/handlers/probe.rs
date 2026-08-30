@@ -12,6 +12,10 @@ pub(super) trait Operations {
     fn current_root(&self) -> Result<Vec<u8>, RpcStatus>;
     fn current_root_signed(&self) -> Result<Vec<u8>, RpcStatus>;
     fn historical_roots(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+    fn merkle_lookup(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+    fn merkle_multi_lookup(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+    fn current_root_hash(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+    fn merkle_check_key_exists(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
 }
 
 impl Operations for ServerData {
@@ -42,6 +46,22 @@ impl Operations for ServerData {
     fn historical_roots(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
         ServerData::historical_roots(self, argument)
     }
+
+    fn merkle_lookup(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        ServerData::merkle_lookup(self, argument)
+    }
+
+    fn merkle_multi_lookup(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        ServerData::merkle_multi_lookup(self, argument)
+    }
+
+    fn current_root_hash(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        ServerData::current_root_hash(self, argument)
+    }
+
+    fn merkle_check_key_exists(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        ServerData::merkle_check_key_exists(self, argument)
+    }
 }
 
 pub(super) fn response(
@@ -71,6 +91,25 @@ pub(super) fn response(
         }
         RouteId::MerkleQueryGetHistoricalRoots => encode_success_response_at(
             &operations.historical_roots(call.call.argument())?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
+        RouteId::MerkleQueryLookup => {
+            encode_success_response_at(&operations.merkle_lookup(call.call.argument())?, sequence)
+                .map_err(|_| RpcStatus::Unsupported)
+        }
+        RouteId::MerkleQueryMLookup => encode_success_response_at(
+            &operations.merkle_multi_lookup(call.call.argument())?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
+        RouteId::MerkleQueryGetCurrentRootHash => encode_success_response_at(
+            &operations.current_root_hash(call.call.argument())?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
+        RouteId::MerkleQueryCheckKeyExists => encode_success_response_at(
+            &operations.merkle_check_key_exists(call.call.argument())?,
             sequence,
         )
         .map_err(|_| RpcStatus::Unsupported),
@@ -121,6 +160,22 @@ mod tests {
         }
 
         fn historical_roots(&self, _: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+            unreachable!()
+        }
+
+        fn merkle_lookup(&self, _: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+            unreachable!()
+        }
+
+        fn merkle_multi_lookup(&self, _: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+            unreachable!()
+        }
+
+        fn current_root_hash(&self, _: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+            unreachable!()
+        }
+
+        fn merkle_check_key_exists(&self, _: &[u8]) -> Result<Vec<u8>, RpcStatus> {
             unreachable!()
         }
     }

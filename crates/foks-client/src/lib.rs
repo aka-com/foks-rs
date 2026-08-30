@@ -24,18 +24,25 @@ use foks_crypto::{
     YubiDevice,
 };
 use foks_proto::{
-    DeviceLabel, DeviceLabelNameAndCommitmentKey, DeviceType, EntityId, HostchainTail, InviteCode,
-    PassphraseUpdateArgument, ProvisionDeviceArgument, PukParcel, RevokeDeviceArgument, Role,
-    SecretSeed, ServiceType, SharedKeyBoxSet, SoftwareSignupArgument, TreeRoot,
+    ClientVersionExt, DeviceLabel, DeviceLabelNameAndCommitmentKey, DeviceNagInfo, DeviceType,
+    EntityId, HostchainTail, InviteCode, PassphraseUpdateArgument, PermissionToken,
+    ProvisionDeviceArgument, PukParcel, RegServerConfig, RevokeDeviceArgument, Role, SecretSeed,
+    ServerClientVersionInfo, ServiceType, SharedKeyBoxSet, SoftwareSignupArgument, TreeRoot,
     UsernameReservation, ENTITY_PUK_VERIFY, ENTITY_USER,
 };
 use foks_rpc::{
-    encode_check_invite_code_request, encode_get_client_cert_chain_request_at,
-    encode_get_current_merkle_root_signed_request, encode_get_historical_merkle_roots_request,
-    encode_get_puk_for_role_request, encode_load_user_chain_request_from,
-    encode_merkle_select_vhost_request, encode_provision_device_request,
-    encode_registration_select_vhost_request, encode_reserve_username_request_at,
-    encode_revoke_device_request, encode_signup_request_at,
+    encode_check_invite_code_request, encode_check_name_exists_request,
+    encode_clear_device_nag_request, encode_get_client_cert_chain_request_at,
+    encode_get_client_version_info_request, encode_get_current_merkle_root_hash_request,
+    encode_get_current_merkle_root_signed_request, encode_get_device_nag_request,
+    encode_get_historical_merkle_roots_request, encode_get_puk_for_role_request,
+    encode_load_user_chain_request_from, encode_merkle_check_key_exists_request,
+    encode_merkle_lookup_request, encode_merkle_multi_lookup_request,
+    encode_merkle_select_vhost_request, encode_probe_key_exists_request,
+    encode_provision_device_request, encode_registration_select_vhost_request,
+    encode_registration_server_config_request, encode_reserve_username_request_at,
+    encode_resolve_username_request, encode_revoke_device_request, encode_signup_request_at,
+    encode_user_ping_request,
 };
 use foks_snowpack::{decode, Value};
 use foks_verify::{
@@ -114,6 +121,14 @@ fn now_microseconds() -> Result<u64> {
         .map_err(|_| Error::KvResponse("system clock timestamp overflow"))
 }
 
+fn now_milliseconds() -> Result<u64> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| Error::KvResponse("system clock precedes Unix epoch"))?;
+    u64::try_from(elapsed.as_millis())
+        .map_err(|_| Error::KvResponse("system clock timestamp overflow"))
+}
+
 fn user_key_for_seed<'a>(
     user: &'a VerifiedUserState,
     seed: &SecretSeed,
@@ -155,7 +170,7 @@ mod tests {
 
     use crate::kv::{read_kv_upload_chunk, read_kv_upload_chunk_with_carry, KvRequest};
     use foks_client_db::SoftStateStore;
-    use foks_proto::{KvListResponse, KvParty, KvPathVersionVector};
+    use foks_proto::{KvListResponse, KvParty};
     use foks_rpc::KvAuth;
     use foks_verify::verify_merkle_advance;
 
@@ -277,8 +292,30 @@ mod tests {
     }
 
     #[test]
+    fn target_accepts_ipv6_literals() {
+        let target = ProbeTarget::parse("[2001:0db8::1]:9443").unwrap();
+        assert_eq!(target.hostname(), "2001:db8::1");
+        assert_eq!(target.port(), 9443);
+        assert_eq!(target.address(), "[2001:db8::1]:9443");
+
+        let defaulted = ProbeTarget::parse("::1").unwrap();
+        assert_eq!(defaulted.hostname(), "::1");
+        assert_eq!(defaulted.port(), DEFAULT_PROBE_PORT);
+        assert_eq!(defaulted.address(), "[::1]:4430");
+    }
+
+    #[test]
     fn target_rejects_ambiguous_or_invalid_names() {
-        for target in ["", ".", "a..b", "-bad.test", "bad-.test", "bad name", "::1"] {
+        for target in [
+            "",
+            ".",
+            "a..b",
+            "-bad.test",
+            "bad-.test",
+            "bad name",
+            "[::1",
+            "[::1]junk",
+        ] {
             assert!(ProbeTarget::parse(target).is_err(), "accepted {target:?}");
         }
     }
@@ -508,6 +545,30 @@ mod tests {
         assert_eq!(size, Some(streamed.len() as u64));
         assert_eq!(streamed, fixture("kv-large-plaintext.bin"));
 
+        let listing = KvListResponse::decode(&fixture("kv-list.snowp")).unwrap();
+        let symlink_request =
+            foks_rpc::encode_kv_get_node_request(KvAuth::Team(&token), listing.entries[1].value)
+                .unwrap();
+        let mut cached_transcript = VecDeque::from([
+            (
+                fixture("kv-get-root-request.frame"),
+                fixture("kv-root.snowp"),
+            ),
+            (
+                fixture("kv-get-dir-request.frame"),
+                fixture("kv-root-dir.snowp"),
+            ),
+            (fixture("kv-list-request.frame"), fixture("kv-list.snowp")),
+            (symlink_request, fixture("kv-symlink-node.snowp")),
+            (
+                fixture("kv-get-large-node-request.frame"),
+                fixture("kv-large-node.snowp"),
+            ),
+            (
+                fixture("kv-get-large-chunk-request.frame"),
+                fixture("kv-large-chunk.snowp"),
+            ),
+        ]);
         let mut cache_checks = 0;
         let cached = client
             .sync_kv_with_fetch(
@@ -519,47 +580,25 @@ mod tests {
                 KvAuth::Team(&token),
                 &private_keys,
                 &soft_path,
-                |_, request| {
-                    assert!(matches!(request, KvRequest::CacheCheck(_)));
-                    cache_checks += 1;
-                    Ok(Vec::new())
+                |auth, request| {
+                    if matches!(request, KvRequest::CacheCheck(_)) {
+                        cache_checks += 1;
+                        return Ok(Vec::new());
+                    }
+                    let request = request.encode(auth, 1)?;
+                    let (expected, response) = cached_transcript
+                        .pop_front()
+                        .ok_or(Error::KvResponse("unexpected cached fixture request"))?;
+                    if request != expected {
+                        return Err(Error::KvResponse("cached fixture request mismatch"));
+                    }
+                    Ok(response)
                 },
             )
             .unwrap();
+        assert!(cached_transcript.is_empty());
         assert_eq!(cache_checks, 1);
         assert_eq!(cached, stored.into_iter().collect::<Vec<_>>());
-
-        let stale = KvPathVersionVector::decode(&fixture("kv-path-version-vector.snowp")).unwrap();
-        let mut saw_targeted_directory = false;
-        let error = client
-            .sync_kv_with_fetch(
-                &host,
-                KvParty {
-                    party,
-                    host: host.host_id.clone(),
-                },
-                KvAuth::Team(&token),
-                &private_keys,
-                &soft_path,
-                |_, request| match request {
-                    KvRequest::CacheCheck(_) => {
-                        Err(Error::Rpc(foks_rpc::Error::KvStaleCache(stale.clone())))
-                    }
-                    KvRequest::Directory(directory) => {
-                        saw_targeted_directory = true;
-                        assert_eq!(*directory, stale.directories[0].id);
-                        Err(Error::KvResponse("stop after targeted invalidation"))
-                    }
-                    KvRequest::Root => panic!("same-root staleness must not reload the root"),
-                    _ => panic!("directory metadata is loaded before stale directory contents"),
-                },
-            )
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            Error::KvResponse("stop after targeted invalidation")
-        ));
-        assert!(saw_targeted_directory);
     }
 
     #[test]

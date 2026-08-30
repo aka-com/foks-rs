@@ -24,6 +24,12 @@ fn bootstrap_is_verified_atomic_and_byte_stable_across_restart() {
     assert!(first.created);
     let verified = foks_verify::verify_public_host("localhost", &first.probe_response).unwrap();
     assert_eq!(verified.snapshot.host_id(), first.host_id.as_bytes());
+    assert_eq!(verified.merkle_root.time, 1_700_000_000_000);
+    let probe = foks_proto::ProbeResponse::decode(&first.probe_response).unwrap();
+    assert_eq!(
+        probe.hostchain[0].decode_change().unwrap().chainer.time,
+        1_700_000_000_000
+    );
     assert_eq!(database.current_root().unwrap().unwrap().epoch, 1);
 
     drop(database);

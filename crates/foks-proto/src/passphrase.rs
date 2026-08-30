@@ -209,9 +209,7 @@ pub struct PassphraseLoginResult {
 /// `User.changePassphrase`, and the optional signup passphrase field.
 ///
 /// The obsolete user-chain fields on the v0.1.9 set request are deliberately
-/// not represented. Encoding emits their canonical zero values. The optional
-/// generic user-settings link is accepted but ignored because this slice does
-/// not implement that separate chain family.
+/// not represented. Encoding emits their canonical zero values.
 #[derive(Clone, Eq, PartialEq)]
 pub struct PassphraseUpdateArgument {
     pub verify_key: EntityId,
@@ -221,6 +219,7 @@ pub struct PassphraseUpdateArgument {
     pub passphrase_box: PpePassphraseBox,
     pub puk_box: Option<PpePukBox>,
     pub stretch_version: StretchVersion,
+    pub user_settings_link: Option<crate::PostGenericLinkArgument>,
 }
 
 impl std::fmt::Debug for PassphraseUpdateArgument {
@@ -249,16 +248,16 @@ impl PassphraseUpdateArgument {
         if self.generation != FIRST_PASSPHRASE_GENERATION {
             return Err(Error::IntegerRange("initial passphrase generation"));
         }
-        Ok(encode(&self.to_set_value())?)
+        Ok(encode(&self.to_set_value()?)?)
     }
 
     pub fn encoded_change(&self) -> Result<Vec<u8>> {
         self.validate()?;
-        Ok(encode(&self.to_change_value())?)
+        Ok(encode(&self.to_change_value()?)?)
     }
 
-    pub fn to_set_value(&self) -> Value {
-        Value::Array(vec![
+    pub fn to_set_value(&self) -> Result<Value> {
+        Ok(Value::Array(vec![
             Value::Binary(self.verify_key.as_bytes().to_vec()),
             Value::Binary(self.salt.to_vec()),
             self.skmwk_box.to_value(),
@@ -271,12 +270,16 @@ impl PassphraseUpdateArgument {
             // retained on the Go wire but ignored by v0.1.9's server.
             Value::Array(vec![Value::Unsigned(0), Value::Variant(None)]),
             Value::Binary(vec![0; 32]),
-            Value::Null,
-        ])
+            self.user_settings_link
+                .as_ref()
+                .map(crate::PostGenericLinkArgument::to_value)
+                .transpose()?
+                .unwrap_or(Value::Null),
+        ]))
     }
 
-    pub fn to_change_value(&self) -> Value {
-        Value::Array(vec![
+    pub fn to_change_value(&self) -> Result<Value> {
+        Ok(Value::Array(vec![
             Value::Binary(self.verify_key.as_bytes().to_vec()),
             self.skmwk_box.to_value(),
             self.passphrase_box.to_value(),
@@ -285,8 +288,12 @@ impl PassphraseUpdateArgument {
                 .map_or(Value::Null, PpePukBox::to_value),
             self.stretch_version.to_value(),
             Value::Unsigned(self.generation),
-            Value::Null,
-        ])
+            self.user_settings_link
+                .as_ref()
+                .map(crate::PostGenericLinkArgument::to_value)
+                .transpose()?
+                .unwrap_or(Value::Null),
+        ]))
     }
 
     pub fn from_set_value(value: &Value) -> Result<Self> {
@@ -299,10 +306,6 @@ impl PassphraseUpdateArgument {
             });
         }
         let _: [u8; 32] = fixed_blob(&fields[7], "legacy passphrase tree location")?;
-        // A regular Go client normally sends a PostGenericLinkArg here. This
-        // server slice has no generic user-settings chain, so retain wire
-        // compatibility by accepting the canonical value without projecting
-        // it into authoritative state.
         let result = Self {
             verify_key: entity(&fields[0])?.require_type(ENTITY_PASSPHRASE_KEY)?,
             salt: fixed_blob(&fields[1], "passphrase salt")?,
@@ -311,6 +314,10 @@ impl PassphraseUpdateArgument {
             passphrase_box: PpePassphraseBox::decode(&encode(&fields[3])?)?,
             puk_box: optional_puk_box(&fields[4])?,
             stretch_version: StretchVersion::from_value(&fields[5])?,
+            user_settings_link: match &fields[8] {
+                Value::Null => None,
+                value => Some(crate::PostGenericLinkArgument::from_value(value)?),
+            },
         };
         result.validate()?;
         Ok(result)
@@ -326,8 +333,6 @@ impl PassphraseUpdateArgument {
 
     fn from_change_value_inner(value: &Value, salt: [u8; 16], require_salt: bool) -> Result<Self> {
         let fields = array(value, 7)?;
-        // See `from_set_value`: the separate generic user-settings link is an
-        // interoperability input, not part of this slice's state model.
         let result = Self {
             verify_key: entity(&fields[0])?.require_type(ENTITY_PASSPHRASE_KEY)?,
             salt,
@@ -336,6 +341,10 @@ impl PassphraseUpdateArgument {
             passphrase_box: PpePassphraseBox::decode(&encode(&fields[2])?)?,
             puk_box: optional_puk_box(&fields[3])?,
             stretch_version: StretchVersion::from_value(&fields[4])?,
+            user_settings_link: match &fields[6] {
+                Value::Null => None,
+                value => Some(crate::PostGenericLinkArgument::from_value(value)?),
+            },
         };
         result.validate_with_salt(require_salt)?;
         Ok(result)

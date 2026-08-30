@@ -17,7 +17,7 @@ use foks_rpc::{encode_registration_select_vhost_request, encode_yubi_signup_requ
 use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::{
-    fix_device_name, normalize_device_name, normalize_username, now_microseconds, prefixed_hash,
+    fix_device_name, normalize_device_name, normalize_username, now_milliseconds, prefixed_hash,
     random_bytes, AuthenticatedUserOutcome, Error, FoksClient, HardStateStore,
     KvDirectoryProjection, MutationCoordinator, MutationDraft, MutationKind, MutationOperation,
     MutationState, PinnedHost, ProtectedMutationStore, Result, YubiCredential,
@@ -128,7 +128,7 @@ impl FoksClient {
             &SoftwareEldestInput {
                 host: host.host_id(),
                 root: &tree_root,
-                time: now_microseconds()?,
+                time: now_milliseconds()?,
                 next_tree_location,
                 subchain_tree_location,
                 normalized_username: &normalized_username,
