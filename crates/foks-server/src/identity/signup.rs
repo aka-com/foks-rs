@@ -22,6 +22,7 @@ pub(crate) struct ValidatedSignup {
     pub link_hash: [u8; 32],
     pub exact_link: Vec<u8>,
     pub next_tree_location: [u8; 32],
+    pub subchain_tree_location_seed: [u8; 32],
     pub puk_verify_key: EntityId,
     pub exact_puk_hepk: Vec<u8>,
     pub exact_parcel: Vec<u8>,
@@ -214,6 +215,7 @@ pub(crate) fn validate_signup(
         link_hash,
         exact_link,
         next_tree_location: request.next_tree_location,
+        subchain_tree_location_seed: request.subchain_tree_location,
         puk_verify_key: eldest.puk_verify_key,
         exact_puk_hepk: request.puk_hepk.encoded()?,
         exact_parcel: request.puk_box.encoded(),
@@ -261,6 +263,7 @@ mod tests {
                 seqno: 1,
                 hash: [0; 32],
             },
+            extensions: Vec::new(),
         };
         validate_signup(&request, &eldest.host, &root, eldest.root.hash).unwrap();
 

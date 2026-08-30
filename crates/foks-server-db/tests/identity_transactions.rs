@@ -93,8 +93,8 @@ fn device_subkey_ids_are_unique_across_users() {
         .execute(
             "INSERT INTO devices
              (device_id, uid, active, role_type, visibility, subkey_id,
-              hepk_fingerprint, exact_hepk, exact_name)
-             VALUES (?1, ?2, 1, 3, 0, ?3, ?4, ?5, ?6)",
+              hepk_fingerprint, self_token, exact_hepk, exact_name)
+             VALUES (?1, ?2, 1, 3, 0, ?3, ?4, zeroblob(17), ?5, ?6)",
             rusqlite::params![
                 [0x23u8; 33],
                 OTHER_UID,
@@ -140,8 +140,8 @@ fn active_credentials_resolve_their_own_current_role_parcel() {
         .execute(
             "INSERT INTO devices
              (device_id, uid, active, role_type, visibility, subkey_id,
-              hepk_fingerprint, exact_hepk, exact_name)
-             VALUES (?1, ?2, 1, 1, -7, NULL, ?3, ?4, ?5)",
+              hepk_fingerprint, self_token, exact_hepk, exact_name)
+             VALUES (?1, ?2, 1, 1, -7, NULL, ?3, zeroblob(17), ?4, ?5)",
             rusqlite::params![MEMBER, [1u8; 33], [0x72u8; 32], b"member-hepk", b"member"],
         )
         .unwrap();

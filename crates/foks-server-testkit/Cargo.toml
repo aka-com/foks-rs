@@ -20,8 +20,10 @@ zeroize = { workspace = true }
 [dev-dependencies]
 foks-client-db = { workspace = true }
 foks-crypto = { workspace = true }
+foks-merkle-store = { workspace = true }
 foks-rpc = { workspace = true }
 foks-snowpack = { workspace = true }
+foks-verify = { workspace = true }
 foks-yubi = { workspace = true }
 rusqlite = { workspace = true }
 serde = { workspace = true }

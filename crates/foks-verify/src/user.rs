@@ -22,14 +22,12 @@ pub struct VerifiedUserDevice {
     pub subkey_id: Option<Vec<u8>>,
 }
 
-/// Extracts the bounded Merkle epochs an untrusted user-chain response asks
-/// the caller to authenticate. This grants no trust; callers must prove every
-/// returned epoch from an already authenticated root before replay.
+/// Extracts the Merkle epochs an untrusted user-chain response asks the caller
+/// to authenticate. This grants no trust; callers must prove every returned
+/// epoch from an already authenticated root before replay. Network callers
+/// bound the encoded chain with the RPC frame limit.
 pub fn user_chain_root_epochs(chain_bytes: &[u8]) -> Result<Vec<u64>> {
     let chain = UserChain::decode(chain_bytes)?;
-    if chain.links.len() > 4096 {
-        return Err(Error::UserChainContinuity);
-    }
     let mut epochs = BTreeSet::from([chain.merkle.root().epoch]);
     for link in &chain.links {
         epochs.insert(link.decode_group_change()?.root.epoch);
@@ -58,6 +56,23 @@ pub struct VerifiedUserSharedKey {
     pub generation: u64,
     pub verify_key: Vec<u8>,
     pub hepk_bytes: Vec<u8>,
+}
+
+/// A user-chain leaf needed to establish that a generic-chain signer had
+/// already been provisioned at the root cited by the generic link.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UserDeviceProvisionLeaf {
+    pub key: [u8; 32],
+    pub value: [u8; 32],
+}
+
+/// Historical bookends for a device that signed a generic link before it was
+/// revoked. The generic leaf must be present at `revoke_root`, and the
+/// provisioning leaf must be present at the generic link's cited root.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserDeviceSigningBookends {
+    pub provision: UserDeviceProvisionLeaf,
+    pub revoke_root: TreeRoot,
 }
 
 impl VerifiedUserSharedKey {
@@ -317,6 +332,137 @@ impl VerifiedUserState {
                 .collect::<Result<Vec<_>>>()?,
         })
     }
+
+    /// Checks whether `signer` was active at `epoch`. A currently active
+    /// interval needs no additional proof; a since-revoked interval returns
+    /// the same provision/revoke bookends used by the Go generic-chain loader.
+    pub fn device_signing_bookends(
+        &self,
+        signer: &EntityId,
+        epoch: u64,
+    ) -> Result<Option<UserDeviceSigningBookends>> {
+        let mut intervals = Vec::<(UserDeviceProvision, Option<TreeRoot>)>::new();
+        for evidence in authenticated_user_link_evidence(self)? {
+            let change = evidence.link.decode_group_change()?;
+            if change.seqno == 1 {
+                let eldest = evidence.link.decode_eldest()?;
+                if eldest.member == *signer {
+                    intervals.push((
+                        UserDeviceProvision {
+                            root: eldest.root,
+                            leaf: evidence.leaf,
+                        },
+                        None,
+                    ));
+                }
+                continue;
+            }
+            let Some(member) = change
+                .changes
+                .first()
+                .filter(|member| member.entity == *signer)
+            else {
+                continue;
+            };
+            if member.role == Role::NONE {
+                let (_, revoke) = intervals
+                    .last_mut()
+                    .filter(|(_, revoke)| revoke.is_none())
+                    .ok_or(Error::UserChainContinuity)?;
+                *revoke = Some(change.root);
+            } else {
+                intervals.push((
+                    UserDeviceProvision {
+                        root: change.root,
+                        leaf: evidence.leaf,
+                    },
+                    None,
+                ));
+            }
+        }
+        for (provision, revoke) in intervals {
+            if epoch < provision.root.epoch {
+                continue;
+            }
+            match revoke {
+                None => return Ok(None),
+                Some(revoke_root) if revoke_root.epoch >= epoch => {
+                    return Ok(Some(UserDeviceSigningBookends {
+                        provision: provision.leaf,
+                        revoke_root,
+                    }));
+                }
+                Some(_) => {}
+            }
+        }
+        Err(Error::UserBinding)
+    }
+}
+
+#[derive(Clone)]
+struct UserDeviceProvision {
+    root: TreeRoot,
+    leaf: UserDeviceProvisionLeaf,
+}
+
+struct AuthenticatedUserLinkEvidence {
+    link: foks_proto::UserLink,
+    leaf: UserDeviceProvisionLeaf,
+}
+
+fn authenticated_user_link_evidence(
+    user: &VerifiedUserState,
+) -> Result<Vec<AuthenticatedUserLinkEvidence>> {
+    let Value::Array(authenticated) = foks_snowpack::decode(&user.authenticated_chain_bytes)?
+    else {
+        return Err(Error::UserChainContinuity);
+    };
+    let segments = user_evidence_segments(&user.evidence_bytes)?;
+    let mut evidence = Vec::with_capacity(authenticated.len());
+    let mut authenticated_index = 0usize;
+    let mut prior_next_location = None;
+    for (segment_index, segment) in segments.into_iter().enumerate() {
+        let chain = UserChain::decode(&segment)?;
+        if segment_index == 0 {
+            if chain.locations.len() != chain.links.len() {
+                return Err(Error::UserChainContinuity);
+            }
+        } else if chain.locations.len() != chain.links.len().saturating_add(1)
+            || chain.locations.first().copied() != prior_next_location
+        {
+            return Err(Error::UserChainContinuity);
+        }
+        for (index, link) in chain.links.into_iter().enumerate() {
+            let authenticated_link = authenticated
+                .get(authenticated_index)
+                .ok_or(Error::UserChainContinuity)?;
+            if foks_snowpack::encode(authenticated_link)? != link.encoded()? {
+                return Err(Error::UserChainContinuity);
+            }
+            let change = link.decode_group_change()?;
+            let location = if change.seqno == 1 {
+                None
+            } else if segment_index == 0 {
+                chain.locations.get(index.saturating_sub(1))
+            } else {
+                chain.locations.get(index)
+            };
+            let key = user_merkle_key(&user.uid, change.seqno, location)?;
+            let value = prefixed_hash(LINK_OUTER_TYPE_ID, &link.encoded()?)?;
+            evidence.push(AuthenticatedUserLinkEvidence {
+                link,
+                leaf: UserDeviceProvisionLeaf { key, value },
+            });
+            authenticated_index = authenticated_index
+                .checked_add(1)
+                .ok_or(Error::UserChainContinuity)?;
+        }
+        prior_next_location = chain.locations.last().copied().or(prior_next_location);
+    }
+    if authenticated_index != authenticated.len() {
+        return Err(Error::UserChainContinuity);
+    }
+    Ok(evidence)
 }
 
 /// Replays an arbitrary v0.1.9 user group-change chain from eldest through

@@ -85,6 +85,34 @@ pub struct UserChainSnapshot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GenericChainLinkSnapshot {
+    pub sequence: u64,
+    pub link_hash: [u8; 32],
+    pub exact_link: Vec<u8>,
+    pub root_epoch: u64,
+    pub next_tree_location: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GenericChainSnapshot {
+    pub entity_id: Vec<u8>,
+    pub chain_type: u64,
+    pub location_seed: [u8; 32],
+    pub links: Vec<GenericChainLinkSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalTeamListEntrySnapshot {
+    pub team_id: Vec<u8>,
+    pub source_role_type: u64,
+    pub source_visibility: i64,
+    pub destination_role_type: u64,
+    pub destination_visibility: i64,
+    pub team_sequence: u64,
+    pub key_generation: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PukMaterialSnapshot {
     pub exact_box_set: Vec<u8>,
     pub sender_id: Vec<u8>,
@@ -140,6 +168,10 @@ impl Database {
         roots_at(&self.connection, epochs)
     }
 
+    pub fn root_at(&self, epoch: u64) -> Result<Option<RootSnapshot>> {
+        root_at(&self.connection, epoch)
+    }
+
     pub fn user_authority(&self, uid: &[u8]) -> Result<Option<UserAuthoritySnapshot>> {
         user_authority(&self.connection, uid)
     }
@@ -151,6 +183,14 @@ impl Database {
     pub fn team(&self, team_id: &[u8]) -> Result<Option<TeamSnapshot>> {
         team_snapshot(&self.connection, team_id)
     }
+
+    pub fn generic_chain(
+        &self,
+        entity_id: &[u8],
+        chain_type: u64,
+    ) -> Result<Option<GenericChainSnapshot>> {
+        generic_chain(&self.connection, entity_id, chain_type)
+    }
 }
 
 impl ReadDatabase {
@@ -160,6 +200,10 @@ impl ReadDatabase {
 
     pub fn roots_at(&self, epochs: &[u64]) -> Result<Option<Vec<RootSnapshot>>> {
         roots_at(&self.connection, epochs)
+    }
+
+    pub fn root_at(&self, epoch: u64) -> Result<Option<RootSnapshot>> {
+        root_at(&self.connection, epoch)
     }
 
     pub fn identity(&self, uid: &[u8]) -> Result<Option<IdentitySnapshot>> {
@@ -188,6 +232,22 @@ impl ReadDatabase {
 
     pub fn team(&self, team_id: &[u8]) -> Result<Option<TeamSnapshot>> {
         team_snapshot(&self.connection, team_id)
+    }
+
+    pub fn generic_chain(
+        &self,
+        entity_id: &[u8],
+        chain_type: u64,
+    ) -> Result<Option<GenericChainSnapshot>> {
+        generic_chain(&self.connection, entity_id, chain_type)
+    }
+
+    pub fn local_team_list(
+        &self,
+        uid: &[u8],
+        host_id: &[u8],
+    ) -> Result<Vec<LocalTeamListEntrySnapshot>> {
+        local_team_list(&self.connection, uid, host_id)
     }
 
     pub fn team_parcels(&self, team_id: &[u8], party_id: &[u8]) -> Result<Vec<Vec<u8>>> {
@@ -294,6 +354,10 @@ impl ReadSnapshot<'_> {
         roots_at_inner(self.connection(), epochs)
     }
 
+    pub fn root_at(&self, epoch: u64) -> Result<Option<RootSnapshot>> {
+        root_at_inner(self.connection(), epoch)
+    }
+
     pub fn identity(&self, uid: &[u8]) -> Result<Option<IdentitySnapshot>> {
         identity_snapshot(self.connection(), uid)
     }
@@ -320,6 +384,22 @@ impl ReadSnapshot<'_> {
 
     pub fn team(&self, team_id: &[u8]) -> Result<Option<TeamSnapshot>> {
         team_snapshot_inner(self.connection(), team_id)
+    }
+
+    pub fn generic_chain(
+        &self,
+        entity_id: &[u8],
+        chain_type: u64,
+    ) -> Result<Option<GenericChainSnapshot>> {
+        generic_chain_inner(self.connection(), entity_id, chain_type)
+    }
+
+    pub fn local_team_list(
+        &self,
+        uid: &[u8],
+        host_id: &[u8],
+    ) -> Result<Vec<LocalTeamListEntrySnapshot>> {
+        local_team_list_inner(self.connection(), uid, host_id)
     }
 
     pub fn team_parcels(&self, team_id: &[u8], party_id: &[u8]) -> Result<Vec<Vec<u8>>> {
@@ -529,6 +609,138 @@ fn team_snapshot_inner(connection: &Connection, team_id: &[u8]) -> Result<Option
 
 pub fn user_chain(connection: &Connection, uid: &[u8]) -> Result<Option<UserChainSnapshot>> {
     read_snapshot(connection, |connection| user_chain_inner(connection, uid))
+}
+
+fn generic_chain(
+    connection: &Connection,
+    entity_id: &[u8],
+    chain_type: u64,
+) -> Result<Option<GenericChainSnapshot>> {
+    read_snapshot(connection, |connection| {
+        generic_chain_inner(connection, entity_id, chain_type)
+    })
+}
+
+fn generic_chain_inner(
+    connection: &Connection,
+    entity_id: &[u8],
+    chain_type: u64,
+) -> Result<Option<GenericChainSnapshot>> {
+    let seed: Option<Vec<u8>> = connection
+        .query_row(
+            "SELECT seed FROM subchain_tree_location_seeds WHERE entity_id = ?1",
+            [entity_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(seed) = seed else {
+        return Ok(None);
+    };
+    let mut statement = connection.prepare(
+        "SELECT l.seqno, l.link_hash, l.exact_link, l.root_epoch, t.location
+         FROM generic_chain_links l
+         JOIN generic_tree_locations t
+           ON t.entity_id = l.entity_id AND t.chain_type = l.chain_type
+          AND t.seqno = l.seqno + 1
+         WHERE l.entity_id = ?1 AND l.chain_type = ?2 ORDER BY l.seqno",
+    )?;
+    let links = statement
+        .query_map(
+            rusqlite::params![entity_id, crate::error::sql_integer(chain_type)?],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                ))
+            },
+        )?
+        .map(|row| {
+            let (sequence, link_hash, exact_link, root_epoch, location) = row?;
+            Ok(GenericChainLinkSnapshot {
+                sequence: unsigned(sequence)?,
+                link_hash: link_hash
+                    .try_into()
+                    .map_err(|_| crate::Error::Invalid("stored generic link hash"))?,
+                exact_link,
+                root_epoch: unsigned(root_epoch)?,
+                next_tree_location: location
+                    .try_into()
+                    .map_err(|_| crate::Error::Invalid("stored generic tree location"))?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some(GenericChainSnapshot {
+        entity_id: entity_id.to_vec(),
+        chain_type,
+        location_seed: seed
+            .try_into()
+            .map_err(|_| crate::Error::Invalid("stored subchain tree-location seed"))?,
+        links,
+    }))
+}
+
+fn local_team_list(
+    connection: &Connection,
+    uid: &[u8],
+    host_id: &[u8],
+) -> Result<Vec<LocalTeamListEntrySnapshot>> {
+    read_snapshot(connection, |connection| {
+        local_team_list_inner(connection, uid, host_id)
+    })
+}
+
+fn local_team_list_inner(
+    connection: &Connection,
+    uid: &[u8],
+    host_id: &[u8],
+) -> Result<Vec<LocalTeamListEntrySnapshot>> {
+    let mut statement = connection.prepare(
+        "SELECT m.team_id, m.source_role_type, m.source_visibility,
+                m.role_type, m.visibility, h.seqno, m.generation
+         FROM team_members m
+         JOIN teams t ON t.team_id = m.team_id
+         JOIN team_chain_heads h ON h.team_id = m.team_id
+         WHERE m.party_id = ?1 AND t.host_id = ?2
+           AND (m.scoped_host_id IS NULL OR m.scoped_host_id = ?2)
+         ORDER BY m.team_id",
+    )?;
+    let entries = statement
+        .query_map(rusqlite::params![uid, host_id], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })?
+        .map(|row| {
+            let (
+                team_id,
+                source_type,
+                source_visibility,
+                destination_type,
+                destination_visibility,
+                sequence,
+                generation,
+            ) = row?;
+            Ok(LocalTeamListEntrySnapshot {
+                team_id,
+                source_role_type: unsigned(source_type)?,
+                source_visibility,
+                destination_role_type: unsigned(destination_type)?,
+                destination_visibility,
+                team_sequence: unsigned(sequence)?,
+                key_generation: unsigned(generation)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(entries)
 }
 
 fn user_chain_inner(connection: &Connection, uid: &[u8]) -> Result<Option<UserChainSnapshot>> {
@@ -771,6 +983,14 @@ fn user_authority_inner(
 
 pub fn roots_at(connection: &Connection, epochs: &[u64]) -> Result<Option<Vec<RootSnapshot>>> {
     read_snapshot(connection, |connection| roots_at_inner(connection, epochs))
+}
+
+pub fn root_at(connection: &Connection, epoch: u64) -> Result<Option<RootSnapshot>> {
+    read_snapshot(connection, |connection| root_at_inner(connection, epoch))
+}
+
+fn root_at_inner(connection: &Connection, epoch: u64) -> Result<Option<RootSnapshot>> {
+    Ok(roots_at_inner(connection, &[epoch])?.and_then(|mut roots| roots.pop()))
 }
 
 fn roots_at_inner(connection: &Connection, epochs: &[u64]) -> Result<Option<Vec<RootSnapshot>>> {

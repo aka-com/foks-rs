@@ -107,16 +107,19 @@ pub(crate) fn dispatch(
     if matches!(
         route,
         RouteId::KvStoreGetRoot
+            | RouteId::KvStoreGet
             | RouteId::KvStoreGetDir
             | RouteId::KvStoreGetNode
             | RouteId::KvStoreGetEncryptedChunk
             | RouteId::KvStoreList
             | RouteId::KvStoreCacheCheck
+            | RouteId::KvStoreUsage
     ) {
         let snapshot = reader.snapshot().map_err(|_| RpcStatus::TransactionRetry)?;
         let authority = resolve_authority(argument, principal, &snapshot, clock)?;
         return match route {
             RouteId::KvStoreGetRoot => get_root(argument, &snapshot, &authority),
+            RouteId::KvStoreGet => get(argument, &snapshot, &authority),
             RouteId::KvStoreGetDir => get_directory(argument, &snapshot, &authority),
             RouteId::KvStoreGetNode => get_node(argument, &snapshot, &authority),
             RouteId::KvStoreGetEncryptedChunk => {
@@ -124,6 +127,7 @@ pub(crate) fn dispatch(
             }
             RouteId::KvStoreList => list(argument, &snapshot, &authority),
             RouteId::KvStoreCacheCheck => cache_check(argument, &snapshot, &authority),
+            RouteId::KvStoreUsage => usage(argument, &snapshot, &authority),
             _ => unreachable!("read-only KV routes were matched above"),
         };
     }
@@ -146,11 +150,13 @@ pub(crate) fn dispatch(
             lock_release(argument, principal, reader, writer, &authority)
         }
         RouteId::KvStoreGetRoot
+        | RouteId::KvStoreGet
         | RouteId::KvStoreGetDir
         | RouteId::KvStoreGetNode
         | RouteId::KvStoreGetEncryptedChunk
         | RouteId::KvStoreList
-        | RouteId::KvStoreCacheCheck => unreachable!("read-only KV routes returned above"),
+        | RouteId::KvStoreCacheCheck
+        | RouteId::KvStoreUsage => unreachable!("read-only KV routes returned above"),
         _ => Err(RpcStatus::Unsupported),
     }
 }
@@ -170,6 +176,99 @@ fn get_root(
         foks_proto::KvRoot::decode(&root.exact).map_err(|_| RpcStatus::TransactionRetry)?;
     authority.require_read_key(decoded.key)?;
     Ok(Response::Data(root.exact))
+}
+
+fn get(
+    argument: &[u8],
+    reader: &foks_server_db::ReadSnapshot<'_>,
+    authority: &KvAuthority,
+) -> Result<Response, RpcStatus> {
+    let fields = fields(argument, 3)?;
+    let precondition = request_precondition(&fields[0])?;
+    check_precondition(reader, authority, precondition.as_ref())?;
+    let Value::Array(path) = &fields[1] else {
+        return Err(bad_arguments("KV get path is not a struct"));
+    };
+    let [parent, names] = path.as_slice() else {
+        return Err(bad_arguments("KV get path has the wrong shape"));
+    };
+    let parent = fixed_16(parent, "KV get parent")?;
+    let names = match names {
+        Value::Null => return Err(RpcStatus::KvNoEnt),
+        Value::Array(names) if !names.is_empty() && names.len() <= 64 => names,
+        Value::Array(_) => return Err(bad_arguments("KV get names are empty or too numerous")),
+        _ => return Err(bad_arguments("KV get names are not a list")),
+    };
+    let Value::Unsigned(follow) = &fields[2] else {
+        return Err(bad_arguments("KV follow behavior is not unsigned"));
+    };
+    if *follow > 2 {
+        return Err(bad_arguments("KV follow behavior is unknown"));
+    }
+    let mut found = None;
+    for name in names {
+        let Value::Array(name) = name else {
+            return Err(bad_arguments("KV get name is not a struct"));
+        };
+        let [Value::Unsigned(directory_version), name_mac] = name.as_slice() else {
+            return Err(bad_arguments("KV get name has the wrong shape"));
+        };
+        let name_mac = fixed_32(name_mac, "KV get name MAC")?;
+        if let Some(stored) = reader
+            .kv_dirent_at_name(&authority.party, &parent, *directory_version, &name_mac)
+            .map_err(|_| RpcStatus::TransactionRetry)?
+        {
+            found = Some(stored);
+            break;
+        }
+    }
+    let stored = found.ok_or(RpcStatus::KvNoEnt)?;
+    let directory = foks_proto::KvDirectory::decode(
+        stored
+            .exact_directory
+            .as_deref()
+            .ok_or(RpcStatus::TransactionRetry)?,
+    )
+    .map_err(|_| RpcStatus::TransactionRetry)?;
+    authority.require_read_key(directory.key)?;
+    let mut dirent =
+        foks_proto::KvDirent::decode(&stored.exact).map_err(|_| RpcStatus::TransactionRetry)?;
+    if dirent.parent != parent || dirent.value.0 != stored.node_id {
+        return Err(RpcStatus::TransactionRetry);
+    }
+    // go-foks omits ctime from kvGet and includes it only in kvList.
+    dirent
+        .set_creation_time(0)
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let node_type = dirent
+        .value
+        .node_type()
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let should_follow = match (*follow, node_type) {
+        (_, foks_proto::KvNodeType::None) | (0, _) => false,
+        (1, foks_proto::KvNodeType::Directory) | (2, _) => true,
+        _ => false,
+    };
+    let node = should_follow
+        .then(|| load_node(reader, authority, dirent.value.0))
+        .transpose()?;
+    let response =
+        foks_proto::KvGetResponse::new(dirent, node).map_err(|_| RpcStatus::TransactionRetry)?;
+    Ok(Response::Data(response.encoded().to_vec()))
+}
+
+fn usage(
+    argument: &[u8],
+    reader: &foks_server_db::ReadSnapshot<'_>,
+    authority: &KvAuthority,
+) -> Result<Response, RpcStatus> {
+    let _fields = fields(argument, 1)?;
+    let usage = reader
+        .kv_usage(&authority.party)
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    Ok(Response::Data(
+        usage.encode().map_err(|_| RpcStatus::TransactionRetry)?,
+    ))
 }
 
 fn mkdir(
@@ -240,8 +339,13 @@ fn put_root(
     let fields = fields(argument, 2)?;
     let exact = encode(&fields[1]).map_err(bad_arguments)?;
     let root = foks_proto::KvRoot::decode(&exact).map_err(bad_arguments)?;
-    if root.version != 1 || !authority.can_write_key(root.key) {
-        return Err(bad_arguments("initial KV root must be version one"));
+    if authority.maximum_role < foks_proto::Role::ADMIN {
+        return Err(permission_denied());
+    }
+    if root.version == 0 || root.binding_mac == [0; 32] || !authority.can_write_key(root.key) {
+        return Err(bad_arguments(
+            "KV root has invalid version, binding, or key metadata",
+        ));
     }
     let (key_role, key_visibility) = role_parts(root.key.role);
     let uid = authority.party.clone();
@@ -253,11 +357,15 @@ fn put_root(
             if !kv_write_is_current(database, &write_authority, &device, now)? {
                 return Err(crate::Error::AuthorizationChanged);
             }
+            let directory_version = database
+                .kv_directory(&uid, &root.root)?
+                .ok_or(foks_server_db::Error::KvConflict)?
+                .version;
             database.put_kv_root(&foks_server_db::KvRootMutation {
                 uid: &uid,
                 version: root.version,
                 directory_id: &root.root,
-                directory_version: 1,
+                directory_version,
                 key_role,
                 key_visibility,
                 key_generation: root.key.generation,
@@ -400,16 +508,7 @@ fn put(
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 2)?;
-    let Value::Array(header) = &fields[0] else {
-        return Err(bad_arguments("KV request header is not a struct"));
-    };
-    let [_auth, precondition] = header.as_slice() else {
-        return Err(bad_arguments("KV request header has the wrong shape"));
-    };
-    let precondition = match precondition {
-        Value::Null => return Err(bad_arguments("KV put requires a cache precondition")),
-        value => foks_proto::KvPathVersionVector::from_value(value).map_err(bad_arguments)?,
-    };
+    let precondition = request_precondition(&fields[0])?;
     let Value::Array(values) = &fields[1] else {
         return Err(bad_arguments("KV dirents are not a list"));
     };
@@ -432,10 +531,10 @@ fn put(
                     "KV dirent uses unsupported mutation metadata",
                 ));
             }
-            Ok((dirent, exact))
+            Ok(dirent)
         })
         .collect::<Result<Vec<_>, RpcStatus>>()?;
-    for (dirent, _) in &dirents {
+    for dirent in &dirents {
         require_directory_write_access(reader, authority, &dirent.parent)?;
     }
     let uid = authority.party.clone();
@@ -447,8 +546,23 @@ fn put(
             if !kv_write_is_current(database, &write_authority, &device, now)? {
                 return Err(crate::Error::AuthorizationChanged);
             }
+            let mut dirents = dirents;
+            for dirent in &mut dirents {
+                let creation_time = database
+                    .kv_dirent(&uid, &dirent.parent, &dirent.id)?
+                    .map(|stored| foks_proto::KvDirent::decode(&stored.exact))
+                    .transpose()?
+                    .filter(|stored| stored.version == dirent.version)
+                    .map_or(now, |stored| stored.creation_time);
+                dirent.set_creation_time(creation_time)?;
+            }
+            let exact = dirents
+                .iter()
+                .map(foks_proto::KvDirent::encode)
+                .collect::<std::result::Result<Vec<_>, _>>()?;
             let mutations = dirents
                 .iter()
+                .zip(&exact)
                 .map(|(dirent, exact)| foks_server_db::KvDirentMutation {
                     parent: &dirent.parent,
                     id: &dirent.id,
@@ -460,7 +574,7 @@ fn put(
                     exact,
                 })
                 .collect::<Vec<_>>();
-            database.put_kv_dirents(&uid, &precondition, &mutations)?;
+            database.put_kv_dirents(&uid, precondition.as_ref(), &mutations)?;
             Ok(())
         })
         .map_err(|error| map_write_error(error, reader, &error_uid))?;
@@ -474,40 +588,58 @@ fn get_node(
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 2)?;
     let id = fixed_17(&fields[1], "KV node ID")?;
-    if !matches!(id[0], 2..=4) {
-        return Err(RpcStatus::KvNoEnt);
-    }
-    let uid = authority.party.clone();
-    if id[0] == 2 {
-        let object_id: [u8; 16] = id[1..].try_into().expect("KV node ID width was checked");
-        let stored = reader
-            .kv_file(&uid, &object_id)
-            .map_err(|_| RpcStatus::TransactionRetry)?
-            .ok_or(RpcStatus::KvNoEnt)?;
-        let metadata = foks_proto::KvLargeFileMetadata::decode(&stored.exact_metadata)
-            .map_err(|_| RpcStatus::TransactionRetry)?;
-        authority.require_read_key(metadata.key)?;
-        return Ok(Response::Data(
-            foks_proto::KvNode::File(metadata)
-                .encoded()
-                .map_err(|_| RpcStatus::TransactionRetry)?,
-        ));
-    }
-    let stored = reader
-        .kv_node(&uid, &id)
-        .map_err(|_| RpcStatus::TransactionRetry)?
-        .ok_or(RpcStatus::KvNoEnt)?;
-    let boxed = foks_proto::KvSmallFileBox::decode(&stored.exact)
-        .map_err(|_| RpcStatus::TransactionRetry)?;
-    authority.require_read_key(boxed.key)?;
-    let node = if stored.node_type == 3 {
-        foks_proto::KvNode::SmallFile(boxed)
-    } else {
-        foks_proto::KvNode::Symlink(boxed)
-    };
+    let node = load_node(reader, authority, id)?;
     Ok(Response::Data(
         node.encoded().map_err(|_| RpcStatus::TransactionRetry)?,
     ))
+}
+
+fn load_node(
+    reader: &foks_server_db::ReadSnapshot<'_>,
+    authority: &KvAuthority,
+    id: [u8; 17],
+) -> Result<foks_proto::KvNode, RpcStatus> {
+    let object_id: [u8; 16] = id[1..].try_into().expect("KV node ID width was checked");
+    match id[0] {
+        1 => {
+            let stored = reader
+                .kv_directory(&authority.party, &object_id)
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .ok_or(RpcStatus::KvNoEnt)?;
+            let directory = foks_proto::KvDirectory::decode(&stored.exact)
+                .map_err(|_| RpcStatus::TransactionRetry)?;
+            authority.require_read_key(directory.key)?;
+            Ok(foks_proto::KvNode::Directory(
+                foks_proto::KvDirectoryPair::from_active(directory)
+                    .map_err(|_| RpcStatus::TransactionRetry)?,
+            ))
+        }
+        2 => {
+            let stored = reader
+                .kv_file(&authority.party, &object_id)
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .ok_or(RpcStatus::KvNoEnt)?;
+            let metadata = foks_proto::KvLargeFileMetadata::decode(&stored.exact_metadata)
+                .map_err(|_| RpcStatus::TransactionRetry)?;
+            authority.require_read_key(metadata.key)?;
+            Ok(foks_proto::KvNode::File(metadata))
+        }
+        3 | 4 => {
+            let stored = reader
+                .kv_node(&authority.party, &id)
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .ok_or(RpcStatus::KvNoEnt)?;
+            let boxed = foks_proto::KvSmallFileBox::decode(&stored.exact)
+                .map_err(|_| RpcStatus::TransactionRetry)?;
+            authority.require_read_key(boxed.key)?;
+            Ok(if stored.node_type == 3 {
+                foks_proto::KvNode::SmallFile(boxed)
+            } else {
+                foks_proto::KvNode::Symlink(boxed)
+            })
+        }
+        _ => Err(RpcStatus::KvNoEnt),
+    }
 }
 
 fn get_encrypted_chunk(
@@ -575,10 +707,13 @@ fn list(
     let [cursor, Value::Unsigned(number), Value::Bool(load_small)] = pagination.as_slice() else {
         return Err(bad_arguments("KV pagination has the wrong shape"));
     };
-    if *number == 0 || *number > foks_proto::MAXIMUM_KV_LIST_PAGE_ENTRIES as u64 {
-        return Err(bad_arguments("KV pagination count is out of range"));
-    }
-    let after = list_cursor(cursor)?;
+    const GO_DEFAULT_PAGE_ENTRIES: u64 = 4096;
+    let number = if *number == 0 || *number > GO_DEFAULT_PAGE_ENTRIES {
+        GO_DEFAULT_PAGE_ENTRIES
+    } else {
+        *number
+    };
+    let cursor = list_cursor(cursor)?;
     let uid = authority.party.clone();
     let parent = reader
         .kv_directory(&uid, &id)
@@ -588,14 +723,11 @@ fn list(
         foks_proto::KvDirectory::decode(&parent.exact).map_err(|_| RpcStatus::TransactionRetry)?;
     authority.require_read_key(parent.key)?;
     let limit =
-        usize::try_from(*number).map_err(|_| bad_arguments("KV pagination count overflows"))? + 1;
-    let mut stored = reader
-        .kv_list(&uid, &id, after.as_ref(), limit)
+        usize::try_from(number).map_err(|_| bad_arguments("KV pagination count overflows"))?;
+    let stored = reader
+        .kv_list(&uid, &id, cursor, limit)
         .map_err(|_| RpcStatus::TransactionRetry)?;
     let final_page = stored.len() < limit;
-    if !final_page {
-        stored.pop();
-    }
     let mut entries = Vec::with_capacity(stored.len());
     let mut extended = Vec::new();
     for (position, stored) in stored.into_iter().enumerate() {
@@ -633,21 +765,12 @@ fn cache_check(
     let [_auth, versions] = inner.as_slice() else {
         return Err(bad_arguments("KV cache check has the wrong shape"));
     };
-    let supplied = foks_proto::KvPathVersionVector::from_value(versions).map_err(bad_arguments)?;
-    let uid = authority.party.clone();
-    let current = current_versions(reader, &uid)?;
-    if supplied.equivalent(&current) {
-        Ok(Response::Void)
-    } else {
-        // The full path version vector is returned to any authenticated party
-        // member regardless of role. This is accepted by design: it is opaque
-        // cache-coherence metadata (tree shape, random 16-byte node IDs, and
-        // version counters — no names, no ciphertext, name_mac excluded), scoped
-        // to the caller's own party, and the client requires the whole vector to
-        // reconcile its cache. Per-role scoping would need a per-role version
-        // vector and would change the pinned v0.1.9 wire contract.
-        Err(RpcStatus::StaleCache(current))
-    }
+    let supplied = match versions {
+        Value::Null => None,
+        value => Some(foks_proto::KvPathVersionVector::from_value(value).map_err(bad_arguments)?),
+    };
+    check_precondition(reader, authority, supplied.as_ref())?;
+    Ok(Response::Void)
 }
 
 fn lock_acquire(
@@ -657,7 +780,6 @@ fn lock_acquire(
     writer: &WriterHandle,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
-    const MAXIMUM_LOCK_MILLIS: u64 = 24 * 60 * 60 * 1000;
     let fields = fields(argument, 3)?;
     let LockFields {
         parent,
@@ -667,9 +789,6 @@ fn lock_acquire(
     let Value::Unsigned(timeout_millis) = &fields[2] else {
         return Err(bad_arguments("KV lock timeout is not unsigned"));
     };
-    if *timeout_millis == 0 || *timeout_millis > MAXIMUM_LOCK_MILLIS {
-        return Err(bad_arguments("KV lock timeout is out of range"));
-    }
     let duration = timeout_millis
         .checked_mul(1000)
         .ok_or_else(|| bad_arguments("KV lock duration overflows"))?;
@@ -682,10 +801,7 @@ fn lock_acquire(
             if !kv_write_is_current(database, &write_authority, &device, now)? {
                 return Err(crate::Error::AuthorizationChanged);
             }
-            let expires_at = now
-                .checked_add(duration)
-                .ok_or(foks_server_db::Error::Invalid("KV lock expiry overflows"))?;
-            database.acquire_kv_lock(&uid, &parent, &dirent, &lock, now, expires_at)?;
+            database.acquire_kv_lock(&uid, &parent, &dirent, &lock, now, duration)?;
             Ok(())
         })
         .map_err(map_lock_error)?;
@@ -729,6 +845,66 @@ fn current_versions(
         .kv_version_vector(uid)
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or(RpcStatus::KvNoEnt)
+}
+
+fn request_precondition(
+    value: &Value,
+) -> Result<Option<foks_proto::KvPathVersionVector>, RpcStatus> {
+    let Value::Array(header) = value else {
+        return Err(bad_arguments("KV request header is not a struct"));
+    };
+    let [_auth, precondition] = header.as_slice() else {
+        return Err(bad_arguments("KV request header has the wrong shape"));
+    };
+    match precondition {
+        Value::Null => Ok(None),
+        value => foks_proto::KvPathVersionVector::from_value(value)
+            .map(Some)
+            .map_err(bad_arguments),
+    }
+}
+
+fn check_precondition(
+    reader: &foks_server_db::ReadSnapshot<'_>,
+    authority: &KvAuthority,
+    supplied: Option<&foks_proto::KvPathVersionVector>,
+) -> Result<(), RpcStatus> {
+    let Some(supplied) = supplied else {
+        return Ok(());
+    };
+    // Go checks read access to every cited directory and the current root
+    // before exposing any cache-version delta to the caller.
+    for directory in &supplied.directories {
+        let stored = reader
+            .kv_directory(&authority.party, &directory.id)
+            .map_err(|_| RpcStatus::TransactionRetry)?
+            .ok_or_else(|| RpcStatus::NotFound("cached directory".to_owned()))?;
+        let stored = foks_proto::KvDirectory::decode(&stored.exact)
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        authority.require_read_key(stored.key)?;
+    }
+    let root = reader
+        .kv_root(&authority.party)
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or_else(|| RpcStatus::NotFound("cached root".to_owned()))?;
+    let root = foks_proto::KvRoot::decode(&root.exact).map_err(|_| RpcStatus::TransactionRetry)?;
+    authority.require_read_key(root.key)?;
+    match reader
+        .kv_version_check(&authority.party, supplied)
+        .map_err(|_| RpcStatus::TransactionRetry)?
+    {
+        foks_server_db::KvVersionCheck::Current => {}
+        foks_server_db::KvVersionCheck::Stale(delta) => {
+            return Err(RpcStatus::StaleCache(delta));
+        }
+        foks_server_db::KvVersionCheck::Future => {
+            return Err(bad_arguments("KV cache version is ahead of the server"));
+        }
+        foks_server_db::KvVersionCheck::Missing => {
+            return Err(RpcStatus::NotFound("cached KV object".to_owned()));
+        }
+    }
+    Ok(())
 }
 
 fn require_directory_write_access(
@@ -967,7 +1143,17 @@ fn fixed_17(value: &Value, kind: &'static str) -> Result<[u8; 17], RpcStatus> {
         .map_err(|_| bad_arguments(format_args!("{kind} has the wrong width")))
 }
 
-fn list_cursor(value: &Value) -> Result<Option<[u8; 32]>, RpcStatus> {
+fn fixed_32(value: &Value, kind: &'static str) -> Result<[u8; 32], RpcStatus> {
+    let Value::Binary(bytes) = value else {
+        return Err(bad_arguments(format_args!("{kind} is not binary")));
+    };
+    bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| bad_arguments(format_args!("{kind} has the wrong width")))
+}
+
+fn list_cursor(value: &Value) -> Result<Option<foks_server_db::KvListCursor>, RpcStatus> {
     let Value::Array(fields) = value else {
         return Err(bad_arguments("KV list cursor is not a struct"));
     };
@@ -980,8 +1166,15 @@ fn list_cursor(value: &Value) -> Result<Option<[u8; 32]>, RpcStatus> {
             bytes
                 .as_slice()
                 .try_into()
+                .map(foks_server_db::KvListCursor::Mac)
                 .map(Some)
                 .map_err(|_| bad_arguments("KV list MAC cursor has the wrong width"))
+        }
+        [Value::Unsigned(2), Value::Variant(Some((tag, value)))] if tag == b"2" => {
+            let Value::Unsigned(time) = value.as_ref() else {
+                return Err(bad_arguments("KV list time cursor is not unsigned"));
+            };
+            Ok(Some(foks_server_db::KvListCursor::Time(*time)))
         }
         _ => Err(bad_arguments("unsupported KV list cursor")),
     }
@@ -1054,6 +1247,7 @@ fn map_lock_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::AuthorizationChanged => permission_denied(),
         crate::Error::Database(foks_server_db::Error::KvLocked) => RpcStatus::Locked,
+        crate::Error::Database(foks_server_db::Error::KvLockTimeout) => RpcStatus::LockTimeout,
         crate::Error::Database(foks_server_db::Error::KvConflict) => RpcStatus::KvNoEnt,
         crate::Error::Database(
             foks_server_db::Error::Invalid(_) | foks_server_db::Error::IntegerRange,

@@ -15,6 +15,7 @@ CREATE TABLE users (
     username_utf8 BLOB NOT NULL,
     username_sequence INTEGER NOT NULL CHECK (username_sequence >= 1),
     username_commitment_key BLOB NOT NULL CHECK (length(username_commitment_key) = 16),
+    device_nag_cleared INTEGER NOT NULL DEFAULT 0 CHECK (device_nag_cleared IN (0, 1)),
     created_at INTEGER NOT NULL CHECK (created_at >= 0),
     FOREIGN KEY (normalized_name, uid) REFERENCES names(normalized_name, uid)
 ) STRICT;
@@ -27,8 +28,11 @@ CREATE TABLE devices (
     visibility INTEGER NOT NULL,
     subkey_id BLOB UNIQUE CHECK (subkey_id IS NULL OR length(subkey_id) IN (33, 34)),
     hepk_fingerprint BLOB NOT NULL CHECK (length(hepk_fingerprint) = 32),
+    self_token BLOB NOT NULL CHECK (length(self_token) = 17),
     exact_hepk BLOB NOT NULL,
-    exact_name BLOB NOT NULL
+    exact_name BLOB NOT NULL,
+    start_epoch INTEGER NOT NULL DEFAULT 1 CHECK (start_epoch >= 1),
+    UNIQUE (uid, self_token)
 ) STRICT;
 
 CREATE TABLE user_chain_links (

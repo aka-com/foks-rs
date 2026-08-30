@@ -696,6 +696,10 @@ fn signup_value(
     let puk_hepk = decode(&puk_hepk.encoded()?)?;
     let device_hepk = decode(&device_hepk.encoded()?)?;
     let label = &device_name.label;
+    let passphrase = passphrase
+        .map(crate::PassphraseUpdateArgument::to_set_value)
+        .transpose()?
+        .unwrap_or(Value::Null);
     let fields = vec![
         Value::Text(username_utf8.to_vec()),
         reservation.to_value(),
@@ -718,7 +722,7 @@ fn signup_value(
         invite_code.to_value(),
         Value::Text(email.to_vec()),
         subkey_box.map_or(Value::Null, HybridBox::to_value),
-        passphrase.map_or(Value::Null, crate::PassphraseUpdateArgument::to_set_value),
+        passphrase,
         Value::Binary(subchain_tree_location.to_vec()),
         Value::Binary(self_token.to_vec()),
         Value::Array(vec![Value::Array(vec![puk_hepk, device_hepk])]),
@@ -1117,6 +1121,67 @@ pub struct HostConfig {
     pub invite_code_regime: u64,
 }
 
+/// Public registration policy returned by `Reg.getServerConfig`.
+///
+/// The standalone server does not implement SSO, but retaining the exact
+/// optional field bytes makes this type safe to use when decoding a future
+/// compatible server configuration as well as when emitting the local one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegServerConfig {
+    pub sso: Option<Vec<u8>>,
+    pub host_type: u64,
+    pub user_viewership: ViewershipMode,
+    pub team_viewership: ViewershipMode,
+    pub invite_code_regime: u64,
+}
+
+impl RegServerConfig {
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        if self.host_type > 4 || self.invite_code_regime > 3 {
+            return Err(Error::IntegerRange(
+                "registration server configuration enum",
+            ));
+        }
+        let sso = self
+            .sso
+            .as_deref()
+            .map(decode)
+            .transpose()?
+            .unwrap_or(Value::Null);
+        Ok(encode(&Value::Array(vec![
+            sso,
+            Value::Unsigned(self.host_type),
+            Value::Array(vec![
+                self.user_viewership.to_value(),
+                self.team_viewership.to_value(),
+            ]),
+            Value::Unsigned(self.invite_code_regime),
+        ]))?)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let wire = decode(bytes)?;
+        let fields = array(&wire, 4)?;
+        let host_type = unsigned(&fields[1])?;
+        let viewership = array(&fields[2], 2)?;
+        let invite_code_regime = unsigned(&fields[3])?;
+        if host_type > 4 || invite_code_regime > 3 {
+            return Err(Error::IntegerRange(
+                "registration server configuration enum",
+            ));
+        }
+        Ok(Self {
+            sso: (!matches!(fields[0], Value::Null))
+                .then(|| encode(&fields[0]))
+                .transpose()?,
+            host_type,
+            user_viewership: ViewershipMode::decode(&viewership[0])?,
+            team_viewership: ViewershipMode::decode(&viewership[1])?,
+            invite_code_regime,
+        })
+    }
+}
+
 impl HostConfig {
     pub fn encoded(&self) -> Result<Vec<u8>> {
         Ok(encode(&Value::Array(vec![
@@ -1424,6 +1489,16 @@ impl RevokeDeviceArgument<'_> {
             .iter()
             .map(|hepk| Ok(decode(&hepk.encoded()?)?))
             .collect::<Result<Vec<_>>>()?;
+        let passphrase = self
+            .passphrase
+            .map(|passphrase| -> Result<Value> {
+                Ok(Value::Array(vec![
+                    passphrase.to_change_value()?,
+                    Value::Null,
+                ]))
+            })
+            .transpose()?
+            .unwrap_or(Value::Null);
         Ok(encode(&Value::Array(vec![
             decode(&self.link.encoded()?)?,
             decode(&self.puk_boxes.encoded())?,
@@ -1435,9 +1510,7 @@ impl RevokeDeviceArgument<'_> {
                 ])
             })),
             Value::Binary(self.next_tree_location.to_vec()),
-            self.passphrase.map_or(Value::Null, |passphrase| {
-                Value::Array(vec![passphrase.to_change_value(), Value::Null])
-            }),
+            passphrase,
             Value::Array(vec![Value::Array(hepks)]),
         ]))?)
     }

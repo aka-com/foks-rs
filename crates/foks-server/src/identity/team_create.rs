@@ -11,6 +11,7 @@ pub(crate) struct Header {
     pub name_commitment_key: Option<[u8; 16]>,
     pub reservation_token: Option<[u8; 17]>,
     pub reservation_expires_at: Option<u64>,
+    pub subchain_tree_location_seed: [u8; 32],
 }
 
 pub(crate) struct Member {
@@ -46,6 +47,17 @@ pub(crate) struct RemovalBox {
     pub exact: Vec<u8>,
 }
 
+pub(crate) struct MembershipLink {
+    pub user: Vec<u8>,
+    pub signer: Vec<u8>,
+    pub sequence: u64,
+    pub previous: Option<[u8; 32]>,
+    pub root: foks_proto::TreeRoot,
+    pub link_hash: [u8; 32],
+    pub exact_link: Vec<u8>,
+    pub next_tree_location: [u8; 32],
+}
+
 pub(crate) struct Command {
     pub team: EntityId,
     pub link_hash: [u8; 32],
@@ -56,8 +68,7 @@ pub(crate) struct Command {
     pub shared_keys: Vec<SharedKey>,
     pub parcels: Vec<Parcel>,
     pub removal_boxes: Vec<RemovalBox>,
-    pub expected_root_epoch: u64,
-    pub expected_root_hash: [u8; 32],
+    pub membership_link: MembershipLink,
 }
 
 pub(crate) enum Argument {
@@ -68,8 +79,10 @@ pub(crate) enum Argument {
 pub(crate) fn validate(
     argument: Argument,
     authority: &foks_server_db::UserAuthoritySnapshot,
+    membership_chain: &foks_server_db::GenericChainSnapshot,
     host: &EntityId,
     principal_owner: &EntityId,
+    signed_root: foks_proto::TreeRoot,
 ) -> Result<Command> {
     let (link, next, boxes, hepks, membership, membership_next, subchain, header, removals) =
         match argument {
@@ -106,6 +119,7 @@ pub(crate) fn validate(
                         name_commitment_key: Some(argument.team_name_commitment_key),
                         reservation_token: Some(argument.reservation.token),
                         reservation_expires_at: Some(argument.reservation.expires_at),
+                        subchain_tree_location_seed: argument.subchain_tree_location,
                     },
                     argument.edit.removal_keys,
                 )
@@ -126,6 +140,7 @@ pub(crate) fn validate(
                     name_commitment_key: None,
                     reservation_token: None,
                     reservation_expires_at: None,
+                    subchain_tree_location_seed: argument.subchain_tree_location,
                 },
                 Vec::new(),
             ),
@@ -148,10 +163,7 @@ pub(crate) fn validate(
         &hepks,
         &change.team,
         host,
-        foks_proto::TreeRoot {
-            epoch: authority.current_root_epoch,
-            hash: authority.current_root_hash,
-        },
+        signed_root.clone(),
         next,
     )?;
     if founding.members.len() != 1
@@ -172,13 +184,17 @@ pub(crate) fn validate(
         return Err(Error::Signup("team founder PUK is not current"));
     }
     let membership_change = membership.decode_approved_membership()?;
+    let expected_membership_sequence = u64::try_from(membership_chain.links.len())
+        .ok()
+        .and_then(|sequence| sequence.checked_add(1))
+        .ok_or(Error::Signup("team membership sequence overflow"))?;
+    let expected_membership_previous = membership_chain.links.last().map(|link| link.link_hash);
     if membership_change.user.as_bytes() != authority.uid
         || membership_change.host != *host
         || membership_change.signer != *principal_owner
-        || membership_change.sequence != 1
-        || membership_change.previous.is_some()
-        || membership_change.root.epoch != authority.current_root_epoch
-        || membership_change.root.hash != authority.current_root_hash
+        || membership_change.sequence != expected_membership_sequence
+        || membership_change.previous != expected_membership_previous
+        || membership_change.root != signed_root
         || membership_change.time != 0
         || membership_change.next_location_commitment != location_commitment(&membership_next)?
         || membership_change.team != change.team
@@ -261,6 +277,11 @@ pub(crate) fn validate(
         })
         .collect();
     let exact_link = link.encoded()?;
+    let exact_membership_link = membership.encoded()?;
+    let membership_link_hash = foks_crypto::prefixed_hash_signable(
+        foks_proto::LINK_OUTER_TYPE_ID,
+        &exact_membership_link,
+    )?;
     Ok(Command {
         team: change.team,
         link_hash: founding.link_hash,
@@ -271,8 +292,16 @@ pub(crate) fn validate(
         shared_keys,
         parcels,
         removal_boxes,
-        expected_root_epoch: authority.current_root_epoch,
-        expected_root_hash: authority.current_root_hash,
+        membership_link: MembershipLink {
+            user: authority.uid.clone(),
+            signer: principal_owner.as_bytes().to_vec(),
+            sequence: membership_change.sequence,
+            previous: membership_change.previous,
+            root: membership_change.root,
+            link_hash: membership_link_hash,
+            exact_link: exact_membership_link,
+            next_tree_location: membership_next,
+        },
     })
 }
 

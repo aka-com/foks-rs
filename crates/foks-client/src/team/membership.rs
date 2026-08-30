@@ -27,10 +27,10 @@ use foks_verify::{
 
 use super::{AuthenticatedTeamOutcome, TeamPrivateKey};
 use crate::{
-    current_owner_puk, now_microseconds, random_bytes, user_key_for_seed, AuthenticatedUserOutcome,
-    DeviceCredential, Error, FoksClient, PinnedHost, ProtectedMutationStore, ProtectedStoreError,
-    RemoteTeamOutcome, Result, UserPrivateKey, YubiCredential, TEAM_MUTATION_OPERATION_ID_TYPE_ID,
-    TEAM_MUTATION_REQUEST_HASH_TYPE_ID,
+    current_owner_puk, now_microseconds, now_milliseconds, random_bytes, user_key_for_seed,
+    AuthenticatedUserOutcome, DeviceCredential, Error, FoksClient, PinnedHost,
+    ProtectedMutationStore, ProtectedStoreError, RemoteTeamOutcome, Result, UserPrivateKey,
+    YubiCredential, TEAM_MUTATION_OPERATION_ID_TYPE_ID, TEAM_MUTATION_REQUEST_HASH_TYPE_ID,
 };
 
 /// Caller-durable material for adding one local user to a named team.
@@ -361,7 +361,7 @@ impl FoksClient {
                 sequence: expected_seqno,
                 previous: authenticated_team.verified.chain_tail_hash(),
                 root: &root,
-                time: now_microseconds()?,
+                time: now_milliseconds()?,
                 next_tree_location: random_bytes()?,
                 member: remote_id,
                 member_host: remote_host,
@@ -419,7 +419,7 @@ impl FoksClient {
         let token_payload = TeamRemoteMemberViewTokenBoxPayload {
             token: request.remote_team.permission.clone(),
             party: member.clone(),
-            time: now_microseconds()?,
+            time: now_milliseconds()?,
         };
         let secret_box = seal_team_remote_member_view_token(
             &member_floor_private.seed,
@@ -816,7 +816,7 @@ impl FoksClient {
                 sequence: expected_seqno,
                 previous: authenticated_team.verified.chain_tail_hash(),
                 root: &root,
-                time: now_microseconds()?,
+                time: now_milliseconds()?,
                 next_tree_location: random_bytes()?,
                 member: request.target_user.uid(),
                 member_source_role: target.role,

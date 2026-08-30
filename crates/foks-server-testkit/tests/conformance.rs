@@ -2,6 +2,14 @@
 mod authorization;
 #[path = "conformance/federation.rs"]
 mod federation;
+#[path = "conformance/go_client_activation.rs"]
+mod go_client_activation;
+#[path = "conformance/go_client_generic.rs"]
+mod go_client_generic;
+#[path = "conformance/go_client_kv.rs"]
+mod go_client_kv;
+#[path = "conformance/go_client_merkle.rs"]
+mod go_client_merkle;
 #[path = "conformance/kv_large.rs"]
 mod kv_large;
 #[path = "conformance/kv_locks.rs"]

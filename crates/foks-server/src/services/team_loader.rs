@@ -226,6 +226,43 @@ pub(crate) fn load_chain(
             }
             None
         }
+        foks_rpc::arguments::TeamChainAuthorization::LocalParentTeam(token) => {
+            let principal = principal.ok_or_else(permission_denied)?;
+            principal.require_ordinary_device()?;
+            if request.load_removal_key || request.load_remote_view_tokens {
+                return Err(permission_denied());
+            }
+            let authority = reader
+                .resolve_team_view_token(&team::token_hash(token), now)
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .ok_or(RpcStatus::Expired)?;
+            if authority.member_id != principal.uid()
+                || authority.member_host_id != host.as_bytes()
+                || !super::user::role_can_load_members(&authority)
+                || reader
+                    .active_credential_owner(principal.uid(), principal.device_id())
+                    .map_err(|_| RpcStatus::TransactionRetry)?
+                    .is_none()
+            {
+                return Err(permission_denied());
+            }
+            let target = reader
+                .team(request.team.as_bytes())
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .ok_or(RpcStatus::TeamNotFound)?;
+            if target.host_id != host.as_bytes()
+                || !target.members.iter().any(|member| {
+                    member.party_id == authority.team_id
+                        && member
+                            .scoped_host_id
+                            .as_deref()
+                            .is_none_or(|scope| scope == host.as_bytes())
+                })
+            {
+                return Err(permission_denied());
+            }
+            None
+        }
     };
     encode_team_chain(reader, host, &request, authority.as_ref())
 }
@@ -515,6 +552,44 @@ pub(crate) fn load_remote_view_tokens(
         .map_err(|_| RpcStatus::TransactionRetry)
 }
 
+pub(crate) fn load_team_membership_chain(
+    argument: &[u8],
+    principal: Option<&Principal>,
+    host: &EntityId,
+    reader: &foks_server_db::ReadSnapshot<'_>,
+    clock: &dyn foks_server_db::Clock,
+) -> Result<Vec<u8>, RpcStatus> {
+    let request =
+        foks_rpc::arguments::decode_load_team_membership_chain(argument).map_err(bad_arguments)?;
+    if request.team.host != *host {
+        return Err(permission_denied());
+    }
+    let now = clock
+        .now_micros()
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let authority = reader
+        .resolve_team_view_token(&team::token_hash(&request.token), now)
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or(RpcStatus::Expired)?;
+    if authority.team_id != request.team.team.as_bytes() {
+        return Err(permission_denied());
+    }
+    if authority.member_host_id == host.as_bytes() {
+        let principal = principal.ok_or_else(permission_denied)?;
+        principal.require_ordinary_device()?;
+        if authority.member_id.as_slice() != principal.uid() {
+            return Err(permission_denied());
+        }
+    } else if let Some(principal) = principal {
+        principal.require_ordinary_device()?;
+    }
+    super::generic::load_for_entity(
+        reader,
+        &request.team.team,
+        foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP,
+        request.start,
+    )
+}
 fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
     RpcStatus::BadArguments(error.to_string())
 }

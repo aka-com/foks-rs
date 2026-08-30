@@ -3037,15 +3037,21 @@ mod tests {
     }
 
     #[test]
-    fn projection_cannot_change_without_chain_advance() {
+    fn independently_verified_public_zone_can_refresh_without_chain_advance() {
         let (_directory, mut store) = store();
         store.accept_host_parts(snapshot().parts()).unwrap();
         let mut changed = snapshot();
+        changed.canonical_name = "moved.foks.example".into();
+        changed.public_zone_bytes = vec![42; 96];
         changed.services[0].endpoint_bytes = vec![12; 20];
-        assert!(matches!(
-            store.accept_host_parts(changed.parts()),
-            Err(Error::ProjectionChanged { seqno: 4 })
-        ));
+        assert_eq!(
+            store.accept_host_parts(changed.parts()).unwrap(),
+            Acceptance::Advanced
+        );
+        assert_eq!(
+            store.host_for_lookup("foks.example").unwrap(),
+            Some(stored(&changed))
+        );
     }
 
     #[test]

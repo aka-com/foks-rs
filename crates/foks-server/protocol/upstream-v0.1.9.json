@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "source": {
     "module": "github.com/foks-proj/go-foks",
     "version": "v0.1.9",
@@ -12,16 +12,20 @@
       "name": "Beacon",
       "unique_id": 3190902588,
       "go_file": "proto/rem/beacon.go",
+      "argument_header": true,
+      "result_header": true,
       "methods": [
         {
           "name": "beaconRegister",
           "position": 1,
-          "qualified_name": "Beacon.beaconRegister"
+          "qualified_name": "Beacon.beaconRegister",
+          "result_type": "void"
         },
         {
           "name": "beaconLookup",
           "position": 2,
-          "qualified_name": "Beacon.beaconLookup"
+          "qualified_name": "Beacon.beaconLookup",
+          "result_type": "lib.TCPAddr"
         }
       ]
     },
@@ -29,91 +33,110 @@
       "name": "KVStore",
       "unique_id": 2397272939,
       "go_file": "proto/rem/kv.go",
+      "argument_header": true,
+      "result_header": true,
       "methods": [
         {
           "name": "kvMkdir",
           "position": 0,
-          "qualified_name": "KVStore.kvMkdir"
+          "qualified_name": "KVStore.kvMkdir",
+          "result_type": "void"
         },
         {
           "name": "kvPut",
           "position": 1,
-          "qualified_name": "KVStore.kvPut"
+          "qualified_name": "KVStore.kvPut",
+          "result_type": "void"
         },
         {
           "name": "kvPutRoot",
           "position": 2,
-          "qualified_name": "KVStore.kvPutRoot"
+          "qualified_name": "KVStore.kvPutRoot",
+          "result_type": "void"
         },
         {
           "name": "kvFileUploadInit",
           "position": 3,
-          "qualified_name": "KVStore.kvFileUploadInit"
+          "qualified_name": "KVStore.kvFileUploadInit",
+          "result_type": "void"
         },
         {
           "name": "kvFileUploadChunk",
           "position": 4,
-          "qualified_name": "KVStore.kvFileUploadChunk"
+          "qualified_name": "KVStore.kvFileUploadChunk",
+          "result_type": "void"
         },
         {
           "name": "kvPutSmallFileOrSymlink",
           "position": 7,
-          "qualified_name": "KVStore.kvPutSmallFileOrSymlink"
+          "qualified_name": "KVStore.kvPutSmallFileOrSymlink",
+          "result_type": "void"
         },
         {
           "name": "kvGetRoot",
           "position": 8,
-          "qualified_name": "KVStore.kvGetRoot"
+          "qualified_name": "KVStore.kvGetRoot",
+          "result_type": "lib.KVRoot"
         },
         {
           "name": "kvGet",
           "position": 9,
-          "qualified_name": "KVStore.kvGet"
+          "qualified_name": "KVStore.kvGet",
+          "result_type": "KVGetRes"
         },
         {
           "name": "kvGetNode",
           "position": 10,
-          "qualified_name": "KVStore.kvGetNode"
+          "qualified_name": "KVStore.kvGetNode",
+          "result_type": "KVGetNodeRes"
         },
         {
           "name": "kvGetEncryptedChunk",
           "position": 11,
-          "qualified_name": "KVStore.kvGetEncryptedChunk"
+          "qualified_name": "KVStore.kvGetEncryptedChunk",
+          "result_type": "GetEncryptedChunkRes"
         },
         {
           "name": "kvGetDir",
           "position": 12,
-          "qualified_name": "KVStore.kvGetDir"
+          "qualified_name": "KVStore.kvGetDir",
+          "result_type": "lib.KVDirPair"
         },
         {
           "name": "kvCacheCheck",
           "position": 13,
-          "qualified_name": "KVStore.kvCacheCheck"
+          "qualified_name": "KVStore.kvCacheCheck",
+          "result_type": "void"
         },
         {
           "name": "kvList",
           "position": 14,
-          "qualified_name": "KVStore.kvList"
+          "qualified_name": "KVStore.kvList",
+          "result_type": "KVListRes"
         },
         {
           "name": "kvLockAcquire",
           "position": 15,
-          "qualified_name": "KVStore.kvLockAcquire"
+          "qualified_name": "KVStore.kvLockAcquire",
+          "result_type": "void"
         },
         {
           "name": "kvLockRelease",
           "position": 16,
-          "qualified_name": "KVStore.kvLockRelease"
+          "qualified_name": "KVStore.kvLockRelease",
+          "result_type": "void"
         },
         {
           "name": "kvUsage",
           "position": 17,
-          "qualified_name": "KVStore.kvUsage"
+          "qualified_name": "KVStore.kvUsage",
+          "result_type": "lib.KVUsage"
         },
         {
           "name": "selectVHost",
           "position": 18,
-          "qualified_name": "KVStore.selectVHost"
+          "qualified_name": "KVStore.selectVHost",
+          "result_type": "void"
         }
       ]
     },
@@ -121,21 +144,26 @@
       "name": "LogSend",
       "unique_id": 4198967001,
       "go_file": "proto/rem/logsend.go",
+      "argument_header": true,
+      "result_header": true,
       "methods": [
         {
           "name": "logSendInit",
           "position": 1,
-          "qualified_name": "LogSend.logSendInit"
+          "qualified_name": "LogSend.logSendInit",
+          "result_type": "lib.LogSendID"
         },
         {
           "name": "logSendInitFile",
           "position": 2,
-          "qualified_name": "LogSend.logSendInitFile"
+          "qualified_name": "LogSend.logSendInitFile",
+          "result_type": "void"
         },
         {
           "name": "logSendUploadBlock",
           "position": 3,
-          "qualified_name": "LogSend.logSendUploadBlock"
+          "qualified_name": "LogSend.logSendUploadBlock",
+          "result_type": "void"
         }
       ]
     },
@@ -143,56 +171,68 @@
       "name": "MerkleQuery",
       "unique_id": 3225496230,
       "go_file": "proto/rem/merkle.go",
+      "argument_header": true,
+      "result_header": true,
       "methods": [
         {
           "name": "lookup",
           "position": 0,
-          "qualified_name": "MerkleQuery.lookup"
+          "qualified_name": "MerkleQuery.lookup",
+          "result_type": "lib.MerklePathCompressed"
         },
         {
           "name": "getHistoricalRoots",
           "position": 1,
-          "qualified_name": "MerkleQuery.getHistoricalRoots"
+          "qualified_name": "MerkleQuery.getHistoricalRoots",
+          "result_type": "GetHistoricalRootsRes"
         },
         {
           "name": "getCurrentRoot",
           "position": 2,
-          "qualified_name": "MerkleQuery.getCurrentRoot"
+          "qualified_name": "MerkleQuery.getCurrentRoot",
+          "result_type": "lib.MerkleRoot"
         },
         {
           "name": "getCurrentRootHash",
           "position": 3,
-          "qualified_name": "MerkleQuery.getCurrentRootHash"
+          "qualified_name": "MerkleQuery.getCurrentRootHash",
+          "result_type": "lib.TreeRoot"
         },
         {
           "name": "checkKeyExists",
           "position": 4,
-          "qualified_name": "MerkleQuery.checkKeyExists"
+          "qualified_name": "MerkleQuery.checkKeyExists",
+          "result_type": "MerkleExistsRes"
         },
         {
           "name": "getCurrentRootSigned",
           "position": 5,
-          "qualified_name": "MerkleQuery.getCurrentRootSigned"
+          "qualified_name": "MerkleQuery.getCurrentRootSigned",
+          "result_type": "lib.SignedMerkleRoot"
         },
         {
           "name": "mLookup",
           "position": 6,
-          "qualified_name": "MerkleQuery.mLookup"
+          "qualified_name": "MerkleQuery.mLookup",
+          "result_type": "lib.MerklePathsCompressed"
         },
         {
           "name": "getCurrentRootSignedEpno",
           "position": 7,
-          "qualified_name": "MerkleQuery.getCurrentRootSignedEpno"
+          "qualified_name": "MerkleQuery.getCurrentRootSignedEpno",
+          "result_type": "lib.MerkleEpno"
         },
         {
           "name": "selectVHost",
           "position": 8,
-          "qualified_name": "MerkleQuery.selectVHost"
+          "qualified_name": "MerkleQuery.selectVHost",
+          "result_type": "void"
         },
         {
           "name": "confirmRoot",
           "position": 9,
-          "qualified_name": "MerkleQuery.confirmRoot"
+          "qualified_name": "MerkleQuery.confirmRoot",
+          "result_type": "void"
         }
       ]
     },
@@ -200,11 +240,14 @@
       "name": "Probe",
       "unique_id": 3314044918,
       "go_file": "proto/rem/probe.go",
+      "argument_header": true,
+      "result_header": true,
       "methods": [
         {
           "name": "probe",
           "position": 1,
-          "qualified_name": "Probe.probe"
+          "qualified_name": "Probe.probe",
+          "result_type": "ProbeRes"
         }
       ]
     },
@@ -212,61 +255,74 @@
       "name": "RealTime",
       "unique_id": 1331226580,
       "go_file": "proto/rem/realtime.go",
+      "argument_header": true,
+      "result_header": true,
       "methods": [
         {
           "name": "rtNewChannel",
           "position": 0,
-          "qualified_name": "RealTime.rtNewChannel"
+          "qualified_name": "RealTime.rtNewChannel",
+          "result_type": "void"
         },
         {
           "name": "rtGetChannel",
           "position": 1,
-          "qualified_name": "RealTime.rtGetChannel"
+          "qualified_name": "RealTime.rtGetChannel",
+          "result_type": "RTChannelMetadata"
         },
         {
           "name": "rtListAllChannelsForTeam",
           "position": 2,
-          "qualified_name": "RealTime.rtListAllChannelsForTeam"
+          "qualified_name": "RealTime.rtListAllChannelsForTeam",
+          "result_type": "RTChannelSet"
         },
         {
           "name": "rtSend",
           "position": 3,
-          "qualified_name": "RealTime.rtSend"
+          "qualified_name": "RealTime.rtSend",
+          "result_type": "RTSendRes"
         },
         {
           "name": "rtGetThread",
           "position": 4,
-          "qualified_name": "RealTime.rtGetThread"
+          "qualified_name": "RealTime.rtGetThread",
+          "result_type": "RTThreadPage"
         },
         {
           "name": "rtGetInboxVersion",
           "position": 5,
-          "qualified_name": "RealTime.rtGetInboxVersion"
+          "qualified_name": "RealTime.rtGetInboxVersion",
+          "result_type": "lib.RTInboxVersion"
         },
         {
           "name": "rtGetChangedThreads",
           "position": 6,
-          "qualified_name": "RealTime.rtGetChangedThreads"
+          "qualified_name": "RealTime.rtGetChangedThreads",
+          "result_type": "RTInboxDelta"
         },
         {
           "name": "rtReadThrough",
           "position": 7,
-          "qualified_name": "RealTime.rtReadThrough"
+          "qualified_name": "RealTime.rtReadThrough",
+          "result_type": "void"
         },
         {
           "name": "rtPollInbox",
           "position": 8,
-          "qualified_name": "RealTime.rtPollInbox"
+          "qualified_name": "RealTime.rtPollInbox",
+          "result_type": "lib.RTInboxPollRes"
         },
         {
           "name": "rtSelectVHost",
           "position": 9,
-          "qualified_name": "RealTime.rtSelectVHost"
+          "qualified_name": "RealTime.rtSelectVHost",
+          "result_type": "void"
         },
         {
           "name": "rtGetThreadRecents",
           "position": 10,
-          "qualified_name": "RealTime.rtGetThreadRecents"
+          "qualified_name": "RealTime.rtGetThreadRecents",
+          "result_type": "RTMsgList"
         }
       ]
     },
@@ -274,126 +330,152 @@
       "name": "Reg",
       "unique_id": 4155213299,
       "go_file": "proto/rem/reg.go",
+      "argument_header": true,
+      "result_header": true,
       "methods": [
         {
           "name": "reserveUsername",
           "position": 0,
-          "qualified_name": "Reg.reserveUsername"
+          "qualified_name": "Reg.reserveUsername",
+          "result_type": "ReserveNameRes"
         },
         {
           "name": "getClientCertChain",
           "position": 1,
-          "qualified_name": "Reg.getClientCertChain"
+          "qualified_name": "Reg.getClientCertChain",
+          "result_type": "[][]byte"
         },
         {
           "name": "signup",
           "position": 2,
-          "qualified_name": "Reg.signup"
+          "qualified_name": "Reg.signup",
+          "result_type": "void"
         },
         {
           "name": "getHostID",
           "position": 3,
-          "qualified_name": "Reg.getHostID"
+          "qualified_name": "Reg.getHostID",
+          "result_type": "lib.HostID"
         },
         {
           "name": "getLoginChallenge",
           "position": 4,
-          "qualified_name": "Reg.getLoginChallenge"
+          "qualified_name": "Reg.getLoginChallenge",
+          "result_type": "Challenge"
         },
         {
           "name": "login",
           "position": 5,
-          "qualified_name": "Reg.login"
+          "qualified_name": "Reg.login",
+          "result_type": "LoginRes"
         },
         {
           "name": "getUIDLookupChallege",
           "position": 6,
-          "qualified_name": "Reg.getUIDLookupChallege"
+          "qualified_name": "Reg.getUIDLookupChallege",
+          "result_type": "Challenge"
         },
         {
           "name": "lookupUIDByDevice",
           "position": 7,
-          "qualified_name": "Reg.lookupUIDByDevice"
+          "qualified_name": "Reg.lookupUIDByDevice",
+          "result_type": "lib.LookupUserRes"
         },
         {
           "name": "checkInviteCode",
           "position": 8,
-          "qualified_name": "Reg.checkInviteCode"
+          "qualified_name": "Reg.checkInviteCode",
+          "result_type": "void"
         },
         {
           "name": "joinWaitList",
           "position": 9,
-          "qualified_name": "Reg.joinWaitList"
+          "qualified_name": "Reg.joinWaitList",
+          "result_type": "lib.WaitListID"
         },
         {
           "name": "checkNameExists",
           "position": 10,
-          "qualified_name": "Reg.checkNameExists"
+          "qualified_name": "Reg.checkNameExists",
+          "result_type": "void"
         },
         {
           "name": "loadUserChain",
           "position": 11,
-          "qualified_name": "Reg.loadUserChain"
+          "qualified_name": "Reg.loadUserChain",
+          "result_type": "UserChain"
         },
         {
           "name": "getSubkeyBoxChallenge",
           "position": 12,
-          "qualified_name": "Reg.getSubkeyBoxChallenge"
+          "qualified_name": "Reg.getSubkeyBoxChallenge",
+          "result_type": "Challenge"
         },
         {
           "name": "loadSubkeyBox",
           "position": 13,
-          "qualified_name": "Reg.loadSubkeyBox"
+          "qualified_name": "Reg.loadSubkeyBox",
+          "result_type": "lib.Box"
         },
         {
           "name": "stretchVersion",
           "position": 14,
-          "qualified_name": "Reg.stretchVersion"
+          "qualified_name": "Reg.stretchVersion",
+          "result_type": "lib.StretchVersion"
         },
         {
           "name": "selectVHost",
           "position": 15,
-          "qualified_name": "Reg.selectVHost"
+          "qualified_name": "Reg.selectVHost",
+          "result_type": "void"
         },
         {
           "name": "resolveUsername",
           "position": 16,
-          "qualified_name": "Reg.resolveUsername"
+          "qualified_name": "Reg.resolveUsername",
+          "result_type": "lib.UID"
         },
         {
           "name": "getServerConfig",
           "position": 17,
-          "qualified_name": "Reg.getServerConfig"
+          "qualified_name": "Reg.getServerConfig",
+          "result_type": "lib.RegServerConfig"
         },
         {
           "name": "initOAuth2Session",
           "position": 18,
-          "qualified_name": "Reg.initOAuth2Session"
+          "qualified_name": "Reg.initOAuth2Session",
+          "result_type": "lib.URLString"
         },
         {
           "name": "pollOAuth2SessionCompletion",
           "position": 19,
-          "qualified_name": "Reg.pollOAuth2SessionCompletion"
+          "qualified_name": "Reg.pollOAuth2SessionCompletion",
+          "result_type": "OAuth2PollRes"
         },
         {
           "name": "ssoLogin",
           "position": 20,
-          "qualified_name": "Reg.ssoLogin"
+          "qualified_name": "Reg.ssoLogin",
+          "result_type": "void"
         },
         {
           "name": "probeKeyExists",
           "position": 21,
-          "qualified_name": "Reg.probeKeyExists"
+          "qualified_name": "Reg.probeKeyExists",
+          "result_type": "void"
         },
         {
           "name": "getVHostMgmtHost",
           "position": 22,
-          "qualified_name": "Reg.getVHostMgmtHost"
+          "qualified_name": "Reg.getVHostMgmtHost",
+          "result_type": "lib.TCPAddr"
         },
         {
           "name": "getClientVersionInfo",
           "position": 23,
-          "qualified_name": "Reg.getClientVersionInfo"
+          "qualified_name": "Reg.getClientVersionInfo",
+          "result_type": "lib.ServerClientVersionInfo"
         }
       ]
     },
@@ -401,86 +483,104 @@
       "name": "TeamAdmin",
       "unique_id": 3689012670,
       "go_file": "proto/rem/team.go",
+      "argument_header": false,
+      "result_header": false,
       "methods": [
         {
           "name": "reserveTeamname",
           "position": 0,
-          "qualified_name": "TeamAdmin.reserveTeamname"
+          "qualified_name": "TeamAdmin.reserveTeamname",
+          "result_type": "ReserveNameRes"
         },
         {
           "name": "createTeam",
           "position": 1,
-          "qualified_name": "TeamAdmin.createTeam"
+          "qualified_name": "TeamAdmin.createTeam",
+          "result_type": "void"
         },
         {
           "name": "editTeam",
           "position": 2,
-          "qualified_name": "TeamAdmin.editTeam"
+          "qualified_name": "TeamAdmin.editTeam",
+          "result_type": "EditTeamRes"
         },
         {
           "name": "makeInertTeamBearerToken",
           "position": 3,
-          "qualified_name": "TeamAdmin.makeInertTeamBearerToken"
+          "qualified_name": "TeamAdmin.makeInertTeamBearerToken",
+          "result_type": "TeamBearerToken"
         },
         {
           "name": "activateTeamBearerToken",
           "position": 4,
-          "qualified_name": "TeamAdmin.activateTeamBearerToken"
+          "qualified_name": "TeamAdmin.activateTeamBearerToken",
+          "result_type": "void"
         },
         {
           "name": "checkTeamBearerToken",
           "position": 5,
-          "qualified_name": "TeamAdmin.checkTeamBearerToken"
+          "qualified_name": "TeamAdmin.checkTeamBearerToken",
+          "result_type": "lib.TeamID"
         },
         {
           "name": "putTeamCert",
           "position": 6,
-          "qualified_name": "TeamAdmin.putTeamCert"
+          "qualified_name": "TeamAdmin.putTeamCert",
+          "result_type": "void"
         },
         {
           "name": "getCurrentTeamCerts",
           "position": 7,
-          "qualified_name": "TeamAdmin.getCurrentTeamCerts"
+          "qualified_name": "TeamAdmin.getCurrentTeamCerts",
+          "result_type": "[]TeamCert"
         },
         {
           "name": "loadTeamRemoteJoinReq",
           "position": 8,
-          "qualified_name": "TeamAdmin.loadTeamRemoteJoinReq"
+          "qualified_name": "TeamAdmin.loadTeamRemoteJoinReq",
+          "result_type": "TeamRemoteJoinReq"
         },
         {
           "name": "postTeamMembershipLink",
           "position": 9,
-          "qualified_name": "TeamAdmin.postTeamMembershipLink"
+          "qualified_name": "TeamAdmin.postTeamMembershipLink",
+          "result_type": "void"
         },
         {
           "name": "loadRemovalKeyBoxForTeamAdmin",
           "position": 10,
-          "qualified_name": "TeamAdmin.loadRemovalKeyBoxForTeamAdmin"
+          "qualified_name": "TeamAdmin.loadRemovalKeyBoxForTeamAdmin",
+          "result_type": "lib.TeamRemovalKeyBox"
         },
         {
           "name": "postTeamRemoval",
           "position": 11,
-          "qualified_name": "TeamAdmin.postTeamRemoval"
+          "qualified_name": "TeamAdmin.postTeamRemoval",
+          "result_type": "void"
         },
         {
           "name": "loadTeamRawInbox",
           "position": 12,
-          "qualified_name": "TeamAdmin.loadTeamRawInbox"
+          "qualified_name": "TeamAdmin.loadTeamRawInbox",
+          "result_type": "TeamRawInbox"
         },
         {
           "name": "rejectJoinReq",
           "position": 13,
-          "qualified_name": "TeamAdmin.rejectJoinReq"
+          "qualified_name": "TeamAdmin.rejectJoinReq",
+          "result_type": "void"
         },
         {
           "name": "getTeamConfig",
           "position": 14,
-          "qualified_name": "TeamAdmin.getTeamConfig"
+          "qualified_name": "TeamAdmin.getTeamConfig",
+          "result_type": "TeamConfig"
         },
         {
           "name": "createTeamAdHoc",
           "position": 15,
-          "qualified_name": "TeamAdmin.createTeamAdHoc"
+          "qualified_name": "TeamAdmin.createTeamAdHoc",
+          "result_type": "void"
         }
       ]
     },
@@ -488,16 +588,20 @@
       "name": "TeamGuest",
       "unique_id": 4141307996,
       "go_file": "proto/rem/team.go",
+      "argument_header": false,
+      "result_header": false,
       "methods": [
         {
           "name": "lookupTeamCertByHash",
           "position": 0,
-          "qualified_name": "TeamGuest.lookupTeamCertByHash"
+          "qualified_name": "TeamGuest.lookupTeamCertByHash",
+          "result_type": "TeamCertAndMetadata"
         },
         {
           "name": "acceptInviteRemote",
           "position": 1,
-          "qualified_name": "TeamGuest.acceptInviteRemote"
+          "qualified_name": "TeamGuest.acceptInviteRemote",
+          "result_type": "lib.TeamRSVPRemote"
         }
       ]
     },
@@ -505,46 +609,56 @@
       "name": "TeamLoader",
       "unique_id": 4178740601,
       "go_file": "proto/rem/team.go",
+      "argument_header": false,
+      "result_header": false,
       "methods": [
         {
           "name": "getTeamVOBearerTokenChallenge",
           "position": 0,
-          "qualified_name": "TeamLoader.getTeamVOBearerTokenChallenge"
+          "qualified_name": "TeamLoader.getTeamVOBearerTokenChallenge",
+          "result_type": "TeamVOBearerTokenChallenge"
         },
         {
           "name": "activateTeamVOBearerToken",
           "position": 1,
-          "qualified_name": "TeamLoader.activateTeamVOBearerToken"
+          "qualified_name": "TeamLoader.activateTeamVOBearerToken",
+          "result_type": "ActivatedVOBearerToken"
         },
         {
           "name": "checkTeamVOBearerToken",
           "position": 2,
-          "qualified_name": "TeamLoader.checkTeamVOBearerToken"
+          "qualified_name": "TeamLoader.checkTeamVOBearerToken",
+          "result_type": "lib.TeamID"
         },
         {
           "name": "loadTeamChain",
           "position": 3,
-          "qualified_name": "TeamLoader.loadTeamChain"
+          "qualified_name": "TeamLoader.loadTeamChain",
+          "result_type": "TeamChain"
         },
         {
           "name": "loadTeamMembershipChain",
           "position": 4,
-          "qualified_name": "TeamLoader.loadTeamMembershipChain"
+          "qualified_name": "TeamLoader.loadTeamMembershipChain",
+          "result_type": "GenericChain"
         },
         {
           "name": "loadRemovalForMember",
           "position": 5,
-          "qualified_name": "TeamLoader.loadRemovalForMember"
+          "qualified_name": "TeamLoader.loadRemovalForMember",
+          "result_type": "TeamRemovalAndKeyBox"
         },
         {
           "name": "loadTeamRemoteViewTokens",
           "position": 6,
-          "qualified_name": "TeamLoader.loadTeamRemoteViewTokens"
+          "qualified_name": "TeamLoader.loadTeamRemoteViewTokens",
+          "result_type": "TeamRemoteViewTokenSet"
         },
         {
           "name": "getServerConfig",
           "position": 7,
-          "qualified_name": "TeamLoader.getServerConfig"
+          "qualified_name": "TeamLoader.getServerConfig",
+          "result_type": "lib.RegServerConfig"
         }
       ]
     },
@@ -552,21 +666,26 @@
       "name": "TeamMember",
       "unique_id": 3181623763,
       "go_file": "proto/rem/team.go",
+      "argument_header": false,
+      "result_header": false,
       "methods": [
         {
           "name": "acceptInviteLocal",
           "position": 0,
-          "qualified_name": "TeamMember.acceptInviteLocal"
+          "qualified_name": "TeamMember.acceptInviteLocal",
+          "result_type": "lib.TeamRSVPLocal"
         },
         {
           "name": "grantRemoteViewPermissionForTeam",
           "position": 1,
-          "qualified_name": "TeamMember.grantRemoteViewPermissionForTeam"
+          "qualified_name": "TeamMember.grantRemoteViewPermissionForTeam",
+          "result_type": "lib.PermissionToken"
         },
         {
           "name": "grantLocalViewPermissionForTeam",
           "position": 2,
-          "qualified_name": "TeamMember.grantLocalViewPermissionForTeam"
+          "qualified_name": "TeamMember.grantLocalViewPermissionForTeam",
+          "result_type": "lib.PermissionToken"
         }
       ]
     },
@@ -574,151 +693,182 @@
       "name": "User",
       "unique_id": 2185169049,
       "go_file": "proto/rem/user.go",
+      "argument_header": true,
+      "result_header": true,
       "methods": [
         {
           "name": "ping",
           "position": 0,
-          "qualified_name": "User.ping"
+          "qualified_name": "User.ping",
+          "result_type": "lib.UID"
         },
         {
           "name": "setPassphrase",
           "position": 1,
-          "qualified_name": "User.setPassphrase"
+          "qualified_name": "User.setPassphrase",
+          "result_type": "void"
         },
         {
           "name": "changePassphrase",
           "position": 2,
-          "qualified_name": "User.changePassphrase"
+          "qualified_name": "User.changePassphrase",
+          "result_type": "void"
         },
         {
           "name": "getSalt",
           "position": 3,
-          "qualified_name": "User.getSalt"
+          "qualified_name": "User.getSalt",
+          "result_type": "lib.PassphraseSalt"
         },
         {
           "name": "nextPassphraseGeneration",
           "position": 4,
-          "qualified_name": "User.nextPassphraseGeneration"
+          "qualified_name": "User.nextPassphraseGeneration",
+          "result_type": "lib.PassphraseGeneration"
         },
         {
           "name": "stretchVersion",
           "position": 5,
-          "qualified_name": "User.stretchVersion"
+          "qualified_name": "User.stretchVersion",
+          "result_type": "lib.StretchVersion"
         },
         {
           "name": "provisionDevice",
           "position": 6,
-          "qualified_name": "User.provisionDevice"
+          "qualified_name": "User.provisionDevice",
+          "result_type": "void"
         },
         {
           "name": "revokeDevice",
           "position": 7,
-          "qualified_name": "User.revokeDevice"
+          "qualified_name": "User.revokeDevice",
+          "result_type": "void"
         },
         {
           "name": "loadUserChain",
           "position": 9,
-          "qualified_name": "User.loadUserChain"
+          "qualified_name": "User.loadUserChain",
+          "result_type": "UserChain"
         },
         {
           "name": "grantLocalViewPermissionForUser",
           "position": 10,
-          "qualified_name": "User.grantLocalViewPermissionForUser"
+          "qualified_name": "User.grantLocalViewPermissionForUser",
+          "result_type": "lib.PermissionToken"
         },
         {
           "name": "changeUsername",
           "position": 11,
-          "qualified_name": "User.changeUsername"
+          "qualified_name": "User.changeUsername",
+          "result_type": "void"
         },
         {
           "name": "reserveUsernameForChange",
           "position": 12,
-          "qualified_name": "User.reserveUsernameForChange"
+          "qualified_name": "User.reserveUsernameForChange",
+          "result_type": "ReserveNameRes"
         },
         {
           "name": "getTreeLocation",
           "position": 13,
-          "qualified_name": "User.getTreeLocation"
+          "qualified_name": "User.getTreeLocation",
+          "result_type": "lib.TreeLocation"
         },
         {
           "name": "getPUKForRole",
           "position": 14,
-          "qualified_name": "User.getPUKForRole"
+          "qualified_name": "User.getPUKForRole",
+          "result_type": "lib.SharedKeyParcel"
         },
         {
           "name": "getPpeParcel",
           "position": 15,
-          "qualified_name": "User.getPpeParcel"
+          "qualified_name": "User.getPpeParcel",
+          "result_type": "lib.PpeParcel"
         },
         {
           "name": "postGenericLink",
           "position": 16,
-          "qualified_name": "User.postGenericLink"
+          "qualified_name": "User.postGenericLink",
+          "result_type": "void"
         },
         {
           "name": "loadGenericChain",
           "position": 17,
-          "qualified_name": "User.loadGenericChain"
+          "qualified_name": "User.loadGenericChain",
+          "result_type": "GenericChain"
         },
         {
           "name": "grantRemoteViewPermissionForUser",
           "position": 18,
-          "qualified_name": "User.grantRemoteViewPermissionForUser"
+          "qualified_name": "User.grantRemoteViewPermissionForUser",
+          "result_type": "lib.PermissionToken"
         },
         {
           "name": "getTeamListServerTrust",
           "position": 19,
-          "qualified_name": "User.getTeamListServerTrust"
+          "qualified_name": "User.getTeamListServerTrust",
+          "result_type": "LocalTeamList"
         },
         {
           "name": "assertPQKeyNotInUse",
           "position": 20,
-          "qualified_name": "User.assertPQKeyNotInUse"
+          "qualified_name": "User.assertPQKeyNotInUse",
+          "result_type": "void"
         },
         {
           "name": "newWebAdminPanelURL",
           "position": 21,
-          "qualified_name": "User.newWebAdminPanelURL"
+          "qualified_name": "User.newWebAdminPanelURL",
+          "result_type": "lib.URLString"
         },
         {
           "name": "checkURL",
           "position": 22,
-          "qualified_name": "User.checkURL"
+          "qualified_name": "User.checkURL",
+          "result_type": "void"
         },
         {
           "name": "resolveUsername",
           "position": 23,
-          "qualified_name": "User.resolveUsername"
+          "qualified_name": "User.resolveUsername",
+          "result_type": "lib.UID"
         },
         {
           "name": "getHostConfig",
           "position": 24,
-          "qualified_name": "User.getHostConfig"
+          "qualified_name": "User.getHostConfig",
+          "result_type": "lib.HostConfig"
         },
         {
           "name": "getDeviceNag",
           "position": 25,
-          "qualified_name": "User.getDeviceNag"
+          "qualified_name": "User.getDeviceNag",
+          "result_type": "lib.DeviceNagInfo"
         },
         {
           "name": "clearDeviceNag",
           "position": 26,
-          "qualified_name": "User.clearDeviceNag"
+          "qualified_name": "User.clearDeviceNag",
+          "result_type": "void"
         },
         {
           "name": "putYubiManagementKey",
           "position": 27,
-          "qualified_name": "User.putYubiManagementKey"
+          "qualified_name": "User.putYubiManagementKey",
+          "result_type": "void"
         },
         {
           "name": "getYubiManagementKey",
           "position": 28,
-          "qualified_name": "User.getYubiManagementKey"
+          "qualified_name": "User.getYubiManagementKey",
+          "result_type": "YubiEncryptedManagementKey"
         },
         {
           "name": "getAllYubiManagementKeys",
           "position": 29,
-          "qualified_name": "User.getAllYubiManagementKeys"
+          "qualified_name": "User.getAllYubiManagementKeys",
+          "result_type": "[]YubiEncryptedManagementKey"
         }
       ]
     },
@@ -726,16 +876,20 @@
       "name": "kex",
       "unique_id": 2924345384,
       "go_file": "proto/rem/kex.go",
+      "argument_header": false,
+      "result_header": false,
       "methods": [
         {
           "name": "send",
           "position": 0,
-          "qualified_name": "kex.send"
+          "qualified_name": "kex.send",
+          "result_type": "void"
         },
         {
           "name": "receive",
           "position": 1,
-          "qualified_name": "kex.receive"
+          "qualified_name": "kex.receive",
+          "result_type": "KexWrapperMsg"
         }
       ]
     }

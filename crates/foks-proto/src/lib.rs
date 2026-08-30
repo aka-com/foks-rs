@@ -28,6 +28,7 @@ pub const MERKLE_TREE_RF_INPUT_TYPE_ID: u64 = 0xb0e2_68f3_88ac_c97a;
 pub const MERKLE_NODE_TYPE_ID: u64 = 0xe941_750d_c5b9_6783;
 pub const MERKLE_BACK_POINTERS_TYPE_ID: u64 = 0x8c7c_4b85_5fba_9000;
 pub const TREE_LOCATION_TYPE_ID: u64 = 0xaeff_d88b_6cd2_67d9;
+pub const CHAIN_LOCATION_DERIVATION_TYPE_ID: u64 = 0xe516_acf9_6cf5_6e58;
 pub const NAME_COMMITMENT_TYPE_ID: u64 = 0xe37b_1fcf_ba97_2353;
 pub const DEVICE_LABEL_TYPE_ID: u64 = 0x9650_2272_0548_6122;
 pub const NAME_HASH_PREIMAGE_TYPE_ID: u64 = 0xf855_6f05_4c4e_036b;
@@ -64,7 +65,11 @@ pub const ENTITY_PASSPHRASE_KEY: u8 = 17;
 pub const ENTITY_BOT_TOKEN_KEY: u8 = 19;
 pub const ENTITY_AD_HOC_TEAM: u8 = 20;
 
+pub const CHAIN_TYPE_USER_SETTINGS: u64 = 2;
+pub const CHAIN_TYPE_TEAM_MEMBERSHIP: u64 = 4;
+
 mod codec;
+mod compat;
 mod entity;
 mod error;
 mod federation;
@@ -77,6 +82,7 @@ mod role;
 mod service;
 mod yubi;
 
+pub use compat::*;
 pub use entity::*;
 pub use error::*;
 pub use federation::*;
@@ -90,8 +96,8 @@ pub use service::*;
 pub use yubi::*;
 
 pub(crate) use codec::{
-    array, binary, boolean, device_entity, entity, expect_unsigned, fixed_blob, integer, list,
-    option, text, type_error, unsigned, user_member_entity, variant,
+    array, array_at_least, binary, boolean, device_entity, entity, expect_unsigned, fixed_blob,
+    integer, list, option, text, type_error, unsigned, user_member_entity, variant,
 };
 
 #[cfg(test)]
@@ -107,6 +113,18 @@ mod tests {
             "../foks-snowpack/tests/fixtures/foks-v0.1.9/user/{name}"
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn generic_membership_fixture_decodes_with_its_chain_type() {
+        let exact = user_fixture("../user-mutations/named-membership-link.snowp");
+        let link = UserLink::decode(&exact).unwrap();
+        let decoded = link.decode_generic().unwrap();
+        assert_eq!(decoded.sequence, 1);
+        assert!(matches!(
+            decoded.payload,
+            GenericLinkPayload::TeamMembership
+        ));
     }
 
     #[test]
@@ -142,6 +160,70 @@ mod tests {
         assert_eq!(seven.services.realtime, "rt");
         // Fewer than the five load-bearing endpoints is still rejected.
         assert!(PublicZone::decode(&zone(&["p", "r", "u", "m"])).is_err());
+    }
+
+    #[test]
+    fn host_probe_structs_tolerate_appended_fields_and_unknown_changes() {
+        let probe = ProbeResponse::decode(FIXTURE).unwrap();
+
+        let Value::Array(mut response) = decode(FIXTURE).unwrap() else {
+            panic!("probe fixture is not an array");
+        };
+        response.push(Value::Text(b"future probe field".to_vec()));
+        assert_eq!(
+            ProbeResponse::decode(&encode(&Value::Array(response)).unwrap())
+                .unwrap()
+                .hostchain,
+            probe.hostchain
+        );
+
+        let mut root = decode(&probe.merkle_root.inner).unwrap();
+        let Value::Array(root_outer) = &mut root else {
+            panic!("Merkle root outer is not an array");
+        };
+        let Value::Variant(Some((_, root_v1))) = &mut root_outer[1] else {
+            panic!("Merkle root v1 is not a variant");
+        };
+        let Value::Array(root_v1) = root_v1.as_mut() else {
+            panic!("Merkle root v1 payload is not an array");
+        };
+        root_v1.push(Value::Text(b"future root field".to_vec()));
+        let evolved_root_bytes = encode(&root).unwrap();
+        let evolved_root = MerkleRoot::decode(&evolved_root_bytes).unwrap();
+        assert_eq!(evolved_root.epoch, 995);
+        assert_eq!(
+            evolved_root.extensions,
+            vec![Value::Text(b"future root field".to_vec())]
+        );
+        assert_eq!(evolved_root.encoded().unwrap(), evolved_root_bytes);
+
+        let mut link = probe.hostchain[0].clone();
+        let mut inner = decode(&link.inner).unwrap();
+        let Value::Array(inner_outer) = &mut inner else {
+            panic!("hostchain inner is not an array");
+        };
+        let Value::Variant(Some((_, change))) = &mut inner_outer[1] else {
+            panic!("hostchain change is not a variant");
+        };
+        let Value::Array(change) = change.as_mut() else {
+            panic!("hostchain change payload is not an array");
+        };
+        let Value::Array(changes) = &mut change[3] else {
+            panic!("fixture hostchain changes are not an array");
+        };
+        changes.push(Value::Array(vec![
+            Value::Unsigned(99),
+            Value::Variant(Some((
+                b"99".to_vec(),
+                Box::new(Value::Text(b"future change".to_vec())),
+            ))),
+        ]));
+        change.push(Value::Text(b"future hostchain field".to_vec()));
+        link.inner = encode(&inner).unwrap();
+        assert_eq!(
+            link.decode_change().unwrap().changes,
+            probe.hostchain[0].decode_change().unwrap().changes
+        );
     }
 
     #[test]

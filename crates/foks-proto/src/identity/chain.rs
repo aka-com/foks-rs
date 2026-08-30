@@ -33,6 +33,63 @@ pub struct DecodedMembershipLink {
     pub removal_key_commitment: Option<[u8; 32]>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PassphraseInfo {
+    pub generation: u64,
+    pub salt: Option<[u8; 16]>,
+    pub stretch_version: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GenericLinkPayload {
+    UserSettings(PassphraseInfo),
+    TeamMembership,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecodedGenericLink {
+    pub entity: EntityId,
+    pub host: EntityId,
+    pub signer: EntityId,
+    pub sequence: u64,
+    pub previous: Option<[u8; 32]>,
+    pub root: TreeRoot,
+    pub time: u64,
+    pub next_location_commitment: [u8; 32],
+    pub payload: GenericLinkPayload,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PostGenericLinkArgument {
+    pub link: UserLink,
+    pub next_tree_location: [u8; 32],
+}
+
+impl PostGenericLinkArgument {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        Self::from_value(&decode(bytes)?)
+    }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&self.to_value()?)?)
+    }
+
+    pub(crate) fn from_value(value: &Value) -> Result<Self> {
+        let fields = array(value, 2)?;
+        Ok(Self {
+            link: user_link(&fields[0])?,
+            next_tree_location: fixed_blob(&fields[1], "generic next tree location")?,
+        })
+    }
+
+    pub(crate) fn to_value(&self) -> Result<Value> {
+        Ok(Value::Array(vec![
+            decode(&self.link.encoded()?)?,
+            Value::Binary(self.next_tree_location.to_vec()),
+        ]))
+    }
+}
+
 /// Public inputs committed by a software-device user eldest link.
 ///
 /// Commitment values are supplied rather than recomputed here so this exact
@@ -325,16 +382,22 @@ impl UnsignedUserLink {
     }
 
     pub fn approved_adhoc_membership(input: &AdHocMembershipLinkPublic<'_>) -> Result<Self> {
-        input.user.clone().require_type(ENTITY_USER)?;
+        require_party(input.user)?;
         input.host.clone().require_type(ENTITY_HOST)?;
-        if !matches!(input.signer.entity_type(), ENTITY_DEVICE | ENTITY_YUBI) {
+        if !matches!(
+            input.signer.entity_type(),
+            ENTITY_DEVICE | ENTITY_YUBI | crate::ENTITY_PTK_VERIFY
+        ) {
             return Err(Error::WrongEntityType {
                 expected: ENTITY_DEVICE,
                 found: input.signer.entity_type(),
             });
         }
         input.team.clone().require_type(ENTITY_AD_HOC_TEAM)?;
-        if input.sequence != 1 || input.previous.is_some() || input.team_sequence != 1 {
+        if input.sequence == 0
+            || (input.sequence == 1) != input.previous.is_none()
+            || input.team_sequence != 1
+        {
             return Err(Error::IntegerRange("ad-hoc membership sequence"));
         }
         let membership = Value::Array(vec![
@@ -392,9 +455,12 @@ impl UnsignedUserLink {
 
     /// Builds the exact v0.1.9 `Approved` membership link used by named teams.
     pub fn approved_membership(input: &ApprovedMembershipLinkPublic<'_>) -> Result<Self> {
-        input.user.clone().require_type(ENTITY_USER)?;
+        require_party(input.user)?;
         input.host.clone().require_type(ENTITY_HOST)?;
-        if !matches!(input.signer.entity_type(), ENTITY_DEVICE | ENTITY_YUBI) {
+        if !matches!(
+            input.signer.entity_type(),
+            ENTITY_DEVICE | ENTITY_YUBI | crate::ENTITY_PTK_VERIFY
+        ) {
             return Err(Error::WrongEntityType {
                 expected: ENTITY_DEVICE,
                 found: input.signer.entity_type(),
@@ -529,6 +595,17 @@ pub struct ApprovedMembershipLinkPublic<'a> {
     pub destination_role: Role,
     pub team_sequence: u64,
     pub removal_key_commitment: [u8; 32],
+}
+
+fn require_party(entity: &EntityId) -> Result<&EntityId> {
+    if matches!(
+        entity.entity_type(),
+        ENTITY_USER | ENTITY_NAMED_TEAM | ENTITY_AD_HOC_TEAM
+    ) {
+        Ok(entity)
+    } else {
+        Err(Error::EntityType(entity.entity_type()))
+    }
 }
 
 pub(crate) fn list_or_null(values: impl Iterator<Item = Value>) -> Value {
@@ -777,9 +854,18 @@ impl UserLink {
             });
         }
         Ok(DecodedMembershipLink {
-            user: entity(&user[0])?.require_type(ENTITY_USER)?,
+            user: require_party(&entity(&user[0])?)?.clone(),
             host: entity(&user[1])?.require_type(ENTITY_HOST)?,
-            signer: device_entity(&signer[0])?,
+            signer: {
+                let signer = entity(&signer[0])?;
+                if !matches!(
+                    signer.entity_type(),
+                    ENTITY_DEVICE | ENTITY_YUBI | crate::ENTITY_PTK_VERIFY
+                ) {
+                    return Err(Error::EntityType(signer.entity_type()));
+                }
+                signer
+            },
             sequence: unsigned(&chainer[0])?,
             previous: option(&chainer[1], |value| {
                 fixed_blob(value, "membership previous")
@@ -936,6 +1022,99 @@ impl UserLink {
             shared_keys: list(&group[5], team_shared_key)?,
             metadata: list(&group[6], change_metadata)?,
         })
+    }
+
+    pub fn decode_generic(&self) -> Result<DecodedGenericLink> {
+        let inner = decode(&self.inner)?;
+        let outer = array(&inner, 2)?;
+        expect_unsigned(&outer[0], "generic inner type", 2)?;
+        let generic = array(variant(&outer[1], "1")?, 4)?;
+        let hiding = array(&generic[0], 2)?;
+        let chainer = array(&hiding[0], 4)?;
+        let root = array(&chainer[2], 2)?;
+        let fq_entity = array(&generic[1], 2)?;
+        let signer = array(&generic[2], 2)?;
+        if signer[1] != Value::Null {
+            return Err(type_error("empty generic signer host scope", &signer[1]));
+        }
+        let payload = decode_generic_payload(&generic[3])?;
+        Ok(DecodedGenericLink {
+            entity: entity(&fq_entity[0])?,
+            host: entity(&fq_entity[1])?.require_type(ENTITY_HOST)?,
+            signer: entity(&signer[0])?,
+            sequence: unsigned(&chainer[0])?,
+            previous: option(&chainer[1], |value| fixed_blob(value, "generic previous"))?,
+            root: TreeRoot {
+                epoch: unsigned(&root[0])?,
+                hash: fixed_blob(&root[1], "generic root hash")?,
+            },
+            time: unsigned(&chainer[3])?,
+            next_location_commitment: fixed_blob(&hiding[1], "generic next location commitment")?,
+            payload,
+        })
+    }
+}
+
+fn decode_generic_payload(value: &Value) -> Result<GenericLinkPayload> {
+    let wrapper = array(value, 2)?;
+    match unsigned(&wrapper[0])? {
+        crate::CHAIN_TYPE_USER_SETTINGS => {
+            let settings = array(variant(&wrapper[1], "0")?, 2)?;
+            expect_unsigned(&settings[0], "user settings type", 0)?;
+            let passphrase = array(variant(&settings[1], "0")?, 3)?;
+            Ok(GenericLinkPayload::UserSettings(PassphraseInfo {
+                generation: unsigned(&passphrase[0])?,
+                salt: option(&passphrase[1], |value| {
+                    fixed_blob(value, "passphrase info salt")
+                })?,
+                stretch_version: unsigned(&passphrase[2])?,
+            }))
+        }
+        crate::CHAIN_TYPE_TEAM_MEMBERSHIP => {
+            validate_team_membership_payload(variant(&wrapper[1], "1")?)?;
+            Ok(GenericLinkPayload::TeamMembership)
+        }
+        value => Err(Error::UnknownEnum {
+            kind: "generic chain type",
+            value,
+        }),
+    }
+}
+
+fn validate_team_membership_payload(value: &Value) -> Result<()> {
+    let membership = array(value, 3)?;
+    let team = array(&membership[0], 2)?;
+    let team = entity(&team[0])?;
+    if !matches!(team.entity_type(), ENTITY_NAMED_TEAM | ENTITY_AD_HOC_TEAM) {
+        return Err(Error::EntityType(team.entity_type()));
+    }
+    entity(&array(&membership[0], 2)?[1])?.require_type(ENTITY_HOST)?;
+    role(&membership[1])?;
+    let state = array(&membership[2], 2)?;
+    match unsigned(&state[0])? {
+        0 | 1 | 3 if state[1] == Value::Variant(None) => Ok(()),
+        2 => {
+            let approved = array(variant(&state[1], "1")?, 2)?;
+            let destination = array(&approved[0], 2)?;
+            role(&destination[0])?;
+            if unsigned(&destination[1])? == 0 {
+                return Err(Error::IntegerRange("team membership sequence"));
+            }
+            let _: [u8; 32] = fixed_blob(&approved[1], "membership key commitment")?;
+            Ok(())
+        }
+        4 => {
+            let approved = array(variant(&state[1], "2")?, 2)?;
+            role(&approved[0])?;
+            if unsigned(&approved[1])? == 0 {
+                return Err(Error::IntegerRange("ad-hoc membership sequence"));
+            }
+            Ok(())
+        }
+        value => Err(Error::UnknownEnum {
+            kind: "team membership state",
+            value,
+        }),
     }
 }
 

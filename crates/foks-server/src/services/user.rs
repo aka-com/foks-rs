@@ -2,10 +2,85 @@ use std::sync::Arc;
 
 use foks_proto::EntityId;
 use foks_rpc::RpcStatus;
-use foks_snowpack::{decode, Value};
+use foks_snowpack::{decode, encode, Value};
 
 use crate::auth::Principal;
 use crate::{net::session::OwnedPassphraseMutation, WriterHandle};
+
+pub(crate) fn ping(
+    database: &foks_server_db::ReadSnapshot<'_>,
+    argument: &[u8],
+    principal: &Principal,
+) -> Result<Vec<u8>, RpcStatus> {
+    foks_rpc::arguments::decode_void(argument).map_err(bad_arguments)?;
+    authorize(database, principal)?;
+    encode(&Value::Binary(principal.uid().to_vec())).map_err(|_| RpcStatus::TransactionRetry)
+}
+
+pub(crate) fn resolve_username(
+    database: &foks_server_db::ReadSnapshot<'_>,
+    argument: &[u8],
+    principal: Option<&Principal>,
+) -> Result<Vec<u8>, RpcStatus> {
+    if let Some(principal) = principal {
+        authorize(database, principal)?;
+    }
+    let request = foks_rpc::arguments::decode_resolve_username(argument).map_err(bad_arguments)?;
+    if foks_verify::normalize_username(&request.name).as_deref() != Some(request.name.as_slice()) {
+        return Err(bad_arguments("username is not normalized"));
+    }
+    let uid = database
+        .uid_by_normalized_name(&request.name)
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or_else(permission_denied)?;
+    match request.authorization {
+        foks_rpc::arguments::ResolveUsernameAuthorization::LocalUser
+            if principal.is_some_and(|principal| uid.as_slice() == principal.uid()) => {}
+        foks_rpc::arguments::ResolveUsernameAuthorization::OpenHost => {}
+        _ => return Err(permission_denied()),
+    }
+    EntityId::from_bytes(uid.clone())
+        .and_then(|entity| entity.require_type(foks_proto::ENTITY_USER))
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    encode(&Value::Binary(uid)).map_err(|_| RpcStatus::TransactionRetry)
+}
+
+pub(crate) fn device_nag(
+    database: &foks_server_db::ReadSnapshot<'_>,
+    argument: &[u8],
+    principal: &Principal,
+) -> Result<Vec<u8>, RpcStatus> {
+    foks_rpc::arguments::decode_void(argument).map_err(bad_arguments)?;
+    authorize(database, principal)?;
+    let state = database
+        .device_nag(principal.uid())
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or(RpcStatus::TransactionRetry)?;
+    foks_proto::DeviceNagInfo {
+        num_devices: state.num_active_devices,
+        cleared: state.cleared,
+    }
+    .encoded()
+    .map_err(|_| RpcStatus::TransactionRetry)
+}
+
+pub(crate) fn clear_device_nag(
+    database: &foks_server_db::ReadDatabase,
+    writer: &WriterHandle,
+    argument: &[u8],
+    principal: &Principal,
+) -> Result<(), RpcStatus> {
+    let cleared = foks_rpc::arguments::decode_clear_device_nag(argument).map_err(bad_arguments)?;
+    authorize_database(database, principal)?;
+    let uid = principal.uid().to_vec();
+    let credential = principal.device_id().to_vec();
+    writer
+        .call(move |database| {
+            database.set_device_nag_cleared(&uid, &credential, cleared)?;
+            Ok(())
+        })
+        .map_err(map_device_nag_write_error)
+}
 
 pub(crate) fn set_passphrase(
     database: &foks_server_db::ReadDatabase,
@@ -293,6 +368,17 @@ fn map_yubi_database_error(error: foks_server_db::Error) -> RpcStatus {
     }
 }
 
+fn map_device_nag_write_error(error: crate::Error) -> RpcStatus {
+    match error {
+        crate::Error::AuthorizationChanged
+        | crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => {
+            permission_denied()
+        }
+        crate::Error::WriterQueue => RpcStatus::RateLimited,
+        _ => RpcStatus::TransactionRetry,
+    }
+}
+
 pub(crate) fn host_config(
     database: &foks_server_db::ReadSnapshot<'_>,
     principal: &Principal,
@@ -324,20 +410,75 @@ pub(crate) fn load_user_chain(
     host: &EntityId,
     argument: &[u8],
     principal: &Principal,
+    now: u64,
 ) -> Result<Vec<u8>, RpcStatus> {
     let request =
         foks_rpc::arguments::decode_load_user_chain_argument(argument).map_err(bad_arguments)?;
-    if !matches!(
-        request.authorization,
-        foks_rpc::arguments::UserChainAuthorization::LocalUser
-    ) {
-        return Err(permission_denied());
-    }
-    database
-        .identity_for_active_device(request.uid.as_bytes(), principal.device_id())
-        .map_err(|_| RpcStatus::TransactionRetry)?
-        .ok_or_else(permission_denied)?;
+    authorize(database, principal)?;
+    authorize_user_chain_load(database, host, &request, principal, now)?;
     render_user_chain(database, host, &request)
+}
+
+fn authorize_user_chain_load(
+    database: &foks_server_db::ReadSnapshot<'_>,
+    host: &EntityId,
+    request: &foks_rpc::arguments::LoadUserChainArgument,
+    principal: &Principal,
+    now: u64,
+) -> Result<(), RpcStatus> {
+    use foks_rpc::arguments::UserChainAuthorization as Authorization;
+
+    if request.uid.as_bytes() == principal.uid() {
+        return Ok(());
+    }
+    match &request.authorization {
+        Authorization::SelfToken(token) => {
+            if database
+                .self_token_matches(request.uid.as_bytes(), token.expose())
+                .map_err(|_| RpcStatus::TransactionRetry)?
+            {
+                Ok(())
+            } else {
+                Err(permission_denied())
+            }
+        }
+        Authorization::LocalTeam(token) => {
+            let authority = database
+                .resolve_team_view_token(&crate::auth::team::token_hash(token), now)
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .ok_or(RpcStatus::Expired)?;
+            if authority.member_id != principal.uid()
+                || authority.member_host_id != host.as_bytes()
+                || !role_can_load_members(&authority)
+            {
+                return Err(permission_denied());
+            }
+            let team = database
+                .team(&authority.team_id)
+                .map_err(|_| RpcStatus::TransactionRetry)?
+                .ok_or_else(permission_denied)?;
+            if team.host_id != host.as_bytes()
+                || !team.members.iter().any(|member| {
+                    member.party_id == request.uid.as_bytes()
+                        && member
+                            .scoped_host_id
+                            .as_deref()
+                            .is_none_or(|scope| scope == host.as_bytes())
+                })
+            {
+                return Err(permission_denied());
+            }
+            Ok(())
+        }
+        Authorization::OpenHost | Authorization::OpenHostOrLocalUser => Ok(()),
+        Authorization::LocalUser | Authorization::RemoteToken(_) => Err(permission_denied()),
+    }
+}
+
+pub(super) fn role_can_load_members(authority: &foks_server_db::TeamViewAuthoritySnapshot) -> bool {
+    authority.effective_role_type > foks_proto::Role::member(0).protocol_value()
+        || (authority.effective_role_type == foks_proto::Role::member(0).protocol_value()
+            && authority.effective_visibility >= 0)
 }
 
 pub(crate) fn render_user_chain(

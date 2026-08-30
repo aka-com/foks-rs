@@ -10,10 +10,10 @@
 use std::io::{Read, Write};
 
 use foks_proto::{
-    AdHocTeamCreateArgument, AddTeamMemberArgument, EntityId, FqParty, FqTeam, InviteCode,
-    KvDirectory, KvDirent, KvLargeFileMetadata, KvNodeId, KvPathVersionVector, KvSmallFileBox,
-    KvUploadChunk, NamedTeamCreateArgument, PassphraseUpdateArgument, PermissionToken,
-    ProvisionDeviceArgument, RegistrationChallenge, RemoteViewPermissionPayload,
+    AdHocTeamCreateArgument, AddTeamMemberArgument, ClientVersionExt, EntityId, FqParty, FqTeam,
+    InviteCode, KvDirectory, KvDirent, KvLargeFileMetadata, KvNodeId, KvPathVersionVector,
+    KvSmallFileBox, KvUploadChunk, NamedTeamCreateArgument, PassphraseUpdateArgument,
+    PermissionToken, ProvisionDeviceArgument, RegistrationChallenge, RemoteViewPermissionPayload,
     RemoveTeamMemberArgument, RevokeDeviceArgument, Role, RoleAndGeneration, Signature,
     SoftwareSignupArgument, TeamBearerToken, TeamBearerTokenChallenge, TeamEditResult,
     TeamNameReservation, TeamRemovalKeyBox, TeamViewChallenge, TeamViewRequest,
@@ -41,36 +41,6 @@ const METHOD_RESPONSE: u64 = 1;
 const RESPONSE_HEADER: &[u8] = &[
     0x82, 0xa1, b'V', 0x01, 0xa2, b'f', b'1', 0x81, 0xa4, b'V', b'e', b'r', b's', 0x01,
 ];
-
-// go-foks routes TeamGuest and Kex are not otherwise handled by this
-// implementation, but both place their arguments and results bare on the wire,
-// so they are classified here to keep `is_headerless_protocol` a faithful
-// description of the whole v0.1.9 protocol set (proto/rem/kex.go, and the
-// TeamGuest protocol in proto/rem/team.go).
-const TEAM_GUEST_PROTOCOL_ID: u64 = 0xf6d7585c;
-const KEX_PROTOCOL_ID: u64 = 0xae4df828;
-
-/// Reports whether a protocol carries its call argument and its result bare on
-/// the wire, without the `{Data, Header}` DataWrap envelope.
-///
-/// go-foks wraps most protocols (Probe, MerkleQuery, Reg, User, KVStore,
-/// Beacon, LogSend, RealTime) in `rpc.DataWrap[Header, T]`, but emits the team
-/// protocols (TeamLoader, TeamAdmin, TeamMember, TeamGuest) and Kex as the bare
-/// `,toarray` struct with no header. This is decided per protocol, never per
-/// method, so it is a pure function of the protocol id. See go-foks v0.1.9
-/// proto/rem/team.go and kex.go, whose generated server handlers decode a bare
-/// argument struct and return a bare result, versus proto/rem/reg.go et al.
-/// whose handlers decode and return `rpc.DataWrap`.
-pub fn is_headerless_protocol(protocol_id: u64) -> bool {
-    matches!(
-        protocol_id,
-        TEAM_LOADER_PROTOCOL_ID
-            | TEAM_ADMIN_PROTOCOL_ID
-            | TEAM_MEMBER_PROTOCOL_ID
-            | TEAM_GUEST_PROTOCOL_ID
-            | KEX_PROTOCOL_ID
-    )
-}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -434,6 +404,51 @@ pub fn encode_registration_stretch_version_request() -> Result<Vec<u8>> {
     )
 }
 
+pub fn encode_registration_server_config_request() -> Result<Vec<u8>> {
+    encode_call_with_validated_argument(
+        REG_PROTOCOL_ID,
+        REG_GET_SERVER_CONFIG_METHOD_POSITION,
+        &[0x90],
+        0,
+    )
+}
+
+pub fn encode_check_name_exists_request(name: &[u8]) -> Result<Vec<u8>> {
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_CHECK_NAME_EXISTS_METHOD_POSITION,
+        &encode(&Value::Array(vec![Value::Text(name.to_vec())]))?,
+        0,
+    )
+}
+
+pub fn encode_probe_key_exists_request(
+    uid: &EntityId,
+    device_id: &EntityId,
+    self_token: &PermissionToken,
+) -> Result<Vec<u8>> {
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_PROBE_KEY_EXISTS_METHOD_POSITION,
+        &encode(&Value::Array(vec![
+            Value::Binary(uid.as_bytes().to_vec()),
+            Value::Binary(device_id.as_bytes().to_vec()),
+            self_token.to_value(),
+        ]))?,
+        0,
+    )
+}
+
+pub fn encode_get_client_version_info_request(version: &ClientVersionExt) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![decode(&version.encoded()?)?]))?;
+    encode_call(
+        REG_PROTOCOL_ID,
+        REG_GET_CLIENT_VERSION_INFO_METHOD_POSITION,
+        &argument,
+        0,
+    )
+}
+
 pub fn encode_get_client_cert_chain_request_at(
     uid: &[u8],
     device_id: &[u8],
@@ -674,6 +689,93 @@ pub fn encode_get_ppe_parcel_request() -> Result<Vec<u8>> {
     encode_user_void_request(USER_GET_PPE_PARCEL_METHOD_POSITION)
 }
 
+pub fn encode_load_generic_chain_request(
+    entity: &EntityId,
+    chain_type: u64,
+    start: u64,
+) -> Result<Vec<u8>> {
+    if start == 0
+        || !matches!(
+            chain_type,
+            foks_proto::CHAIN_TYPE_USER_SETTINGS | foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP
+        )
+    {
+        return Err(foks_proto::Error::IntegerRange("generic-chain request").into());
+    }
+    let argument = encode(&Value::Array(vec![
+        Value::Binary(entity.as_bytes().to_vec()),
+        Value::Unsigned(chain_type),
+        Value::Unsigned(start),
+    ]))?;
+    encode_call(
+        USER_PROTOCOL_ID,
+        USER_LOAD_GENERIC_CHAIN_METHOD_POSITION,
+        &argument,
+        0,
+    )
+}
+
+pub fn encode_load_team_membership_chain_request(
+    team: &EntityId,
+    host: &EntityId,
+    token: &[u8; 16],
+    start: u64,
+) -> Result<Vec<u8>> {
+    if start == 0 {
+        return Err(foks_proto::Error::IntegerRange("team membership-chain request").into());
+    }
+    let argument = encode(&Value::Array(vec![
+        Value::Array(vec![
+            Value::Binary(team.as_bytes().to_vec()),
+            Value::Binary(host.as_bytes().to_vec()),
+        ]),
+        Value::Binary(token.to_vec()),
+        Value::Unsigned(start),
+    ]))?;
+    encode_call(
+        TEAM_LOADER_PROTOCOL_ID,
+        TEAM_LOAD_MEMBERSHIP_CHAIN_METHOD_POSITION,
+        &argument,
+        0,
+    )
+}
+
+pub fn encode_post_generic_link_request(
+    argument: &foks_proto::PostGenericLinkArgument,
+) -> Result<Vec<u8>> {
+    encode_call(
+        USER_PROTOCOL_ID,
+        USER_POST_GENERIC_LINK_METHOD_POSITION,
+        &argument.encoded()?,
+        0,
+    )
+}
+
+pub fn encode_post_team_membership_link_request(
+    token: &TeamBearerToken,
+    argument: &foks_proto::PostGenericLinkArgument,
+) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![
+        Value::Binary(token.to_vec()),
+        decode(&argument.encoded()?)?,
+    ]))?;
+    encode_call(
+        TEAM_ADMIN_PROTOCOL_ID,
+        TEAM_POST_MEMBERSHIP_LINK_METHOD_POSITION,
+        &argument,
+        0,
+    )
+}
+
+pub fn encode_get_team_list_server_trust_request() -> Result<Vec<u8>> {
+    encode_call_with_validated_argument(
+        USER_PROTOCOL_ID,
+        USER_GET_TEAM_LIST_SERVER_TRUST_METHOD_POSITION,
+        &[0x90],
+        0,
+    )
+}
+
 pub fn encode_provision_device_request(argument: &ProvisionDeviceArgument<'_>) -> Result<Vec<u8>> {
     encode_call(
         USER_PROTOCOL_ID,
@@ -865,6 +967,46 @@ pub fn encode_get_host_config_request() -> Result<Vec<u8>> {
     )
 }
 
+pub fn encode_user_ping_request() -> Result<Vec<u8>> {
+    encode_call_with_validated_argument(USER_PROTOCOL_ID, USER_PING_METHOD_POSITION, &[0x90], 0)
+}
+
+pub fn encode_resolve_username_request(name: &[u8], open_host: bool) -> Result<Vec<u8>> {
+    let authorization = Value::Array(vec![
+        Value::Unsigned(if open_host { 4 } else { 0 }),
+        Value::Variant(None),
+    ]);
+    let argument = encode(&Value::Array(vec![Value::Array(vec![
+        Value::Text(name.to_vec()),
+        authorization,
+    ])]))?;
+    encode_call(
+        USER_PROTOCOL_ID,
+        USER_RESOLVE_USERNAME_METHOD_POSITION,
+        &argument,
+        0,
+    )
+}
+
+pub fn encode_get_device_nag_request() -> Result<Vec<u8>> {
+    encode_call_with_validated_argument(
+        USER_PROTOCOL_ID,
+        USER_GET_DEVICE_NAG_METHOD_POSITION,
+        &[0x90],
+        0,
+    )
+}
+
+pub fn encode_clear_device_nag_request(cleared: bool) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![Value::Bool(cleared)]))?;
+    encode_call(
+        USER_PROTOCOL_ID,
+        USER_CLEAR_DEVICE_NAG_METHOD_POSITION,
+        &argument,
+        0,
+    )
+}
+
 pub fn encode_get_current_merkle_root_request(host: &EntityId, sequence: u64) -> Result<Vec<u8>> {
     let argument = encode(&Value::Array(vec![Value::Binary(host.as_bytes().to_vec())]))?;
     encode_call(
@@ -873,6 +1015,89 @@ pub fn encode_get_current_merkle_root_request(host: &EntityId, sequence: u64) ->
         &argument,
         sequence,
     )
+}
+
+pub fn encode_merkle_lookup_request(
+    host: Option<&EntityId>,
+    key: [u8; 32],
+    signed: bool,
+    root: Option<u64>,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![
+        optional_entity(host),
+        Value::Binary(key.to_vec()),
+        Value::Bool(signed),
+        root.map_or(Value::Null, Value::Unsigned),
+    ]))?;
+    encode_call(
+        MERKLE_QUERY_PROTOCOL_ID,
+        MERKLE_LOOKUP_METHOD_POSITION,
+        &argument,
+        sequence,
+    )
+}
+
+pub fn encode_merkle_multi_lookup_request(
+    host: Option<&EntityId>,
+    keys: &[[u8; 32]],
+    signed: bool,
+    root: Option<u64>,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    let keys = if keys.is_empty() {
+        Value::Null
+    } else {
+        Value::Array(keys.iter().map(|key| Value::Binary(key.to_vec())).collect())
+    };
+    let argument = encode(&Value::Array(vec![
+        optional_entity(host),
+        keys,
+        Value::Bool(signed),
+        root.map_or(Value::Null, Value::Unsigned),
+    ]))?;
+    encode_call(
+        MERKLE_QUERY_PROTOCOL_ID,
+        MERKLE_MULTI_LOOKUP_METHOD_POSITION,
+        &argument,
+        sequence,
+    )
+}
+
+pub fn encode_get_current_merkle_root_hash_request(
+    host: Option<&EntityId>,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![optional_entity(host)]))?;
+    encode_call(
+        MERKLE_QUERY_PROTOCOL_ID,
+        MERKLE_GET_CURRENT_ROOT_HASH_METHOD_POSITION,
+        &argument,
+        sequence,
+    )
+}
+
+pub fn encode_merkle_check_key_exists_request(
+    host: Option<&EntityId>,
+    key: [u8; 32],
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![
+        optional_entity(host),
+        Value::Binary(key.to_vec()),
+    ]))?;
+    encode_call(
+        MERKLE_QUERY_PROTOCOL_ID,
+        MERKLE_CHECK_KEY_EXISTS_METHOD_POSITION,
+        &argument,
+        sequence,
+    )
+}
+
+fn optional_entity(entity: Option<&EntityId>) -> Value {
+    entity.map_or(Value::Null, |entity| {
+        Value::Binary(entity.as_bytes().to_vec())
+    })
 }
 
 /// Requests the signed current Merkle root (getCurrentRootSigned @5). The v0.1.9
@@ -1263,6 +1488,37 @@ pub fn encode_kv_get_root_request_at(auth: KvAuth<'_>, sequence: u64) -> Result<
     )
 }
 
+pub fn encode_kv_get_request_at(
+    auth: KvAuth<'_>,
+    precondition: Option<&KvPathVersionVector>,
+    parent: &[u8; 16],
+    names: &[(u64, [u8; 32])],
+    follow: u64,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    let names = if names.is_empty() {
+        Value::Null
+    } else {
+        Value::Array(
+            names
+                .iter()
+                .map(|(version, mac)| {
+                    Value::Array(vec![Value::Unsigned(*version), Value::Binary(mac.to_vec())])
+                })
+                .collect(),
+        )
+    };
+    encode_kv_call_at(
+        KV_GET_METHOD_POSITION,
+        Value::Array(vec![
+            kv_request_header(auth, precondition),
+            Value::Array(vec![Value::Binary(parent.to_vec()), names]),
+            Value::Unsigned(follow),
+        ]),
+        sequence,
+    )
+}
+
 pub fn encode_kv_get_dir_request(auth: KvAuth<'_>, directory: &[u8; 16]) -> Result<Vec<u8>> {
     encode_kv_get_dir_request_at(auth, directory, 1)
 }
@@ -1371,6 +1627,14 @@ pub fn encode_kv_cache_check_request_at(
             auth.to_value(),
             versions.to_value(),
         ])]),
+        sequence,
+    )
+}
+
+pub fn encode_kv_usage_request_at(auth: KvAuth<'_>, sequence: u64) -> Result<Vec<u8>> {
+    encode_kv_call_at(
+        KV_USAGE_METHOD_POSITION,
+        Value::Array(vec![auth.to_value()]),
         sequence,
     )
 }
@@ -1542,9 +1806,10 @@ pub fn decode_void_response(content: &[u8], expected_sequence: u64) -> Result<()
             });
         }
     }
-    if text(wrapped.value()?)? != b"Header" || wrapped.value()? != RESPONSE_HEADER {
+    if text(wrapped.value()?)? != b"Header" {
         return Err(Error::Compatibility);
     }
+    check_compatibility_header(wrapped.value()?)?;
     if !wrapped.done() {
         return Err(Error::Envelope {
             expected: "end of void RPC data wrapper",
@@ -1679,10 +1944,7 @@ fn decode_data_wrap(bytes: &[u8]) -> Result<Vec<u8>> {
             found: "another field",
         });
     }
-    let header = cursor.value()?;
-    if header != RESPONSE_HEADER {
-        return Err(Error::Compatibility);
-    }
+    check_compatibility_header(cursor.value()?)?;
     if !cursor.done() {
         return Err(Error::Envelope {
             expected: "end of RPC data wrapper",
@@ -2229,6 +2491,31 @@ fn text(bytes: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
+/// Checks the fixed v1 compatibility-header shape while accepting every
+/// nonzero compatibility version, matching go-foks' argument and response
+/// checks. Version zero is the only compatibility generation v0.1.9 treats
+/// as categorically too old.
+fn check_compatibility_header(bytes: &[u8]) -> Result<()> {
+    let mut header = Cursor::new(bytes);
+    if map_length(&mut header)? != 2
+        || text(header.value()?)? != b"V"
+        || unsigned(header.value()?)? != 1
+        || text(header.value()?)? != b"f1"
+    {
+        return Err(Error::Compatibility);
+    }
+    let mut v1 = Cursor::new(header.value()?);
+    if map_length(&mut v1)? != 1
+        || text(v1.value()?)? != b"Vers"
+        || unsigned(v1.value()?)? == 0
+        || !v1.done()
+        || !header.done()
+    {
+        return Err(Error::Compatibility);
+    }
+    Ok(())
+}
+
 fn frame(content: &[u8], maximum: usize) -> Result<Vec<u8>> {
     if content.len() > maximum {
         return Err(Error::FrameTooLarge {
@@ -2494,11 +2781,34 @@ impl ValueKind for Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        check_status, decode_call, encode_call, encode_call_with_validated_argument,
-        encode_status_response_at, read_frame, read_response, resequence_call, unsigned, Cursor,
-        Error, RpcStatus, DEFAULT_MAX_FRAME_LENGTH, METHOD_CALL_V2,
+        check_compatibility_header, check_status, decode_call, encode_call,
+        encode_call_with_validated_argument, encode_status_response_at, read_frame, read_response,
+        resequence_call, unsigned, Cursor, Error, RpcStatus, DEFAULT_MAX_FRAME_LENGTH,
+        METHOD_CALL_V2, RESPONSE_HEADER,
     };
     use foks_proto::{KvDirectoryVersion, KvDirentVersion, KvPathVersionVector};
+
+    #[test]
+    fn compatibility_headers_accept_nonzero_versions_only() {
+        check_compatibility_header(RESPONSE_HEADER).unwrap();
+        let mut newer = RESPONSE_HEADER.to_vec();
+        *newer.last_mut().unwrap() = 2;
+        check_compatibility_header(&newer).unwrap();
+
+        let mut zero = RESPONSE_HEADER.to_vec();
+        *zero.last_mut().unwrap() = 0;
+        assert!(matches!(
+            check_compatibility_header(&zero),
+            Err(Error::Compatibility)
+        ));
+
+        let mut unknown_header_format = RESPONSE_HEADER.to_vec();
+        unknown_header_format[3] = 2;
+        assert!(matches!(
+            check_compatibility_header(&unknown_header_format),
+            Err(Error::Compatibility)
+        ));
+    }
 
     #[test]
     fn status_responses_round_trip_in_the_positional_go_shape() {

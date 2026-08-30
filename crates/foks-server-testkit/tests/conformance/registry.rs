@@ -24,6 +24,51 @@ struct DeclaredRoute {
 
 const COVERAGE: &[Coverage] = &[
     Coverage {
+        name: "go_client_activation",
+        run: crate::go_client_activation::go_client_activation_success,
+        routes: &[("Reg", "getServerConfig"), ("User", "ping")],
+    },
+    Coverage {
+        name: "go_client_housekeeping",
+        run: crate::go_client_activation::go_client_activation_success,
+        routes: &[
+            ("Reg", "getClientVersionInfo"),
+            ("User", "getDeviceNag"),
+            ("User", "clearDeviceNag"),
+        ],
+    },
+    Coverage {
+        name: "go_client_identity",
+        run: crate::go_client_activation::go_client_activation_success,
+        routes: &[
+            ("Reg", "checkNameExists"),
+            ("Reg", "probeKeyExists"),
+            ("Reg", "resolveUsername"),
+            ("User", "resolveUsername"),
+        ],
+    },
+    Coverage {
+        name: "go_client_merkle_queries",
+        run: crate::go_client_merkle::go_client_merkle_queries,
+        routes: &[
+            ("MerkleQuery", "lookup"),
+            ("MerkleQuery", "getCurrentRootHash"),
+            ("MerkleQuery", "checkKeyExists"),
+            ("MerkleQuery", "mLookup"),
+        ],
+    },
+    Coverage {
+        name: "go_client_generic",
+        run: crate::go_client_generic::generic_membership_chains_and_trusted_team_lists_work,
+        routes: &[
+            ("User", "postGenericLink"),
+            ("User", "loadGenericChain"),
+            ("User", "getTeamListServerTrust"),
+            ("TeamLoader", "loadTeamMembershipChain"),
+            ("TeamAdmin", "postTeamMembershipLink"),
+        ],
+    },
+    Coverage {
         name: "probe_and_pin",
         run: crate::probe_and_pin::probe_and_pin_success,
         routes: &[
@@ -31,6 +76,7 @@ const COVERAGE: &[Coverage] = &[
             ("Reg", "reserveUsername"),
             ("Reg", "selectVHost"),
             ("MerkleQuery", "getCurrentRoot"),
+            ("MerkleQuery", "getCurrentRootSigned"),
             ("MerkleQuery", "selectVHost"),
         ],
     },
@@ -133,14 +179,12 @@ const COVERAGE: &[Coverage] = &[
         run: crate::authorization::unsupported_team_routes_return_typed_status,
         routes: &[
             ("TeamLoader", "checkTeamVOBearerToken"),
-            ("TeamLoader", "loadTeamMembershipChain"),
             ("TeamLoader", "loadRemovalForMember"),
             ("TeamLoader", "getServerConfig"),
             ("TeamAdmin", "checkTeamBearerToken"),
             ("TeamAdmin", "putTeamCert"),
             ("TeamAdmin", "getCurrentTeamCerts"),
             ("TeamAdmin", "loadTeamRemoteJoinReq"),
-            ("TeamAdmin", "postTeamMembershipLink"),
             ("TeamAdmin", "postTeamRemoval"),
             ("TeamAdmin", "loadTeamRawInbox"),
             ("TeamAdmin", "rejectJoinReq"),
@@ -173,6 +217,11 @@ const COVERAGE: &[Coverage] = &[
             ("KvStore", "fileUploadChunk"),
             ("KvStore", "getEncryptedChunk"),
         ],
+    },
+    Coverage {
+        name: "go_client_kv",
+        run: crate::go_client_kv::go_style_kv_get_usage_directory_nodes_and_time_lists_work,
+        routes: &[("KvStore", "get"), ("KvStore", "usage")],
     },
 ];
 

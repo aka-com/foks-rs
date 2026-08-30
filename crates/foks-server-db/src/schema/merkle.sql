@@ -5,7 +5,8 @@ CREATE TABLE merkle_nodes (
 
 CREATE TABLE merkle_leaves (
     leaf_key BLOB PRIMARY KEY CHECK (length(leaf_key) = 32),
-    leaf_value BLOB NOT NULL CHECK (length(leaf_value) = 32)
+    leaf_value BLOB NOT NULL CHECK (length(leaf_value) = 32),
+    epoch INTEGER NOT NULL CHECK (epoch >= 1)
 ) STRICT;
 
 CREATE TABLE merkle_roots (

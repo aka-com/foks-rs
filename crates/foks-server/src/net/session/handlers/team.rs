@@ -23,6 +23,11 @@ pub(super) trait Operations {
         argument: &[u8],
         principal: &Principal,
     ) -> Result<Vec<u8>, RpcStatus>;
+    fn load_team_membership_chain(
+        &self,
+        argument: &[u8],
+        principal: Option<&Principal>,
+    ) -> Result<Vec<u8>, RpcStatus>;
     fn grant_remote_view(
         &self,
         argument: &[u8],
@@ -42,6 +47,11 @@ pub(super) trait Operations {
         argument: &[u8],
         principal: &Principal,
     ) -> Result<Vec<u8>, RpcStatus>;
+    fn post_team_membership_link(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<(), RpcStatus>;
 }
 
 impl Operations for ServerData {
@@ -116,6 +126,23 @@ impl Operations for ServerData {
         )
     }
 
+    fn load_team_membership_chain(
+        &self,
+        argument: &[u8],
+        principal: Option<&Principal>,
+    ) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        crate::services::team_loader::load_team_membership_chain(
+            argument,
+            principal,
+            &self.host()?,
+            &snapshot,
+            self.clock.as_ref(),
+        )
+    }
     fn grant_remote_view(
         &self,
         argument: &[u8],
@@ -218,6 +245,24 @@ impl Operations for ServerData {
             self.clock.as_ref(),
         )
     }
+
+    fn post_team_membership_link(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<(), RpcStatus> {
+        let database = self.read_database()?;
+        crate::services::team_admin::post_team_membership_link(
+            argument,
+            principal,
+            &self.host()?,
+            &database,
+            self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+            self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
+            &self.clock,
+            &self.hostchain_tail,
+        )
+    }
 }
 
 pub(super) fn response(
@@ -237,6 +282,9 @@ pub(super) fn response(
         )?),
         RouteId::TeamLoaderLoadTeamChain => {
             Some(operations.load_chain(call.call.argument(), principal)?)
+        }
+        RouteId::TeamLoaderLoadTeamMembershipChain => {
+            Some(operations.load_team_membership_chain(call.call.argument(), principal)?)
         }
         RouteId::TeamLoaderLoadTeamRemoteViewTokens => Some(operations.load_remote_view_tokens(
             call.call.argument(),
@@ -277,6 +325,13 @@ pub(super) fn response(
             call.call.argument(),
             principal.ok_or_else(permission_denied)?,
         )?),
+        RouteId::TeamAdminPostTeamMembershipLink => {
+            operations.post_team_membership_link(
+                call.call.argument(),
+                principal.ok_or_else(permission_denied)?,
+            )?;
+            None
+        }
         _ => return Err(RpcStatus::Unsupported),
     };
     // Team protocols place their result bare on the wire with no DataWrap

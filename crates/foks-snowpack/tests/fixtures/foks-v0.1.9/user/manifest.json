@@ -112,9 +112,29 @@
       "sha256": "785b46ff57002b431dfdc3fe2785a4ea97d2487926159a412b53985f8bb9f0cd"
     },
     {
+      "file": "merkle-check-key-response.snowp",
+      "bytes": 5,
+      "sha256": "21c07a34ca52bcf6ea36687d04460bc5ab0f4f566515b7af90d8ff9bfbc98358"
+    },
+    {
+      "file": "merkle-current-root-hash-response.snowp",
+      "bytes": 38,
+      "sha256": "caf7b835c545651fbd177e51ab46526ab3e971a094ae0130b5445472e43a995b"
+    },
+    {
       "file": "merkle-historical-response.snowp",
       "bytes": 261,
       "sha256": "3eac6a2fdaa049f78e700c112d1ce97a43b9779088db3ef2f9b223ff80122895"
+    },
+    {
+      "file": "merkle-lookup-response.snowp",
+      "bytes": 265,
+      "sha256": "2d53ad9013f2e6a0dd7e4af38cd6da41c2055f8d00a6f8754ddc7a9c5982847f"
+    },
+    {
+      "file": "merkle-multi-lookup-response.snowp",
+      "bytes": 817,
+      "sha256": "0fce53fd638000b89d5d81ae3c80cfa44c3272cf77e1b4acd57013126316a7dd"
     },
     {
       "file": "merkle-root-996.snowp",
@@ -359,9 +379,39 @@
       "sha256": "8652a1897ad4d6465ac3cd92a42c0278d2286b71ee39ef68eaa8e222d315a8f4"
     },
     {
+      "file": "merkle-check-key-request.frame",
+      "bytes": 107,
+      "sha256": "4ec610daee2baacc7d44d2701bff66f941d5b5dc2f670ebf64a1c7696a623120"
+    },
+    {
+      "file": "merkle-current-root-hash-request.frame",
+      "bytes": 73,
+      "sha256": "fe9cd93b4bdfc7000a4b4c7ce4f4330e08d2ca00f7efc30c4d65cd1c8f4ae53d"
+    },
+    {
       "file": "merkle-historical-roots-request.frame",
       "bytes": 90,
       "sha256": "d92a06d1bd6bedc21f33557d598222316b33a8d7a262e496ee830fb138c0ea23"
+    },
+    {
+      "file": "merkle-leaf-not-found-response.frame",
+      "bytes": 10,
+      "sha256": "07e69db8f1132208bd84ef57cc5a7f37cb9190bedd5eb69d3204ec30f9ac8e91"
+    },
+    {
+      "file": "merkle-lookup-request.frame",
+      "bytes": 111,
+      "sha256": "d918b70b97fd7a9d8dadb4c2b790ae54cca12dcd0597a182b7428b4c3e4b6d06"
+    },
+    {
+      "file": "merkle-multi-lookup-request.frame",
+      "bytes": 147,
+      "sha256": "73917fd6d1066b7dbe80486f51e0f33fac68f71eb71740d2202e7d9563e83d3b"
+    },
+    {
+      "file": "merkle-no-root-response.frame",
+      "bytes": 10,
+      "sha256": "b147a9911c2804fa0140b10390a728d3fbb45d0cd6c153e57c56078bbf9b07bc"
     },
     {
       "file": "merkle-select-vhost-request.frame",
@@ -384,6 +434,51 @@
       "sha256": "35b095fa3d66306f262cd053ee78af75b41958ad48a823d530a202c1a28e64a1"
     },
     {
+      "file": "reg-check-name-not-found-response.frame",
+      "bytes": 10,
+      "sha256": "d66552faf6fd44c9020099e66b0a74a9b1663d8c8806fdf59843ca78830b8100"
+    },
+    {
+      "file": "reg-check-name-request.frame",
+      "bytes": 44,
+      "sha256": "dcaa579d2c7313a58a15b563b401bedf717a3ab7af2aaf65f94de58a815fcf7a"
+    },
+    {
+      "file": "reg-client-version-empty.snowp",
+      "bytes": 4,
+      "sha256": "7db14e282efef04a870fca782adc953f83955a0fec00660740d688818583a6ae"
+    },
+    {
+      "file": "reg-client-version-request.frame",
+      "bytes": 55,
+      "sha256": "03b8a083f9385faf7499dec96f245be0328fd137b241a708965824638c4354bc"
+    },
+    {
+      "file": "reg-probe-key-exists-request.frame",
+      "bytes": 127,
+      "sha256": "24123224d9105e781ca02d2b79becc76107675cc58ac1bdd1fd9ebeaef7d0a2e"
+    },
+    {
+      "file": "reg-probe-key-not-found-response.frame",
+      "bytes": 23,
+      "sha256": "6cec209f9377332076939fd03dad07f98239d310a4b97f66a6cae39f8795b8e0"
+    },
+    {
+      "file": "reg-server-config-open.snowp",
+      "bytes": 7,
+      "sha256": "6fc4d100f563bac671a27493f22e0bdd3347d62a5e5dd05a65e0708639a6892c"
+    },
+    {
+      "file": "reg-server-config-request.frame",
+      "bytes": 38,
+      "sha256": "38f0c818230bda8f62cdf86ebfdd49a8ad7fe7fc0715b7b7f8033edf4afe185a"
+    },
+    {
+      "file": "reg-user-load-self-token-request.frame",
+      "bytes": 100,
+      "sha256": "e6f0737a03cd9ffd1d576ce2a2fc86a0392cf40e6d77ba89ea43d9a06e22fba6"
+    },
+    {
       "file": "reg-select-vhost-request.frame",
       "bytes": 73,
       "sha256": "f0318ceb6e02349a2a499537c3f4c4d2f848c7db24448c0cbb547ecd4c34fd20"
@@ -402,6 +497,11 @@
       "file": "team-load-request.frame",
       "bytes": 110,
       "sha256": "04dd6fd1b62955b76a535591ab1cf4bfceff2183084a46f8cd85f6033f4d8582"
+    },
+    {
+      "file": "team-load-local-parent-request.frame",
+      "bytes": 110,
+      "sha256": "00136a00468b0cdc4cf579a552ededf26e9ba806e2dcd8e964a35a962aa95d0c"
     },
     {
       "file": "team-ptk-admin-seed.bin",
@@ -434,14 +534,54 @@
       "sha256": "0a5f720ae25988f61778188df4253eab90134820158aa3f20ae449515e3d3dfb"
     },
     {
+      "file": "user-clear-device-nag-request.frame",
+      "bytes": 39,
+      "sha256": "ba7e21ea878068ccb59d61238a0e60bbe40fa2118ae4251cda03cc48fed11f7c"
+    },
+    {
+      "file": "user-device-nag-one.snowp",
+      "bytes": 3,
+      "sha256": "311805539586438470f2243395071392e8136fb6af7c270fbfa4de28985ff510"
+    },
+    {
+      "file": "user-device-nag-request.frame",
+      "bytes": 38,
+      "sha256": "98f1c843ae706fd39b84bf3d2902cbac37ec93c946f727ad7f92b5a347633001"
+    },
+    {
       "file": "user-load-request.frame",
       "bytes": 79,
       "sha256": "edf41aabca44f9fbcdf66dbd872add2a9d38fd03f9ffa4d5875bcc1224c855e8"
     },
     {
+      "file": "user-load-local-team-request.frame",
+      "bytes": 99,
+      "sha256": "61087d098c1ddae4b78d5ff532bc28e77a5f7d422674e066337205f06bd5a2a3"
+    },
+    {
+      "file": "user-load-open-host-request.frame",
+      "bytes": 79,
+      "sha256": "cfc18ee1a6da34423f59a152e5c603caa0471de8ca495a6c10051115282f9b78"
+    },
+    {
+      "file": "user-load-open-or-local-request.frame",
+      "bytes": 79,
+      "sha256": "55deddc1a9e861a45c8aa618b655b44256fe60d4fbb69d44b31a347dd95f78d7"
+    },
+    {
       "file": "user-member-puk-request.frame",
       "bytes": 79,
       "sha256": "4948369b2acb26c23f854ee01a8d749136cfc972585c1348277716363b2791cd"
+    },
+    {
+      "file": "user-ping-request.frame",
+      "bytes": 38,
+      "sha256": "4bdf231e688fe6ea54c3b15c8965f4e4e7dff36e460592dc284f82d4a3750a71"
+    },
+    {
+      "file": "user-resolve-username-open-request.frame",
+      "bytes": 48,
+      "sha256": "0bec1ffc1a5cd215c2d1c28d84e8f8a3c4697b7f0bbaf0be24050a05d24bdcf2"
     },
     {
       "file": "user-puk-request.frame",

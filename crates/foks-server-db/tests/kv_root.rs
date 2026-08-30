@@ -32,12 +32,38 @@ fn root_requires_an_owned_matching_directory_and_replays_exactly() {
     };
     test.database.put_kv_root(&mutation).unwrap();
     test.database.put_kv_root(&mutation).unwrap();
+    test.database
+        .put_kv_root(&KvRootMutation {
+            uid: &[1; 33],
+            version: 2,
+            directory_id: &directory,
+            directory_version: 1,
+            key_role: 3,
+            key_visibility: 0,
+            key_generation: 1,
+            exact: b"root-two",
+        })
+        .unwrap();
+    assert!(test
+        .database
+        .put_kv_root(&KvRootMutation {
+            uid: &[1; 33],
+            version: 4,
+            directory_id: &directory,
+            directory_version: 1,
+            key_role: 3,
+            key_visibility: 0,
+            key_generation: 1,
+            exact: b"skipped-root",
+        })
+        .is_err());
 
     let reader =
         foks_server_db::ReadDatabase::open(&test.path, foks_server_db::Config::default()).unwrap();
     let root = reader.kv_root(&[1; 33]).unwrap().unwrap();
     assert_eq!(root.directory_id, directory);
-    assert_eq!(root.exact, b"root");
+    assert_eq!(root.version, 2);
+    assert_eq!(root.exact, b"root-two");
     let stored_directory = reader.kv_directory(&[1; 33], &directory).unwrap().unwrap();
     assert_eq!(stored_directory.exact, b"directory");
 }
@@ -71,12 +97,12 @@ fn conflicting_root_or_directory_never_replaces_authoritative_bytes() {
         .put_kv_root(&KvRootMutation {
             uid: &[1; 33],
             version: 1,
-            directory_id: &directory,
+            directory_id: &[0x99; 16],
             directory_version: 1,
-            key_role: 2,
+            key_role: 3,
             key_visibility: 0,
             key_generation: 1,
-            exact: b"wrong-key-root",
+            exact: b"unknown-directory-root",
         })
         .is_err());
     assert!(

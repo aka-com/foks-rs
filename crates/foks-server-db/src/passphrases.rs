@@ -39,25 +39,10 @@ impl Database {
         credential_id: &[u8],
         mutation: PassphraseMutation<'_>,
     ) -> Result<()> {
-        validate_mutation(&self.config, uid, mutation)?;
-        if mutation.generation != 1 {
-            return Err(Error::PassphraseGeneration);
-        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if crate::certificates::active_owner_role_credential(&transaction, uid, credential_id)?
-            .is_none()
-        {
-            return Err(Error::AuthorizationChanged);
-        }
-        require_current_owner_puk(&transaction, uid, mutation)?;
-        if snapshot(&transaction, uid)?.is_some() {
-            return Err(Error::PassphraseGeneration);
-        }
-        ensure_user(&transaction, uid)?;
-        insert_salt(&transaction, uid, mutation)?;
-        insert_box(&transaction, uid, mutation)?;
+        apply_set(&transaction, &self.config, uid, credential_id, mutation)?;
         transaction.commit()?;
         Ok(())
     }
@@ -70,31 +55,86 @@ impl Database {
         credential_id: &[u8],
         mutation: PassphraseMutation<'_>,
     ) -> Result<()> {
-        validate_mutation(&self.config, uid, mutation)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if crate::certificates::active_owner_role_credential(&transaction, uid, credential_id)?
-            .is_none()
-        {
-            return Err(Error::AuthorizationChanged);
-        }
-        require_current_owner_puk(&transaction, uid, mutation)?;
-        let current = snapshot(&transaction, uid)?.ok_or(Error::PassphraseNotFound)?;
-        if current.salt != *mutation.salt
-            || current.stretch_version != mutation.stretch_version
-            || current
-                .generation
-                .checked_add(1)
-                .is_none_or(|next| next != mutation.generation)
-        {
-            return Err(Error::PassphraseGeneration);
-        }
-        insert_box(&transaction, uid, mutation)?;
+        apply_change(&transaction, &self.config, uid, credential_id, mutation)?;
         transaction.commit()?;
         Ok(())
     }
 
+    pub(crate) fn apply_set_passphrase(
+        transaction: &Transaction<'_>,
+        config: &Config,
+        uid: &[u8],
+        credential_id: &[u8],
+        mutation: PassphraseMutation<'_>,
+    ) -> Result<()> {
+        apply_set(transaction, config, uid, credential_id, mutation)
+    }
+
+    pub(crate) fn apply_change_passphrase(
+        transaction: &Transaction<'_>,
+        config: &Config,
+        uid: &[u8],
+        credential_id: &[u8],
+        mutation: PassphraseMutation<'_>,
+    ) -> Result<()> {
+        apply_change(transaction, config, uid, credential_id, mutation)
+    }
+}
+
+fn apply_set(
+    transaction: &Transaction<'_>,
+    config: &Config,
+    uid: &[u8],
+    credential_id: &[u8],
+    mutation: PassphraseMutation<'_>,
+) -> Result<()> {
+    validate_mutation(config, uid, mutation)?;
+    if mutation.generation != 1 {
+        return Err(Error::PassphraseGeneration);
+    }
+    if crate::certificates::active_owner_role_credential(transaction, uid, credential_id)?.is_none()
+    {
+        return Err(Error::AuthorizationChanged);
+    }
+    require_current_owner_puk(transaction, uid, mutation)?;
+    if snapshot(transaction, uid)?.is_some() {
+        return Err(Error::PassphraseGeneration);
+    }
+    ensure_user(transaction, uid)?;
+    insert_salt(transaction, uid, mutation)?;
+    insert_box(transaction, uid, mutation)
+}
+
+fn apply_change(
+    transaction: &Transaction<'_>,
+    config: &Config,
+    uid: &[u8],
+    credential_id: &[u8],
+    mutation: PassphraseMutation<'_>,
+) -> Result<()> {
+    validate_mutation(config, uid, mutation)?;
+    if crate::certificates::active_owner_role_credential(transaction, uid, credential_id)?.is_none()
+    {
+        return Err(Error::AuthorizationChanged);
+    }
+    require_current_owner_puk(transaction, uid, mutation)?;
+    let current = snapshot(transaction, uid)?.ok_or(Error::PassphraseNotFound)?;
+    if current.salt != *mutation.salt
+        || current.stretch_version != mutation.stretch_version
+        || current
+            .generation
+            .checked_add(1)
+            .is_none_or(|next| next != mutation.generation)
+    {
+        return Err(Error::PassphraseGeneration);
+    }
+    insert_box(transaction, uid, mutation)
+}
+
+impl Database {
     pub fn passphrase(&self, uid: &[u8]) -> Result<Option<PassphraseSnapshot>> {
         snapshot(&self.connection, uid)
     }

@@ -4,9 +4,10 @@ use foks_proto::{EntityId, Role, RoleAndGeneration, TeamChain};
 use foks_rpc::{
     arguments::{
         decode_activate_team_bearer_token, decode_activate_team_view, decode_load_removal_key_box,
-        decode_load_team_chain, decode_lookup_uid_by_device, decode_make_team_bearer_token,
-        decode_team_name_reservation_request, decode_team_view_request,
-        decode_uid_lookup_challenge,
+        decode_load_team_chain, decode_load_user_chain_argument, decode_lookup_uid_by_device,
+        decode_make_team_bearer_token, decode_team_name_reservation_request,
+        decode_team_view_request, decode_uid_lookup_challenge, TeamChainAuthorization,
+        UserChainAuthorization,
     },
     encode_call, encode_get_host_config_request, encode_load_team_chain_request_with_options,
     read_call, TeamChainLoadOptions, DEFAULT_MAX_FRAME_LENGTH, PROBE_METHOD_POSITION,
@@ -76,6 +77,46 @@ fn second_slice_server_decoders_accept_official_go_requests() {
     assert!(team_load.name_cursor.is_none());
     assert!(!team_load.load_removal_key);
     assert!(!team_load.load_remote_view_tokens);
+    assert!(matches!(
+        decode_load_user_chain_argument(&fixture_argument(
+            "user/reg-user-load-self-token-request.frame"
+        ))
+        .unwrap()
+        .authorization,
+        UserChainAuthorization::SelfToken(_)
+    ));
+    assert!(matches!(
+        decode_load_user_chain_argument(&fixture_argument(
+            "user/user-load-local-team-request.frame"
+        ))
+        .unwrap()
+        .authorization,
+        UserChainAuthorization::LocalTeam(token) if token == [0x44; 16]
+    ));
+    assert!(matches!(
+        decode_load_user_chain_argument(&fixture_argument(
+            "user/user-load-open-host-request.frame"
+        ))
+        .unwrap()
+        .authorization,
+        UserChainAuthorization::OpenHost
+    ));
+    assert!(matches!(
+        decode_load_user_chain_argument(&fixture_argument(
+            "user/user-load-open-or-local-request.frame"
+        ))
+        .unwrap()
+        .authorization,
+        UserChainAuthorization::OpenHostOrLocalUser
+    ));
+    assert!(matches!(
+        decode_load_team_chain(&fixture_argument(
+            "user/team-load-local-parent-request.frame"
+        ))
+        .unwrap()
+        .authorization,
+        TeamChainAuthorization::LocalParentTeam(token) if token == [0x55; 16]
+    ));
     assert_eq!(
         decode_team_name_reservation_request(&argument("named-reserve-request.frame")).unwrap(),
         b"auditteam"

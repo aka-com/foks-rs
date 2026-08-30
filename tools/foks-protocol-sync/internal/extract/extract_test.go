@@ -13,7 +13,14 @@ func TestModuleExtractsStructuralIdentitiesAndAliases(t *testing.T) {
 	root := fixtureModule(t, `package rem
 const methodPosition = +0x2
 var RenamedProtocolID rpc.ProtocolUniqueID = rpc.ProtocolUniqueID(0xc5884ff6)
-func call() { rpc.NewMethodV2(RenamedProtocolID, methodPosition, "Renamed.run") }
+type RenamedClient struct{}
+func (c RenamedClient) call() (res lib.UID, err error) {
+  warg := &rpc.DataWrap[lib.Header, Input]{}
+  var tmp rpc.DataWrap[lib.Header, lib.UID]
+  _, _ = warg, tmp
+  rpc.NewMethodV2(RenamedProtocolID, methodPosition, "Renamed.run")
+  return
+}
 func protocol() rpc.ProtocolV2 { return rpc.ProtocolV2{Name: "Renamed", ID: RenamedProtocolID, Methods: map[rpc.Position]rpc.ServeHandlerDescriptionV2{methodPosition: {Name: "run"}}} }
 `)
 	artifact, err := Module(root, model.SourceIdentity{Module: "example", Version: "test"})
@@ -22,6 +29,9 @@ func protocol() rpc.ProtocolV2 { return rpc.ProtocolV2{Name: "Renamed", ID: Rena
 	}
 	if got := artifact.Protocols[0]; got.Name != "Renamed" || got.UniqueID != 0xc5884ff6 || got.Methods[0].Position != 2 {
 		t.Fatalf("unexpected protocol: %#v", got)
+	}
+	if got := artifact.Protocols[0]; !got.ArgumentHeader || !got.ResultHeader || got.Methods[0].ResultType != "lib.UID" {
+		t.Fatalf("missing client wire shape: %#v", got)
 	}
 	if got := artifact.Statuses; len(got) != 2 || got[1].Name != "SECOND" || got[1].Value != 16 {
 		t.Fatalf("unexpected aliased statuses: %#v", got)
@@ -58,10 +68,8 @@ func addedProtocol() rpc.ProtocolV2 { return rpc.ProtocolV2{Name: "Added", ID: A
 func TestModuleRejectsDuplicatePositions(t *testing.T) {
 	root := fixtureModule(t, `package rem
 var RenamedProtocolID rpc.ProtocolUniqueID = rpc.ProtocolUniqueID(1)
-func call() {
-  rpc.NewMethodV2(RenamedProtocolID, 1, "Renamed.one")
-  rpc.NewMethodV2(RenamedProtocolID, 1, "Renamed.two")
-}
+func callOne() { rpc.NewMethodV2(RenamedProtocolID, 1, "Renamed.one") }
+func callTwo() { rpc.NewMethodV2(RenamedProtocolID, 1, "Renamed.two") }
 func protocol() rpc.ProtocolV2 { return rpc.ProtocolV2{Name: "Renamed", ID: RenamedProtocolID, Methods: map[rpc.Position]rpc.ServeHandlerDescriptionV2{1: {Name: "one"}}} }
 `)
 	_, err := Module(root, model.SourceIdentity{Module: "example", Version: "test"})

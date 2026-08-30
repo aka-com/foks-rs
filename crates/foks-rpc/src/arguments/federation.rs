@@ -10,7 +10,10 @@ use crate::{Error, Result};
 pub enum UserChainAuthorization {
     LocalUser,
     RemoteToken(PermissionToken),
+    SelfToken(PermissionToken),
+    LocalTeam([u8; 16]),
     OpenHost,
+    OpenHostOrLocalUser,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,7 +75,22 @@ pub fn decode_load_user_chain_argument(bytes: &[u8]) -> Result<LoadUserChainArgu
         (1, Some((case, value))) if case == b"1" => {
             UserChainAuthorization::RemoteToken(PermissionToken::decode(&encode(value.as_ref())?)?)
         }
+        (2, Some((case, value))) if case == b"2" => {
+            UserChainAuthorization::SelfToken(PermissionToken::decode(&encode(value.as_ref())?)?)
+        }
+        (3, Some((case, value))) if case == b"3" => {
+            let Value::Binary(token) = value.as_ref() else {
+                return Err(shape("local team-view token bytes"));
+            };
+            UserChainAuthorization::LocalTeam(
+                token
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| shape("16-byte team-view token"))?,
+            )
+        }
         (4, None) => UserChainAuthorization::OpenHost,
+        (5, None) => UserChainAuthorization::OpenHostOrLocalUser,
         _ => return Err(shape("supported user-chain authorization")),
     };
     Ok(LoadUserChainArgument {
@@ -206,6 +224,52 @@ mod tests {
             decoded.authorization,
             UserChainAuthorization::RemoteToken(found) if found == token
         ));
+    }
+
+    #[test]
+    fn every_go_v019_user_chain_authorization_variant_decodes() {
+        let token = PermissionToken::new([2; 17]);
+        let variants = [
+            (
+                Value::Array(vec![Value::Unsigned(0), Value::Variant(None)]),
+                UserChainAuthorization::LocalUser,
+            ),
+            (
+                Value::Array(vec![
+                    Value::Unsigned(1),
+                    Value::Variant(Some((b"1".to_vec(), Box::new(token.to_value())))),
+                ]),
+                UserChainAuthorization::RemoteToken(token.clone()),
+            ),
+            (
+                Value::Array(vec![
+                    Value::Unsigned(2),
+                    Value::Variant(Some((b"2".to_vec(), Box::new(token.to_value())))),
+                ]),
+                UserChainAuthorization::SelfToken(token),
+            ),
+            (
+                Value::Array(vec![
+                    Value::Unsigned(3),
+                    Value::Variant(Some((b"3".to_vec(), Box::new(Value::Binary(vec![3; 16]))))),
+                ]),
+                UserChainAuthorization::LocalTeam([3; 16]),
+            ),
+            (
+                Value::Array(vec![Value::Unsigned(4), Value::Variant(None)]),
+                UserChainAuthorization::OpenHost,
+            ),
+            (
+                Value::Array(vec![Value::Unsigned(5), Value::Variant(None)]),
+                UserChainAuthorization::OpenHostOrLocalUser,
+            ),
+        ];
+        let uid = entity(foks_proto::ENTITY_USER, 1);
+        for (encoded, expected) in variants {
+            let value = load_user_chain_argument_value(&uid, 1, None, encoded);
+            let decoded = decode_load_user_chain_argument(&encode(&value).unwrap()).unwrap();
+            assert_eq!(decoded.authorization, expected);
+        }
     }
 
     #[test]

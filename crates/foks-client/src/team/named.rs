@@ -20,8 +20,8 @@ use foks_verify::normalize_username;
 
 use super::AuthenticatedTeamOutcome;
 use crate::{
-    current_owner_puk, now_microseconds, random_bytes, AuthenticatedUserOutcome, DeviceCredential,
-    Error, FoksClient, PinnedHost, Result, UserPrivateKey, YubiCredential,
+    current_owner_puk, now_microseconds, now_milliseconds, random_bytes, AuthenticatedUserOutcome,
+    DeviceCredential, Error, FoksClient, PinnedHost, Result, UserPrivateKey, YubiCredential,
     TEAM_MUTATION_OPERATION_ID_TYPE_ID, TEAM_MUTATION_REQUEST_HASH_TYPE_ID,
 };
 
@@ -70,7 +70,17 @@ impl FoksClient {
         team_name_utf8: &str,
         secrets: &NamedTeamSecrets,
     ) -> Result<CreatedNamedTeam> {
-        let authenticated_user = self.authenticate_and_pin(host, credential)?;
+        let (authenticated_user, membership) = self.retry_chain_load(host, |current| {
+            let authenticated = self.authenticate_and_pin(current, credential)?;
+            let membership = self.load_membership_chain_tail(
+                current,
+                &credential.uid,
+                &credential.seed,
+                &credential.certificate_chain,
+                &authenticated.verified,
+            )?;
+            Ok((authenticated, membership))
+        })?;
         let owner = current_owner_puk(&authenticated_user)?;
         let device_id = derive_device_public(&credential.seed)?.id;
         let device = authenticated_user
@@ -94,6 +104,7 @@ impl FoksClient {
             &credential.certificate_chain,
             &authenticated_user,
             owner,
+            membership,
             team_name_utf8,
             secrets,
             |input, seeds, removal| {
@@ -110,7 +121,17 @@ impl FoksClient {
         team_name_utf8: &str,
         secrets: &NamedTeamSecrets,
     ) -> Result<CreatedNamedTeam> {
-        let authenticated_user = self.authenticate_yubi_and_pin(host, credential)?;
+        let (authenticated_user, membership) = self.retry_chain_load(host, |current| {
+            let authenticated = self.authenticate_yubi_and_pin(current, credential)?;
+            let membership = self.load_membership_chain_tail(
+                current,
+                &credential.uid,
+                &credential.subkey_seed,
+                &credential.certificate_chain,
+                &authenticated.verified,
+            )?;
+            Ok((authenticated, membership))
+        })?;
         let owner = current_owner_puk(&authenticated_user)?;
         let subkey = derive_subkey_id(&credential.subkey_seed)?;
         let device = authenticated_user
@@ -138,6 +159,7 @@ impl FoksClient {
             &credential.certificate_chain,
             &authenticated_user,
             owner,
+            membership,
             team_name_utf8,
             secrets,
             |input, seeds, removal| {
@@ -297,6 +319,7 @@ impl FoksClient {
         certificate_chain: &[Vec<u8>],
         authenticated_user: &AuthenticatedUserOutcome,
         owner: &UserPrivateKey,
+        membership: super::MembershipChainTail,
         team_name_utf8: &str,
         secrets: &NamedTeamSecrets,
         make_material: impl FnOnce(
@@ -320,8 +343,10 @@ impl FoksClient {
                 user: uid,
                 host: host.host_id(),
                 root: &authenticated_user.verified.tree_root(),
-                time: now_microseconds()?,
+                time: now_milliseconds()?,
                 owner_puk_generation: owner.generation,
+                membership_sequence: membership.sequence,
+                membership_previous: membership.previous,
                 normalized_name: &normalized,
                 name_sequence: reservation.sequence,
                 team_name_commitment_key: secrets.team_name_commitment_key,

@@ -2,7 +2,7 @@ mod common;
 
 use foks_proto::{KvDirectoryVersion, KvDirentVersion, KvPathVersionVector};
 use foks_server_db::{
-    Error, KvDirectoryMutation, KvDirentMutation, KvNodeMutation, KvRootMutation,
+    KvDirectoryMutation, KvDirentMutation, KvNodeMutation, KvRootMutation, KvVersionCheck,
 };
 
 const UID: [u8; 33] = [1; 33];
@@ -84,7 +84,7 @@ fn dirent_batch_is_atomic_and_updates_only_the_reachable_version_vector() {
     test.database
         .put_kv_dirents(
             &UID,
-            &initial,
+            Some(&initial),
             &[KvDirentMutation {
                 parent: &root,
                 id: &entry,
@@ -102,7 +102,7 @@ fn dirent_batch_is_atomic_and_updates_only_the_reachable_version_vector() {
     test.database
         .put_kv_dirents(
             &UID,
-            &initial,
+            Some(&initial),
             &[KvDirentMutation {
                 parent: &root,
                 id: &entry,
@@ -128,6 +128,10 @@ fn dirent_batch_is_atomic_and_updates_only_the_reachable_version_vector() {
         }],
     };
     assert_eq!(reader.kv_version_vector(&UID).unwrap(), Some(current));
+    assert_eq!(
+        reader.kv_version_check(&UID, &initial).unwrap(),
+        KvVersionCheck::Current
+    );
     test.database
         .put_kv_directory_with_precondition(
             &KvDirectoryMutation {
@@ -150,10 +154,10 @@ fn dirent_batch_is_atomic_and_updates_only_the_reachable_version_vector() {
     assert_eq!(reader.kv_list(&UID, &root, None, 10).unwrap().len(), 1);
 
     let other_entry = [0x62; 16];
-    assert!(matches!(
-        test.database.put_kv_dirents(
+    test.database
+        .put_kv_dirents(
             &UID,
-            &initial,
+            Some(&initial),
             &[KvDirentMutation {
                 parent: &root,
                 id: &other_entry,
@@ -164,10 +168,26 @@ fn dirent_batch_is_atomic_and_updates_only_the_reachable_version_vector() {
                 creation_time: 43,
                 exact: b"dirent-two",
             }],
-        ),
-        Err(Error::KvConflict)
-    ));
-    assert_eq!(reader.kv_list(&UID, &root, None, 10).unwrap().len(), 1);
+        )
+        .unwrap();
+    let wildcard_entry = [0x64; 16];
+    test.database
+        .put_kv_dirents(
+            &UID,
+            None,
+            &[KvDirentMutation {
+                parent: &root,
+                id: &wildcard_entry,
+                version: 1,
+                directory_version: 1,
+                node_id: &node,
+                name_mac: &[0x74; 32],
+                creation_time: 43,
+                exact: b"dirent-wildcard",
+            }],
+        )
+        .unwrap();
+    assert_eq!(reader.kv_list(&UID, &root, None, 10).unwrap().len(), 3);
 }
 
 #[test]
@@ -190,7 +210,7 @@ fn tombstone_removes_an_entry_from_listing_and_cache_preconditions() {
     test.database
         .put_kv_dirents(
             &UID,
-            &empty,
+            Some(&empty),
             &[KvDirentMutation {
                 parent: &root,
                 id: &entry,
@@ -207,7 +227,7 @@ fn tombstone_removes_an_entry_from_listing_and_cache_preconditions() {
     test.database
         .put_kv_dirents(
             &UID,
-            &live,
+            Some(&live),
             &[KvDirentMutation {
                 parent: &root,
                 id: &entry,
@@ -222,4 +242,26 @@ fn tombstone_removes_an_entry_from_listing_and_cache_preconditions() {
         .unwrap();
     assert_eq!(reader.kv_version_vector(&UID).unwrap(), Some(empty));
     assert!(reader.kv_list(&UID, &root, None, 10).unwrap().is_empty());
+    assert_eq!(
+        reader.kv_version_check(&UID, &live).unwrap(),
+        KvVersionCheck::Stale(KvPathVersionVector {
+            root_version: 1,
+            directories: vec![KvDirectoryVersion {
+                id: root,
+                version: 1,
+                entries: vec![KvDirentVersion {
+                    id: entry,
+                    version: 2,
+                }],
+            }],
+        })
+    );
+    assert_eq!(
+        reader
+            .kv_dirent_at_name(&UID, &root, 1, &name_mac)
+            .unwrap()
+            .unwrap()
+            .exact,
+        b"tombstone"
+    );
 }

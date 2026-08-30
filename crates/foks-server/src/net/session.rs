@@ -3,10 +3,17 @@ use std::sync::Arc;
 mod handlers;
 
 use foks_proto::{
-    DecodedSignupArgument, EntityId, HistoricalMerkleRoots, InviteCode, MerkleRoot, ProbeResponse,
-    SignedBlob, UsernameReservation,
+    DecodedSignupArgument, EntityId, HistoricalMerkleRoots, InviteCode, MerkleExistsResponse,
+    MerkleLookupResponse, MerkleMultiLookupResponse, MerkleRoot, ProbeResponse, SignedBlob,
+    TreeRoot, UsernameReservation,
 };
-use foks_rpc::{encode_status_response_at, RpcStatus};
+use foks_rpc::{
+    arguments::{
+        decode_merkle_check_key, decode_merkle_lookup, decode_merkle_multi_lookup,
+        decode_merkle_optional_host,
+    },
+    encode_status_response_at, RpcStatus,
+};
 use foks_snowpack::{decode, Value};
 use rustls::pki_types::CertificateDer;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -143,6 +150,11 @@ impl ServerData {
         };
         let reader = self.read_database()?;
         let exact_link = decoded.link().encoded().map_err(bad_arguments)?;
+        let signed_root = decoded
+            .link()
+            .decode_group_change()
+            .map_err(bad_arguments)?
+            .root;
         let idempotency_key =
             foks_crypto::prefixed_hash_signable(foks_proto::LINK_OUTER_TYPE_ID, &exact_link)
                 .map_err(bad_arguments)?;
@@ -179,16 +191,21 @@ impl ServerData {
             let authority = database
                 .user_authority(&uid)?
                 .ok_or(crate::Error::Signup("user mutation authority missing"))?;
-            let command = crate::identity::mutation::validate(&authority, &host, &signer, decoded)?;
+            let cited_root = require_cited_root(database, &signed_root)?;
+            let command = crate::identity::mutation::validate(
+                &authority,
+                &host,
+                &signer,
+                decoded,
+                signed_root,
+            )?;
             let authoritative_root = database
                 .current_root()?
                 .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?;
-            if authoritative_root.epoch != command.expected_root_epoch
-                || authoritative_root.root_hash != command.expected_root_hash
-            {
+            if cited_root.epoch > authoritative_root.epoch {
                 return Err(crate::Error::Database(foks_server_db::Error::StaleRoot));
             }
-            if now < decode_stored_root(&authoritative_root)?.time {
+            if now / 1_000 < decode_stored_root(&authoritative_root)?.time {
                 return Err(crate::Error::Signup("system clock moved backwards"));
             }
             let chain_key = foks_merkle_store::chain_key(
@@ -223,10 +240,11 @@ impl ServerData {
                 .collect::<Vec<_>>();
             let root = MerkleRoot {
                 epoch: root_epoch,
-                time: now,
+                time: now / 1_000,
                 back_pointers: foks_merkle_store::back_pointer_hash(&back_pointers)?,
                 root_node: merkle_commit.root,
                 hostchain: hostchain_tail,
+                extensions: Vec::new(),
             };
             let exact_root = root.encoded()?;
             let root_hash =
@@ -245,6 +263,7 @@ impl ServerData {
                 let (role_type, visibility) = crate::identity::mutation::role_parts(added.role);
                 foks_server_db::AddedCredential {
                     device_id: &added.device_id,
+                    self_token: &added.self_token,
                     hepk_fingerprint: &added.hepk_fingerprint,
                     exact_hepk: &added.exact_hepk,
                     exact_name: &added.exact_name,
@@ -339,8 +358,8 @@ impl ServerData {
                 passphrase: passphrase
                     .as_ref()
                     .map(|passphrase| passphrase.as_database(now)),
-                expected_root_epoch: command.expected_root_epoch,
-                expected_root_hash: &command.expected_root_hash,
+                expected_root_epoch: authoritative_root.epoch,
+                expected_root_hash: &authoritative_root.root_hash,
                 merkle_commit: &merkle_commit,
                 merkle_leaves: &leaves,
                 root_epoch,
@@ -454,13 +473,17 @@ impl ServerData {
             }
             Err(_) => return Err(RpcStatus::TransactionRetry),
         }
-        let current = reader
-            .current_root()
+        let signed_root = request.link.decode_eldest().map_err(bad_arguments)?.root;
+        let cited = reader
+            .root_at(signed_root.epoch)
             .map_err(|_| RpcStatus::TransactionRetry)?
-            .ok_or_else(|| RpcStatus::NotFound("Merkle root not found".to_owned()))?;
-        let current_root = validated_root(&current)?;
+            .ok_or(RpcStatus::StaleRoot)?;
+        let cited_root = validated_root(&cited)?;
+        if cited.root_hash != signed_root.hash {
+            return Err(RpcStatus::StaleRoot);
+        }
         let host = EntityId::from_bytes(self.host_id.clone()).map_err(bad_arguments)?;
-        let validated = validate_signup(&request, &host, &current_root, current.root_hash)
+        let validated = validate_signup(&request, &host, &cited_root, cited.root_hash)
             .map_err(|_| bad_arguments("software signup validation failed"))?;
         let passphrase = request
             .passphrase
@@ -474,7 +497,6 @@ impl ServerData {
         let clock = Arc::clone(&self.clock);
         let hostchain_tail = self.hostchain_tail.clone();
         let reservation = request.reservation;
-        let expected_root_hash = current.root_hash;
         let result = writer.call(move |database| {
             let now = clock.now_micros()?;
             let receipt_expires_at = now
@@ -483,11 +505,12 @@ impl ServerData {
             let authoritative = database
                 .current_root()?
                 .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?;
-            if authoritative.root_hash != expected_root_hash {
+            let cited = require_cited_root(database, &signed_root)?;
+            if cited.epoch > authoritative.epoch {
                 return Err(crate::Error::Database(foks_server_db::Error::StaleRoot));
             }
             let authoritative_root = decode_stored_root(&authoritative)?;
-            if now < authoritative_root.time {
+            if now / 1_000 < authoritative_root.time {
                 return Err(crate::Error::Signup("system clock moved backwards"));
             }
             let changes = validated
@@ -520,10 +543,11 @@ impl ServerData {
                 .collect::<Vec<_>>();
             let root = MerkleRoot {
                 epoch: root_epoch,
-                time: now,
+                time: now / 1_000,
                 back_pointers: foks_merkle_store::back_pointer_hash(&back_pointers)?,
                 root_node: merkle_commit.root,
                 hostchain: hostchain_tail,
+                extensions: Vec::new(),
             };
             let exact_root = root.encoded()?;
             let root_hash =
@@ -548,6 +572,7 @@ impl ServerData {
                 uid: validated.uid.as_bytes(),
                 device_id: validated.device_id.as_bytes(),
                 device_hepk_fingerprint: &validated.device_hepk_fingerprint,
+                self_token: &request.self_token,
                 exact_device_hepk: &validated.exact_device_hepk,
                 exact_device_name: &validated.exact_device_name,
                 subkey_id: validated.subkey_id.as_ref().map(EntityId::as_bytes),
@@ -559,13 +584,14 @@ impl ServerData {
                 link_hash: &validated.link_hash,
                 exact_link: &validated.exact_link,
                 tree_location: &validated.next_tree_location,
+                subchain_tree_location_seed: &validated.subchain_tree_location_seed,
                 shared_role_type: foks_proto::Role::OWNER.protocol_value(),
                 shared_visibility: 0,
                 shared_generation: 1,
                 shared_verify_key: validated.puk_verify_key.as_bytes(),
                 exact_shared_hepk: &validated.exact_puk_hepk,
                 exact_parcel: &validated.exact_parcel,
-                expected_root_hash: Some(expected_root_hash),
+                expected_root_hash: Some(authoritative.root_hash),
                 merkle_commit: &merkle_commit,
                 merkle_leaves: &validated.leaves,
                 root_epoch,
@@ -816,6 +842,86 @@ impl ServerData {
         .map_err(|_| RpcStatus::TransactionRetry)
     }
 
+    fn merkle_lookup(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
+        let argument = decode_merkle_lookup(argument).map_err(bad_arguments)?;
+        self.validate_optional_host(argument.host.as_ref())?;
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        let root = select_merkle_lookup_root(&snapshot, argument.signed, argument.root)?;
+        let path = foks_merkle_store::proof(&snapshot.node_reader(), root.root_node, argument.key)
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        MerkleLookupResponse {
+            root: validated_root(&root)?,
+            path,
+        }
+        .encoded()
+        .map_err(|_| RpcStatus::TransactionRetry)
+    }
+
+    fn merkle_multi_lookup(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
+        let argument = decode_merkle_multi_lookup(argument).map_err(bad_arguments)?;
+        self.validate_optional_host(argument.host.as_ref())?;
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        let root = select_merkle_lookup_root(&snapshot, argument.signed, argument.root)?;
+        let reader = snapshot.node_reader();
+        let paths = argument
+            .keys
+            .into_iter()
+            .map(|key| {
+                foks_merkle_store::proof(&reader, root.root_node, key)
+                    .map_err(|_| RpcStatus::TransactionRetry)
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        MerkleMultiLookupResponse {
+            root: validated_root(&root)?,
+            paths,
+        }
+        .encoded()
+        .map_err(|_| RpcStatus::TransactionRetry)
+    }
+
+    fn current_root_hash(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
+        let host = decode_merkle_optional_host(argument).map_err(bad_arguments)?;
+        self.validate_optional_host(host.as_ref())?;
+        let root = self
+            .read_database()?
+            .current_root()
+            .map_err(|_| RpcStatus::TransactionRetry)?
+            .ok_or(RpcStatus::MerkleNoRoot)?;
+        validated_root(&root)?;
+        TreeRoot {
+            epoch: root.epoch,
+            hash: root.root_hash,
+        }
+        .encoded()
+        .map_err(|_| RpcStatus::TransactionRetry)
+    }
+
+    fn merkle_check_key_exists(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
+        let argument = decode_merkle_check_key(argument).map_err(bad_arguments)?;
+        self.validate_optional_host(argument.host.as_ref())?;
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        let epoch = snapshot
+            .merkle_leaf_epoch(&argument.key)
+            .map_err(|_| RpcStatus::TransactionRetry)?
+            .ok_or(RpcStatus::MerkleLeafNotFound)?;
+        MerkleExistsResponse {
+            epoch,
+            // Root publication and signing are one atomic standalone commit.
+            signed: true,
+        }
+        .encoded()
+        .map_err(|_| RpcStatus::TransactionRetry)
+    }
+
     fn validate_host_argument(&self, argument: &[u8]) -> std::result::Result<(), RpcStatus> {
         validate_host_argument_against(argument, &self.host_id, false)
     }
@@ -829,6 +935,16 @@ impl ServerData {
 
     fn validate_host_value(&self, host: &Value) -> std::result::Result<(), RpcStatus> {
         validate_host_value_against(host, &self.host_id)
+    }
+
+    fn validate_optional_host(
+        &self,
+        host: Option<&EntityId>,
+    ) -> std::result::Result<(), RpcStatus> {
+        if host.is_some_and(|host| host.as_bytes() != self.host_id) {
+            return Err(RpcStatus::NotFound("host not found".to_owned()));
+        }
+        Ok(())
     }
 
     fn validate_probe(&self, argument: &[u8]) -> std::result::Result<(), RpcStatus> {
@@ -859,6 +975,35 @@ impl ServerData {
             _ => Err(bad_arguments("probe HostID has the wrong shape")),
         }
     }
+}
+
+fn select_merkle_lookup_root(
+    snapshot: &foks_server_db::ReadSnapshot<'_>,
+    signed: bool,
+    epoch: Option<u64>,
+) -> std::result::Result<foks_server_db::RootSnapshot, RpcStatus> {
+    if epoch.is_some_and(|epoch| i64::try_from(epoch).is_err()) {
+        return Err(RpcStatus::MerkleNoRoot);
+    }
+    let root = match epoch {
+        Some(epoch) => snapshot
+            .roots_at(&[epoch])
+            .map_err(|_| RpcStatus::TransactionRetry)?
+            .and_then(|mut roots| roots.pop()),
+        None => snapshot
+            .current_root()
+            .map_err(|_| RpcStatus::TransactionRetry)?,
+    }
+    .ok_or(RpcStatus::MerkleNoRoot)?;
+    validated_root(&root)?;
+    if signed {
+        let signed =
+            SignedBlob::decode(&root.exact_signed_root).map_err(|_| RpcStatus::TransactionRetry)?;
+        if signed.inner != root.exact_root {
+            return Err(RpcStatus::TransactionRetry);
+        }
+    }
+    Ok(root)
 }
 
 fn validate_host_argument_against(
@@ -909,6 +1054,20 @@ fn decode_stored_root(root: &foks_server_db::RootSnapshot) -> Result<MerkleRoot>
         return Err(crate::Error::Signup("stored Merkle root binding mismatch"));
     }
     Ok(decoded)
+}
+
+fn require_cited_root(
+    database: &foks_server_db::Database,
+    cited: &TreeRoot,
+) -> Result<foks_server_db::RootSnapshot> {
+    let root = database
+        .root_at(cited.epoch)?
+        .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?;
+    decode_stored_root(&root)?;
+    if root.root_hash != cited.hash {
+        return Err(crate::Error::Database(foks_server_db::Error::StaleRoot));
+    }
+    Ok(root)
 }
 
 fn decode_epochs(value: &Value) -> std::result::Result<Vec<u64>, RpcStatus> {

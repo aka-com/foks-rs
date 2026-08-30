@@ -48,6 +48,7 @@ impl HardStateStore {
         }
 
         let stored = load_host_row(&transaction, snapshot.host_id)?;
+        let mut projection_changed = false;
         let chain_advanced = match &stored {
             None => {
                 transaction.execute(
@@ -86,13 +87,22 @@ impl HardStateStore {
                             });
                         }
                         let stored_services = load_services(&transaction, snapshot.host_id)?;
-                        if stored.canonical_name != snapshot.canonical_name
+                        projection_changed = stored.canonical_name != snapshot.canonical_name
                             || stored.public_zone_bytes != snapshot.public_zone_bytes
-                            || stored_services != normalized_services(snapshot.services)
-                        {
-                            return Err(Error::ProjectionChanged {
-                                seqno: snapshot.chain_seqno,
-                            });
+                            || stored_services != normalized_services(snapshot.services);
+                        if projection_changed {
+                            // Public zones are independently signed, short-lived
+                            // projections. Go hosts can legitimately re-sign or
+                            // replace them without extending the hostchain.
+                            transaction.execute(
+                                "UPDATE hosts SET canonical_name = ?2, public_zone_bytes = ?3 \
+                                 WHERE host_id = ?1",
+                                params![
+                                    snapshot.host_id,
+                                    snapshot.canonical_name,
+                                    snapshot.public_zone_bytes,
+                                ],
+                            )?;
                         }
                         false
                     }
@@ -128,7 +138,7 @@ impl HardStateStore {
             params![snapshot.lookup_name, snapshot.host_id],
         )?;
 
-        if chain_advanced {
+        if chain_advanced || projection_changed {
             transaction.execute(
                 "DELETE FROM host_services WHERE host_id = ?1",
                 [&snapshot.host_id],
@@ -158,7 +168,7 @@ impl HardStateStore {
 
         Ok(if stored.is_none() {
             Acceptance::Inserted
-        } else if chain_advanced || merkle_advanced {
+        } else if chain_advanced || projection_changed || merkle_advanced {
             Acceptance::Advanced
         } else {
             Acceptance::Unchanged

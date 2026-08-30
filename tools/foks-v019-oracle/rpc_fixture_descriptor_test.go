@@ -2,16 +2,38 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/foks-proj/go-foks/lib/core"
 	proto "github.com/foks-proj/go-foks/proto/lib"
 	"github.com/foks-proj/go-foks/proto/rem"
 	"github.com/foks-proj/go-snowpack-rpc/rpc"
 )
+
+type responseShapeClient struct {
+	result interface{}
+}
+
+func (*responseShapeClient) Transport(context.Context) (rpc.Transporter, error) { panic("unused") }
+func (*responseShapeClient) Call(context.Context, rpc.Methoder, interface{}, interface{}, time.Duration) error {
+	panic("unused")
+}
+func (c *responseShapeClient) Call2(_ context.Context, _ rpc.Methoder, _ interface{}, result interface{}, _ time.Duration, _ rpc.ErrorUnwrapper) error {
+	c.result = result
+	return nil
+}
+func (*responseShapeClient) CallCompressed(context.Context, rpc.Methoder, interface{}, interface{}, rpc.CompressionType, time.Duration) error {
+	panic("unused")
+}
+func (*responseShapeClient) Notify(context.Context, rpc.Methoder, interface{}, time.Duration) error {
+	panic("unused")
+}
 
 func TestFixtureProtocolsUseGeneratedDescriptors(t *testing.T) {
 	protocols := []rpc.ProtocolUniqueID{
@@ -68,6 +90,27 @@ func TestGeneratedWireArgumentSelectsExactEnvelope(t *testing.T) {
 	}
 	if _, err := generatedWireArgument(rem.ProbeProtocolID, 99, probe); err == nil {
 		t.Fatal("accepted an unknown generated method position")
+	}
+}
+
+func TestGeneratedClientsSelectExactResponseEnvelopes(t *testing.T) {
+	client := &responseShapeClient{}
+	if err := (rem.TeamAdminClient{Cli: client}).CreateTeam(context.Background(), rem.CreateTeamArg{}); err != nil {
+		t.Fatal(err)
+	}
+	if client.result != nil {
+		t.Fatalf("TeamAdmin.createTeam generated response target %T, expected bare void", client.result)
+	}
+
+	if err := (rem.RegClient{Cli: client}).SelectVHost(context.Background(), proto.HostID{}); err != nil {
+		t.Fatal(err)
+	}
+	result := reflect.ValueOf(client.result)
+	dataWrapType := reflect.TypeOf(rpc.DataWrap[proto.Header, interface{}]{})
+	if !result.IsValid() || result.Kind() != reflect.Pointer || result.Elem().Kind() != reflect.Struct ||
+		result.Elem().Type().PkgPath() != dataWrapType.PkgPath() ||
+		!strings.HasPrefix(result.Elem().Type().Name(), "DataWrap[") {
+		t.Fatalf("Reg.selectVHost generated response target %T, expected DataWrap", client.result)
 	}
 }
 

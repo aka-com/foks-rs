@@ -193,6 +193,7 @@ fn unsigned_newer_merkle_root_is_rejected_before_user_state_is_used() {
             .unwrap()
             .host,
         database_path: database.clone(),
+        probe: registration_target.clone(),
         registration: registration_target,
         user: user_target.clone(),
         merkle_query: merkle_target,

@@ -97,15 +97,30 @@ fn locks_are_token_bound_and_expiry_is_effective_without_cleanup() {
         .unwrap();
     assert!(matches!(
         test.database
+            .acquire_kv_lock(&UID, &root, &dirent, &first, 150, 250),
+        Err(Error::KvLocked)
+    ));
+    assert!(matches!(
+        test.database
             .acquire_kv_lock(&UID, &root, &dirent, &second, 150, 250),
         Err(Error::KvLocked)
     ));
     assert!(matches!(
         test.database.release_kv_lock(&UID, &root, &dirent, &second),
-        Err(Error::KvLocked)
+        Err(Error::KvLockTimeout)
     ));
     test.database
-        .acquire_kv_lock(&UID, &root, &dirent, &second, 200, 300)
+        .acquire_kv_lock(&UID, &root, &dirent, &second, 200, 100)
+        .unwrap();
+    test.database
+        .release_kv_lock(&UID, &root, &dirent, &second)
+        .unwrap();
+
+    test.database
+        .acquire_kv_lock(&UID, &root, &dirent, &first, 300, 200)
+        .unwrap();
+    test.database
+        .acquire_kv_lock(&UID, &root, &dirent, &second, 300, 0)
         .unwrap();
     test.database
         .release_kv_lock(&UID, &root, &dirent, &second)

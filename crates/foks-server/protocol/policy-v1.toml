@@ -10,14 +10,19 @@ bad_passphrase = "BAD_PASSPHRASE_ERROR"
 device_already_provisioned = "DEVICE_ALREADY_PROVISIONED_ERROR"
 expired = "EXPIRED_ERROR"
 locked = "KV_LOCK_ALREADY_HELD_ERROR"
+lock_timeout = "KV_LOCK_TIMEOUT_ERROR"
 kv_noent = "KV_NOENT_ERROR"
 kv_permission = "KV_PERM_ERROR"
+key_not_found = "KEY_NOT_FOUND_ERROR"
+merkle_leaf_not_found = "MERKLE_LEAF_NOT_FOUND_ERROR"
+merkle_no_root = "MERKLE_NO_ROOT_ERROR"
 name_in_use = "USERNAME_IN_USE_ERROR"
 not_found = "GENERIC_NOT_FOUND_ERROR"
 permission_denied = "PERMISSION_ERROR"
 passphrase_not_found = "PASSPHRASE_NOT_FOUND_ERROR"
 quota_exceeded = "OVER_QUOTA_ERROR"
 rate_limited = "RATE_LIMIT_ERROR"
+revoke_race = "REVOKE_RACE_ERROR"
 stale_cache = "KV_STALE_CACHE_ERROR"
 stale_root = "TX_RETRY_ERROR"
 tx_retry = "TX_RETRY_ERROR"
@@ -36,6 +41,7 @@ team_adhoc_open_viewership = "TEAM_ADHOC_OPEN_VIEWERSHIP_ERROR"
 team_adhoc_invalid_change = "TEAM_ADHOC_INVALID_TEAM_CHANGE_ERROR"
 team_adhoc_duplicate = "TEAM_ADHOC_DUPLICATE_ERROR"
 unsupported = "NOT_IMPLEMENTED"
+user_not_found = "USER_NOT_FOUND_ERROR"
 
 [[protocol]]
 name = "Probe"
@@ -143,6 +149,20 @@ statuses = ["ok", "bad_args", "unsupported"]
 max_request_bytes = 4096
 supported = true
 coverage = ["probe_and_pin"]
+
+
+[[route]]
+protocol = "Reg"
+method = "resolveUsername"
+position_constant = "REG_RESOLVE_USERNAME_METHOD_POSITION"
+listeners = ["public_services"]
+authentication = "delegated_tls_and_view_policy"
+request = "ResolveUsernameArgument"
+result = "UID"
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry"]
+max_request_bytes = 4096
+supported = true
+coverage = ["go_client_identity"]
 
 
 [[route]]
@@ -328,6 +348,118 @@ coverage = ["federation_lifecycle"]
 
 
 [[route]]
+protocol = "Reg"
+method = "checkNameExists"
+position_constant = "REG_CHECK_NAME_EXISTS_METHOD_POSITION"
+listeners = ["public_services"]
+authentication = "delegated_tls"
+request = "Name"
+result = "Void"
+statuses = ["ok", "bad_args", "user_not_found", "tx_retry"]
+max_request_bytes = 4096
+supported = true
+coverage = ["go_client_identity"]
+
+
+[[route]]
+protocol = "Reg"
+method = "getServerConfig"
+position_constant = "REG_GET_SERVER_CONFIG_METHOD_POSITION"
+listeners = ["public_services"]
+authentication = "delegated_tls"
+request = "Void"
+result = "RegServerConfig"
+statuses = ["ok", "bad_args", "tx_retry"]
+max_request_bytes = 1024
+supported = true
+coverage = ["go_client_activation"]
+
+
+[[route]]
+protocol = "Reg"
+method = "getClientVersionInfo"
+position_constant = "REG_GET_CLIENT_VERSION_INFO_METHOD_POSITION"
+listeners = ["public_services"]
+authentication = "delegated_tls"
+request = "ClientVersionExt"
+result = "ServerClientVersionInfo"
+statuses = ["ok", "bad_args"]
+max_request_bytes = 4096
+supported = true
+coverage = ["go_client_housekeeping"]
+
+
+[[route]]
+protocol = "Reg"
+method = "probeKeyExists"
+position_constant = "REG_PROBE_KEY_EXISTS_METHOD_POSITION"
+listeners = ["public_services"]
+authentication = "self_view_token"
+request = "ProbeKeyExistsArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "key_not_found", "tx_retry"]
+max_request_bytes = 4096
+supported = true
+coverage = ["go_client_identity"]
+
+
+[[route]]
+protocol = "User"
+method = "resolveUsername"
+position_constant = "USER_RESOLVE_USERNAME_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls_and_view_policy"
+request = "ResolveUsernameArgument"
+result = "UID"
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry"]
+max_request_bytes = 4096
+supported = true
+coverage = ["go_client_identity"]
+
+
+[[route]]
+protocol = "User"
+method = "ping"
+position_constant = "USER_PING_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "Void"
+result = "UID"
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry"]
+max_request_bytes = 1024
+supported = true
+coverage = ["go_client_activation"]
+
+
+[[route]]
+protocol = "User"
+method = "getDeviceNag"
+position_constant = "USER_GET_DEVICE_NAG_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "Void"
+result = "DeviceNagInfo"
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry"]
+max_request_bytes = 1024
+supported = true
+coverage = ["go_client_housekeeping"]
+
+
+[[route]]
+protocol = "User"
+method = "clearDeviceNag"
+position_constant = "USER_CLEAR_DEVICE_NAG_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "Boolean"
+result = "Void"
+statuses = ["ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
+max_request_bytes = 1024
+supported = true
+coverage = ["go_client_housekeeping"]
+
+
+[[route]]
 protocol = "User"
 method = "setPassphrase"
 position_constant = "USER_SET_PASSPHRASE_METHOD_POSITION"
@@ -433,7 +565,7 @@ listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "LoadUserChainArgument"
 result = "UserChain"
-statuses = ["ok", "bad_args", "not_found", "permission_denied"]
+statuses = ["ok", "bad_args", "expired", "not_found", "permission_denied"]
 max_request_bytes = 16384
 supported = true
 coverage = ["signup_and_user"]
@@ -480,6 +612,48 @@ statuses = ["ok", "permission_denied"]
 max_request_bytes = 1024
 supported = true
 coverage = ["authorization"]
+
+
+[[route]]
+protocol = "User"
+method = "postGenericLink"
+position_constant = "USER_POST_GENERIC_LINK_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "PostGenericLinkArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "permission_denied", "stale_root", "rate_limited", "tx_retry"]
+max_request_bytes = 4194304
+supported = true
+coverage = ["go_client_generic"]
+
+
+[[route]]
+protocol = "User"
+method = "loadGenericChain"
+position_constant = "USER_LOAD_GENERIC_CHAIN_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "LoadGenericChainArgument"
+result = "GenericChain"
+statuses = ["ok", "bad_args", "not_found", "permission_denied", "tx_retry"]
+max_request_bytes = 16384
+supported = true
+coverage = ["go_client_generic"]
+
+
+[[route]]
+protocol = "User"
+method = "getTeamListServerTrust"
+position_constant = "USER_GET_TEAM_LIST_SERVER_TRUST_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "Void"
+result = "LocalTeamList"
+statuses = ["ok", "permission_denied", "tx_retry"]
+max_request_bytes = 1024
+supported = true
+coverage = ["go_client_generic"]
 
 
 [[route]]
@@ -596,14 +770,15 @@ coverage = ["team_create_edit_and_kv", "federation_lifecycle"]
 [[route]]
 protocol = "TeamLoader"
 method = "loadTeamMembershipChain"
-listeners = ["authenticated"]
-authentication = "active_team_view_token"
-request = "Unsupported"
-result = "Unsupported"
-statuses = ["unsupported"]
-max_request_bytes = 4096
-supported = false
-coverage = ["unsupported_team_routes"]
+position_constant = "TEAM_LOAD_MEMBERSHIP_CHAIN_METHOD_POSITION"
+listeners = ["public_services", "authenticated"]
+authentication = "team_view_token"
+request = "LoadTeamMembershipChainArgument"
+result = "GenericChain"
+statuses = ["ok", "bad_args", "expired", "not_found", "permission_denied", "tx_retry"]
+max_request_bytes = 16384
+supported = true
+coverage = ["go_client_generic"]
 
 
 [[route]]
@@ -668,7 +843,7 @@ listeners = ["authenticated"]
 authentication = "active_owner_device_mtls"
 request = "NamedTeamCreateArgument"
 result = "Void"
-statuses = ["ok", "bad_args", "name_in_use", "team_error", "team_race", "team_roster", "team_key", "stale_root", "tx_retry"]
+statuses = ["ok", "bad_args", "name_in_use", "team_error", "team_race", "team_roster", "team_key", "revoke_race", "stale_root", "tx_retry"]
 max_request_bytes = 8388608
 supported = true
 coverage = ["team_create_edit_and_kv"]
@@ -771,14 +946,15 @@ coverage = ["unsupported_team_routes"]
 [[route]]
 protocol = "TeamAdmin"
 method = "postTeamMembershipLink"
+position_constant = "TEAM_POST_MEMBERSHIP_LINK_METHOD_POSITION"
 listeners = ["authenticated"]
 authentication = "active_team_admin_token"
-request = "Unsupported"
-result = "Unsupported"
-statuses = ["unsupported"]
-max_request_bytes = 4096
-supported = false
-coverage = ["unsupported_team_routes"]
+request = "PostTeamMembershipLinkArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "expired", "permission_denied", "stale_root", "rate_limited", "tx_retry"]
+max_request_bytes = 4194304
+supported = true
+coverage = ["go_client_generic"]
 
 
 [[route]]
@@ -855,7 +1031,7 @@ listeners = ["authenticated"]
 authentication = "active_owner_device_mtls"
 request = "AdHocTeamCreateArgument"
 result = "Void"
-statuses = ["ok", "bad_args", "team_error", "team_roster", "team_key", "team_adhoc_creator_included", "team_adhoc_open_viewership", "team_adhoc_duplicate", "stale_root", "tx_retry"]
+statuses = ["ok", "bad_args", "team_error", "team_roster", "team_key", "team_adhoc_creator_included", "team_adhoc_open_viewership", "team_adhoc_duplicate", "revoke_race", "stale_root", "tx_retry"]
 max_request_bytes = 8388608
 supported = true
 coverage = ["team_create_edit_and_kv"]
@@ -873,6 +1049,20 @@ statuses = ["ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
 max_request_bytes = 16384
 supported = true
 coverage = ["federation_lifecycle"]
+
+
+[[route]]
+protocol = "MerkleQuery"
+method = "lookup"
+position_constant = "MERKLE_LOOKUP_METHOD_POSITION"
+listeners = ["public_services"]
+authentication = "delegated_tls"
+request = "MerkleLookupArgument"
+result = "MerklePathCompressed"
+statuses = ["ok", "bad_args", "not_found", "merkle_no_root", "tx_retry"]
+max_request_bytes = 4096
+supported = true
+coverage = ["go_client_merkle_queries"]
 
 
 [[route]]
@@ -905,6 +1095,34 @@ coverage = ["probe_and_pin"]
 
 [[route]]
 protocol = "MerkleQuery"
+method = "getCurrentRootHash"
+position_constant = "MERKLE_GET_CURRENT_ROOT_HASH_METHOD_POSITION"
+listeners = ["public_services"]
+authentication = "delegated_tls"
+request = "OptionalHostId"
+result = "TreeRoot"
+statuses = ["ok", "bad_args", "not_found", "merkle_no_root", "tx_retry"]
+max_request_bytes = 4096
+supported = true
+coverage = ["go_client_merkle_queries"]
+
+
+[[route]]
+protocol = "MerkleQuery"
+method = "checkKeyExists"
+position_constant = "MERKLE_CHECK_KEY_EXISTS_METHOD_POSITION"
+listeners = ["public_services"]
+authentication = "delegated_tls"
+request = "MerkleCheckKeyArgument"
+result = "MerkleExistsResponse"
+statuses = ["ok", "bad_args", "not_found", "merkle_leaf_not_found", "tx_retry"]
+max_request_bytes = 4096
+supported = true
+coverage = ["go_client_merkle_queries"]
+
+
+[[route]]
+protocol = "MerkleQuery"
 method = "getCurrentRootSigned"
 position_constant = "MERKLE_GET_CURRENT_ROOT_SIGNED_METHOD_POSITION"
 listeners = ["public_services"]
@@ -915,6 +1133,20 @@ statuses = ["ok", "bad_args", "not_found"]
 max_request_bytes = 4096
 supported = true
 coverage = ["probe_and_pin"]
+
+
+[[route]]
+protocol = "MerkleQuery"
+method = "mLookup"
+position_constant = "MERKLE_MULTI_LOOKUP_METHOD_POSITION"
+listeners = ["public_services"]
+authentication = "delegated_tls"
+request = "MerkleMultiLookupArgument"
+result = "MerklePathsCompressed"
+statuses = ["ok", "bad_args", "not_found", "merkle_no_root", "tx_retry"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["go_client_merkle_queries"]
 
 
 [[route]]
@@ -1038,6 +1270,21 @@ coverage = ["kv_small"]
 
 [[route]]
 protocol = "KvStore"
+method = "get"
+upstream_method = "kvGet"
+position_constant = "KV_GET_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "KvGetArgument"
+result = "KvGetResponse"
+statuses = ["ok", "bad_args", "stale_cache", "kv_noent", "not_found"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["go_client_kv"]
+
+
+[[route]]
+protocol = "KvStore"
 method = "getNode"
 upstream_method = "kvGetNode"
 position_constant = "KV_GET_NODE_METHOD_POSITION"
@@ -1090,7 +1337,7 @@ listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "KvCacheCheckArgument"
 result = "KvPathVersionVector"
-statuses = ["ok", "bad_args", "stale_cache"]
+statuses = ["ok", "bad_args", "stale_cache", "not_found"]
 max_request_bytes = 1048576
 supported = true
 coverage = ["kv_small"]
@@ -1135,10 +1382,25 @@ listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "KvLockReleaseArgument"
 result = "Void"
-statuses = ["ok", "bad_args", "not_found"]
+statuses = ["ok", "bad_args", "lock_timeout"]
 max_request_bytes = 16384
 supported = true
 coverage = ["kv_small"]
+
+
+[[route]]
+protocol = "KvStore"
+method = "usage"
+upstream_method = "kvUsage"
+position_constant = "KV_USAGE_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "KvUsageArgument"
+result = "KvUsage"
+statuses = ["ok", "bad_args"]
+max_request_bytes = 16384
+supported = true
+coverage = ["go_client_kv"]
 
 
 [[route]]

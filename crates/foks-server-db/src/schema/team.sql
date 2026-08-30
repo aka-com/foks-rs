@@ -72,6 +72,7 @@ CREATE TABLE team_shared_keys (
     generation INTEGER NOT NULL CHECK (generation >= 1),
     verify_key BLOB NOT NULL CHECK (length(verify_key) IN (33, 34)),
     exact_hepk BLOB NOT NULL,
+    start_epoch INTEGER NOT NULL DEFAULT 1 CHECK (start_epoch >= 1),
     PRIMARY KEY (team_id, role_type, visibility, generation)
 ) STRICT;
 

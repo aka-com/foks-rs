@@ -26,15 +26,21 @@ fn lock_tokens_expiry_and_user_scope_are_enforced() {
             &mut protected,
         )
         .unwrap();
-    for invalid_timeout in [Duration::ZERO, Duration::from_secs(24 * 60 * 60 + 1)] {
-        let invalid = session
-            .acquire_lock(root, target, invalid_timeout)
-            .unwrap_err();
-        assert!(matches!(
-            invalid,
-            foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1030, .. })
-        ));
-    }
+    let zero = session.acquire_lock(root, target, Duration::ZERO).unwrap();
+    let zero_replacement = session.acquire_lock(root, target, Duration::ZERO).unwrap();
+    assert_ne!(zero_replacement, zero);
+    let timed_out_release = session.release_lock(root, target, zero).unwrap_err();
+    assert!(matches!(
+        timed_out_release,
+        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 8015, .. })
+    ));
+    session
+        .release_lock(root, target, zero_replacement)
+        .unwrap();
+    let long = session
+        .acquire_lock(root, target, Duration::from_secs(24 * 60 * 60 + 1))
+        .unwrap();
+    session.release_lock(root, target, long).unwrap();
     let first = session
         .acquire_lock(root, target, Duration::from_secs(30))
         .unwrap();
@@ -48,7 +54,7 @@ fn lock_tokens_expiry_and_user_scope_are_enforced() {
     let wrong_release = session.release_lock(root, target, [0x99; 16]).unwrap_err();
     assert!(matches!(
         wrong_release,
-        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 8014, .. })
+        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 8015, .. })
     ));
     fixture.environment.advance_clock(30 * 1_000_000 + 1);
     let replacement = session

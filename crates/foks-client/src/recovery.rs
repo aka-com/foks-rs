@@ -22,7 +22,7 @@ use foks_snowpack::{decode, Value};
 use foks_verify::{normalize_device_name, verify_user_chain, VerifiedDevice};
 
 use crate::{
-    fix_device_name, now_microseconds, random_bytes, AuthenticatedUserOutcome, DeviceCredential,
+    fix_device_name, now_milliseconds, random_bytes, AuthenticatedUserOutcome, DeviceCredential,
     Error, FoksClient, HardStateStore, NewSoftwareDeviceSecrets, PinnedHost,
     ProvisionedSoftwareDevice, Result, SoftwareDeviceProvisionRequest, UserPrivateKey,
 };
@@ -127,7 +127,7 @@ impl FoksClient {
                         .ok_or(Error::AccountRequest("user sequence overflow"))?,
                     previous: authenticated.verified.chain_tail_hash(),
                     root: &authenticated.verified.tree_root(),
-                    time: now_microseconds()?,
+                    time: now_milliseconds()?,
                     next_tree_location,
                 },
                 role,
@@ -408,7 +408,7 @@ impl FoksClient {
                         .ok_or(Error::AccountRequest("user sequence overflow"))?,
                     previous: authenticated.verified.chain_tail_hash(),
                     root: &authenticated.verified.tree_root(),
-                    time: now_microseconds()?,
+                    time: now_milliseconds()?,
                     next_tree_location,
                 },
                 role: request.role,

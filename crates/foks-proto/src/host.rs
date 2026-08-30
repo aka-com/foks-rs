@@ -1,9 +1,9 @@
 //! Probe, hostchain, public-zone, and Merkle wire objects.
 
 use crate::{
-    array, binary, decode, encode, entity, expect_unsigned, fixed_blob, integer, list, option,
-    text, type_error, unsigned, variant, EntityId, Error, Result, ServiceType, Signature,
-    SignedBlob, Value, ENTITY_HOST, ENTITY_HOST_TLS_CA,
+    array, array_at_least, binary, decode, encode, entity, expect_unsigned, fixed_blob, integer,
+    list, option, text, type_error, unsigned, variant, EntityId, Error, Result, ServiceType,
+    Signature, SignedBlob, Value, ENTITY_HOST, ENTITY_HOST_TLS_CA,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16,7 +16,7 @@ pub struct ProbeResponse {
 impl ProbeResponse {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
-        let fields = array(&wire, 3)?;
+        let fields = array_at_least(&wire, 3)?;
         Ok(Self {
             merkle_root: signed_blob(&fields[0])?,
             public_zone: signed_blob(&fields[1])?,
@@ -104,6 +104,28 @@ impl HostchainLink {
 pub struct TreeRoot {
     pub epoch: u64,
     pub hash: [u8; 32],
+}
+
+impl TreeRoot {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let fields = array(&value, 2)?;
+        Ok(Self {
+            epoch: unsigned(&fields[0])?,
+            hash: fixed_blob(&fields[1], "Merkle root hash")?,
+        })
+    }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&self.to_value())?)
+    }
+
+    pub(crate) fn to_value(&self) -> Value {
+        Value::Array(vec![
+            Value::Unsigned(self.epoch),
+            Value::Binary(self.hash.to_vec()),
+        ])
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -257,6 +279,7 @@ pub struct MerkleRoot {
     pub back_pointers: [u8; 32],
     pub root_node: [u8; 32],
     pub hostchain: HostchainTail,
+    pub extensions: Vec<Value>,
 }
 
 impl MerkleRoot {
@@ -264,7 +287,7 @@ impl MerkleRoot {
         let wire = decode(bytes)?;
         let fields = array(&wire, 2)?;
         expect_unsigned(&fields[0], "Merkle root version", 1)?;
-        let v1 = array(variant(&fields[1], "1")?, 5)?;
+        let v1 = array_at_least(variant(&fields[1], "1")?, 5)?;
         let tail = array(&v1[4], 2)?;
         let epoch = unsigned(&v1[0])?;
         if epoch == 0 {
@@ -279,25 +302,25 @@ impl MerkleRoot {
                 seqno: unsigned(&tail[0])?,
                 hash: fixed_blob(&tail[1], "hostchain tail hash")?,
             },
+            extensions: v1[5..].to_vec(),
         })
     }
 
     pub fn encoded(&self) -> Result<Vec<u8>> {
+        let mut v1 = vec![
+            Value::Unsigned(self.epoch),
+            Value::Unsigned(self.time),
+            Value::Binary(self.back_pointers.to_vec()),
+            Value::Binary(self.root_node.to_vec()),
+            Value::Array(vec![
+                Value::Unsigned(self.hostchain.seqno),
+                Value::Binary(self.hostchain.hash.to_vec()),
+            ]),
+        ];
+        v1.extend(self.extensions.iter().cloned());
         Ok(encode(&Value::Array(vec![
             Value::Unsigned(1),
-            Value::Variant(Some((
-                b"1".to_vec(),
-                Box::new(Value::Array(vec![
-                    Value::Unsigned(self.epoch),
-                    Value::Unsigned(self.time),
-                    Value::Binary(self.back_pointers.to_vec()),
-                    Value::Binary(self.root_node.to_vec()),
-                    Value::Array(vec![
-                        Value::Unsigned(self.hostchain.seqno),
-                        Value::Binary(self.hostchain.hash.to_vec()),
-                    ]),
-                ])),
-            ))),
+            Value::Variant(Some((b"1".to_vec(), Box::new(Value::Array(v1))))),
         ]))?)
     }
 }
@@ -433,7 +456,7 @@ pub(crate) fn signature_list(signatures: &[Signature]) -> Value {
 }
 
 fn hostchain_change(value: &Value) -> Result<HostchainChange> {
-    let fields = array(value, 4)?;
+    let fields = array_at_least(value, 4)?;
     let chainer = array(&fields[0], 4)?;
     let root = array(&chainer[2], 2)?;
     Ok(HostchainChange {
@@ -448,28 +471,40 @@ fn hostchain_change(value: &Value) -> Result<HostchainChange> {
         },
         host: entity(&fields[1])?.require_type(ENTITY_HOST)?,
         signer: entity(&fields[2])?.require_type(ENTITY_HOST)?,
-        changes: list(&fields[3], change_item)?,
+        changes: change_items(&fields[3])?,
     })
 }
 
-fn change_item(value: &Value) -> Result<HostchainChangeItem> {
+fn change_items(value: &Value) -> Result<Vec<HostchainChangeItem>> {
+    let values = match value {
+        Value::Null => return Ok(Vec::new()),
+        Value::Array(values) => values,
+        _ => return Err(type_error("list or null", value)),
+    };
+    values
+        .iter()
+        .map(change_item)
+        .collect::<Result<Vec<_>>>()
+        .map(|items| items.into_iter().flatten().collect())
+}
+
+fn change_item(value: &Value) -> Result<Option<HostchainChangeItem>> {
     let fields = array(value, 2)?;
     let change_type = unsigned(&fields[0])?;
     match change_type {
-        1 => Ok(HostchainChangeItem::Revoke(entity(variant(
+        1 => Ok(Some(HostchainChangeItem::Revoke(entity(variant(
             &fields[1], "1",
-        )?)?)),
-        2 => Ok(HostchainChangeItem::Key(entity(variant(&fields[1], "2")?)?)),
+        )?)?))),
+        2 => Ok(Some(HostchainChangeItem::Key(entity(variant(
+            &fields[1], "2",
+        )?)?))),
         3 => {
             let ca = array(variant(&fields[1], "3")?, 2)?;
-            Ok(HostchainChangeItem::TlsCa {
+            Ok(Some(HostchainChangeItem::TlsCa {
                 id: entity(&ca[0])?.require_type(ENTITY_HOST_TLS_CA)?,
                 certificate: binary(&ca[1])?.to_vec(),
-            })
+            }))
         }
-        value => Err(Error::UnknownEnum {
-            kind: "hostchain change type",
-            value,
-        }),
+        _ => Ok(None),
     }
 }

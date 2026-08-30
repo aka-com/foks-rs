@@ -1,10 +1,12 @@
 package extract
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"go/ast"
+	"go/format"
 	"go/parser"
 	"go/token"
 	"os"
@@ -21,6 +23,11 @@ type protocolVariable struct {
 	goFile string
 }
 
+type protocolHeaders struct {
+	argument bool
+	result   bool
+}
+
 func Module(moduleDir string, identity model.SourceIdentity) (model.Artifact, error) {
 	root, err := filepath.EvalSymlinks(moduleDir)
 	if err != nil {
@@ -35,6 +42,7 @@ func Module(moduleDir string, identity model.SourceIdentity) (model.Artifact, er
 	methods := make(map[string][]model.Method)
 	handlers := make(map[string][]model.Method)
 	protocolNames := make(map[string]string)
+	headers := make(map[string]protocolHeaders)
 	remoteGoFiles, err := filesWithExtension(root, "proto/rem", ".go")
 	if err != nil {
 		return model.Artifact{}, err
@@ -75,43 +83,17 @@ func Module(moduleDir string, identity model.SourceIdentity) (model.Artifact, er
 			}
 		}
 
-		ast.Inspect(parsed, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok || !isSelector(call.Fun, "NewMethodV2") || len(call.Args) < 3 {
-				return true
-			}
-			identifier, ok := call.Args[0].(*ast.Ident)
-			if !ok {
-				err = fmt.Errorf("%s: NewMethodV2 protocol is not an identifier", relative)
-				return false
-			}
-			position, parseErr := integer(call.Args[1], constants)
-			if parseErr != nil || position > uint64(^uint32(0)) {
-				err = fmt.Errorf("%s: invalid method position: %v", relative, parseErr)
-				return false
-			}
-			qualified, parseErr := stringLiteral(call.Args[2])
-			if parseErr != nil {
-				err = fmt.Errorf("%s: invalid method name: %v", relative, parseErr)
-				return false
-			}
-			parts := strings.SplitN(qualified, ".", 2)
-			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-				err = fmt.Errorf("%s: malformed qualified method %q", relative, qualified)
-				return false
-			}
-			if old, exists := protocolNames[identifier.Name]; exists && old != parts[0] {
-				err = fmt.Errorf("%s: %s names both %s and %s", relative, identifier.Name, old, parts[0])
-				return false
-			}
-			protocolNames[identifier.Name] = parts[0]
-			methods[identifier.Name] = append(methods[identifier.Name], model.Method{
-				Name: parts[1], Position: uint32(position), QualifiedName: qualified,
-			})
-			return true
-		})
+		fileMethods, fileNames, fileHeaders, err := clientMethods(parsed, relative, constants)
 		if err != nil {
 			return model.Artifact{}, err
+		}
+		for variable, values := range fileMethods {
+			if _, exists := methods[variable]; exists {
+				return model.Artifact{}, fmt.Errorf("duplicate client protocol %s", variable)
+			}
+			methods[variable] = values
+			protocolNames[variable] = fileNames[variable]
+			headers[variable] = fileHeaders[variable]
 		}
 		fileHandlers, err := handlerMethods(parsed, relative, constants)
 		if err != nil {
@@ -135,7 +117,12 @@ func Module(moduleDir string, identity model.SourceIdentity) (model.Artifact, er
 			return model.Artifact{}, err
 		}
 		artifact.Protocols = append(artifact.Protocols, model.Protocol{
-			Name: protocolNames[variable], UniqueID: protocol.id, GoFile: protocol.goFile, Methods: values,
+			Name:           protocolNames[variable],
+			UniqueID:       protocol.id,
+			GoFile:         protocol.goFile,
+			ArgumentHeader: headers[variable].argument,
+			ResultHeader:   headers[variable].result,
+			Methods:        values,
 		})
 	}
 	for variable := range handlers {
@@ -241,6 +228,156 @@ func semanticSnowpack(input []byte) []byte {
 func wordByte(value byte) bool {
 	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' ||
 		value >= '0' && value <= '9' || value == '_'
+}
+
+func clientMethods(
+	parsed *ast.File,
+	relative string,
+	constants map[string]uint64,
+) (map[string][]model.Method, map[string]string, map[string]protocolHeaders, error) {
+	methods := make(map[string][]model.Method)
+	protocolNames := make(map[string]string)
+	headers := make(map[string]protocolHeaders)
+	for _, declaration := range parsed.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Body == nil {
+			continue
+		}
+		var calls []*ast.CallExpr
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if ok && isSelector(call.Fun, "NewMethodV2") {
+				calls = append(calls, call)
+			}
+			return true
+		})
+		if len(calls) == 0 {
+			continue
+		}
+		if len(calls) != 1 || len(calls[0].Args) < 3 {
+			return nil, nil, nil, fmt.Errorf("%s: %s has %d malformed NewMethodV2 calls", relative, function.Name.Name, len(calls))
+		}
+		call := calls[0]
+		identifier, ok := call.Args[0].(*ast.Ident)
+		if !ok {
+			return nil, nil, nil, fmt.Errorf("%s: NewMethodV2 protocol is not an identifier", relative)
+		}
+		position, err := integer(call.Args[1], constants)
+		if err != nil || position > uint64(^uint32(0)) {
+			return nil, nil, nil, fmt.Errorf("%s: invalid method position: %v", relative, err)
+		}
+		qualified, err := stringLiteral(call.Args[2])
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("%s: invalid method name: %v", relative, err)
+		}
+		parts := strings.SplitN(qualified, ".", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return nil, nil, nil, fmt.Errorf("%s: malformed qualified method %q", relative, qualified)
+		}
+		if old, exists := protocolNames[identifier.Name]; exists && old != parts[0] {
+			return nil, nil, nil, fmt.Errorf("%s: %s names both %s and %s", relative, identifier.Name, old, parts[0])
+		}
+		resultType, err := clientResultType(function)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("%s: %s: %w", relative, qualified, err)
+		}
+		methodHeaders := protocolHeaders{
+			argument: bindingUsesDataWrap(function.Body, "warg"),
+			result:   bindingUsesDataWrap(function.Body, "tmp"),
+		}
+		if old, exists := headers[identifier.Name]; exists && old != methodHeaders {
+			return nil, nil, nil, fmt.Errorf("%s: protocol %s uses inconsistent headers", relative, parts[0])
+		}
+		protocolNames[identifier.Name] = parts[0]
+		headers[identifier.Name] = methodHeaders
+		methods[identifier.Name] = append(methods[identifier.Name], model.Method{
+			Name: parts[1], Position: uint32(position), QualifiedName: qualified, ResultType: resultType,
+		})
+	}
+	return methods, protocolNames, headers, nil
+}
+
+func clientResultType(function *ast.FuncDecl) (string, error) {
+	if function.Type.Results == nil {
+		return "void", nil
+	}
+	var resultTypes []string
+	for _, field := range function.Type.Results.List {
+		if identifier, ok := field.Type.(*ast.Ident); ok && identifier.Name == "error" {
+			continue
+		}
+		value, err := formatExpression(field.Type)
+		if err != nil {
+			return "", err
+		}
+		count := len(field.Names)
+		if count == 0 {
+			count = 1
+		}
+		for i := 0; i < count; i++ {
+			resultTypes = append(resultTypes, value)
+		}
+	}
+	if len(resultTypes) == 0 {
+		return "void", nil
+	}
+	if len(resultTypes) != 1 {
+		return "", fmt.Errorf("client method has %d non-error results", len(resultTypes))
+	}
+	return resultTypes[0], nil
+}
+
+func formatExpression(expression ast.Expr) (string, error) {
+	var output bytes.Buffer
+	if err := format.Node(&output, token.NewFileSet(), expression); err != nil {
+		return "", err
+	}
+	return output.String(), nil
+}
+
+func bindingUsesDataWrap(node ast.Node, name string) bool {
+	found := false
+	ast.Inspect(node, func(node ast.Node) bool {
+		switch value := node.(type) {
+		case *ast.AssignStmt:
+			for index, left := range value.Lhs {
+				identifier, ok := left.(*ast.Ident)
+				if ok && identifier.Name == name && index < len(value.Rhs) && containsDataWrap(value.Rhs[index]) {
+					found = true
+					return false
+				}
+			}
+		case *ast.ValueSpec:
+			for index, identifier := range value.Names {
+				if identifier.Name != name {
+					continue
+				}
+				if value.Type != nil && containsDataWrap(value.Type) {
+					found = true
+					return false
+				}
+				if index < len(value.Values) && containsDataWrap(value.Values[index]) {
+					found = true
+					return false
+				}
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+func containsDataWrap(node ast.Node) bool {
+	found := false
+	ast.Inspect(node, func(node ast.Node) bool {
+		selector, ok := node.(*ast.SelectorExpr)
+		if ok && selector.Sel.Name == "DataWrap" {
+			found = true
+			return false
+		}
+		return !found
+	})
+	return found
 }
 
 func handlerMethods(parsed *ast.File, relative string, constants map[string]uint64) (map[string][]model.Method, error) {

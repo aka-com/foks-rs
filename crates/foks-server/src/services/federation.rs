@@ -18,7 +18,6 @@ const USER_PERMISSION_TOKEN_AAD: &[u8] = b"foks-federation-user-view-token-v1";
 const TEAM_PERMISSION_TOKEN_AAD: &[u8] = b"foks-federation-team-view-token-v1";
 const PERMISSION_LIFETIME_MICROSECONDS: u64 = 30 * 24 * 60 * 60 * 1_000_000;
 const PERMISSION_RENEWAL_WINDOW_MICROSECONDS: u64 = 7 * 24 * 60 * 60 * 1_000_000;
-const SIGNATURE_TIME_WINDOW_MICROSECONDS: u64 = 5 * 60 * 1_000_000;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn grant_remote_user_view(
@@ -117,14 +116,7 @@ pub(crate) fn grant_remote_team_view(
         return Err(permission_denied());
     }
     let now = clock.now_micros().map_err(internal)?;
-    if request.payload.time == 0
-        || request.payload.time > now.saturating_add(SIGNATURE_TIME_WINDOW_MICROSECONDS)
-        || now
-            > request
-                .payload
-                .time
-                .saturating_add(SIGNATURE_TIME_WINDOW_MICROSECONDS)
-    {
+    if !super::protocol_time_is_nowish(request.payload.time, now) {
         return Err(permission_denied());
     }
     let team = reader
@@ -223,16 +215,25 @@ pub(crate) fn load_remote_user_chain(
 ) -> Result<Vec<u8>, RpcStatus> {
     let request =
         foks_rpc::arguments::decode_load_user_chain_argument(argument).map_err(bad_arguments)?;
-    let foks_rpc::arguments::UserChainAuthorization::RemoteToken(token) = &request.authorization
-    else {
-        return Err(permission_denied());
-    };
-    let hash = token_hash(token.expose());
-    if !database
-        .remote_user_view_token_is_current(&hash, request.uid.as_bytes(), now)
-        .map_err(internal)?
-    {
-        return Err(permission_denied());
+    match &request.authorization {
+        foks_rpc::arguments::UserChainAuthorization::RemoteToken(token) => {
+            let hash = token_hash(token.expose());
+            if !database
+                .remote_user_view_token_is_current(&hash, request.uid.as_bytes(), now)
+                .map_err(internal)?
+            {
+                return Err(permission_denied());
+            }
+        }
+        foks_rpc::arguments::UserChainAuthorization::SelfToken(token) => {
+            if !database
+                .self_token_matches(request.uid.as_bytes(), token.expose())
+                .map_err(internal)?
+            {
+                return Err(permission_denied());
+            }
+        }
+        _ => return Err(permission_denied()),
     }
     super::user::render_user_chain(database, local_host, &request)
 }

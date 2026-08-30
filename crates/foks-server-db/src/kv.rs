@@ -68,6 +68,21 @@ pub struct StoredKvNode {
 pub struct StoredKvDirent {
     pub exact: Vec<u8>,
     pub node_id: [u8; 17],
+    pub exact_directory: Option<Vec<u8>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KvListCursor {
+    Mac([u8; 32]),
+    Time(u64),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KvVersionCheck {
+    Current,
+    Stale(foks_proto::KvPathVersionVector),
+    Future,
+    Missing,
 }
 
 pub struct KvFileChunkMutation<'a> {
@@ -94,6 +109,19 @@ pub struct StoredKvFileChunk {
 }
 
 impl Database {
+    pub fn kv_directory(&self, uid: &[u8], id: &[u8; 16]) -> Result<Option<StoredKvDirectory>> {
+        kv_directory(&self.connection, uid, id)
+    }
+
+    pub fn kv_dirent(
+        &self,
+        uid: &[u8],
+        parent: &[u8; 16],
+        id: &[u8; 16],
+    ) -> Result<Option<StoredKvDirent>> {
+        kv_dirent(&self.connection, uid, parent, id)
+    }
+
     /// Materializes a party-scoped KV namespace only for a local user or team.
     /// The polymorphic party binding is resolved from authoritative identity
     /// tables rather than accepted from the caller.
@@ -173,9 +201,8 @@ impl Database {
             None => {}
         }
         if let Some(precondition) = precondition {
-            if !kv_version_vector(&transaction, mutation.uid)?
-                .as_ref()
-                .is_some_and(|current| current.equivalent(precondition))
+            if kv_version_check(&transaction, mutation.uid, precondition)?
+                != KvVersionCheck::Current
             {
                 return Err(Error::KvConflict);
             }
@@ -264,7 +291,7 @@ impl Database {
     pub fn put_kv_dirents(
         &mut self,
         uid: &[u8],
-        precondition: &foks_proto::KvPathVersionVector,
+        precondition: Option<&foks_proto::KvPathVersionVector>,
         mutations: &[KvDirentMutation<'_>],
     ) -> Result<()> {
         if uid.len() != 33 || mutations.is_empty() || mutations.len() > 64 {
@@ -313,11 +340,10 @@ impl Database {
         {
             return Ok(());
         }
-        if !kv_version_vector(&transaction, uid)?
-            .as_ref()
-            .is_some_and(|current| current.equivalent(precondition))
-        {
-            return Err(Error::KvConflict);
+        if let Some(precondition) = precondition {
+            if kv_version_check(&transaction, uid, precondition)? != KvVersionCheck::Current {
+                return Err(Error::KvConflict);
+            }
         }
         let added_bytes = mutations.iter().try_fold(0usize, |total, mutation| {
             total
@@ -568,9 +594,9 @@ impl Database {
         dirent: &[u8; 16],
         lock: &[u8; 16],
         now: u64,
-        expires_at: u64,
+        timeout: u64,
     ) -> Result<()> {
-        if uid.len() != 33 || expires_at <= now {
+        if uid.len() != 33 {
             return Err(Error::Invalid("KV lock"));
         }
         if !self.ensure_kv_namespace(uid)? {
@@ -590,29 +616,31 @@ impl Database {
         if !directory_exists {
             return Err(Error::KvConflict);
         }
-        let existing: Option<(Vec<u8>, i64)> = transaction
+        let existing: Option<i64> = transaction
             .query_row(
-                "SELECT lock_id, expires_at FROM kv_locks
+                "SELECT created_at FROM kv_locks
                  WHERE uid = ?1 AND parent_id = ?2 AND dirent_id = ?3",
                 params![uid, parent, dirent],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| row.get(0),
             )
             .optional()?;
-        if existing.as_ref().is_some_and(|(existing_lock, expiry)| {
-            existing_lock.as_slice() != lock
-                && u64::try_from(*expiry).is_ok_and(|expiry| expiry > now)
-        }) {
-            return Err(Error::KvLocked);
+        if let Some(created_at) = existing {
+            let expires_at = crate::error::unsigned(created_at)?
+                .checked_add(timeout)
+                .ok_or(Error::IntegerRange)?;
+            if now < expires_at {
+                return Err(Error::KvLocked);
+            }
         }
         if existing.is_none() {
             ensure_kv_capacity(&transaction, &self.config, uid, 64, 1)?;
         }
         transaction.execute(
-            "INSERT INTO kv_locks(uid, parent_id, dirent_id, lock_id, expires_at)
+            "INSERT INTO kv_locks(uid, parent_id, dirent_id, lock_id, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(uid, parent_id, dirent_id)
-             DO UPDATE SET lock_id = excluded.lock_id, expires_at = excluded.expires_at",
-            params![uid, parent, dirent, lock, sql_integer(expires_at)?],
+             DO UPDATE SET lock_id = excluded.lock_id, created_at = excluded.created_at",
+            params![uid, parent, dirent, lock, sql_integer(now)?],
         )?;
         transaction.commit()?;
         Ok(())
@@ -631,7 +659,7 @@ impl Database {
             params![uid, parent, dirent, lock],
         )?;
         if changed == 0 {
-            return Err(Error::KvLocked);
+            return Err(Error::KvLockTimeout);
         }
         Ok(())
     }
@@ -653,49 +681,63 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: Option<Vec<u8>> = transaction
+        let existing: Option<(i64, Vec<u8>)> = transaction
             .query_row(
-                "SELECT exact_root FROM kv_roots WHERE uid = ?1",
+                "SELECT root_version, exact_root FROM kv_roots WHERE uid = ?1",
                 [mutation.uid],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        match existing {
-            Some(exact) if exact == mutation.exact => return Ok(()),
-            Some(_) => return Err(Error::KvConflict),
-            None => {}
+        match &existing {
+            Some((version, exact))
+                if crate::error::unsigned(*version)? == mutation.version
+                    && exact == mutation.exact =>
+            {
+                return Ok(())
+            }
+            Some((version, _))
+                if crate::error::unsigned(*version)?
+                    .checked_add(1)
+                    .is_none_or(|next| next != mutation.version) =>
+            {
+                return Err(Error::KvConflict)
+            }
+            None if mutation.version != 1 => return Err(Error::KvConflict),
+            _ => {}
         }
-        let directory_key: Option<(i64, i64, i64)> = transaction
+        let directory_exists = transaction
             .query_row(
-                "SELECT key_role, key_visibility, key_generation FROM kv_directories
+                "SELECT 1 FROM kv_directories
                  WHERE uid = ?1 AND directory_id = ?2 AND version = ?3 AND status = 0",
                 params![
                     mutation.uid,
                     mutation.directory_id,
                     sql_integer(mutation.directory_version)?
                 ],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |_| Ok(()),
             )
-            .optional()?;
-        let expected_key = (
-            sql_integer(mutation.key_role)?,
-            mutation.key_visibility,
-            sql_integer(mutation.key_generation)?,
-        );
-        if directory_key != Some(expected_key) {
+            .optional()?
+            .is_some();
+        if !directory_exists {
             return Err(Error::KvConflict);
         }
+        let prior_bytes = existing.as_ref().map_or(0, |(_, exact)| exact.len());
         ensure_kv_capacity(
             &transaction,
             &self.config,
             mutation.uid,
-            mutation.exact.len(),
-            1,
+            mutation.exact.len().saturating_sub(prior_bytes),
+            u64::from(existing.is_none()),
         )?;
         transaction.execute(
             "INSERT INTO kv_roots
              (uid, root_version, directory_id, directory_version, exact_root)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(uid) DO UPDATE SET
+               root_version = excluded.root_version,
+               directory_id = excluded.directory_id,
+               directory_version = excluded.directory_version,
+               exact_root = excluded.exact_root",
             params![
                 mutation.uid,
                 sql_integer(mutation.version)?,
@@ -739,10 +781,32 @@ impl ReadDatabase {
         &self,
         uid: &[u8],
         parent: &[u8; 16],
-        after_name_mac: Option<&[u8; 32]>,
+        cursor: Option<KvListCursor>,
         limit: usize,
     ) -> Result<Vec<StoredKvDirent>> {
-        kv_list(&self.connection, uid, parent, after_name_mac, limit)
+        kv_list(&self.connection, uid, parent, cursor, limit)
+    }
+
+    pub fn kv_dirent_at_name(
+        &self,
+        uid: &[u8],
+        parent: &[u8; 16],
+        directory_version: u64,
+        name_mac: &[u8; 32],
+    ) -> Result<Option<StoredKvDirent>> {
+        kv_dirent_at_name(&self.connection, uid, parent, directory_version, name_mac)
+    }
+
+    pub fn kv_usage(&self, uid: &[u8]) -> Result<foks_proto::KvUsage> {
+        kv_usage(&self.connection, uid)
+    }
+
+    pub fn kv_version_check(
+        &self,
+        uid: &[u8],
+        supplied: &foks_proto::KvPathVersionVector,
+    ) -> Result<KvVersionCheck> {
+        kv_version_check(&self.connection, uid, supplied)
     }
 
     pub fn kv_version_vector(&self, uid: &[u8]) -> Result<Option<foks_proto::KvPathVersionVector>> {
@@ -780,10 +844,32 @@ impl ReadSnapshot<'_> {
         &self,
         uid: &[u8],
         parent: &[u8; 16],
-        after_name_mac: Option<&[u8; 32]>,
+        cursor: Option<KvListCursor>,
         limit: usize,
     ) -> Result<Vec<StoredKvDirent>> {
-        kv_list(self.connection(), uid, parent, after_name_mac, limit)
+        kv_list(self.connection(), uid, parent, cursor, limit)
+    }
+
+    pub fn kv_dirent_at_name(
+        &self,
+        uid: &[u8],
+        parent: &[u8; 16],
+        directory_version: u64,
+        name_mac: &[u8; 32],
+    ) -> Result<Option<StoredKvDirent>> {
+        kv_dirent_at_name(self.connection(), uid, parent, directory_version, name_mac)
+    }
+
+    pub fn kv_usage(&self, uid: &[u8]) -> Result<foks_proto::KvUsage> {
+        kv_usage(self.connection(), uid)
+    }
+
+    pub fn kv_version_check(
+        &self,
+        uid: &[u8],
+        supplied: &foks_proto::KvPathVersionVector,
+    ) -> Result<KvVersionCheck> {
+        kv_version_check(self.connection(), uid, supplied)
     }
 
     pub fn kv_version_vector(&self, uid: &[u8]) -> Result<Option<foks_proto::KvPathVersionVector>> {
@@ -861,40 +947,128 @@ fn kv_list(
     connection: &rusqlite::Connection,
     uid: &[u8],
     parent: &[u8; 16],
-    after_name_mac: Option<&[u8; 32]>,
+    cursor: Option<KvListCursor>,
     limit: usize,
 ) -> Result<Vec<StoredKvDirent>> {
-    if limit == 0 || limit > 1001 {
+    if limit == 0 || limit > 4096 {
         return Err(Error::Invalid("KV list limit"));
     }
-    let mut statement = connection.prepare(
-        "SELECT d.exact_dirent, d.node_id FROM kv_dirent_heads h
+    let (query, mac, time) = match cursor {
+        None => (
+            "SELECT d.exact_dirent, d.node_id FROM kv_dirent_heads h
+             JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
+               AND d.dirent_id = h.dirent_id AND d.version = h.version
+             WHERE h.uid = ?1 AND h.parent_id = ?2
+               AND substr(d.node_id, 1, 1) != X'00'
+             ORDER BY d.name_mac, d.dirent_id LIMIT ?3",
+            None,
+            None,
+        ),
+        Some(KvListCursor::Mac(mac)) => (
+            "SELECT d.exact_dirent, d.node_id FROM kv_dirent_heads h
+             JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
+               AND d.dirent_id = h.dirent_id AND d.version = h.version
+             WHERE h.uid = ?1 AND h.parent_id = ?2
+               AND substr(d.node_id, 1, 1) != X'00' AND d.name_mac > ?3
+             ORDER BY d.name_mac, d.dirent_id LIMIT ?4",
+            Some(mac),
+            None,
+        ),
+        Some(KvListCursor::Time(time)) => (
+            "SELECT d.exact_dirent, d.node_id FROM kv_dirent_heads h
          JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
            AND d.dirent_id = h.dirent_id AND d.version = h.version
          WHERE h.uid = ?1 AND h.parent_id = ?2
            AND substr(d.node_id, 1, 1) != X'00'
-           AND (?3 IS NULL OR d.name_mac > ?3)
-         ORDER BY d.name_mac, d.dirent_id LIMIT ?4",
-    )?;
-    let rows = statement.query_map(
-        params![
-            uid,
-            parent,
-            after_name_mac,
-            i64::try_from(limit).map_err(|_| Error::IntegerRange)?
-        ],
-        |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
-    )?;
-    rows.map(|row| {
-        let (exact, node_id) = row?;
-        Ok(StoredKvDirent {
+           AND d.creation_time >= ?3
+         ORDER BY d.creation_time, d.dirent_id LIMIT ?4",
+            None,
+            Some(time),
+        ),
+    };
+    let mut statement = connection.prepare(query)?;
+    let limit = i64::try_from(limit).map_err(|_| Error::IntegerRange)?;
+    let mut rows = match (mac, time) {
+        (None, None) => statement.query(params![uid, parent, limit])?,
+        (Some(mac), None) => statement.query(params![uid, parent, mac, limit])?,
+        (None, Some(time)) => statement.query(params![uid, parent, sql_integer(time)?, limit])?,
+        (Some(_), Some(_)) => unreachable!("KV list cursor has one arm"),
+    };
+    let mut stored = Vec::new();
+    while let Some(row) = rows.next()? {
+        let exact = row.get::<_, Vec<u8>>(0)?;
+        let node_id = row.get::<_, Vec<u8>>(1)?;
+        stored.push(StoredKvDirent {
             exact,
             node_id: node_id
                 .try_into()
                 .map_err(|_| Error::Invalid("stored KV node ID"))?,
+            exact_directory: None,
+        });
+    }
+    Ok(stored)
+}
+
+fn kv_dirent(
+    connection: &rusqlite::Connection,
+    uid: &[u8],
+    parent: &[u8; 16],
+    id: &[u8; 16],
+) -> Result<Option<StoredKvDirent>> {
+    connection
+        .query_row(
+            "SELECT d.exact_dirent, d.node_id FROM kv_dirent_heads h
+             JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
+               AND d.dirent_id = h.dirent_id AND d.version = h.version
+             WHERE h.uid = ?1 AND h.parent_id = ?2 AND h.dirent_id = ?3",
+            params![uid, parent, id],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()?
+        .map(|(exact, node_id)| {
+            Ok(StoredKvDirent {
+                exact,
+                node_id: node_id
+                    .try_into()
+                    .map_err(|_| Error::Invalid("stored KV node ID"))?,
+                exact_directory: None,
+            })
         })
-    })
-    .collect()
+        .transpose()
+}
+
+fn kv_dirent_at_name(
+    connection: &rusqlite::Connection,
+    uid: &[u8],
+    parent: &[u8; 16],
+    directory_version: u64,
+    name_mac: &[u8; 32],
+) -> Result<Option<StoredKvDirent>> {
+    let stored: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = connection
+        .query_row(
+            "SELECT e.exact_dirent, e.node_id, d.exact_directory
+             FROM kv_dirents e JOIN kv_directories d
+               ON d.uid = e.uid AND d.directory_id = e.parent_id
+              AND d.version = e.directory_version
+             WHERE e.uid = ?1 AND e.parent_id = ?2
+               AND e.name_mac = ?3 AND e.directory_version = ?4
+             ORDER BY e.version DESC LIMIT 1",
+            params![uid, parent, name_mac, sql_integer(directory_version)?],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    stored
+        .map(|row| {
+            let (exact, node_id, exact_directory) = row;
+            Ok(StoredKvDirent {
+                exact,
+                node_id: node_id
+                    .try_into()
+                    .map_err(|_| Error::Invalid("stored KV node ID"))?,
+                exact_directory: Some(exact_directory),
+            })
+        })
+        .transpose()
 }
 
 fn node_reference_exists(
@@ -996,6 +1170,120 @@ fn kv_version_vector(
         root_version: root.version,
         directories: directories.into_values().collect(),
     }))
+}
+
+fn kv_version_check(
+    connection: &rusqlite::Connection,
+    uid: &[u8],
+    supplied: &foks_proto::KvPathVersionVector,
+) -> Result<KvVersionCheck> {
+    let Some(root) = kv_root(connection, uid)? else {
+        return Ok(KvVersionCheck::Missing);
+    };
+    if root.version < supplied.root_version {
+        return Ok(KvVersionCheck::Future);
+    }
+    let mut stale_directories = Vec::new();
+    for directory in &supplied.directories {
+        let current: Option<i64> = connection
+            .query_row(
+                "SELECT version FROM kv_directory_heads
+                 WHERE uid = ?1 AND directory_id = ?2",
+                params![uid, directory.id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(current) = current else {
+            return Ok(KvVersionCheck::Missing);
+        };
+        let current = crate::error::unsigned(current)?;
+        if current < directory.version {
+            return Ok(KvVersionCheck::Future);
+        }
+        let mut stale_entries = Vec::new();
+        for entry in &directory.entries {
+            let current: Option<i64> = connection
+                .query_row(
+                    "SELECT version FROM kv_dirent_heads
+                     WHERE uid = ?1 AND parent_id = ?2 AND dirent_id = ?3",
+                    params![uid, directory.id, entry.id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(current) = current else {
+                return Ok(KvVersionCheck::Missing);
+            };
+            let current = crate::error::unsigned(current)?;
+            if current < entry.version {
+                return Ok(KvVersionCheck::Future);
+            }
+            if current > entry.version {
+                stale_entries.push(foks_proto::KvDirentVersion {
+                    id: entry.id,
+                    version: current,
+                });
+            }
+        }
+        if current > directory.version || !stale_entries.is_empty() {
+            stale_directories.push(foks_proto::KvDirectoryVersion {
+                id: directory.id,
+                version: current,
+                entries: stale_entries,
+            });
+        }
+    }
+    if (supplied.root_version == 0 || root.version == supplied.root_version)
+        && stale_directories.is_empty()
+    {
+        return Ok(KvVersionCheck::Current);
+    }
+    Ok(KvVersionCheck::Stale(foks_proto::KvPathVersionVector {
+        root_version: root.version,
+        directories: stale_directories,
+    }))
+}
+
+fn kv_usage(connection: &rusqlite::Connection, uid: &[u8]) -> Result<foks_proto::KvUsage> {
+    let mut statement = connection.prepare(
+        "SELECT exact_node FROM kv_nodes
+         WHERE uid = ?1 AND node_type IN (3, 4)",
+    )?;
+    let rows = statement.query_map([uid], |row| row.get::<_, Vec<u8>>(0))?;
+    let mut small_number = 0u64;
+    let mut small_bytes = 0u64;
+    for row in rows {
+        let exact = row?;
+        let boxed = foks_proto::KvSmallFileBox::decode(&exact)
+            .map_err(|_| Error::Invalid("stored KV small node"))?;
+        small_number = small_number.checked_add(1).ok_or(Error::IntegerRange)?;
+        small_bytes = small_bytes
+            .checked_add(u64::try_from(boxed.ciphertext.len()).map_err(|_| Error::IntegerRange)?)
+            .ok_or(Error::IntegerRange)?;
+    }
+    let large_number: i64 = connection.query_row(
+        "SELECT count(*) FROM kv_file_uploads WHERE uid = ?1",
+        [uid],
+        |row| row.get(0),
+    )?;
+    let (large_chunks, large_bytes): (i64, i64) = connection.query_row(
+        "SELECT count(*), coalesce(sum(length(ciphertext)), 0)
+         FROM kv_file_chunks WHERE uid = ?1",
+        [uid],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    Ok(foks_proto::KvUsage {
+        small: foks_proto::KvUsageStats {
+            number: small_number,
+            bytes: small_bytes,
+        },
+        large: foks_proto::KvChunkedUsageStats {
+            base: foks_proto::KvUsageStats {
+                number: crate::error::unsigned(large_number)?,
+                bytes: crate::error::unsigned(large_bytes)?,
+            },
+            chunks: crate::error::unsigned(large_chunks)?,
+        },
+    })
 }
 
 fn kv_root(connection: &rusqlite::Connection, uid: &[u8]) -> Result<Option<StoredKvRoot>> {

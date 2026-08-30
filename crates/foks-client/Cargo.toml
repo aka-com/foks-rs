@@ -10,6 +10,7 @@ autotests = false
 chacha20poly1305 = { workspace = true }
 foks-client-db = { workspace = true }
 foks-crypto = { workspace = true }
+foks-merkle-store = { workspace = true }
 foks-proto = { workspace = true }
 foks-rpc = { workspace = true }
 foks-snowpack = { workspace = true }

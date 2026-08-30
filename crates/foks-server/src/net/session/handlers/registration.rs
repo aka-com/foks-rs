@@ -5,6 +5,11 @@ use crate::rpc::{RouteId, RoutedCall};
 use super::super::ServerData;
 
 pub(super) trait Operations {
+    fn resolve_username(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+    fn client_version_info(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+    fn server_config(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+    fn check_name_exists(&self, argument: &[u8]) -> Result<(), RpcStatus>;
+    fn probe_key_exists(&self, argument: &[u8]) -> Result<(), RpcStatus>;
     fn reserve_username(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn signup(&self, argument: &[u8]) -> Result<(), RpcStatus>;
     fn check_invite_code(&self, argument: &[u8]) -> Result<(), RpcStatus>;
@@ -20,6 +25,33 @@ pub(super) trait Operations {
 }
 
 impl Operations for ServerData {
+    fn resolve_username(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        let snapshot = database
+            .snapshot()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        crate::services::user::resolve_username(&snapshot, argument, None)
+    }
+
+    fn client_version_info(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        crate::services::registration::client_version_info(argument)
+    }
+
+    fn server_config(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        crate::services::registration::server_config(argument, &database)
+    }
+
+    fn check_name_exists(&self, argument: &[u8]) -> Result<(), RpcStatus> {
+        let database = self.read_database()?;
+        crate::services::registration::check_name_exists(argument, &database)
+    }
+
+    fn probe_key_exists(&self, argument: &[u8]) -> Result<(), RpcStatus> {
+        let database = self.read_database()?;
+        crate::services::registration::probe_key_exists(argument, &database)
+    }
+
     fn reserve_username(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
         ServerData::reserve_username(self, argument)
     }
@@ -123,6 +155,28 @@ pub(super) fn response(
 ) -> Result<Vec<u8>, RpcStatus> {
     let sequence = call.call.sequence();
     match call.route.id {
+        RouteId::RegResolveUsername => encode_success_response_at(
+            &operations.resolve_username(call.call.argument())?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
+        RouteId::RegCheckNameExists => {
+            operations.check_name_exists(call.call.argument())?;
+            encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
+        }
+        RouteId::RegGetClientVersionInfo => encode_success_response_at(
+            &operations.client_version_info(call.call.argument())?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
+        RouteId::RegGetServerConfig => {
+            encode_success_response_at(&operations.server_config(call.call.argument())?, sequence)
+                .map_err(|_| RpcStatus::Unsupported)
+        }
+        RouteId::RegProbeKeyExists => {
+            operations.probe_key_exists(call.call.argument())?;
+            encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
+        }
         RouteId::RegReserveUsername => encode_success_response_at(
             &operations.reserve_username(call.call.argument())?,
             sequence,

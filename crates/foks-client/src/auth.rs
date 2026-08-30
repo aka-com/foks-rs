@@ -2,15 +2,19 @@
 
 use super::{
     authenticate_historical_roots_from_latest, decode, derive_device_public, derive_subkey_id,
-    encode_get_client_cert_chain_request_at, encode_get_current_merkle_root_signed_request,
-    encode_get_historical_merkle_roots_request, encode_get_puk_for_role_request,
-    encode_load_user_chain_request_from, encode_merkle_select_vhost_request,
-    encode_registration_select_vhost_request, merkle_history_requirements,
-    open_puk_parcel_for_role, open_puk_parcel_with_for_role, open_puk_seed_chain,
-    restore_merkle_anchor, user_chain_root_epochs, verify_signed_merkle_advance, verify_user_chain,
-    verify_user_chain_increment, Acceptance, AuthenticatedMerkleRoots, EntityId, Error, FoksClient,
-    HardStateStore, HostchainTail, PinnedHost, PukParcel, Result, Role, SecretSeed, Value,
-    VerifiedMerkleAdvance, VerifiedUserState, YubiDevice, ENTITY_USER,
+    encode_clear_device_nag_request, encode_get_client_cert_chain_request_at,
+    encode_get_current_merkle_root_hash_request, encode_get_current_merkle_root_signed_request,
+    encode_get_device_nag_request, encode_get_historical_merkle_roots_request,
+    encode_get_puk_for_role_request, encode_load_user_chain_request_from,
+    encode_merkle_check_key_exists_request, encode_merkle_lookup_request,
+    encode_merkle_multi_lookup_request, encode_merkle_select_vhost_request,
+    encode_registration_select_vhost_request, encode_resolve_username_request,
+    encode_user_ping_request, merkle_history_requirements, open_puk_parcel_for_role,
+    open_puk_parcel_with_for_role, open_puk_seed_chain, restore_merkle_anchor,
+    user_chain_root_epochs, verify_signed_merkle_advance, verify_user_chain,
+    verify_user_chain_increment, Acceptance, AuthenticatedMerkleRoots, DeviceNagInfo, EntityId,
+    Error, FoksClient, HardStateStore, HostchainTail, PinnedHost, PukParcel, Result, Role,
+    SecretSeed, Value, VerifiedMerkleAdvance, VerifiedUserState, YubiDevice, ENTITY_USER,
 };
 use foks_crypto::{open_subkey_box, sign_yubi_typed};
 use foks_proto::{RegistrationChallenge, ENTITY_SUBKEY, REG_CHALLENGE_PAYLOAD_TYPE_ID};
@@ -78,6 +82,141 @@ pub(crate) fn user_chain_cursor(prior: Option<&VerifiedUserState>) -> Result<Use
 }
 
 impl FoksClient {
+    pub fn merkle_lookup(
+        &self,
+        host: &PinnedHost,
+        key: [u8; 32],
+        signed: bool,
+        root: Option<u64>,
+    ) -> Result<foks_proto::MerkleLookupResponse> {
+        let response = self.call_after_vhost_selection(
+            host,
+            &host.merkle_query,
+            &encode_merkle_select_vhost_request(host.host_id())?,
+            &encode_merkle_lookup_request(Some(host.host_id()), key, signed, root, 1)?,
+        )?;
+        Ok(foks_proto::MerkleLookupResponse::decode(&response)?)
+    }
+
+    pub fn merkle_multi_lookup(
+        &self,
+        host: &PinnedHost,
+        keys: &[[u8; 32]],
+        signed: bool,
+        root: Option<u64>,
+    ) -> Result<foks_proto::MerkleMultiLookupResponse> {
+        let response = self.call_after_vhost_selection(
+            host,
+            &host.merkle_query,
+            &encode_merkle_select_vhost_request(host.host_id())?,
+            &encode_merkle_multi_lookup_request(Some(host.host_id()), keys, signed, root, 1)?,
+        )?;
+        Ok(foks_proto::MerkleMultiLookupResponse::decode(&response)?)
+    }
+
+    pub fn current_merkle_root_hash(&self, host: &PinnedHost) -> Result<foks_proto::TreeRoot> {
+        let response = self.call_after_vhost_selection(
+            host,
+            &host.merkle_query,
+            &encode_merkle_select_vhost_request(host.host_id())?,
+            &encode_get_current_merkle_root_hash_request(Some(host.host_id()), 1)?,
+        )?;
+        Ok(foks_proto::TreeRoot::decode(&response)?)
+    }
+
+    pub fn merkle_key_exists(
+        &self,
+        host: &PinnedHost,
+        key: [u8; 32],
+    ) -> Result<foks_proto::MerkleExistsResponse> {
+        let response = self.call_after_vhost_selection(
+            host,
+            &host.merkle_query,
+            &encode_merkle_select_vhost_request(host.host_id())?,
+            &encode_merkle_check_key_exists_request(Some(host.host_id()), key, 1)?,
+        )?;
+        Ok(foks_proto::MerkleExistsResponse::decode(&response)?)
+    }
+
+    pub fn resolve_username(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        username_utf8: &str,
+        open_host: bool,
+    ) -> Result<EntityId> {
+        let normalized = foks_verify::normalize_username(username_utf8.as_bytes()).ok_or(
+            Error::AccountRequest("username is not valid after normalization"),
+        )?;
+        let response = self.call_with_material(
+            host,
+            &host.user,
+            &encode_resolve_username_request(&normalized, open_host)?,
+            &credential.seed,
+            &credential.certificate_chain,
+        )?;
+        let Value::Binary(uid) = decode(&response)? else {
+            return Err(Error::CredentialBinding(
+                "username resolution returned a non-UID value",
+            ));
+        };
+        EntityId::from_bytes(uid)?
+            .require_type(ENTITY_USER)
+            .map_err(Into::into)
+    }
+
+    pub fn device_nag(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+    ) -> Result<DeviceNagInfo> {
+        let response = self.call_with_material(
+            host,
+            &host.user,
+            &encode_get_device_nag_request()?,
+            &credential.seed,
+            &credential.certificate_chain,
+        )?;
+        DeviceNagInfo::decode(&response).map_err(Into::into)
+    }
+
+    pub fn clear_device_nag(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        cleared: bool,
+    ) -> Result<()> {
+        self.call_void_with_material(
+            host,
+            &host.user,
+            &encode_clear_device_nag_request(cleared)?,
+            &credential.seed,
+            &credential.certificate_chain,
+        )
+    }
+
+    pub fn ping(&self, host: &PinnedHost, credential: &DeviceCredential) -> Result<EntityId> {
+        let response = self.call_with_material(
+            host,
+            &host.user,
+            &encode_user_ping_request()?,
+            &credential.seed,
+            &credential.certificate_chain,
+        )?;
+        let Value::Binary(uid) = decode(&response)? else {
+            return Err(Error::CredentialBinding(
+                "user ping returned a non-UID value",
+            ));
+        };
+        let uid = EntityId::from_bytes(uid)?.require_type(ENTITY_USER)?;
+        if uid != credential.uid {
+            return Err(Error::CredentialBinding(
+                "user ping returned a different UID",
+            ));
+        }
+        Ok(uid)
+    }
+
     /// Recovers the delegated software subkey from the server using a fresh
     /// challenge signed by the hardware parent. `expected_subkey` is durable
     /// locator metadata and prevents a server from substituting another key.
@@ -343,40 +482,85 @@ impl FoksClient {
         if targets.is_empty() {
             return Ok(latest.authenticated_roots().clone());
         }
-        let mut full_epochs = std::collections::BTreeSet::new();
-        let mut hash_epochs = std::collections::BTreeSet::new();
-        for &target in &targets {
-            if target == 0 || target >= latest.root().epoch {
-                return Err(binding(
-                    "user chain references an unauthenticated future Merkle root",
-                ));
+        let mut authenticated = latest.authenticated_roots().clone();
+        for batch in historical_root_batches(latest.root().epoch, targets, binding)? {
+            let roots = self.authenticate_chain_root_batch(
+                host,
+                latest,
+                &batch.targets,
+                &batch.full_epochs,
+                &batch.hash_epochs,
+            )?;
+            authenticated.merge(&roots)?;
+        }
+        Ok(authenticated)
+    }
+
+    fn authenticate_chain_root_batch(
+        &self,
+        host: &PinnedHost,
+        latest: &VerifiedMerkleAdvance,
+        targets: &[u64],
+        full_epochs: &std::collections::BTreeSet<u64>,
+        hash_epochs: &std::collections::BTreeSet<u64>,
+    ) -> Result<AuthenticatedMerkleRoots> {
+        let full_epochs = full_epochs.iter().copied().collect::<Vec<_>>();
+        let hash_epochs = hash_epochs.iter().copied().collect::<Vec<_>>();
+        let mut roots = std::collections::BTreeMap::new();
+        let mut hashes = std::collections::BTreeMap::new();
+        for (requested_full, requested_hashes) in
+            historical_epoch_requests(&full_epochs, &hash_epochs)
+        {
+            let response = self.call_after_vhost_selection(
+                host,
+                &host.merkle_query,
+                &encode_merkle_select_vhost_request(host.host_id())?,
+                &encode_get_historical_merkle_roots_request(
+                    host.host_id(),
+                    &requested_full,
+                    &requested_hashes,
+                    1,
+                )?,
+            )?;
+            let response = foks_proto::HistoricalMerkleRoots::decode(&response)?;
+            if response.roots.len() != requested_full.len()
+                || response.hashes.len() != requested_hashes.len()
+            {
+                return Err(foks_verify::Error::MerkleHistoryShape.into());
             }
-            full_epochs.insert(target);
-            let requirements = merkle_history_requirements(latest.root().epoch, target)?;
-            full_epochs.extend(requirements.full_roots);
-            hash_epochs.extend(requirements.hashes);
+            for (epoch, root) in requested_full.into_iter().zip(response.roots) {
+                if roots.insert(epoch, root).is_some() {
+                    return Err(foks_verify::Error::MerkleHistoryShape.into());
+                }
+            }
+            for (epoch, hash) in requested_hashes.into_iter().zip(response.hashes) {
+                if hashes.insert(epoch, hash).is_some() {
+                    return Err(foks_verify::Error::MerkleHistoryShape.into());
+                }
+            }
         }
-        let full_epochs = full_epochs.into_iter().collect::<Vec<_>>();
-        let hash_epochs = hash_epochs.into_iter().collect::<Vec<_>>();
-        if full_epochs.len() > 64 || hash_epochs.len() > 64 {
-            return Err(binding(
-                "user chain requires too many historical Merkle roots",
-            ));
+        let historical = foks_proto::HistoricalMerkleRoots {
+            roots: full_epochs
+                .iter()
+                .map(|epoch| {
+                    roots
+                        .remove(epoch)
+                        .ok_or(foks_verify::Error::MerkleHistoryShape)
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            hashes: hash_epochs
+                .iter()
+                .map(|epoch| {
+                    hashes
+                        .remove(epoch)
+                        .ok_or(foks_verify::Error::MerkleHistoryShape)
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?,
         }
-        let historical = self.call_after_vhost_selection(
-            host,
-            &host.merkle_query,
-            &encode_merkle_select_vhost_request(host.host_id())?,
-            &encode_get_historical_merkle_roots_request(
-                host.host_id(),
-                &full_epochs,
-                &hash_epochs,
-                1,
-            )?,
-        )?;
+        .encoded()?;
         Ok(authenticate_historical_roots_from_latest(
             latest,
-            &targets,
+            targets,
             &full_epochs,
             &hash_epochs,
             &historical,
@@ -387,6 +571,16 @@ impl FoksClient {
     /// the user chain, unboxes the enrolled device role's PUK history, and
     /// atomically advances public user hard state in SQLite.
     pub fn authenticate_and_pin(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+    ) -> Result<AuthenticatedUserOutcome> {
+        self.retry_chain_load(host, |current| {
+            self.authenticate_and_pin_once(current, credential)
+        })
+    }
+
+    fn authenticate_and_pin_once(
         &self,
         host: &PinnedHost,
         credential: &DeviceCredential,
@@ -470,6 +664,16 @@ impl FoksClient {
     /// Authenticates a Yubi-backed device using its software subkey for mTLS
     /// and the hardware parent for PUK decapsulation.
     pub fn authenticate_yubi_and_pin(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+    ) -> Result<AuthenticatedUserOutcome> {
+        self.retry_chain_load(host, |current| {
+            self.authenticate_yubi_and_pin_once(current, credential)
+        })
+    }
+
+    fn authenticate_yubi_and_pin_once(
         &self,
         host: &PinnedHost,
         credential: &YubiCredential<'_>,
@@ -561,6 +765,133 @@ impl FoksClient {
             puks,
         })
     }
+
+    pub(crate) fn retry_chain_load<T>(
+        &self,
+        host: &PinnedHost,
+        mut operation: impl FnMut(&PinnedHost) -> Result<T>,
+    ) -> Result<T> {
+        const ATTEMPTS: usize = 3;
+        let mut current = host.clone();
+        for attempt in 0..ATTEMPTS {
+            match operation(&current) {
+                Ok(value) => return Ok(value),
+                Err(error) if attempt + 1 < ATTEMPTS && retryable_chain_load_error(&error) => {
+                    std::thread::sleep(std::time::Duration::from_millis(10_u64 << attempt));
+                    current = self
+                        .probe_and_pin_host_id(
+                            &current.probe,
+                            &current.host_id,
+                            &current.database_path,
+                        )?
+                        .pinned;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("bounded retry loop always returns")
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct HistoricalRootBatch {
+    targets: Vec<u64>,
+    full_epochs: std::collections::BTreeSet<u64>,
+    hash_epochs: std::collections::BTreeSet<u64>,
+}
+
+fn historical_root_batches(
+    latest_epoch: u64,
+    targets: Vec<u64>,
+    binding: fn(&'static str) -> Error,
+) -> Result<Vec<HistoricalRootBatch>> {
+    const MAXIMUM_TARGETS_PER_BATCH: usize = 64;
+
+    let mut batches = Vec::new();
+    let mut batch = HistoricalRootBatch {
+        targets: Vec::new(),
+        full_epochs: std::collections::BTreeSet::new(),
+        hash_epochs: std::collections::BTreeSet::new(),
+    };
+    for target in targets
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        if target == 0 || target >= latest_epoch {
+            return Err(binding(
+                "user chain references an unauthenticated future Merkle root",
+            ));
+        }
+        let requirements = merkle_history_requirements(latest_epoch, target)?;
+        let mut target_full = requirements
+            .full_roots
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        target_full.insert(target);
+        let target_hashes = requirements
+            .hashes
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        if batch.targets.len() == MAXIMUM_TARGETS_PER_BATCH {
+            batches.push(batch);
+            batch = HistoricalRootBatch {
+                targets: Vec::new(),
+                full_epochs: std::collections::BTreeSet::new(),
+                hash_epochs: std::collections::BTreeSet::new(),
+            };
+        }
+        batch.targets.push(target);
+        batch.full_epochs.extend(target_full);
+        batch.hash_epochs.extend(target_hashes);
+    }
+    if !batch.targets.is_empty() {
+        batches.push(batch);
+    }
+    Ok(batches)
+}
+
+fn historical_epoch_requests(
+    full_epochs: &[u64],
+    hash_epochs: &[u64],
+) -> Vec<(Vec<u64>, Vec<u64>)> {
+    const MAXIMUM_EPOCHS_PER_REQUEST: usize = 64;
+
+    let count = full_epochs
+        .len()
+        .max(hash_epochs.len())
+        .div_ceil(MAXIMUM_EPOCHS_PER_REQUEST);
+    (0..count)
+        .map(|index| {
+            let start = index * MAXIMUM_EPOCHS_PER_REQUEST;
+            let full_end = (start + MAXIMUM_EPOCHS_PER_REQUEST).min(full_epochs.len());
+            let hash_end = (start + MAXIMUM_EPOCHS_PER_REQUEST).min(hash_epochs.len());
+            (
+                full_epochs
+                    .get(start..full_end)
+                    .unwrap_or_default()
+                    .to_vec(),
+                hash_epochs
+                    .get(start..hash_end)
+                    .unwrap_or_default()
+                    .to_vec(),
+            )
+        })
+        .collect()
+}
+
+fn retryable_chain_load_error(error: &Error) -> bool {
+    match error {
+        Error::UserBinding(message) | Error::TeamBinding(message) => {
+            *message == "user chain references an unauthenticated future Merkle root"
+        }
+        Error::Verify(
+            foks_verify::Error::UntrustedUserRoot
+            | foks_verify::Error::MerkleHostchainMismatch
+            | foks_verify::Error::MissingDelegatedKey("Merkle signer")
+            | foks_verify::Error::DelegatedSignature("Merkle signer"),
+        ) => true,
+        _ => false,
+    }
 }
 
 fn current_milliseconds() -> Result<u64> {
@@ -569,4 +900,56 @@ fn current_milliseconds() -> Result<u64> {
         .map_err(|_| Error::CredentialBinding("system clock precedes Unix epoch"))?;
     u64::try_from(elapsed.as_millis())
         .map_err(|_| Error::CredentialBinding("system clock timestamp overflow"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        historical_epoch_requests, historical_root_batches, retryable_chain_load_error, Error,
+    };
+
+    #[test]
+    fn historical_root_requests_are_batched_without_dropping_targets() {
+        let targets = (1..=100).collect::<Vec<_>>();
+        let batches = historical_root_batches(10_000, targets.clone(), Error::UserBinding).unwrap();
+        assert!(batches.len() > 1);
+        assert!(batches.iter().all(|batch| batch.targets.len() <= 64));
+        for batch in &batches {
+            let full = batch.full_epochs.iter().copied().collect::<Vec<_>>();
+            let hashes = batch.hash_epochs.iter().copied().collect::<Vec<_>>();
+            assert!(historical_epoch_requests(&full, &hashes)
+                .iter()
+                .all(|(full, hashes)| full.len() <= 64 && hashes.len() <= 64));
+        }
+        assert_eq!(
+            batches
+                .into_iter()
+                .flat_map(|batch| batch.targets)
+                .collect::<Vec<_>>(),
+            targets
+        );
+    }
+
+    #[test]
+    fn historical_root_batches_reject_future_roots() {
+        assert!(matches!(
+            historical_root_batches(100, vec![100], Error::TeamBinding),
+            Err(Error::TeamBinding(
+                "user chain references an unauthenticated future Merkle root"
+            ))
+        ));
+    }
+
+    #[test]
+    fn only_trust_refresh_races_are_retried() {
+        assert!(retryable_chain_load_error(&Error::UserBinding(
+            "user chain references an unauthenticated future Merkle root"
+        )));
+        assert!(retryable_chain_load_error(&Error::Verify(
+            foks_verify::Error::MerkleHostchainMismatch
+        )));
+        assert!(!retryable_chain_load_error(&Error::Verify(
+            foks_verify::Error::UserChainContinuity
+        )));
+    }
 }

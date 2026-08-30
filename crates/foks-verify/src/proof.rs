@@ -5,7 +5,7 @@ use crate::{
     MERKLE_NODE_TYPE_ID,
 };
 
-pub(crate) fn verify_merkle_path(
+pub fn verify_merkle_path(
     path: &MerklePathCompressed,
     query_key: &[u8; 32],
     expected_leaf: Option<&[u8; 32]>,
@@ -15,7 +15,7 @@ pub(crate) fn verify_merkle_path(
     verify_merkle_path_with(path, query_key, expected, expected_root_node)
 }
 
-pub(crate) fn verify_merkle_path_present(
+pub fn verify_merkle_path_present(
     path: &MerklePathCompressed,
     query_key: &[u8; 32],
     expected_root_node: &[u8; 32],

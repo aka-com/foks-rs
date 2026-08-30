@@ -272,7 +272,8 @@ fn construct_publication(
     {
         return Err(Error::Config("current Merkle database head is invalid"));
     }
-    if now < current_wire_root.time {
+    let protocol_time = now / 1_000;
+    if protocol_time < current_wire_root.time {
         return Err(Error::Config("host rotation time moved backwards"));
     }
     let host = EntityId::from_bytes(stored.host_id)?;
@@ -294,7 +295,7 @@ fn construct_publication(
                 epoch: current_root.epoch,
                 hash: current_root.root_hash,
             },
-            time: now,
+            time: protocol_time,
         },
         host,
         signer,
@@ -331,13 +332,14 @@ fn construct_publication(
         .collect::<Vec<_>>();
     let root = MerkleRoot {
         epoch: root_epoch,
-        time: now,
+        time: protocol_time,
         back_pointers: foks_merkle_store::back_pointer_hash(&back_pointers)?,
         root_node: current_root.root_node,
         hostchain: HostchainTail {
             seqno: hostchain_seqno,
             hash: hostchain_link_hash,
         },
+        extensions: Vec::new(),
     };
     let exact_root = root.encoded()?;
     let root_hash = foks_crypto::prefixed_hash_signable(MERKLE_ROOT_TYPE_ID, &exact_root)?;

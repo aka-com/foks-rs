@@ -25,6 +25,7 @@ pub struct IdentityMutation<'a> {
     pub uid: &'a [u8],
     pub device_id: &'a [u8],
     pub device_hepk_fingerprint: &'a [u8; 32],
+    pub self_token: &'a [u8; 17],
     pub exact_device_hepk: &'a [u8],
     pub exact_device_name: &'a [u8],
     pub subkey_id: Option<&'a [u8]>,
@@ -33,6 +34,7 @@ pub struct IdentityMutation<'a> {
     pub link_hash: &'a [u8; 32],
     pub exact_link: &'a [u8],
     pub tree_location: &'a [u8; 32],
+    pub subchain_tree_location_seed: &'a [u8; 32],
     pub shared_role_type: u64,
     pub shared_visibility: i64,
     pub shared_generation: u64,
@@ -147,15 +149,17 @@ impl Database {
         transaction.execute(
             "INSERT INTO devices
              (device_id, uid, active, role_type, visibility, subkey_id,
-              hepk_fingerprint, exact_hepk, exact_name)
-             VALUES (?1, ?2, 1, 3, 0, ?3, ?4, ?5, ?6)",
+              hepk_fingerprint, self_token, exact_hepk, exact_name, start_epoch)
+             VALUES (?1, ?2, 1, 3, 0, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 mutation.device_id,
                 mutation.uid,
                 mutation.subkey_id,
                 mutation.device_hepk_fingerprint,
+                mutation.self_token,
                 mutation.exact_device_hepk,
                 mutation.exact_device_name,
+                sql_integer(mutation.root_epoch)?,
             ],
         )?;
         insert_yubi_projection(
@@ -185,6 +189,10 @@ impl Database {
         transaction.execute(
             "INSERT INTO tree_locations(uid, seqno, location) VALUES (?1, 1, ?2)",
             params![mutation.uid, mutation.tree_location],
+        )?;
+        transaction.execute(
+            "INSERT INTO subchain_tree_location_seeds(entity_id, seed) VALUES (?1, ?2)",
+            params![mutation.uid, mutation.subchain_tree_location_seed],
         )?;
         transaction.execute(
             "INSERT INTO shared_keys
@@ -249,9 +257,9 @@ impl Database {
         }
         for (key, value) in mutation.merkle_leaves {
             transaction.execute(
-                "INSERT INTO merkle_leaves(leaf_key, leaf_value) VALUES (?1, ?2)
+                "INSERT INTO merkle_leaves(leaf_key, leaf_value, epoch) VALUES (?1, ?2, ?3)
                  ON CONFLICT(leaf_key) DO UPDATE SET leaf_value = excluded.leaf_value",
-                params![key, value],
+                params![key, value, sql_integer(mutation.root_epoch)?],
             )?;
         }
         inject(failure, FailurePoint::MerkleNodes)?;

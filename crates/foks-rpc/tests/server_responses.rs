@@ -1,6 +1,7 @@
 use foks_proto::KvPathVersionVector;
 use foks_rpc::{
-    encode_status_response_at, encode_void_success_response_at, read_void_response, RpcStatus,
+    encode_bare_void_success_response_at, encode_status_response_at,
+    encode_void_success_response_at, read_bare_void_response, read_void_response, RpcStatus,
     DEFAULT_MAX_FRAME_LENGTH,
 };
 
@@ -23,6 +24,30 @@ fn stale_cache_error_matches_the_official_go_frame() {
 }
 
 #[test]
+fn identity_lookup_errors_match_the_official_go_frames() {
+    assert_eq!(
+        encode_status_response_at(&RpcStatus::UserNotFound, 0).unwrap(),
+        fixture("reg-check-name-not-found-response.frame")
+    );
+    assert_eq!(
+        encode_status_response_at(&RpcStatus::KeyNotFound("probed key".to_owned()), 0).unwrap(),
+        fixture("reg-probe-key-not-found-response.frame")
+    );
+}
+
+#[test]
+fn merkle_lookup_errors_match_the_official_go_frames() {
+    assert_eq!(
+        encode_status_response_at(&RpcStatus::MerkleNoRoot, 0).unwrap(),
+        fixture("merkle-no-root-response.frame")
+    );
+    assert_eq!(
+        encode_status_response_at(&RpcStatus::MerkleLeafNotFound, 0).unwrap(),
+        fixture("merkle-leaf-not-found-response.frame")
+    );
+}
+
+#[test]
 fn void_success_is_accepted_by_the_existing_client_decoder() {
     let response = encode_void_success_response_at(42).unwrap();
     let mut response = response.as_slice();
@@ -39,6 +64,15 @@ fn void_success_matches_the_official_go_frame() {
 }
 
 #[test]
+fn headerless_void_success_matches_the_official_go_frame() {
+    let expected = fixture("team-create-response.frame");
+    assert_eq!(encode_bare_void_success_response_at(0).unwrap(), expected);
+    let mut response = expected.as_slice();
+    read_bare_void_response(&mut response, DEFAULT_MAX_FRAME_LENGTH, 0).unwrap();
+    assert!(response.is_empty());
+}
+
+#[test]
 fn every_typed_status_is_observed_as_an_application_error() {
     let versions = KvPathVersionVector::decode(&fixture("kv-path-version-vector.snowp")).unwrap();
     let statuses = [
@@ -46,11 +80,14 @@ fn every_typed_status_is_observed_as_an_application_error() {
         RpcStatus::DeviceAlreadyProvisioned,
         RpcStatus::Expired,
         RpcStatus::Locked,
+        RpcStatus::MerkleLeafNotFound,
+        RpcStatus::MerkleNoRoot,
         RpcStatus::KvNoEnt,
         RpcStatus::KvPermission {
             operation: 0,
             resource: 0,
         },
+        RpcStatus::KeyNotFound("key".into()),
         RpcStatus::NameInUse,
         RpcStatus::NotFound("missing".into()),
         RpcStatus::PermissionDenied("denied".into()),
@@ -73,6 +110,7 @@ fn every_typed_status_is_observed_as_an_application_error() {
         RpcStatus::TeamAdHocOpenViewership,
         RpcStatus::TeamAdHocInvalidChange("change".into()),
         RpcStatus::TeamAdHocDuplicate,
+        RpcStatus::UserNotFound,
         RpcStatus::Unsupported,
     ];
     for status in statuses {

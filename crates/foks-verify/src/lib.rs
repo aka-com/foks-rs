@@ -39,7 +39,7 @@ const ED25519_OID: &str = "1.3.101.112";
 pub use error::*;
 pub use host::*;
 pub use merkle::*;
-pub(crate) use proof::{verify_merkle_path, verify_merkle_path_present};
+pub use proof::{verify_merkle_path, verify_merkle_path_present};
 pub use team::*;
 pub use user::*;
 pub use user_transition::{verify_user_transition, VerifiedUserTransition};
@@ -519,6 +519,7 @@ mod tests {
         assert_eq!(verified.team_name(), b"fixtureteam");
         assert_eq!(verified.team_name_utf8(), b"fixtureteam");
         assert_eq!(verified.team_name_sequence(), 1);
+        assert_eq!(verified.member_load_floor(), Role::member(0));
         assert_eq!(verified.members().len(), 1);
         assert_eq!(verified.members()[0].role, Role::OWNER);
         assert_eq!(verified.shared_keys().len(), 4);
@@ -1046,9 +1047,10 @@ mod tests {
     #[test]
     fn canonical_address_parser_handles_dns_and_ipv6() {
         assert_eq!(canonical_host("foks.app:4430").unwrap(), "foks.app");
+        assert_eq!(canonical_host("foks.app").unwrap(), "foks.app");
         assert_eq!(canonical_host("[::1]:4430").unwrap(), "::1");
         assert!(canonical_host("[]:4430").is_err());
-        assert!(canonical_host("foks.app").is_err());
+        assert!(canonical_host("::1").is_err());
         assert!(canonical_host(":4430").is_err());
     }
 
@@ -1103,6 +1105,76 @@ mod tests {
 
         genesis.signatures[0] = foks_proto::Signature::Ed25519([0; 64]);
         assert!(verify_hostchain(&[genesis]).is_err());
+    }
+
+    #[test]
+    fn redelegation_restores_non_chain_signers_only() {
+        let original = SigningKey::from_bytes(&[1; 32]);
+        let delegated = SigningKey::from_bytes(&[3; 32]);
+        let host = entity_id(ENTITY_HOST, &original);
+        let metadata = entity_id(ENTITY_HOST_METADATA_SIGNER, &delegated);
+        let key_change = |key: &EntityId| {
+            Value::Array(vec![Value::Array(vec![
+                Value::Unsigned(2),
+                Value::Variant(Some((
+                    b"2".to_vec(),
+                    Box::new(Value::Binary(key.as_bytes().to_vec())),
+                ))),
+            ])])
+        };
+        let revoke_change = |key: &EntityId| {
+            Value::Array(vec![Value::Array(vec![
+                Value::Unsigned(1),
+                Value::Variant(Some((
+                    b"1".to_vec(),
+                    Box::new(Value::Binary(key.as_bytes().to_vec())),
+                ))),
+            ])])
+        };
+
+        let genesis = link(
+            1,
+            None,
+            &host,
+            &host,
+            key_change(&metadata),
+            vec![&delegated, &original],
+        );
+        let genesis_hash =
+            prefixed_hash(HOSTCHAIN_LINK_OUTER_TYPE_ID, &genesis.encoded().unwrap()).unwrap();
+        let revocation = link(
+            2,
+            Some(genesis_hash),
+            &host,
+            &host,
+            revoke_change(&metadata),
+            vec![&original],
+        );
+        let revocation_hash =
+            prefixed_hash(HOSTCHAIN_LINK_OUTER_TYPE_ID, &revocation.encoded().unwrap()).unwrap();
+        let redelegation = link(
+            3,
+            Some(revocation_hash),
+            &host,
+            &host,
+            key_change(&metadata),
+            vec![&delegated, &original],
+        );
+        let state = verify_hostchain(&[genesis, revocation, redelegation]).unwrap();
+        assert!(!state.revoked.contains(&metadata));
+        assert!(state
+            .active_keys(ENTITY_HOST_METADATA_SIGNER)
+            .any(|key| key == &metadata));
+
+        let mut state = HostchainState::default();
+        state.revoked.insert(host.clone());
+        state
+            .keys
+            .entry(ENTITY_HOST)
+            .or_default()
+            .push(host.clone());
+        assert!(state.revoked.contains(&host));
+        assert!(!state.active_keys(ENTITY_HOST).any(|key| key == &host));
     }
 
     fn entity_id(entity_type: u8, key: &SigningKey) -> EntityId {

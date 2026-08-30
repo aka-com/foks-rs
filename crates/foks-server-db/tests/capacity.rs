@@ -148,7 +148,7 @@ fn namespace_shape_limits_match_client_traversal_limits() {
     test.database
         .put_kv_dirents(
             &UID,
-            &initial,
+            Some(&initial),
             &[KvDirentMutation {
                 parent: &root,
                 id: &[0x61; 16],
@@ -165,7 +165,7 @@ fn namespace_shape_limits_match_client_traversal_limits() {
     assert!(matches!(
         test.database.put_kv_dirents(
             &UID,
-            &current,
+            Some(&current),
             &[KvDirentMutation {
                 parent: &root,
                 id: &[0x62; 16],
@@ -199,7 +199,7 @@ fn oversized_dirents_and_unsafe_capacity_configuration_are_rejected() {
     assert!(matches!(
         test.database.put_kv_dirents(
             &UID,
-            &precondition,
+            Some(&precondition),
             &[KvDirentMutation {
                 parent: &root,
                 id: &[0x61; 16],

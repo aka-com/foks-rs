@@ -27,6 +27,24 @@ pub struct MerklePathCompressed {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerkleLookupResponse {
+    pub root: MerkleRoot,
+    pub path: MerklePathCompressed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerkleMultiLookupResponse {
+    pub root: MerkleRoot,
+    pub paths: Vec<MerklePathCompressed>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MerkleExistsResponse {
+    pub epoch: u64,
+    pub signed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UserMerklePaths {
     root: MerkleRoot,
     paths: Vec<MerklePathCompressed>,
@@ -127,7 +145,15 @@ impl NameCommitmentAndKey {
 }
 
 impl MerklePathCompressed {
-    pub(crate) fn to_value(&self) -> Value {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        merkle_path(&decode(bytes)?)
+    }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&self.to_value())?)
+    }
+
+    pub fn to_value(&self) -> Value {
         let edges = self
             .edges
             .iter()
@@ -167,6 +193,77 @@ impl MerklePathCompressed {
             ]),
         };
         Value::Array(vec![Value::Binary(edges), terminal])
+    }
+}
+
+impl MerkleLookupResponse {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let fields = array(&value, 3)?;
+        Ok(Self {
+            root: MerkleRoot::decode(&encode(&fields[0])?)?,
+            path: merkle_path(&Value::Array(vec![fields[1].clone(), fields[2].clone()]))?,
+        })
+    }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        let Value::Array(path) = self.path.to_value() else {
+            unreachable!("Merkle paths are positional structs");
+        };
+        Ok(encode(&Value::Array(vec![
+            decode(&self.root.encoded()?)?,
+            path[0].clone(),
+            path[1].clone(),
+        ]))?)
+    }
+}
+
+impl MerkleMultiLookupResponse {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let fields = array(&value, 2)?;
+        Ok(Self {
+            root: MerkleRoot::decode(&encode(&fields[0])?)?,
+            paths: list(&fields[1], merkle_path)?,
+        })
+    }
+
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        let paths = if self.paths.is_empty() {
+            Value::Null
+        } else {
+            Value::Array(
+                self.paths
+                    .iter()
+                    .map(MerklePathCompressed::to_value)
+                    .collect(),
+            )
+        };
+        Ok(encode(&Value::Array(vec![
+            decode(&self.root.encoded()?)?,
+            paths,
+        ]))?)
+    }
+}
+
+impl MerkleExistsResponse {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = decode(bytes)?;
+        let fields = array(&value, 2)?;
+        let Value::Bool(signed) = fields[1] else {
+            return Err(type_error("boolean", &fields[1]));
+        };
+        Ok(Self {
+            epoch: unsigned(&fields[0])?,
+            signed,
+        })
+    }
+
+    pub fn encoded(self) -> Result<Vec<u8>> {
+        Ok(encode(&Value::Array(vec![
+            Value::Unsigned(self.epoch),
+            Value::Bool(self.signed),
+        ]))?)
     }
 }
 

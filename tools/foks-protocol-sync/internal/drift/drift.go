@@ -178,6 +178,20 @@ func Compare(baseline, candidate model.Artifact, policy Policy) Report {
 			}
 			add(class, "protocol_id_changed", name, fmt.Sprintf("%#x -> %#x", old.UniqueID, newProtocol.UniqueID))
 		}
+		if old.ArgumentHeader != newProtocol.ArgumentHeader {
+			class := OutsideLocalSlice
+			if supportedProtocols[name] {
+				class = WireBreaking
+			}
+			add(class, "argument_header_changed", name, fmt.Sprintf("%t -> %t", old.ArgumentHeader, newProtocol.ArgumentHeader))
+		}
+		if old.ResultHeader != newProtocol.ResultHeader {
+			class := OutsideLocalSlice
+			if supportedProtocols[name] {
+				class = WireBreaking
+			}
+			add(class, "result_header_changed", name, fmt.Sprintf("%t -> %t", old.ResultHeader, newProtocol.ResultHeader))
+		}
 		compareMethods(old, newProtocol, policy, supportedProtocols[name], add)
 	}
 	for name := range candidateProtocols {
@@ -232,8 +246,13 @@ func compareMethods(old, candidate model.Protocol, policy Policy, protocolSuppor
 		}
 		if !ok {
 			add(class, "method_removed", subject, withCoverage(fmt.Sprintf("position %d is absent", method.Position), subject, policy))
-		} else if method.Position != newMethod.Position {
-			add(class, "method_position_changed", subject, withCoverage(fmt.Sprintf("%d -> %d", method.Position, newMethod.Position), subject, policy))
+		} else {
+			if method.Position != newMethod.Position {
+				add(class, "method_position_changed", subject, withCoverage(fmt.Sprintf("%d -> %d", method.Position, newMethod.Position), subject, policy))
+			}
+			if method.ResultType != newMethod.ResultType {
+				add(class, "method_result_changed", subject, withCoverage(fmt.Sprintf("%s -> %s", method.ResultType, newMethod.ResultType), subject, policy))
+			}
 		}
 	}
 	for name, method := range newByName {

@@ -348,65 +348,21 @@ impl FoksClient {
         for _ in 0..3 {
             let attempt = (|| -> Result<Vec<KvDirectoryProjection>> {
                 let mut store = SoftStateStore::open(soft_database_path)?;
-                let cached_vector =
-                    store.version_vector(host.host_id.as_bytes(), party.party.as_bytes())?;
-                let cached_tree = if cached_vector.is_some() {
-                    store.tree(host.host_id.as_bytes(), party.party.as_bytes())?
-                } else {
-                    Vec::new()
-                };
-                let stale = if let Some(versions) = &cached_vector {
-                    match fetch(auth, &KvRequest::CacheCheck(versions.clone())) {
-                        Ok(_) => return Ok(cached_tree),
-                        Err(Error::Rpc(foks_rpc::Error::KvStaleCache(stale))) => Some(stale),
-                        Err(error) => return Err(error),
-                    }
-                } else {
-                    None
-                };
-                let incremental = stale.as_ref().is_some_and(|stale| {
-                    cached_vector
-                        .as_ref()
-                        .is_some_and(|cached| stale.root_version == cached.root_version)
-                });
-                let (root_bytes, root, mut queue) = if incremental {
-                    let cached_root = cached_tree
-                        .first()
-                        .ok_or(Error::KvResponse("cached KV tree has no root"))?;
-                    let root = KvRoot::decode(&cached_root.root_bytes)?;
-                    let stale = stale
-                        .as_ref()
-                        .expect("incremental state has stale versions");
-                    let queue = stale
-                        .directories
-                        .iter()
-                        .map(|directory| directory.id)
-                        .collect::<VecDeque<_>>();
-                    (cached_root.root_bytes.clone(), root, queue)
-                } else {
-                    let root_bytes = fetch(auth, &KvRequest::Root)?;
-                    let root = KvRoot::decode(&root_bytes)?;
-                    let queue = VecDeque::from([root.root]);
-                    (root_bytes, root, queue)
-                };
+                // Go's PathVersionVector is a partial assertion: a successful
+                // cache check proves that cited entries are unchanged, but it
+                // cannot prove that a peer did not add an uncited entry. A
+                // complete namespace projection therefore requires a fresh
+                // traversal; the final cache check below still closes races.
+                let root_bytes = fetch(auth, &KvRequest::Root)?;
+                let root = KvRoot::decode(&root_bytes)?;
+                let mut queue = VecDeque::from([root.root]);
                 if root.version == 0 {
                     return Err(Error::KvResponse("root version is zero"));
                 }
                 let root_keys = kv_key(private_keys, root.key.role, root.key.generation)?;
                 root_keys.verify_root(&root, &party)?;
 
-                let known_directories = cached_tree
-                    .iter()
-                    .map(|directory| directory.directory_id)
-                    .collect::<BTreeSet<_>>();
-                let mut combined = if incremental {
-                    cached_tree
-                        .into_iter()
-                        .map(|directory| (directory.directory_id, directory))
-                        .collect::<BTreeMap<_, _>>()
-                } else {
-                    BTreeMap::new()
-                };
+                let mut combined = BTreeMap::new();
                 let mut large_files: Vec<KvLargeFileStage> = Vec::new();
                 let mut visited = BTreeSet::new();
                 let mut projections = Vec::new();
@@ -539,9 +495,7 @@ impl FoksClient {
                             match entry.value.node_type()? {
                                 KvNodeType::Directory => {
                                     let child = entry.value.object_id();
-                                    if !known_directories.contains(&child) {
-                                        queue.push_back(child);
-                                    }
+                                    queue.push_back(child);
                                 }
                                 KvNodeType::SmallFile => {
                                     let (boxed, exact) = match extended.remove(&position) {

@@ -20,6 +20,7 @@ pub struct TeamHeader<'a> {
     pub name_commitment_key: Option<&'a [u8; 16]>,
     pub reservation_token: Option<&'a [u8; 17]>,
     pub reservation_expires_at: Option<u64>,
+    pub subchain_tree_location_seed: &'a [u8; 32],
 }
 
 pub struct TeamMemberMutation<'a> {
@@ -92,6 +93,7 @@ pub struct TeamMutation<'a> {
     pub seed_chain: &'a [TeamSeedChainMutation<'a>],
     pub removal_boxes: &'a [TeamRemovalBoxMutation<'a>],
     pub remote_member_view_tokens: &'a [TeamRemoteMemberViewTokenMutation<'a>],
+    pub generic_link: Option<crate::GenericLinkMutation<'a>>,
     pub expected_root_epoch: u64,
     pub expected_root_hash: &'a [u8; 32],
     pub merkle_commit: &'a foks_merkle_store::Commit,
@@ -208,6 +210,10 @@ impl Database {
                     sql_integer(mutation.now)?
                 ],
             )?;
+            transaction.execute(
+                "INSERT INTO subchain_tree_location_seeds(entity_id, seed) VALUES (?1, ?2)",
+                params![mutation.team_id, header.subchain_tree_location_seed],
+            )?;
             (header.kind, header.host_id.to_vec())
         } else {
             let head: Option<(i64, Vec<u8>, i64, Vec<u8>)> = transaction
@@ -299,6 +305,14 @@ impl Database {
                 mutation.next_tree_location
             ],
         )?;
+        if let Some(generic) = &mutation.generic_link {
+            crate::generic::insert_generic_link(
+                &transaction,
+                &self.config,
+                generic,
+                mutation.root_epoch,
+            )?;
+        }
         inject(failure, TeamMutationFailurePoint::Chain)?;
 
         transaction.execute(
@@ -331,18 +345,21 @@ impl Database {
             insert_exact(
                 &transaction,
                 "INSERT INTO team_shared_keys
-                 (team_id, role_type, visibility, generation, verify_key, exact_hepk)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 (team_id, role_type, visibility, generation, verify_key, exact_hepk, start_epoch)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT(team_id, role_type, visibility, generation) DO UPDATE SET
-                   verify_key = excluded.verify_key, exact_hepk = excluded.exact_hepk
-                 WHERE verify_key = excluded.verify_key AND exact_hepk = excluded.exact_hepk",
+                   verify_key = excluded.verify_key, exact_hepk = excluded.exact_hepk,
+                   start_epoch = excluded.start_epoch
+                 WHERE verify_key = excluded.verify_key AND exact_hepk = excluded.exact_hepk
+                   AND start_epoch = excluded.start_epoch",
                 params![
                     mutation.team_id,
                     sql_integer(key.role_type)?,
                     key.visibility,
                     sql_integer(key.generation)?,
                     key.verify_key,
-                    key.exact_hepk
+                    key.exact_hepk,
+                    sql_integer(mutation.root_epoch)?
                 ],
                 "conflicting team shared key",
             )?;
@@ -522,9 +539,9 @@ fn publish_merkle(
     }
     for (key, value) in mutation.merkle_leaves {
         transaction.execute(
-            "INSERT INTO merkle_leaves(leaf_key, leaf_value) VALUES (?1, ?2)
+            "INSERT INTO merkle_leaves(leaf_key, leaf_value, epoch) VALUES (?1, ?2, ?3)
              ON CONFLICT(leaf_key) DO UPDATE SET leaf_value = excluded.leaf_value",
-            params![key, value],
+            params![key, value, sql_integer(mutation.root_epoch)?],
         )?;
     }
     inject(failure, TeamMutationFailurePoint::MerkleNodes)?;

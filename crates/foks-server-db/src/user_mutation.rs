@@ -14,6 +14,7 @@ pub enum UserMutationFailurePoint {
 
 pub struct AddedCredential<'a> {
     pub device_id: &'a [u8],
+    pub self_token: &'a [u8; 17],
     pub hepk_fingerprint: &'a [u8; 32],
     pub exact_hepk: &'a [u8],
     pub exact_name: &'a [u8],
@@ -171,8 +172,8 @@ impl Database {
             transaction.execute(
                 "INSERT INTO devices
                  (device_id, uid, active, role_type, visibility, subkey_id,
-                  hepk_fingerprint, exact_hepk, exact_name)
-                 VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?8)",
+                  hepk_fingerprint, self_token, exact_hepk, exact_name, start_epoch)
+                 VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     added.device_id,
                     mutation.uid,
@@ -180,8 +181,10 @@ impl Database {
                     added.visibility,
                     added.subkey_id,
                     added.hepk_fingerprint,
+                    added.self_token,
                     added.exact_hepk,
-                    added.exact_name
+                    added.exact_name,
+                    sql_integer(mutation.root_epoch)?
                 ],
             )?;
             crate::identity::insert_yubi_projection(
@@ -290,9 +293,9 @@ impl Database {
         }
         for (key, value) in mutation.merkle_leaves {
             transaction.execute(
-                "INSERT INTO merkle_leaves(leaf_key, leaf_value) VALUES (?1, ?2)
+                "INSERT INTO merkle_leaves(leaf_key, leaf_value, epoch) VALUES (?1, ?2, ?3)
                  ON CONFLICT(leaf_key) DO UPDATE SET leaf_value = excluded.leaf_value",
-                params![key, value],
+                params![key, value, sql_integer(mutation.root_epoch)?],
             )?;
         }
         inject(failure, UserMutationFailurePoint::MerkleNodes)?;
