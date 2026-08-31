@@ -2,25 +2,123 @@
 
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::{fs, path::PathBuf};
 
 use foks_agent_client::AgentClient;
 use foks_agent_proto::{
-    ErrorCode, FederationRole, Operation, ResponseResult, SecretString, TeamRole,
-    YubiRetryConfiguration,
+    AccountStoreRef, AccountSummary, ErrorCode, ErrorFields, FederationRole, KnownStoreSummary,
+    KvChunkResult, KvEntryMetadata, KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef,
+    KvUploadHeader, Operation, ProfileProtocol, ProfileTrust, ResponseResult, SecretString,
+    TeamKind, TeamRole, TeamStoreRef, YubiRetryConfiguration,
 };
+use serde::de::DeserializeOwned;
 use serde_json::Value;
+use zeroize::{Zeroize as _, Zeroizing};
+
+// Local protocol v2 encodes byte vectors as JSON integer arrays; these bounds
+// keep worst-case payloads comfortably below its 1 MiB frame ceiling.
+pub const MAXIMUM_INLINE_KV_BYTES: usize = 128 * 1024;
+const KV_READ_CHUNK_BYTES: u32 = 128 * 1024;
+const MAXIMUM_DESKTOP_REVEAL_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Typed desktop-side classification of local-agent failures.
+///
+/// Protocol v2 expands the stable protocol variants in phase 4. Defining the desktop
+/// boundary now keeps transport prose from leaking into view code during the refactor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AgentError {
+    Protocol {
+        code: ErrorCode,
+        message: String,
+        fields: ErrorFields,
+    },
+    Transport(String),
+    Ambiguous(String),
+    Cancelled,
+}
+
+impl AgentError {
+    /// Reports a transient condition, not permission to retry a mutation.
+    /// Callers must reconcile an ambiguous mutation or use its explicit
+    /// resume operation before issuing it again.
+    pub fn transient(&self) -> bool {
+        matches!(
+            self,
+            Self::Protocol {
+                code: ErrorCode::Busy | ErrorCode::DeadlineExceeded | ErrorCode::ProfileBusy,
+                ..
+            } | Self::Transport(_)
+                | Self::Ambiguous(_)
+        )
+    }
+
+    pub fn fatal(&self) -> bool {
+        matches!(
+            self,
+            Self::Protocol {
+                code: ErrorCode::VersionMismatch,
+                ..
+            }
+        )
+    }
+
+    pub fn ambiguous(&self) -> bool {
+        matches!(
+            self,
+            Self::Protocol {
+                code: ErrorCode::DeadlineExceeded,
+                ..
+            } | Self::Ambiguous(_)
+        )
+    }
+
+    pub fn user_message(&self) -> &str {
+        match self {
+            Self::Protocol { message, .. }
+            | Self::Transport(message)
+            | Self::Ambiguous(message) => message,
+            Self::Cancelled => "The request was cancelled.",
+        }
+    }
+}
+
+impl std::fmt::Display for AgentError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Protocol { code, message, .. } => {
+                write!(formatter, "agent returned {code:?}: {message}")?;
+                if *code == ErrorCode::DeadlineExceeded {
+                    formatter.write_str(
+                        "\n\nThe operation may still have completed. Refresh this screen \
+                         (or run the matching resume action) before retrying it.",
+                    )?;
+                }
+                Ok(())
+            }
+            Self::Transport(message) => formatter.write_str(message),
+            Self::Ambiguous(message) => write!(
+                formatter,
+                "{message}\n\nThe upload commit may have completed. The store will be refreshed before another mutation."
+            ),
+            Self::Cancelled => formatter.write_str("request cancelled"),
+        }
+    }
+}
+
+impl std::error::Error for AgentError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Screen {
-    Status,
-    Profiles,
-    Accounts,
-    YubiKeys,
-    PersonalKv,
-    Teams,
-    Jobs,
+    Items,
+    Notifications,
+    GetStarted,
+    Stores,
+    Parties,
+    Servers,
+    Settings,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,57 +145,1075 @@ pub enum YubiAction {
 
 impl Screen {
     pub const ALL: [Self; 7] = [
-        Self::Status,
-        Self::Profiles,
-        Self::Accounts,
-        Self::YubiKeys,
-        Self::PersonalKv,
-        Self::Teams,
-        Self::Jobs,
+        Self::Items,
+        Self::Notifications,
+        Self::GetStarted,
+        Self::Stores,
+        Self::Parties,
+        Self::Servers,
+        Self::Settings,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Status => "Status",
-            Self::Profiles => "Profiles",
-            Self::Accounts => "Accounts",
-            Self::YubiKeys => "YubiKeys",
-            Self::PersonalKv => "Personal KV",
-            Self::Teams => "Teams",
-            Self::Jobs => "Scheduled work",
+            Self::Items => "Items",
+            Self::Notifications => "Notifications",
+            Self::GetStarted => "Get started",
+            Self::Stores => "Stores",
+            Self::Parties => "Parties",
+            Self::Servers => "Servers",
+            Self::Settings => "Settings",
         }
     }
 }
 
 pub trait AgentTransport: Send + Sync + 'static {
-    fn call(&self, operation: Operation) -> Result<Value, String>;
+    fn call(&self, operation: Operation) -> Result<Value, AgentError>;
+
+    fn put_kv_stream(
+        &self,
+        _header: KvUploadHeader,
+        _reader: &mut dyn std::io::Read,
+    ) -> Result<Value, AgentError> {
+        Err(AgentError::Transport(
+            "this agent transport does not support streaming uploads".to_owned(),
+        ))
+    }
 }
 
 impl AgentTransport for AgentClient {
-    fn call(&self, operation: Operation) -> Result<Value, String> {
-        let response = self.call(operation).map_err(|error| error.to_string())?;
+    fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+        let response = self.call(operation).map_err(agent_client_error)?;
         match response.result {
             ResponseResult::Success { value } => Ok(value),
-            ResponseResult::Error { code, message } => {
-                let mut rendered = format!("agent returned {code:?}: {message}");
-                if matches!(code, ErrorCode::DeadlineExceeded) {
-                    rendered.push_str(
-                        "\n\nThe operation may still have completed. Refresh this screen \
-                         (or run the matching resume action) before retrying it.",
-                    );
-                }
-                Err(rendered)
-            }
+            ResponseResult::Error {
+                code,
+                message,
+                fields,
+            } => Err(AgentError::Protocol {
+                code,
+                message,
+                fields,
+            }),
+        }
+    }
+
+    fn put_kv_stream(
+        &self,
+        header: KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+    ) -> Result<Value, AgentError> {
+        let response = self
+            .put_kv_stream(header, reader)
+            .map_err(agent_client_error)?;
+        match response.result {
+            ResponseResult::Success { value } => Ok(value),
+            ResponseResult::Error {
+                code,
+                message,
+                fields,
+            } => Err(AgentError::Protocol {
+                code,
+                message,
+                fields,
+            }),
         }
     }
 }
 
-/// The one response shape the desktop interprets structurally besides plain
-/// string lists. Parsing through serde keeps the coupling to agent payloads
-/// in one typed, testable place instead of scattered `Value` walking.
+fn agent_client_error(error: foks_agent_client::Error) -> AgentError {
+    match error {
+        foks_agent_client::Error::Ambiguous(message) => AgentError::Ambiguous(message),
+        foks_agent_client::Error::Protocol(foks_agent_proto::Error::Version) => {
+            AgentError::Protocol {
+                code: ErrorCode::VersionMismatch,
+                message: "the desktop and local agent protocol versions do not match".to_owned(),
+                fields: ErrorFields::default(),
+            }
+        }
+        error => AgentError::Transport(error.to_string()),
+    }
+}
+
+/// Response shapes the desktop interprets structurally. Parsing through serde
+/// keeps the coupling to agent payloads in one typed, testable place instead
+/// of scattering `Value` walking through views.
 #[derive(serde::Deserialize)]
 struct ProfileSummary {
     name: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct TeamSummaryResponse {
+    alias: String,
+    account_alias: String,
+    team_id_hex: String,
+    kind: String,
+    name: Option<String>,
+    active: bool,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum CatalogStoreRef {
+    Account(AccountStoreRef),
+    Team(TeamStoreRef),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CatalogStoreSummary {
+    Account {
+        store: AccountStoreRef,
+    },
+    Team {
+        store: TeamStoreRef,
+        kind: String,
+        name: Option<String>,
+        active: bool,
+    },
+}
+
+impl CatalogStoreSummary {
+    pub fn store_ref(&self) -> CatalogStoreRef {
+        match self {
+            Self::Account { store } => CatalogStoreRef::Account(store.clone()),
+            Self::Team { store, .. } => CatalogStoreRef::Team(store.clone()),
+        }
+    }
+
+    pub fn profile(&self) -> &str {
+        match self {
+            Self::Account { store } => &store.profile,
+            Self::Team { store, .. } => &store.profile,
+        }
+    }
+
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Account { store } => &store.account_alias,
+            Self::Team { store, name, .. } => name.as_deref().unwrap_or(&store.team_alias),
+        }
+    }
+}
+
+impl CatalogStoreRef {
+    pub fn profile(&self) -> &str {
+        match self {
+            Self::Account(store) => &store.profile,
+            Self::Team(store) => &store.profile,
+        }
+    }
+}
+
+impl CatalogSnapshot {
+    pub fn profile_blocked(&self, profile: &str) -> bool {
+        self.blocked_profiles
+            .iter()
+            .any(|blocked| blocked == profile)
+    }
+
+    pub fn store_blocked(&self, store: &CatalogStoreRef) -> bool {
+        self.profile_blocked(store.profile())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogItem {
+    pub store: CatalogStoreRef,
+    pub metadata: KvEntryMetadata,
+}
+
+#[derive(Debug)]
+pub enum KvItemValue {
+    File(Zeroizing<Vec<u8>>),
+    Symlink(Zeroizing<String>),
+    Directory,
+}
+
+#[derive(Debug)]
+pub struct KvItemRead {
+    pub store: CatalogStoreRef,
+    pub path: String,
+    pub version: u64,
+    pub read_role: KvRole,
+    pub write_role: KvRole,
+    pub value: KvItemValue,
+}
+
+pub enum KvAccountMutation {
+    Inline(Operation),
+    Stream {
+        header: KvUploadHeader,
+        content: Zeroizing<Vec<u8>>,
+    },
+}
+
+impl std::fmt::Debug for KvAccountMutation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Inline(operation) => formatter.debug_tuple("Inline").field(operation).finish(),
+            Self::Stream { header, content } => formatter
+                .debug_struct("Stream")
+                .field("header", header)
+                .field(
+                    "content",
+                    &format_args!("<redacted; {} bytes>", content.len()),
+                )
+                .finish(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CatalogFailureScope {
+    Profile { profile: String, source: String },
+    Store(CatalogStoreRef),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogFailure {
+    pub scope: CatalogFailureScope,
+    pub error: AgentError,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogInventoryState {
+    pub profile: String,
+    pub accounts_complete: bool,
+    pub teams_complete: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CatalogSnapshot {
+    pub profiles: Vec<String>,
+    pub stores: Vec<CatalogStoreSummary>,
+    pub known_stores: Vec<CatalogStoreSummary>,
+    pub inventory: Vec<CatalogInventoryState>,
+    pub items: Vec<CatalogItem>,
+    pub failures: Vec<CatalogFailure>,
+    pub blocked_profiles: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CatalogLoadToken(Arc<AtomicBool>);
+
+impl CatalogLoadToken {
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    fn check(&self) -> Result<(), AgentError> {
+        if self.0.load(Ordering::Acquire) {
+            Err(AgentError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Loads one live item catalog. Calls are sequential inside each FOKS profile
+/// because native checkpoint/session access is exclusive; up to four distinct
+/// profiles are processed concurrently.
+pub fn load_catalog(transport: Arc<dyn AgentTransport>) -> Result<CatalogSnapshot, AgentError> {
+    load_catalog_with_token(transport, true, CatalogLoadToken::default())
+}
+
+/// Loads account and team discovery without walking any KV tree.
+pub fn load_stores(transport: Arc<dyn AgentTransport>) -> Result<CatalogSnapshot, AgentError> {
+    load_catalog_with_token(transport, false, CatalogLoadToken::default())
+}
+
+pub fn load_catalog_cancellable(
+    transport: Arc<dyn AgentTransport>,
+    token: CatalogLoadToken,
+) -> Result<CatalogSnapshot, AgentError> {
+    load_catalog_with_token(transport, true, token)
+}
+
+pub fn load_stores_cancellable(
+    transport: Arc<dyn AgentTransport>,
+    token: CatalogLoadToken,
+) -> Result<CatalogSnapshot, AgentError> {
+    load_catalog_with_token(transport, false, token)
+}
+
+fn load_catalog_with_token(
+    transport: Arc<dyn AgentTransport>,
+    include_items: bool,
+    token: CatalogLoadToken,
+) -> Result<CatalogSnapshot, AgentError> {
+    token.check()?;
+    let profiles: Vec<ProfileSummary> =
+        decode_agent_value(transport.call(Operation::ListProfiles)?)?;
+    token.check()?;
+    let profiles = profiles
+        .into_iter()
+        .map(|profile| profile.name)
+        .collect::<Vec<_>>();
+    let loaded = run_bounded(profiles.clone(), |profile| {
+        load_profile_catalog(transport.as_ref(), profile, include_items, token.clone())
+    });
+    let mut snapshot = CatalogSnapshot {
+        profiles,
+        ..CatalogSnapshot::default()
+    };
+    for loaded in loaded {
+        let loaded = loaded?;
+        snapshot.stores.extend(loaded.stores);
+        snapshot.known_stores.extend(loaded.known_stores);
+        snapshot.inventory.extend(loaded.inventory);
+        snapshot.items.extend(loaded.items);
+        snapshot.failures.extend(loaded.failures);
+        snapshot.blocked_profiles.extend(loaded.blocked_profiles);
+    }
+    snapshot.stores.sort_by(|left, right| {
+        left.profile()
+            .cmp(right.profile())
+            .then(left.label().cmp(right.label()))
+    });
+    snapshot.known_stores.sort_by(|left, right| {
+        left.profile()
+            .cmp(right.profile())
+            .then(left.label().cmp(right.label()))
+    });
+    snapshot
+        .inventory
+        .sort_by(|left, right| left.profile.cmp(&right.profile));
+    snapshot.items.sort_by(|left, right| {
+        left.store
+            .profile()
+            .cmp(right.store.profile())
+            .then(left.metadata.path.cmp(&right.metadata.path))
+    });
+    snapshot.blocked_profiles.sort();
+    snapshot.blocked_profiles.dedup();
+    Ok(snapshot)
+}
+
+fn load_profile_catalog(
+    transport: &dyn AgentTransport,
+    profile: String,
+    include_items: bool,
+    token: CatalogLoadToken,
+) -> Result<CatalogSnapshot, AgentError> {
+    let mut snapshot = CatalogSnapshot::default();
+    match transport.call(Operation::ListKnownStores {
+        profile: profile.clone(),
+    }) {
+        Ok(value) => match decode_agent_value::<Vec<KnownStoreSummary>>(value) {
+            Ok(stores) => {
+                snapshot.known_stores = stores
+                    .into_iter()
+                    .map(|store| known_catalog_store(&profile, store))
+                    .collect();
+            }
+            Err(error) => snapshot.failures.push(CatalogFailure {
+                scope: CatalogFailureScope::Profile {
+                    profile: profile.clone(),
+                    source: "known store index".to_owned(),
+                },
+                error,
+            }),
+        },
+        Err(error) => snapshot.failures.push(CatalogFailure {
+            scope: CatalogFailureScope::Profile {
+                profile: profile.clone(),
+                source: "known store index".to_owned(),
+            },
+            error,
+        }),
+    }
+    let mut accounts_complete = false;
+    let mut teams_complete = false;
+    for job in [
+        CatalogDiscovery::Accounts(profile.clone()),
+        CatalogDiscovery::Teams(profile.clone()),
+    ] {
+        token.check()?;
+        let operation = match &job {
+            CatalogDiscovery::Accounts(profile) => Operation::ListAccounts {
+                profile: profile.clone(),
+            },
+            CatalogDiscovery::Teams(profile) => Operation::ListTeams {
+                profile: profile.clone(),
+            },
+        };
+        let result = transport.call(operation);
+        match (job, result) {
+            (CatalogDiscovery::Accounts(job_profile), Ok(value)) => {
+                match decode_agent_value::<Vec<AccountSummary>>(value) {
+                    Ok(accounts)
+                        if accounts
+                            .iter()
+                            .all(|account| account.profile == job_profile) =>
+                    {
+                        accounts_complete = true;
+                        snapshot.stores.extend(accounts.into_iter().map(|account| {
+                            CatalogStoreSummary::Account {
+                                store: AccountStoreRef {
+                                    profile: job_profile.clone(),
+                                    account_alias: account.alias,
+                                },
+                            }
+                        }))
+                    }
+                    Ok(_) => snapshot.failures.push(CatalogFailure {
+                        scope: CatalogFailureScope::Profile {
+                            profile: job_profile,
+                            source: "account stores".to_owned(),
+                        },
+                        error: AgentError::Transport(
+                            "agent returned accounts for a different profile".to_owned(),
+                        ),
+                    }),
+                    Err(error) => snapshot.failures.push(CatalogFailure {
+                        scope: CatalogFailureScope::Profile {
+                            profile: job_profile,
+                            source: "account stores".to_owned(),
+                        },
+                        error,
+                    }),
+                }
+            }
+            (CatalogDiscovery::Teams(job_profile), Ok(value)) => {
+                match decode_agent_value::<Vec<TeamSummaryResponse>>(value) {
+                    Ok(teams) => {
+                        teams_complete = true;
+                        snapshot.stores.extend(teams.into_iter().map(|team| {
+                            CatalogStoreSummary::Team {
+                                store: TeamStoreRef {
+                                    profile: job_profile.clone(),
+                                    account_alias: team.account_alias,
+                                    team_alias: team.alias,
+                                    team_id: team.team_id_hex,
+                                },
+                                kind: team.kind,
+                                name: team.name,
+                                active: team.active,
+                            }
+                        }));
+                    }
+                    Err(error) => snapshot.failures.push(CatalogFailure {
+                        scope: CatalogFailureScope::Profile {
+                            profile: job_profile,
+                            source: "team stores".to_owned(),
+                        },
+                        error,
+                    }),
+                }
+            }
+            (job, Err(error)) => {
+                if error_blocks_profile_catalog(&error) {
+                    snapshot.blocked_profiles.push(profile.clone());
+                }
+                snapshot.failures.push(CatalogFailure {
+                    scope: CatalogFailureScope::Profile {
+                        profile: job.profile().to_owned(),
+                        source: job.source().to_owned(),
+                    },
+                    error,
+                });
+            }
+        }
+    }
+    if accounts_complete {
+        snapshot
+            .known_stores
+            .retain(|store| !matches!(store, CatalogStoreSummary::Account { .. }));
+        snapshot.known_stores.extend(
+            snapshot
+                .stores
+                .iter()
+                .filter(|store| matches!(store, CatalogStoreSummary::Account { .. }))
+                .cloned(),
+        );
+    }
+    if teams_complete {
+        snapshot
+            .known_stores
+            .retain(|store| !matches!(store, CatalogStoreSummary::Team { .. }));
+        snapshot.known_stores.extend(
+            snapshot
+                .stores
+                .iter()
+                .filter(|store| matches!(store, CatalogStoreSummary::Team { .. }))
+                .cloned(),
+        );
+    }
+    snapshot.inventory.push(CatalogInventoryState {
+        profile: profile.clone(),
+        accounts_complete,
+        teams_complete,
+    });
+    snapshot
+        .known_stores
+        .sort_by(|left, right| left.label().cmp(right.label()));
+    if !include_items || snapshot.blocked_profiles.contains(&profile) {
+        return Ok(snapshot);
+    }
+    snapshot
+        .stores
+        .sort_by(|left, right| left.label().cmp(right.label()));
+    let stores = snapshot
+        .stores
+        .iter()
+        .filter(|store| !matches!(store, CatalogStoreSummary::Team { active: false, .. }))
+        .map(CatalogStoreSummary::store_ref)
+        .collect::<Vec<_>>();
+    for store in stores {
+        token.check()?;
+        match load_store_pages(transport, &store, &token) {
+            Ok(entries) => snapshot
+                .items
+                .extend(entries.into_iter().map(|metadata| CatalogItem {
+                    store: store.clone(),
+                    metadata,
+                })),
+            Err(error) => {
+                let blocks_profile = error_blocks_profile_catalog(&error);
+                snapshot.failures.push(CatalogFailure {
+                    scope: if blocks_profile {
+                        CatalogFailureScope::Profile {
+                            profile: profile.clone(),
+                            source: "KV catalog".to_owned(),
+                        }
+                    } else {
+                        CatalogFailureScope::Store(store)
+                    },
+                    error,
+                });
+                if blocks_profile {
+                    snapshot.items.clear();
+                    snapshot.blocked_profiles.push(profile.clone());
+                    break;
+                }
+            }
+        }
+    }
+    Ok(snapshot)
+}
+
+fn error_blocks_profile_catalog(error: &AgentError) -> bool {
+    match error {
+        AgentError::Protocol {
+            code: ErrorCode::RollbackDetected | ErrorCode::CheckpointResetRequired,
+            ..
+        } => true,
+        AgentError::Protocol {
+            code: ErrorCode::CapabilityDenied,
+            fields,
+            ..
+        } => fields.capability.as_deref() == Some("kv"),
+        _ => false,
+    }
+}
+
+/// Reads the exact catalog version selected by the person. Large files are
+/// assembled only from version-bound chunks, so a concurrent edit can never
+/// splice two versions into one displayed value.
+pub fn read_catalog_item(
+    transport: &dyn AgentTransport,
+    item: &CatalogItem,
+) -> Result<KvItemRead, AgentError> {
+    let store = kv_store_ref(&item.store);
+    let value = transport.call(Operation::ReadKv {
+        store: store.clone(),
+        path: item.metadata.path.clone(),
+        version: item.metadata.version,
+    })?;
+    let mut read: KvReadResult = decode_agent_value(value)?;
+    if read.store != store
+        || read.path != item.metadata.path
+        || read.version != item.metadata.version
+        || read.node_type != item.metadata.node_type
+        || read.read_role != item.metadata.read_role
+        || read.write_role != item.metadata.write_role
+    {
+        zeroize_kv_read_payload(&mut read);
+        return Err(AgentError::Transport(
+            "agent returned a KV value for a different catalog selection".to_owned(),
+        ));
+    }
+    let value = match read.node_type.as_str() {
+        "small-file" => {
+            if read.symlink_target.is_some() {
+                zeroize_kv_read_payload(&mut read);
+                return Err(AgentError::Transport(
+                    "agent mixed a symlink target into a small-file response".to_owned(),
+                ));
+            }
+            KvItemValue::File(Zeroizing::new(read.content.take().ok_or_else(|| {
+                AgentError::Transport("agent omitted small-file content".to_owned())
+            })?))
+        }
+        "file" => {
+            if read.content.is_some() || read.symlink_target.is_some() {
+                zeroize_kv_read_payload(&mut read);
+                return Err(AgentError::Transport(
+                    "agent mixed inline content into a large-file response".to_owned(),
+                ));
+            }
+            let total = read.size.ok_or_else(|| {
+                AgentError::Transport("agent omitted the large-file size".to_owned())
+            })?;
+            if total > MAXIMUM_DESKTOP_REVEAL_BYTES {
+                return Err(AgentError::Transport(format!(
+                    "this file is {total} bytes; this release reveals at most {MAXIMUM_DESKTOP_REVEAL_BYTES} bytes in memory"
+                )));
+            }
+            let capacity = usize::try_from(total).map_err(|_| {
+                AgentError::Transport("KV file is too large for this desktop".to_owned())
+            })?;
+            let mut content = Zeroizing::new(Vec::with_capacity(capacity));
+            let mut offset = 0u64;
+            while offset < total {
+                let remaining = total - offset;
+                let length = u32::try_from(remaining.min(u64::from(KV_READ_CHUNK_BYTES)))
+                    .expect("chunk bound fits in u32");
+                let mut chunk: KvChunkResult =
+                    decode_agent_value(transport.call(Operation::ReadKvChunk {
+                        store: store.clone(),
+                        path: item.metadata.path.clone(),
+                        version: item.metadata.version,
+                        offset,
+                        length,
+                    })?)?;
+                let invalid = chunk.store != store
+                    || chunk.path != item.metadata.path
+                    || chunk.version != item.metadata.version
+                    || chunk.offset != offset
+                    || chunk.content.is_empty()
+                    || chunk.content.len() > length as usize;
+                if invalid {
+                    chunk.content.zeroize();
+                    return Err(AgentError::Transport(
+                        "agent returned an invalid or unbound KV chunk".to_owned(),
+                    ));
+                }
+                offset = offset
+                    .checked_add(chunk.content.len() as u64)
+                    .ok_or_else(|| AgentError::Transport("KV chunk offset overflow".to_owned()))?;
+                if offset > total || chunk.eof != (offset == total) {
+                    chunk.content.zeroize();
+                    return Err(AgentError::Transport(
+                        "agent returned an inconsistent KV end-of-file marker".to_owned(),
+                    ));
+                }
+                content.extend_from_slice(&chunk.content);
+                chunk.content.zeroize();
+            }
+            KvItemValue::File(content)
+        }
+        "symlink" => {
+            if read.content.is_some() {
+                zeroize_kv_read_payload(&mut read);
+                return Err(AgentError::Transport(
+                    "agent mixed file content into a symlink response".to_owned(),
+                ));
+            }
+            KvItemValue::Symlink(Zeroizing::new(read.symlink_target.take().ok_or_else(
+                || AgentError::Transport("agent omitted the symlink target".to_owned()),
+            )?))
+        }
+        "directory" => {
+            if read.content.is_some() || read.symlink_target.is_some() {
+                zeroize_kv_read_payload(&mut read);
+                return Err(AgentError::Transport(
+                    "agent returned content for a directory".to_owned(),
+                ));
+            }
+            KvItemValue::Directory
+        }
+        _ => {
+            zeroize_kv_read_payload(&mut read);
+            return Err(AgentError::Transport(
+                "agent returned an unsupported KV node type".to_owned(),
+            ));
+        }
+    };
+    Ok(KvItemRead {
+        store: item.store.clone(),
+        path: read.path,
+        version: read.version,
+        read_role: read.read_role,
+        write_role: read.write_role,
+        value,
+    })
+}
+
+fn zeroize_kv_read_payload(read: &mut KvReadResult) {
+    if let Some(content) = &mut read.content {
+        content.zeroize();
+    }
+    if let Some(target) = &mut read.symlink_target {
+        target.zeroize();
+    }
+}
+
+pub fn create_kv_file_mutation(
+    store: &CatalogStoreRef,
+    path: &str,
+    content: Vec<u8>,
+) -> Result<KvAccountMutation, &'static str> {
+    file_mutation(
+        kv_store_ref(store),
+        required_path(path)?,
+        content,
+        KvRole::Owner,
+        KvRole::Owner,
+        KvPrecondition::Create,
+    )
+}
+
+pub fn edit_kv_file_mutation(
+    item: &CatalogItem,
+    content: Vec<u8>,
+) -> Result<KvAccountMutation, &'static str> {
+    if !matches!(item.metadata.node_type.as_str(), "file" | "small-file") {
+        return Err("the selected item is not a file");
+    }
+    file_mutation(
+        kv_store_ref(&item.store),
+        item.metadata.path.clone(),
+        content,
+        item.metadata.read_role,
+        item.metadata.write_role,
+        KvPrecondition::ExactVersion {
+            version: item.metadata.version,
+        },
+    )
+}
+
+/// Builds the header for a native file upload without first assembling the
+/// file in memory. The caller must stream exactly `total_length` bytes from an
+/// already-open source handle.
+pub fn create_kv_file_upload(
+    store: &CatalogStoreRef,
+    path: &str,
+    total_length: u64,
+) -> Result<KvUploadHeader, &'static str> {
+    file_upload_header(
+        kv_store_ref(store),
+        required_path(path)?,
+        total_length,
+        KvRole::Owner,
+        KvRole::Owner,
+        KvPrecondition::Create,
+    )
+}
+
+/// Builds an exact-version replacement header from authenticated catalog
+/// metadata. The caller must stream from an already-open source handle.
+pub fn edit_kv_file_upload(
+    item: &CatalogItem,
+    total_length: u64,
+) -> Result<KvUploadHeader, &'static str> {
+    if !matches!(item.metadata.node_type.as_str(), "file" | "small-file") {
+        return Err("the selected item is not a file");
+    }
+    file_upload_header(
+        kv_store_ref(&item.store),
+        item.metadata.path.clone(),
+        total_length,
+        item.metadata.read_role,
+        item.metadata.write_role,
+        KvPrecondition::ExactVersion {
+            version: item.metadata.version,
+        },
+    )
+}
+
+pub fn create_kv_symlink_operation(
+    store: &CatalogStoreRef,
+    path: &str,
+    target: &str,
+) -> Result<Operation, &'static str> {
+    Ok(Operation::PutKvSymlink {
+        store: kv_store_ref(store),
+        path: required_path(path)?,
+        target: required_verbatim_text(target, "enter a symlink target")?,
+        read_role: KvRole::Owner,
+        write_role: KvRole::Owner,
+        precondition: KvPrecondition::Create,
+    })
+}
+
+pub fn edit_kv_symlink_operation(
+    item: &CatalogItem,
+    _target: &str,
+) -> Result<Operation, &'static str> {
+    if item.metadata.node_type != "symlink" {
+        return Err("the selected item is not a symlink");
+    }
+    Err("FOKS symlinks must be removed and recreated to change their target")
+}
+
+pub fn create_kv_directory_operation(
+    store: &CatalogStoreRef,
+    path: &str,
+) -> Result<Operation, &'static str> {
+    Ok(Operation::MkdirKv {
+        store: kv_store_ref(store),
+        path: required_path(path)?,
+        read_role: KvRole::Owner,
+        write_role: KvRole::Owner,
+        precondition: KvPrecondition::Create,
+    })
+}
+
+pub fn remove_kv_operation(item: &CatalogItem, recursive: bool) -> Result<Operation, &'static str> {
+    Ok(Operation::RemoveKv {
+        store: kv_store_ref(&item.store),
+        path: item.metadata.path.clone(),
+        recursive,
+        precondition: KvPrecondition::ExactVersion {
+            version: item.metadata.version,
+        },
+    })
+}
+
+fn file_mutation(
+    store: KvStoreRef,
+    path: String,
+    content: Vec<u8>,
+    read_role: KvRole,
+    write_role: KvRole,
+    precondition: KvPrecondition,
+) -> Result<KvAccountMutation, &'static str> {
+    if content.len() <= MAXIMUM_INLINE_KV_BYTES {
+        Ok(KvAccountMutation::Inline(Operation::PutKv {
+            store,
+            path,
+            content,
+            read_role,
+            write_role,
+            precondition,
+        }))
+    } else {
+        let total_length = u64::try_from(content.len()).map_err(|_| "item content is too large")?;
+        Ok(KvAccountMutation::Stream {
+            header: KvUploadHeader {
+                store,
+                path,
+                total_length,
+                read_role,
+                write_role,
+                precondition,
+            },
+            content: Zeroizing::new(content),
+        })
+    }
+}
+
+fn file_upload_header(
+    store: KvStoreRef,
+    path: String,
+    total_length: u64,
+    read_role: KvRole,
+    write_role: KvRole,
+    precondition: KvPrecondition,
+) -> Result<KvUploadHeader, &'static str> {
+    Ok(KvUploadHeader {
+        store,
+        path,
+        total_length,
+        read_role,
+        write_role,
+        precondition,
+    })
+}
+
+fn kv_store_ref(store: &CatalogStoreRef) -> KvStoreRef {
+    match store {
+        CatalogStoreRef::Account(store) => KvStoreRef::Account(store.clone()),
+        CatalogStoreRef::Team(store) => KvStoreRef::Team(store.clone()),
+    }
+}
+
+fn required_path(path: &str) -> Result<String, &'static str> {
+    let path = required_verbatim_text(path, "enter an absolute item path")?;
+    if !path.starts_with('/') || path == "/" {
+        return Err("enter an absolute path below the store root");
+    }
+    Ok(path)
+}
+
+fn known_catalog_store(profile: &str, store: KnownStoreSummary) -> CatalogStoreSummary {
+    match store {
+        KnownStoreSummary::Account { account_alias, .. } => CatalogStoreSummary::Account {
+            store: AccountStoreRef {
+                profile: profile.to_owned(),
+                account_alias,
+            },
+        },
+        KnownStoreSummary::Team {
+            account_alias,
+            team_alias,
+            team_id_hex,
+            team_kind,
+            name,
+            active,
+            ..
+        } => CatalogStoreSummary::Team {
+            store: TeamStoreRef {
+                profile: profile.to_owned(),
+                account_alias,
+                team_alias,
+                team_id: team_id_hex,
+            },
+            kind: match team_kind {
+                TeamKind::Named => "named",
+                TeamKind::AdHoc => "ad-hoc",
+            }
+            .to_owned(),
+            name,
+            active,
+        },
+    }
+}
+
+#[derive(Clone)]
+enum CatalogDiscovery {
+    Accounts(String),
+    Teams(String),
+}
+
+impl CatalogDiscovery {
+    fn profile(&self) -> &str {
+        match self {
+            Self::Accounts(profile) | Self::Teams(profile) => profile,
+        }
+    }
+
+    fn source(&self) -> &str {
+        match self {
+            Self::Accounts(_) => "account stores",
+            Self::Teams(_) => "team stores",
+        }
+    }
+}
+
+fn load_store_pages(
+    transport: &dyn AgentTransport,
+    store: &CatalogStoreRef,
+    token: &CatalogLoadToken,
+) -> Result<Vec<KvEntryMetadata>, AgentError> {
+    match load_store_pages_once(transport, store, token) {
+        Err(error) if catalog_cursor_snapshot_changed(&error) => {
+            token.check()?;
+            load_store_pages_once(transport, store, token)
+        }
+        result => result,
+    }
+}
+
+fn load_store_pages_once(
+    transport: &dyn AgentTransport,
+    store: &CatalogStoreRef,
+    token: &CatalogLoadToken,
+) -> Result<Vec<KvEntryMetadata>, AgentError> {
+    const PAGE_LIMIT: u32 = 200;
+    const MAXIMUM_PAGES: usize = 4096;
+    let mut cursor = None;
+    let mut snapshot_version = None;
+    let mut entries = Vec::new();
+    for _ in 0..MAXIMUM_PAGES {
+        token.check()?;
+        let operation = match store {
+            CatalogStoreRef::Account(store) => Operation::ListKv {
+                store: store.clone(),
+                cursor: cursor.clone(),
+                limit: PAGE_LIMIT,
+            },
+            CatalogStoreRef::Team(store) => Operation::ListTeamKv {
+                store: store.clone(),
+                cursor: cursor.clone(),
+                limit: PAGE_LIMIT,
+            },
+        };
+        let page: KvPage = decode_agent_value(transport.call(operation)?)?;
+        token.check()?;
+        if snapshot_version
+            .replace(page.snapshot_version)
+            .is_some_and(|version| version != page.snapshot_version)
+        {
+            return Err(invalid_agent_response(
+                "catalog snapshot changed between pages",
+            ));
+        }
+        if page.entries.is_empty() && page.next_cursor.is_some() {
+            return Err(invalid_agent_response("catalog page made no progress"));
+        }
+        entries.extend(page.entries);
+        let Some(next) = page.next_cursor else {
+            return Ok(entries);
+        };
+        cursor = Some(next);
+    }
+    Err(invalid_agent_response("catalog exceeded its page limit"))
+}
+
+fn catalog_cursor_snapshot_changed(error: &AgentError) -> bool {
+    matches!(
+        error,
+        AgentError::Protocol {
+            code: ErrorCode::InvalidRequest,
+            message,
+            ..
+        } if message == "catalog cursor belongs to another store snapshot"
+    )
+}
+
+fn decode_agent_value<T: DeserializeOwned>(value: Value) -> Result<T, AgentError> {
+    serde_json::from_value(value)
+        .map_err(|error| invalid_agent_response(&format!("invalid agent response: {error}")))
+}
+
+fn invalid_agent_response(message: &str) -> AgentError {
+    AgentError::Transport(message.to_owned())
+}
+
+fn catalog_accounts(catalog: &CatalogSnapshot, profile: Option<&str>) -> Vec<String> {
+    catalog
+        .stores
+        .iter()
+        .filter_map(|store| match store {
+            CatalogStoreSummary::Account { store } if Some(store.profile.as_str()) == profile => {
+                Some(store.account_alias.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn run_bounded<T, R>(jobs: Vec<T>, work: impl Fn(T) -> R + Sync) -> Vec<R>
+where
+    T: Send,
+    R: Send,
+{
+    const MAXIMUM_WORKERS: usize = 4;
+    if jobs.is_empty() {
+        return Vec::new();
+    }
+    let count = jobs.len();
+    let queue = Mutex::new(jobs.into_iter().enumerate().collect::<VecDeque<_>>());
+    let results = Mutex::new((0..count).map(|_| None).collect::<Vec<Option<R>>>());
+    std::thread::scope(|scope| {
+        for _ in 0..count.min(MAXIMUM_WORKERS) {
+            scope.spawn(|| loop {
+                let Some((index, job)) = queue.lock().expect("catalog queue poisoned").pop_front()
+                else {
+                    break;
+                };
+                results.lock().expect("catalog results poisoned")[index] = Some(work(job));
+            });
+        }
+    });
+    results
+        .into_inner()
+        .expect("catalog results poisoned")
+        .into_iter()
+        .map(|result| result.expect("catalog worker dropped a result"))
+        .collect()
 }
 
 pub struct DesktopModel {
@@ -107,6 +1223,7 @@ pub struct DesktopModel {
     selected_account: Option<String>,
     profiles: Vec<String>,
     accounts: Vec<String>,
+    catalog: Option<CatalogSnapshot>,
     value: Option<Value>,
     error: Option<String>,
 }
@@ -115,11 +1232,12 @@ impl DesktopModel {
     pub fn new(transport: Arc<dyn AgentTransport>) -> Self {
         Self {
             transport,
-            screen: Screen::Status,
+            screen: Screen::Items,
             selected_profile: None,
             selected_account: None,
             profiles: Vec::new(),
             accounts: Vec::new(),
+            catalog: None,
             value: None,
             error: None,
         }
@@ -149,6 +1267,49 @@ impl DesktopModel {
         &self.accounts
     }
 
+    pub fn has_any_accounts(&self) -> bool {
+        self.catalog.as_ref().is_some_and(|catalog| {
+            catalog
+                .stores
+                .iter()
+                .any(|store| matches!(store, CatalogStoreSummary::Account { .. }))
+        }) || !self.accounts.is_empty()
+    }
+
+    pub fn catalog(&self) -> Option<&CatalogSnapshot> {
+        self.catalog.as_ref()
+    }
+
+    pub fn accept_catalog(&mut self, result: Result<CatalogSnapshot, AgentError>) {
+        match result {
+            Ok(catalog) => {
+                self.profiles = catalog.profiles.clone();
+                if self
+                    .selected_profile
+                    .as_ref()
+                    .is_none_or(|selected| !self.profiles.contains(selected))
+                {
+                    self.selected_profile = self.profiles.first().cloned();
+                }
+                self.accounts = catalog_accounts(&catalog, self.selected_profile.as_deref());
+                if self
+                    .selected_account
+                    .as_ref()
+                    .is_none_or(|selected| !self.accounts.contains(selected))
+                {
+                    self.selected_account = self.accounts.first().cloned();
+                }
+                self.catalog = Some(catalog);
+                self.error = None;
+                self.value = None;
+            }
+            Err(error) => {
+                self.error = Some(error.to_string());
+                self.value = None;
+            }
+        }
+    }
+
     pub fn value(&self) -> Option<&Value> {
         self.value.as_ref()
     }
@@ -166,11 +1327,61 @@ impl DesktopModel {
     pub fn select_profile(&mut self, profile: impl Into<String>) {
         self.selected_profile = Some(profile.into());
         self.selected_account = None;
-        self.accounts.clear();
+        self.accounts = self
+            .catalog
+            .as_ref()
+            .map(|catalog| catalog_accounts(catalog, self.selected_profile.as_deref()))
+            .unwrap_or_default();
+        self.selected_account = self.accounts.first().cloned();
     }
 
     pub fn select_account(&mut self, account: impl Into<String>) {
         self.selected_account = Some(account.into());
+    }
+
+    pub fn probe_operation(&self) -> Result<Operation, &'static str> {
+        Ok(Operation::Probe {
+            profile: self
+                .selected_profile
+                .clone()
+                .ok_or("select a profile first")?,
+        })
+    }
+
+    pub fn add_profile_operation(
+        &self,
+        name: &str,
+        probe: &str,
+    ) -> Result<Operation, &'static str> {
+        Ok(Operation::AddProfile {
+            name: required_text(name, "enter a profile name")?,
+            probe: required_text(probe, "enter a FOKS probe address")?,
+            protocol: ProfileProtocol::V019,
+            trust: ProfileTrust::WebPki,
+        })
+    }
+
+    pub fn remove_profile_operation(&self) -> Result<Operation, &'static str> {
+        Ok(Operation::RemoveProfile {
+            name: self
+                .selected_profile
+                .clone()
+                .ok_or("select a profile first")?,
+        })
+    }
+
+    pub fn reset_hard_state_operation(&self) -> Result<Operation, &'static str> {
+        Err("reset requires the bound preview flow in the new desktop")
+    }
+
+    pub fn resume_account_operation(&self, alias: &str) -> Result<Operation, &'static str> {
+        Ok(Operation::ResumeAccount {
+            profile: self
+                .selected_profile
+                .clone()
+                .ok_or("select a profile first")?,
+            alias: required_text(alias, "enter the local account alias")?,
+        })
     }
 
     /// Records an account created this session so the selector reflects it
@@ -183,34 +1394,41 @@ impl DesktopModel {
         self.selected_account = Some(alias);
     }
 
+    pub fn record_profile(&mut self, name: impl Into<String>) {
+        let name = name.into();
+        if !self.profiles.contains(&name) {
+            self.profiles.push(name.clone());
+            self.profiles.sort();
+        }
+        self.selected_profile = Some(name);
+        self.selected_account = None;
+        self.accounts.clear();
+    }
+
+    pub fn forget_profile(&mut self, name: &str) {
+        self.profiles.retain(|profile| profile != name);
+        if self.selected_profile.as_deref() == Some(name) {
+            self.selected_profile = self.profiles.first().cloned();
+            self.selected_account = None;
+            self.accounts.clear();
+        }
+    }
+
     pub fn operation(&self) -> Result<Operation, &'static str> {
         let profile = || {
             self.selected_profile
                 .clone()
                 .ok_or("select a profile first")
         };
-        let account = || {
-            self.selected_account
-                .clone()
-                .ok_or("select an account first")
-        };
         match self.screen {
-            Screen::Status => Ok(Operation::Ping),
-            Screen::Profiles => Ok(Operation::ListProfiles),
-            Screen::Accounts => Ok(Operation::ListAccounts {
+            Screen::Items | Screen::Stores => Err("refresh the catalog instead"),
+            Screen::Notifications => Err("notifications refresh with operation results"),
+            Screen::GetStarted => Ok(Operation::AgentStatus),
+            Screen::Servers => Ok(Operation::ListProfiles),
+            Screen::Settings => Ok(Operation::ListYubiAccounts {
                 profile: profile()?,
             }),
-            Screen::YubiKeys => Ok(Operation::ListYubiAccounts {
-                profile: profile()?,
-            }),
-            Screen::PersonalKv => Ok(Operation::ListKv {
-                profile: profile()?,
-                alias: account()?,
-            }),
-            Screen::Teams => Ok(Operation::ListTeams {
-                profile: profile()?,
-            }),
-            Screen::Jobs => Ok(Operation::RunDueJobs {
+            Screen::Parties => Ok(Operation::ListTeams {
                 profile: profile()?,
             }),
         }
@@ -364,6 +1582,116 @@ impl DesktopModel {
         })
     }
 
+    pub fn list_devices_operation(&self) -> Result<Operation, &'static str> {
+        let (profile, alias) = self.selected_account_context()?;
+        Ok(Operation::ListDevices { profile, alias })
+    }
+
+    pub fn provision_owner_device_operation(
+        &self,
+        target_alias: &str,
+        device_name: &str,
+        serial: u64,
+    ) -> Result<Operation, &'static str> {
+        let (profile, source_alias) = self.selected_account_context()?;
+        let target_alias = required_text(target_alias, "enter the new local device alias")?;
+        let device_name = required_text(device_name, "enter the device name")?;
+        if serial == 0 {
+            return Err("device serial must be positive");
+        }
+        Ok(Operation::ProvisionOwnerDevice {
+            profile,
+            source_alias,
+            target_alias,
+            device_name,
+            serial,
+        })
+    }
+
+    pub fn resume_owner_device_provision_operation(
+        &self,
+        target_alias: &str,
+    ) -> Result<Operation, &'static str> {
+        Ok(Operation::ResumeOwnerDeviceProvision {
+            profile: self
+                .selected_profile
+                .clone()
+                .ok_or("select a profile first")?,
+            target_alias: required_text(target_alias, "enter the pending device alias")?,
+        })
+    }
+
+    pub fn prepare_owner_backup_operation(
+        &self,
+        backup_alias: &str,
+    ) -> Result<Operation, &'static str> {
+        let (profile, account_alias) = self.selected_account_context()?;
+        Ok(Operation::PrepareOwnerBackup {
+            profile,
+            account_alias,
+            backup_alias: required_text(backup_alias, "enter a local backup alias")?,
+        })
+    }
+
+    pub fn commit_owner_backup_operation(
+        &self,
+        backup_alias: &str,
+        phrase: SecretString,
+    ) -> Result<Operation, &'static str> {
+        let (profile, account_alias) = self.selected_account_context()?;
+        validate_backup_phrase(&phrase)?;
+        Ok(Operation::CommitOwnerBackup {
+            profile,
+            account_alias,
+            backup_alias: required_text(backup_alias, "enter a local backup alias")?,
+            phrase,
+        })
+    }
+
+    pub fn recover_owner_account_operation(
+        &self,
+        target_alias: &str,
+        phrase: SecretString,
+        device_name: &str,
+        serial: u64,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        let target_alias = required_text(target_alias, "enter the recovered account alias")?;
+        let device_name = required_text(device_name, "enter the recovery device name")?;
+        validate_backup_phrase(&phrase)?;
+        if serial == 0 {
+            return Err("device serial must be positive");
+        }
+        Ok(Operation::RecoverOwnerAccount {
+            profile,
+            target_alias,
+            phrase,
+            device_name,
+            serial,
+        })
+    }
+
+    pub fn resume_owner_recovery_operation(
+        &self,
+        target_alias: &str,
+        phrase: SecretString,
+        device_name: &str,
+    ) -> Result<Operation, &'static str> {
+        validate_backup_phrase(&phrase)?;
+        Ok(Operation::ResumeOwnerRecovery {
+            profile: self
+                .selected_profile
+                .clone()
+                .ok_or("select a profile first")?,
+            target_alias: required_text(target_alias, "enter the pending recovery alias")?,
+            phrase,
+            device_name: required_text(device_name, "enter the recovery device name")?,
+        })
+    }
+
     fn selected_account_context(&self) -> Result<(String, String), &'static str> {
         Ok((
             self.selected_profile
@@ -438,6 +1766,46 @@ impl DesktopModel {
         })
     }
 
+    pub fn create_team_operation(
+        &self,
+        account_alias: &str,
+        team_alias: &str,
+        name: &str,
+        kind: TeamKind,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        let account_alias = required_text(account_alias, "enter the owner account alias")?;
+        let team_alias = required_text(team_alias, "enter a local team alias")?;
+        let name = match kind {
+            TeamKind::Named => required_text(name, "enter the FOKS team name")?,
+            TeamKind::AdHoc if name.trim().is_empty() => String::new(),
+            TeamKind::AdHoc => return Err("ad-hoc teams do not have a FOKS name"),
+        };
+        Ok(Operation::CreateTeam {
+            profile,
+            account_alias,
+            team_alias,
+            name,
+            kind,
+        })
+    }
+
+    pub fn resume_team_creation_operation(
+        &self,
+        team_alias: &str,
+    ) -> Result<Operation, &'static str> {
+        Ok(Operation::ResumeTeamCreation {
+            profile: self
+                .selected_profile
+                .clone()
+                .ok_or("select a profile first")?,
+            team_alias: required_text(team_alias, "enter the pending team alias")?,
+        })
+    }
+
     pub fn add_team_member_operation(
         &self,
         team_alias: &str,
@@ -479,7 +1847,7 @@ impl DesktopModel {
     pub fn demote_team_member_operation(
         &self,
         team_alias: &str,
-        username: &str,
+        party_id_hex: &str,
         role: TeamRole,
         visibility: i16,
     ) -> Result<Operation, &'static str> {
@@ -487,11 +1855,11 @@ impl DesktopModel {
             .selected_profile
             .clone()
             .ok_or("select a profile first")?;
-        validate_team_member_input(team_alias, username, role, visibility)?;
+        validate_team_party_input(team_alias, party_id_hex, role, visibility)?;
         Ok(Operation::DemoteTeamMember {
             profile,
             team_alias: team_alias.to_owned(),
-            username: username.to_owned(),
+            party_id_hex: party_id_hex.to_owned(),
             role,
             visibility,
         })
@@ -500,17 +1868,17 @@ impl DesktopModel {
     pub fn remove_team_member_operation(
         &self,
         team_alias: &str,
-        username: &str,
+        party_id_hex: &str,
     ) -> Result<Operation, &'static str> {
         let profile = self
             .selected_profile
             .clone()
             .ok_or("select a profile first")?;
-        validate_team_member_input(team_alias, username, TeamRole::Member, 0)?;
+        validate_team_party_input(team_alias, party_id_hex, TeamRole::Member, 0)?;
         Ok(Operation::RemoveTeamMember {
             profile,
             team_alias: team_alias.to_owned(),
-            username: username.to_owned(),
+            party_id_hex: party_id_hex.to_owned(),
         })
     }
 
@@ -641,6 +2009,51 @@ impl DesktopModel {
         }
     }
 
+    pub fn yubi_passphrase_operation(
+        &self,
+        action: PassphraseAction,
+        alias: &str,
+        pin: SecretString,
+        passphrase: SecretString,
+        confirmation: Option<SecretString>,
+    ) -> Result<Operation, &'static str> {
+        let profile = self.selected_yubi_profile()?;
+        let alias = required_alias(alias)?;
+        validate_pin(pin.expose())?;
+        match action {
+            PassphraseAction::Set | PassphraseAction::Change => {
+                let confirmation = confirmation.ok_or("confirm the passphrase")?;
+                if passphrase.expose() != confirmation.expose() {
+                    return Err("passphrase confirmation does not match");
+                }
+            }
+            PassphraseAction::Verify if confirmation.is_some() => {
+                return Err("verification does not take a confirmation");
+            }
+            PassphraseAction::Verify => {}
+        }
+        Ok(match action {
+            PassphraseAction::Set => Operation::SetYubiPassphrase {
+                profile,
+                alias,
+                pin,
+                passphrase,
+            },
+            PassphraseAction::Change => Operation::ChangeYubiPassphrase {
+                profile,
+                alias,
+                pin,
+                passphrase,
+            },
+            PassphraseAction::Verify => Operation::VerifyYubiPassphrase {
+                profile,
+                alias,
+                pin,
+                passphrase,
+            },
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn provision_yubi_operation(
         &self,
@@ -739,7 +2152,7 @@ impl DesktopModel {
         match result {
             Ok(value) => {
                 match self.screen {
-                    Screen::Profiles => {
+                    Screen::Servers => {
                         if let Ok(parsed) =
                             serde_json::from_value::<Vec<ProfileSummary>>(value.clone())
                         {
@@ -750,9 +2163,12 @@ impl DesktopModel {
                             }
                         }
                     }
-                    Screen::Accounts => {
-                        if let Ok(parsed) = serde_json::from_value::<Vec<String>>(value.clone()) {
-                            self.accounts = parsed;
+                    Screen::Stores => {
+                        if let Ok(parsed) =
+                            serde_json::from_value::<Vec<AccountSummary>>(value.clone())
+                        {
+                            self.accounts =
+                                parsed.into_iter().map(|account| account.alias).collect();
                             if self.selected_account.is_none() {
                                 self.selected_account = self.accounts.first().cloned();
                             }
@@ -782,6 +2198,34 @@ fn validate_team_member_input(
     }
     if role != TeamRole::Member && visibility != 0 {
         return Err("visibility applies only to member roles");
+    }
+    Ok(())
+}
+
+fn validate_team_party_input(
+    team_alias: &str,
+    party_id_hex: &str,
+    role: TeamRole,
+    visibility: i16,
+) -> Result<(), &'static str> {
+    if team_alias.trim().is_empty()
+        || party_id_hex.len() != 66
+        || !party_id_hex.starts_with("01")
+        || !party_id_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("enter the team alias and authenticated user party id");
+    }
+    if role != TeamRole::Member && visibility != 0 {
+        return Err("visibility applies only to member roles");
+    }
+    Ok(())
+}
+
+fn validate_backup_phrase(phrase: &SecretString) -> Result<(), &'static str> {
+    if phrase.expose().split_whitespace().count() != 17 {
+        return Err("backup phrase must contain exactly 17 tokens");
     }
     Ok(())
 }
@@ -838,6 +2282,23 @@ fn required_alias(alias: &str) -> Result<String, &'static str> {
         Err("enter a YubiKey account alias")
     } else {
         Ok(alias.to_owned())
+    }
+}
+
+fn required_text(value: &str, error: &'static str) -> Result<String, &'static str> {
+    let value = value.trim();
+    if value.is_empty() {
+        Err(error)
+    } else {
+        Ok(value.to_owned())
+    }
+}
+
+fn required_verbatim_text(value: &str, error: &'static str) -> Result<String, &'static str> {
+    if value.trim().is_empty() {
+        Err(error)
+    } else {
+        Ok(value.to_owned())
     }
 }
 
@@ -936,30 +2397,699 @@ mod tests {
     }
 
     impl AgentTransport for MockTransport {
-        fn call(&self, operation: Operation) -> Result<Value, String> {
+        fn call(&self, operation: Operation) -> Result<Value, AgentError> {
             self.operations.lock().unwrap().push(operation);
             Ok(Value::Null)
         }
     }
 
+    struct CatalogTransport;
+
+    impl AgentTransport for CatalogTransport {
+        fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+            match operation {
+                Operation::ListProfiles => Ok(serde_json::json!([{"name": "local"}])),
+                Operation::ListKnownStores { .. } => Ok(serde_json::json!([])),
+                Operation::ListAccounts { profile } => {
+                    assert_eq!(profile, "local");
+                    Ok(serde_json::json!([{
+                        "profile": "local",
+                        "alias": "personal",
+                        "username": "alice"
+                    }]))
+                }
+                Operation::ListTeams { profile } => {
+                    assert_eq!(profile, "local");
+                    Ok(serde_json::json!([{
+                        "alias": "eng",
+                        "account_alias": "personal",
+                        "team_id_hex": "aa",
+                        "kind": "named",
+                        "name": "engineering",
+                        "active": true
+                    }]))
+                }
+                Operation::ListKv { cursor, .. } => {
+                    let (path, next_cursor) = if cursor.is_none() {
+                        ("/first", Some("next"))
+                    } else {
+                        ("/second", None)
+                    };
+                    Ok(serde_json::to_value(KvPage {
+                        snapshot_version: 7,
+                        entries: vec![KvEntryMetadata {
+                            path: path.to_owned(),
+                            node_type: "small-file".to_owned(),
+                            version: 1,
+                            size: None,
+                            read_role: foks_agent_proto::KvRole::Owner,
+                            write_role: foks_agent_proto::KvRole::Owner,
+                        }],
+                        next_cursor: next_cursor.map(str::to_owned),
+                    })
+                    .unwrap())
+                }
+                Operation::ListTeamKv { .. } => Err(AgentError::Protocol {
+                    code: ErrorCode::CapabilityDenied,
+                    message: "team KV is unavailable".to_owned(),
+                    fields: ErrorFields {
+                        capability: Some("kv".to_owned()),
+                        ..ErrorFields::default()
+                    },
+                }),
+                operation => panic!("unexpected catalog operation: {operation:?}"),
+            }
+        }
+    }
+
     #[test]
-    fn screens_cannot_cross_profile_or_account_selection() {
+    fn kv_capability_failure_blocks_every_store_in_the_profile() {
+        let catalog = load_catalog(Arc::new(CatalogTransport)).unwrap();
+        assert_eq!(catalog.stores.len(), 2);
+        assert!(catalog.items.is_empty());
+        assert_eq!(catalog.blocked_profiles, ["local"]);
+        assert_eq!(catalog.failures.len(), 1);
+        assert!(matches!(
+            catalog.failures[0].scope,
+            CatalogFailureScope::Profile { ref profile, .. } if profile == "local"
+        ));
+    }
+
+    struct PartialCatalogTransport;
+
+    impl AgentTransport for PartialCatalogTransport {
+        fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+            match operation {
+                Operation::ListProfiles => Ok(serde_json::json!([{"name": "local"}])),
+                Operation::ListKnownStores { .. } => Ok(serde_json::json!([{
+                    "store_kind": "account",
+                    "account_alias": "old-account",
+                    "last_seen_at": 10
+                }, {
+                    "store_kind": "team",
+                    "account_alias": "personal",
+                    "team_alias": "household",
+                    "team_id_hex": "03aa",
+                    "team_kind": "named",
+                    "name": "Household",
+                    "active": true,
+                    "last_seen_at": 11
+                }])),
+                Operation::ListAccounts { .. } => Ok(serde_json::json!([])),
+                Operation::ListTeams { .. } => Err(AgentError::Transport("offline".to_owned())),
+                operation => panic!("unexpected partial catalog operation: {operation:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn partial_catalog_replaces_only_successful_known_store_sources() {
+        let catalog = load_catalog(Arc::new(PartialCatalogTransport)).unwrap();
+        assert!(catalog.stores.is_empty());
+        assert!(matches!(
+            catalog.known_stores.as_slice(),
+            [CatalogStoreSummary::Team { store, .. }] if store.team_alias == "household"
+        ));
+        assert_eq!(
+            catalog.inventory,
+            [CatalogInventoryState {
+                profile: "local".to_owned(),
+                accounts_complete: true,
+                teams_complete: false,
+            }]
+        );
+        assert_eq!(catalog.failures.len(), 1);
+    }
+
+    struct AccountCatalogTransport;
+
+    impl AgentTransport for AccountCatalogTransport {
+        fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+            match operation {
+                Operation::ListProfiles => Ok(serde_json::json!([{"name": "local"}])),
+                Operation::ListKnownStores { .. } => Ok(serde_json::json!([])),
+                Operation::ListAccounts { .. } => Ok(serde_json::json!([{
+                    "profile": "local",
+                    "alias": "personal",
+                    "username": "alice"
+                }])),
+                Operation::ListTeams { .. } => Ok(serde_json::json!([])),
+                Operation::ListKv { cursor, .. } => {
+                    let (path, next_cursor) = if cursor.is_none() {
+                        ("/first", Some("next"))
+                    } else {
+                        ("/second", None)
+                    };
+                    Ok(serde_json::to_value(KvPage {
+                        snapshot_version: 7,
+                        entries: vec![KvEntryMetadata {
+                            path: path.to_owned(),
+                            node_type: "small-file".to_owned(),
+                            version: 1,
+                            size: None,
+                            read_role: KvRole::Owner,
+                            write_role: KvRole::Owner,
+                        }],
+                        next_cursor: next_cursor.map(str::to_owned),
+                    })
+                    .unwrap())
+                }
+                operation => panic!("unexpected account catalog operation: {operation:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn unified_catalog_pages_account_items_on_one_profile_queue() {
+        let catalog = load_catalog(Arc::new(AccountCatalogTransport)).unwrap();
+        assert_eq!(catalog.items.len(), 2);
+        assert_eq!(catalog.items[0].metadata.path, "/first");
+        assert_eq!(catalog.items[1].metadata.path, "/second");
+        assert!(catalog.failures.is_empty());
+    }
+
+    struct ChangedCatalogTransport {
+        cursors: Mutex<Vec<Option<String>>>,
+    }
+
+    impl AgentTransport for ChangedCatalogTransport {
+        fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+            let Operation::ListKv { cursor, .. } = operation else {
+                panic!("unexpected operation")
+            };
+            let mut cursors = self.cursors.lock().unwrap();
+            cursors.push(cursor.clone());
+            let call = cursors.len();
+            match call {
+                1 => Ok(serde_json::to_value(KvPage {
+                    snapshot_version: 7,
+                    entries: vec![KvEntryMetadata {
+                        path: "/stale".to_owned(),
+                        node_type: "small-file".to_owned(),
+                        version: 1,
+                        size: None,
+                        read_role: KvRole::Owner,
+                        write_role: KvRole::Owner,
+                    }],
+                    next_cursor: Some("stale-cursor".to_owned()),
+                })
+                .unwrap()),
+                2 => Err(AgentError::Protocol {
+                    code: ErrorCode::InvalidRequest,
+                    message: "catalog cursor belongs to another store snapshot".to_owned(),
+                    fields: ErrorFields::default(),
+                }),
+                3 => Ok(serde_json::to_value(KvPage {
+                    snapshot_version: 8,
+                    entries: vec![KvEntryMetadata {
+                        path: "/fresh".to_owned(),
+                        node_type: "small-file".to_owned(),
+                        version: 1,
+                        size: None,
+                        read_role: KvRole::Owner,
+                        write_role: KvRole::Owner,
+                    }],
+                    next_cursor: Some("fresh-cursor".to_owned()),
+                })
+                .unwrap()),
+                4 => Ok(serde_json::to_value(KvPage {
+                    snapshot_version: 8,
+                    entries: vec![KvEntryMetadata {
+                        path: "/second".to_owned(),
+                        node_type: "small-file".to_owned(),
+                        version: 1,
+                        size: None,
+                        read_role: KvRole::Owner,
+                        write_role: KvRole::Owner,
+                    }],
+                    next_cursor: None,
+                })
+                .unwrap()),
+                _ => panic!("unexpected page call"),
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_restarts_once_when_a_cursor_snapshot_changes() {
+        let transport = ChangedCatalogTransport {
+            cursors: Mutex::new(Vec::new()),
+        };
+        let entries = load_store_pages(
+            &transport,
+            &CatalogStoreRef::Account(AccountStoreRef {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+            }),
+            &CatalogLoadToken::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/fresh", "/second"]
+        );
+        assert_eq!(
+            transport.cursors.into_inner().unwrap(),
+            [
+                None,
+                Some("stale-cursor".to_owned()),
+                None,
+                Some("fresh-cursor".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn stores_discovery_never_walks_a_kv_tree() {
+        let catalog = load_stores(Arc::new(AccountCatalogTransport)).unwrap();
+        assert_eq!(catalog.stores.len(), 1);
+        assert!(catalog.items.is_empty());
+        assert!(catalog.failures.is_empty());
+    }
+
+    struct LockAwareCatalogTransport {
+        active_profiles: Mutex<std::collections::HashSet<String>>,
+        active: std::sync::atomic::AtomicUsize,
+        maximum: std::sync::atomic::AtomicUsize,
+    }
+
+    impl AgentTransport for LockAwareCatalogTransport {
+        fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+            let profile = match operation {
+                Operation::ListProfiles => {
+                    return Ok(serde_json::json!([{"name": "one"}, {"name": "two"}]))
+                }
+                Operation::ListKnownStores { profile }
+                | Operation::ListAccounts { profile }
+                | Operation::ListTeams { profile } => profile,
+                operation => panic!("unexpected lock-aware operation: {operation:?}"),
+            };
+            {
+                let mut active = self.active_profiles.lock().unwrap();
+                if !active.insert(profile.clone()) {
+                    return Err(AgentError::Protocol {
+                        code: ErrorCode::ProfileBusy,
+                        message: "same-profile overlap".to_owned(),
+                        fields: ErrorFields::default(),
+                    });
+                }
+            }
+            let count = self
+                .active
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            self.maximum
+                .fetch_max(count, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            self.active
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            self.active_profiles.lock().unwrap().remove(&profile);
+            Ok(serde_json::json!([]))
+        }
+    }
+
+    #[test]
+    fn catalog_serializes_each_profile_while_parallelizing_distinct_profiles() {
+        let transport = Arc::new(LockAwareCatalogTransport {
+            active_profiles: Mutex::new(std::collections::HashSet::new()),
+            active: std::sync::atomic::AtomicUsize::new(0),
+            maximum: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let catalog = load_catalog(transport.clone()).unwrap();
+        assert!(catalog.failures.is_empty());
+        assert!(transport.maximum.load(std::sync::atomic::Ordering::SeqCst) > 1);
+    }
+
+    struct CancellingCatalogTransport(CatalogLoadToken);
+
+    impl AgentTransport for CancellingCatalogTransport {
+        fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+            match operation {
+                Operation::ListProfiles => Ok(serde_json::json!([{"name": "local"}])),
+                Operation::ListKnownStores { .. } => Ok(serde_json::json!([])),
+                Operation::ListAccounts { .. } => {
+                    self.0.cancel();
+                    Ok(serde_json::json!([]))
+                }
+                operation => panic!("canceled catalog launched another call: {operation:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn canceled_catalog_stops_before_its_next_profile_call() {
+        let token = CatalogLoadToken::default();
+        let result =
+            load_catalog_cancellable(Arc::new(CancellingCatalogTransport(token.clone())), token);
+        assert_eq!(result.unwrap_err(), AgentError::Cancelled);
+    }
+
+    struct LargeReadTransport {
+        store: KvStoreRef,
+        total: u64,
+        operations: Mutex<Vec<Operation>>,
+    }
+
+    impl AgentTransport for LargeReadTransport {
+        fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+            self.operations.lock().unwrap().push(operation.clone());
+            match operation {
+                Operation::ReadKv {
+                    store,
+                    path,
+                    version,
+                } => {
+                    assert_eq!(store, self.store);
+                    assert_eq!(path, "/large");
+                    assert_eq!(version, 9);
+                    Ok(serde_json::to_value(KvReadResult {
+                        store,
+                        path,
+                        version,
+                        node_type: "file".to_owned(),
+                        size: Some(self.total),
+                        read_role: KvRole::Member { visibility: 2 },
+                        write_role: KvRole::Admin,
+                        content: None,
+                        symlink_target: None,
+                    })
+                    .unwrap())
+                }
+                Operation::ReadKvChunk {
+                    store,
+                    path,
+                    version,
+                    offset,
+                    length,
+                } => {
+                    assert_eq!(store, self.store);
+                    assert_eq!(path, "/large");
+                    assert_eq!(version, 9);
+                    let count = (self.total - offset).min(u64::from(length)) as usize;
+                    Ok(serde_json::to_value(KvChunkResult {
+                        store,
+                        path,
+                        version,
+                        offset,
+                        content: (0..count)
+                            .map(|index| ((offset as usize + index) % 251) as u8)
+                            .collect(),
+                        eof: offset + count as u64 == self.total,
+                    })
+                    .unwrap())
+                }
+                operation => panic!("unexpected item read: {operation:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn large_item_reads_are_chunked_and_bound_to_the_catalog_version() {
+        let account = AccountStoreRef {
+            profile: "local".to_owned(),
+            account_alias: "personal".to_owned(),
+        };
+        let item = CatalogItem {
+            store: CatalogStoreRef::Account(account.clone()),
+            metadata: KvEntryMetadata {
+                path: "/large".to_owned(),
+                node_type: "file".to_owned(),
+                version: 9,
+                size: None,
+                read_role: KvRole::Member { visibility: 2 },
+                write_role: KvRole::Admin,
+            },
+        };
+        let transport = LargeReadTransport {
+            store: KvStoreRef::Account(account),
+            total: u64::from(KV_READ_CHUNK_BYTES) + 17,
+            operations: Mutex::new(Vec::new()),
+        };
+        let read = read_catalog_item(&transport, &item).unwrap();
+        let KvItemValue::File(content) = read.value else {
+            panic!("large file did not return file content")
+        };
+        assert_eq!(content.len(), KV_READ_CHUNK_BYTES as usize + 17);
+        assert_eq!(content[0], 0);
+        assert_eq!(
+            content[KV_READ_CHUNK_BYTES as usize],
+            (KV_READ_CHUNK_BYTES as usize % 251) as u8
+        );
+        assert_eq!(transport.operations.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn account_and_team_item_mutations_are_cas_bound() {
+        let account = CatalogStoreRef::Account(AccountStoreRef {
+            profile: "local".to_owned(),
+            account_alias: "personal".to_owned(),
+        });
+        let item = CatalogItem {
+            store: account.clone(),
+            metadata: KvEntryMetadata {
+                path: "/password".to_owned(),
+                node_type: "small-file".to_owned(),
+                version: 7,
+                size: None,
+                read_role: KvRole::Member { visibility: -1 },
+                write_role: KvRole::Admin,
+            },
+        };
+        assert!(matches!(
+            create_kv_file_mutation(&account, "/new", b"secret".to_vec()).unwrap(),
+            KvAccountMutation::Inline(Operation::PutKv {
+                read_role: KvRole::Owner,
+                write_role: KvRole::Owner,
+                precondition: KvPrecondition::Create,
+                ..
+            })
+        ));
+        assert!(matches!(
+            edit_kv_file_mutation(&item, b"replacement".to_vec()).unwrap(),
+            KvAccountMutation::Inline(Operation::PutKv {
+                read_role: KvRole::Member { visibility: -1 },
+                write_role: KvRole::Admin,
+                precondition: KvPrecondition::ExactVersion { version: 7 },
+                ..
+            })
+        ));
+        assert!(matches!(
+            edit_kv_file_mutation(&item, vec![0; MAXIMUM_INLINE_KV_BYTES + 1]).unwrap(),
+            KvAccountMutation::Stream {
+                header: KvUploadHeader {
+                    precondition: KvPrecondition::ExactVersion { version: 7 },
+                    read_role: KvRole::Member { visibility: -1 },
+                    write_role: KvRole::Admin,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(matches!(
+            remove_kv_operation(&item, false).unwrap(),
+            Operation::RemoveKv {
+                precondition: KvPrecondition::ExactVersion { version: 7 },
+                ..
+            }
+        ));
+        assert!(matches!(
+            create_kv_file_upload(&account, "/large", 84 * 1024 * 1024).unwrap(),
+            KvUploadHeader {
+                total_length: 88_080_384,
+                read_role: KvRole::Owner,
+                write_role: KvRole::Owner,
+                precondition: KvPrecondition::Create,
+                ..
+            }
+        ));
+        let mut file = item.clone();
+        file.metadata.node_type = "file".to_owned();
+        assert!(matches!(
+            edit_kv_file_upload(&file, 64).unwrap(),
+            KvUploadHeader {
+                total_length: 64,
+                read_role: KvRole::Member { visibility: -1 },
+                write_role: KvRole::Admin,
+                precondition: KvPrecondition::ExactVersion { version: 7 },
+                ..
+            }
+        ));
+        assert!(matches!(
+            edit_kv_file_upload(&item, 64).unwrap(),
+            KvUploadHeader {
+                total_length: 64,
+                read_role: KvRole::Member { visibility: -1 },
+                write_role: KvRole::Admin,
+                precondition: KvPrecondition::ExactVersion { version: 7 },
+                ..
+            }
+        ));
+        assert_eq!(
+            create_kv_symlink_operation(&account, "/link ", " target ").unwrap(),
+            Operation::PutKvSymlink {
+                store: kv_store_ref(&account),
+                path: "/link ".to_owned(),
+                target: " target ".to_owned(),
+                read_role: KvRole::Owner,
+                write_role: KvRole::Owner,
+                precondition: KvPrecondition::Create,
+            }
+        );
+        let mut symlink = item.clone();
+        symlink.metadata.node_type = "symlink".to_owned();
+        assert_eq!(
+            edit_kv_symlink_operation(&symlink, "replacement").unwrap_err(),
+            "FOKS symlinks must be removed and recreated to change their target"
+        );
+
+        let team = CatalogStoreRef::Team(TeamStoreRef {
+            profile: "local".to_owned(),
+            account_alias: "personal".to_owned(),
+            team_alias: "engineering".to_owned(),
+            team_id: "aa".to_owned(),
+        });
+        assert!(matches!(
+            create_kv_file_mutation(&team, "/shared", Vec::new()).unwrap(),
+            KvAccountMutation::Inline(Operation::PutKv {
+                store: KvStoreRef::Team(_),
+                precondition: KvPrecondition::Create,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn catalog_worker_bound_never_exceeds_four() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let active = AtomicUsize::new(0);
+        let maximum = AtomicUsize::new(0);
+        let output = run_bounded((0..12).collect(), |value| {
+            let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+            maximum.fetch_max(current, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            active.fetch_sub(1, Ordering::SeqCst);
+            value
+        });
+        assert_eq!(output, (0..12).collect::<Vec<_>>());
+        assert_eq!(maximum.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn agent_error_classification_keeps_ambiguous_and_fatal_failures_distinct() {
+        let deadline = AgentError::Protocol {
+            code: ErrorCode::DeadlineExceeded,
+            message: "late".to_owned(),
+            fields: ErrorFields::default(),
+        };
+        assert!(deadline.transient());
+        assert!(deadline.ambiguous());
+        assert!(!deadline.fatal());
+
+        let mismatch = AgentError::Protocol {
+            code: ErrorCode::VersionMismatch,
+            message: "upgrade".to_owned(),
+            fields: ErrorFields::default(),
+        };
+        assert!(mismatch.fatal());
+        assert!(!mismatch.transient());
+        assert!(!mismatch.ambiguous());
+
+        assert!(AgentError::Transport("socket closed".to_owned()).transient());
+        let upload = AgentError::Ambiguous("socket closed after commit".to_owned());
+        assert!(upload.transient());
+        assert!(upload.ambiguous());
+        assert_eq!(
+            AgentError::Cancelled.user_message(),
+            "The request was cancelled."
+        );
+
+        let decoded_mismatch = agent_client_error(foks_agent_client::Error::Protocol(
+            foks_agent_proto::Error::Version,
+        ));
+        assert!(decoded_mismatch.fatal());
+    }
+
+    #[test]
+    fn screens_keep_catalog_and_profile_scopes_separate() {
         let transport = Arc::new(MockTransport {
             operations: Mutex::new(Vec::new()),
         });
         let mut model = DesktopModel::new(transport);
-        model.navigate(Screen::PersonalKv);
+        model.navigate(Screen::Items);
+        assert_eq!(model.operation(), Err("refresh the catalog instead"));
+        model.navigate(Screen::Settings);
         assert_eq!(model.operation(), Err("select a profile first"));
         model.select_profile("hosted");
-        assert_eq!(model.operation(), Err("select an account first"));
-        model.select_account("personal");
+        assert_eq!(
+            model.probe_operation().unwrap(),
+            Operation::Probe {
+                profile: "hosted".to_owned(),
+            }
+        );
         assert_eq!(
             model.operation().unwrap(),
-            Operation::ListKv {
+            Operation::ListYubiAccounts {
+                profile: "hosted".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn team_store_identity_includes_the_owning_account_alias() {
+        let left = CatalogStoreRef::Team(TeamStoreRef {
+            profile: "local".to_owned(),
+            account_alias: "personal".to_owned(),
+            team_alias: "engineering".to_owned(),
+            team_id: "0d".repeat(33),
+        });
+        let right = CatalogStoreRef::Team(TeamStoreRef {
+            profile: "local".to_owned(),
+            account_alias: "work".to_owned(),
+            team_alias: "engineering".to_owned(),
+            team_id: "0d".repeat(33),
+        });
+        assert_ne!(left, right);
+    }
+
+    #[test]
+    fn first_run_operations_are_explicitly_bound_to_native_foks_identity() {
+        let transport = Arc::new(MockTransport {
+            operations: Mutex::new(Vec::new()),
+        });
+        let mut model = DesktopModel::new(transport);
+        assert_eq!(
+            model.add_profile_operation("", "foks.example:443"),
+            Err("enter a profile name")
+        );
+        assert_eq!(
+            model
+                .add_profile_operation("hosted", "foks.example:443")
+                .unwrap(),
+            Operation::AddProfile {
+                name: "hosted".to_owned(),
+                probe: "foks.example:443".to_owned(),
+                protocol: ProfileProtocol::V019,
+                trust: ProfileTrust::WebPki,
+            }
+        );
+        model.record_profile("hosted");
+        assert_eq!(
+            model.resume_account_operation("personal").unwrap(),
+            Operation::ResumeAccount {
                 profile: "hosted".to_owned(),
                 alias: "personal".to_owned(),
             }
         );
+        assert_eq!(
+            model.reset_hard_state_operation().unwrap_err(),
+            "reset requires the bound preview flow in the new desktop"
+        );
+        model.forget_profile("hosted");
+        assert!(model.profiles().is_empty());
     }
 
     #[test]
@@ -968,12 +3098,16 @@ mod tests {
             operations: Mutex::new(Vec::new()),
         });
         let mut model = DesktopModel::new(transport);
-        model.navigate(Screen::Profiles);
+        model.navigate(Screen::Servers);
         model.accept(Ok(serde_json::json!([{"name": "local"}])));
         assert_eq!(model.selected_profile(), Some("local"));
         assert_eq!(model.profiles(), ["local".to_owned()]);
-        model.navigate(Screen::Accounts);
-        model.accept(Ok(serde_json::json!(["personal"])));
+        model.navigate(Screen::Stores);
+        model.accept(Ok(serde_json::json!([{
+            "profile": "local",
+            "alias": "personal",
+            "username": "alice"
+        }])));
         assert_eq!(model.selected_account(), Some("personal"));
         assert_eq!(model.accounts(), ["personal".to_owned()]);
     }
@@ -984,7 +3118,7 @@ mod tests {
             operations: Mutex::new(Vec::new()),
         });
         let mut model = DesktopModel::new(transport);
-        model.navigate(Screen::Profiles);
+        model.navigate(Screen::Servers);
         model.accept(Ok(
             serde_json::json!([{"name": "local"}, {"name": "partner"}]),
         ));
@@ -993,8 +3127,11 @@ mod tests {
         assert_eq!(model.profiles(), ["local".to_owned(), "partner".to_owned()]);
         assert!(model.value().is_some());
 
-        model.navigate(Screen::Accounts);
-        model.accept(Ok(serde_json::json!(["personal", "work"])));
+        model.navigate(Screen::Stores);
+        model.accept(Ok(serde_json::json!([
+            {"profile": "partner", "alias": "personal", "username": "alice"},
+            {"profile": "partner", "alias": "work", "username": "alice"}
+        ])));
         model.select_account("work");
         assert_eq!(model.accounts(), ["personal".to_owned(), "work".to_owned()]);
 
@@ -1323,24 +3460,38 @@ mod tests {
         );
         assert_eq!(
             model
-                .demote_team_member_operation("engineering", "alice", TeamRole::Member, -2)
+                .demote_team_member_operation(
+                    "engineering",
+                    "01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    TeamRole::Member,
+                    -2,
+                )
                 .unwrap(),
             Operation::DemoteTeamMember {
                 profile: "local".to_owned(),
                 team_alias: "engineering".to_owned(),
-                username: "alice".to_owned(),
+                party_id_hex: "01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_owned(),
                 role: TeamRole::Member,
                 visibility: -2,
             }
         );
         assert_eq!(
+            model.demote_team_member_operation("engineering", "alice", TeamRole::Member, 0,),
+            Err("enter the team alias and authenticated user party id")
+        );
+        assert_eq!(
             model
-                .remove_team_member_operation("engineering", "alice")
+                .remove_team_member_operation(
+                    "engineering",
+                    "01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                )
                 .unwrap(),
             Operation::RemoveTeamMember {
                 profile: "local".to_owned(),
                 team_alias: "engineering".to_owned(),
-                username: "alice".to_owned(),
+                party_id_hex: "01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_owned(),
             }
         );
         assert_eq!(
@@ -1355,13 +3506,152 @@ mod tests {
     }
 
     #[test]
+    fn team_creation_keeps_native_kind_and_has_an_explicit_resume() {
+        let transport = Arc::new(MockTransport {
+            operations: Mutex::new(Vec::new()),
+        });
+        let mut model = DesktopModel::new(transport);
+        model.select_profile("local");
+        assert_eq!(
+            model
+                .create_team_operation(
+                    "personal",
+                    "engineering",
+                    "engineeringteam",
+                    TeamKind::Named,
+                )
+                .unwrap(),
+            Operation::CreateTeam {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+                team_alias: "engineering".to_owned(),
+                name: "engineeringteam".to_owned(),
+                kind: TeamKind::Named,
+            }
+        );
+        assert_eq!(
+            model
+                .create_team_operation("personal", "project", "", TeamKind::AdHoc)
+                .unwrap(),
+            Operation::CreateTeam {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+                team_alias: "project".to_owned(),
+                name: String::new(),
+                kind: TeamKind::AdHoc,
+            }
+        );
+        assert_eq!(
+            model.create_team_operation("personal", "project", "invented", TeamKind::AdHoc),
+            Err("ad-hoc teams do not have a FOKS name")
+        );
+        assert_eq!(
+            model.resume_team_creation_operation("engineering").unwrap(),
+            Operation::ResumeTeamCreation {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn owner_device_and_recovery_operations_stay_profile_and_account_bound() {
+        let transport = Arc::new(MockTransport {
+            operations: Mutex::new(Vec::new()),
+        });
+        let mut model = DesktopModel::new(transport);
+        model.select_profile("local");
+        model.record_account("personal".to_owned());
+        model.select_account("personal");
+
+        assert_eq!(
+            model.list_devices_operation().unwrap(),
+            Operation::ListDevices {
+                profile: "local".to_owned(),
+                alias: "personal".to_owned(),
+            }
+        );
+        assert_eq!(
+            model
+                .provision_owner_device_operation("laptop", "Laptop", 2)
+                .unwrap(),
+            Operation::ProvisionOwnerDevice {
+                profile: "local".to_owned(),
+                source_alias: "personal".to_owned(),
+                target_alias: "laptop".to_owned(),
+                device_name: "Laptop".to_owned(),
+                serial: 2,
+            }
+        );
+        assert_eq!(
+            model
+                .resume_owner_device_provision_operation("laptop")
+                .unwrap(),
+            Operation::ResumeOwnerDeviceProvision {
+                profile: "local".to_owned(),
+                target_alias: "laptop".to_owned(),
+            }
+        );
+        assert_eq!(
+            model.prepare_owner_backup_operation("offline").unwrap(),
+            Operation::PrepareOwnerBackup {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+                backup_alias: "offline".to_owned(),
+            }
+        );
+
+        let phrase = (1..=17)
+            .map(|index| format!("word{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(
+            model
+                .commit_owner_backup_operation("offline", SecretString::new(&phrase))
+                .unwrap(),
+            Operation::CommitOwnerBackup {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+                backup_alias: "offline".to_owned(),
+                phrase: SecretString::new(&phrase),
+            }
+        );
+        assert_eq!(
+            model
+                .recover_owner_account_operation(
+                    "recovered",
+                    SecretString::new(&phrase),
+                    "Recovery laptop",
+                    3,
+                )
+                .unwrap(),
+            Operation::RecoverOwnerAccount {
+                profile: "local".to_owned(),
+                target_alias: "recovered".to_owned(),
+                phrase: SecretString::new(&phrase),
+                device_name: "Recovery laptop".to_owned(),
+                serial: 3,
+            }
+        );
+        assert_eq!(
+            model.recover_owner_account_operation(
+                "recovered",
+                SecretString::new("too short"),
+                "Recovery laptop",
+                3,
+            ),
+            Err("backup phrase must contain exactly 17 tokens")
+        );
+    }
+
+    #[test]
     fn yubikey_screen_binds_hardware_and_recovery_operations_to_the_profile() {
         let transport = Arc::new(MockTransport {
             operations: Mutex::new(Vec::new()),
         });
         let mut model = DesktopModel::new(transport);
         model.select_profile("local");
-        model.navigate(Screen::YubiKeys);
+        model.navigate(Screen::Settings);
         assert_eq!(
             model.operation().unwrap(),
             Operation::ListYubiAccounts {
@@ -1474,6 +3764,38 @@ mod tests {
             ),
             Err("use two distinct PIV retired-key slots from 0x82 through 0x95")
         );
+        assert_eq!(
+            model
+                .yubi_passphrase_operation(
+                    PassphraseAction::Change,
+                    "hardware",
+                    SecretString::new("123456"),
+                    SecretString::new("new passphrase"),
+                    Some(SecretString::new("new passphrase")),
+                )
+                .unwrap(),
+            Operation::ChangeYubiPassphrase {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                pin: SecretString::new("123456"),
+                passphrase: SecretString::new("new passphrase"),
+            }
+        );
+    }
+
+    #[test]
+    fn failed_catalog_refresh_keeps_the_last_authenticated_snapshot() {
+        let transport = Arc::new(MockTransport {
+            operations: Mutex::new(Vec::new()),
+        });
+        let mut model = DesktopModel::new(transport);
+        model.accept_catalog(Ok(CatalogSnapshot {
+            profiles: vec!["local".to_owned()],
+            ..CatalogSnapshot::default()
+        }));
+        model.accept_catalog(Err(AgentError::Transport("agent unavailable".to_owned())));
+        assert_eq!(model.catalog().unwrap().profiles, ["local"]);
+        assert_eq!(model.error(), Some("agent unavailable"));
     }
 
     #[test]

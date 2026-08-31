@@ -343,16 +343,20 @@ type responseEnvelopeClient struct {
 func (*responseEnvelopeClient) Transport(context.Context) (rpc.Transporter, error) {
 	panic("unused")
 }
+
 func (*responseEnvelopeClient) Call(context.Context, rpc.Methoder, interface{}, interface{}, time.Duration) error {
 	panic("unused")
 }
+
 func (c *responseEnvelopeClient) Call2(_ context.Context, _ rpc.Methoder, _ interface{}, result interface{}, _ time.Duration, _ rpc.ErrorUnwrapper) error {
 	c.result = result
 	return errCapturedResponseEnvelope
 }
+
 func (*responseEnvelopeClient) CallCompressed(context.Context, rpc.Methoder, interface{}, interface{}, rpc.CompressionType, time.Duration) error {
 	panic("unused")
 }
+
 func (*responseEnvelopeClient) Notify(context.Context, rpc.Methoder, interface{}, time.Duration) error {
 	panic("unused")
 }
@@ -887,8 +891,8 @@ func writeUserFixtures(output string, address proto.TCPAddr, hostID proto.HostID
 		return err
 	}
 	teamEntries := []fixtureMerkleEntry{
-		fixtureMerkleEntry{key: *teamNameFirst, value: *teamNameLeaf},
-		fixtureMerkleEntry{key: teamKey, value: teamHash.ToStdHash()},
+		{key: *teamNameFirst, value: *teamNameLeaf},
+		{key: teamKey, value: teamHash.ToStdHash()},
 	}
 	nextTeamInput := teamInput
 	nextTeamInput.Seqno++

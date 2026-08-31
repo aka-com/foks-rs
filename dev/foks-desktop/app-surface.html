@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FOKS Desktop — current application surface</title>
+<!--
+  Interactive transcription of the current GPUI application in
+  crates/foks-desktop/src/gui.rs. This is an as-built surface, not a redesign.
+  It intentionally retains the seven screens, fixed profile/account context,
+  form-heavy operator-console layout, raw JSON response panels, lifecycle
+  overlay, and confirmation copy that the Rust application currently renders.
+
+  The controls above the window are mock scaffolding. They walk the complete
+  first-release journey and expose otherwise difficult states. Query strings
+  can deep-link the artifact: ?step=items, ?screen=Parties,
+  ?lifecycle=bootstrap, ?catalog=conflict, and ?modal=remove-item.
+
+  Fixture values are illustrative, but every displayed field is sourced from
+  an existing FOKS application/protocol structure. The mock does not add
+  activity, scheduled jobs, per-item sync state, team-summary facts, account
+  facts, or health telemetry that the current wire cannot supply.
+-->
+<style>
+  :root{
+    --page:#e9edf4; --canvas:#f5f7fb; --panel:#f8faff; --white:#fff;
+    --border:#d8dfeb; --border-strong:#bcc7d8; --ink:#172235;
+    --muted:#526178; --subtle:#65738a; --rail:#172235; --rail-hover:#263653;
+    --rail-muted:#c9d3e1; --selected:#e8edf5; --accent:#2764d8;
+    --danger:#b42318; --danger-wash:#fdecea; --warning:#8a5700;
+    --warning-wash:#fff5d8; --shadow:0 28px 80px rgba(23,34,53,.20);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%;font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink)}
+  body{background:var(--page);padding:24px 20px 64px}
+  button,input,textarea{font:inherit}
+  button{color:inherit}
+  .mock-head,.mock-controls,.mock-hint,.window{width:min(1180px,100%);margin-inline:auto}
+  .mock-head{margin-bottom:12px}
+  .mock-head h1{font-size:18px;margin:0 0 5px;letter-spacing:-.015em}
+  .mock-head p{font-size:13px;line-height:1.5;color:var(--muted);margin:0;max-width:930px}
+  .mock-controls{display:flex;flex-direction:column;gap:9px;padding:12px;border:1px dashed #9caabc;border-radius:12px;background:rgba(255,255,255,.55)}
+  .control-row{display:flex;align-items:flex-start;gap:10px}
+  .control-label{width:76px;flex:0 0 auto;padding-top:5px;color:var(--muted);font-size:11px;font-weight:750;text-transform:uppercase;letter-spacing:.07em}
+  .control-set{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{border:1px solid var(--border-strong);background:var(--white);border-radius:999px;padding:5px 10px;font-size:11px;cursor:pointer}
+  .chip:hover{border-color:var(--accent)}
+  .chip.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+  .chip.flow{border-radius:7px}
+  .mock-hint{min-height:28px;padding:9px 4px 5px;color:var(--muted);font-size:12px}
+  .window{height:740px;border:1px solid #b7c1cf;border-radius:15px;overflow:hidden;background:var(--canvas);box-shadow:var(--shadow)}
+  .titlebar{height:42px;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:0 15px;background:#f7f8fa;border-bottom:1px solid var(--border);font-size:12px;color:var(--muted)}
+  .traffic{display:flex;gap:7px}.traffic i{width:11px;height:11px;border-radius:50%;background:#d8dde5}.traffic i:first-child{background:#ff5f57}.traffic i:nth-child(2){background:#febc2e}.traffic i:nth-child(3){background:#28c840}
+  .titlebar strong{color:#46536a;font-size:12px}
+  .app{height:calc(100% - 42px);display:grid;grid-template-columns:220px minmax(0,1fr);position:relative}
+  .rail{background:var(--rail);padding:24px 16px;display:flex;flex-direction:column;gap:6px;color:#fff}
+  .brand{font-size:21px;font-weight:780;margin:0 10px 17px}
+  .nav{border:0;background:transparent;color:var(--rail-muted);padding:10px 12px;border-radius:7px;text-align:left;cursor:pointer;font-size:14px}
+  .nav:hover{background:var(--rail-hover)}.nav.on{background:var(--accent);color:#fff}
+  .main{min-width:0;padding:24px;display:flex;flex-direction:column;gap:14px;overflow:hidden}
+  .page-head{display:flex;align-items:center;justify-content:space-between;gap:15px}
+  .page-head h2{font-size:25px;line-height:1.05;margin:0 0 6px;letter-spacing:-.02em}
+  .context{font-size:12px;color:var(--subtle);white-space:pre}
+  .btn{border:1px solid var(--border-strong);background:var(--white);padding:8px 12px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:650}
+  .btn:hover{border-color:var(--accent)}.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}.btn.danger{background:var(--danger);border-color:var(--danger);color:#fff}.btn.soft-danger{background:var(--danger-wash);border-color:#f4c7c2;color:#8e1e16}.btn[disabled]{opacity:.55;cursor:default}
+  .selectors{display:flex;gap:7px;flex-wrap:wrap}.selector{border:0;background:var(--selected);padding:6px 11px;border-radius:999px;font-size:12px;cursor:pointer}.selector.on{background:var(--accent);color:#fff}
+  .body{flex:1;min-height:0;overflow:hidden}.scroll{height:100%;overflow:auto;padding-right:4px}
+  .stack{display:flex;flex-direction:column;gap:14px}.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.button-row{display:flex;flex-wrap:wrap;gap:8px}
+  .card{border:1px solid var(--border);background:var(--panel);border-radius:10px;padding:15px}.card.white{background:#fff}.card h3{font-size:16px;margin:0 0 7px}.card p{font-size:12px;line-height:1.5;color:var(--subtle);margin:0 0 12px}
+  .field{display:flex;flex-direction:column;gap:5px}.field label{font-size:11px;color:var(--muted);font-weight:650}.input{min-height:36px;border:1px solid var(--border-strong);border-radius:6px;background:#fff;padding:9px 10px;color:#5a677b;font-size:12px}.input.secret{letter-spacing:.14em}.field.wide{grid-column:1/-1}
+  .response{min-height:130px;white-space:pre-wrap;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px;overflow:auto;color:#36445b}
+  .banner{border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.45}.banner.error{background:var(--danger-wash);color:#7c211a}.banner.warning{background:var(--warning-wash);color:var(--warning)}.banner.info{background:var(--selected);color:#2c466f}
+  .catalog{height:100%;display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px}.catalog-left{min-width:0;display:flex;flex-direction:column;gap:10px}.search{border:1px solid var(--border-strong);border-radius:7px;background:#fff;padding:10px 12px;color:var(--subtle);font-size:12px}.rows{min-height:0;overflow:auto;border:1px solid var(--border);border-radius:10px;background:#fff}.store-head,.item-row,.message-row{height:54px;padding:0 13px;border-bottom:1px solid var(--border);display:flex;align-items:center}.store-head{height:57px;flex-direction:column;justify-content:center;align-items:flex-start;background:#fff;cursor:pointer}.store-head.on{background:var(--selected)}.store-head strong{font-size:14px}.store-head span,.item-row span{font-size:10px;color:var(--subtle)}.item-row{justify-content:space-between;cursor:pointer;font-size:12px}.item-row.on{background:var(--selected);box-shadow:inset 3px 0 var(--accent)}.message-row{font-size:12px;color:var(--subtle)}
+  .inspector{overflow:auto;border:1px solid var(--border);border-radius:10px;background:#fff;padding:15px}.inspector h3{font-size:15px;margin:0 0 12px;overflow-wrap:anywhere}.meta{display:grid;grid-template-columns:84px 1fr;gap:7px 8px;font-size:12px}.meta dt{color:var(--subtle)}.meta dd{margin:0;overflow-wrap:anywhere}.value{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--selected);border-radius:7px;padding:11px;margin:13px 0;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}.divider{height:1px;background:var(--border);margin:16px 0}.minor{font-size:11px;line-height:1.5;color:var(--subtle)}
+  .store-card{padding:12px;border:1px solid var(--border);border-radius:9px;background:#fff}.store-card strong{font-size:14px}.store-card div{margin-top:5px;color:var(--subtle);font-size:11px;overflow-wrap:anywhere}
+  .check{padding:12px;border-radius:7px;background:#fff;font-size:13px}.check.done{background:var(--selected)}
+  .notification{height:100%;border:1px solid var(--border);border-radius:10px;background:#fff;padding:23px}.notification h3{margin:0 0 8px;font-size:16px}.notification p{color:var(--subtle);font-size:12px}
+  .overlay{position:absolute;inset:0;background:rgba(23,34,53,.82);display:grid;place-items:center;z-index:20;backdrop-filter:blur(5px)}
+  .sheet{width:min(480px,calc(100% - 40px));background:#fff;border:1px solid var(--border);border-radius:12px;padding:23px;box-shadow:0 22px 60px rgba(0,0,0,.28)}.sheet h3{font-size:20px;margin:0 0 9px}.sheet p{font-size:12px;line-height:1.55;color:var(--subtle);margin:0 0 17px}.sheet .button-row{justify-content:flex-end}
+  .locked-content{opacity:.88}
+  @media(max-width:900px){.window{height:760px}.app{grid-template-columns:178px 1fr}.rail{padding-inline:10px}.catalog{grid-template-columns:1fr}.inspector{display:none}.grid2{grid-template-columns:1fr}.field.wide{grid-column:auto}}
+</style>
+</head>
+<body>
+<header class="mock-head">
+  <h1>FOKS Desktop — current application surface</h1>
+  <p>The window below mirrors the GPUI console as built. Use the journey first, then inspect individual screens, lifecycle states, catalog outcomes, and confirmation sheets. Mock controls are outside the application frame.</p>
+</header>
+
+<section class="mock-controls" aria-label="Mock state controls">
+  <div class="control-row">
+    <span class="control-label">Journey</span>
+    <div class="control-set" id="journeyControls">
+      <button class="chip flow" data-step="launch">1 · Launch</button>
+      <button class="chip flow" data-step="bootstrap">2 · Bootstrap</button>
+      <button class="chip flow" data-step="start">3 · Get started</button>
+      <button class="chip flow" data-step="server">4 · Add server</button>
+      <button class="chip flow" data-step="probe">5 · Probe</button>
+      <button class="chip flow" data-step="account">6 · Create account</button>
+      <button class="chip flow" data-step="items">7 · Browse items</button>
+      <button class="chip flow" data-step="reveal">8 · Reveal</button>
+      <button class="chip flow" data-step="conflict">9 · Edit conflict</button>
+      <button class="chip flow" data-step="team">10 · Create team</button>
+      <button class="chip flow" data-step="party">11 · Manage party</button>
+      <button class="chip flow" data-step="recovery">12 · Recovery</button>
+      <button class="chip flow" data-step="yubi">13 · YubiKey</button>
+      <button class="chip flow" data-step="lost">14 · Agent lost</button>
+    </div>
+  </div>
+  <div class="control-row">
+    <span class="control-label">Screen</span>
+    <div class="control-set" id="screenControls"></div>
+  </div>
+  <div class="control-row">
+    <span class="control-label">Lifecycle</span>
+    <div class="control-set">
+      <button class="chip" data-lifecycle="checking">Checking</button>
+      <button class="chip" data-lifecycle="bootstrap">Bootstrap</button>
+      <button class="chip" data-lifecycle="initializing">Initializing</button>
+      <button class="chip" data-lifecycle="ready">Ready</button>
+      <button class="chip" data-lifecycle="failed">Failed</button>
+    </div>
+  </div>
+  <div class="control-row">
+    <span class="control-label">Catalog</span>
+    <div class="control-set">
+      <button class="chip" data-catalog="base">Masked</button>
+      <button class="chip" data-catalog="reading">Reading</button>
+      <button class="chip" data-catalog="revealed">Revealed</button>
+      <button class="chip" data-catalog="team">Team read-only</button>
+      <button class="chip" data-catalog="team-pending">Team pending</button>
+      <button class="chip" data-catalog="profile-blocked">Profile blocked</button>
+      <button class="chip" data-catalog="conflict">Conflict</button>
+      <button class="chip" data-catalog="refresh-error">Refresh failed</button>
+      <button class="chip" data-catalog="empty">Empty</button>
+      <button class="chip" data-catalog="not-loaded">Not loaded</button>
+    </div>
+  </div>
+  <div class="control-row">
+    <span class="control-label">Confirm</span>
+    <div class="control-set">
+      <button class="chip" data-modal="none">None</button>
+      <button class="chip" data-modal="remove-item">Remove item</button>
+      <button class="chip" data-modal="remove-party">Remove party</button>
+      <button class="chip" data-modal="demote-party">Demote party</button>
+      <button class="chip" data-modal="revoke-yubi">Revoke YubiKey</button>
+      <button class="chip" data-modal="remove-profile">Remove profile</button>
+      <button class="chip" data-modal="reset-hard-state">Reset hard state</button>
+    </div>
+  </div>
+</section>
+<div class="mock-hint" id="mockHint"></div>
+
+<main class="window" aria-label="FOKS desktop mock">
+  <div class="titlebar">
+    <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+    <strong>FOKS</strong>
+    <span></span>
+  </div>
+  <div class="app" id="app"></div>
+</main>
+
+<script>
+const SCREENS = ["Items","Notifications","Get started","Stores","Parties","Servers","Settings"];
+const ORDER = ["launch","bootstrap","start","server","probe","account","items","reveal","conflict","team","party","recovery","yubi","lost"];
+const HINTS = {
+  launch:"The desktop is mounted underneath a full-window agent connection lock.",
+  bootstrap:"Only AgentStatus and InitializeState are admitted until native secure state exists.",
+  start:"The persistent Get started screen links to profile and account setup; it is not a separate first-run branch.",
+  server:"Profiles are Go-compatible v0.1.9 endpoints. Add, probe/pin, remove, and hard-state reset are the available actions.",
+  probe:"ProbeReport is shown in the generic JSON response panel using only its real fields.",
+  account:"Account creation belongs to the selected profile and creates the personal FOKS store.",
+  items:"The unified catalog mixes personal and team stores; team stores are list/read-only in this release.",
+  reveal:"Reveal reads the exact selected version. Values are hidden until explicitly requested.",
+  conflict:"A compare-and-swap conflict leaves the catalog visible and schedules a refresh rather than overwriting.",
+  team:"Named and ad-hoc team creation share one operator form; interrupted creation has an explicit resume action.",
+  party:"Member/Admin/Owner are native FOKS roles. The desktop's add/demote path currently exposes Member visibility.",
+  recovery:"Owner-device, backup, recovery, YubiKey, and passphrase workflows are all stacked on Settings.",
+  yubi:"Hardware onboarding, synchronization, credential recovery, revocation, and passphrase operations share the Settings screen.",
+  lost:"A transport failure locks the entire window and offers restart without automatically replaying a mutation."
+};
+const state = {step:"items",screen:"Items",lifecycle:"ready",catalog:"base",modal:"none",profiles:true,accounts:true,catalogStores:true,teamCreated:false,response:null,error:null,selected:"db",store:"personal"};
+
+const params = new URLSearchParams(location.search);
+const requested = {step:params.get("step"),screen:params.get("screen"),lifecycle:params.get("lifecycle"),catalog:params.get("catalog"),modal:params.get("modal")};
+if(params.has("step")) state.step=params.get("step");
+if(params.has("screen")) state.screen=params.get("screen");
+if(params.has("lifecycle")) state.lifecycle=params.get("lifecycle");
+if(params.has("catalog")) state.catalog=params.get("catalog");
+if(params.has("modal")) state.modal=params.get("modal");
+if(!params.has("step") && [requested.screen,requested.lifecycle,requested.catalog,requested.modal].some(Boolean))state.step="direct";
+
+const profile = {name:"local",probe:"foks.example.net:443",protocol:{generation:"v019"},trust:{kind:"web-pki"}};
+const probe = {lookup_name:"foks.example.net",canonical_name:"foks.example.net",host_id_hex:"02b04d17e390a1f85ddc6ce95b7748dfac2217ed401da781764da8eb55d098f724",host_chain_sequence:33,merkle_epoch:90417};
+const teamId = "033f91c2aa07b45e18d0c73a9f2e5b6417ac8d0192f3e4b5c6d7089a1b2c3d4e5f";
+const items = [
+  {id:"db",store:"personal",path:"/env/prod/DATABASE_URL",type:"small-file",version:3,size:96,read:"Owner",write:"Owner",value:"postgres://service:••••••••@db.internal/prod"},
+  {id:"link",store:"personal",path:"/latest-key",type:"symlink",version:2,size:22,read:"Owner",write:"Owner",value:"/ssh/id_ed25519"},
+  {id:"ssh",store:"personal",path:"/ssh/id_ed25519",type:"small-file",version:1,size:419,read:"Owner",write:"Owner",value:"-----BEGIN OPENSSH PRIVATE KEY-----\n…\n-----END OPENSSH PRIVATE KEY-----"},
+  {id:"token",store:"engineering",path:"/deploy/production-token",type:"small-file",version:12,size:88,read:"Admin",write:"Owner",value:"foks_team_token_••••••••"},
+  {id:"bundle",store:"engineering",path:"/release/bundle.tar",type:"file",version:5,size:84399718,read:"Member (0)",write:"Admin",value:"[binary file content]"}
+];
+
+function escapeHtml(value){return String(value).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function pretty(value){return escapeHtml(JSON.stringify(value,null,2));}
+function field(label,placeholder,wide=false,secret=false){return `<div class="field${wide?" wide":""}"><label>${label}</label><div class="input${secret?" secret":""}">${secret?"••••••••":placeholder}</div></div>`;}
+function buttons(labels){return `<div class="button-row">${labels.map(([label,kind="primary",action="generic"])=>`<button class="btn ${kind}" data-action="${action}">${label}</button>`).join("")}</div>`;}
+function response(value=state.response){return `<div class="response">${state.error?`Unavailable\n\n${escapeHtml(state.error)}`:value?pretty(value):"No data loaded."}</div>`;}
+function setQuery(){const q=new URLSearchParams();q.set("step",state.step);q.set("screen",state.screen);q.set("lifecycle",state.lifecycle);q.set("catalog",state.catalog);if(state.modal!=="none")q.set("modal",state.modal);history.replaceState(null,"",`?${q}`);}
+
+function applyStep(step){
+  state.step=step;state.modal="none";state.response=null;state.error=null;state.profiles=true;state.accounts=true;state.catalogStores=true;state.teamCreated=false;
+  if(step==="launch"){state.screen="Items";state.lifecycle="checking";state.profiles=false;state.accounts=false;state.catalog="not-loaded";state.selected=null;}
+  if(step==="bootstrap"){state.screen="Items";state.lifecycle="bootstrap";state.profiles=false;state.accounts=false;state.catalog="not-loaded";state.selected=null;}
+  if(step==="start"){state.screen="Get started";state.lifecycle="ready";state.profiles=false;state.accounts=false;}
+  if(step==="server"){state.screen="Servers";state.lifecycle="ready";state.profiles=false;state.accounts=false;state.response=[];}
+  if(step==="probe"){state.screen="Servers";state.lifecycle="ready";state.accounts=false;state.response=probe;}
+  if(step==="account"){state.screen="Stores";state.lifecycle="ready";state.accounts=false;state.catalogStores=false;state.response=null;}
+  if(step==="items"){state.screen="Items";state.lifecycle="ready";state.catalog="base";state.selected="db";state.store="personal";}
+  if(step==="reveal"){state.screen="Items";state.lifecycle="ready";state.catalog="revealed";state.selected="db";state.store="personal";}
+  if(step==="conflict"){state.screen="Items";state.lifecycle="ready";state.catalog="conflict";state.selected=null;state.store="personal";}
+  if(step==="team"){state.screen="Parties";state.lifecycle="ready";state.response=[];}
+  if(step==="party"){state.screen="Parties";state.lifecycle="ready";state.teamCreated=true;state.response=[{username:"sam",party_id_hex:"01a4c107f822ee91b05d3c44a7e0186b297f10cd439b62ae0831d5f7c46e29b0a5",scoped_host_id_hex:null,party_kind:"user",source_role:{Member:{visibility:0}},destination_role:{Member:{visibility:0}},generation:4,locally_manageable:true}];}
+  if(step==="recovery"){state.screen="Settings";state.lifecycle="ready";state.teamCreated=true;state.response=[{id_hex:"02a779c40674942e2d0fc18aa8d59b2ee4fa95ea7a652310e3f13d2d317f170b22",role:"owner",current:true}];}
+  if(step==="yubi"){state.screen="Settings";state.lifecycle="ready";state.teamCreated=true;state.response={alias:"hardware",username:"rae",yubi_id_hex:"0205c6fa82b793ff91ef91fcbfe0fac5b98509dd137691568452f4928662f51fa4",subkey_id_hex:"03b4f1adca8c1eb3f6d9ff632e81419d13a80c6f2791ddf416559696230fe6a5a2",user_chain_sequence:7,management_enrolled:true};}
+  if(step==="lost"){state.screen="Items";state.lifecycle="failed";state.catalog="base";state.teamCreated=true;}
+  render();
+}
+
+function rail(){return `<aside class="rail"><div class="brand">FOKS</div>${SCREENS.map(name=>`<button class="nav ${state.screen===name?"on":""}" data-screen="${name}">${name}</button>`).join("")}</aside>`;}
+function selectors(){
+  if(state.screen==="Servers" && state.profiles)return `<div class="selectors"><button class="selector on">local</button></div>`;
+  if((state.screen==="Stores"||state.screen==="Settings") && state.accounts)return `<div class="selectors"><button class="selector on">personal</button></div>`;
+  return "";
+}
+function pageHead(){const profileName=state.profiles?"local":"none",account=state.accounts?"personal":"none";return `<div class="page-head"><div><h2>${state.screen}</h2><div class="context">Profile: ${profileName}    Account: ${account}</div></div><button class="btn primary" data-action="refresh">Refresh</button></div>${selectors()}`;}
+
+function itemsScreen(){
+  if(state.catalog==="not-loaded")return `<section class="notification">No catalog has been loaded.</section>`;
+  if(state.catalog==="empty")return `<div class="catalog"><div class="catalog-left"><div class="search">Search paths</div><div class="rows"><div class="message-row">No account or team stores are available.</div></div></div><aside class="inspector"><div class="minor">Select an item to inspect its authenticated metadata.</div><div class="divider"></div><div class="minor">Select an account store to create an item.</div></aside></div>`;
+  const selected=items.find(item=>item.id===state.selected)||null;
+  const visible=state.catalog==="revealed",reading=state.catalog==="reading";
+  const banner=state.catalog==="refresh-error"?`<div class="banner error">The last operation failed: local agent I/O failed.</div>`:"";
+  const row=(item)=>`<div class="item-row ${selected?.id===item.id?"on":""}" data-item="${item.id}"><strong>${item.path}</strong><span>${item.type}</span></div>`;
+  const personalRows=items.filter(item=>item.store==="personal").map(row).join("");
+  const teamRows=items.filter(item=>item.store==="engineering").map(row).join("");
+  const personalOn=state.store==="personal"?"on":"",teamOn=state.store==="engineering"?"on":"";
+  const value=selected?(reading?`<div class="minor">Reading the exact selected version…</div>`:visible?`<div class="value">${escapeHtml(selected.value)}</div><button class="btn" data-action="hide">Hide value</button>`:`<button class="btn primary" data-action="reveal">Reveal value</button>`):"";
+  const mutation=!selected?"":selected.store==="engineering"?`<div class="divider"></div><div class="minor">Team stores are list/read-only in this release.</div>`:selected.type==="symlink"?`<div class="divider"></div><div class="minor">FOKS symlinks must be removed and recreated to change their target.</div>${buttons([["Remove","soft-danger","remove-item"]])}`:`<div class="divider"></div>${field("Replacement secret value","",false,true)}<div style="height:9px"></div>${buttons([["Replace","primary","replace"],["Remove","soft-danger","remove-item"]])}`;
+  const creation=state.catalog==="profile-blocked"?`<div class="divider"></div><div class="minor">This profile's catalog is blocked until its trust or KV capability error is resolved.</div>`:state.store==="personal"?`<div class="divider"></div><h3>New account-store item</h3><div class="minor">local / personal · new items default to Owner read and write roles</div><div style="height:10px"></div>${field("Path","/path/to/item")}${field("Secret value","",false,true)}${field("Symlink target","",false,true)}<div style="height:10px"></div>${buttons([["Create file"],["Create folder",""],["Create symlink",""]])}`:`<div class="divider"></div><div class="minor">Team stores are list/read-only in this release.</div>`;
+  const itemError=state.catalog==="conflict"?`<div class="banner error">agent returned Conflict: the KV item changed; refresh before retrying</div>`:"";
+  const inspector=selected?`<h3>${selected.path}</h3><dl class="meta"><dt>Type</dt><dd>${selected.type}</dd><dt>Version</dt><dd>${selected.version}</dd><dt>Size</dt><dd>${selected.size}</dd><dt>Read role</dt><dd>${selected.read}</dd><dt>Write role</dt><dd>${selected.write}</dd></dl><div style="height:13px"></div>${value}${mutation}${itemError}${creation}`:`<div class="minor">Select an item to inspect its authenticated metadata.</div>${itemError}${creation}`;
+  const teamSection=state.teamCreated||["team","team-pending"].includes(state.catalog)?`<div class="store-head ${teamOn}" data-store="engineering"><strong>Engineering</strong><span>named team · engineering · ${state.catalog==="team-pending"?"creation pending":"active"}</span></div>${state.catalog==="team-pending"?'<div class="message-row">Items are unavailable until team creation completes.</div>':teamRows}`:"";
+  return `<div class="stack" style="height:100%">${banner}<div class="catalog"><div class="catalog-left"><div class="search">Search paths</div><div class="rows">${teamSection}<div class="store-head ${personalOn}" data-store="personal"><strong>personal</strong><span>Account store</span></div>${personalRows}</div></div><aside class="inspector">${inspector}</aside></div></div>`;
+}
+
+function storesScreen(){return `<div class="scroll"><div class="stack">
+  <section class="card"><h3>Create account</h3><p>The invite and optional passphrase go only to the private local agent; passphrase fields are consumed when submitted.</p><div class="grid2">${field("Local alias","personal")}${field("Username","rae")}${field("Device","MacBook")}${field("Email","Email (optional)")}${field("Invite","",true,true)}${field("Passphrase (optional)","",false,true)}${field("Confirm passphrase","",false,true)}</div><div style="height:12px"></div>${buttons([["Create account","primary","create-account"],["Resume account","","generic"]])}</section>
+  <section class="card"><h3>Account passphrase</h3><p>Select an account. Set and change require confirmation; verify performs the public login challenge.</p><div class="grid2">${field("Passphrase","",false,true)}${field("Confirm passphrase","",false,true)}</div><div style="height:12px"></div>${buttons([["Set"],["Change"],["Verify"]])}</section>
+  <section>${state.catalogStores?`${state.teamCreated?`<div class="store-card"><strong>Engineering</strong><div>Team store · local · alias engineering · id ${teamId} · named · active</div></div><div style="height:8px"></div>`:""}<div class="store-card"><strong>personal</strong><div>Account store · local</div></div>`:`<div class="minor">No stores have been loaded.</div>`}</section>
+  </div></div>`;}
+
+function serversScreen(){return `<div class="stack" style="height:100%"><section class="card"><h3>FOKS server profile</h3><p>Add a Go-compatible v0.1.9 server, then probe and pin its authenticated host identity before creating an account.</p><div class="grid2">${field("Profile name","local")}${field("FOKS probe address","foks.example.net:443")}</div><div style="height:12px"></div>${buttons([["Add server","primary","add-server"],["Probe selected server","primary","probe"],["Remove selected server","primary","remove-profile"],["Reset hard state","primary","reset-hard-state"]])}</section>${response(state.response||(state.profiles?[profile]:null))}</div>`;}
+
+function getStartedScreen(){return `<section class="card"><h3>Set up this FOKS client</h3><div class="stack"><div class="check done">✓ Secure local state initialized</div><button class="check ${state.profiles?"done":""}" data-screen="Servers">${state.profiles?"✓":"○"} Add a FOKS server profile</button><button class="check" data-screen="Servers">→ Probe the selected server before account onboarding</button><button class="check ${state.accounts?"done":""}" data-screen="Stores">${state.accounts?"✓":"○"} Create or resume an account store</button></div></section>`;}
+
+function partiesScreen(){return `<div class="scroll"><div class="stack">
+  <section class="card"><h3>Create a team store</h3><p>A named team has a FOKS-visible name. An ad-hoc team has only its local alias. Interrupted creation is resumed from the durable native team record.</p><div class="grid2">${field("Owner account alias","personal")}${field("Local team alias","engineering")}${field("FOKS team name","engineering")}${field("Pending team alias","engineering")}</div><div style="height:12px"></div>${buttons([["Create named team"],["Create ad-hoc team"],["Resume creation"]])}</section>
+  <section class="card"><h3>Local team members</h3><p>Add local users, list the authenticated roster, or strictly demote/remove a member. Member visibility is an ordered authorization band that affects disclosure and key access. A locally manageable target can still be refused when the selected account lacks authority.</p><div class="grid2">${field("Named team","engineering")}${field("Username","sam")}${field("Member visibility","0")}</div><div style="height:12px"></div>${buttons([["List roster","primary","roster"],["Add member"],["Resume add"],["Demote to member","primary","demote-party"],["Remove member","primary","remove-party"],["Resume edit"]])}</section>
+  <section class="card"><h3>Federated team admission</h3><p>Both profiles must already be probed and contain active teams. Desktop admission uses a member role; CLI and agent clients can explicitly select admin or owner.</p><div class="grid2">${field("Local named team","engineering")}${field("Remote profile","partner")}${field("Remote team","shared")}${field("Member visibility","0")}</div><div style="height:12px"></div>${buttons([["Admit remote team"],["List remote bindings"]])}</section>
+  ${response(state.response||[{alias:"engineering",account_alias:"personal",team_id_hex:teamId,kind:"named",name:"engineering",active:true}])}
+  </div></div>`;}
+
+function settingsScreen(){return `<div class="scroll"><div class="stack">
+  <section class="card"><h3>Software owner devices</h3><p>The selected account supplies the current owner credential. Provisioning creates another local owner credential; resume reconciles an interrupted provision without repeating it.</p><div class="grid2">${field("New local alias","laptop")}${field("Device name","Travel Mac")}${field("Device serial","2")}</div><div style="height:12px"></div>${buttons([["List devices"],["Provision owner device"],["Resume provision"]])}</section>
+  <section class="card"><h3>Owner recovery</h3><p>Enroll creates a 17-word owner backup phrase and returns it once for offline storage. Recovery creates a new local owner device; resume uses the same phrase and pending alias.</p>${field("Backup alias","paper-backup")}<div class="grid2">${field("Recovered account alias","recovered")}${field("Recovery device name","New Mac")}${field("Recovery device serial","1")}</div>${field("17-word backup phrase","",false,true)}<div style="height:12px"></div>${buttons([["Enroll backup","primary","backup"],["Recover account"],["Resume recovery"]])}</section>
+  <section class="card"><h3>Create YubiKey account</h3><p>The agent generates keys only in empty retired-key slots. Optional retry counts are applied and both PIV credentials restored before either FOKS key is generated.</p><div class="grid2">${field("Local alias","hardware")}${field("Username","rae")}${field("Device name","YubiKey 5")}${field("Email","Email (optional)")}${field("Card serial","12345678")}${field("PIN","",false,true)}${field("Device serial","3")}${field("Signing slot","0x82")}${field("PQ slot","0x83")}${field("Enrollment PUK (optional)","",false,true)}${field("PIN retries","3")}${field("PUK retries","3")}</div>${field("Invite","",false,true)}<div class="grid2">${field("Passphrase (optional)","",false,true)}${field("Confirm passphrase","",false,true)}</div><div style="height:12px"></div>${buttons([["Create YubiKey account"],["Provision from software alias"]])}</section>
+  <section class="card"><h3>YubiKey lifecycle</h3><p>Use the alias and PIN above for sync or rotation. FOKS never changes retry counts after enrollment. Management-key recovery uses the software alias and does not require the card PIN.</p>${field("Software recovery alias","personal")}<div class="grid2">${field("New PIN","",false,true)}${field("Current PUK","",false,true)}${field("New PUK","",false,true)}</div><div style="height:12px"></div>${buttons([["Sync"],["Sync + federation"],["List connected cards"],["Resume enrollment"],["PIN status"],["Rotate management key"],["Resume management rotation"],["Recover management key"],["Recover subkey"],["Revoke YubiKey","primary","revoke-yubi"],["Change PIN"],["Change PUK"],["Unblock PIN"]])}</section>
+  <section class="card"><h3>YubiKey passphrase</h3><p>Uses the YubiKey alias and PIN above. Set and change require confirmation; verify performs the native public challenge.</p><div class="grid2">${field("Passphrase","",false,true)}${field("Confirm passphrase","",false,true)}</div><div style="height:12px"></div>${buttons([["Set"],["Change"],["Verify"]])}</section>
+  ${response(state.response??[])}
+  </div></div>`;}
+
+function notificationScreen(){return `<section class="notification"><h3>No actions need attention.</h3><p>Interrupted or resumable operations will appear here.</p></section>`;}
+function body(){if(state.screen==="Items")return itemsScreen();if(state.screen==="Notifications")return notificationScreen();if(state.screen==="Get started")return getStartedScreen();if(state.screen==="Stores")return storesScreen();if(state.screen==="Parties")return partiesScreen();if(state.screen==="Servers")return serversScreen();if(state.screen==="Settings")return settingsScreen();return response();}
+
+function lifecycleOverlay(){
+  if(state.lifecycle==="ready")return "";
+  const copy={checking:["Starting FOKS","Connecting to the private local agent…",false],bootstrap:["Set up this FOKS client","The local agent is ready for its initialize-state bootstrap step.","Initialize secure state"],initializing:["Securing local state","Creating the native credential and rollback boundary…",false],failed:["FOKS agent unavailable","The local agent connection was lost. Restarting it will not replay the interrupted operation.","Retry"]}[state.lifecycle];
+  return `<div class="overlay"><div class="sheet"><h3>${copy[0]}</h3><p>${copy[1]}</p>${copy[2]?buttons([[copy[2],"primary",state.lifecycle==="bootstrap"?"initialize":"retry"]]):""}</div></div>`;
+}
+function modal(){
+  if(state.modal==="none")return "";
+  const selectedPath=items.find(item=>item.id===state.selected)?.path||"/env/prod/DATABASE_URL";
+  const data={"remove-item":[`Remove ${selectedPath}?`,"This writes a FOKS tombstone using the exact version shown in the catalog. A directory removal includes its current descendants; concurrent edits make the operation fail instead of overwriting them.","Remove item"],"remove-party":["Remove sam from engineering?","Removing this party rekeys the team in one signed operation. It prevents future access, but cannot recall copies the party already downloaded.","Remove party"],"demote-party":["Demote sam in engineering to Member (0)?","This strictly lowers the party's live authority and rekeys the team in one signed operation, but cannot recall previously downloaded data.","Demote party"],"revoke-yubi":["Revoke hardware?","This removes the YubiKey device and rotates the affected account keys. The card will no longer open the account; copies it already downloaded cannot be recalled.","Revoke YubiKey"],"remove-profile":["Remove the local server profile?","This removes the profile from the Console but retains its durable profile directory. Re-adding the same profile name can reconnect it.","Remove profile"],"reset-hard-state":["Reset hard state for local?","This discards the rollback checkpoint and hard-state database, including the authenticated host pin. Probe the server again before using this profile.","Reset hard state"]}[state.modal];
+  return `<div class="overlay"><div class="sheet"><h3>${data[0]}</h3><p>${data[1]}</p><div class="button-row"><button class="btn" data-modal="none">Cancel</button><button class="btn danger" data-action="confirm">${data[2]}</button></div></div></div>`;
+}
+
+function renderControls(){
+  document.getElementById("screenControls").innerHTML=SCREENS.map(name=>`<button class="chip ${state.screen===name?"on":""}" data-screen="${name}">${name}</button>`).join("");
+  document.querySelectorAll("[data-step]").forEach(el=>el.classList.toggle("on",el.dataset.step===state.step));
+  document.querySelectorAll("[data-lifecycle]").forEach(el=>el.classList.toggle("on",el.dataset.lifecycle===state.lifecycle));
+  document.querySelectorAll("[data-catalog]").forEach(el=>el.classList.toggle("on",el.dataset.catalog===state.catalog));
+  document.querySelectorAll("[data-modal]").forEach(el=>el.classList.toggle("on",el.dataset.modal===state.modal));
+  document.getElementById("mockHint").textContent=HINTS[state.step]||"Direct state inspection.";
+}
+function render(){document.getElementById("app").innerHTML=`${rail()}<section class="main ${state.lifecycle!=="ready"?"locked-content":""}">${pageHead()}<div class="body">${body()}</div></section>${modal()}${lifecycleOverlay()}`;renderControls();setQuery();}
+
+document.addEventListener("click",event=>{
+  const target=event.target.closest("button,[data-item],[data-store]");if(!target)return;
+  if(target.dataset.step){applyStep(target.dataset.step);return;}
+  if(target.dataset.screen){state.screen=target.dataset.screen;state.step="direct";state.lifecycle="ready";state.modal="none";state.error=null;state.profiles=true;state.accounts=true;state.catalogStores=true;state.teamCreated=true;state.response=state.screen==="Servers"?[profile]:state.screen==="Parties"?[{alias:"engineering",account_alias:"personal",team_id_hex:teamId,kind:"named",name:"engineering",active:true}]:state.screen==="Settings"?[]:null;render();return;}
+  if(target.dataset.lifecycle){state.lifecycle=target.dataset.lifecycle;state.step="direct";render();return;}
+  if(target.dataset.catalog){state.catalog=target.dataset.catalog;state.screen="Items";state.lifecycle="ready";state.step="direct";state.profiles=true;state.accounts=true;state.error=null;if(["team","team-pending"].includes(state.catalog)){state.teamCreated=true;state.selected=state.catalog==="team"?"bundle":null;state.store="engineering";}else if(["conflict","profile-blocked"].includes(state.catalog)){state.selected=null;state.store="personal";}else if(!["empty","not-loaded"].includes(state.catalog)){state.selected="db";state.store="personal";}render();return;}
+  if(target.dataset.modal){if(target.dataset.modal==="none"){state.modal="none";state.step="direct";render();return;}state.modal=target.dataset.modal;state.step="direct";state.lifecycle="ready";state.profiles=true;state.accounts=true;state.teamCreated=true;if(state.modal==="remove-item"){state.screen="Items";state.catalog="base";state.store="personal";state.selected="db";}else if(["remove-party","demote-party"].includes(state.modal)){state.screen="Parties";state.response=[{username:"sam",party_id_hex:"01a4c107f822ee91b05d3c44a7e0186b297f10cd439b62ae0831d5f7c46e29b0a5",scoped_host_id_hex:null,party_kind:"user",source_role:{Member:{visibility:0}},destination_role:{Member:{visibility:0}},generation:4,locally_manageable:true}];}else if(state.modal==="revoke-yubi"){state.screen="Settings";state.response=[];}else if(["remove-profile","reset-hard-state"].includes(state.modal)){state.screen="Servers";state.response=[profile];}render();return;}
+  if(target.dataset.item){state.selected=target.dataset.item;state.store=items.find(x=>x.id===state.selected).store;state.catalog=state.store==="engineering"?"team":"base";render();return;}
+  if(target.dataset.store){state.store=target.dataset.store;state.selected=null;state.catalog=state.store==="engineering"?"team":"base";render();return;}
+  const action=target.dataset.action;
+  if(action==="reveal"){state.catalog="revealed";render();}
+  else if(action==="hide"){state.catalog="base";render();}
+  else if(action==="remove-item"){state.modal="remove-item";render();}
+  else if(action==="remove-party"){state.modal="remove-party";render();}
+  else if(action==="demote-party"){state.modal="demote-party";render();}
+  else if(action==="revoke-yubi"){state.modal="revoke-yubi";render();}
+  else if(action==="remove-profile"){state.modal="remove-profile";render();}
+  else if(action==="reset-hard-state"){state.modal="reset-hard-state";render();}
+  else if(action==="probe"){if(state.profiles){state.response=probe;state.error=null;}else{state.response=null;state.error="select a profile";}render();}
+  else if(action==="add-server"){state.profiles=true;state.response=profile;state.error=null;render();}
+  else if(action==="create-account"){state.accounts=true;state.response={username:"rae",user_chain_sequence:1,directories:1,entries:0};render();}
+  else if(action==="roster"){applyStep("party");}
+  else if(action==="backup"){state.response={backup_alias:"paper-backup",phrase:"acorn amber atlas birch cedar cloud coral ember fern harbor iris juniper maple moss river stone willow"};render();}
+  else if(action==="initialize"){state.lifecycle="initializing";state.step="bootstrap";render();}
+  else if(action==="retry"){state.lifecycle="checking";render();}
+  else if(action==="confirm"){if(state.modal==="remove-item"){state.selected=null;state.catalog="base";}state.modal="none";render();}
+  else if(action==="refresh"){state.error=null;if(state.screen==="Stores")state.catalogStores=state.accounts;state.response=state.screen==="Servers"?(state.profiles?[profile]:[]):state.screen==="Parties"?[{alias:"engineering",account_alias:"personal",team_id_hex:teamId,kind:"named",name:"engineering",active:true}]:state.screen==="Settings"?[]:state.response;render();}
+});
+
+if(requested.step&&ORDER.includes(requested.step))applyStep(requested.step);else render();
+if(requested.screen){state.screen=requested.screen;state.profiles=true;state.accounts=true;state.catalogStores=true;if(state.screen==="Servers")state.response=[profile];if(state.screen==="Parties"){state.teamCreated=true;state.response=[{alias:"engineering",account_alias:"personal",team_id_hex:teamId,kind:"named",name:"engineering",active:true}];}if(state.screen==="Settings")state.response=[];}
+if(requested.lifecycle)state.lifecycle=requested.lifecycle;
+if(requested.catalog){state.catalog=requested.catalog;state.screen="Items";if(["team","team-pending"].includes(state.catalog)){state.teamCreated=true;state.store="engineering";state.selected=state.catalog==="team"?"bundle":null;}else if(["conflict","profile-blocked"].includes(state.catalog)){state.store="personal";state.selected=null;}else if(!["empty","not-loaded"].includes(state.catalog)){state.store="personal";state.selected="db";}}
+if(requested.modal){state.modal=requested.modal;if(state.modal==="remove-item"){state.screen="Items";state.catalog="base";state.store="personal";state.selected="db";}else if(["remove-party","demote-party"].includes(state.modal)){state.screen="Parties";state.teamCreated=true;}else if(state.modal==="revoke-yubi")state.screen="Settings";else if(["remove-profile","reset-hard-state"].includes(state.modal))state.screen="Servers";}
+if(requested.screen||requested.lifecycle||requested.catalog||requested.modal)render();
+</script>
+</body>
+</html>

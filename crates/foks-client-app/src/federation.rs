@@ -1308,6 +1308,150 @@ impl CheckedProfileSession<'_> {
         unreachable!("bounded federated CLKR convergence loop always returns")
     }
 
+    fn authenticated_member_edit_parties(
+        &self,
+        team_alias: &str,
+        local_vault: &mut AccountVault<'_>,
+        registry: &ProfileRegistry,
+        credentials: &ClientCredentials,
+        master_key: &[u8; 32],
+    ) -> Result<std::collections::BTreeMap<TeamRefreshPartyKey, TeamRefreshParty>> {
+        let stored = local_vault.team(team_alias)?;
+        if !stored.federated_members.iter().any(|member| member.active) {
+            return Ok(std::collections::BTreeMap::new());
+        }
+
+        // A roster edit rotates PTKs. First converge the existing federation
+        // bindings, then re-authenticate every scoped recipient against the
+        // resulting local head. An inactive or unbound scoped row is never
+        // treated as a usable key recipient.
+        self.refresh_federated_team_security(
+            team_alias,
+            &[],
+            local_vault,
+            registry,
+            credentials,
+            master_key,
+        )?;
+        let mut cascade = FederationCascade {
+            visited: std::collections::BTreeSet::from([(
+                self.profile.name.clone(),
+                team_alias.to_owned(),
+            )]),
+            ..FederationCascade::default()
+        };
+        let (_, mut supplied, _) = self.load_federated_graph_recipients(
+            team_alias,
+            &[],
+            local_vault,
+            registry,
+            credentials,
+            master_key,
+            &mut cascade,
+        )?;
+        supplied
+            .remove(&stored.team_id)
+            .ok_or(Error::InvalidAccount(
+                "active federation bindings did not authenticate the edited team roster",
+            ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn demote_local_team_member_in_authenticated_roster(
+        &self,
+        team_alias: &str,
+        party_id_hex: &str,
+        destination: super::team::TeamMemberRole,
+        local_vault: &mut AccountVault<'_>,
+        registry: &ProfileRegistry,
+        credentials: &ClientCredentials,
+        master_key: &[u8; 32],
+    ) -> Result<super::team::TeamMemberMutationReport> {
+        self.profile.require(Capability::Teams)?;
+        let _scheduler_lock = super::runtime::ProfileLock::scheduler(&self.paths)?;
+        let parties = self.authenticated_member_edit_parties(
+            team_alias,
+            local_vault,
+            registry,
+            credentials,
+            master_key,
+        )?;
+        self.demote_local_team_member_with_parties(
+            team_alias,
+            party_id_hex,
+            destination,
+            &parties,
+            local_vault,
+            master_key,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn remove_local_team_member_in_authenticated_roster(
+        &self,
+        team_alias: &str,
+        party_id_hex: &str,
+        local_vault: &mut AccountVault<'_>,
+        registry: &ProfileRegistry,
+        credentials: &ClientCredentials,
+        master_key: &[u8; 32],
+    ) -> Result<super::team::TeamMemberMutationReport> {
+        self.profile.require(Capability::Teams)?;
+        let _scheduler_lock = super::runtime::ProfileLock::scheduler(&self.paths)?;
+        let parties = self.authenticated_member_edit_parties(
+            team_alias,
+            local_vault,
+            registry,
+            credentials,
+            master_key,
+        )?;
+        self.remove_local_team_member_with_parties(
+            team_alias,
+            party_id_hex,
+            &parties,
+            local_vault,
+            master_key,
+        )
+    }
+
+    pub fn resume_local_team_member_edit_in_authenticated_roster(
+        &self,
+        team_alias: &str,
+        local_vault: &mut AccountVault<'_>,
+        registry: &ProfileRegistry,
+        credentials: &ClientCredentials,
+        master_key: &[u8; 32],
+    ) -> Result<super::team::TeamMemberMutationReport> {
+        self.profile.require(Capability::Teams)?;
+        let _scheduler_lock = super::runtime::ProfileLock::scheduler(&self.paths)?;
+        // A remotely accepted edit can be waiting only for local
+        // finalization. Complete that path without making the already
+        // committed operation depend on every federation profile still being
+        // reachable. A pre-submit mixed-roster edit fails before mutation
+        // with this exact binding error, at which point we authenticate the
+        // external recipients and retry.
+        match self.resume_local_team_member_edit(team_alias, local_vault, master_key) {
+            Ok(report) => return Ok(report),
+            Err(Error::Client(foks_client::Error::TeamBinding(
+                "remaining non-local roster party lacks an authenticated recipient",
+            ))) => {}
+            Err(error) => return Err(error),
+        }
+        let parties = self.authenticated_member_edit_parties(
+            team_alias,
+            local_vault,
+            registry,
+            credentials,
+            master_key,
+        )?;
+        self.resume_local_team_member_edit_with_authenticated_parties(
+            team_alias,
+            &parties,
+            local_vault,
+            master_key,
+        )
+    }
+
     /// Runs ordinary local jobs plus cross-profile federation refreshes. The
     /// caller already holds this profile's checked operation lock; the remote
     /// lock is attempted without waiting so inverse profile jobs cannot

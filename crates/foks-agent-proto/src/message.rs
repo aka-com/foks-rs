@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -88,6 +88,255 @@ pub enum TeamRole {
     Owner,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TeamKind {
+    Named,
+    AdHoc,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct AccountStoreRef {
+    pub profile: String,
+    pub account_alias: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AccountSummary {
+    pub profile: String,
+    pub alias: String,
+    pub username: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "store_kind", rename_all = "kebab-case")]
+pub enum KnownStoreSummary {
+    Account {
+        account_alias: String,
+        last_seen_at: u64,
+    },
+    Team {
+        account_alias: String,
+        team_alias: String,
+        team_id_hex: String,
+        team_kind: TeamKind,
+        name: Option<String>,
+        active: bool,
+        last_seen_at: u64,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DeviceSummary {
+    pub id_hex: String,
+    pub name: Option<String>,
+    pub role: String,
+    pub current: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PendingOperationKind {
+    AccountSignup,
+    DeviceProvision,
+    PairingOffer,
+    PairingAcceptance,
+    AccountRecovery,
+    YubiEnrollment,
+    TeamCreation,
+    TeamMemberAddition,
+    TeamMemberEdit,
+    TeamRekey,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PendingOperationSummary {
+    pub kind: PendingOperationKind,
+    pub alias: String,
+    pub target: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResetArtifactKind {
+    HardState,
+    SoftState,
+    ProtectedMutations,
+    CredentialsAndResumables,
+    ExternalRollbackCheckpoint,
+    ExternalDatabaseClaim,
+    ExternalPublicationAuthorization,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ResetArtifactSummary {
+    pub kind: ResetArtifactKind,
+    pub entries: u64,
+    pub bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ResetStatePreview {
+    pub profile: String,
+    pub resumables: Vec<PendingOperationSummary>,
+    pub artifacts: Vec<ResetArtifactSummary>,
+    pub token: SecretString,
+    pub expires_in_seconds: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BackupEnrollmentSummary {
+    pub backup_alias: String,
+    pub account_alias: String,
+    pub backup_id_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ServerStatusSnapshot {
+    pub profile: String,
+    pub configured_probe: String,
+    pub host: Option<StoredHostStatus>,
+    pub lease_required: bool,
+    pub lease_expires_at: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StoredHostStatus {
+    pub lookup_name: String,
+    pub canonical_name: String,
+    pub host_id_hex: String,
+    pub host_chain_sequence: u64,
+    pub merkle_epoch: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct TeamStoreRef {
+    pub profile: String,
+    pub account_alias: String,
+    pub team_alias: String,
+    pub team_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "store", rename_all = "kebab-case")]
+pub enum KvStoreRef {
+    Account(AccountStoreRef),
+    Team(TeamStoreRef),
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KvRole {
+    Member { visibility: i16 },
+    Admin,
+    Owner,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KvEntryMetadata {
+    pub path: String,
+    pub node_type: String,
+    pub version: u64,
+    pub size: Option<u64>,
+    pub read_role: KvRole,
+    pub write_role: KvRole,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KvPage {
+    pub snapshot_version: u64,
+    pub entries: Vec<KvEntryMetadata>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum KvPrecondition {
+    Create,
+    ExactVersion { version: u64 },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KvReadResult {
+    pub store: KvStoreRef,
+    pub path: String,
+    pub version: u64,
+    pub node_type: String,
+    pub size: Option<u64>,
+    pub read_role: KvRole,
+    pub write_role: KvRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symlink_target: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KvChunkResult {
+    pub store: KvStoreRef,
+    pub path: String,
+    pub version: u64,
+    pub offset: u64,
+    pub content: Vec<u8>,
+    pub eof: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KvUploadHeader {
+    pub store: KvStoreRef,
+    pub path: String,
+    pub total_length: u64,
+    pub read_role: KvRole,
+    pub write_role: KvRole,
+    pub precondition: KvPrecondition,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KvUploadFrame {
+    pub version: u32,
+    pub id: u64,
+    #[serde(flatten)]
+    pub payload: KvUploadPayload,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "frame", rename_all = "kebab-case")]
+pub enum KvUploadPayload {
+    Chunk { offset: u64, content: Vec<u8> },
+    Commit,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum AgentStatus {
+    Bootstrap { step: String },
+    Ready,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CredentialBackend {
+    Native,
+    PrivateFile,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "generation", rename_all = "kebab-case")]
+pub enum ProfileProtocol {
+    V019,
+    CurrentProbeOnly {
+        canary_public_key: String,
+        lease_url: String,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum ProfileTrust {
+    WebPki,
+    CertificateDer { path: String },
+}
+
 impl Request {
     pub fn new(id: u64, operation: Operation) -> Self {
         Self {
@@ -102,11 +351,46 @@ impl Request {
 #[serde(tag = "operation", rename_all = "kebab-case")]
 pub enum Operation {
     Ping,
+    AgentStatus,
+    InitializeState {
+        backend: CredentialBackend,
+    },
+    AddProfile {
+        name: String,
+        probe: String,
+        protocol: ProfileProtocol,
+        trust: ProfileTrust,
+    },
+    CheckAndAddProfile {
+        name: String,
+        probe: String,
+        protocol: ProfileProtocol,
+        trust: ProfileTrust,
+    },
+    RemoveProfile {
+        name: String,
+    },
+    DescribeResetHardState {
+        profile: String,
+    },
+    ResetHardState {
+        profile: String,
+        token: SecretString,
+    },
     ListProfiles,
     Probe {
         profile: String,
     },
+    RefreshLease {
+        profile: String,
+    },
+    ListKnownStores {
+        profile: String,
+    },
     ListAccounts {
+        profile: String,
+    },
+    ListPendingOperations {
         profile: String,
     },
     CreateAccount {
@@ -117,6 +401,61 @@ pub enum Operation {
         email: String,
         invite: SecretString,
         passphrase: Option<SecretString>,
+    },
+    ResumeAccount {
+        profile: String,
+        alias: String,
+    },
+    ListDevices {
+        profile: String,
+        alias: String,
+    },
+    ListBackupEnrollments {
+        profile: String,
+        account_alias: String,
+    },
+    DescribeServerStatus {
+        profile: String,
+    },
+    RemoveDevice {
+        profile: String,
+        signer_alias: String,
+        device_id: String,
+    },
+    ProvisionOwnerDevice {
+        profile: String,
+        source_alias: String,
+        target_alias: String,
+        device_name: String,
+        serial: u64,
+    },
+    ResumeOwnerDeviceProvision {
+        profile: String,
+        target_alias: String,
+    },
+    PrepareOwnerBackup {
+        profile: String,
+        account_alias: String,
+        backup_alias: String,
+    },
+    CommitOwnerBackup {
+        profile: String,
+        account_alias: String,
+        backup_alias: String,
+        phrase: SecretString,
+    },
+    RecoverOwnerAccount {
+        profile: String,
+        target_alias: String,
+        phrase: SecretString,
+        device_name: String,
+        serial: u64,
+    },
+    ResumeOwnerRecovery {
+        profile: String,
+        target_alias: String,
+        phrase: SecretString,
+        device_name: String,
     },
     SetPassphrase {
         profile: String,
@@ -131,6 +470,24 @@ pub enum Operation {
     VerifyPassphrase {
         profile: String,
         alias: String,
+        passphrase: SecretString,
+    },
+    SetYubiPassphrase {
+        profile: String,
+        alias: String,
+        pin: SecretString,
+        passphrase: SecretString,
+    },
+    ChangeYubiPassphrase {
+        profile: String,
+        alias: String,
+        pin: SecretString,
+        passphrase: SecretString,
+    },
+    VerifyYubiPassphrase {
+        profile: String,
+        alias: String,
+        pin: SecretString,
         passphrase: SecretString,
     },
     SyncAccount {
@@ -254,11 +611,78 @@ pub enum Operation {
         software_alias: String,
     },
     ListKv {
+        store: AccountStoreRef,
+        #[serde(default)]
+        cursor: Option<String>,
+        limit: u32,
+    },
+    ListTeamKv {
+        store: TeamStoreRef,
+        #[serde(default)]
+        cursor: Option<String>,
+        limit: u32,
+    },
+    ReadKv {
+        store: KvStoreRef,
+        path: String,
+        version: u64,
+    },
+    ReadKvChunk {
+        store: KvStoreRef,
+        path: String,
+        version: u64,
+        offset: u64,
+        length: u32,
+    },
+    PutKv {
+        store: KvStoreRef,
+        path: String,
+        content: Vec<u8>,
+        read_role: KvRole,
+        write_role: KvRole,
+        precondition: KvPrecondition,
+    },
+    PutKvStream {
+        header: KvUploadHeader,
+    },
+    PutKvSymlink {
+        store: KvStoreRef,
+        path: String,
+        target: String,
+        read_role: KvRole,
+        write_role: KvRole,
+        precondition: KvPrecondition,
+    },
+    MkdirKv {
+        store: KvStoreRef,
+        path: String,
+        read_role: KvRole,
+        write_role: KvRole,
+        precondition: KvPrecondition,
+    },
+    RemoveKv {
+        store: KvStoreRef,
+        path: String,
+        recursive: bool,
+        precondition: KvPrecondition,
+    },
+    CreateTeam {
         profile: String,
-        alias: String,
+        account_alias: String,
+        team_alias: String,
+        name: String,
+        kind: TeamKind,
+    },
+    ResumeTeamCreation {
+        profile: String,
+        team_alias: String,
     },
     ListTeams {
         profile: String,
+    },
+    DiscoverTeams {
+        profile: String,
+        account_alias: String,
     },
     SyncTeam {
         profile: String,
@@ -283,14 +707,14 @@ pub enum Operation {
     DemoteTeamMember {
         profile: String,
         team_alias: String,
-        username: String,
+        party_id_hex: String,
         role: TeamRole,
         visibility: i16,
     },
     RemoveTeamMember {
         profile: String,
         team_alias: String,
-        username: String,
+        party_id_hex: String,
     },
     ResumeTeamMemberEdit {
         profile: String,
@@ -335,6 +759,18 @@ pub enum Operation {
 }
 
 impl Operation {
+    /// Clears request-owned plaintext once a client has serialized it. Secret
+    /// strings already zeroize on drop; KV byte/string fields use ordinary
+    /// wire types for serde compatibility and therefore need this explicit
+    /// handoff hook.
+    pub fn zeroize_plaintext(&mut self) {
+        match self {
+            Self::PutKv { content, .. } => content.zeroize(),
+            Self::PutKvSymlink { target, .. } => target.zeroize(),
+            _ => {}
+        }
+    }
+
     /// Interactive KEX can contain two sequential relay polls. Frontends and
     /// the resident agent use a longer bounded deadline only for these calls.
     pub fn is_device_pairing_wait(&self) -> bool {
@@ -343,19 +779,106 @@ impl Operation {
             Self::FinishDevicePairing { .. } | Self::AcceptDevicePairing { .. }
         )
     }
+
+    /// Calls in the allow-list may share the bounded worker pool; every other
+    /// call additionally takes the agent's global single-flight gate. Some
+    /// allow-listed calls still advance authenticated local checkpoints or
+    /// host pins under the per-profile lock.
+    pub fn is_mutation(&self) -> bool {
+        !matches!(
+            self,
+            Self::Ping
+                | Self::AgentStatus
+                | Self::ListProfiles
+                | Self::DescribeResetHardState { .. }
+                | Self::Probe { .. }
+                | Self::PrepareOwnerBackup { .. }
+                | Self::ListKnownStores { .. }
+                | Self::ListAccounts { .. }
+                | Self::ListPendingOperations { .. }
+                | Self::ListDevices { .. }
+                | Self::ListBackupEnrollments { .. }
+                | Self::DescribeServerStatus { .. }
+                | Self::VerifyPassphrase { .. }
+                | Self::ListYubiCards { .. }
+                | Self::ListYubiAccounts { .. }
+                | Self::YubiPinStatus { .. }
+                | Self::ListKv { .. }
+                | Self::ListTeamKv { .. }
+                | Self::ReadKv { .. }
+                | Self::ReadKvChunk { .. }
+                | Self::ListTeams { .. }
+                | Self::ListTeamMembers { .. }
+                | Self::ListFederatedTeams { .. }
+        )
+    }
 }
 
 impl std::fmt::Debug for Operation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Ping => formatter.write_str("Ping"),
+            Self::AgentStatus => formatter.write_str("AgentStatus"),
+            Self::InitializeState { backend } => formatter
+                .debug_struct("InitializeState")
+                .field("backend", backend)
+                .finish(),
+            Self::AddProfile {
+                name,
+                probe,
+                protocol,
+                trust,
+            } => formatter
+                .debug_struct("AddProfile")
+                .field("name", name)
+                .field("probe", probe)
+                .field("protocol", protocol)
+                .field("trust", trust)
+                .finish(),
+            Self::CheckAndAddProfile {
+                name,
+                probe,
+                protocol,
+                trust,
+            } => formatter
+                .debug_struct("CheckAndAddProfile")
+                .field("name", name)
+                .field("probe", probe)
+                .field("protocol", protocol)
+                .field("trust", trust)
+                .finish(),
+            Self::RemoveProfile { name } => formatter
+                .debug_struct("RemoveProfile")
+                .field("name", name)
+                .finish(),
+            Self::DescribeResetHardState { profile } => formatter
+                .debug_struct("DescribeResetHardState")
+                .field("profile", profile)
+                .finish(),
+            Self::ResetHardState { profile, token: _ } => formatter
+                .debug_struct("ResetHardState")
+                .field("profile", profile)
+                .field("token", &"<redacted>")
+                .finish(),
             Self::ListProfiles => formatter.write_str("ListProfiles"),
             Self::Probe { profile } => formatter
                 .debug_struct("Probe")
                 .field("profile", profile)
                 .finish(),
+            Self::RefreshLease { profile } => formatter
+                .debug_struct("RefreshLease")
+                .field("profile", profile)
+                .finish(),
+            Self::ListKnownStores { profile } => formatter
+                .debug_struct("ListKnownStores")
+                .field("profile", profile)
+                .finish(),
             Self::ListAccounts { profile } => formatter
                 .debug_struct("ListAccounts")
+                .field("profile", profile)
+                .finish(),
+            Self::ListPendingOperations { profile } => formatter
+                .debug_struct("ListPendingOperations")
                 .field("profile", profile)
                 .finish(),
             Self::CreateAccount {
@@ -376,6 +899,108 @@ impl std::fmt::Debug for Operation {
                 .field("invite", &"<redacted>")
                 .field("passphrase", &"<redacted>")
                 .finish(),
+            Self::ResumeAccount { profile, alias } => formatter
+                .debug_struct("ResumeAccount")
+                .field("profile", profile)
+                .field("alias", alias)
+                .finish(),
+            Self::ListDevices { profile, alias } => formatter
+                .debug_struct("ListDevices")
+                .field("profile", profile)
+                .field("alias", alias)
+                .finish(),
+            Self::ListBackupEnrollments {
+                profile,
+                account_alias,
+            } => formatter
+                .debug_struct("ListBackupEnrollments")
+                .field("profile", profile)
+                .field("account_alias", account_alias)
+                .finish(),
+            Self::DescribeServerStatus { profile } => formatter
+                .debug_struct("DescribeServerStatus")
+                .field("profile", profile)
+                .finish(),
+            Self::RemoveDevice {
+                profile,
+                signer_alias,
+                device_id,
+            } => formatter
+                .debug_struct("RemoveDevice")
+                .field("profile", profile)
+                .field("signer_alias", signer_alias)
+                .field("device_id", device_id)
+                .finish(),
+            Self::ProvisionOwnerDevice {
+                profile,
+                source_alias,
+                target_alias,
+                device_name,
+                serial,
+            } => formatter
+                .debug_struct("ProvisionOwnerDevice")
+                .field("profile", profile)
+                .field("source_alias", source_alias)
+                .field("target_alias", target_alias)
+                .field("device_name", device_name)
+                .field("serial", serial)
+                .finish(),
+            Self::ResumeOwnerDeviceProvision {
+                profile,
+                target_alias,
+            } => formatter
+                .debug_struct("ResumeOwnerDeviceProvision")
+                .field("profile", profile)
+                .field("target_alias", target_alias)
+                .finish(),
+            Self::PrepareOwnerBackup {
+                profile,
+                account_alias,
+                backup_alias,
+            } => formatter
+                .debug_struct("PrepareOwnerBackup")
+                .field("profile", profile)
+                .field("account_alias", account_alias)
+                .field("backup_alias", backup_alias)
+                .finish(),
+            Self::CommitOwnerBackup {
+                profile,
+                account_alias,
+                backup_alias,
+                phrase: _,
+            } => formatter
+                .debug_struct("CommitOwnerBackup")
+                .field("profile", profile)
+                .field("account_alias", account_alias)
+                .field("backup_alias", backup_alias)
+                .field("phrase", &"<redacted>")
+                .finish(),
+            Self::RecoverOwnerAccount {
+                profile,
+                target_alias,
+                phrase: _,
+                device_name,
+                serial,
+            } => formatter
+                .debug_struct("RecoverOwnerAccount")
+                .field("profile", profile)
+                .field("target_alias", target_alias)
+                .field("phrase", &"<redacted>")
+                .field("device_name", device_name)
+                .field("serial", serial)
+                .finish(),
+            Self::ResumeOwnerRecovery {
+                profile,
+                target_alias,
+                phrase: _,
+                device_name,
+            } => formatter
+                .debug_struct("ResumeOwnerRecovery")
+                .field("profile", profile)
+                .field("target_alias", target_alias)
+                .field("phrase", &"<redacted>")
+                .field("device_name", device_name)
+                .finish(),
             Self::SetPassphrase { profile, alias, .. } => formatter
                 .debug_struct("SetPassphrase")
                 .field("profile", profile)
@@ -392,6 +1017,42 @@ impl std::fmt::Debug for Operation {
                 .debug_struct("VerifyPassphrase")
                 .field("profile", profile)
                 .field("alias", alias)
+                .field("passphrase", &"<redacted>")
+                .finish(),
+            Self::SetYubiPassphrase {
+                profile,
+                alias,
+                pin: _,
+                passphrase: _,
+            } => formatter
+                .debug_struct("SetYubiPassphrase")
+                .field("profile", profile)
+                .field("alias", alias)
+                .field("pin", &"<redacted>")
+                .field("passphrase", &"<redacted>")
+                .finish(),
+            Self::ChangeYubiPassphrase {
+                profile,
+                alias,
+                pin: _,
+                passphrase: _,
+            } => formatter
+                .debug_struct("ChangeYubiPassphrase")
+                .field("profile", profile)
+                .field("alias", alias)
+                .field("pin", &"<redacted>")
+                .field("passphrase", &"<redacted>")
+                .finish(),
+            Self::VerifyYubiPassphrase {
+                profile,
+                alias,
+                pin: _,
+                passphrase: _,
+            } => formatter
+                .debug_struct("VerifyYubiPassphrase")
+                .field("profile", profile)
+                .field("alias", alias)
+                .field("pin", &"<redacted>")
                 .field("passphrase", &"<redacted>")
                 .finish(),
             Self::SyncAccount { profile, alias } => formatter
@@ -618,14 +1279,145 @@ impl std::fmt::Debug for Operation {
                 .field("yubi_alias", yubi_alias)
                 .field("software_alias", software_alias)
                 .finish(),
-            Self::ListKv { profile, alias } => formatter
+            Self::ListKv {
+                store,
+                cursor,
+                limit,
+            } => formatter
                 .debug_struct("ListKv")
+                .field("store", store)
+                .field("cursor", cursor)
+                .field("limit", limit)
+                .finish(),
+            Self::ListTeamKv {
+                store,
+                cursor,
+                limit,
+            } => formatter
+                .debug_struct("ListTeamKv")
+                .field("store", store)
+                .field("cursor", cursor)
+                .field("limit", limit)
+                .finish(),
+            Self::ReadKv {
+                store,
+                path,
+                version,
+            } => formatter
+                .debug_struct("ReadKv")
+                .field("store", store)
+                .field("path", path)
+                .field("version", version)
+                .finish(),
+            Self::ReadKvChunk {
+                store,
+                path,
+                version,
+                offset,
+                length,
+            } => formatter
+                .debug_struct("ReadKvChunk")
+                .field("store", store)
+                .field("path", path)
+                .field("version", version)
+                .field("offset", offset)
+                .field("length", length)
+                .finish(),
+            Self::PutKv {
+                store,
+                path,
+                content: _,
+                read_role,
+                write_role,
+                precondition,
+            } => formatter
+                .debug_struct("PutKv")
+                .field("store", store)
+                .field("path", path)
+                .field("content", &"<redacted>")
+                .field("read_role", read_role)
+                .field("write_role", write_role)
+                .field("precondition", precondition)
+                .finish(),
+            Self::PutKvStream { header } => formatter
+                .debug_struct("PutKvStream")
+                .field("header", header)
+                .finish(),
+            Self::PutKvSymlink {
+                store,
+                path,
+                target: _,
+                read_role,
+                write_role,
+                precondition,
+            } => formatter
+                .debug_struct("PutKvSymlink")
+                .field("store", store)
+                .field("path", path)
+                .field("target", &"<redacted>")
+                .field("read_role", read_role)
+                .field("write_role", write_role)
+                .field("precondition", precondition)
+                .finish(),
+            Self::MkdirKv {
+                store,
+                path,
+                read_role,
+                write_role,
+                precondition,
+            } => formatter
+                .debug_struct("MkdirKv")
+                .field("store", store)
+                .field("path", path)
+                .field("read_role", read_role)
+                .field("write_role", write_role)
+                .field("precondition", precondition)
+                .finish(),
+            Self::RemoveKv {
+                store,
+                path,
+                recursive,
+                precondition,
+            } => formatter
+                .debug_struct("RemoveKv")
+                .field("store", store)
+                .field("path", path)
+                .field("recursive", recursive)
+                .field("precondition", precondition)
+                .finish(),
+            Self::CreateTeam {
+                profile,
+                account_alias,
+                team_alias,
+                name,
+                kind,
+            } => formatter
+                .debug_struct("CreateTeam")
                 .field("profile", profile)
-                .field("alias", alias)
+                .field("account_alias", account_alias)
+                .field("team_alias", team_alias)
+                .field("name", name)
+                .field("kind", kind)
+                .finish(),
+            Self::ResumeTeamCreation {
+                profile,
+                team_alias,
+            } => formatter
+                .debug_struct("ResumeTeamCreation")
+                .field("profile", profile)
+                .field("team_alias", team_alias)
                 .finish(),
             Self::ListTeams { profile } => formatter
                 .debug_struct("ListTeams")
                 .field("profile", profile)
+                .finish(),
+            Self::DiscoverTeams {
+                profile,
+                account_alias,
+            } => formatter
+                .debug_struct("DiscoverTeams")
+                .field("profile", profile)
+                .field("account_alias", account_alias)
                 .finish(),
             Self::SyncTeam {
                 profile,
@@ -670,26 +1462,26 @@ impl std::fmt::Debug for Operation {
             Self::DemoteTeamMember {
                 profile,
                 team_alias,
-                username,
+                party_id_hex,
                 role,
                 visibility,
             } => formatter
                 .debug_struct("DemoteTeamMember")
                 .field("profile", profile)
                 .field("team_alias", team_alias)
-                .field("username", username)
+                .field("party_id_hex", party_id_hex)
                 .field("role", role)
                 .field("visibility", visibility)
                 .finish(),
             Self::RemoveTeamMember {
                 profile,
                 team_alias,
-                username,
+                party_id_hex,
             } => formatter
                 .debug_struct("RemoveTeamMember")
                 .field("profile", profile)
                 .field("team_alias", team_alias)
-                .field("username", username)
+                .field("party_id_hex", party_id_hex)
                 .finish(),
             Self::ResumeTeamMemberEdit {
                 profile,
@@ -751,40 +1543,93 @@ impl std::fmt::Debug for Operation {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 pub struct Response {
     pub version: u32,
-    pub id: u64,
+    pub id: Option<u64>,
     #[serde(flatten)]
     pub result: ResponseResult,
+}
+
+impl std::fmt::Debug for Response {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Response")
+            .field("version", &self.version)
+            .field("id", &self.id)
+            .field("result", &self.result)
+            .finish()
+    }
 }
 
 impl Response {
     pub fn success(id: u64, value: serde_json::Value) -> Self {
         Self {
             version: PROTOCOL_VERSION,
-            id,
+            id: Some(id),
             result: ResponseResult::Success { value },
         }
     }
 
     pub fn error(id: u64, code: ErrorCode, message: impl Into<String>) -> Self {
+        Self::error_with_fields(Some(id), code, message, ErrorFields::default())
+    }
+
+    pub fn error_without_id(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self::error_with_fields(None, code, message, ErrorFields::default())
+    }
+
+    pub fn error_with_fields(
+        id: Option<u64>,
+        code: ErrorCode,
+        message: impl Into<String>,
+        fields: ErrorFields,
+    ) -> Self {
         Self {
             version: PROTOCOL_VERSION,
             id,
             result: ResponseResult::Error {
                 code,
-                message: message.into(),
+                message: bounded_field(message.into()),
+                fields: fields.bounded(),
             },
         }
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub enum ResponseResult {
-    Success { value: serde_json::Value },
-    Error { code: ErrorCode, message: String },
+    Success {
+        value: serde_json::Value,
+    },
+    Error {
+        code: ErrorCode,
+        message: String,
+        #[serde(default, skip_serializing_if = "ErrorFields::is_empty")]
+        fields: ErrorFields,
+    },
+}
+
+impl std::fmt::Debug for ResponseResult {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Success { .. } => formatter
+                .debug_struct("Success")
+                .field("value", &"<redacted>")
+                .finish(),
+            Self::Error {
+                code,
+                message,
+                fields,
+            } => formatter
+                .debug_struct("Error")
+                .field("code", code)
+                .field("message", message)
+                .field("fields", fields)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -792,7 +1637,283 @@ pub enum ResponseResult {
 pub enum ErrorCode {
     InvalidRequest,
     VersionMismatch,
+    BootstrapRequired,
+    Conflict,
     Busy,
     DeadlineExceeded,
+    CapabilityDenied,
+    RollbackDetected,
+    CheckpointResetRequired,
+    ProfileBusy,
     OperationFailed,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ErrorFields {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl ErrorFields {
+    pub fn is_empty(&self) -> bool {
+        self.capability.is_none()
+            && self.profile.is_none()
+            && self.state_dir.is_none()
+            && self.reason.is_none()
+    }
+
+    fn bounded(mut self) -> Self {
+        self.capability = self.capability.map(bounded_field);
+        self.profile = self.profile.map(bounded_field);
+        self.state_dir = self.state_dir.map(bounded_field);
+        self.reason = self.reason.map(bounded_field);
+        self
+    }
+}
+
+fn bounded_field(mut value: String) -> String {
+    const MAXIMUM_FIELD_BYTES: usize = 4096;
+    if value.len() <= MAXIMUM_FIELD_BYTES {
+        return value;
+    }
+    let mut end = MAXIMUM_FIELD_BYTES;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+    value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discover_teams_operation_has_stable_wire_and_debug_shapes() {
+        let operation = Operation::DiscoverTeams {
+            profile: "work".to_owned(),
+            account_alias: "personal".to_owned(),
+        };
+        assert_eq!(
+            serde_json::to_value(&operation).unwrap(),
+            serde_json::json!({
+                "operation": "discover-teams",
+                "profile": "work",
+                "account_alias": "personal"
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Operation>(serde_json::to_value(&operation).unwrap()).unwrap(),
+            operation
+        );
+        assert_eq!(
+            format!("{operation:?}"),
+            "DiscoverTeams { profile: \"work\", account_alias: \"personal\" }"
+        );
+        assert!(operation.is_mutation());
+    }
+
+    #[test]
+    fn first_run_publication_and_backup_operations_have_stable_safe_shapes() {
+        let publication = Operation::CheckAndAddProfile {
+            name: "work".to_owned(),
+            probe: "foks.example.test".to_owned(),
+            protocol: ProfileProtocol::V019,
+            trust: ProfileTrust::WebPki,
+        };
+        assert_eq!(
+            serde_json::to_value(&publication).unwrap(),
+            serde_json::json!({
+                "operation": "check-and-add-profile",
+                "name": "work",
+                "probe": "foks.example.test",
+                "protocol": { "generation": "v019" },
+                "trust": { "kind": "web-pki" }
+            })
+        );
+        assert!(publication.is_mutation());
+
+        let prepare = Operation::PrepareOwnerBackup {
+            profile: "work".to_owned(),
+            account_alias: "personal".to_owned(),
+            backup_alias: "paper".to_owned(),
+        };
+        assert_eq!(
+            serde_json::to_value(&prepare).unwrap(),
+            serde_json::json!({
+                "operation": "prepare-owner-backup",
+                "profile": "work",
+                "account_alias": "personal",
+                "backup_alias": "paper"
+            })
+        );
+        assert!(!prepare.is_mutation());
+
+        let commit = Operation::CommitOwnerBackup {
+            profile: "work".to_owned(),
+            account_alias: "personal".to_owned(),
+            backup_alias: "paper".to_owned(),
+            phrase: SecretString::new("never print this phrase"),
+        };
+        let encoded = serde_json::to_value(&commit).unwrap();
+        assert_eq!(
+            serde_json::from_value::<Operation>(encoded).unwrap(),
+            commit
+        );
+        assert!(commit.is_mutation());
+        assert!(!format!("{commit:?}").contains("never print this phrase"));
+
+        let response = Response::success(
+            17,
+            serde_json::json!({ "phrase": "never print this response phrase" }),
+        );
+        let debug = format!("{response:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("never print this response phrase"));
+    }
+
+    #[test]
+    fn reset_and_settings_operations_have_stable_safe_shapes() {
+        let describe = Operation::DescribeResetHardState {
+            profile: "work".to_owned(),
+        };
+        assert_eq!(
+            serde_json::to_value(&describe).unwrap(),
+            serde_json::json!({
+                "operation": "describe-reset-hard-state",
+                "profile": "work"
+            })
+        );
+        assert!(!describe.is_mutation());
+
+        let reset = Operation::ResetHardState {
+            profile: "work".to_owned(),
+            token: SecretString::new("one-use-secret-token"),
+        };
+        let reset_value = serde_json::to_value(&reset).unwrap();
+        assert_eq!(
+            reset_value,
+            serde_json::json!({
+                "operation": "reset-hard-state",
+                "profile": "work",
+                "token": "one-use-secret-token"
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Operation>(reset_value).unwrap(),
+            reset
+        );
+        assert!(reset.is_mutation());
+        assert!(!format!("{reset:?}").contains("one-use-secret-token"));
+
+        let preview = ResetStatePreview {
+            profile: "work".to_owned(),
+            resumables: vec![PendingOperationSummary {
+                kind: PendingOperationKind::AccountRecovery,
+                alias: "personal".to_owned(),
+                target: None,
+            }],
+            artifacts: vec![ResetArtifactSummary {
+                kind: ResetArtifactKind::CredentialsAndResumables,
+                entries: 2,
+                bytes: 144,
+            }],
+            token: SecretString::new("opaque"),
+            expires_in_seconds: 60,
+        };
+        assert!(!format!("{preview:?}").contains("opaque"));
+        assert_eq!(
+            serde_json::to_value(preview).unwrap(),
+            serde_json::json!({
+                "profile": "work",
+                "resumables": [{
+                    "kind": "account-recovery",
+                    "alias": "personal",
+                    "target": null
+                }],
+                "artifacts": [{
+                    "kind": "credentials-and-resumables",
+                    "entries": 2,
+                    "bytes": 144
+                }],
+                "token": "opaque",
+                "expires_in_seconds": 60
+            })
+        );
+
+        let backups = Operation::ListBackupEnrollments {
+            profile: "work".to_owned(),
+            account_alias: "personal".to_owned(),
+        };
+        assert!(!backups.is_mutation());
+        assert_eq!(
+            serde_json::to_value(backups).unwrap(),
+            serde_json::json!({
+                "operation": "list-backup-enrollments",
+                "profile": "work",
+                "account_alias": "personal"
+            })
+        );
+
+        let status = Operation::DescribeServerStatus {
+            profile: "work".to_owned(),
+        };
+        assert!(!status.is_mutation());
+        assert_eq!(
+            serde_json::to_value(status).unwrap(),
+            serde_json::json!({
+                "operation": "describe-server-status",
+                "profile": "work"
+            })
+        );
+
+        assert_eq!(
+            serde_json::to_value(ServerStatusSnapshot {
+                profile: "work".to_owned(),
+                configured_probe: "foks.example.test:443".to_owned(),
+                host: Some(StoredHostStatus {
+                    lookup_name: "foks.example.test".to_owned(),
+                    canonical_name: "foks.example.test".to_owned(),
+                    host_id_hex: "abcd".to_owned(),
+                    host_chain_sequence: 9,
+                    merkle_epoch: 4,
+                }),
+                lease_required: true,
+                lease_expires_at: Some(1_800_000_000),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "profile": "work",
+                "configured_probe": "foks.example.test:443",
+                "host": {
+                    "lookup_name": "foks.example.test",
+                    "canonical_name": "foks.example.test",
+                    "host_id_hex": "abcd",
+                    "host_chain_sequence": 9,
+                    "merkle_epoch": 4
+                },
+                "lease_required": true,
+                "lease_expires_at": 1_800_000_000_u64
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(BackupEnrollmentSummary {
+                backup_alias: "paper".to_owned(),
+                account_alias: "personal".to_owned(),
+                backup_id_hex: "1234".to_owned(),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "backup_alias": "paper",
+                "account_alias": "personal",
+                "backup_id_hex": "1234"
+            })
+        );
+    }
 }

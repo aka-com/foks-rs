@@ -1,0 +1,194 @@
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+load("//:version.bzl", "VERSION")
+load("//bazel/macos:app_bundle.bzl", "macos_app_bundle", "macos_sign", "macos_zip")
+
+js_library(
+    name = "wire_contract",
+    srcs = ["wire-contract.json"],
+    visibility = ["//foks-ui:__pkg__"],
+)
+
+FOKS_PACKAGING_DATA = ["//packaging/foks-desktop:macos/entitlements.plist"]
+
+copy_to_directory(
+    name = "frontendDist",
+    srcs = ["//foks-ui:dir"],
+    root_paths = ["foks-ui/dir"],
+)
+
+# generate_context! resolves ../foks-ui/dist from the staged foks-tauri
+# manifest directory. Preserve that source layout inside a single declared
+# TreeArtifact so it is identical locally and under remote execution.
+copy_to_directory(
+    name = "codegen_dir",
+    srcs = [
+        "tauri.conf.json",
+        ":frontendDist",
+    ] + FOKS_PACKAGING_DATA + glob([
+        "capabilities/**",
+        "icons/**",
+        "linux/**",
+    ]),
+    replace_prefixes = {"foks-tauri/frontendDist": "foks-ui/dist"},
+    root_paths = [],
+)
+
+TAURI_CODEGEN_DATA = [
+    "Cargo.toml",
+    "tauri.conf.json",
+] + glob([
+    "capabilities/**",
+    "icons/**",
+    "linux/**",
+])
+
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    data = TAURI_CODEGEN_DATA + FOKS_PACKAGING_DATA + [
+        "//:Cargo.toml",
+        "@crates//:tauri",
+        "@crates//:tauri-plugin-clipboard-manager",
+        "@crates//:tauri-plugin-dialog",
+        "@crates//:tauri-plugin-single-instance",
+    ],
+    edition = "2021",
+    link_deps = [
+        "@crates//:tauri",
+        "@crates//:tauri-plugin-clipboard-manager",
+        "@crates//:tauri-plugin-dialog",
+        "@crates//:tauri-plugin-single-instance",
+    ],
+    tags = ["no-cache"],
+    deps = ["@crates//:tauri-build"],
+)
+
+rust_library(
+    name = "foks_desktop_app",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/main.rs"],
+    ),
+    compile_data = TAURI_CODEGEN_DATA + FOKS_PACKAGING_DATA + [":codegen_dir"],
+    crate_name = "foks_desktop_app",
+    edition = "2021",
+    rustc_env = {"CARGO_MANIFEST_DIR": "$(execpath :codegen_dir)/foks-tauri"},
+    version = VERSION,
+    visibility = ["//visibility:public"],
+    deps = [
+        ":build_script",
+        "//crates:foks_agent_client",
+        "//crates:foks_agent_proto",
+        "//crates:foks_compat_artifact",
+        "//crates:foks_crypto",
+        "//crates:foks_desktop",
+        "@crates//:fs2",
+        "@crates//:getrandom",
+        "@crates//:libc",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2-0.11.0",
+        "@crates//:tauri",
+        "@crates//:tauri-plugin-clipboard-manager",
+        "@crates//:tauri-plugin-dialog",
+        "@crates//:tauri-plugin-single-instance",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+        "@crates//:tracing",
+        "@crates//:tracing-subscriber",
+        "@crates//:url",
+        "@crates//:zeroize",
+    ] + select({
+        "@platforms//os:macos": [
+            "@crates//:block2",
+            "@crates//:objc2",
+            "@crates//:objc2-app-kit",
+            "@crates//:objc2-foundation",
+            "@crates//:objc2-local-authentication",
+        ],
+        "@platforms//os:linux": ["@crates//:zbus"],
+        "//conditions:default": [],
+    }),
+)
+
+rust_binary(
+    name = "foks-desktop",
+    srcs = ["src/main.rs"],
+    edition = "2021",
+    rustc_flags = select({
+        "@platforms//os:macos": ["-lframework=WebKit"],
+        "//conditions:default": [],
+    }),
+    version = VERSION,
+    visibility = ["//visibility:public"],
+    deps = [":foks_desktop_app"],
+)
+
+# Development app: correct bundle layout, intentionally unsigned.
+macos_app_bundle(
+    name = "FOKS_app",
+    binary = ":foks-desktop",
+    bundle_name = "FOKS",
+    executable_name = "foks-desktop",
+    helper_files = {"//crates:foks-agent": "foks-agent"},
+    icon = "icons/icon.icns",
+    infoplist = "//packaging/foks-desktop:macos/Info.plist",
+    target_compatible_with = ["@platforms//os:macos"],
+    version = VERSION,
+    visibility = ["//visibility:public"],
+)
+
+# Release app: sign the managed agent first, place it at Contents/Helpers,
+# then sign the outer bundle. Both targets fail closed without a Developer ID
+# identity; an unsigned artifact can never accidentally satisfy this chain.
+macos_sign(
+    name = "_foks_agent_release_signed",
+    src = "//crates:foks-agent",
+    entitlements_file = "//packaging/foks-desktop:macos/entitlements.plist",
+    for_notarization = True,
+    out_name = "foks-agent",
+    require_signing = True,
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:macos"],
+)
+
+macos_app_bundle(
+    name = "_FOKS_app_release_presign",
+    binary = ":foks-desktop",
+    # The signed target below owns FOKS.app. Bazel forbids the presign and
+    # signed actions from declaring the same output directory.
+    bundle_name = "FOKS-presign",
+    executable_name = "foks-desktop",
+    helper_files = {":_foks_agent_release_signed": "foks-agent"},
+    icon = "icons/icon.icns",
+    infoplist = "//packaging/foks-desktop:macos/Info.plist",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:macos"],
+    version = VERSION,
+)
+
+macos_sign(
+    name = "FOKS_app_release_signed",
+    src = ":_FOKS_app_release_presign",
+    entitlements_file = "//packaging/foks-desktop:macos/entitlements.plist",
+    for_notarization = True,
+    nested_entitlements = {
+        "//packaging/foks-desktop:macos/entitlements.plist": "Contents/Helpers/foks-agent",
+    },
+    out_name = "FOKS.app",
+    require_signing = True,
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:macos"],
+    visibility = ["//visibility:public"],
+)
+
+macos_zip(
+    name = "FOKS_zip_notary_submission",
+    app = ":FOKS_app_release_signed",
+    out_name = "foks-desktop-notary-submission.zip",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:macos"],
+)

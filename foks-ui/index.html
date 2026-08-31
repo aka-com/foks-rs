@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FOKS</title>
+  <!-- The design's stylesheet, then the adaptation that turns the mock's
+       fake browser window into the real application window. Light only —
+       there is no theme script here on purpose (see ui/kit/README.md). -->
+  <link rel="stylesheet" href="/src/styles/shell.css">
+  <link rel="stylesheet" href="/src/styles/app.css">
+</head>
+<body>
+  <div id="root">
+    <!-- Placeholder until app.tsx mounts the React root, so the first paint
+         is the shell's ground rather than a blank webview. -->
+    <div class="app-loading" role="status" aria-label="Loading FOKS">Loading…</div>
+  </div>
+  <!-- Portal target for fixed-position overlays that must escape the
+       scrolling and clipping surfaces inside #root. -->
+  <div id="overlays"></div>
+  <script src="/app.tsx" type="module"></script>
+</body>
+</html>

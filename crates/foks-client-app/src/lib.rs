@@ -26,12 +26,10 @@ use foks_client::{
     SoftwareDeviceProvisionRequest,
 };
 use foks_client_db::ScheduledJobKind;
-use foks_client_db::{
-    HardStateStore, KvDirectoryProjection, MutationKind, MutationState, SoftStateStore,
-};
+use foks_client_db::{HardStateStore, KvDirectoryProjection, MutationKind, MutationState};
 use foks_compat_artifact::{Outcome as CanaryOutcome, SignedCanaryArtifact};
-pub use foks_crypto::Passphrase;
 use foks_crypto::{derive_device_public, derive_shared_verify_key, prefixed_hash, BackupKey};
+pub use foks_crypto::{BackupPhrase, Passphrase};
 use foks_keystore::SecretStore;
 use foks_proto::{
     EntityId, InviteCode, KvNodeId, KvNodeType, Role, SecretSeed, ENTITY_PUK_VERIFY, ENTITY_USER,
@@ -54,8 +52,7 @@ const MASTER_KEY_RECORD: &str = "master-key-v1";
 const STATE_ROOT_RECORD: &str = "state-root-v1";
 const STATE_ROOT_BINDING_TYPE_ID: u64 = 0xf8d8_c42e_96e0_4734;
 const REGISTRY_LOCK_FILE: &str = ".profiles.lock";
-pub const PINNED_PROTOCOL_METADATA_SHA256: &str =
-    "cc3c55378ec57b77bbb951c35723bc198c112563909178806d8db33762ed7939";
+pub use foks_protocol_metadata::PINNED_PROTOCOL_METADATA_SHA256;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -67,6 +64,8 @@ pub enum Error {
     ProfileMissing,
     #[error("FOKS profile registry changed concurrently; reload and retry")]
     ProfileRegistryChanged,
+    #[error("FOKS reset preview no longer matches this profile's local state")]
+    ResetPreviewChanged,
     #[error("FOKS profile does not permit {0:?}")]
     CapabilityDenied(Capability),
     #[error("FOKS account already exists")]
@@ -77,6 +76,8 @@ pub enum Error {
     InvalidAccount(&'static str),
     #[error("FOKS KV path is invalid: {0}")]
     InvalidKvPath(&'static str),
+    #[error("FOKS KV item changed since it was read")]
+    KvConflict,
     #[error("FOKS application configuration is invalid: {0}")]
     InvalidConfig(&'static str),
     #[error("FOKS client failed: {0}")]
@@ -127,7 +128,50 @@ pub enum Error {
     },
 }
 
+fn entity_id_from_hex(value: &str) -> Result<EntityId> {
+    if !value.len().is_multiple_of(2) || value.len() > 128 {
+        return Err(Error::InvalidAccount("entity ID is not valid hexadecimal"));
+    }
+    let mut bytes = Vec::with_capacity(value.len() / 2);
+    for pair in value.as_bytes().chunks_exact(2) {
+        let digit = |byte| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        };
+        let high =
+            digit(pair[0]).ok_or(Error::InvalidAccount("entity ID is not valid hexadecimal"))?;
+        let low =
+            digit(pair[1]).ok_or(Error::InvalidAccount("entity ID is not valid hexadecimal"))?;
+        bytes.push((high << 4) | low);
+    }
+    EntityId::from_bytes(bytes).map_err(Into::into)
+}
+
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PendingOperationKind {
+    AccountSignup,
+    DeviceProvision,
+    PairingOffer,
+    PairingAcceptance,
+    AccountRecovery,
+    YubiEnrollment,
+    TeamCreation,
+    TeamMemberAddition,
+    TeamMemberEdit,
+    TeamRekey,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PendingOperationSummary {
+    pub kind: PendingOperationKind,
+    pub alias: String,
+    pub target: Option<String>,
+}
 
 pub use federation::{
     FederatedMembershipSummary, FederationAdmissionReport, FederationDestinationRole,
@@ -135,9 +179,9 @@ pub use federation::{
 };
 pub use runtime::{JobRun, JobRunReport};
 pub use yubi::{
-    LoadedYubiAccount, YubiAccountReport, YubiCardSummary, YubiFederationSyncReport,
-    YubiLifecycleReport, YubiPinStatus, YubiProvisionInput, YubiRevocationReport, YubiSignupInput,
-    YubiSubkeyRecoveryReport,
+    LoadedYubiAccount, YubiAccountReport, YubiAccountSummary, YubiCardSummary, YubiEnrollmentState,
+    YubiFederationSyncReport, YubiLifecycleReport, YubiPinStatus, YubiProvisionInput,
+    YubiRevocationReport, YubiSignupInput, YubiSubkeyRecoveryReport,
 };
 
 mod account;
@@ -147,7 +191,8 @@ mod registry;
 mod team;
 
 pub use account::{
-    derive_mutation_key, derive_vault_key, AccountVault, DeviceProvisionReport, DeviceSummary,
+    derive_mutation_key, derive_vault_key, AccountVault, BackupEnrollmentReport,
+    BackupEnrollmentSummary, DeviceProvisionReport, DeviceRevocationReport, DeviceSummary,
     KexAcceptanceInput, KexOfferReport, LoadedAccount, PassphraseReport, SyncReport,
 };
 use checkpoint::RollbackHostCheckpoint;
@@ -156,18 +201,26 @@ use checkpoint::{
     database_claim_record_key, hard_state_artifact_paths, rollback_record_key,
     CheckpointReconciliation,
 };
-pub use checkpoint::{ClientCredentials, CredentialBackend, RollbackCheckpoint};
+pub use checkpoint::{
+    ClientCredentials, CredentialBackend, ResetArtifactKind, ResetArtifactSummary,
+    ResetStatePreview, RollbackCheckpoint,
+};
 #[cfg(test)]
 use kv::{display_component, split_parent};
-pub use kv::{KvEntrySummary, KvListReport, KvWriteReport};
+pub use kv::{
+    KvCatalogEntry, KvCatalogReport, KvChunkReport, KvEntrySummary, KvListReport,
+    KvMutationPrecondition, KvReadReport, KvRoleSummary, KvWriteReport,
+};
 pub use registry::{
-    Capability, CheckedProfileSession, ProbeReport, Profile, ProfilePaths, ProfileRegistry,
-    ProfileSession, ProtocolPolicy, TrustRoot,
+    Capability, CheckedProfileSession, ProbeAcceptance, ProbeReport, Profile, ProfilePaths,
+    ProfilePublicationReport, ProfileRegistry, ProfileSession, ProtocolPolicy,
+    ServerStatusSnapshot, StoredHostStatus, TrustRoot,
 };
 #[cfg(test)]
 use team::StoredTeam;
 pub use team::{
-    TeamMemberMutationReport, TeamMemberRole, TeamMemberSummary, TeamSummary, TeamSyncReport,
+    TeamDiscoveryReport, TeamMemberMutationReport, TeamMemberRole, TeamMemberSummary, TeamSummary,
+    TeamSyncReport,
 };
 fn account_key(alias: &str) -> String {
     format!("account.{alias}")
@@ -561,8 +614,10 @@ mod tests {
     fn explicit_private_file_credentials_round_trip_without_native_services() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("state");
+        assert!(!ClientCredentials::is_initialized(&root).unwrap());
         let initialized =
             ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        assert!(ClientCredentials::is_initialized(&root).unwrap());
         let expected = initialized.master_key().unwrap();
         drop(initialized);
         let reopened = ClientCredentials::open(&root).unwrap();
@@ -891,26 +946,111 @@ mod tests {
     }
 
     #[test]
-    fn explicit_hard_state_reset_removes_database_and_sidecars() {
+    fn reset_preview_binds_validated_resumables_and_all_local_artifacts() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("state");
         let credentials =
             ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let master = credentials.master_key().unwrap();
         let mut registry = ProfileRegistry::open(&root).unwrap();
         registry
             .add(profile("local", ProtocolPolicy::V019))
             .unwrap();
         let session = ProfileSession::open(&registry, "local").unwrap();
         HardStateStore::open(&session.paths().hard_database).unwrap();
-        for sidecar in hard_state_artifact_paths(&session.paths().hard_database)[1..].iter() {
-            std::fs::write(sidecar, b"test sidecar").unwrap();
+        HardStateStore::open(&session.paths().soft_database).unwrap();
+        for database in [
+            &session.paths().hard_database,
+            &session.paths().soft_database,
+        ] {
+            for sidecar in hard_state_artifact_paths(database)[1..].iter() {
+                std::fs::write(sidecar, b"test sidecar").unwrap();
+            }
+        }
+        std::fs::create_dir_all(&session.paths().protected_mutations).unwrap();
+        std::fs::write(
+            session.paths().protected_mutations.join("queued-write"),
+            b"protected mutation",
+        )
+        .unwrap();
+        let mut store = foks_keystore::EncryptedFileSecretStore::open(
+            &session.paths().credential_store,
+            derive_vault_key(&master),
+        )
+        .unwrap();
+        {
+            let mut vault = AccountVault::new(&mut store);
+            vault
+                .put_pending(&PendingSignup::random("personal", "alice").unwrap())
+                .unwrap();
+        }
+        drop(store);
+
+        let preview = credentials.describe_reset_state(&session).unwrap();
+        assert_eq!(preview.profile, "local");
+        assert_eq!(preview.resumables.len(), 1);
+        assert_eq!(
+            preview.resumables[0].kind,
+            PendingOperationKind::AccountSignup
+        );
+        assert_eq!(preview.resumables[0].alias, "personal");
+        for kind in [
+            ResetArtifactKind::HardState,
+            ResetArtifactKind::SoftState,
+            ResetArtifactKind::ProtectedMutations,
+            ResetArtifactKind::CredentialsAndResumables,
+        ] {
+            assert!(preview
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.kind == kind));
         }
 
-        credentials.reset_hard_state(&session).unwrap();
+        // Any post-preview change, even in soft state, invalidates the exact
+        // deletion authorization and leaves every artifact intact.
+        std::fs::write(
+            session.paths().protected_mutations.join("late-write"),
+            b"arrived after preview",
+        )
+        .unwrap();
+        assert!(matches!(
+            credentials.reset_hard_state_if_matches(&session, preview.state_digest()),
+            Err(Error::ResetPreviewChanged)
+        ));
+        assert!(session.paths().hard_database.exists());
+        assert!(session.paths().credential_store.exists());
 
-        assert!(hard_state_artifact_paths(&session.paths().hard_database)
-            .iter()
-            .all(|path| !path.exists()));
+        // An interruption after atomic directory staging is safe to resume.
+        // The next preview still validates and names the quarantined resumable.
+        let preview = credentials.describe_reset_state(&session).unwrap();
+        checkpoint::TEST_FAIL_AFTER_RESET_STAGING.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(matches!(
+            credentials.reset_hard_state_if_matches(&session, preview.state_digest()),
+            Err(Error::InvalidConfig("injected reset interruption"))
+        ));
+        let resumed = credentials.describe_reset_state(&session).unwrap();
+        assert_eq!(resumed.resumables.len(), 1);
+        assert_eq!(resumed.resumables[0].alias, "personal");
+        credentials
+            .reset_hard_state_if_matches(&session, resumed.state_digest())
+            .unwrap();
+
+        for database in [
+            &session.paths().hard_database,
+            &session.paths().soft_database,
+        ] {
+            assert!(hard_state_artifact_paths(database)
+                .iter()
+                .all(|path| !path.exists()));
+        }
+        assert!(!session.paths().protected_mutations.exists());
+        assert!(!session.paths().credential_store.exists());
+        assert!(!session.paths().directory.join(".reset-mutations").exists());
+        assert!(!session
+            .paths()
+            .directory
+            .join(".reset-credentials")
+            .exists());
     }
 
     #[test]
@@ -1252,6 +1392,68 @@ mod tests {
     }
 
     #[test]
+    fn probe_reports_preserve_acceptance_outcomes() {
+        assert_eq!(
+            ProbeAcceptance::from(foks_client_db::Acceptance::Inserted),
+            ProbeAcceptance::Inserted
+        );
+        assert_eq!(
+            ProbeAcceptance::from(foks_client_db::Acceptance::Advanced),
+            ProbeAcceptance::Advanced
+        );
+        assert_eq!(
+            ProbeAcceptance::from(foks_client_db::Acceptance::Unchanged),
+            ProbeAcceptance::Unchanged
+        );
+    }
+
+    #[test]
+    fn passive_server_status_reports_only_configured_and_authenticated_facts() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let credentials =
+            ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(profile("hosted", ProtocolPolicy::V019))
+            .unwrap();
+        let session = ProfileSession::open(&registry, "hosted").unwrap();
+
+        let empty = session.server_status_without_pinned_host().unwrap();
+        assert_eq!(empty.profile, "hosted");
+        assert_eq!(empty.configured_probe, "foks.app");
+        assert!(empty.host.is_none());
+        assert!(!empty.lease_required);
+        assert!(empty.lease_expires_at.is_none());
+
+        let verified = foks_verify::verify_public_host(
+            "foks.app",
+            include_bytes!(
+                "../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp"
+            ),
+        )
+        .unwrap();
+        HardStateStore::open(&session.paths().hard_database)
+            .unwrap()
+            .accept_verified_host(&verified.snapshot)
+            .unwrap();
+        assert!(session.server_status_without_pinned_host().is_err());
+
+        let status = credentials
+            .with_checked_session(&session, |checked| checked.server_status())
+            .unwrap();
+        let host = status.host.as_ref().unwrap();
+        assert_eq!(host.lookup_name, "foks.app");
+        assert_eq!(host.canonical_name, verified.snapshot.canonical_name());
+        assert_eq!(host.host_id_hex, hex(verified.snapshot.host_id()));
+        assert_eq!(host.host_chain_sequence, verified.snapshot.chain_seqno());
+        assert_eq!(host.merkle_epoch, verified.snapshot.merkle_root().epoch());
+        let value = serde_json::to_value(status).unwrap();
+        assert!(value.get("checked_at").is_none());
+        assert!(value.get("trusted_since").is_none());
+    }
+
+    #[test]
     fn account_vault_validates_binding_and_lists_aliases() {
         let mut store = MemorySecretStore::default();
         let credential = DeviceCredential {
@@ -1300,6 +1502,7 @@ mod tests {
             vault.yubi_aliases().unwrap(),
             vec!["yubi-pending", "yubi-ready"]
         );
+        assert!(vault.yubi_accounts().is_err());
         for alias in [
             "software-pending",
             "device-pending",
@@ -1309,6 +1512,33 @@ mod tests {
         ] {
             assert!(vault.contains(alias).unwrap(), "{alias} was not reserved");
         }
+    }
+
+    #[test]
+    fn pending_operations_are_enumerated_by_resumable_kind() {
+        let mut store = MemorySecretStore::default();
+        let signup = PendingSignup::random("signup", "alice").unwrap();
+        let mut vault = AccountVault::new(&mut store);
+        vault.put_pending(&signup).unwrap();
+        let pending = vault.pending_operations().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert!(pending.iter().any(|operation| {
+            operation.kind == PendingOperationKind::AccountSignup
+                && operation.alias == "signup"
+                && operation.target.is_none()
+        }));
+    }
+
+    #[test]
+    fn malformed_pending_record_is_not_advertised_as_resumable() {
+        let mut store = MemorySecretStore::default();
+        store
+            .put(
+                &pending_device_key("new-laptop"),
+                b"authenticated but malformed",
+            )
+            .unwrap();
+        assert!(AccountVault::new(&mut store).pending_operations().is_err());
     }
 
     #[test]
@@ -1326,7 +1556,21 @@ mod tests {
             ("/one".into(), "two".into())
         );
         assert_eq!(split_parent("/one").unwrap(), ("/".into(), "one".into()));
-        for invalid in ["relative", "/", "/one//two", "/one/../two", "/one/."] {
+        assert_eq!(
+            split_parent("/space%20parent/hello%20world").unwrap(),
+            ("/space%20parent".into(), "hello world".into())
+        );
+        for invalid in [
+            "relative",
+            "/",
+            "/one//two",
+            "/one/../two",
+            "/one/.",
+            "/one/%2E%2E",
+            "/one/%",
+            "/one/%GG",
+            "/one/%FF",
+        ] {
             assert!(split_parent(invalid).is_err(), "accepted {invalid:?}");
         }
     }
@@ -1351,5 +1595,10 @@ mod tests {
         let restored = vault.team("engineering").unwrap();
         assert_eq!(restored.team_id, expected_id);
         assert_eq!(vault.team_aliases().unwrap(), vec!["engineering"]);
+        assert!(vault.pending_operations().unwrap().iter().any(|operation| {
+            operation.kind == PendingOperationKind::TeamCreation
+                && operation.alias == "engineering"
+                && operation.target.is_none()
+        }));
     }
 }

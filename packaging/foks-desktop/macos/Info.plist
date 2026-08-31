@@ -4,11 +4,13 @@
   <key>CFBundleDisplayName</key><string>FOKS</string>
   <key>CFBundleExecutable</key><string>foks-desktop</string>
   <key>CFBundleIdentifier</key><string>org.foks.desktop</string>
+  <key>CFBundleIconFile</key><string>icon.icns</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>FOKS</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>__FOKS_VERSION__</string>
-  <key>CFBundleVersion</key><string>__FOKS_VERSION__</string>
+  <key>CFBundleShortVersionString</key><string>{VERSION}</string>
+  <key>CFBundleVersion</key><string>{VERSION}</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

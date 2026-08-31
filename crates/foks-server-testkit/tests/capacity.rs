@@ -14,7 +14,7 @@ fn options() -> KvWriteOptions {
 }
 
 #[test]
-fn small_object_capacity_rejects_without_a_partial_directory_entry() {
+fn small_object_capacity_rejects_before_commit_without_partial_writes() {
     let environment = TestEnvironment::with_profile(TestProfile::SmallCapacity).unwrap();
     let server = environment.start_server().unwrap();
     let client = TestClient::new(&environment, "object-capacity-client").unwrap();
@@ -47,10 +47,13 @@ fn small_object_capacity_rejects_without_a_partial_directory_entry() {
             "small profile failed to enforce object capacity"
         );
     };
-    assert!(matches!(
-        quota_error,
-        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1060, .. })
-    ));
+    assert!(
+        matches!(
+            &quota_error,
+            foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1060, .. })
+        ),
+        "unexpected capacity error after {committed} objects: {quota_error:?}"
+    );
     let tree = session.sync().unwrap();
     assert_eq!(tree[0].entries.len(), committed);
     assert!(!tree[0]

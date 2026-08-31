@@ -35,6 +35,7 @@ func (m *oracleContext) Infow(string, ...interface{}) {}
 func (m *oracleContext) Warnw(string, ...interface{}) {}
 func (m *oracleContext) WarnwWithContext(context.Context, string, ...interface{}) {
 }
+
 func (m *oracleContext) RPCLogOptions() (rpc.LogOptions, error) {
 	return &rpc.StandardLogOptions{}, nil
 }

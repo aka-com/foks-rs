@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["deb"],
+    "externalBin": ["binaries/foks-agent"],
+    "linux": {
+      "deb": {
+        "depends": ["policykit-1", "libpcsclite1"],
+        "desktopTemplate": "linux/foks.desktop.hbs",
+        "files": {
+          "/usr/share/metainfo/org.foks.Desktop.metainfo.xml": "linux/org.foks.Desktop.metainfo.xml",
+          "/usr/share/polkit-1/actions/org.foks.desktop.policy": "linux/org.foks.desktop.policy"
+        }
+      }
+    }
+  }
+}

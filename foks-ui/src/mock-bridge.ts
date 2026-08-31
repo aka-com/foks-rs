@@ -1,0 +1,900 @@
+/** A deterministic command bridge for render and browser acceptance tests. */
+
+import type {
+  Bridge,
+  CatalogDto,
+  DownloadResponse,
+  ItemRequest,
+  KvRoleInput,
+  ReadItemResponse,
+} from './bridge';
+import { roleDto } from './bridge';
+import { FIXTURE } from './fixture';
+import { catalog } from './model/lease';
+import { parseRole, roleRank, visibilityOf } from './model/roles';
+import { itemKey } from './model/types';
+import type { RoleWire, Store, World } from './model/types';
+import {
+  decodeFirstRunCheckpoint,
+  FIRST_RUN_CHECKPOINT_KEY,
+} from './first-run-state';
+
+export class VersionMismatchError extends Error {
+  constructor(
+    readonly path: string,
+    readonly asked: number,
+    readonly found: number,
+  ) {
+    super(
+      `${path} is at version ${found}, not ${asked}. Refresh and review before reading it.`,
+    );
+    this.name = 'VersionMismatchError';
+  }
+}
+
+export function mockBridge(world: World = FIXTURE): Bridge {
+  const stores: Store[] = world.stores.map((store) => ({ ...store }));
+  const servers = world.servers.map((server) => ({ ...server }));
+  const accounts = world.accounts.map((account) => ({ ...account }));
+  let items = world.items.map((item) => ({ ...item }));
+  let parties = world.parties.map((party) => ({ ...party }));
+  const federation = world.federation.map((entry) => ({ ...entry }));
+  const contents = new Map(
+    items.map((item) => [
+      itemKey(item),
+      item.kind === 'Link'
+        ? (item.target ?? '')
+        : (world.plaintext[itemKey(item)] ?? item.value ?? ''),
+    ]),
+  );
+  const select = (request: ItemRequest) => {
+    const item = items.find(
+      (candidate) =>
+        candidate.store === request.storeId && candidate.path === request.path,
+    );
+    if (!item) throw new Error(`${request.path} is not in ${request.storeId}.`);
+    if (item.version !== request.version) {
+      throw new VersionMismatchError(item.path, request.version, item.version);
+    }
+    return item;
+  };
+  const hoverListeners = new Set<(event: { hovering: boolean }) => void>();
+  const pathListeners = new Set<(paths: string[]) => void>();
+  const failure = (code: string, message: string) => ({
+    code,
+    message,
+    retryable: code === 'agent-lost',
+    ambiguous: false,
+    fatal: code === 'agent-lost',
+    details: { kind: code },
+  });
+  const decodeCreateRole = (role: KvRoleInput): RoleWire => {
+    if (role === 'Owner' || role === 'Admin') return { role };
+    const match = /^Member:(0|-?[1-9]\d*)$/.exec(role);
+    const visibility = Number(match?.[1]);
+    if (
+      !match ||
+      !Number.isInteger(visibility) ||
+      visibility < -32768 ||
+      visibility > 32767
+    ) {
+      throw failure('invalid-request', 'Choose a valid group item role.');
+    }
+    return { role: 'Member', visibility };
+  };
+  const createRoles = (
+    storeId: string,
+    readRole?: KvRoleInput,
+    writeRole?: KvRoleInput,
+  ): { read: RoleWire; write: RoleWire } => {
+    const store = stores.find((candidate) => candidate.id === storeId);
+    if (!store) throw failure('store-not-found', 'This store is no longer listed.');
+    if (store.kind === 'account') {
+      if (readRole !== undefined || writeRole !== undefined)
+        throw failure('invalid-request', 'Account item roles are fixed to Owner.');
+      return { read: { role: 'Owner' }, write: { role: 'Owner' } };
+    }
+    if (!store.active)
+      throw failure('inactive-group', 'Resume this group before changing it.');
+    if (readRole === undefined || writeRole === undefined)
+      throw failure('invalid-request', 'Choose both group item roles.');
+    return {
+      read: decodeCreateRole(readRole),
+      write: decodeCreateRole(writeRole),
+    };
+  };
+  const fixtureEngineeringStore = world.stores.find(
+    (store) => store.id === 'team:eng',
+  );
+  const fixtureEngineering =
+    fixtureEngineeringStore?.kind === 'team'
+      ? fixtureEngineeringStore
+      : undefined;
+  const fixtureHouseholdStore = world.stores.find(
+    (store) => store.id === 'team:household',
+  );
+  const fixtureHousehold =
+    fixtureHouseholdStore?.kind === 'team'
+      ? fixtureHouseholdStore
+      : undefined;
+  const firstRunFixture = {
+    invited: {
+      profile: 'acme',
+      accountAlias: 'sol',
+      server: 'foks.acme-corp.com',
+      typo: 'foks.acme-corp.co',
+      username: 'sol',
+      deviceName: "Sol's MacBook Air",
+      admin: 'sam.ortiz',
+      groupName: 'Engineering',
+      groupAlias: fixtureEngineering?.alias,
+      groupTeamIdHex: fixtureEngineering?.team_id_hex,
+      report: {
+        profile: 'acme',
+        acceptance: 'inserted' as const,
+        lookupName: 'foks.acme-corp.com',
+        canonicalName: 'foks.acme-corp.com',
+        hostId:
+          '024d17e390a5c2f8e16d7b39c04a8e5f2d1c6b7a9038e4f5d6c1a2b3e7f0948d1c',
+        chain: 33,
+        epoch: 90417,
+      },
+    },
+    own: {
+      profile: 'personal',
+      accountAlias: 'personal',
+      server: 'foks.example.net',
+      typo: 'foks.example.ne',
+      username: 'rae',
+      deviceName: 'MacBook Pro',
+      groupName: 'Household',
+      groupAlias: fixtureHousehold?.alias,
+      groupTeamIdHex: fixtureHousehold?.team_id_hex,
+      report: {
+        profile: 'personal',
+        acceptance: 'inserted' as const,
+        lookupName: 'foks.example.net',
+        canonicalName: 'foks.example.net',
+        hostId:
+          '0231c2aa07e4b1d86c3f52a09e7d41c8b6f0a2d3e95c17b48f6a0d2e3c5b719a4f',
+        chain: 12,
+        epoch: 4821,
+      },
+    },
+    backupPhrase:
+      'orbit velvet lantern cactus mirror harbor pistol thumb copper fossil meadow rotate silent wagon bright ladder ivory',
+  };
+  let appLocked = false;
+  const appLockState = () => ({
+    locked: appLocked,
+    available: true,
+    mechanism: 'password' as const,
+  });
+  const pending = new Map<
+    string,
+    {
+      kind: 'account-signup' | 'account-recovery';
+      alias: string;
+      target?: string;
+    }[]
+  >();
+  const serverHosts = new Map<string, {
+    lookupName: string; canonicalName: string; hostId: string; chain: number; epoch: number;
+  }>();
+  const hostIds: Record<string, string> = {
+    personal: `02${'9f31c2aa'.repeat(8)}`,
+    acme: `02${'b04d17e3'.repeat(8)}`,
+    partner: `02${'04c8b19e'.repeat(8)}`,
+  };
+  for (const server of servers) {
+    if (server.host_id && server.chain !== null && server.epoch !== null) {
+      serverHosts.set(server.id, {
+        lookupName: server.name,
+        canonicalName: server.name,
+        hostId: hostIds[server.id] ?? `02${'1'.repeat(64)}`,
+        chain: server.chain,
+        epoch: server.epoch,
+      });
+    }
+  }
+  const pairingOffers = new Map<string, string>();
+  const pairingAcceptances = new Set<string>();
+  const resetTokens = new Set<string>();
+  const deviceRows = new Map<string, { id: string; name?: string; role: 'owner' | 'admin' | 'member'; current: boolean }[]>();
+  const backupRows = new Map<string, { backupAlias: string; accountAlias: string; backupId: string }[]>();
+  const yubi = world.yubiAccounts.map((entry) => ({ alias: entry.alias, state: 'complete' as const }));
+  const accountStore = (id: string) => stores.find((store) => store.id === id && store.kind === 'account');
+  for (const store of stores) {
+    if (store.kind !== 'account') continue;
+    const rows = store.account === 'personal'
+      ? world.devices.map((device) => ({ id: device.id_hex.replace(/^02/, '04'), name: device.name, role: 'owner' as const, current: device.current }))
+      : [{ id: `04${'8'.repeat(64)}`, name: 'MacBook Pro', role: 'owner' as const, current: true }];
+    deviceRows.set(store.id, rows);
+    backupRows.set(store.id, store.account === 'personal'
+      ? [{ backupAlias: 'paper-backup', accountAlias: store.account, backupId: `10${'4'.repeat(64)}` }]
+      : []);
+  }
+  const restoreFirstRunAccount = (): void => {
+    if (typeof window === 'undefined') return;
+    const saved = decodeFirstRunCheckpoint(
+      window.localStorage.getItem(FIRST_RUN_CHECKPOINT_KEY),
+    );
+    if (!saved?.profile || !saved.account) return;
+    const id = `acct:${saved.account.alias}`;
+    if (!stores.some((store) => store.id === id)) {
+      stores.push({
+        id,
+        kind: 'account',
+        name: 'Personal',
+        server: saved.profile.profile,
+        account: saved.account.alias,
+      });
+    }
+    if (!accounts.some((account) => account.store === id)) {
+      accounts.push({
+        store: id,
+        alias: saved.account.alias,
+        username: saved.account.username,
+        server: saved.profile.profile,
+      });
+    }
+  };
+  const ensureFirstRunAccount = (
+    profile: string,
+    alias: string,
+    username: string,
+  ): void => {
+    const id = `acct:${alias}`;
+    if (!stores.some((store) => store.id === id)) {
+      stores.push({
+        id,
+        kind: 'account',
+        name: 'Personal',
+        server: profile,
+        account: alias,
+      });
+    }
+    const existing = accounts.find((account) => account.store === id);
+    if (existing) {
+      existing.store = id;
+      existing.username = username;
+    } else accounts.push({ store: id, alias, username, server: profile });
+  };
+  const assertFree = (storeId: string, path: string): void => {
+    if (items.some((item) => item.store === storeId && item.path === path)) {
+      throw failure('already-exists', `${path} already exists.`);
+    }
+  };
+  const assertNamedGroup = (storeId: string): void => {
+    const store = stores.find((candidate) => candidate.id === storeId);
+    if (!store || store.kind !== 'team')
+      throw failure('store-not-found', 'The group is not in the catalog.');
+    if (!store.active)
+      throw failure('inactive-group', 'The group is inactive.');
+    if (store.team_kind !== 'named')
+      throw failure(
+        'group-management-unavailable',
+        'Roster and federation changes require a named group.',
+      );
+  };
+  const catalogResponse = (): CatalogDto => ({
+    profiles: [...new Set(servers.map((server) => server.name))],
+    stores: stores.map((store) => ({ ...store })),
+    items: catalog({ ...world, items }).map((item) => ({
+      store: item.store,
+      path: item.path,
+      kind: item.kind,
+      size: item.size,
+      version: item.version,
+      read: roleDto(item.read),
+      write: roleDto(item.write),
+    })),
+    failures: [],
+    blockedProfiles: [],
+  });
+  return {
+    native: false,
+    fixtureWorld: world,
+    firstRunFixture,
+    appLockState: async () => appLockState(),
+    lockApp: async () => {
+      appLocked = true;
+      return appLockState();
+    },
+    unlockApp: async () => {
+      appLocked = false;
+      return appLockState();
+    },
+    agentStatus: () => Promise.resolve({ ...world.agent }),
+    appInfo: async () => ({ version: '0.3.0', agentSocket: '/private/foks/agent.sock' }),
+    listCatalog: () => {
+      restoreFirstRunAccount();
+      return Promise.resolve(catalogResponse());
+    },
+    listStores: () => Promise.resolve({ ...catalogResponse(), items: [] }),
+    listServers: () =>
+      Promise.resolve(servers.map((server) => ({ ...server }))),
+    listAccounts: () => {
+      restoreFirstRunAccount();
+      // Every fixture and checkpoint-restored account carries its exact store,
+      // the same way `list_accounts` does; there is nothing to resolve here.
+      return Promise.resolve(
+        accounts.map((account) => ({ ...account })),
+      );
+    },
+    listParties: (storeId) =>
+      Promise.resolve(
+        parties
+          .filter((party) => party.store === storeId)
+          .map((party) => ({ ...party })),
+      ),
+    listFederation: (storeId) =>
+      Promise.resolve(
+        federation
+          .filter((entry) => entry.store === storeId)
+          .map((entry) => ({ ...entry })),
+      ),
+    readItem: (request: ItemRequest): Promise<ReadItemResponse> => {
+      const item = select(request);
+      return Promise.resolve({
+        store: item.store,
+        path: item.path,
+        version: item.version,
+        value: contents.get(itemKey(item)) ?? '',
+      });
+    },
+    copyItemValue: (request) => {
+      select(request);
+      return Promise.resolve({ ok: true });
+    },
+    copyItemPath: (request) => {
+      select(request);
+      return Promise.resolve({ ok: true });
+    },
+    downloadFile: (request): Promise<DownloadResponse> => {
+      select(request);
+      return Promise.resolve({ saved: true });
+    },
+    createTextItem: async ({ storeId, path, value, readRole, writeRole }) => {
+      assertFree(storeId, path);
+      const roles = createRoles(storeId, readRole, writeRole);
+      items.push({
+        store: storeId,
+        path,
+        kind: 'Secret',
+        size: value.length,
+        version: 1,
+        ...roles,
+        value,
+      });
+      contents.set(`${storeId}|${path}`, value);
+      return { applied: true };
+    },
+    createLink: async ({ storeId, path, target, readRole, writeRole }) => {
+      assertFree(storeId, path);
+      const roles = createRoles(storeId, readRole, writeRole);
+      items.push({
+        store: storeId,
+        path,
+        kind: 'Link',
+        size: target.length,
+        version: 1,
+        ...roles,
+        target,
+      });
+      contents.set(`${storeId}|${path}`, target);
+      return { applied: true };
+    },
+    createFolder: async ({ storeId, path, readRole, writeRole }) => {
+      assertFree(storeId, path);
+      const roles = createRoles(storeId, readRole, writeRole);
+      items.push({
+        store: storeId,
+        path,
+        kind: 'Folder',
+        size: 0,
+        version: 1,
+        ...roles,
+      });
+      return { applied: true };
+    },
+    editTextItem: async ({ storeId, path, version, value }) => {
+      const index = items.findIndex(
+        (item) => item.store === storeId && item.path === path,
+      );
+      const item = index < 0 ? undefined : items[index];
+      if (!item) throw failure('conflict', `${path} is no longer there.`);
+      if (item.version !== version)
+        throw failure('conflict', `${path} changed first.`);
+      items[index] = {
+        ...item,
+        version: version + 1,
+        size: value.length,
+        value,
+      };
+      contents.set(`${storeId}|${path}`, value);
+      return { applied: true };
+    },
+    removeItem: async ({ storeId, path, version }) => {
+      const item = items.find(
+        (candidate) => candidate.store === storeId && candidate.path === path,
+      );
+      if (!item || item.version !== version)
+        throw failure('conflict', `${path} changed first.`);
+      items = items.filter((candidate) => candidate !== item);
+      contents.delete(`${storeId}|${path}`);
+      return { applied: true };
+    },
+    importDroppedFile: async ({ storeId, path, readRole, writeRole }) => {
+      assertFree(storeId, path);
+      const roles = createRoles(storeId, readRole, writeRole);
+      items.push({
+        store: storeId,
+        path,
+        kind: 'File',
+        size: 0,
+        version: 1,
+        ...roles,
+      });
+      return { applied: true };
+    },
+    pickAndImportFile: async ({ storeId, path, readRole, writeRole }) => {
+      assertFree(storeId, path);
+      const roles = createRoles(storeId, readRole, writeRole);
+      items.push({
+        store: storeId,
+        path,
+        kind: 'File',
+        size: 0,
+        version: 1,
+        ...roles,
+      });
+      return { applied: true };
+    },
+    replaceDroppedFile: async ({ storeId, path, version }) => {
+      const item = items.find(
+        (candidate) => candidate.store === storeId && candidate.path === path,
+      );
+      if (!item || item.version !== version)
+        throw failure('conflict', `${path} changed first.`);
+      item.version += 1;
+      return { applied: true };
+    },
+    pickAndReplaceFile: async ({ storeId, path, version }) => {
+      const item = items.find(
+        (candidate) => candidate.store === storeId && candidate.path === path,
+      );
+      if (!item || item.version !== version)
+        throw failure('conflict', `${path} changed first.`);
+      item.version += 1;
+      return { applied: true };
+    },
+    resumeGroupCreation: async (storeId) => {
+      const store = stores.find((candidate) => candidate.id === storeId);
+      if (!store || store.kind !== 'team' || store.active) {
+        throw failure(
+          'invalid-request',
+          'Only an inactive group can be resumed.',
+        );
+      }
+      store.active = true;
+      return { applied: true };
+    },
+    takeAgentConnectionLoss: async () => null,
+    retryAgentConnection: async () => ({ ...world.agent }),
+    createGroup: async ({ accountStoreId, teamAlias, name, kind }) => {
+      const account = stores.find(
+        (store) => store.id === accountStoreId && store.kind === 'account',
+      );
+      if (!account)
+        throw failure(
+          'store-not-found',
+          'The account store is not in the catalog.',
+        );
+      const id = `team:${teamAlias}`;
+      if (stores.some((store) => store.id === id))
+        throw failure('conflict', 'That group alias already exists.');
+      stores.push({
+        id,
+        kind: 'team',
+        name: name || teamAlias,
+        alias: teamAlias,
+        server: account.server,
+        account: account.account,
+        active: true,
+        team_kind: kind,
+        team_id_hex: `${kind === 'named' ? '03' : '14'}${'1'.repeat(64)}`,
+      });
+      parties.push({
+        store: id,
+        username:
+          world.accounts.find((candidate) => candidate.store === account.id)
+            ?.username ?? account.account,
+        label: 'you',
+        party_kind: 'user',
+        generation: 1,
+        locally_manageable: true,
+        party_id_hex: `01${'2'.repeat(64)}`,
+        source_role: { role: 'Owner' },
+        destination_role: { role: 'Owner' },
+      });
+      return { applied: true };
+    },
+    addGroupMember: async ({ storeId, username, destination }) => {
+      assertNamedGroup(storeId);
+      if (
+        parties.some(
+          (party) => party.store === storeId && party.username === username,
+        )
+      )
+        throw failure('conflict', 'That username is already in the roster.');
+      parties.push({
+        store: storeId,
+        username,
+        party_kind: 'user',
+        generation: 1,
+        locally_manageable: true,
+        party_id_hex: `01${String(parties.length + 1).padStart(64, '3')}`,
+        source_role: destination,
+        destination_role: destination,
+      });
+      return { applied: true };
+    },
+    resumeGroupMemberAddition: async ({ storeId }) => {
+      assertNamedGroup(storeId);
+      return { applied: true };
+    },
+    demoteGroupMember: async ({ storeId, username, destination }) => {
+      assertNamedGroup(storeId);
+      const party = parties.find(
+        (candidate) =>
+          candidate.store === storeId && candidate.username === username,
+      );
+      if (!party || !party.locally_manageable)
+        throw failure(
+          'member-not-actionable',
+          'That roster party cannot be changed here.',
+        );
+      const current = parseRole(party.destination_role);
+      const next = parseRole(destination);
+      const lower =
+        roleRank(next) < roleRank(current) ||
+        (current?.kind === 'member' &&
+          next?.kind === 'member' &&
+          visibilityOf(next) < visibilityOf(current));
+      if (!lower)
+        throw failure('not-a-demotion', 'Choose a strictly lower role.');
+      party.destination_role = destination;
+      party.generation += 1;
+      return { applied: true };
+    },
+    removeGroupMember: async ({ storeId, username }) => {
+      assertNamedGroup(storeId);
+      const party = parties.find(
+        (candidate) =>
+          candidate.store === storeId && candidate.username === username,
+      );
+      if (!party || !party.locally_manageable)
+        throw failure(
+          'member-not-actionable',
+          'That roster party cannot be removed here.',
+        );
+      parties = parties.filter((candidate) => candidate !== party);
+      return { applied: true };
+    },
+    resumeGroupMemberEdit: async (storeId) => {
+      assertNamedGroup(storeId);
+      return { applied: true };
+    },
+    admitGroup: async ({ storeId, remoteStoreId, visibility }) => {
+      assertNamedGroup(storeId);
+      const remote = stores.find(
+        (store) => store.id === remoteStoreId && store.kind === 'team',
+      );
+      const local = stores.find(
+        (store) => store.id === storeId && store.kind === 'team',
+      );
+      if (
+        !remote ||
+        remote.kind !== 'team' ||
+        !remote.active ||
+        remote.team_kind !== 'named' ||
+        remote.server === local?.server
+      )
+        throw failure(
+          'invalid-request',
+          'Choose an active named group on a different profile.',
+        );
+      const operation = `admission-${federation.length + 1}`;
+      federation.push({
+        store: storeId,
+        remote_profile:
+          world.servers.find((server) => server.id === remote.server)?.name ??
+          remote.server,
+        remote_team_alias: remote.alias,
+        remote_host_id_hex:
+          world.servers.find((server) => server.id === remote.server)
+            ?.host_id ?? '',
+        remote_team_id_hex: remote.team_id_hex,
+        destination: { role: 'Member', visibility },
+        operation_id_hex: operation,
+        active: true,
+      });
+      parties.push({
+        store: storeId,
+        username: null,
+        party_kind: 'named-team',
+        generation: 1,
+        locally_manageable: false,
+        party_id_hex: remote.team_id_hex,
+        scoped_host_id_hex:
+          world.servers.find((server) => server.id === remote.server)
+            ?.host_id ?? undefined,
+        source_role: { role: 'Owner' },
+        destination_role: { role: 'Member', visibility },
+      });
+      return { applied: true };
+    },
+    rerunGroupAdmission: async (storeId, operationId) => {
+      assertNamedGroup(storeId);
+      const entry = federation.find(
+        (candidate) =>
+          candidate.store === storeId &&
+          candidate.operation_id_hex === operationId,
+      );
+      if (!entry || entry.active)
+        throw failure(
+          'admission-not-resumable',
+          'That group membership cannot be resumed.',
+        );
+      entry.active = true;
+      return { applied: true };
+    },
+    copyText: async () => ({ ok: true }),
+    initializeClientState: async () => ({ phase: 'Ready' }),
+    checkAndAddProfile: async (profileName, probe) => {
+      const path =
+        probe === firstRunFixture.invited.server
+          ? firstRunFixture.invited
+          : probe === firstRunFixture.own.server
+            ? firstRunFixture.own
+            : undefined;
+      if (!path)
+        throw failure('io', `${probe} did not answer, so nothing was saved.`);
+      return { ...path.report, profile: profileName };
+    },
+    listPendingOperations: async (profile) =>
+      (pending.get(profile) ?? []).map((operation) => ({ ...operation })),
+    createFirstRunAccount: async ({ profile, alias, username }) => {
+      pending.set(profile, [{ kind: 'account-signup', alias }]);
+      ensureFirstRunAccount(profile, alias, username);
+      pending.delete(profile);
+      return { applied: true };
+    },
+    resumeFirstRunAccount: async (profile, alias) => {
+      const operation = (pending.get(profile) ?? []).find(
+        (entry) => entry.kind === 'account-signup' && entry.alias === alias,
+      );
+      if (!operation)
+        throw failure(
+          'pending-operation-not-found',
+          'That account setup is no longer pending.',
+        );
+      pending.delete(profile);
+      return { applied: true };
+    },
+    setFirstRunPassphrase: async () => ({ applied: true }),
+    prepareOwnerBackup: async (_profile, _accountAlias, backupAlias) => ({
+      backupAlias,
+      phrase: firstRunFixture.backupPhrase,
+    }),
+    commitOwnerBackup: async (_profile, _accountAlias, backupAlias, phrase) => {
+      if (backupAlias !== 'paper' || phrase !== firstRunFixture.backupPhrase) {
+        throw failure(
+          'invalid-request',
+          'The prepared backup phrase no longer matches.',
+        );
+      }
+      return { applied: true };
+    },
+    recoverOwnerAccount: async (profile, targetAlias) => {
+      pending.set(profile, [{ kind: 'account-recovery', alias: targetAlias }]);
+      const path =
+        profile === firstRunFixture.invited.profile
+          ? firstRunFixture.invited
+          : firstRunFixture.own;
+      ensureFirstRunAccount(profile, targetAlias, path.username);
+      pending.delete(profile);
+      return { applied: true };
+    },
+    resumeOwnerRecovery: async (profile, targetAlias) => {
+      const operation = (pending.get(profile) ?? []).find(
+        (entry) =>
+          entry.kind === 'account-recovery' && entry.alias === targetAlias,
+      );
+      if (!operation)
+        throw failure(
+          'pending-operation-not-found',
+          'That recovery is no longer pending.',
+        );
+      const path =
+        profile === firstRunFixture.invited.profile
+          ? firstRunFixture.invited
+          : firstRunFixture.own;
+      ensureFirstRunAccount(profile, targetAlias, path.username);
+      pending.delete(profile);
+      return { applied: true };
+    },
+    discoverGroups: async (profile, accountAlias) => {
+      if (profile !== firstRunFixture.invited.profile || accountAlias !== 'sol') {
+        return { accountAlias, groups: [] };
+      }
+      const engineering = stores.find(
+        (store) => store.id === fixtureEngineering?.id,
+      );
+      if (engineering?.kind === 'team') engineering.account = accountAlias;
+      if (
+        engineering?.kind === 'team' &&
+        !parties.some(
+          (party) =>
+            party.store === engineering.id && party.username === accountAlias,
+        )
+      ) {
+        parties = [
+          ...parties,
+          {
+            store: engineering.id,
+            username: accountAlias,
+            label: 'you',
+            party_kind: 'user',
+            generation: 1,
+            locally_manageable: true,
+            party_id_hex: `01${'6'.repeat(64)}`,
+            source_role: { role: 'Member', visibility: 0 },
+            destination_role: { role: 'Member', visibility: 0 },
+          },
+        ];
+      }
+      return {
+        accountAlias,
+        groups: [
+          {
+            alias: 'engineering',
+            accountAlias,
+            teamIdHex:
+              fixtureEngineering?.team_id_hex ?? `03${'3'.repeat(64)}`,
+            kind: 'named',
+            name: 'Engineering',
+            active: true,
+          },
+        ],
+      };
+    },
+    describeServerStatus: async (profile) => {
+      const server = servers.find((entry) => entry.id === profile || entry.name === profile);
+      if (!server) throw failure('store-not-found', 'That server is not configured.');
+      return {
+        profile: server.id,
+        configuredProbe: server.name,
+        host: serverHosts.get(server.id) ?? null,
+        leaseRequired: true,
+        leaseExpiresAt: server.id === 'personal'
+          ? Math.floor(Date.now() / 1000) + 6 * 24 * 60 * 60
+          : server.id === 'acme'
+            ? Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60
+            : serverHosts.has(server.id)
+              ? Math.floor(Date.now() / 1000) + 6 * 24 * 60 * 60
+              : null,
+      };
+    },
+    checkServer: async (profile) => {
+      const server = servers.find((entry) => entry.id === profile || entry.name === profile);
+      if (!server) throw failure('store-not-found', 'That server is not configured.');
+      const existing = serverHosts.get(server.id);
+      const host = existing ?? {
+        lookupName: server.name,
+        canonicalName: server.name,
+        hostId: hostIds[server.id] ?? `02${'7'.repeat(64)}`,
+        chain: 4,
+        epoch: 118204,
+      };
+      serverHosts.set(server.id, host);
+      return { profile: server.id, acceptance: existing ? 'unchanged' as const : 'inserted' as const, ...host };
+    },
+    addServer: async (profileName, probe) => {
+      if (servers.some((server) => server.id === profileName)) throw failure('already-exists', 'That server profile already exists.');
+      servers.push({ id: profileName, name: probe, label: null, host_id: null, chain: null, epoch: null, lease: null, accounts: [], state: 'never-probed' });
+      return { profile: profileName, configuredProbe: probe };
+    },
+    forgetServer: async (profile, confirmation) => {
+      if (profile !== confirmation) throw failure('invalid-request', 'Type the exact server profile to forget it.');
+      const index = servers.findIndex((server) => server.id === profile);
+      if (index >= 0) servers.splice(index, 1);
+      serverHosts.delete(profile);
+      return { profile, removed: true as const };
+    },
+    listAccountDevices: async (accountStoreId) => (deviceRows.get(accountStoreId) ?? []).map((entry) => ({ ...entry })),
+    removeAccountDevice: async (accountStoreId, deviceId) => {
+      const rows = deviceRows.get(accountStoreId) ?? [];
+      const index = rows.findIndex((entry) => entry.id === deviceId);
+      if (index >= 0) rows.splice(index, 1);
+      return { deviceId, userChainSequence: 14, alreadyAbsent: index < 0 };
+    },
+    listBackupEnrollments: async (accountStoreId) => (backupRows.get(accountStoreId) ?? []).map((entry) => ({ ...entry })),
+    startDevicePairing: async (accountStoreId) => {
+      const store = accountStore(accountStoreId);
+      if (!store) throw failure('store-not-found', 'That account is not available.');
+      const phrase = 'cobalt window';
+      pairingOffers.set(accountStoreId, phrase);
+      return { accountAlias: store.account, phrase };
+    },
+    resumeDevicePairingOffer: async (accountStoreId) => {
+      const store = accountStore(accountStoreId);
+      const phrase = pairingOffers.get(accountStoreId);
+      if (!store || !phrase) throw failure('pending-operation-not-found', 'That pairing offer is no longer pending.');
+      return { accountAlias: store.account, phrase };
+    },
+    finishDevicePairing: async (accountStoreId) => {
+      const store = accountStore(accountStoreId);
+      if (!store || !pairingOffers.has(accountStoreId)) throw failure('pending-operation-not-found', 'That pairing offer is not ready to finish.');
+      pairingOffers.delete(accountStoreId);
+      return { alias: store.account, deviceId: `04${'5'.repeat(64)}`, userChainSequence: 15 };
+    },
+    acceptDevicePairing: async (profile, targetAlias) => {
+      pairingAcceptances.add(`${profile}:${targetAlias}`);
+      return { alias: targetAlias, deviceId: `04${'6'.repeat(64)}`, userChainSequence: 15 };
+    },
+    resumeDevicePairingAcceptance: async (profile, targetAlias) => {
+      if (!pairingAcceptances.has(`${profile}:${targetAlias}`)) throw failure('pending-operation-not-found', 'That pairing acceptance is no longer pending.');
+      pairingAcceptances.delete(`${profile}:${targetAlias}`);
+      return { alias: targetAlias, deviceId: `04${'6'.repeat(64)}`, userChainSequence: 15 };
+    },
+    setAccountPassphrase: async () => ({ generation: 1, stretchVersion: 'v1' as const, verified: true as const }),
+    changeAccountPassphrase: async () => ({ generation: 2, stretchVersion: 'v1' as const, verified: true as const }),
+    verifyAccountPassphrase: async () => ({ generation: 2, stretchVersion: 'v1' as const, verified: true as const }),
+    describeReset: async (profile) => {
+      const token = `reset-${profile}-${Date.now()}`;
+      resetTokens.add(token);
+      return {
+        profile,
+        resumables: profile === 'personal' ? [{ kind: 'team-creation' as const, alias: 'homelab' }] : [],
+        artifacts: [{ kind: 'catalog-cache', entries: 5, bytes: 8192 }],
+        token,
+        expiresInSeconds: 60,
+      };
+    },
+    resetServer: async (profile, confirmation, token) => {
+      if (profile !== confirmation || !resetTokens.delete(token)) throw failure('invalid-request', 'Preview the reset again and type the exact profile.');
+      return { applied: true };
+    },
+    listYubiCards: async () => world.cardsConnected.map((card) => ({ ...card })),
+    listYubiAccounts: async () => yubi.map((entry) => ({ ...entry })),
+    runYubi: async ({ command, args }) => {
+      if (command === 'yubi_pin_status' || command === 'change_yubi_pin' || command === 'unblock_yubi_pin') return { remaining: 3, blocked: false };
+      if (command.includes('passphrase')) return { generation: 2, stretchVersion: 'v1', verified: true };
+      const alias =
+        'alias' in args && typeof args.alias === 'string'
+          ? args.alias
+          : 'yubiAlias' in args && typeof args.yubiAlias === 'string'
+            ? args.yubiAlias
+            : 'primary key';
+      if (command === 'create_yubi_account') yubi.push({ alias, state: 'complete' });
+      if (command === 'create_yubi_account' || command === 'resume_yubi_account' || command === 'provision_yubi_device') {
+        return { alias, username: 'rae', yubiId: `08${'8'.repeat(66)}`, subkeyId: `0d${'d'.repeat(64)}`, userChainSequence: 22, managementEnrolled: true };
+      }
+      if (command === 'sync_yubi_account') return { username: 'rae', userChainSequence: 22, directories: 2, entries: 7, federation: [] };
+      if (command === 'change_yubi_puk') return { alias, changed: true };
+      if (command === 'recover_yubi_subkey') return { alias, subkeyId: `0d${'d'.repeat(64)}`, certificateCount: 2 };
+      if (command === 'revoke_yubi_device') return { alias, userChainSequence: 23, removedLocalCredential: true };
+      return { alias, managementEnrolled: true, managementGeneration: 2 };
+    },
+    onDropHover: async (listener) => {
+      hoverListeners.add(listener);
+      return () => hoverListeners.delete(listener);
+    },
+    onDropPaths: async (listener) => {
+      pathListeners.add(listener);
+      return () => pathListeners.delete(listener);
+    },
+  };
+}

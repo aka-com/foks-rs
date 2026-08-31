@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(test)]
+static TEST_FAIL_AFTER_BACKUP_ENROLLMENT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl CheckedProfileSession<'_> {
     #[allow(clippy::too_many_arguments)]
     pub fn create_account(
@@ -122,11 +126,117 @@ impl CheckedProfileSession<'_> {
             .iter()
             .map(|device| DeviceSummary {
                 id_hex: hex(device.id.as_bytes()),
+                name: authenticated
+                    .verified
+                    .device_display_name(&device.id)
+                    .map(str::to_owned),
                 role: format!("{:?}", device.role.kind()).to_ascii_lowercase(),
                 current: derive_device_public(&loaded.credential.seed)
                     .is_ok_and(|current| current.id == device.id),
             })
             .collect())
+    }
+
+    pub fn remove_software_device(
+        &self,
+        signer_alias: &str,
+        device_id_hex: &str,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<DeviceRevocationReport> {
+        self.profile.require(Capability::DeviceAdministration)?;
+        let signer = vault.account(signer_alias)?;
+        let target = entity_id_from_hex(device_id_hex)?;
+        target.clone().require_type(foks_proto::ENTITY_DEVICE)?;
+        let host = self.pinned_host()?;
+        let authenticated = self
+            .client
+            .authenticate_and_pin(&host, &signer.credential)?;
+        let Some(target_role) = authenticated
+            .verified
+            .devices()
+            .iter()
+            .find(|device| device.id == target)
+            .map(|device| device.role)
+        else {
+            return Ok(DeviceRevocationReport {
+                device_id_hex: hex(target.as_bytes()),
+                user_chain_sequence: authenticated.verified.chain_seqno(),
+                already_absent: true,
+            });
+        };
+        let mut rotations = Vec::new();
+        for public in authenticated
+            .verified
+            .shared_keys()
+            .iter()
+            .filter(|key| key.role <= target_role)
+        {
+            let previous = self
+                .client
+                .load_puks_for_role(
+                    &host,
+                    &signer.credential,
+                    &authenticated.verified,
+                    public.role,
+                )?
+                .into_iter()
+                .find(|puk| puk.role == public.role && puk.generation == public.generation)
+                .ok_or(Error::InvalidAccount(
+                    "current PUK required for device removal is unavailable",
+                ))?;
+            rotations.push(foks_client::UserPukRotation {
+                role: public.role,
+                previous_generation: public.generation,
+                previous_seed: previous.seed,
+                new_seed: SecretSeed::new(random_array()?),
+            });
+        }
+        let no_passphrase = if rotations
+            .iter()
+            .any(|rotation| rotation.role == Role::OWNER)
+        {
+            self.profile.require(Capability::Passphrases)?;
+            match self.client.authenticated_passphrase_settings(
+                &host,
+                &signer.credential,
+                &authenticated,
+            )? {
+                Some(_) => None,
+                None => {
+                    if !HardStateStore::open(&self.paths.hard_database)?
+                        .user_has_no_passphrase_attestation(
+                            host.host_id().as_bytes(),
+                            signer.credential.uid.as_bytes(),
+                        )?
+                    {
+                        return Err(Error::InvalidAccount(
+                            "legacy unlinked passphrase state must be verified before owner rotation",
+                        ));
+                    }
+                    Some(foks_client::NoPassphraseConfigured)
+                }
+            }
+        } else {
+            None
+        };
+        let mut mutations = EncryptedFileMutationStore::open(
+            &self.paths.protected_mutations,
+            derive_mutation_key(master_key),
+        )?;
+        let revoked = self.client.revoke_user_credential_with_software_device(
+            &host,
+            &signer.credential,
+            &target,
+            &rotations,
+            no_passphrase,
+            &mut mutations,
+        )?;
+        Ok(DeviceRevocationReport {
+            device_id_hex: hex(target.as_bytes()),
+            user_chain_sequence: revoked.verified.chain_seqno(),
+            already_absent: false,
+        })
     }
 
     pub fn provision_owner_device(
@@ -426,14 +536,14 @@ impl CheckedProfileSession<'_> {
         })
     }
 
-    /// Generates and durably stores a backup key before submitting enrollment.
-    /// The returned phrase should additionally be copied to offline storage.
-    pub fn enroll_owner_backup(
+    /// Generates an ephemeral backup phrase after validating its intended
+    /// account and alias. This does not write local state or contact FOKS.
+    pub fn prepare_owner_backup(
         &self,
         account_alias: &str,
         backup_alias: &str,
         vault: &mut AccountVault<'_>,
-    ) -> Result<Zeroizing<String>> {
+    ) -> Result<BackupPhrase> {
         self.profile.require(Capability::Recovery)?;
         validate_name(backup_alias)?;
         if vault
@@ -444,14 +554,58 @@ impl CheckedProfileSession<'_> {
         {
             return Err(Error::AccountExists);
         }
-        let loaded = vault.account(account_alias)?;
-        let host = self.pinned_host()?;
+        let _ = vault.account(account_alias)?;
         let backup = BackupKey::generate()?;
-        let phrase = backup.phrase().expose_joined();
-        vault.put_backup(backup_alias, account_alias, &phrase)?;
-        self.client
-            .enroll_backup_key(&host, &loaded.credential, Role::OWNER, &backup)?;
-        Ok(phrase)
+        Ok(backup.phrase())
+    }
+
+    /// Enrolls a phrase only after the caller has acknowledged retaining it
+    /// offline. Ambiguous remote completion is safe to retry with the same
+    /// phrase; the local record contains public completion facts only.
+    pub fn commit_owner_backup(
+        &self,
+        account_alias: &str,
+        backup_alias: &str,
+        phrase: Zeroizing<String>,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<BackupEnrollmentReport> {
+        self.profile.require(Capability::Recovery)?;
+        validate_name(backup_alias)?;
+        let loaded = vault.account(account_alias)?;
+        let backup = BackupKey::from_phrase(&phrase)?;
+        let backup_id = backup.public_material()?.id;
+        if let Some(existing) = vault.backup(backup_alias)? {
+            if existing.account_alias != account_alias || existing.backup_id != backup_id.as_bytes()
+            {
+                return Err(Error::InvalidAccount(
+                    "backup alias is bound to another account or phrase",
+                ));
+            }
+        }
+        let host = self.pinned_host()?;
+        let enrolled =
+            self.client
+                .enroll_backup_key(&host, &loaded.credential, Role::OWNER, &backup)?;
+
+        #[cfg(test)]
+        if TEST_FAIL_AFTER_BACKUP_ENROLLMENT.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::InvalidAccount(
+                "test interrupted backup enrollment before local completion",
+            ));
+        }
+
+        vault.put_backup(&StoredBackup {
+            version: CREDENTIAL_VERSION,
+            backup_alias: backup_alias.to_owned(),
+            account_alias: account_alias.to_owned(),
+            backup_id: backup_id.as_bytes().to_vec(),
+        })?;
+        Ok(BackupEnrollmentReport {
+            backup_alias: backup_alias.to_owned(),
+            account_alias: account_alias.to_owned(),
+            backup_id_hex: hex(backup_id.as_bytes()),
+            user_chain_sequence: enrolled.authenticated.verified.chain_seqno(),
+        })
     }
 
     pub fn recover_owner_account(
@@ -649,6 +803,7 @@ impl SyncReport {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DeviceSummary {
     pub id_hex: String,
+    pub name: Option<String>,
     pub role: String,
     pub current: bool,
 }
@@ -659,6 +814,29 @@ pub struct DeviceProvisionReport {
     pub device_id_hex: String,
     pub user_chain_sequence: u64,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeviceRevocationReport {
+    pub device_id_hex: String,
+    pub user_chain_sequence: u64,
+    pub already_absent: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BackupEnrollmentReport {
+    pub backup_alias: String,
+    pub account_alias: String,
+    pub backup_id_hex: String,
+    pub user_chain_sequence: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BackupEnrollmentSummary {
+    pub backup_alias: String,
+    pub account_alias: String,
+    pub backup_id_hex: String,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct StoredAccount {
     version: u32,
@@ -812,13 +990,7 @@ struct StoredBackup {
     version: u32,
     backup_alias: String,
     account_alias: String,
-    phrase: String,
-}
-
-impl Drop for StoredBackup {
-    fn drop(&mut self) {
-        self.phrase.zeroize();
-    }
+    backup_id: Vec<u8>,
 }
 impl PendingSignup {
     pub(super) fn random(alias: &str, username: &str) -> Result<Self> {
@@ -919,6 +1091,117 @@ impl<'a> AccountVault<'a> {
             .into_iter()
             .filter_map(|key| key.strip_prefix("account.").map(str::to_owned))
             .collect())
+    }
+
+    /// Lists only locally persisted public enrollment facts. A record exists
+    /// only after remote enrollment completed; recovery phrases are never
+    /// stored and therefore cannot be returned here.
+    pub fn backup_enrollments(
+        &mut self,
+        account_alias: &str,
+    ) -> Result<Vec<BackupEnrollmentSummary>> {
+        validate_name(account_alias)?;
+        let mut summaries = Vec::new();
+        for key in self.store.keys()? {
+            let Some(alias) = key.strip_prefix("backup.") else {
+                continue;
+            };
+            validate_name(alias)?;
+            let backup = self.backup(alias)?.ok_or(Error::InvalidAccount(
+                "backup enrollment disappeared during enumeration",
+            ))?;
+            if backup.account_alias == account_alias {
+                summaries.push(BackupEnrollmentSummary {
+                    backup_alias: backup.backup_alias,
+                    account_alias: backup.account_alias,
+                    backup_id_hex: hex(&backup.backup_id),
+                });
+            }
+        }
+        summaries.sort_by(|left, right| left.backup_alias.cmp(&right.backup_alias));
+        Ok(summaries)
+    }
+
+    /// Enumerates resumable product operations without exposing their
+    /// protected material. Reading each record authenticates it before a UI
+    /// is allowed to advertise a Resume action.
+    pub fn pending_operations(&mut self) -> Result<Vec<PendingOperationSummary>> {
+        const PREFIXES: [(&str, PendingOperationKind); 8] = [
+            ("pending.", PendingOperationKind::AccountSignup),
+            ("pending-device.", PendingOperationKind::DeviceProvision),
+            ("kex-offer.", PendingOperationKind::PairingOffer),
+            ("pending-kex.", PendingOperationKind::PairingAcceptance),
+            ("pending-recovery.", PendingOperationKind::AccountRecovery),
+            ("pending-yubi.", PendingOperationKind::YubiEnrollment),
+            ("team-member-edit.", PendingOperationKind::TeamMemberEdit),
+            ("team-rekey.", PendingOperationKind::TeamRekey),
+        ];
+        let mut operations = Vec::new();
+        for key in self.store.keys()? {
+            let Some((prefix, kind)) = PREFIXES.iter().find(|(prefix, _)| key.starts_with(prefix))
+            else {
+                continue;
+            };
+            let alias = key
+                .strip_prefix(prefix)
+                .ok_or(Error::InvalidAccount("pending operation key changed"))?;
+            validate_name(alias)?;
+            match kind {
+                PendingOperationKind::AccountSignup => drop(self.pending(alias)?),
+                PendingOperationKind::DeviceProvision => drop(self.pending_device(alias)?),
+                PendingOperationKind::PairingOffer => drop(self.kex_offer(alias)?),
+                PendingOperationKind::PairingAcceptance => drop(self.pending_kex(alias)?),
+                PendingOperationKind::AccountRecovery => drop(self.pending_recovery(alias)?),
+                PendingOperationKind::YubiEnrollment => self.validate_pending_yubi_record(alias)?,
+                PendingOperationKind::TeamMemberEdit => {
+                    self.team_member_edit(alias)?.ok_or(Error::InvalidAccount(
+                        "pending team member edit disappeared during enumeration",
+                    ))?;
+                }
+                PendingOperationKind::TeamRekey => {
+                    self.team_rekey(alias)?.ok_or(Error::InvalidAccount(
+                        "pending team rekey disappeared during enumeration",
+                    ))?;
+                }
+                PendingOperationKind::TeamCreation | PendingOperationKind::TeamMemberAddition => {
+                    return Err(Error::InvalidAccount(
+                        "derived team operation has no direct pending record",
+                    ));
+                }
+            }
+            operations.push(PendingOperationSummary {
+                kind: *kind,
+                alias: alias.to_owned(),
+                target: None,
+            });
+        }
+        for alias in self.team_aliases()? {
+            let team = self.team(&alias)?;
+            if !team.active {
+                operations.push(PendingOperationSummary {
+                    kind: PendingOperationKind::TeamCreation,
+                    alias: alias.clone(),
+                    target: None,
+                });
+            }
+            operations.extend(
+                team.local_members
+                    .iter()
+                    .filter(|member| !member.active)
+                    .map(|member| PendingOperationSummary {
+                        kind: PendingOperationKind::TeamMemberAddition,
+                        alias: alias.clone(),
+                        target: Some(member.username.clone()),
+                    }),
+            );
+        }
+        operations.sort_by(|left, right| {
+            left.alias
+                .cmp(&right.alias)
+                .then_with(|| left.kind.cmp(&right.kind))
+                .then_with(|| left.target.cmp(&right.target))
+        });
+        Ok(operations)
     }
 
     pub fn contains(&mut self, alias: &str) -> Result<bool> {
@@ -1119,20 +1402,23 @@ impl<'a> AccountVault<'a> {
         Ok(())
     }
 
-    fn put_backup(&mut self, backup_alias: &str, account_alias: &str, phrase: &str) -> Result<()> {
+    fn backup(&mut self, backup_alias: &str) -> Result<Option<StoredBackup>> {
         validate_name(backup_alias)?;
-        validate_name(account_alias)?;
-        if phrase.len() > 1024 || phrase.split_whitespace().count() != 17 {
-            return Err(Error::InvalidAccount("backup phrase is malformed"));
-        }
-        let backup = StoredBackup {
-            version: CREDENTIAL_VERSION,
-            backup_alias: backup_alias.to_owned(),
-            account_alias: account_alias.to_owned(),
-            phrase: phrase.to_owned(),
+        let bytes = match self.store.get(&backup_key(backup_alias)) {
+            Ok(bytes) => bytes,
+            Err(foks_keystore::Error::Missing) => return Ok(None),
+            Err(error) => return Err(error.into()),
         };
-        let encoded = Zeroizing::new(serde_json::to_vec(&backup)?);
-        self.store.put(&backup_key(backup_alias), &encoded)?;
+        let backup: StoredBackup = serde_json::from_slice(&bytes)?;
+        validate_stored_backup(&backup, backup_alias)?;
+        Ok(Some(backup))
+    }
+
+    fn put_backup(&mut self, backup: &StoredBackup) -> Result<()> {
+        validate_stored_backup(backup, &backup.backup_alias)?;
+        let encoded = Zeroizing::new(serde_json::to_vec(backup)?);
+        self.store
+            .put(&backup_key(&backup.backup_alias), &encoded)?;
         Ok(())
     }
 
@@ -1232,6 +1518,18 @@ fn validate_pending_recovery(pending: &PendingRecovery) -> Result<()> {
     validate_name(&pending.target_alias)
 }
 
+fn validate_stored_backup(backup: &StoredBackup, expected_alias: &str) -> Result<()> {
+    if backup.version != CREDENTIAL_VERSION || backup.backup_alias != expected_alias {
+        return Err(Error::InvalidAccount(
+            "backup version or alias binding changed",
+        ));
+    }
+    validate_name(&backup.backup_alias)?;
+    validate_name(&backup.account_alias)?;
+    EntityId::from_bytes(backup.backup_id.clone())?.require_type(foks_proto::ENTITY_BACKUP_KEY)?;
+    Ok(())
+}
+
 pub(super) fn validate_certificates(certificates: &[Vec<u8>]) -> Result<()> {
     if certificates.is_empty()
         || certificates.len() > MAX_CERTIFICATES
@@ -1244,4 +1542,170 @@ pub(super) fn validate_certificates(certificates: &[Vec<u8>]) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use foks_keystore::EncryptedFileSecretStore;
+    use foks_server_testkit::TestEnvironment;
+
+    #[test]
+    fn backup_prepare_is_ephemeral_and_commit_reconciles_after_interruption() {
+        let environment = TestEnvironment::new().unwrap();
+        let _server = environment.start_server().unwrap();
+        let addresses = environment.addresses().unwrap();
+        let state = environment.client_path("backup-split", "state").unwrap();
+        let root = environment
+            .client_path("backup-split", "probe-root.der")
+            .unwrap();
+        environment.write_probe_root(&root).unwrap();
+        let credentials =
+            ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
+        let master = credentials.master_key().unwrap();
+        let mut registry = ProfileRegistry::open(&state).unwrap();
+        registry
+            .add(Profile {
+                name: "local".to_owned(),
+                probe: format!("localhost:{}", addresses.probe.port()),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::CertificateDer { path: root },
+            })
+            .unwrap();
+        let session = ProfileSession::open(&registry, "local").unwrap();
+        credentials
+            .with_checked_session(&session, |session| {
+                session.probe_and_pin()?;
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                session.create_account(
+                    "personal",
+                    "backupowner",
+                    "owner laptop",
+                    "owner@example.test",
+                    "",
+                    None,
+                    &mut AccountVault::new(&mut store),
+                    &master,
+                )?;
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+
+        let phrase = credentials
+            .with_checked_session(&session, |session| {
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+                let initial_devices = session.list_devices("personal", &mut vault)?;
+                assert_eq!(initial_devices.len(), 1);
+                assert_eq!(initial_devices[0].name.as_deref(), Some("owner laptop"));
+                assert!(initial_devices[0].current);
+                let before = initial_devices.len();
+                let discarded =
+                    session.prepare_owner_backup("personal", "discarded", &mut vault)?;
+                assert_eq!(format!("{discarded:?}"), "BackupPhrase([REDACTED])");
+                assert!(vault.backup("discarded")?.is_none());
+                drop(discarded);
+                assert_eq!(session.list_devices("personal", &mut vault)?.len(), before);
+
+                let phrase = session.prepare_owner_backup("personal", "paper", &mut vault)?;
+                let joined = phrase.expose_joined();
+                TEST_FAIL_AFTER_BACKUP_ENROLLMENT.store(true, std::sync::atomic::Ordering::SeqCst);
+                session
+                    .commit_owner_backup(
+                        "personal",
+                        "paper",
+                        Zeroizing::new(joined.as_str().to_owned()),
+                        &mut vault,
+                    )
+                    .expect_err("the failpoint interrupts after remote enrollment");
+                assert!(vault.backup("paper")?.is_none());
+                assert_eq!(
+                    session.list_devices("personal", &mut vault)?.len(),
+                    before + 1
+                );
+                Ok::<_, Error>(joined)
+            })
+            .unwrap();
+
+        credentials
+            .with_checked_session(&session, |session| {
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+                let completed = session.commit_owner_backup(
+                    "personal",
+                    "paper",
+                    Zeroizing::new(phrase.as_str().to_owned()),
+                    &mut vault,
+                )?;
+                assert_eq!(completed.backup_alias, "paper");
+                assert_eq!(completed.account_alias, "personal");
+                assert_eq!(completed.backup_id_hex.len(), 66);
+                assert_eq!(session.list_devices("personal", &mut vault)?.len(), 2);
+
+                let encoded = vault.store.get(&backup_key("paper"))?;
+                let value: serde_json::Value = serde_json::from_slice(&encoded)?;
+                assert!(value.get("phrase").is_none());
+                assert!(value
+                    .get("backup_id")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some());
+                assert!(!String::from_utf8_lossy(&encoded).contains(phrase.as_str()));
+
+                let repeated = session.commit_owner_backup(
+                    "personal",
+                    "paper",
+                    Zeroizing::new(phrase.as_str().to_owned()),
+                    &mut vault,
+                )?;
+                assert_eq!(repeated, completed);
+                assert_eq!(session.list_devices("personal", &mut vault)?.len(), 2);
+                assert_eq!(
+                    vault.backup_enrollments("personal")?,
+                    vec![BackupEnrollmentSummary {
+                        backup_alias: completed.backup_alias.clone(),
+                        account_alias: completed.account_alias.clone(),
+                        backup_id_hex: completed.backup_id_hex.clone(),
+                    }]
+                );
+                assert!(vault.backup_enrollments("missing")?.is_empty());
+
+                let other_phrase = session
+                    .prepare_owner_backup("personal", "other-paper", &mut vault)?
+                    .expose_joined();
+                assert!(session
+                    .commit_owner_backup(
+                        "personal",
+                        "paper",
+                        Zeroizing::new(other_phrase.as_str().to_owned()),
+                        &mut vault,
+                    )
+                    .is_err());
+                assert_eq!(session.list_devices("personal", &mut vault)?.len(), 2);
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn backup_enrollment_list_rejects_authenticated_malformed_records() {
+        let mut store = foks_keystore::MemorySecretStore::default();
+        foks_keystore::SecretStore::put(
+            &mut store,
+            &backup_key("paper"),
+            b"authenticated but malformed",
+        )
+        .unwrap();
+        assert!(AccountVault::new(&mut store)
+            .backup_enrollments("personal")
+            .is_err());
+    }
 }

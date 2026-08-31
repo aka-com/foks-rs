@@ -1,4 +1,21 @@
 use super::*;
+use sha2::{Digest as _, Sha256};
+
+#[cfg(test)]
+pub(super) static TEST_FAIL_AFTER_CHECKPOINT_PUBLICATION: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+pub(super) static TEST_FAIL_AFTER_RESET_STAGING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+const PROFILE_PUBLICATION_AUTHORIZATION_PREFIX: &str = "profile-publication.";
+const RESET_CREDENTIAL_QUARANTINE: &str = ".reset-credentials";
+const RESET_MUTATION_QUARANTINE: &str = ".reset-mutations";
+
+pub(super) struct ProfilePublicationAuthorization {
+    pub(super) authorized: bool,
+    pub(super) nonce: [u8; 32],
+}
 
 thread_local! {
     /// Checked profile operations are synchronous and their file locks are
@@ -62,6 +79,40 @@ pub enum CredentialBackend {
     PrivateFile,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResetArtifactKind {
+    HardState,
+    SoftState,
+    ProtectedMutations,
+    CredentialsAndResumables,
+    ExternalRollbackCheckpoint,
+    ExternalDatabaseClaim,
+    ExternalPublicationAuthorization,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ResetArtifactSummary {
+    pub kind: ResetArtifactKind,
+    pub entries: u64,
+    pub bytes: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ResetStatePreview {
+    pub profile: String,
+    pub resumables: Vec<PendingOperationSummary>,
+    pub artifacts: Vec<ResetArtifactSummary>,
+    #[serde(skip)]
+    state_digest: [u8; 32],
+}
+
+impl ResetStatePreview {
+    pub fn state_digest(&self) -> [u8; 32] {
+        self.state_digest
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct ClientStateFile {
     version: u32,
@@ -78,6 +129,14 @@ pub struct ClientCredentials {
 }
 
 impl ClientCredentials {
+    /// Reports whether the state envelope exists without treating an absent
+    /// first-run state as corruption. Existing state is still fully parsed
+    /// and opened by `open` before the agent enters ready mode.
+    pub fn is_initialized(root: impl AsRef<Path>) -> Result<bool> {
+        let root = prepare_private_directory(root.as_ref())?;
+        Ok(read_private_file_optional(&root.join(STATE_CONFIG_FILE), MAX_CONFIG_BYTES)?.is_some())
+    }
+
     pub fn initialize(root: impl AsRef<Path>, backend: CredentialBackend) -> Result<Self> {
         let root = prepare_private_directory(root.as_ref())?;
         let config_path = root.join(STATE_CONFIG_FILE);
@@ -175,6 +234,58 @@ impl ClientCredentials {
                     .map_err(Into::into)
             }
         }
+    }
+
+    pub(super) fn begin_profile_publication(&self, profile: &str) -> Result<[u8; 32]> {
+        validate_name(profile)?;
+        if self.backend == CredentialBackend::Native {
+            let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
+            return begin_profile_publication_with_store(profile, &mut native);
+        }
+        random_array()
+    }
+
+    pub(super) fn profile_publication_is_authorized(
+        &self,
+        profile: &str,
+        authorization: &[u8; 32],
+        marker_digest: &[u8; 32],
+    ) -> Result<bool> {
+        if self.backend != CredentialBackend::Native {
+            return Ok(true);
+        }
+        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
+        profile_publication_is_authorized_with_store(
+            profile,
+            authorization,
+            marker_digest,
+            &mut native,
+        )
+    }
+
+    pub(super) fn bind_profile_publication(
+        &self,
+        profile: &str,
+        authorization: &[u8; 32],
+        marker_digest: &[u8; 32],
+    ) -> Result<()> {
+        if self.backend != CredentialBackend::Native {
+            return Ok(());
+        }
+        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
+        bind_profile_publication_with_store(profile, authorization, marker_digest, &mut native)
+    }
+
+    pub(super) fn cancel_profile_publication(
+        &self,
+        profile: &str,
+        authorization: &[u8; 32],
+    ) -> Result<()> {
+        if self.backend != CredentialBackend::Native {
+            return Ok(());
+        }
+        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
+        cancel_profile_publication_with_store(profile, authorization, &mut native)
     }
 
     fn verify_native_root_binding(&self) -> Result<()> {
@@ -353,13 +464,22 @@ impl ClientCredentials {
         session: &ProfileSession,
     ) -> Result<Option<runtime::DatabaseLock>> {
         if self.backend != CredentialBackend::Native {
+            self.complete_private_profile_publication(session)?;
             return Ok(None);
         }
-        let allow_checkpoint_enrollment =
-            !hard_state_artifacts_exist(&session.paths.hard_database)?;
+        let pristine = !hard_state_artifacts_exist(&session.paths.hard_database)?;
         let current = session.rollback_checkpoint()?;
+        let publication = self.profile_publication_authorization(session, &current)?;
+        let authorized = publication
+            .as_ref()
+            .is_some_and(|publication| publication.authorized);
         let lock = runtime::DatabaseLock::acquire(&self.root, &current.database_id)?;
-        self.verify_native_checkpoint(session, &current, allow_checkpoint_enrollment)?;
+        self.verify_native_checkpoint_for_use(
+            session,
+            &current,
+            pristine || authorized,
+            publication.as_ref(),
+        )?;
         Ok(Some(lock))
     }
 
@@ -368,16 +488,25 @@ impl ClientCredentials {
         session: &ProfileSession,
     ) -> Result<Option<Option<runtime::DatabaseLock>>> {
         if self.backend != CredentialBackend::Native {
+            self.complete_private_profile_publication(session)?;
             return Ok(Some(None));
         }
-        let allow_checkpoint_enrollment =
-            !hard_state_artifacts_exist(&session.paths.hard_database)?;
+        let pristine = !hard_state_artifacts_exist(&session.paths.hard_database)?;
         let current = session.rollback_checkpoint()?;
+        let publication = self.profile_publication_authorization(session, &current)?;
+        let authorized = publication
+            .as_ref()
+            .is_some_and(|publication| publication.authorized);
         let Some(lock) = runtime::DatabaseLock::try_acquire(&self.root, &current.database_id)?
         else {
             return Ok(None);
         };
-        self.verify_native_checkpoint(session, &current, allow_checkpoint_enrollment)?;
+        self.verify_native_checkpoint_for_use(
+            session,
+            &current,
+            pristine || authorized,
+            publication.as_ref(),
+        )?;
         Ok(Some(Some(lock)))
     }
 
@@ -387,12 +516,16 @@ impl ClientCredentials {
         second: &ProfileSession,
     ) -> Result<Vec<runtime::DatabaseLock>> {
         if self.backend != CredentialBackend::Native {
+            self.complete_private_profile_publication(first)?;
+            self.complete_private_profile_publication(second)?;
             return Ok(Vec::new());
         }
-        let first_allows_enrollment = !hard_state_artifacts_exist(&first.paths.hard_database)?;
-        let second_allows_enrollment = !hard_state_artifacts_exist(&second.paths.hard_database)?;
+        let first_pristine = !hard_state_artifacts_exist(&first.paths.hard_database)?;
+        let second_pristine = !hard_state_artifacts_exist(&second.paths.hard_database)?;
         let first_current = first.rollback_checkpoint()?;
         let second_current = second.rollback_checkpoint()?;
+        let first_publication = self.profile_publication_authorization(first, &first_current)?;
+        let second_publication = self.profile_publication_authorization(second, &second_current)?;
         if first_current.database_id == second_current.database_id {
             return Err(self.checkpoint_reset_error(
                 second,
@@ -409,31 +542,128 @@ impl ClientCredentials {
         self.verify_native_checkpoint_with_store(
             first,
             &first_current,
-            first_allows_enrollment,
+            first_pristine
+                || first_publication
+                    .as_ref()
+                    .is_some_and(|publication| publication.authorized),
             &mut native,
         )?;
         self.verify_native_checkpoint_with_store(
             second,
             &second_current,
-            second_allows_enrollment,
+            second_pristine
+                || second_publication
+                    .as_ref()
+                    .is_some_and(|publication| publication.authorized),
             &mut native,
         )?;
+        self.finish_profile_publication(first, first_publication.as_ref())?;
+        self.finish_profile_publication(second, second_publication.as_ref())?;
         Ok(locks)
     }
 
-    fn verify_native_checkpoint(
+    fn complete_private_profile_publication(&self, session: &ProfileSession) -> Result<()> {
+        if !registry::profile_publication_is_pending(session)? {
+            return Ok(());
+        }
+        let current = session.rollback_checkpoint()?;
+        let publication = self
+            .profile_publication_authorization(session, &current)?
+            .ok_or(Error::InvalidConfig(
+                "profile publication marker disappeared",
+            ))?;
+        self.finish_profile_publication(session, Some(&publication))
+    }
+
+    fn profile_publication_authorization(
+        &self,
+        session: &ProfileSession,
+        current: &RollbackCheckpoint,
+    ) -> Result<Option<ProfilePublicationAuthorization>> {
+        let Some(binding) =
+            registry::profile_publication_checkpoint_binding(&self.root, session, current)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(ProfilePublicationAuthorization {
+            authorized: self.profile_publication_is_authorized(
+                &session.profile.name,
+                &binding.nonce,
+                &binding.marker_digest,
+            )?,
+            nonce: binding.nonce,
+        }))
+    }
+
+    fn verify_native_checkpoint_for_use(
         &self,
         session: &ProfileSession,
         current: &RollbackCheckpoint,
         allow_checkpoint_enrollment: bool,
+        publication: Option<&ProfilePublicationAuthorization>,
     ) -> Result<()> {
         let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
+        self.verify_native_checkpoint_for_use_with_store(
+            session,
+            current,
+            allow_checkpoint_enrollment,
+            publication,
+            &mut native,
+        )
+    }
+
+    pub(super) fn verify_native_checkpoint_for_use_with_store(
+        &self,
+        session: &ProfileSession,
+        current: &RollbackCheckpoint,
+        allow_checkpoint_enrollment: bool,
+        publication: Option<&ProfilePublicationAuthorization>,
+        store: &mut impl CheckpointStore,
+    ) -> Result<()> {
         self.verify_native_checkpoint_with_store(
             session,
             current,
             allow_checkpoint_enrollment,
-            &mut native,
-        )
+            store,
+        )?;
+        self.finish_profile_publication_with_store(session, publication, store)
+    }
+
+    fn finish_profile_publication(
+        &self,
+        session: &ProfileSession,
+        publication: Option<&ProfilePublicationAuthorization>,
+    ) -> Result<()> {
+        let Some(publication) = publication else {
+            return Ok(());
+        };
+        #[cfg(test)]
+        if TEST_FAIL_AFTER_CHECKPOINT_PUBLICATION.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::InvalidConfig(
+                "test interrupted after external checkpoint publication",
+            ));
+        }
+        self.cancel_profile_publication(&session.profile.name, &publication.nonce)?;
+        registry::complete_profile_publication(session)
+    }
+
+    fn finish_profile_publication_with_store(
+        &self,
+        session: &ProfileSession,
+        publication: Option<&ProfilePublicationAuthorization>,
+        store: &mut impl CheckpointStore,
+    ) -> Result<()> {
+        let Some(publication) = publication else {
+            return Ok(());
+        };
+        #[cfg(test)]
+        if TEST_FAIL_AFTER_CHECKPOINT_PUBLICATION.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::InvalidConfig(
+                "test interrupted after external checkpoint publication",
+            ));
+        }
+        cancel_profile_publication_with_store(&session.profile.name, &publication.nonce, store)?;
+        registry::complete_profile_publication(session)
     }
 
     pub(super) fn verify_native_checkpoint_with_store(
@@ -552,36 +782,70 @@ impl ClientCredentials {
         self.verify_native_checkpoint_with_store(session, &current, false, &mut native)
     }
 
-    /// Deliberately removes a profile's external rollback watermark and local
-    /// hard-state database. The next checked operation enrolls a new database.
-    pub fn reset_hard_state(&self, session: &ProfileSession) -> Result<()> {
+    /// Describes the complete profile-local reset scope without requiring a
+    /// successful rollback check. Every resumable record is decrypted and
+    /// validated before it is advertised.
+    pub fn describe_reset_state(&self, session: &ProfileSession) -> Result<ResetStatePreview> {
         self.ensure_session_root(session)?;
+        if registry::profile_publication_is_pending(session)? {
+            return Err(Error::InvalidConfig(
+                "profile publication checkpoint is still pending",
+            ));
+        }
         let operation = runtime::ProfileLock::operation(session.paths())?;
         let scheduler = runtime::ProfileLock::scheduler(session.paths())?;
-        let current =
-            if self.backend == CredentialBackend::Native && session.paths.hard_database.exists() {
-                // Reset is the explicit recovery path for malformed hard
-                // state. If its metadata cannot be read, no database-ID lock
-                // or claim cleanup is possible; the profile locks still
-                // serialize deletion and the unreachable claim is harmless.
-                session.rollback_checkpoint().ok()
-            } else {
-                None
-            };
-        let database_lock = current
-            .as_ref()
-            .map(|checkpoint| runtime::DatabaseLock::acquire(&self.root, &checkpoint.database_id))
-            .transpose()?;
-        let result = self.reset_hard_state_locked(session, current.as_ref());
-        let database_release = database_lock
-            .map(runtime::DatabaseLock::release)
-            .transpose();
+        let result = self.reset_state_preview_locked(session);
+        let scheduler_release = scheduler.release();
+        let operation_release = operation.release();
+        scheduler_release?;
+        operation_release?;
+        result
+    }
+
+    /// Deliberately removes every profile-local state artifact, but only if it
+    /// still exactly matches a recently described preview. Callers provide
+    /// one-use authorization separately; this digest closes the state-change
+    /// race between describing and executing the reset.
+    pub fn reset_hard_state_if_matches(
+        &self,
+        session: &ProfileSession,
+        expected_digest: [u8; 32],
+    ) -> Result<()> {
+        self.ensure_session_root(session)?;
+        if registry::profile_publication_is_pending(session)? {
+            return Err(Error::InvalidConfig(
+                "profile publication checkpoint is still pending",
+            ));
+        }
+        let operation = runtime::ProfileLock::operation(session.paths())?;
+        let scheduler = runtime::ProfileLock::scheduler(session.paths())?;
+        let database_ids = self.reset_database_ids(session)?;
+        let mut database_locks = Vec::with_capacity(database_ids.len());
+        for database_id in &database_ids {
+            database_locks.push(runtime::DatabaseLock::acquire(&self.root, database_id)?);
+        }
+        let result = (|| {
+            let preview = self.reset_state_preview_locked(session)?;
+            if preview.state_digest != expected_digest {
+                return Err(Error::ResetPreviewChanged);
+            }
+            self.reset_profile_state_locked(session, &database_ids)
+        })();
+        let database_release = release_database_locks(database_locks);
         let scheduler_release = scheduler.release();
         let operation_release = operation.release();
         result?;
         database_release?;
         scheduler_release?;
         operation_release
+    }
+
+    /// Compatibility helper for explicit CLI confirmation. Agent callers use
+    /// `describe_reset_state` and `reset_hard_state_if_matches` with a
+    /// short-lived, one-use authorization.
+    pub fn reset_hard_state(&self, session: &ProfileSession) -> Result<()> {
+        let preview = self.describe_reset_state(session)?;
+        self.reset_hard_state_if_matches(session, preview.state_digest)
     }
 
     fn ensure_session_root(&self, session: &ProfileSession) -> Result<()> {
@@ -597,29 +861,459 @@ impl ClientCredentials {
         Ok(())
     }
 
-    fn reset_hard_state_locked(
-        &self,
-        session: &ProfileSession,
-        current: Option<&RollbackCheckpoint>,
-    ) -> Result<()> {
+    fn reset_database_ids(&self, session: &ProfileSession) -> Result<Vec<[u8; 16]>> {
+        let mut ids = Vec::new();
+        if session.paths.hard_database.exists() {
+            if let Ok(current) = session.rollback_checkpoint() {
+                ids.push(current.database_id);
+            }
+        }
         if self.backend == CredentialBackend::Native {
             let key = rollback_record_key(&session.profile.name)?;
             let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-            if let Some(current) = current {
-                remove_database_claim_if_owned(
-                    &mut native,
-                    current.database_id,
-                    &session.profile.name,
-                )?;
+            match native.get(&key) {
+                Ok(bytes) => {
+                    let checkpoint: RollbackCheckpoint = serde_json::from_slice(&bytes)?;
+                    if checkpoint.profile != session.profile.name {
+                        return Err(Error::InvalidConfig(
+                            "external checkpoint profile binding changed",
+                        ));
+                    }
+                    ids.push(checkpoint.database_id);
+                }
+                Err(foks_keystore::Error::Missing) => {}
+                Err(error) => return Err(error.into()),
             }
-            native.remove(&key)?;
         }
-        remove_hard_state_artifacts(&session.paths.hard_database)?;
-        if let Some(parent) = session.paths.hard_database.parent() {
-            File::open(parent)?.sync_all()?;
+        ids.sort_unstable();
+        ids.dedup();
+        Ok(ids)
+    }
+
+    fn reset_state_preview_locked(&self, session: &ProfileSession) -> Result<ResetStatePreview> {
+        let master = self.master_key()?;
+        reset_state_preview(
+            session,
+            &master,
+            if self.backend == CredentialBackend::Native {
+                Some((&self.state_id, &session.profile.name))
+            } else {
+                None
+            },
+        )
+    }
+
+    fn reset_profile_state_locked(
+        &self,
+        session: &ProfileSession,
+        database_ids: &[[u8; 16]],
+    ) -> Result<()> {
+        stage_reset_directory(
+            &session.paths.credential_store,
+            &session.paths.directory.join(RESET_CREDENTIAL_QUARANTINE),
+        )?;
+        stage_reset_directory(
+            &session.paths.protected_mutations,
+            &session.paths.directory.join(RESET_MUTATION_QUARANTINE),
+        )?;
+        File::open(&session.paths.directory)?.sync_all()?;
+        #[cfg(test)]
+        if TEST_FAIL_AFTER_RESET_STAGING.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::InvalidConfig("injected reset interruption"));
         }
+        if self.backend == CredentialBackend::Native {
+            let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
+            remove_external_reset_records(&mut native, &session.profile.name, database_ids)?;
+        }
+        for path in reset_local_artifact_paths(session) {
+            remove_reset_artifact(&path)?;
+        }
+        File::open(&session.paths.directory)?.sync_all()?;
         Ok(())
     }
+}
+
+fn reset_local_artifact_paths(session: &ProfileSession) -> Vec<PathBuf> {
+    hard_state_artifact_paths(&session.paths.hard_database)
+        .into_iter()
+        .chain(hard_state_artifact_paths(&session.paths.soft_database))
+        .chain([
+            session.paths.protected_mutations.clone(),
+            session.paths.directory.join(RESET_MUTATION_QUARANTINE),
+            session.paths.credential_store.clone(),
+            session.paths.directory.join(RESET_CREDENTIAL_QUARANTINE),
+        ])
+        .collect()
+}
+
+fn reset_state_preview(
+    session: &ProfileSession,
+    master_key: &[u8; 32],
+    native: Option<(&str, &str)>,
+) -> Result<ResetStatePreview> {
+    let mut digest = Sha256::new();
+    digest.update(b"foks-reset-state-preview-v1\0");
+    digest.update(session.profile.name.as_bytes());
+
+    let mut resumables = Vec::new();
+    for credential_directory in [
+        session.paths.credential_store.clone(),
+        session.paths.directory.join(RESET_CREDENTIAL_QUARANTINE),
+    ] {
+        match fs::symlink_metadata(&credential_directory) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(Error::InvalidConfig(
+                        "credential reset artifact path is unsafe",
+                    ));
+                }
+                let mut store = foks_keystore::EncryptedFileSecretStore::open(
+                    &credential_directory,
+                    derive_vault_key(master_key),
+                )?;
+                resumables.extend(AccountVault::new(&mut store).pending_operations()?);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    resumables.sort_by(|left, right| {
+        left.alias
+            .cmp(&right.alias)
+            .then_with(|| left.kind.cmp(&right.kind))
+            .then_with(|| left.target.cmp(&right.target))
+    });
+    digest.update(serde_json::to_vec(&resumables)?);
+
+    let groups = [
+        (
+            ResetArtifactKind::HardState,
+            hard_state_artifact_paths(&session.paths.hard_database).to_vec(),
+        ),
+        (
+            ResetArtifactKind::SoftState,
+            hard_state_artifact_paths(&session.paths.soft_database).to_vec(),
+        ),
+        (
+            ResetArtifactKind::ProtectedMutations,
+            vec![
+                session.paths.protected_mutations.clone(),
+                session.paths.directory.join(RESET_MUTATION_QUARANTINE),
+            ],
+        ),
+        (
+            ResetArtifactKind::CredentialsAndResumables,
+            vec![
+                session.paths.credential_store.clone(),
+                session.paths.directory.join(RESET_CREDENTIAL_QUARANTINE),
+            ],
+        ),
+    ];
+    let mut artifacts = Vec::new();
+    for (kind, paths) in groups {
+        let mut entries = 0_u64;
+        let mut bytes = 0_u64;
+        digest.update([kind as u8]);
+        for path in paths {
+            hash_reset_artifact(
+                &session.paths.directory,
+                &path,
+                &mut digest,
+                &mut entries,
+                &mut bytes,
+            )?;
+        }
+        if entries != 0 {
+            artifacts.push(ResetArtifactSummary {
+                kind,
+                entries,
+                bytes,
+            });
+        }
+    }
+
+    if let Some((state_id, profile)) = native {
+        let mut store = foks_keystore::NativeCredentialStore::open(state_id)?;
+        hash_external_reset_state(session, profile, &mut store, &mut digest, &mut artifacts)?;
+    }
+
+    Ok(ResetStatePreview {
+        profile: session.profile.name.clone(),
+        resumables,
+        artifacts,
+        state_digest: digest.finalize().into(),
+    })
+}
+
+fn hash_external_reset_state(
+    session: &ProfileSession,
+    profile: &str,
+    store: &mut impl CheckpointStore,
+    digest: &mut Sha256,
+    artifacts: &mut Vec<ResetArtifactSummary>,
+) -> Result<()> {
+    let rollback_key = rollback_record_key(profile)?;
+    let mut database_ids = Vec::new();
+    if session.paths.hard_database.exists() {
+        if let Ok(checkpoint) = session.rollback_checkpoint() {
+            database_ids.push(checkpoint.database_id);
+        }
+    }
+    let rollback = match store.get(&rollback_key) {
+        Ok(value) => {
+            let checkpoint: RollbackCheckpoint = serde_json::from_slice(&value)?;
+            if checkpoint.profile != profile {
+                return Err(Error::InvalidConfig(
+                    "external checkpoint profile binding changed",
+                ));
+            }
+            database_ids.push(checkpoint.database_id);
+            Some(value)
+        }
+        Err(foks_keystore::Error::Missing) => None,
+        Err(error) => return Err(error.into()),
+    };
+    hash_external_reset_record(
+        ResetArtifactKind::ExternalRollbackCheckpoint,
+        &rollback_key,
+        rollback.as_ref().map(|value| value.as_slice()),
+        digest,
+        artifacts,
+    );
+    database_ids.sort_unstable();
+    database_ids.dedup();
+    for database_id in database_ids {
+        let key = database_claim_record_key(&database_id);
+        let claim = match store.get(&key) {
+            Ok(value) if value.as_slice() == profile.as_bytes() => Some(value),
+            Ok(_) | Err(foks_keystore::Error::Missing) => None,
+            Err(error) => return Err(error.into()),
+        };
+        hash_external_reset_record(
+            ResetArtifactKind::ExternalDatabaseClaim,
+            &key,
+            claim.as_ref().map(|value| value.as_slice()),
+            digest,
+            artifacts,
+        );
+    }
+    let authorization_key = profile_publication_authorization_key(profile)?;
+    let authorization = match store.get(&authorization_key) {
+        Ok(value) => Some(value),
+        Err(foks_keystore::Error::Missing) => None,
+        Err(error) => return Err(error.into()),
+    };
+    hash_external_reset_record(
+        ResetArtifactKind::ExternalPublicationAuthorization,
+        &authorization_key,
+        authorization.as_ref().map(|value| value.as_slice()),
+        digest,
+        artifacts,
+    );
+    Ok(())
+}
+
+fn hash_external_reset_record(
+    kind: ResetArtifactKind,
+    key: &str,
+    value: Option<&[u8]>,
+    digest: &mut Sha256,
+    artifacts: &mut Vec<ResetArtifactSummary>,
+) {
+    digest.update([kind as u8]);
+    digest.update((key.len() as u64).to_le_bytes());
+    digest.update(key.as_bytes());
+    match value {
+        Some(value) => {
+            digest.update([1]);
+            digest.update((value.len() as u64).to_le_bytes());
+            digest.update(value);
+            artifacts.push(ResetArtifactSummary {
+                kind,
+                entries: 1,
+                bytes: value.len() as u64,
+            });
+        }
+        None => digest.update([0]),
+    }
+}
+
+fn hash_reset_artifact(
+    root: &Path,
+    path: &Path,
+    digest: &mut Sha256,
+    entries: &mut u64,
+    bytes: &mut u64,
+) -> Result<()> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| Error::InvalidConfig("reset artifact escaped the profile"))?;
+    let relative = relative
+        .to_str()
+        .ok_or(Error::InvalidConfig("reset artifact path is not UTF-8"))?;
+    digest.update((relative.len() as u64).to_le_bytes());
+    digest.update(relative.as_bytes());
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            digest.update([0]);
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(Error::InvalidConfig("reset artifact path is a symlink"));
+    }
+    *entries = entries
+        .checked_add(1)
+        .ok_or(Error::InvalidConfig("reset artifact count overflow"))?;
+    if metadata.is_dir() {
+        digest.update([1]);
+        let mut children = fs::read_dir(path)?.collect::<std::io::Result<Vec<_>>>()?;
+        children.sort_by_key(std::fs::DirEntry::file_name);
+        for child in children {
+            hash_reset_artifact(root, &child.path(), digest, entries, bytes)?;
+        }
+        return Ok(());
+    }
+    if !metadata.is_file() {
+        return Err(Error::InvalidConfig("reset artifact path is not a file"));
+    }
+    digest.update([2]);
+    digest.update(metadata.len().to_le_bytes());
+    *bytes = bytes
+        .checked_add(metadata.len())
+        .ok_or(Error::InvalidConfig("reset artifact size overflow"))?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options.open(path)?;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(())
+}
+
+fn remove_reset_artifact(path: &Path) -> Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(Error::InvalidConfig("reset artifact path is a symlink"));
+    }
+    if metadata.is_dir() {
+        let mut children = fs::read_dir(path)?.collect::<std::io::Result<Vec<_>>>()?;
+        children.sort_by_key(std::fs::DirEntry::file_name);
+        for child in children {
+            remove_reset_artifact(&child.path())?;
+        }
+        fs::remove_dir(path)?;
+    } else if metadata.is_file() {
+        fs::remove_file(path)?;
+    } else {
+        return Err(Error::InvalidConfig("reset artifact path is not a file"));
+    }
+    Ok(())
+}
+
+fn stage_reset_directory(active: &Path, quarantine: &Path) -> Result<()> {
+    if quarantine.exists() {
+        remove_reset_artifact(quarantine)?;
+    }
+    match fs::symlink_metadata(active) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            fs::rename(active, quarantine)?;
+        }
+        Ok(_) => return Err(Error::InvalidConfig("reset directory path is unsafe")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+pub(super) fn profile_publication_authorization_key(profile: &str) -> Result<String> {
+    validate_name(profile)?;
+    Ok(format!(
+        "{PROFILE_PUBLICATION_AUTHORIZATION_PREFIX}{profile}"
+    ))
+}
+
+pub(super) fn begin_profile_publication_with_store(
+    profile: &str,
+    store: &mut impl CheckpointStore,
+) -> Result<[u8; 32]> {
+    let authorization = random_array()?;
+    store.put(
+        &profile_publication_authorization_key(profile)?,
+        &authorization,
+    )?;
+    Ok(authorization)
+}
+
+pub(super) fn profile_publication_is_authorized_with_store(
+    profile: &str,
+    authorization: &[u8; 32],
+    marker_digest: &[u8; 32],
+    store: &mut impl CheckpointStore,
+) -> Result<bool> {
+    let mut expected = [0_u8; 64];
+    expected[..32].copy_from_slice(authorization);
+    expected[32..].copy_from_slice(marker_digest);
+    match store.get(&profile_publication_authorization_key(profile)?) {
+        Ok(stored) => Ok(stored.as_slice() == expected),
+        Err(foks_keystore::Error::Missing) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub(super) fn bind_profile_publication_with_store(
+    profile: &str,
+    authorization: &[u8; 32],
+    marker_digest: &[u8; 32],
+    store: &mut impl CheckpointStore,
+) -> Result<()> {
+    let key = profile_publication_authorization_key(profile)?;
+    let stored = store.get(&key)?;
+    if stored.as_slice() != authorization {
+        return Err(Error::InvalidConfig(
+            "profile publication authorization changed",
+        ));
+    }
+    let mut bound = Zeroizing::new([0_u8; 64]);
+    bound[..32].copy_from_slice(authorization);
+    bound[32..].copy_from_slice(marker_digest);
+    store.put(&key, bound.as_slice())?;
+    Ok(())
+}
+
+pub(super) fn cancel_profile_publication_with_store(
+    profile: &str,
+    authorization: &[u8; 32],
+    store: &mut impl CheckpointStore,
+) -> Result<()> {
+    let key = profile_publication_authorization_key(profile)?;
+    match store.get(&key) {
+        Ok(stored)
+            if stored.len() >= authorization.len()
+                && &stored[..authorization.len()] == authorization =>
+        {
+            store.remove(&key)?;
+        }
+        Ok(_) | Err(foks_keystore::Error::Missing) => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
 }
 
 pub(super) trait CheckpointStore {
@@ -689,6 +1383,119 @@ fn remove_database_claim_if_owned(
     Ok(())
 }
 
+fn remove_external_reset_records(
+    store: &mut impl CheckpointStore,
+    profile: &str,
+    database_ids: &[[u8; 16]],
+) -> Result<()> {
+    for database_id in database_ids {
+        remove_database_claim_if_owned(store, *database_id, profile)?;
+    }
+    store.remove(&rollback_record_key(profile)?)?;
+    store.remove(&profile_publication_authorization_key(profile)?)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod reset_tests {
+    use super::*;
+    use foks_keystore::{MemorySecretStore, SecretStore};
+
+    fn session(root: &Path) -> ProfileSession {
+        let mut registry = ProfileRegistry::open(root).unwrap();
+        registry
+            .add(Profile {
+                name: "local".to_owned(),
+                probe: "foks.app".to_owned(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+        ProfileSession::open(&registry, "local").unwrap()
+    }
+
+    #[test]
+    fn external_reset_preview_binds_and_removes_only_owned_records() {
+        let temporary = tempfile::tempdir().unwrap();
+        let session = session(temporary.path());
+        let checkpoint = session.rollback_checkpoint().unwrap();
+        let rollback_key = rollback_record_key("local").unwrap();
+        let claim_key = database_claim_record_key(&checkpoint.database_id);
+        let authorization_key = profile_publication_authorization_key("local").unwrap();
+        let mut store = MemorySecretStore::default();
+        SecretStore::put(
+            &mut store,
+            &rollback_key,
+            &serde_json::to_vec(&checkpoint).unwrap(),
+        )
+        .unwrap();
+        SecretStore::put(&mut store, &claim_key, b"local").unwrap();
+        SecretStore::put(&mut store, &authorization_key, &[7; 64]).unwrap();
+
+        let mut digest = Sha256::new();
+        let mut artifacts = Vec::new();
+        hash_external_reset_state(&session, "local", &mut store, &mut digest, &mut artifacts)
+            .unwrap();
+        assert!(artifacts
+            .iter()
+            .any(|artifact| { artifact.kind == ResetArtifactKind::ExternalRollbackCheckpoint }));
+        assert!(artifacts
+            .iter()
+            .any(|artifact| artifact.kind == ResetArtifactKind::ExternalDatabaseClaim));
+        assert!(artifacts.iter().any(|artifact| {
+            artifact.kind == ResetArtifactKind::ExternalPublicationAuthorization
+        }));
+
+        remove_external_reset_records(&mut store, "local", &[checkpoint.database_id]).unwrap();
+        assert!(matches!(
+            SecretStore::get(&mut store, &rollback_key),
+            Err(foks_keystore::Error::Missing)
+        ));
+        assert!(matches!(
+            SecretStore::get(&mut store, &claim_key),
+            Err(foks_keystore::Error::Missing)
+        ));
+        assert!(matches!(
+            SecretStore::get(&mut store, &authorization_key),
+            Err(foks_keystore::Error::Missing)
+        ));
+
+        SecretStore::put(&mut store, &claim_key, b"another-profile").unwrap();
+        remove_external_reset_records(&mut store, "local", &[checkpoint.database_id]).unwrap();
+        assert_eq!(
+            SecretStore::get(&mut store, &claim_key).unwrap().as_slice(),
+            b"another-profile"
+        );
+    }
+
+    #[test]
+    fn external_reset_preview_rejects_a_cross_profile_checkpoint_binding() {
+        let temporary = tempfile::tempdir().unwrap();
+        let session = session(temporary.path());
+        let mut checkpoint = session.rollback_checkpoint().unwrap();
+        checkpoint.profile = "other".to_owned();
+        let mut store = MemorySecretStore::default();
+        SecretStore::put(
+            &mut store,
+            &rollback_record_key("local").unwrap(),
+            &serde_json::to_vec(&checkpoint).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            hash_external_reset_state(
+                &session,
+                "local",
+                &mut store,
+                &mut Sha256::new(),
+                &mut Vec::new(),
+            ),
+            Err(Error::InvalidConfig(
+                "external checkpoint profile binding changed"
+            ))
+        ));
+    }
+}
+
 fn rollback_reason(error: &Error) -> &'static str {
     match error {
         Error::RollbackDetected(reason) => reason,
@@ -710,7 +1517,7 @@ pub(super) fn hard_state_artifact_paths(database: &Path) -> [PathBuf; 4] {
     ]
 }
 
-fn hard_state_artifacts_exist(database: &Path) -> Result<bool> {
+pub(super) fn hard_state_artifacts_exist(database: &Path) -> Result<bool> {
     for path in hard_state_artifact_paths(database) {
         match fs::symlink_metadata(path) {
             Ok(_) => return Ok(true),
@@ -719,17 +1526,6 @@ fn hard_state_artifacts_exist(database: &Path) -> Result<bool> {
         }
     }
     Ok(false)
-}
-
-fn remove_hard_state_artifacts(database: &Path) -> Result<()> {
-    for path in hard_state_artifact_paths(database) {
-        match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Ok(())
 }
 
 pub(super) fn rollback_record_key(profile: &str) -> Result<String> {

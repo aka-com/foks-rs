@@ -292,6 +292,19 @@ pub struct YubiRevocationReport {
     pub removed_local_credential: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct YubiAccountSummary {
+    pub alias: String,
+    pub state: YubiEnrollmentState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum YubiEnrollmentState {
+    Pending,
+    Complete,
+}
+
 impl From<PinRetries> for YubiPinStatus {
     fn from(value: PinRetries) -> Self {
         Self {
@@ -318,6 +331,43 @@ impl AccountVault<'_> {
         aliases.sort();
         aliases.dedup();
         Ok(aliases)
+    }
+
+    /// Lists Yubi credential aliases without merging resumable enrollment
+    /// records into completed credentials.
+    pub fn yubi_accounts(&mut self) -> Result<Vec<YubiAccountSummary>> {
+        let records = self
+            .store
+            .keys()?
+            .into_iter()
+            .filter_map(|key| {
+                key.strip_prefix("pending-yubi.")
+                    .map(|alias| (alias.to_owned(), YubiEnrollmentState::Pending))
+                    .or_else(|| {
+                        key.strip_prefix("yubi-account.")
+                            .map(|alias| (alias.to_owned(), YubiEnrollmentState::Complete))
+                    })
+            })
+            .collect::<Vec<_>>();
+        let mut accounts = Vec::with_capacity(records.len());
+        for (alias, state) in records {
+            match state {
+                YubiEnrollmentState::Pending => drop(self.pending_yubi(&alias)?),
+                YubiEnrollmentState::Complete => drop(self.stored_yubi(&alias)?),
+            }
+            accounts.push(YubiAccountSummary { alias, state });
+        }
+        accounts.sort_by(|left, right| {
+            left.alias
+                .cmp(&right.alias)
+                .then_with(|| left.state.cmp(&right.state))
+        });
+        Ok(accounts)
+    }
+
+    pub(super) fn validate_pending_yubi_record(&mut self, alias: &str) -> Result<()> {
+        drop(self.pending_yubi(alias)?);
+        Ok(())
     }
 
     fn put_pending_yubi(&mut self, pending: &PendingYubiAccount) -> Result<()> {
@@ -1954,6 +2004,7 @@ fn validate_locator(locator: &YubiDeviceLocator) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use foks_keystore::{MemorySecretStore, SecretStore as _};
 
     fn stored_management_state(
         current: [u8; 24],
@@ -2036,5 +2087,42 @@ mod tests {
                 "pending Yubi management key is marked as enrolled"
             ))
         ));
+    }
+
+    #[test]
+    fn yubi_account_states_are_returned_only_after_record_validation() {
+        let stored = stored_management_state([0x11; 24], None, true, Some(3));
+        let pending = PendingYubiAccount::new_provision(
+            "hardware-pending",
+            "hardwareuser",
+            stored.locator.clone(),
+            "personal".to_owned(),
+            "New security key".to_owned(),
+            7,
+        )
+        .unwrap();
+        let mut store = MemorySecretStore::default();
+        let mut vault = AccountVault::new(&mut store);
+        vault.put_stored_yubi(&stored).unwrap();
+        vault.put_pending_yubi(&pending).unwrap();
+        assert_eq!(
+            vault.yubi_accounts().unwrap(),
+            vec![
+                YubiAccountSummary {
+                    alias: "hardware".to_owned(),
+                    state: YubiEnrollmentState::Complete,
+                },
+                YubiAccountSummary {
+                    alias: "hardware-pending".to_owned(),
+                    state: YubiEnrollmentState::Pending,
+                },
+            ]
+        );
+
+        drop(vault);
+        store
+            .put(&pending_yubi_key("broken"), b"authenticated but malformed")
+            .unwrap();
+        assert!(AccountVault::new(&mut store).yubi_accounts().is_err());
     }
 }

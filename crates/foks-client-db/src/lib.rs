@@ -11,7 +11,8 @@ mod soft;
 mod soft_schema;
 
 pub use soft::{
-    KvDirectoryProjection, KvLargeFileStage, KvProjectedEntry, SoftStateStore, MAX_DISCOVERY_HINTS,
+    KnownStore, KnownTeamStore, KvDirectoryProjection, KvLargeFileStage, KvProjectedEntry,
+    SoftStateStore, MAX_DISCOVERY_HINTS,
 };
 
 use foks_proto::ServiceType;
@@ -593,12 +594,18 @@ pub enum Error {
     WrongSoftApplicationId { found: i64, expected: i64 },
     #[error("soft-state database permissions {0:#o} allow group or other access")]
     InsecureSoftPermissions(u32),
-    #[error("soft-state schema version {found} is unsupported; this build supports {supported}")]
-    UnsupportedSoftSchema { found: u32, supported: u32 },
+    #[error("The replaceable FOKS cache at {path} uses schema version {found}, but this build supports version {supported}. Quit FOKS, delete {path} and any {path}-wal or {path}-shm files, then reopen FOKS. Your accounts, credentials, and server trust state are stored separately.")]
+    UnsupportedSoftSchema {
+        path: String,
+        found: u32,
+        supported: u32,
+    },
     #[error("invalid verified KV projection")]
     InvalidKvProjection,
     #[error("persisted federation discovery hint is malformed")]
     InvalidDiscoveryHint,
+    #[error("persisted known store is malformed")]
+    InvalidKnownStore,
     #[error("KV root rolled back from version {stored} to {received}")]
     KvRootRollback { stored: u64, received: u64 },
     #[error("KV directory rolled back from version {stored} to {received}")]

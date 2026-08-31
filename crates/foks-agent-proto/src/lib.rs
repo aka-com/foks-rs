@@ -5,10 +5,19 @@
 mod frame;
 mod message;
 
-pub use frame::{decode_request, decode_response, encode, Error, Result, MAXIMUM_MESSAGE_BYTES};
+pub use frame::{
+    decode_request, decode_response, decode_upload_frame, encode, request_id, Error, Result,
+    MAXIMUM_MESSAGE_BYTES,
+};
 pub use message::{
-    ErrorCode, FederationRole, Operation, Request, Response, ResponseResult, SecretString,
-    TeamRole, YubiFederationUnlockInput, YubiRetryConfiguration, PROTOCOL_VERSION,
+    AccountStoreRef, AccountSummary, AgentStatus, BackupEnrollmentSummary, CredentialBackend,
+    DeviceSummary, ErrorCode, ErrorFields, FederationRole, KnownStoreSummary, KvChunkResult,
+    KvEntryMetadata, KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadFrame,
+    KvUploadHeader, KvUploadPayload, Operation, PendingOperationKind, PendingOperationSummary,
+    ProfileProtocol, ProfileTrust, Request, ResetArtifactKind, ResetArtifactSummary,
+    ResetStatePreview, Response, ResponseResult, SecretString, ServerStatusSnapshot,
+    StoredHostStatus, TeamKind, TeamRole, TeamStoreRef, YubiFederationUnlockInput,
+    YubiRetryConfiguration, PROTOCOL_VERSION,
 };
 
 #[cfg(test)]
@@ -30,6 +39,82 @@ mod tests {
             decode_response(&encode(&response).unwrap()).unwrap(),
             response
         );
+    }
+
+    #[test]
+    fn kv_stream_frames_bind_request_offset_and_commit() {
+        let chunk = KvUploadFrame {
+            version: PROTOCOL_VERSION,
+            id: 44,
+            payload: KvUploadPayload::Chunk {
+                offset: 128,
+                content: b"secret bytes".to_vec(),
+            },
+        };
+        assert_eq!(
+            decode_upload_frame(&encode(&chunk).unwrap()).unwrap(),
+            chunk
+        );
+        let commit = KvUploadFrame {
+            version: PROTOCOL_VERSION,
+            id: 44,
+            payload: KvUploadPayload::Commit,
+        };
+        assert_eq!(
+            decode_upload_frame(&encode(&commit).unwrap()).unwrap(),
+            commit
+        );
+    }
+
+    #[test]
+    fn serialized_inline_kv_plaintext_can_be_cleared_in_place() {
+        let mut operation = Operation::PutKv {
+            store: KvStoreRef::Account(AccountStoreRef {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+            }),
+            path: "/secret".to_owned(),
+            content: b"sensitive".to_vec(),
+            read_role: KvRole::Owner,
+            write_role: KvRole::Owner,
+            precondition: KvPrecondition::Create,
+        };
+        operation.zeroize_plaintext();
+        assert!(matches!(
+            operation,
+            Operation::PutKv { ref content, .. } if content.iter().all(|byte| *byte == 0)
+        ));
+    }
+
+    #[test]
+    fn team_creation_and_resume_keep_native_kind_and_identity() {
+        for operation in [
+            Operation::CreateTeam {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+                team_alias: "engineering".to_owned(),
+                name: "engineeringteam".to_owned(),
+                kind: TeamKind::Named,
+            },
+            Operation::CreateTeam {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+                team_alias: "project".to_owned(),
+                name: String::new(),
+                kind: TeamKind::AdHoc,
+            },
+            Operation::ResumeTeamCreation {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+            },
+        ] {
+            assert_eq!(
+                decode_request(&encode(&Request::new(91, operation.clone())).unwrap())
+                    .unwrap()
+                    .operation,
+                operation
+            );
+        }
     }
 
     #[test]
@@ -62,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn json_wire_shape_is_stable_without_response_dtos() {
+    fn json_wire_shape_is_stable_with_v2_envelopes() {
         let request = Request::new(
             9,
             Operation::SyncTeam {
@@ -73,7 +158,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 1,
+                "version": 2,
                 "id": 9,
                 "operation": {
                     "operation": "sync-team",
@@ -85,7 +170,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Response::error(9, ErrorCode::Busy, "locked")).unwrap(),
             serde_json::json!({
-                "version": 1,
+                "version": 2,
                 "id": 9,
                 "status": "error",
                 "code": "busy",
@@ -110,7 +195,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&admission).unwrap(),
             serde_json::json!({
-                "version": 1,
+                "version": 2,
                 "id": 13,
                 "operation": {
                     "operation": "admit-federated-team",
@@ -139,6 +224,182 @@ mod tests {
     }
 
     #[test]
+    fn v2_catalog_dtos_bind_store_cursor_and_native_roles() {
+        let operation = Operation::ListTeamKv {
+            store: TeamStoreRef {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+                team_alias: "engineering".to_owned(),
+                team_id: "a1".repeat(33),
+            },
+            cursor: Some("v2.cursor".to_owned()),
+            limit: 200,
+        };
+        let request = Request::new(31, operation.clone());
+        assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
+        assert!(!operation.is_mutation());
+
+        let page = KvPage {
+            snapshot_version: 9,
+            entries: vec![KvEntryMetadata {
+                path: "/shared.txt".to_owned(),
+                node_type: "small-file".to_owned(),
+                version: 4,
+                size: None,
+                read_role: KvRole::Member { visibility: 0 },
+                write_role: KvRole::Admin,
+            }],
+            next_cursor: None,
+        };
+        let encoded = serde_json::to_value(&page).unwrap();
+        assert_eq!(serde_json::from_value::<KvPage>(encoded).unwrap(), page);
+    }
+
+    #[test]
+    fn protocol_extensions_bind_team_writes_and_resumable_operations() {
+        let team = KvStoreRef::Team(TeamStoreRef {
+            profile: "local".to_owned(),
+            account_alias: "personal".to_owned(),
+            team_alias: "engineering".to_owned(),
+            team_id: "a1".repeat(33),
+        });
+        for operation in [
+            Operation::PutKv {
+                store: team.clone(),
+                path: "/secret".to_owned(),
+                content: b"value".to_vec(),
+                read_role: KvRole::Member { visibility: 0 },
+                write_role: KvRole::Admin,
+                precondition: KvPrecondition::Create,
+            },
+            Operation::RemoveKv {
+                store: team,
+                path: "/secret".to_owned(),
+                recursive: false,
+                precondition: KvPrecondition::ExactVersion { version: 3 },
+            },
+            Operation::ListPendingOperations {
+                profile: "local".to_owned(),
+            },
+            Operation::RefreshLease {
+                profile: "hosted".to_owned(),
+            },
+            Operation::RemoveDevice {
+                profile: "local".to_owned(),
+                signer_alias: "personal".to_owned(),
+                device_id: "04".to_owned() + &"ab".repeat(32),
+            },
+        ] {
+            let request = Request::new(47, operation.clone());
+            assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
+        }
+
+        let pending = vec![PendingOperationSummary {
+            kind: PendingOperationKind::PairingAcceptance,
+            alias: "new-laptop".to_owned(),
+            target: None,
+        }];
+        let encoded = serde_json::to_value(&pending).unwrap();
+        assert_eq!(
+            serde_json::from_value::<Vec<PendingOperationSummary>>(encoded).unwrap(),
+            pending
+        );
+    }
+
+    #[test]
+    fn bootstrap_and_profile_operations_have_stable_typed_envelopes() {
+        let initialize = Operation::InitializeState {
+            backend: CredentialBackend::Native,
+        };
+        assert!(initialize.is_mutation());
+        assert_eq!(
+            serde_json::to_value(&initialize).unwrap(),
+            serde_json::json!({
+                "operation": "initialize-state",
+                "backend": "native"
+            })
+        );
+
+        let profile = Operation::AddProfile {
+            name: "local".to_owned(),
+            probe: "foks.example:443".to_owned(),
+            protocol: ProfileProtocol::V019,
+            trust: ProfileTrust::WebPki,
+        };
+        let request = Request::new(32, profile);
+        assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
+        assert_eq!(
+            serde_json::from_value::<AgentStatus>(serde_json::json!({
+                "state": "bootstrap",
+                "step": "initialize-state"
+            }))
+            .unwrap(),
+            AgentStatus::Bootstrap {
+                step: "initialize-state".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn request_ids_survive_version_errors_but_not_malformed_frames() {
+        let request = Request {
+            version: PROTOCOL_VERSION + 1,
+            id: 44,
+            operation: Operation::Ping,
+        };
+        let frame = encode(&request).unwrap();
+        assert!(matches!(decode_request(&frame), Err(Error::Version)));
+        assert_eq!(request_id(&frame), Some(44));
+        assert_eq!(request_id(&[0, 0, 0, 1, b'{']), None);
+
+        let response = Response::error_without_id(ErrorCode::InvalidRequest, "bad frame");
+        assert_eq!(response.id, None);
+    }
+
+    #[test]
+    fn version_is_rejected_before_unknown_request_or_response_shapes() {
+        let request = encode(&serde_json::json!({
+            "version": PROTOCOL_VERSION + 1,
+            "id": 45,
+            "operation": { "future-operation": { "field": true } }
+        }))
+        .unwrap();
+        assert!(matches!(decode_request(&request), Err(Error::Version)));
+        assert_eq!(request_id(&request), Some(45));
+
+        let response = encode(&serde_json::json!({
+            "version": PROTOCOL_VERSION + 1,
+            "id": 45,
+            "result": { "future-result": { "field": true } }
+        }))
+        .unwrap();
+        assert!(matches!(decode_response(&response), Err(Error::Version)));
+    }
+
+    #[test]
+    fn structured_error_fields_are_bounded_and_optional() {
+        let response = Response::error_with_fields(
+            Some(8),
+            ErrorCode::CheckpointResetRequired,
+            "x".repeat(5000),
+            ErrorFields {
+                profile: Some("personal".to_owned()),
+                reason: Some("y".repeat(5000)),
+                ..ErrorFields::default()
+            },
+        );
+        let ResponseResult::Error {
+            message, fields, ..
+        } = response.result
+        else {
+            panic!("expected error response");
+        };
+        assert_eq!(message.len(), 4096);
+        assert_eq!(fields.reason.unwrap().len(), 4096);
+        assert_eq!(fields.profile.as_deref(), Some("personal"));
+    }
+
+    #[test]
     fn local_team_member_operations_round_trip_with_roles_and_recovery() {
         let operations = [
             Operation::ListTeamMembers {
@@ -160,14 +421,14 @@ mod tests {
             Operation::DemoteTeamMember {
                 profile: "local".to_owned(),
                 team_alias: "engineering".to_owned(),
-                username: "alice".to_owned(),
+                party_id_hex: format!("01{}", "11".repeat(32)),
                 role: TeamRole::Member,
                 visibility: -1,
             },
             Operation::RemoveTeamMember {
                 profile: "local".to_owned(),
                 team_alias: "engineering".to_owned(),
-                username: "alice".to_owned(),
+                party_id_hex: format!("01{}", "22".repeat(32)),
             },
             Operation::ResumeTeamMemberEdit {
                 profile: "local".to_owned(),
@@ -178,6 +439,72 @@ mod tests {
             let request = Request::new(20 + index as u64, operation);
             assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
         }
+    }
+
+    #[test]
+    fn roster_selector_and_device_name_wire_shapes_are_stable() {
+        let party_id_hex = format!("01{}", "ab".repeat(32));
+        assert_eq!(
+            serde_json::to_value(Request::new(
+                25,
+                Operation::DemoteTeamMember {
+                    profile: "local".to_owned(),
+                    team_alias: "engineering".to_owned(),
+                    party_id_hex: party_id_hex.clone(),
+                    role: TeamRole::Member,
+                    visibility: 0,
+                },
+            ))
+            .unwrap(),
+            serde_json::json!({
+                "version": 2,
+                "id": 25,
+                "operation": {
+                    "operation": "demote-team-member",
+                    "profile": "local",
+                    "team_alias": "engineering",
+                    "party_id_hex": party_id_hex,
+                    "role": "member",
+                    "visibility": 0,
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(Request::new(
+                26,
+                Operation::RemoveTeamMember {
+                    profile: "local".to_owned(),
+                    team_alias: "engineering".to_owned(),
+                    party_id_hex: party_id_hex.clone(),
+                },
+            ))
+            .unwrap(),
+            serde_json::json!({
+                "version": 2,
+                "id": 26,
+                "operation": {
+                    "operation": "remove-team-member",
+                    "profile": "local",
+                    "team_alias": "engineering",
+                    "party_id_hex": party_id_hex,
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(DeviceSummary {
+                id_hex: format!("04{}", "cd".repeat(32)),
+                name: Some("Rae's MacBook Air".to_owned()),
+                role: "owner".to_owned(),
+                current: true,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "id_hex": format!("04{}", "cd".repeat(32)),
+                "name": "Rae's MacBook Air",
+                "role": "owner",
+                "current": true,
+            })
+        );
     }
 
     #[test]
@@ -260,6 +587,26 @@ mod tests {
     }
 
     #[test]
+    fn owner_recovery_phrase_round_trips_without_entering_debug_output() {
+        let operation = Operation::RecoverOwnerAccount {
+            profile: "local".to_owned(),
+            target_alias: "recovered".to_owned(),
+            phrase: SecretString::new("one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen"),
+            device_name: "recovery laptop".to_owned(),
+            serial: 3,
+        };
+        assert_eq!(
+            decode_request(&encode(&Request::new(18, operation.clone())).unwrap())
+                .unwrap()
+                .operation,
+            operation
+        );
+        let debug = format!("{operation:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("seventeen"));
+    }
+
+    #[test]
     fn every_yubikey_operation_redacts_pin_puk_and_signup_secrets() {
         let operations = [
             Operation::CreateYubiAccount {
@@ -302,6 +649,24 @@ mod tests {
                 alias: "hardware".to_owned(),
                 pin: SecretString::new("sync-pin"),
                 with_federation: true,
+            },
+            Operation::SetYubiPassphrase {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                pin: SecretString::new("passphrase-pin"),
+                passphrase: SecretString::new("set-yubi-passphrase"),
+            },
+            Operation::ChangeYubiPassphrase {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                pin: SecretString::new("change-passphrase-pin"),
+                passphrase: SecretString::new("change-yubi-passphrase"),
+            },
+            Operation::VerifyYubiPassphrase {
+                profile: "local".to_owned(),
+                alias: "hardware".to_owned(),
+                pin: SecretString::new("verify-passphrase-pin"),
+                passphrase: SecretString::new("verify-yubi-passphrase"),
             },
             Operation::RefreshFederatedSecurity {
                 profile: "local".to_owned(),
@@ -366,6 +731,12 @@ mod tests {
                 "resume-pin",
                 "provision-pin",
                 "sync-pin",
+                "passphrase-pin",
+                "set-yubi-passphrase",
+                "change-passphrase-pin",
+                "change-yubi-passphrase",
+                "verify-passphrase-pin",
+                "verify-yubi-passphrase",
                 "234567",
                 "345678",
                 "456789",

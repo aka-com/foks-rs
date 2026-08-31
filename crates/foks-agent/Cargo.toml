@@ -12,13 +12,20 @@ path = "src/main.rs"
 [dependencies]
 clap = { workspace = true }
 foks-agent-proto = { workspace = true }
+foks-client = { workspace = true }
 foks-client-app = { workspace = true }
+foks-client-db = { workspace = true }
 foks-compat-artifact = { workspace = true }
 foks-keystore = { workspace = true }
+foks-verify = { workspace = true }
 foks-yubi = { workspace = true, features = ["hardware"] }
+fs2 = { workspace = true }
+getrandom = { workspace = true }
+libc = { workspace = true }
 reqwest = { workspace = true }
 rustix = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tokio = { workspace = true }
 zeroize = { workspace = true }
 

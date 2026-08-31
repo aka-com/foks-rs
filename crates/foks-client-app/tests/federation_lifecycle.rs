@@ -75,6 +75,23 @@ fn protected_product_workflow_admits_and_reconciles_a_remote_team() {
                 &mut vault,
                 &master,
             )?;
+            local.create_account(
+                "local-admin",
+                "localfedadmin",
+                "local federation admin",
+                "local-admin@example.test",
+                "",
+                None,
+                &mut vault,
+                &master,
+            )?;
+            local.add_local_team_member(
+                "local-team",
+                "localfedadmin",
+                TeamMemberRole::Admin,
+                &mut vault,
+                &master,
+            )?;
             Ok::<_, foks_client_app::Error>(())
         })
         .unwrap();
@@ -258,6 +275,59 @@ fn protected_product_workflow_admits_and_reconciles_a_remote_team() {
     assert_eq!(repeated.operation_id_hex, first.operation_id_hex);
     assert_eq!(repeated.scheduled_job_id_hex, first.scheduled_job_id_hex);
 
+    // A local user remains actionable by its authenticated party ID even
+    // though the same roster now includes a host-scoped admitted team. The
+    // demotion must use the authenticated mixed-roster path; the scoped party
+    // remains present and authenticated even though its Member role does not
+    // receive the rotated Admin key.
+    credentials
+        .with_checked_session(&local, |local| {
+            let mut store = EncryptedFileSecretStore::open(
+                &local.paths().credential_store,
+                derive_vault_key(&master),
+            )?;
+            let mut vault = AccountVault::new(&mut store);
+            let members = local.list_team_members("local-team", &mut vault)?;
+            let party_id = members
+                .iter()
+                .find(|member| member.username.as_deref() == Some("localfedadmin"))
+                .map(|member| member.party_id_hex.clone())
+                .ok_or(foks_client_app::Error::InvalidAccount(
+                    "local administrator is missing from the authenticated mixed roster",
+                ))?;
+            let scoped_party_id = members
+                .iter()
+                .find(|member| member.scoped_host_id_hex.is_some())
+                .map(|member| member.party_id_hex.clone())
+                .ok_or(foks_client_app::Error::InvalidAccount(
+                    "admitted team is missing from the authenticated mixed roster",
+                ))?;
+            assert!(matches!(
+                local
+                    .remove_local_team_member("local-team", &scoped_party_id, &mut vault, &master,),
+                Err(foks_client_app::Error::Protocol(_))
+            ));
+            let demoted = local.demote_local_team_member_in_authenticated_roster(
+                "local-team",
+                &party_id,
+                TeamMemberRole::Member { visibility: 0 },
+                &mut vault,
+                &registry,
+                &credentials,
+                &master,
+            )?;
+            assert_eq!(
+                demoted.destination_role,
+                Some(TeamMemberRole::Member { visibility: 0 })
+            );
+            assert!(local
+                .list_team_members("local-team", &mut vault)?
+                .iter()
+                .any(|member| member.scoped_host_id_hex.is_some()));
+            Ok::<_, foks_client_app::Error>(())
+        })
+        .unwrap();
+
     let original_remote_generation = credentials
         .with_checked_session(&local, |local| {
             let mut store = EncryptedFileSecretStore::open(
@@ -282,9 +352,17 @@ fn protected_product_workflow_admits_and_reconciles_a_remote_team() {
                 derive_vault_key(&master),
             )?;
             let mut vault = AccountVault::new(&mut store);
+            let party_id = remote
+                .list_team_members("remote-team", &mut vault)?
+                .into_iter()
+                .find(|member| member.username.as_deref() == Some("remotefedmember"))
+                .map(|member| member.party_id_hex)
+                .ok_or(foks_client_app::Error::InvalidAccount(
+                    "remote member is missing from the authenticated roster",
+                ))?;
             remote.demote_local_team_member(
                 "remote-team",
-                "remotefedmember",
+                &party_id,
                 TeamMemberRole::Member { visibility: 0 },
                 &mut vault,
                 &master,
@@ -575,12 +653,16 @@ fn a_federated_refresh_cascades_through_an_intermediate_profile() {
                 &remote_c.paths().credential_store,
                 derive_vault_key(&master),
             )?;
-            remote_c.remove_local_team_member(
-                "team",
-                "cascadecmember",
-                &mut AccountVault::new(&mut store),
-                &master,
-            )?;
+            let mut vault = AccountVault::new(&mut store);
+            let party_id = remote_c
+                .list_team_members("team", &mut vault)?
+                .into_iter()
+                .find(|member| member.username.as_deref() == Some("cascadecmember"))
+                .map(|member| member.party_id_hex)
+                .ok_or(foks_client_app::Error::InvalidAccount(
+                    "cascade member is missing from the authenticated roster",
+                ))?;
+            remote_c.remove_local_team_member("team", &party_id, &mut vault, &master)?;
             Ok::<_, foks_client_app::Error>(())
         })
         .unwrap();

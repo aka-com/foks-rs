@@ -12,7 +12,13 @@
     "counts": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["wire_breaking", "behavior_review_required", "additive", "outside_local_slice", "source_only"],
+      "required": [
+        "wire_breaking",
+        "behavior_review_required",
+        "additive",
+        "outside_local_slice",
+        "source_only"
+      ],
       "properties": {
         "wire_breaking": { "type": "integer", "minimum": 0 },
         "behavior_review_required": { "type": "integer", "minimum": 0 },
@@ -29,7 +35,13 @@
         "required": ["class", "kind", "subject", "detail"],
         "properties": {
           "class": {
-            "enum": ["wire_breaking", "behavior_review_required", "additive", "outside_local_slice", "source_only"]
+            "enum": [
+              "wire_breaking",
+              "behavior_review_required",
+              "additive",
+              "outside_local_slice",
+              "source_only"
+            ]
           },
           "kind": { "type": "string", "minLength": 1 },
           "subject": { "type": "string", "minLength": 1 },

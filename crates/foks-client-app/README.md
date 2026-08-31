@@ -35,14 +35,17 @@ The implemented application slice covers:
 - personal KV list/read/write/mkdir/remove with streamed file I/O;
 - durable refresh jobs and bounded retry state;
 - owner software-device provisioning and resume, including interactive
-  13-token KEX pairing with protected offer/acceptance recovery state;
+  13-token KEX pairing with protected offer/acceptance recovery state, and
+  device summaries whose optional display names come from authenticated
+  user-chain disclosure openings;
 - YubiKey-backed signup and software-owner provisioning, exact-card sync,
   delegated-subkey recovery, PIN/PUK administration, enrollment-only retry
   policy, crash-safe PIV management-key rotation and recovery, scheduled
   envelope refresh, and software-owner revocation;
 - backup enrollment and owner recovery with pre-submit durable secrets;
 - named/ad-hoc team creation, resume, PTK-protected local records, team sync,
-  and team-KV root creation; and
+  team-KV root creation, and party-ID-selected local-user demotion/removal over
+  fully authenticated local and federated recipient projections; and
 - two-profile remote-team admission, protected federation bindings, durable
   crash reconciliation, and daily remote-view renewal.
 
@@ -58,6 +61,9 @@ grant call after rotation.
 Profiles that stay offline past expiry require explicit recovery; a remote
 PTK-generation or roster change is detected as a failed reconciliation and
 still requires the complete FOKS PTK-rotation workflow.
+Roster mutation never treats an admitted team as a local user: un-admit remains
+absent, and promotion remains the existing remove-and-re-add sequence rather
+than an atomic operation.
 
 Most provisioning and recovery inputs that contain long-lived secrets stay in
 the direct application/CLI boundary. Software and YubiKey signup, hardware
@@ -91,8 +97,7 @@ platform PC/SC stack: macOS provides it, while Linux needs pcsc-lite
 development headers at build time and the PC/SC daemon at runtime. Go is used
 only by the optional pinned-upstream protocol/oracle audits.
 
-The direct application, CLI, agent, and GPUI desktop are exercised on macOS and
-Linux. Windows is not a release target. macOS uses Keychain and runtime Metal
-shaders; Linux uses Secret Service plus Wayland/X11. Native desktop graphics
-add their documented platform development packages, but remain outside every
-protocol and storage crate.
+The direct application, CLI, agent, retained desktop command backend, and Tauri
+desktop are exercised on macOS and Linux. Windows is not a release target.
+macOS uses Keychain; Linux uses Secret Service plus WebKitGTK. Native desktop
+webview dependencies remain outside every protocol and storage crate.
