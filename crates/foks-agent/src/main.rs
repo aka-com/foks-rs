@@ -11,14 +11,15 @@ use foks_agent_proto::{
     AccountStoreRef, AccountSummary, AgentStatus,
     BackupEnrollmentSummary as WireBackupEnrollmentSummary,
     CredentialBackend as WireCredentialBackend, DeviceSummary as WireDeviceSummary, ErrorCode,
-    ErrorFields, KnownStoreSummary as WireKnownStoreSummary, KvChunkResult, KvEntryMetadata,
-    KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadHeader, Operation,
-    PendingOperationKind as WirePendingOperationKind,
+    ErrorFields, GoProfileCandidate as WireGoProfileCandidate,
+    GoProfileDiscovery as WireGoProfileDiscovery, KnownStoreSummary as WireKnownStoreSummary,
+    KvChunkResult, KvEntryMetadata, KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef,
+    KvUploadHeader, Operation, PendingOperationKind as WirePendingOperationKind,
     PendingOperationSummary as WirePendingOperationSummary, ProfileProtocol, ProfileTrust, Request,
     ResetArtifactKind as WireResetArtifactKind, ResetArtifactSummary as WireResetArtifactSummary,
-    ResetStatePreview as WireResetStatePreview, Response,
+    ResetStatePreview as WireResetStatePreview, Response, ResponseResult,
     ServerStatusSnapshot as WireServerStatusSnapshot, StoredHostStatus as WireStoredHostStatus,
-    TeamKind, TeamRole, TeamStoreRef, MAXIMUM_MESSAGE_BYTES,
+    TeamDetailsSummary, TeamKind, TeamRole, TeamStoreRef, MAXIMUM_MESSAGE_BYTES,
 };
 use foks_client_app::{
     derive_vault_key, AccountVault, CancellationToken, Capability, CheckedProfileSession,
@@ -36,6 +37,8 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use zeroize::{Zeroize as _, Zeroizing};
 
+const DEFAULT_SOCKET_NAME: &str = "foks-rs.sock";
+const AGENT_LOCK_NAME: &str = ".foks-rs.lock";
 const MAXIMUM_REQUESTS_PER_CONNECTION: usize = 128;
 const CANCELLATION_GRACE: Duration = Duration::from_secs(1);
 const MAXIMUM_CANARY_BYTES: usize = 64 * 1024;
@@ -153,7 +156,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let ready = Arc::new(AtomicBool::new(initialized));
     let socket = arguments
         .socket
-        .unwrap_or_else(|| state_dir.join("agent.sock"));
+        .unwrap_or_else(|| state_dir.join(DEFAULT_SOCKET_NAME));
     let parent = socket.parent().ok_or("agent socket has no parent")?;
     if socket.file_name().is_none() {
         return Err("agent socket path has no file name".into());
@@ -1047,11 +1050,7 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
         return Response::error(id, ErrorCode::InvalidRequest, error.to_string());
     }
     if error.downcast_ref::<ProfileBusyError>().is_some() {
-        return Response::error(
-            id,
-            ErrorCode::ProfileBusy,
-            "another operation is using this profile",
-        );
+        return Response::error(id, ErrorCode::ProfileBusy, error.to_string());
     }
     if let Some(error) = error.downcast_ref::<foks_client_app::Error>() {
         match error {
@@ -1232,7 +1231,7 @@ struct ProfileBusyError;
 
 impl std::fmt::Display for ProfileBusyError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("another operation is using this profile")
+        formatter.write_str("Another operation is using this profile.")
     }
 }
 
@@ -1874,6 +1873,30 @@ fn dispatch_result(
                 step: "initialize-state".to_owned(),
             }
         })?),
+        Operation::DiscoverGoProfiles => {
+            let installation = foks_go_interop::discover_standard()?;
+            Ok(serde_json::to_value(WireGoProfileDiscovery {
+                installed: installation.installed,
+                candidates: installation
+                    .candidates
+                    .into_iter()
+                    .map(|candidate| WireGoProfileCandidate {
+                        candidate_id: candidate.id,
+                        username: None,
+                        server_hint: None,
+                        host_id_hex: candidate.host_id_hex,
+                        user_id_hex: candidate.user_id_hex,
+                        device_id_hex: candidate.device_id_hex,
+                        role: candidate.role,
+                        storage_kind: candidate.storage.as_str().to_owned(),
+                        hidden: candidate.hidden,
+                        provisional: candidate.provisional,
+                        pairable: candidate.pairable,
+                        copyable: candidate.copyable,
+                    })
+                    .collect(),
+            })?)
+        }
         Operation::InitializeState { backend } => {
             let backend = match backend {
                 WireCredentialBackend::Native => CredentialBackend::Native,
@@ -1972,6 +1995,51 @@ fn dispatch_result(
                     },
                     timeout,
                     cancellation,
+                )?,
+            )?)
+        }
+        Operation::CheckAndAddGoProfile {
+            candidate_id,
+            name,
+            probe,
+            protocol,
+            trust,
+        } => {
+            let root = foks_go_interop::standard_root().ok_or("Go FOKS home is unavailable")?;
+            let candidate = foks_go_interop::resolve(&root, &candidate_id)?;
+            if !candidate.summary.pairable {
+                return Err("Go FOKS profile is not pairable".into());
+            }
+            let protocol = match protocol {
+                ProfileProtocol::V019 => ProtocolPolicy::V019,
+                ProfileProtocol::CurrentProbeOnly {
+                    canary_public_key,
+                    lease_url,
+                } => ProtocolPolicy::CurrentProbeOnly {
+                    canary_public_key,
+                    lease_url,
+                    last_artifact: None,
+                },
+            };
+            let trust = match trust {
+                ProfileTrust::WebPki => TrustRoot::WebPki,
+                ProfileTrust::CertificateDer { path } => TrustRoot::CertificateDer {
+                    path: PathBuf::from(path),
+                },
+            };
+            let credentials = ClientCredentials::open(state_dir)?;
+            Ok(serde_json::to_value(
+                credentials.check_and_add_profile_for_host_with_control(
+                    &mut registry,
+                    Profile {
+                        name,
+                        probe,
+                        protocol,
+                        trust,
+                    },
+                    timeout,
+                    cancellation,
+                    Some(candidate.host_id()),
                 )?,
             )?)
         }
@@ -2478,6 +2546,33 @@ fn dispatch_result(
                 )?)?)
             })
         }
+        Operation::AcceptGoProfilePairing {
+            candidate_id,
+            profile,
+            target_alias,
+            device_name,
+            serial,
+            phrase,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                let candidate = go_candidate_for_session(&candidate_id, session)?;
+                Ok(serde_json::to_value(
+                    session.accept_owner_device_pairing_for_user(
+                        KexAcceptanceInput {
+                            target_alias,
+                            device_name,
+                            serial,
+                            phrase: phrase.expose().to_owned(),
+                        },
+                        Some(candidate.user_id()),
+                        Some(&candidate_id),
+                        vault,
+                    )?,
+                )?)
+            })
+        }
         Operation::ResumeDevicePairingAcceptance {
             profile,
             target_alias,
@@ -2488,6 +2583,50 @@ fn dispatch_result(
                 Ok(serde_json::to_value(
                     session.resume_owner_device_pairing_acceptance(&target_alias, vault)?,
                 )?)
+            })
+        }
+        Operation::ResumeGoProfilePairing {
+            candidate_id,
+            profile,
+            target_alias,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(
+                    session.resume_owner_device_pairing_acceptance_for_user(
+                        &target_alias,
+                        None,
+                        Some(&candidate_id),
+                        vault,
+                    )?,
+                )?)
+            })
+        }
+        Operation::CopyGoProfileDevice {
+            candidate_id,
+            profile,
+            target_alias,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                let candidate = go_candidate_for_session(&candidate_id, session)?;
+                if !candidate.summary.copyable {
+                    return Err("Go FOKS profile cannot copy its device key".into());
+                }
+                let expected_device: &[u8; 33] = candidate
+                    .device_id()
+                    .try_into()
+                    .map_err(|_| "Go FOKS profile has a non-software device id")?;
+                let seed = candidate.copy_device_seed()?;
+                Ok(serde_json::to_value(session.import_software_device(
+                    &target_alias,
+                    candidate.user_id(),
+                    expected_device,
+                    foks_proto::SecretSeed::new(*seed),
+                    vault,
+                )?)?)
             })
         }
         Operation::ListYubiCards { profile } => {
@@ -3211,6 +3350,31 @@ fn dispatch_result(
                 )?)
             })
         }
+        Operation::ListTeamDetails {
+            profile,
+            team_alias,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                let members = match session.list_team_members(&team_alias, vault) {
+                    Ok(members) => ResponseResult::Success {
+                        value: serde_json::to_value(members)?,
+                    },
+                    Err(error) => dispatch_error_response(0, &error).result,
+                };
+                let federation = match session.list_federated_memberships(&team_alias, vault) {
+                    Ok(federation) => ResponseResult::Success {
+                        value: serde_json::to_value(federation)?,
+                    },
+                    Err(error) => dispatch_error_response(0, &error).result,
+                };
+                Ok(serde_json::to_value(TeamDetailsSummary {
+                    members,
+                    federation,
+                })?)
+            })
+        }
         Operation::ListTeamMembers {
             profile,
             team_alias,
@@ -3663,6 +3827,21 @@ fn wire_known_store(
     })
 }
 
+fn go_candidate_for_session(
+    candidate_id: &str,
+    session: &CheckedProfileSession<'_>,
+) -> Result<foks_go_interop::ResolvedCandidate, Box<dyn std::error::Error>> {
+    let root = foks_go_interop::standard_root().ok_or("Go FOKS home is unavailable")?;
+    let candidate = foks_go_interop::resolve(&root, candidate_id)?;
+    if !candidate.summary.pairable {
+        return Err("Go FOKS profile is not pairable".into());
+    }
+    if session.pinned_host()?.host_id().as_bytes() != candidate.host_id() {
+        return Err("Go FOKS profile belongs to a different server".into());
+    }
+    Ok(candidate)
+}
+
 fn with_vault(
     state_dir: &Path,
     session: &ProfileSession,
@@ -3836,7 +4015,7 @@ impl AgentLock {
             .truncate(false)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(state_dir.join(".agent.lock"))?;
+            .open(state_dir.join(AGENT_LOCK_NAME))?;
         let metadata = file.metadata()?;
         if !metadata.is_file()
             || metadata.uid() != rustix::process::geteuid().as_raw()
@@ -3910,7 +4089,7 @@ mod tests {
         let error =
             foks_client_app::Error::ClientDatabase(foks_client_db::Error::UnsupportedSoftSchema {
                 path: "/private/foks/profiles/local/soft.sqlite3".to_owned(),
-                found: 3,
+                found: 2,
                 supported: 4,
             });
         let response = dispatch_error_response(7, &error);
@@ -3975,6 +4154,7 @@ mod tests {
     fn agent_lifetime_lock_is_exclusive_and_reusable() {
         let directory = tempfile::tempdir().unwrap();
         let first = AgentLock::acquire(directory.path()).unwrap();
+        assert!(directory.path().join(AGENT_LOCK_NAME).is_file());
         assert_eq!(
             AgentLock::acquire(directory.path()).unwrap_err().kind(),
             std::io::ErrorKind::AddrInUse

@@ -1,19 +1,14 @@
 /**
  * The page header — `shell.js`'s `pageHeader()` and `headerParts()`.
  *
- * Title, subtitle, the avatar stack on a group, the Manage chip, and the
- * search field with its ⌘K hint. Store descriptions come from the same model
+ * Title, subtitle, the avatar stack on a group, and the search field with its
+ * ⌘K hint. Store descriptions come from the same model
  * function as the sidebar, so the two surfaces cannot disagree.
  */
 
 import type { ReactNode } from 'react';
-import { Button, SearchField, Stack } from '../components';
-import {
-  partiesOf,
-  storeDescription,
-  storeDescriptionState,
-  storeOf,
-} from '../model';
+import { SearchField, Stack } from '../components';
+import { partiesOf, storeHeadingDescription, storeOf } from '../model';
 import type { World } from '../model';
 import type { Location } from '../location';
 
@@ -25,7 +20,7 @@ export interface HeaderParts {
 }
 
 /** The title, subtitle, and optional leading or trailing elements for an item list. */
-export function headerFor(world: World, location: Location, onManage?: () => void): HeaderParts {
+export function headerFor(world: World, location: Location): HeaderParts {
   if (location.kind === 'all') {
     return { title: 'All items', subtitle: '' };
   }
@@ -34,8 +29,7 @@ export function headerFor(world: World, location: Location, onManage?: () => voi
   }
   const store = storeOf(world, location.ref);
   if (!store) return { title: 'Unknown vault', subtitle: '' };
-  const description = storeDescription(world, store);
-  const descriptionState = storeDescriptionState(world, store);
+  const description = storeHeadingDescription(world, store);
   if (store.kind === 'account') {
     return {
       title: store.name,
@@ -46,20 +40,7 @@ export function headerFor(world: World, location: Location, onManage?: () => voi
   return {
     title: store.name,
     subtitle: description,
-    lead: <Stack parties={parties} size="lg" />,
-    tail:
-      descriptionState === 'normal' ? (
-        <Button
-          size="sm"
-          disabled={!onManage || store.team_kind === 'adhoc'}
-          onClick={onManage}
-          title={store.team_kind === 'adhoc'
-            ? 'Roster management is unavailable for an ad-hoc group'
-            : `People and roles in ${store.name}`}
-        >
-          Manage
-        </Button>
-      ) : undefined,
+    tail: <Stack parties={parties} />,
   };
 }
 
@@ -89,13 +70,19 @@ export function PageHeader({
 }: PageHeaderProps): ReactNode {
   return (
     <div className="path">
-      <div className={`loc${lead || tail ? '' : ' text-only'}`}>
+      <div className={`loc${lead ? '' : ' text-only'}`}>
         {lead}
-        <h1>{title}</h1>
-        {subtitle ? <small>{subtitle}</small> : null}
-        {tail}
+        <div className="loc-copy">
+          <h1>{title}</h1>
+          {subtitle ? <small>{subtitle}</small> : null}
+        </div>
       </div>
-      {action ? <div className="header-action">{action}</div> : null}
+      {tail || action ? (
+        <div className="header-action">
+          {tail}
+          {action}
+        </div>
+      ) : null}
       {query !== undefined && onQuery ? (
         <SearchField
           value={query}

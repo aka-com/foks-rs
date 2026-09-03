@@ -9,7 +9,7 @@ use foks_proto::{
     BeaconHint, EntityId, KvDirectoryVersion, KvDirentVersion, KvPathVersionVector, ENTITY_HOST,
 };
 
-use crate::soft_schema::{APPLICATION_ID, INITIAL, VERSION};
+use crate::soft_schema::{APPLICATION_ID, V3_SCHEMA, V3_TO_V4, VERSION};
 use crate::{sqlite_integer, stored_unsigned, Acceptance, Error, Result};
 
 pub const MAX_DISCOVERY_HINTS: usize = 128;
@@ -1083,7 +1083,8 @@ fn initialize(connection: &mut Connection, path: &Path) -> Result<()> {
             });
         }
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute_batch(INITIAL)?;
+        transaction.execute_batch(V3_SCHEMA)?;
+        transaction.execute_batch(V3_TO_V4)?;
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
         transaction.pragma_update(None, "user_version", VERSION)?;
         transaction.commit()?;
@@ -1094,6 +1095,13 @@ fn initialize(connection: &mut Connection, path: &Path) -> Result<()> {
             found: application_id,
             expected: APPLICATION_ID,
         });
+    }
+    if version == 3 {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute_batch(V3_TO_V4)?;
+        transaction.pragma_update(None, "user_version", VERSION)?;
+        transaction.commit()?;
+        return Ok(());
     }
     if version != VERSION {
         return Err(Error::UnsupportedSoftSchema {
@@ -1285,12 +1293,48 @@ mod tests {
     }
 
     #[test]
+    fn version_three_soft_schema_migrates_in_place() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("soft.sqlite3");
+        let hint = BeaconHint::new(host(7), "preserved.test:4430".to_owned()).unwrap();
+        let projection = snapshot();
+        {
+            let mut store = SoftStateStore::open(&path).unwrap();
+            store.store_discovery_hint(&hint, 10).unwrap();
+            store.project_directory(&projection).unwrap();
+        }
+        let connection = Connection::open(&path).unwrap();
+        connection.execute("DROP TABLE known_stores", []).unwrap();
+        connection.pragma_update(None, "user_version", 3).unwrap();
+        drop(connection);
+
+        let mut store = SoftStateStore::open(&path).unwrap();
+        assert!(store.discovery_hint(&host(7), 11).unwrap().is_some());
+        assert_eq!(
+            store
+                .directory(
+                    &projection.host_id,
+                    &projection.party_id,
+                    &projection.directory_id,
+                )
+                .unwrap(),
+            Some(projection),
+        );
+        assert!(store.known_stores().unwrap().is_empty());
+        let version: u32 = store
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, VERSION);
+    }
+
+    #[test]
     fn unsupported_soft_schema_names_the_safe_recovery_path() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("soft.sqlite3");
         drop(SoftStateStore::open(&path).unwrap());
         let connection = Connection::open(&path).unwrap();
-        connection.pragma_update(None, "user_version", 3).unwrap();
+        connection.pragma_update(None, "user_version", 2).unwrap();
         drop(connection);
 
         let error = match SoftStateStore::open(&path) {

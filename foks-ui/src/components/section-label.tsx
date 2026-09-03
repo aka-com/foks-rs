@@ -15,17 +15,20 @@ export interface SectionLabelProps {
   as?: 'side' | 'panel';
   /** A trailing control, right-aligned — the design's `.sec .lnk`. */
   action?: ReactNode;
+  /** A modifier the sheet already draws, such as `danger-title`. */
+  className?: string;
   children: ReactNode;
 }
 
 export function SectionLabel({
   as = 'panel',
   action,
+  className,
   children,
 }: SectionLabelProps): ReactNode {
-  if (as === 'side') return <h6>{children}</h6>;
+  if (as === 'side') return <h6 className={className}>{children}</h6>;
   return (
-    <div className="sec">
+    <div className={['sec', className ?? ''].filter(Boolean).join(' ')}>
       {children}
       {action}
     </div>

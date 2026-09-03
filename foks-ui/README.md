@@ -22,15 +22,16 @@ inline `small-file` encoding, a value that fails the explicit text read is
 presented with Download and native Replace actions without changing the wire
 or database format.
 
-Groups now has its own list and group-administration location. It loads the
-agent's account projection, roster and federation facts; computes every people,
-group and readable-item count; and exposes the operations the command layer can
-perform. Member changes are restricted to unique, locally manageable usernames.
+Group settings hangs off each group’s vault page and loads the agent's roster
+and federation facts, computes every people, group and readable-item count, and
+exposes the operations the command layer can perform. Group creation, discovery,
+attention states and account-specific invite messages live under Settings ›
+Groups. Member changes are restricted to unique, locally manageable usernames.
 An inactive or ambiguous federation admission reads nothing. Active ad-hoc
 groups retain read-only roster facts but suppress member and federation actions.
-The short Join pane has account-specific copy/invite messages; native clipboard
-hygiene stays behind `copy_text`. First run is a location inside the same main
-window, with its sidebar replaced by the seven-step setup checklist. Its
+Native clipboard hygiene stays behind `copy_text`. First run is a location
+inside the same main window, with its sidebar replaced by the seven-step setup
+checklist. Its
 versioned local checkpoint contains only nonsecret progress and display facts;
 invite, passphrase, recovery phrase and prepared backup phrase values are held
 only in their live form or one-time sheet and are never encoded. Reopening
@@ -187,7 +188,7 @@ authenticated in the catalog.
 | `src/app-root.tsx` | The shell: window, sidebar, screen, details panel, deep links. |
 | `src/components/` | The design's parts — Button, Chip, Tag, Badge, Avatar, Stack, KindIcon, Inset, SectionLabel, Notice, Band, SegmentedControl, SplitButton, MenuButton, SearchField. |
 | `src/shell/` | The chrome: `sidebar.tsx`, `page-header.tsx`, `toolbar.tsx`. |
-| `src/screens/` | The bodies: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx`, `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx`, `settings-screen.tsx`, `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `issues-screen.tsx`, `scope.ts` (what is listed, in what order). |
+| `src/screens/` | The bodies: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx`, `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx`, `settings-screen.tsx`, `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `alerts-screen.tsx`, `scope.ts` (what is listed, in what order). |
 | `src/bridge.ts` | The typed `Bridge` interface and the Tauri implementation. |
 | `src/mock-bridge.ts` | The same interface, answered from the fixture. |
 | `src/fixture.ts` | The stable desktop fixture, as typed data. |
@@ -312,17 +313,19 @@ kept so a link written against the design lands here.
 | `grid` | All items | `view=grid` |
 | `lease` | Work (Acme) | `lease=lapsed` — the whole world, not a place |
 | `inactive` | Homelab | group reports inactive; Resume creation uses its resumable operation |
-| `issues` | Issues | `lease=lapsed`, so the pane has its critical entry |
+| `alerts` | Alerts | `lease=lapsed`, so the pane has its critical entry |
 | `agent-lost` | Full window stop | Retry reconnects and refreshes without replay |
-| `groups` | Groups | group cards, account identity and resumable inactive creation |
-| `people` · `party` · `federation` · `store` · `danger` | Engineering administration | selected tab/panel from `03-groups.html` |
-| `invite` · `add` · `demote` · `remove` · `admit` | Engineering administration | the named Group sheet |
-| `create` | Groups | named/ad-hoc Create group sheet, defaulting to Work (Acme) |
-| `groups-lease` · `groups-inactive` | Engineering or Homelab administration | distinct aliases for `03-groups.html`'s lease/inactive states |
-| `manage` | Household vault | the short Vault Manage sheet |
-| `party-remove` | Engineering vault | the short non-local removal refusal from `01-vault.html` |
-| `join` | Join or create a group | account-specific copy and invite choices |
-| `join-invite` | Join or create a group | the short Vault invite sheet, opened on the exact `acct:work` fixture store |
+| `groups` | Settings › Groups | create, discovery, attention and invite sections |
+| `people` · `party` · `federation` | Engineering Group settings | People tab, with federation below the roster, or party panel |
+| `danger` | Engineering Group settings | Settings tab |
+| `store` · `items` | Engineering | group vault |
+| `invite` · `add` · `demote` · `remove` · `admit` | Engineering Group settings | the named Group sheet |
+| `create` | Settings › Groups | named/ad-hoc Create group sheet, defaulting to Work (Acme) |
+| `groups-lease` · `groups-inactive` | Engineering Group settings or Homelab vault | distinct lease/inactive takeovers |
+| `manage` | Household Group settings | People tab, without a Manage overlay |
+| `party-remove` | Engineering Group settings | the non-local removal refusal |
+| `join` | Settings › Groups | account-specific discovery and invite choices |
+| `join-invite` | Settings › Groups | invite sheet opened on the exact `acct:work` fixture store |
 | `boot` · `who` · `address` · `no-address` · `checked` · `compare` · `error` | First run, steps 0–2 | `path=invited` or `path=own` selects the setup route |
 | `account` · `existing` · `protect` · `phrase` | First run, steps 3–4 | account creation/recovery and the one-time backup sheet |
 | `waiting` · `added` · `create-group` · `done` | First run, steps 5–6 | invited discovery or own-group completion |
@@ -332,7 +335,7 @@ kept so a link written against the design lands here.
 | `servers-reset` · `servers-add` · `servers-unprobed` · `servers-check` | Servers & devices | typed reset, add/check and explicit result states |
 | `settings-macs` · `settings-macs-work` · `settings-phrase` | Settings | devices, pairing, recovery and one-time backup reveal; `settings-macs-work` names the exact `acct:work` store |
 | `settings-keys` · `settings-enrol` · `settings-account` | Settings | YubiKey lifecycle and passphrase/account status |
-| `settings-agent` · `settings-about` | Settings | exact local socket/version and setup re-entry |
+| `settings-agent` · `settings-about` | Settings | local agent status, inspect, version; `settings-agent` is an alias of About |
 
 `decodeLocation` answers `null` for `grid`, `show` and `lease` on purpose:
 none of them is a *place*. `grid` is a view preference, `show` is a selection

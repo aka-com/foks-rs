@@ -44,20 +44,21 @@ export function readableBy(
   };
 }
 
-const SORTS: Readonly<Record<SortKey, (world: World) => (a: Item, b: Item) => number>> =
-  {
-    name: () => (a, b) => nameOf(a.path).localeCompare(nameOf(b.path)),
-    kind: () => (a, b) =>
-      KIND_LIST.indexOf(kindOf(a) as (typeof KIND_LIST)[number]) -
-        KIND_LIST.indexOf(kindOf(b) as (typeof KIND_LIST)[number]) ||
-      nameOf(a.path).localeCompare(nameOf(b.path)),
-    group: (world) => (a, b) =>
-      (storeOf(world, a.store)?.name ?? '').localeCompare(
-        storeOf(world, b.store)?.name ?? '',
-      ) || nameOf(a.path).localeCompare(nameOf(b.path)),
-    version: () => (a, b) =>
-      b.version - a.version || nameOf(a.path).localeCompare(nameOf(b.path)),
-  };
+const SORTS: Readonly<
+  Record<SortKey, (world: World) => (a: Item, b: Item) => number>
+> = {
+  name: () => (a, b) => nameOf(a.path).localeCompare(nameOf(b.path)),
+  kind: () => (a, b) =>
+    KIND_LIST.indexOf(kindOf(a) as (typeof KIND_LIST)[number]) -
+      KIND_LIST.indexOf(kindOf(b) as (typeof KIND_LIST)[number]) ||
+    nameOf(a.path).localeCompare(nameOf(b.path)),
+  group: (world) => (a, b) =>
+    (storeOf(world, a.store)?.name ?? '').localeCompare(
+      storeOf(world, b.store)?.name ?? '',
+    ) || nameOf(a.path).localeCompare(nameOf(b.path)),
+  version: () => (a, b) =>
+    b.version - a.version || nameOf(a.path).localeCompare(nameOf(b.path)),
+};
 
 /** Whether a location lists items at all. */
 export function listsItems(location: Location): boolean {

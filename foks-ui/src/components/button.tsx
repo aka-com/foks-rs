@@ -11,7 +11,7 @@
  *            danger   `.btn.danger`   destructive, red ink on hover wash
  *            quiet    `.btn.icon`     the square icon toggle in the toolbar,
  *                                     which carries an `on` state
- *   size     sm       `.btn.cap`      the 24px pill (Manage, row affordances)
+ *   size     sm       `.btn.cap`      the 24px pill used by row affordances
  */
 
 import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';

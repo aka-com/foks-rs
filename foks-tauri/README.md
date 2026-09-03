@@ -116,7 +116,7 @@ derive its stores; do not issue `list_stores` and `list_catalog` concurrently.
 response contains only a profile name; it has no read-only last-probe or lease
 status operation. FOKS therefore returns null host/chain/epoch/lease facts and
 does not silently call `Probe`, because Probe can insert or advance trust.
-Catalog failures and `blockedProfiles` are the honest typed Issues source.
+Catalog failures and `blockedProfiles` are the honest typed Alerts source.
 
 ## Phase 3 mutation boundary
 

@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { OverlayProvider } from '/kit/overlay-primitives';
+import { ToastController, ToastProvider } from '/kit/toasts';
 import { loadWorld, normalizeCommandError, selectBridge } from './bridge';
 import type { AppLockState, Bridge } from './bridge';
 import { Button } from './components';
@@ -30,16 +31,23 @@ import {
 } from './location';
 import { INITIAL_SCENE } from './location';
 import type { Scene } from './location';
-import { applyLease, isLogin, kindOf, nameOf, notesNow, storeOf, storeReadable } from './model';
+import {
+  applyLease,
+  isLogin,
+  kindOf,
+  nameOf,
+  notesNow,
+  storeOf,
+  storeReadable,
+} from './model';
 import type { Item, World } from './model';
 import { Sidebar } from './shell/sidebar';
-import { IssuesScreen } from './screens/issues-screen';
+import { AlertsScreen } from './screens/alerts-screen';
 import { DetailsPanel } from './screens/details-panel';
 import { ItemsScreen } from './screens/items-screen';
-import { GroupsScreen, VaultGroupOverlay } from './screens/groups-screen';
+import { GroupSettingsScreen } from './screens/groups-screen';
 import { FirstRunExperience } from './screens/first-run-screen';
 import { PlaceholderScreen } from './screens/placeholder-screen';
-import { ServersScreen } from './screens/servers-screen';
 import { SettingsScreen } from './screens/settings-screen';
 import { listsItems } from './screens/scope';
 import {
@@ -71,11 +79,11 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
   const [activeBridge, setActiveBridge] = useState<Bridge | null>(
     () => bridge ?? null,
   );
-  const [loaded, setLoaded] = useState<World | null>(
-    () => world ?? null,
-  );
+  const [loaded, setLoaded] = useState<World | null>(() => world ?? null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [firstRunStart, setFirstRunStart] = useState<'boot' | 'who' | 'local' | null>(null);
+  const [firstRunStart, setFirstRunStart] = useState<
+    'boot' | 'who' | 'local' | null
+  >(null);
   const [managedProfile, setManagedProfile] = useState<string | null>(null);
   const [lockState, setLockState] = useState<AppLockState | null>(null);
   const [lockError, setLockError] = useState<string | null>(null);
@@ -90,7 +98,9 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
         setLoadError(null);
         return;
       }
-      setLoadError('An injected world must include the bridge that answers its item actions.');
+      setLoadError(
+        'An injected world must include the bridge that answers its item actions.',
+      );
       return;
     }
     let alive = true;
@@ -125,10 +135,19 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
             if (!requested) throw error;
             next = emptyWorld(status);
           }
-          if (!requested && !next.stores.some((entry) => entry.kind === 'account')) {
-            const localProfile = appInfo.managedProfile && next.servers.some(
-              (server) => server.id === appInfo.managedProfile && server.state === 'ok',
-            ) ? appInfo.managedProfile : null;
+          if (
+            !requested &&
+            next.accountInventoryComplete &&
+            !next.stores.some((entry) => entry.kind === 'account')
+          ) {
+            const localProfile =
+              appInfo.managedProfile &&
+              next.servers.some(
+                (server) =>
+                  server.id === appInfo.managedProfile && server.state === 'ok',
+              )
+                ? appInfo.managedProfile
+                : null;
             if (alive) {
               setManagedProfile(localProfile);
               setFirstRunStart(localProfile ? 'local' : 'who');
@@ -151,33 +170,49 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
   }, [bootEpoch, bridge, world]);
 
   if (lockState && activeBridge) {
-    const mechanism = lockState.mechanism === 'biometry'
-      ? 'Touch ID or your Mac password'
-      : 'your operating-system password';
+    const mechanism =
+      lockState.mechanism === 'biometry'
+        ? 'Touch ID or your Mac password'
+        : 'your operating-system password';
     return (
-      <div className="app-lock" role="dialog" aria-modal="true" aria-labelledby="app-lock-title">
+      <div
+        className="app-lock"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="app-lock-title"
+      >
         <div className="app-lock-card">
           <h1 id="app-lock-title">Unlock FOKS</h1>
-          <p>Authenticate with {mechanism} to allow FOKS to connect to servers and read vault data.</p>
-          {lockError ? <p className="app-lock-error" role="alert">{lockError}</p> : null}
+          <p>
+            Authenticate with {mechanism} to allow FOKS to connect to servers
+            and read vault data.
+          </p>
+          {lockError ? (
+            <p className="app-lock-error" role="alert">
+              {lockError}
+            </p>
+          ) : null}
           <Button
             variant="primary"
             disabled={unlocking}
             onClick={() => {
               setUnlocking(true);
               setLockError(null);
-              void activeBridge.unlockApp().then(
-                (next) => {
-                  if (next.locked) {
-                    setLockState(next);
-                    return;
-                  }
-                  setLockState(null);
-                  setActiveBridge(null);
-                  setBootEpoch((value) => value + 1);
-                },
-                (error) => setLockError(normalizeCommandError(error).message),
-              ).finally(() => setUnlocking(false));
+              void activeBridge
+                .unlockApp()
+                .then(
+                  (next) => {
+                    if (next.locked) {
+                      setLockState(next);
+                      return;
+                    }
+                    setLockState(null);
+                    setActiveBridge(null);
+                    setBootEpoch((value) => value + 1);
+                  },
+                  (error) => setLockError(normalizeCommandError(error).message),
+                )
+                .finally(() => setUnlocking(false));
             }}
           >
             Unlock
@@ -188,12 +223,44 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
   }
 
   if (loadError) {
-    return <div className="app-loading" role="alert">{loadError}</div>;
+    return (
+      <div
+        className="app-lock"
+        role="alertdialog"
+        aria-labelledby="app-boot-error-title"
+      >
+        <div className="app-lock-card">
+          <h1 id="app-boot-error-title">Couldn’t load FOKS</h1>
+          <p className="app-lock-error" role="alert">
+            {loadError}
+          </p>
+          <Button
+            variant="primary"
+            onClick={() => {
+              setLoadError(null);
+              setLoaded(null);
+              setActiveBridge(null);
+              setBootEpoch((value) => value + 1);
+            }}
+          >
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
   }
   if (!loaded || !activeBridge) {
     return <div className="app-loading">Connecting to the local agent…</div>;
   }
-  return <VaultShell world={loaded} bridge={activeBridge} store={store} firstRunStart={firstRunStart} managedProfile={managedProfile} />;
+  return (
+    <VaultShell
+      world={loaded}
+      bridge={activeBridge}
+      store={store}
+      firstRunStart={firstRunStart}
+      managedProfile={managedProfile}
+    />
+  );
 }
 
 interface VaultShellProps {
@@ -204,7 +271,13 @@ interface VaultShellProps {
   managedProfile?: string | null;
 }
 
-function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile = null }: VaultShellProps): ReactNode {
+function VaultShell({
+  world,
+  bridge,
+  store,
+  firstRunStart = null,
+  managedProfile = null,
+}: VaultShellProps): ReactNode {
   const [{ scene, automaticFirstRun }] = useState(() => {
     const decoded = initialScene();
     const automatic = Boolean(
@@ -230,12 +303,16 @@ function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile
   const locations = store ?? fallback;
   const state = useLocationState(locations);
   const [latest, setLatest] = useState(world);
+  const [refreshingWorld, setRefreshingWorld] = useState(false);
   const [workflow, setWorkflow] = useState<WriteWorkflow>(() =>
-    initialWriteWorkflow(typeof window === 'undefined' ? '' : window.location.search, world),
+    initialWriteWorkflow(
+      typeof window === 'undefined' ? '' : window.location.search,
+      world,
+    ),
   );
-  const [flash, setFlash] = useState<string | null>(null);
+  const [toasts] = useState(() => new ToastController());
   const [concealSignal, setConcealSignal] = useState(0);
-  const [groupSheetIntent, setGroupSheetIntent] = useState<{ store: string; sheet: 'manage' } | null>(null);
+  const [windowChromeHidden, setWindowChromeHidden] = useState(false);
   const [resumeDraft, setResumeDraft] = useState<{
     store: string;
     path: string;
@@ -268,27 +345,88 @@ function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile
 
   useEffect(() => setLatest(world), [world]);
 
-  const refreshWorld = useCallback(async (): Promise<World> => {
-    const next = await loadWorld(bridge);
-    setLatest(next);
-    return next;
+  useEffect(() => {
+    if (!bridge.native) return;
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    const apply = ({
+      maximized,
+      fullscreen,
+    }: Awaited<ReturnType<Bridge['windowState']>>): void => {
+      if (!disposed) setWindowChromeHidden(maximized || fullscreen);
+    };
+    void bridge
+      .onWindowState(apply)
+      .then(async (unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        stop = unlisten;
+        apply(await bridge.windowState());
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, [bridge]);
+
+  // Catalog loads cancel the previous generation. Callers that need a fresh
+  // world — Settings recovery, Groups, first run, conflict review — must
+  // share one in-flight load rather than stacking `list_catalog`.
+  const refreshWorldInFlight = useRef<Promise<World> | null>(null);
+  const refreshWorld = useCallback((): Promise<World> => {
+    if (!refreshWorldInFlight.current) {
+      const pending = loadWorld(bridge)
+        .then((next) => {
+          setLatest(next);
+          return next;
+        })
+        .finally(() => {
+          if (refreshWorldInFlight.current === pending)
+            refreshWorldInFlight.current = null;
+        });
+      refreshWorldInFlight.current = pending;
+    }
+    return refreshWorldInFlight.current;
   }, [bridge]);
 
   const refresh = async (message: string): Promise<void> => {
     await refreshWorld();
-    setFlash(message);
+    toasts.show(message);
   };
 
-  const commandError = useCallback((error: unknown, item?: Item, draft = ''): void => {
-    const typed = normalizeCommandError(error);
-    const routed = workflowForError(error, item, draft);
-    if (routed) {
-      if (routed.kind === 'agent-lost') setConcealSignal((value) => value + 1);
-      setWorkflow(routed);
-      return;
-    }
-    setFlash(typed.message);
-  }, []);
+  const commandError = useCallback(
+    (error: unknown, item?: Item, draft = ''): void => {
+      const typed = normalizeCommandError(error);
+      const routed = workflowForError(error, item, draft);
+      if (routed) {
+        if (routed.kind === 'agent-lost')
+          setConcealSignal((value) => value + 1);
+        setWorkflow(routed);
+        return;
+      }
+      // A missing catalog snapshot is a refresh hint, not a failed account
+      // action: the desktop dropped its last list so the next command cannot
+      // bind to a stale store. The standard toast matches that, rather than the
+      // danger tone used for refused or broken work.
+      toasts.show(
+        typed.message,
+        typed.code === 'catalog-required' ? undefined : { tone: 'warning' },
+      );
+    },
+    [toasts],
+  );
+
+  const refreshAll = (): void => {
+    if (refreshingWorld) return;
+    setRefreshingWorld(true);
+    void refreshWorld()
+      .then(() => toasts.show('Vaults and groups refreshed'))
+      .catch(commandError)
+      .finally(() => setRefreshingWorld(false));
+  };
 
   useEffect(() => {
     let alive = true;
@@ -303,14 +441,18 @@ function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile
           setWorkflow({ kind: 'agent-lost', message });
         }
       } catch (error) {
-        if (alive && normalizeCommandError(error).code === 'agent-lost') commandError(error);
+        if (alive && normalizeCommandError(error).code === 'agent-lost')
+          commandError(error);
       } finally {
         pending = false;
       }
     };
     void check();
     const timer = window.setInterval(() => void check(), 1000);
-    return () => { alive = false; window.clearInterval(timer); };
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
   }, [bridge, commandError]);
 
   const appRef = useRef<HTMLDivElement>(null);
@@ -340,6 +482,10 @@ function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return;
+      // A dialog that handled Escape has already prevented it. Without this
+      // check the keypress that closed a sheet also cleared the search filter
+      // or dropped the selection the sheet was about.
+      if (event.defaultPrevented) return;
       const current = locations.getSnapshot();
       if (current.query) locations.search('');
       else if (current.selection) locations.select(null);
@@ -351,15 +497,19 @@ function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile
   }, [locations]);
 
   const here = state.location;
-  const namedState = typeof window === 'undefined'
-    ? ''
-    : new URLSearchParams(window.location.search).get('state') ?? '';
+  // Captured once, the way SettingsScreen captures its
+  // scene: the effect below rewrites the address bar to the canonical scene
+  // on the first commit, so fixture-only sheet intent must retain its name.
+  const [namedState] = useState(() =>
+    typeof window === 'undefined'
+      ? ''
+      : (new URLSearchParams(window.location.search).get('state') ?? ''),
+  );
   const detailsShown =
     state.details &&
     listsItems(here) &&
     !(here.kind === 'store' && !storeReadable(shown, here.ref)) &&
     !(state.selection && !storeReadable(shown, state.selection.store));
-
   const screen = listsItems(here) ? (
     <ItemsScreen
       world={shown}
@@ -376,27 +526,39 @@ function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile
           await refresh('Group creation resumed');
         } catch (error) {
           commandError(error);
+          if (normalizeCommandError(error).code !== 'agent-lost') {
+            try {
+              await refresh('State refreshed — review before retrying');
+            } catch (refreshError) {
+              commandError(refreshError);
+            }
+          }
         }
       }}
       onRemove={(item) => setWorkflow({ kind: 'remove', item })}
-      onManage={(storeId) => {
-        setGroupSheetIntent({ store: storeId, sheet: 'manage' });
-        locations.navigate({ kind: 'group-admin', ref: storeId });
-      }}
+      onSettings={(storeId) =>
+        locations.navigate({
+          kind: 'group-settings',
+          ref: storeId,
+          tab: 'people',
+        })
+      }
       onCommandError={commandError}
     />
-  ) : here.kind === 'join' || here.kind === 'groups' || here.kind === 'group-admin' ? (
-    <GroupsScreen key={here.kind === 'group-admin' ? `${here.kind}:${here.ref}` : here.kind} world={shown} bridge={bridge} location={here} onNavigate={(location) => locations.navigate(location)} onApplied={refresh} onError={commandError} initialSheet={here.kind === 'group-admin' && groupSheetIntent?.store === here.ref ? groupSheetIntent.sheet : undefined} onIntentConsumed={() => setGroupSheetIntent(null)} />
-  ) : here.kind === 'issues' ? (
-    <IssuesScreen world={shown} />
-  ) : here.kind === 'servers' ? (
-    <ServersScreen
+  ) : here.kind === 'group-settings' ? (
+    <GroupSettingsScreen
+      key={`${here.kind}:${here.ref}`}
       world={shown}
       bridge={bridge}
       location={here}
-      scene={namedState}
       onNavigate={(location) => locations.navigate(location)}
-      onRefresh={refresh}
+      onApplied={refresh}
+      onError={commandError}
+    />
+  ) : here.kind === 'alerts' ? (
+    <AlertsScreen
+      world={shown}
+      onRefreshWorld={refreshWorld}
       onError={commandError}
     />
   ) : here.kind === 'settings' ? (
@@ -408,6 +570,7 @@ function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile
       scene={namedState}
       onNavigate={(location) => locations.navigate(location)}
       onRefresh={refresh}
+      onRefreshWorld={refreshWorld}
       onError={commandError}
     />
   ) : (
@@ -415,8 +578,16 @@ function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile
   );
 
   const shell = (
-    <div className={bridge.native ? 'window native-window' : 'window web-mock-window'}>
-      <div className="titlebar">
+    <div
+      className={[
+        'window',
+        bridge.native ? 'native-window' : 'web-mock-window',
+        windowChromeHidden ? 'window-chrome-hidden' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+    >
+      <div className="titlebar" data-tauri-drag-region="">
         {bridge.native ? null : (
           <span className="lights" aria-hidden="true">
             <span className="light r" />
@@ -424,18 +595,40 @@ function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile
             <span className="light g" />
           </span>
         )}
-        <span className="brand">{APP_NAME}</span>
-        <span className="spacer" />
+        <span className="brand" data-tauri-drag-region="">
+          {APP_NAME}
+        </span>
+        <span className="spacer" data-tauri-drag-region="" />
         <span
           className={shown.agent.phase === 'Bootstrap' ? 'agent warn' : 'agent'}
+          data-tauri-drag-region=""
         >
-          <i />
+          <i data-tauri-drag-region="" />
           {/* The agent's own word for where it is, as the design frames it. */}
           Agent {shown.agent.phase === 'Bootstrap' ? 'starting' : 'ready'}
         </span>
+        <Button
+          variant="quiet"
+          className="global-refresh"
+          icon="again"
+          aria-label={
+            refreshingWorld ? 'Refreshing vaults and groups' : 'Refresh'
+          }
+          title={
+            refreshingWorld
+              ? 'Refreshing vaults and groups'
+              : 'Refresh vaults and groups'
+          }
+          disabled={refreshingWorld}
+          onClick={refreshAll}
+        />
       </div>
       <div
-        className={detailsShown || (here.kind === 'first-run' && here.step === 'added') ? 'app with-details' : 'app'}
+        className={
+          detailsShown || (here.kind === 'first-run' && here.step === 'added')
+            ? 'app with-details'
+            : 'app'
+        }
         ref={appRef}
       >
         {here.kind === 'first-run' ? (
@@ -449,17 +642,19 @@ function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile
             automaticEntry={automaticFirstRun}
             managedProfile={managedProfile ?? undefined}
           />
-        ) : <>
-          <Sidebar
-            world={shown}
-            location={here}
-            issues={notesNow(shown).length}
-            onNavigate={(location) => {
-              locations.navigate(location);
-            }}
-          />
-          <main className="main">{screen}</main>
-        </>}
+        ) : (
+          <>
+            <Sidebar
+              world={shown}
+              location={here}
+              alerts={notesNow(shown).length}
+              onNavigate={(location) => {
+                locations.navigate(location);
+              }}
+            />
+            <main className="main">{screen}</main>
+          </>
+        )}
         {here.kind !== 'first-run' && detailsShown ? (
           <DetailsPanel
             world={shown}
@@ -474,7 +669,9 @@ function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile
               locations.setDetails(false);
             }}
             onRemove={(item) => setWorkflow({ kind: 'remove', item })}
-            onConflict={(item, draft) => setWorkflow({ kind: 'conflict', item, draft })}
+            onConflict={(item, draft) =>
+              setWorkflow({ kind: 'conflict', item, draft })
+            }
             onApplied={refresh}
             onCommandError={commandError}
             concealSignal={concealSignal}
@@ -482,7 +679,6 @@ function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile
           />
         ) : null}
       </div>
-      {flash ? <div className="flash" aria-live="polite">{flash}</div> : null}
       <WriteOverlay
         world={shown}
         bridge={bridge}
@@ -491,10 +687,14 @@ function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile
         onApplied={refresh}
         onError={commandError}
         onRefreshConflict={async (item, draft) => {
-          const next = await loadWorld(bridge);
-          setLatest(next);
-          setResumeDraft({ store: item.store, path: item.path, value: draft, epoch: Date.now() });
-          setFlash('Refreshed the catalog — review your retained draft');
+          await refreshWorld();
+          setResumeDraft({
+            store: item.store,
+            path: item.path,
+            value: draft,
+            epoch: Date.now(),
+          });
+          toasts.show('Refreshed the catalog — review your retained draft');
         }}
         onDiscardConflict={() => {
           setWorkflow(null);
@@ -502,33 +702,32 @@ function VaultShell({ world, bridge, store, firstRunStart = null, managedProfile
           setConcealSignal((value) => value + 1);
         }}
         onOpenExisting={async (existing) => {
-          const next = await loadWorld(bridge);
+          const next = await refreshWorld();
           const current = next.items.find(
-            (item) => item.store === existing.storeId && item.path === existing.path,
+            (item) =>
+              item.store === existing.storeId && item.path === existing.path,
           );
           if (!current) {
-            throw new Error('That path is free now. Your draft is still here; change the path or try creating it again.');
+            throw new Error(
+              'That path is free now. Your draft is still here; change the path or try creating it again.',
+            );
           }
           setLatest(next);
           locations.select({ store: current.store, path: current.path });
         }}
       />
-      {namedState === 'manage' || namedState === 'party-remove' ? (
-        <VaultGroupOverlay
-          world={shown}
-          bridge={bridge}
-          scene={namedState}
-          onApplied={refresh}
-          onError={commandError}
-        />
-      ) : null}
     </div>
   );
 
-  if (!portalRoot) return shell;
+  const withToasts = (
+    <ToastProvider controller={toasts} portalRoot={portalRoot}>
+      {shell}
+    </ToastProvider>
+  );
+  if (!portalRoot) return withToasts;
   return (
     <OverlayProvider backgroundRef={appRef} portalRoot={portalRoot}>
-      {shell}
+      {withToasts}
     </OverlayProvider>
   );
 }
@@ -539,9 +738,12 @@ function emptyWorld(agent: World['agent']): World {
     servers: [],
     accounts: [],
     stores: [],
+    unavailableStores: [],
+    accountInventoryComplete: false,
     items: [],
     parties: [],
     federation: [],
+    groupDetailFailures: [],
     devices: [],
     yubiAccounts: [],
     cardsConnected: [],
@@ -551,24 +753,45 @@ function emptyWorld(agent: World['agent']): World {
   };
 }
 
-function demoSelection(demo: Scene['demo'], world: World): { store: string; path: string } | null {
+function demoSelection(
+  demo: Scene['demo'],
+  world: World,
+): { store: string; path: string } | null {
   if (!demo) return null;
   const candidates = world.items.filter((item) => item.kind !== 'Folder');
   let item: Item | undefined;
-  if (demo === 'password') item = candidates.find((candidate) => isLogin(candidate));
+  if (demo === 'password')
+    item = candidates.find((candidate) => isLogin(candidate));
   else if (demo === 'resource') {
     item = candidates
-      .filter((candidate) => kindOf(candidate) === 'Resource' && storeOf(world, candidate.store)?.kind === 'account')
-      .sort((left, right) => nameOf(left.path).localeCompare(nameOf(right.path)))[0];
+      .filter(
+        (candidate) =>
+          kindOf(candidate) === 'Resource' &&
+          storeOf(world, candidate.store)?.kind === 'account',
+      )
+      .sort((left, right) =>
+        nameOf(left.path).localeCompare(nameOf(right.path)),
+      )[0];
   } else if (demo === 'file') {
     item = candidates
-      .filter((candidate) => kindOf(candidate) === 'File' && storeOf(world, candidate.store)?.kind === 'team')
+      .filter(
+        (candidate) =>
+          kindOf(candidate) === 'File' &&
+          storeOf(world, candidate.store)?.kind === 'team',
+      )
       .sort((left, right) => right.version - left.version)[0];
-  } else if (demo === 'link') item = candidates.find((candidate) => kindOf(candidate) === 'Link');
+  } else if (demo === 'link')
+    item = candidates.find((candidate) => kindOf(candidate) === 'Link');
   else {
     item = candidates
-      .filter((candidate) => kindOf(candidate) === 'Password' && storeOf(world, candidate.store)?.kind === 'team')
-      .sort((left, right) => nameOf(left.path).localeCompare(nameOf(right.path)))[0];
+      .filter(
+        (candidate) =>
+          kindOf(candidate) === 'Password' &&
+          storeOf(world, candidate.store)?.kind === 'team',
+      )
+      .sort((left, right) =>
+        nameOf(left.path).localeCompare(nameOf(right.path)),
+      )[0];
   }
   return item ? { store: item.store, path: item.path } : null;
 }

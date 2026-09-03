@@ -1,7 +1,28 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464b_5653; // `FKVS`
 pub(crate) const VERSION: u32 = 4;
 
-pub(crate) const INITIAL: &str = r#"
+pub(crate) const V3_TO_V4: &str = r#"
+CREATE TABLE known_stores (
+    kind INTEGER NOT NULL CHECK (kind IN (1, 2)),
+    account_alias TEXT NOT NULL CHECK (length(account_alias) BETWEEN 1 AND 255),
+    team_alias TEXT NOT NULL,
+    team_id_hex TEXT,
+    team_kind TEXT CHECK (team_kind IN ('named', 'ad-hoc')),
+    display_name TEXT,
+    active INTEGER CHECK (active IN (0, 1)),
+    last_seen_at INTEGER NOT NULL CHECK (last_seen_at >= 0),
+    CHECK (
+        (kind = 1 AND team_alias = '' AND team_id_hex IS NULL AND team_kind IS NULL
+                  AND display_name IS NULL AND active IS NULL)
+        OR
+        (kind = 2 AND length(team_alias) BETWEEN 1 AND 255 AND team_id_hex IS NOT NULL
+                  AND team_kind IS NOT NULL AND active IS NOT NULL)
+    ),
+    PRIMARY KEY (kind, account_alias, team_alias)
+) STRICT, WITHOUT ROWID;
+"#;
+
+pub(crate) const V3_SCHEMA: &str = r#"
 CREATE TABLE kv_parties (
     host_id BLOB NOT NULL CHECK (length(host_id) = 33),
     party_id BLOB NOT NULL CHECK (length(party_id) = 33),
@@ -74,25 +95,6 @@ CREATE TABLE kv_large_file_chunks (
     content BLOB NOT NULL CHECK (length(content) > 0),
     PRIMARY KEY (file_id, offset),
     FOREIGN KEY (file_id) REFERENCES kv_large_files(id) ON DELETE CASCADE
-) STRICT, WITHOUT ROWID;
-
-CREATE TABLE known_stores (
-    kind INTEGER NOT NULL CHECK (kind IN (1, 2)),
-    account_alias TEXT NOT NULL CHECK (length(account_alias) BETWEEN 1 AND 255),
-    team_alias TEXT NOT NULL,
-    team_id_hex TEXT,
-    team_kind TEXT CHECK (team_kind IN ('named', 'ad-hoc')),
-    display_name TEXT,
-    active INTEGER CHECK (active IN (0, 1)),
-    last_seen_at INTEGER NOT NULL CHECK (last_seen_at >= 0),
-    CHECK (
-        (kind = 1 AND team_alias = '' AND team_id_hex IS NULL AND team_kind IS NULL
-                  AND display_name IS NULL AND active IS NULL)
-        OR
-        (kind = 2 AND length(team_alias) BETWEEN 1 AND 255 AND team_id_hex IS NOT NULL
-                  AND team_kind IS NOT NULL AND active IS NOT NULL)
-    ),
-    PRIMARY KEY (kind, account_alias, team_alias)
 ) STRICT, WITHOUT ROWID;
 
 -- Beacon answers are routing hints, never trust anchors. Keeping them in the

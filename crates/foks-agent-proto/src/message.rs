@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -108,6 +108,13 @@ pub struct AccountSummary {
     pub username: String,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TeamDetailsSummary {
+    pub members: ResponseResult,
+    pub federation: ResponseResult,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "store_kind", rename_all = "kebab-case")]
 pub enum KnownStoreSummary {
@@ -132,6 +139,28 @@ pub struct DeviceSummary {
     pub name: Option<String>,
     pub role: String,
     pub current: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GoProfileCandidate {
+    pub candidate_id: String,
+    pub username: Option<String>,
+    pub server_hint: Option<String>,
+    pub host_id_hex: String,
+    pub user_id_hex: String,
+    pub device_id_hex: String,
+    pub role: String,
+    pub storage_kind: String,
+    pub hidden: bool,
+    pub provisional: bool,
+    pub pairable: bool,
+    pub copyable: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GoProfileDiscovery {
+    pub installed: bool,
+    pub candidates: Vec<GoProfileCandidate>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -352,6 +381,7 @@ impl Request {
 pub enum Operation {
     Ping,
     AgentStatus,
+    DiscoverGoProfiles,
     InitializeState {
         backend: CredentialBackend,
     },
@@ -362,6 +392,13 @@ pub enum Operation {
         trust: ProfileTrust,
     },
     CheckAndAddProfile {
+        name: String,
+        probe: String,
+        protocol: ProfileProtocol,
+        trust: ProfileTrust,
+    },
+    CheckAndAddGoProfile {
+        candidate_id: String,
         name: String,
         probe: String,
         protocol: ProfileProtocol,
@@ -513,7 +550,25 @@ pub enum Operation {
         serial: u64,
         phrase: SecretString,
     },
+    AcceptGoProfilePairing {
+        candidate_id: String,
+        profile: String,
+        target_alias: String,
+        device_name: String,
+        serial: u64,
+        phrase: SecretString,
+    },
     ResumeDevicePairingAcceptance {
+        profile: String,
+        target_alias: String,
+    },
+    ResumeGoProfilePairing {
+        candidate_id: String,
+        profile: String,
+        target_alias: String,
+    },
+    CopyGoProfileDevice {
+        candidate_id: String,
         profile: String,
         target_alias: String,
     },
@@ -688,6 +743,10 @@ pub enum Operation {
         profile: String,
         team_alias: String,
     },
+    ListTeamDetails {
+        profile: String,
+        team_alias: String,
+    },
     ListTeamMembers {
         profile: String,
         team_alias: String,
@@ -776,7 +835,11 @@ impl Operation {
     pub fn is_device_pairing_wait(&self) -> bool {
         matches!(
             self,
-            Self::FinishDevicePairing { .. } | Self::AcceptDevicePairing { .. }
+            Self::FinishDevicePairing { .. }
+                | Self::AcceptDevicePairing { .. }
+                | Self::AcceptGoProfilePairing { .. }
+                | Self::ResumeDevicePairingAcceptance { .. }
+                | Self::ResumeGoProfilePairing { .. }
         )
     }
 
@@ -789,6 +852,7 @@ impl Operation {
             self,
             Self::Ping
                 | Self::AgentStatus
+                | Self::DiscoverGoProfiles
                 | Self::ListProfiles
                 | Self::DescribeResetHardState { .. }
                 | Self::Probe { .. }
@@ -808,6 +872,7 @@ impl Operation {
                 | Self::ReadKv { .. }
                 | Self::ReadKvChunk { .. }
                 | Self::ListTeams { .. }
+                | Self::ListTeamDetails { .. }
                 | Self::ListTeamMembers { .. }
                 | Self::ListFederatedTeams { .. }
         )
@@ -819,6 +884,7 @@ impl std::fmt::Debug for Operation {
         match self {
             Self::Ping => formatter.write_str("Ping"),
             Self::AgentStatus => formatter.write_str("AgentStatus"),
+            Self::DiscoverGoProfiles => formatter.write_str("DiscoverGoProfiles"),
             Self::InitializeState { backend } => formatter
                 .debug_struct("InitializeState")
                 .field("backend", backend)
@@ -842,6 +908,20 @@ impl std::fmt::Debug for Operation {
                 trust,
             } => formatter
                 .debug_struct("CheckAndAddProfile")
+                .field("name", name)
+                .field("probe", probe)
+                .field("protocol", protocol)
+                .field("trust", trust)
+                .finish(),
+            Self::CheckAndAddGoProfile {
+                candidate_id,
+                name,
+                probe,
+                protocol,
+                trust,
+            } => formatter
+                .debug_struct("CheckAndAddGoProfile")
+                .field("candidate_id", candidate_id)
                 .field("name", name)
                 .field("probe", probe)
                 .field("protocol", protocol)
@@ -1098,11 +1178,47 @@ impl std::fmt::Debug for Operation {
                 .field("serial", serial)
                 .field("phrase", &"<redacted>")
                 .finish(),
+            Self::AcceptGoProfilePairing {
+                candidate_id,
+                profile,
+                target_alias,
+                device_name,
+                serial,
+                phrase: _,
+            } => formatter
+                .debug_struct("AcceptGoProfilePairing")
+                .field("candidate_id", candidate_id)
+                .field("profile", profile)
+                .field("target_alias", target_alias)
+                .field("device_name", device_name)
+                .field("serial", serial)
+                .field("phrase", &"<redacted>")
+                .finish(),
             Self::ResumeDevicePairingAcceptance {
                 profile,
                 target_alias,
             } => formatter
                 .debug_struct("ResumeDevicePairingAcceptance")
+                .field("profile", profile)
+                .field("target_alias", target_alias)
+                .finish(),
+            Self::ResumeGoProfilePairing {
+                candidate_id,
+                profile,
+                target_alias,
+            } => formatter
+                .debug_struct("ResumeGoProfilePairing")
+                .field("candidate_id", candidate_id)
+                .field("profile", profile)
+                .field("target_alias", target_alias)
+                .finish(),
+            Self::CopyGoProfileDevice {
+                candidate_id,
+                profile,
+                target_alias,
+            } => formatter
+                .debug_struct("CopyGoProfileDevice")
+                .field("candidate_id", candidate_id)
                 .field("profile", profile)
                 .field("target_alias", target_alias)
                 .finish(),
@@ -1424,6 +1540,14 @@ impl std::fmt::Debug for Operation {
                 team_alias,
             } => formatter
                 .debug_struct("SyncTeam")
+                .field("profile", profile)
+                .field("team_alias", team_alias)
+                .finish(),
+            Self::ListTeamDetails {
+                profile,
+                team_alias,
+            } => formatter
+                .debug_struct("ListTeamDetails")
                 .field("profile", profile)
                 .field("team_alias", team_alias)
                 .finish(),
@@ -1778,6 +1902,41 @@ mod tests {
         let debug = format!("{response:?}");
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("never print this response phrase"));
+    }
+
+    #[test]
+    fn team_details_operation_and_nested_results_are_explicit() {
+        let operation = Operation::ListTeamDetails {
+            profile: "work".to_owned(),
+            team_alias: "engineering".to_owned(),
+        };
+        assert_eq!(
+            serde_json::to_value(&operation).unwrap(),
+            serde_json::json!({
+                "operation": "list-team-details",
+                "profile": "work",
+                "team_alias": "engineering"
+            })
+        );
+        assert_eq!(
+            format!("{operation:?}"),
+            "ListTeamDetails { profile: \"work\", team_alias: \"engineering\" }"
+        );
+        let details = TeamDetailsSummary {
+            members: ResponseResult::Error {
+                code: ErrorCode::RateLimited,
+                message: "wait".to_owned(),
+                fields: ErrorFields::default(),
+            },
+            federation: ResponseResult::Success {
+                value: serde_json::json!([]),
+            },
+        };
+        assert_eq!(
+            serde_json::from_value::<TeamDetailsSummary>(serde_json::to_value(&details).unwrap())
+                .unwrap(),
+            details
+        );
     }
 
     #[test]

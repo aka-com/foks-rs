@@ -395,6 +395,23 @@ impl ProfileRegistry {
         timeout: Duration,
         cancellation: CancellationToken,
     ) -> Result<ProfilePublicationReport> {
+        self.check_and_add_profile_for_host_with_control(
+            authorizer,
+            profile,
+            timeout,
+            cancellation,
+            None,
+        )
+    }
+
+    fn check_and_add_profile_for_host_with_control<A: ProfilePublicationAuthorizer>(
+        &mut self,
+        authorizer: &A,
+        profile: Profile,
+        timeout: Duration,
+        cancellation: CancellationToken,
+        expected_host: Option<&[u8; 33]>,
+    ) -> Result<ProfilePublicationReport> {
         profile.validate()?;
         if timeout.is_zero() {
             return Err(Error::InvalidConfig("zero profile operation timeout"));
@@ -415,6 +432,11 @@ impl ProfileRegistry {
                     if marker.profile != profile {
                         return Err(Error::InvalidConfig(
                             "profile publication registry binding changed",
+                        ));
+                    }
+                    if expected_host.is_some_and(|host| marker.probe.host_id_hex != hex(host)) {
+                        return Err(Error::InvalidProfile(
+                            "saved server does not match the expected host",
                         ));
                     }
                     return Ok(ProfilePublicationReport {
@@ -463,6 +485,11 @@ impl ProfileRegistry {
                 client,
             };
             let probe = session.probe_and_pin_unchecked()?;
+            if expected_host.is_some_and(|host| probe.host_id_hex != hex(host)) {
+                return Err(Error::InvalidProfile(
+                    "checked server does not match the expected host",
+                ));
+            }
 
             #[cfg(test)]
             if TEST_PROFILE_PUBLICATION_CRASH_POINT
@@ -838,17 +865,43 @@ impl ClientCredentials {
         timeout: Duration,
         cancellation: CancellationToken,
     ) -> Result<ProfilePublicationReport> {
+        self.check_and_add_profile_for_host_with_control(
+            registry,
+            profile,
+            timeout,
+            cancellation,
+            None,
+        )
+    }
+
+    pub fn check_and_add_profile_for_host_with_control(
+        &self,
+        registry: &mut ProfileRegistry,
+        profile: Profile,
+        timeout: Duration,
+        cancellation: CancellationToken,
+        expected_host: Option<&[u8; 33]>,
+    ) -> Result<ProfilePublicationReport> {
         if self.root != registry.root {
             return Err(Error::InvalidConfig(
                 "profile registry belongs to a different client state",
             ));
         }
-        let result = registry.check_and_add_profile_with_control(
-            self,
-            profile.clone(),
-            timeout,
-            cancellation,
-        );
+        let result = match expected_host {
+            Some(expected_host) => registry.check_and_add_profile_for_host_with_control(
+                self,
+                profile.clone(),
+                timeout,
+                cancellation,
+                Some(expected_host),
+            ),
+            None => registry.check_and_add_profile_with_control(
+                self,
+                profile.clone(),
+                timeout,
+                cancellation,
+            ),
+        };
         let report = result?;
         let session = ProfileSession::open(registry, &profile.name)?;
         self.with_checked_session(&session, |_| Ok::<_, Error>(()))?;
@@ -1395,6 +1448,41 @@ mod tests {
             &ProfileSession::open(&registry, "local").unwrap()
         )
         .unwrap());
+    }
+
+    #[test]
+    fn checked_profile_publication_rejects_an_unexpected_host_before_commit() {
+        let _guard = TEST_PROFILE_PUBLICATION_MUTEX.lock().unwrap();
+        let environment = TestEnvironment::new().unwrap();
+        let _server = environment.start_server().unwrap();
+        let addresses = environment.addresses().unwrap();
+        let state = environment
+            .client_path("profile-publication-host-binding", "state")
+            .unwrap();
+        let credentials =
+            ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&state).unwrap();
+        let profile = local_profile(
+            &environment,
+            "wrong-host",
+            format!("localhost:{}", addresses.probe.port()),
+        );
+        let mut expected = [0x55; 33];
+        expected[0] = 2;
+        assert!(credentials
+            .check_and_add_profile_for_host_with_control(
+                &mut registry,
+                profile,
+                Duration::from_secs(30),
+                CancellationToken::new(),
+                Some(&expected),
+            )
+            .is_err());
+        assert!(matches!(
+            registry.profile("wrong-host"),
+            Err(Error::ProfileMissing)
+        ));
+        assert!(!registry.paths("wrong-host").unwrap().directory.exists());
     }
 
     #[test]

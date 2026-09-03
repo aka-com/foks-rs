@@ -1,8 +1,12 @@
 /** Shared full-page treatment for a store whose contents are unavailable. */
 
 import type { ReactNode } from 'react';
-import { Button, Chip, Notice } from '../components';
-import { serverOf, storeDescription, storeDescriptionState } from '../model';
+import { Button, Notice } from '../components';
+import {
+  serverOf,
+  storeDescriptionState,
+  storeHeadingDescription,
+} from '../model';
 import type { Store, StoreDescriptionState, World } from '../model';
 import { PageHeader } from '../shell/page-header';
 
@@ -12,7 +16,6 @@ interface StoreAccessCopy {
   title: string;
   detail: string;
   action: 'open-server' | 'review-server' | 'finish-setup';
-  status?: string;
 }
 
 function unavailableSubject(store: Store): string {
@@ -37,15 +40,26 @@ function accessCopy(
     case 'lease-unavailable':
       return {
         title: 'Server status unavailable',
-        detail: `FOKS cannot verify the compatibility lease for ${serverName}. ${subject}.`,
+        detail: `FOKS has no signed check-in for ${serverName}. ${subject}.`,
+        action: 'review-server',
+      };
+    case 'never-probed':
+      return {
+        title: 'Server not checked yet',
+        detail: `${serverName} has not been checked. ${subject} until it is checked and its identity pinned.`,
+        action: 'review-server',
+      };
+    case 'catalog-unavailable':
+      return {
+        title: 'Store connection failed',
+        detail: `${store.name} remains known on this Mac, but its current server state could not be loaded. ${subject}.`,
         action: 'review-server',
       };
     case 'lease-lapsed':
       return {
-        title: 'Compatibility lease expired',
-        detail: `${subject} until the agent renews the lease for ${serverName}.`,
+        title: 'Check-in expired',
+        detail: `${subject} until the agent renews the check-in for ${serverName}.`,
         action: 'open-server',
-        status: 'Waiting for renewal',
       };
     case 'inactive':
       return {
@@ -62,6 +76,8 @@ export interface StoreAccessTakeoverProps {
   lead?: ReactNode;
   onOpenServer: (profile: string) => void;
   onFinishSetup: () => void;
+  headerAction?: ReactNode;
+  noHeader?: boolean;
 }
 
 export function StoreAccessTakeover({
@@ -70,6 +86,8 @@ export function StoreAccessTakeover({
   lead,
   onOpenServer,
   onFinishSetup,
+  headerAction,
+  noHeader = false,
 }: StoreAccessTakeoverProps): ReactNode {
   const state = storeDescriptionState(world, store);
   if (state === 'normal') return null;
@@ -88,24 +106,24 @@ export function StoreAccessTakeover({
 
   return (
     <>
-      <PageHeader
-        title={store.name}
-        subtitle={storeDescription(world, store)}
-        lead={lead}
-      />
+      {noHeader ? null : (
+        <PageHeader
+          title={store.name}
+          subtitle={storeHeadingDescription(world, store)}
+          lead={lead}
+          action={
+            <>
+              {state === 'inactive' ? null : action}
+              {headerAction}
+            </>
+          }
+        />
+      )}
       <div className="body">
         <Notice
           severity={state === 'inactive' ? 'warn' : 'crit'}
           title={copy.title}
-          footnote={
-            state === 'inactive' ? undefined : 'Other servers are unaffected.'
-          }
-          actions={
-            <>
-              {action}
-              {copy.status ? <Chip tone="warn">{copy.status}</Chip> : null}
-            </>
-          }
+          actions={action}
         >
           <p>{copy.detail}</p>
         </Notice>
@@ -125,16 +143,13 @@ function joinNames(stores: readonly Store[]): string {
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
-/** Aggregate unavailable stores without mixing profiles or hiding inactive groups. */
+/** Aggregate catalog-level access problems. Incomplete group setup stays on the group, not All items. */
 export function storeAccessBands(world: World): StoreAccessBand[] {
   const buckets = new Map<string, { state: AccessProblem; stores: Store[] }>();
   for (const store of world.stores) {
     const state = storeDescriptionState(world, store);
-    if (state === 'normal') continue;
-    const key =
-      state === 'inactive'
-        ? `inactive:${store.id}`
-        : `${state}:${store.server}`;
+    if (state === 'normal' || state === 'inactive') continue;
+    const key = `${state}:${store.server}`;
     const bucket = buckets.get(key) ?? { state, stores: [] };
     bucket.stores.push(store);
     buckets.set(key, bucket);
@@ -148,10 +163,12 @@ export function storeAccessBands(world: World): StoreAccessBand[] {
       state === 'blocked'
         ? `${names} ${verb} unavailable because a protocol safety check blocked ${serverName}.`
         : state === 'lease-unavailable'
-          ? `${names} ${verb} unavailable because FOKS cannot verify the compatibility lease for ${serverName}.`
+          ? `${names} ${verb} unavailable because FOKS has no signed check-in for ${serverName}.`
           : state === 'lease-lapsed'
-            ? `${names} ${verb} unavailable because the compatibility lease for ${serverName} expired.`
-            : `${names} ${verb} unavailable because group setup is incomplete.`;
+            ? `${names} ${verb} unavailable because the check-in for ${serverName} expired.`
+            : state === 'catalog-unavailable'
+              ? `${names} ${verb} unavailable because the current store inventory could not be loaded.`
+              : `${names} ${verb} unavailable because ${serverName} has not been checked.`;
     return { key, text };
   });
 }

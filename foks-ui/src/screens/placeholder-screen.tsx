@@ -1,7 +1,7 @@
 /**
  * The panes this phase does not build.
  *
- * Join or create a group, Servers & devices, Settings and the first run are
+ * Join or create a group, Servers, Settings and the first run are
  * whole screens. A stub of them would be a screen someone has to delete, so
  * this identifies unavailable locations without inventing their behavior.
  */
@@ -23,14 +23,14 @@ const PANES: Readonly<Record<string, Pane>> = {
     body: 'An admin adds your username on the server. FOKS does not use invite links. Open Groups to manage rosters, roles, and Federation.',
   },
   servers: {
-    title: 'Servers & devices',
+    title: 'Servers',
     subtitle: 'Not available in this build',
-    body: 'Server rows with their own Check, the host id and the compare box, the server check-in and how long it has left, Add a server, Forget, the typed-confirmation reset, the device list and pairing are all specified there.',
+    body: 'Server rows with their own Check, the pinned Host ID, the check-in and how long it has left, Add a server, Forget, the typed-confirmation reset and pairing are all specified there.',
   },
   settings: {
     title: 'Settings',
     subtitle: 'Not available in this build',
-    body: 'Your accounts on this Mac, Your Macs & recovery, Security keys grouped into Everyday / Recovery / Danger, the backup phrase, Agent status and Start over are all specified there.',
+    body: 'Your accounts on this Mac, Recovery devices, Security keys grouped into Everyday / Recovery / Danger, the backup phrase, Agent status and About are all specified there.',
   },
   'first-run': {
     title: 'Setting up',
@@ -39,7 +39,11 @@ const PANES: Readonly<Record<string, Pane>> = {
   },
 };
 
-export function PlaceholderScreen({ location }: { location: Location }): ReactNode {
+export function PlaceholderScreen({
+  location,
+}: {
+  location: Location;
+}): ReactNode {
   const pane = PANES[location.kind];
   if (!pane) return null;
   return (

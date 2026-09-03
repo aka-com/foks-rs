@@ -1,0 +1,25 @@
+[package]
+name = "foks-go-interop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+base64 = { workspace = true }
+crypto_secretbox = { workspace = true }
+foks-snowpack = { workspace = true }
+libc = { workspace = true }
+rustix = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

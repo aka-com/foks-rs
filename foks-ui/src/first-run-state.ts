@@ -1,9 +1,25 @@
 import type { CheckedProfileResponse } from './bridge';
 
 export const FIRST_RUN_STATES = [
-  'boot', 'who', 'local', 'address', 'no-address', 'checked', 'compare', 'error',
-  'account', 'existing', 'protect', 'phrase', 'waiting', 'added',
-  'create-group', 'done', 'local-done', 'checklist-invited', 'checklist-own',
+  'boot',
+  'who',
+  'local',
+  'address',
+  'no-address',
+  'checked',
+  'compare',
+  'error',
+  'account',
+  'existing',
+  'protect',
+  'phrase',
+  'waiting',
+  'added',
+  'create-group',
+  'done',
+  'local-done',
+  'checklist-invited',
+  'checklist-own',
 ] as const;
 
 export type FirstRunStateName = (typeof FIRST_RUN_STATES)[number];
@@ -42,10 +58,24 @@ export interface FirstRunCheckpoint {
 export type FirstRunEvent =
   | { type: 'initialize'; managedLocal?: boolean }
   | { type: 'choose'; path: FirstRunPath; returning?: boolean }
-  | { type: 'managed-profile-selected'; address: string; profile: CheckedProfileResponse; returning?: boolean }
+  | {
+      type: 'managed-profile-selected';
+      address: string;
+      profile: CheckedProfileResponse;
+      returning?: boolean;
+    }
   | { type: 'go'; state: FirstRunStateName }
-  | { type: 'profile-checked'; address: string; profile: CheckedProfileResponse }
-  | { type: 'account-complete'; alias: string; username: string; deviceName: string }
+  | {
+      type: 'profile-checked';
+      address: string;
+      profile: CheckedProfileResponse;
+    }
+  | {
+      type: 'account-complete';
+      alias: string;
+      username: string;
+      deviceName: string;
+    }
   | { type: 'passphrase-set' }
   | { type: 'backup-committed' }
   | { type: 'skip-protect' }
@@ -55,7 +85,10 @@ export type FirstRunEvent =
   | { type: 'group-discovered'; group: FirstRunGroupIdentity }
   | { type: 'reenter' };
 
-export function initialFirstRun(path: FirstRunPath = 'invited', state: FirstRunStateName = 'who'): FirstRunCheckpoint {
+export function initialFirstRun(
+  path: FirstRunPath = 'invited',
+  state: FirstRunStateName = 'who',
+): FirstRunCheckpoint {
   return {
     version: 1,
     path,
@@ -72,7 +105,10 @@ export function initialFirstRun(path: FirstRunPath = 'invited', state: FirstRunS
 }
 
 /** Pure state transition. Secret form values are deliberately not events. */
-export function transitionFirstRun(state: FirstRunCheckpoint, event: FirstRunEvent): FirstRunCheckpoint {
+export function transitionFirstRun(
+  state: FirstRunCheckpoint,
+  event: FirstRunEvent,
+): FirstRunCheckpoint {
   switch (event.type) {
     case 'initialize':
       return {
@@ -98,17 +134,35 @@ export function transitionFirstRun(state: FirstRunCheckpoint, event: FirstRunEve
     case 'go':
       return { ...state, state: event.state };
     case 'profile-checked':
-      return { ...state, state: 'checked', serverAddress: event.address, profile: event.profile };
+      return {
+        ...state,
+        state: 'checked',
+        serverAddress: event.address,
+        profile: event.profile,
+      };
     case 'account-complete':
       return {
         ...state,
         state: 'protect',
-        account: { alias: event.alias, username: event.username, deviceName: event.deviceName },
+        account: {
+          alias: event.alias,
+          username: event.username,
+          deviceName: event.deviceName,
+        },
       };
     case 'passphrase-set':
-      return { ...state, passphraseSet: true };
+      // Setting a passphrase un-skips protection, exactly as committing a
+      // backup does below. Without this the checkpoint holds both
+      // `passphraseSet` and `protectSkipped`, which `decodeFirstRunCheckpoint`
+      // rejects — so the next launch throws the whole first run away.
+      return { ...state, passphraseSet: true, protectSkipped: false };
     case 'backup-committed':
-      return { ...state, state: 'protect', backupCommitted: true, protectSkipped: false };
+      return {
+        ...state,
+        state: 'protect',
+        backupCommitted: true,
+        protectSkipped: false,
+      };
     case 'skip-protect':
       return {
         ...state,
@@ -119,7 +173,8 @@ export function transitionFirstRun(state: FirstRunCheckpoint, event: FirstRunEve
       return {
         ...state,
         state: 'local-done',
-        protectSkipped: event.skipped && !state.passphraseSet && !state.backupCommitted,
+        protectSkipped:
+          event.skipped && !state.passphraseSet && !state.backupCommitted,
       };
     case 'group-complete':
       return {
@@ -141,20 +196,45 @@ export function transitionFirstRun(state: FirstRunCheckpoint, event: FirstRunEve
   }
 }
 
-const isPath = (value: unknown): value is FirstRunPath => value === 'invited' || value === 'own';
+const isPath = (value: unknown): value is FirstRunPath =>
+  value === 'invited' || value === 'own';
 export const isFirstRunState = (value: unknown): value is FirstRunStateName =>
-  typeof value === 'string' && (FIRST_RUN_STATES as readonly string[]).includes(value);
+  typeof value === 'string' &&
+  (FIRST_RUN_STATES as readonly string[]).includes(value);
 
 const ROOT_KEYS = new Set([
-  'version', 'path', 'state', 'initialized', 'managedLocal', 'profile', 'serverAddress',
-  'account', 'passphraseSet', 'backupCommitted', 'protectSkipped', 'group',
-  'groupSkipped', 'added', 'returning',
+  'version',
+  'path',
+  'state',
+  'initialized',
+  'managedLocal',
+  'profile',
+  'serverAddress',
+  'account',
+  'passphraseSet',
+  'backupCommitted',
+  'protectSkipped',
+  'group',
+  'groupSkipped',
+  'added',
+  'returning',
 ]);
-const PROFILE_KEYS = new Set(['profile', 'acceptance', 'lookupName', 'canonicalName', 'hostId', 'chain', 'epoch']);
+const PROFILE_KEYS = new Set([
+  'profile',
+  'acceptance',
+  'lookupName',
+  'canonicalName',
+  'hostId',
+  'chain',
+  'epoch',
+]);
 const ACCOUNT_KEYS = new Set(['alias', 'username', 'deviceName']);
 const GROUP_KEYS = new Set(['name', 'kind', 'alias', 'teamIdHex']);
 
-function exactKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+function exactKeys(
+  value: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+): boolean {
   return Object.keys(value).every((key) => allowed.has(key));
 }
 
@@ -163,11 +243,16 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 function boundedText(value: unknown, maximum: number): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= maximum &&
-    value.trim() === value && [...value].every((character) => {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= maximum &&
+    value.trim() === value &&
+    [...value].every((character) => {
       const code = character.charCodeAt(0);
       return code > 31 && code !== 127;
-    });
+    })
+  );
 }
 
 function localName(value: unknown): value is string {
@@ -205,19 +290,27 @@ export function encodeFirstRunCheckpoint(state: FirstRunCheckpoint): string {
   });
 }
 
-export function decodeFirstRunCheckpoint(value: string | null): FirstRunCheckpoint | null {
+export function decodeFirstRunCheckpoint(
+  value: string | null,
+): FirstRunCheckpoint | null {
   if (!value) return null;
   try {
     const parsed: unknown = JSON.parse(value);
     if (!record(parsed) || !exactKeys(parsed, ROOT_KEYS)) return null;
     const item = parsed;
-    if (item.version !== 1 || !isPath(item.path) || !isFirstRunState(item.state)) return null;
+    if (
+      item.version !== 1 ||
+      !isPath(item.path) ||
+      !isFirstRunState(item.state)
+    )
+      return null;
     const base = initialFirstRun(item.path, safeResumeState(item.state));
     let profile: CheckedProfileResponse | undefined;
     if (item.profile !== undefined) {
       const candidate = item.profile;
       if (
-        !record(candidate) || !exactKeys(candidate, PROFILE_KEYS) ||
+        !record(candidate) ||
+        !exactKeys(candidate, PROFILE_KEYS) ||
         (candidate.acceptance !== 'inserted' &&
           candidate.acceptance !== 'advanced' &&
           candidate.acceptance !== 'unchanged') ||
@@ -227,10 +320,13 @@ export function decodeFirstRunCheckpoint(value: string | null): FirstRunCheckpoi
         typeof candidate.hostId !== 'string' ||
         !/^02[0-9a-f]{64}$/.test(candidate.hostId) ||
         typeof candidate.chain !== 'number' ||
-        !Number.isSafeInteger(candidate.chain) || candidate.chain < 0 ||
+        !Number.isSafeInteger(candidate.chain) ||
+        candidate.chain < 0 ||
         typeof candidate.epoch !== 'number' ||
-        !Number.isSafeInteger(candidate.epoch) || candidate.epoch < 0
-      ) return null;
+        !Number.isSafeInteger(candidate.epoch) ||
+        candidate.epoch < 0
+      )
+        return null;
       profile = {
         profile: candidate.profile,
         acceptance: candidate.acceptance,
@@ -245,10 +341,13 @@ export function decodeFirstRunCheckpoint(value: string | null): FirstRunCheckpoi
     if (item.account !== undefined) {
       const candidate = item.account;
       if (
-        !record(candidate) || !exactKeys(candidate, ACCOUNT_KEYS) ||
-        !localName(candidate.alias) || !boundedText(candidate.username, 256) ||
+        !record(candidate) ||
+        !exactKeys(candidate, ACCOUNT_KEYS) ||
+        !localName(candidate.alias) ||
+        !boundedText(candidate.username, 256) ||
         !boundedText(candidate.deviceName, 256)
-      ) return null;
+      )
+        return null;
       account = {
         alias: candidate.alias,
         username: candidate.username,
@@ -259,13 +358,17 @@ export function decodeFirstRunCheckpoint(value: string | null): FirstRunCheckpoi
     if (item.group !== undefined) {
       const candidate = item.group;
       if (
-        !record(candidate) || !exactKeys(candidate, GROUP_KEYS) ||
+        !record(candidate) ||
+        !exactKeys(candidate, GROUP_KEYS) ||
         !boundedText(candidate.name, 256) ||
         (candidate.kind !== 'named' && candidate.kind !== 'adhoc') ||
         !localName(candidate.alias) ||
         typeof candidate.teamIdHex !== 'string' ||
-        !new RegExp(`^${candidate.kind === 'named' ? '03' : '14'}[0-9a-f]{64}$`).test(candidate.teamIdHex)
-      ) return null;
+        !new RegExp(
+          `^${candidate.kind === 'named' ? '03' : '14'}[0-9a-f]{64}$`,
+        ).test(candidate.teamIdHex)
+      )
+        return null;
       group = {
         name: candidate.name,
         kind: candidate.kind,
@@ -274,40 +377,80 @@ export function decodeFirstRunCheckpoint(value: string | null): FirstRunCheckpoi
       };
     }
     const flags = [
-      item.initialized, item.managedLocal, item.passphraseSet, item.backupCommitted,
-      item.protectSkipped, item.groupSkipped, item.added, item.returning,
+      item.initialized,
+      item.managedLocal,
+      item.passphraseSet,
+      item.backupCommitted,
+      item.protectSkipped,
+      item.groupSkipped,
+      item.added,
+      item.returning,
     ];
     if (flags.some((flag) => typeof flag !== 'boolean')) return null;
-    if (item.serverAddress !== undefined && !boundedText(item.serverAddress, 2048)) return null;
+    if (
+      item.serverAddress !== undefined &&
+      !boundedText(item.serverAddress, 2048)
+    )
+      return null;
     const state = safeResumeState(item.state);
-    const needsProfile = !['boot', 'who', 'local', 'address', 'no-address', 'error'].includes(state);
-    const needsAccount = ['protect', 'waiting', 'added', 'create-group', 'done', 'local-done', 'checklist-invited', 'checklist-own'].includes(state);
+    const needsProfile = ![
+      'boot',
+      'who',
+      'local',
+      'address',
+      'no-address',
+      'error',
+    ].includes(state);
+    const needsAccount = [
+      'protect',
+      'waiting',
+      'added',
+      'create-group',
+      'done',
+      'local-done',
+      'checklist-invited',
+      'checklist-own',
+    ].includes(state);
     if ((state === 'boot') === (item.initialized as boolean)) return null;
     if (profile && item.serverAddress === undefined) return null;
-    if (needsProfile && (!profile || item.serverAddress === undefined)) return null;
+    if (needsProfile && (!profile || item.serverAddress === undefined))
+      return null;
     if (account && !profile) return null;
     if (needsAccount && !account) return null;
     if (
-      (item.passphraseSet === true || item.backupCommitted === true ||
-        item.protectSkipped === true || group || item.groupSkipped === true ||
-        item.added === true) && !account
-    ) return null;
+      (item.passphraseSet === true ||
+        item.backupCommitted === true ||
+        item.protectSkipped === true ||
+        group ||
+        item.groupSkipped === true ||
+        item.added === true) &&
+      !account
+    )
+      return null;
     if (group && !account) return null;
     if (
       item.protectSkipped === true &&
       (item.passphraseSet === true || item.backupCommitted === true)
-    ) return null;
-    if (item.groupSkipped === true && (group || item.added === true)) return null;
+    )
+      return null;
+    if (item.groupSkipped === true && (group || item.added === true))
+      return null;
     if (item.returning === true && item.path !== 'own') return null;
     if (item.managedLocal === true && item.path !== 'own') return null;
-    if ((state === 'local' || state === 'local-done') && item.managedLocal !== true) return null;
+    if (
+      (state === 'local' || state === 'local-done') &&
+      item.managedLocal !== true
+    )
+      return null;
     if (state === 'done' && (!group || item.path !== 'own')) return null;
-    if (state === 'added' && (
-      item.added !== true || item.path !== 'invited' ||
-      !group
-    )) return null;
+    if (
+      state === 'added' &&
+      (item.added !== true || item.path !== 'invited' || !group)
+    )
+      return null;
     if (item.added === true && item.path !== 'invited') return null;
-    if (item.path === 'invited' && Boolean(group) !== (item.added === true)) return null;
+    if (item.path === 'invited' && Boolean(group) !== (item.added === true))
+      return null;
     if (item.path === 'own' && item.added === true) return null;
     if (item.groupSkipped === true && item.path !== 'own') return null;
     return {
@@ -315,7 +458,8 @@ export function decodeFirstRunCheckpoint(value: string | null): FirstRunCheckpoi
       initialized: item.initialized as boolean,
       managedLocal: item.managedLocal as boolean,
       profile,
-      serverAddress: typeof item.serverAddress === 'string' ? item.serverAddress : undefined,
+      serverAddress:
+        typeof item.serverAddress === 'string' ? item.serverAddress : undefined,
       account,
       passphraseSet: item.passphraseSet as boolean,
       backupCommitted: item.backupCommitted as boolean,

@@ -5,13 +5,19 @@
  *   `.tag`    a smaller, quieter classification
  *   `.badge`  a count on a navigation row
  *
- * `Badge` renders **nothing at zero**. The rule that an empty Issues badge
+ * `Badge` renders **nothing at zero**. The rule that an empty Alerts badge
  * is absent rather than a "0" lives here, once, so no caller can forget it.
  */
 
 import type { ReactNode } from 'react';
 
-export type ChipTone = 'default' | 'you' | 'warn';
+/**
+ * `ok` and `bad` are the two the server and key screens need: a status pill
+ * that is green when a thing checked out and red when it did not. Both were
+ * written as raw spans against classes the stylesheet never defined, so every
+ * status rendered the same neutral grey.
+ */
+export type ChipTone = 'default' | 'you' | 'warn' | 'ok' | 'bad';
 
 export interface ChipProps {
   tone?: ChipTone;
@@ -43,7 +49,11 @@ export interface TagProps {
   children: ReactNode;
 }
 
-export function Tag({ tone = 'default', title, children }: TagProps): ReactNode {
+export function Tag({
+  tone = 'default',
+  title,
+  children,
+}: TagProps): ReactNode {
   return (
     <span className={tone === 'warn' ? 'tag warn' : 'tag'} title={title}>
       {children}

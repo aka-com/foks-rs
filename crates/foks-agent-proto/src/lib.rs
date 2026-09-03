@@ -11,13 +11,13 @@ pub use frame::{
 };
 pub use message::{
     AccountStoreRef, AccountSummary, AgentStatus, BackupEnrollmentSummary, CredentialBackend,
-    DeviceSummary, ErrorCode, ErrorFields, FederationRole, KnownStoreSummary, KvChunkResult,
-    KvEntryMetadata, KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadFrame,
-    KvUploadHeader, KvUploadPayload, Operation, PendingOperationKind, PendingOperationSummary,
-    ProfileProtocol, ProfileTrust, Request, ResetArtifactKind, ResetArtifactSummary,
-    ResetStatePreview, Response, ResponseResult, SecretString, ServerStatusSnapshot,
-    StoredHostStatus, TeamKind, TeamRole, TeamStoreRef, YubiFederationUnlockInput,
-    YubiRetryConfiguration, PROTOCOL_VERSION,
+    DeviceSummary, ErrorCode, ErrorFields, FederationRole, GoProfileCandidate, GoProfileDiscovery,
+    KnownStoreSummary, KvChunkResult, KvEntryMetadata, KvPage, KvPrecondition, KvReadResult,
+    KvRole, KvStoreRef, KvUploadFrame, KvUploadHeader, KvUploadPayload, Operation,
+    PendingOperationKind, PendingOperationSummary, ProfileProtocol, ProfileTrust, Request,
+    ResetArtifactKind, ResetArtifactSummary, ResetStatePreview, Response, ResponseResult,
+    SecretString, ServerStatusSnapshot, StoredHostStatus, TeamDetailsSummary, TeamKind, TeamRole,
+    TeamStoreRef, YubiFederationUnlockInput, YubiRetryConfiguration, PROTOCOL_VERSION,
 };
 
 #[cfg(test)]
@@ -38,6 +38,20 @@ mod tests {
         assert_eq!(
             decode_response(&encode(&response).unwrap()).unwrap(),
             response
+        );
+    }
+
+    #[test]
+    fn go_profile_discovery_is_read_only_and_has_a_stable_shape() {
+        let request = Request::new(8, Operation::DiscoverGoProfiles);
+        assert!(!request.operation.is_mutation());
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "version": 5,
+                "id": 8,
+                "operation": { "operation": "discover-go-profiles" }
+            })
         );
     }
 
@@ -158,7 +172,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 3,
+                "version": 5,
                 "id": 9,
                 "operation": {
                     "operation": "sync-team",
@@ -170,7 +184,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Response::error(9, ErrorCode::Busy, "locked")).unwrap(),
             serde_json::json!({
-                "version": 3,
+                "version": 5,
                 "id": 9,
                 "status": "error",
                 "code": "busy",
@@ -203,7 +217,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&admission).unwrap(),
             serde_json::json!({
-                "version": 3,
+                "version": 5,
                 "id": 13,
                 "operation": {
                     "operation": "admit-federated-team",
@@ -465,7 +479,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 3,
+                "version": 5,
                 "id": 25,
                 "operation": {
                     "operation": "demote-team-member",
@@ -488,7 +502,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 3,
+                "version": 5,
                 "id": 26,
                 "operation": {
                     "operation": "remove-team-member",
@@ -587,6 +601,20 @@ mod tests {
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("cage"));
         assert!(operation.is_device_pairing_wait());
+        let imported = Operation::AcceptGoProfilePairing {
+            candidate_id: "ab".repeat(32),
+            profile: "local".to_owned(),
+            target_alias: "laptop".to_owned(),
+            device_name: "paired laptop".to_owned(),
+            serial: 3,
+            phrase: SecretString::new(
+                "cage 32 advice 4 letter 128 avoid 16 acoustic 2 doctor 64 amount",
+            ),
+        };
+        let debug = format!("{imported:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("cage"));
+        assert!(imported.is_device_pairing_wait());
         assert!(!Operation::StartDevicePairing {
             profile: "local".to_owned(),
             account_alias: "owner".to_owned(),

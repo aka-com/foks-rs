@@ -69,9 +69,8 @@ const STATES = [
   'people',
   'party',
   'federation',
-  'store',
+  'items',
   'danger',
-  'invite',
   'add',
   'demote',
   'remove',
@@ -82,19 +81,50 @@ const STATES = [
   'party-remove',
   'groups-lease',
   'groups-inactive',
-  'servers-list', 'servers-server', 'servers-lapsed', 'servers-rollback',
-  'servers-reset', 'servers-add', 'servers-unprobed', 'servers-check',
-  'settings-macs', 'settings-macs-work', 'settings-phrase', 'settings-keys',
-  'settings-enrol', 'settings-account', 'settings-agent', 'settings-about',
+  'rekey-menu',
+  'servers-list',
+  'servers-server',
+  'servers-lapsed',
+  'servers-rollback',
+  'servers-reset',
+  'servers-add',
+  'servers-unprobed',
+  'servers-check',
+  'settings-macs',
+  'settings-macs-work',
+  'settings-phrase',
+  'settings-keys',
+  'settings-enrol',
+  'settings-account',
+  'settings-agent',
+  'settings-about',
 ];
 
 // These extensions get app screenshots and an interaction walk.
-const GROUP_ITEM_STATES = ['group-new-text', 'group-new-link', 'group-new-file'];
+const GROUP_ITEM_STATES = [
+  'group-new-text',
+  'group-new-link',
+  'group-new-file',
+];
 
 const FIRST_RUN_STATES = [
-  'boot', 'who', 'address', 'no-address', 'checked', 'compare', 'error',
-  'account', 'existing', 'protect', 'phrase', 'waiting', 'added',
-  'create-group', 'done', 'checklist-invited', 'checklist-own',
+  'boot',
+  'who',
+  'address',
+  'no-address',
+  'checked',
+  'compare',
+  'error',
+  'account',
+  'existing',
+  'protect',
+  'phrase',
+  'waiting',
+  'added',
+  'create-group',
+  'done',
+  'checklist-invited',
+  'checklist-own',
 ];
 
 const TYPES = {
@@ -167,16 +197,34 @@ async function visit(context, url, shot) {
     .waitForSelector('.app', { timeout: 5000 })
     .catch(() => problems.push('the shell never rendered `.app`'));
   if (new URL(url).searchParams.get('state') === 'show') {
-    await page.waitForSelector('.details .v.mono', { timeout: 5000 })
-      .catch(() => problems.push('Show did not reveal the selected exact version'));
+    await page
+      .waitForSelector('.details .v.mono', { timeout: 5000 })
+      .catch(() =>
+        problems.push('Show did not reveal the selected exact version'),
+      );
   }
-  if (new URL(url).searchParams.get('state') === 'phrase' && new URL(url).protocol !== 'file:') {
-    await page.waitForSelector('.sheet .word', { timeout: 5000 })
-      .catch(() => problems.push('the one-time backup phrase was not prepared'));
+  if (
+    new URL(url).searchParams.get('state') === 'phrase' &&
+    new URL(url).protocol !== 'file:'
+  ) {
+    await page
+      .waitForSelector('.sheet .word', { timeout: 5000 })
+      .catch(() =>
+        problems.push('the one-time backup phrase was not prepared'),
+      );
   }
-  if (new URL(url).protocol !== 'file:' && new URL(url).searchParams.get('state') === 'link') {
-    await page.getByRole('button', { name: 'Read target', exact: true }).waitFor({ timeout: 5000 })
-      .catch(() => problems.push('the Link target was not kept masked behind an explicit read'));
+  if (
+    new URL(url).protocol !== 'file:' &&
+    new URL(url).searchParams.get('state') === 'link'
+  ) {
+    await page
+      .getByRole('button', { name: 'Read target', exact: true })
+      .waitFor({ timeout: 5000 })
+      .catch(() =>
+        problems.push(
+          'the Link target was not kept masked behind an explicit read',
+        ),
+      );
   }
 
   const width = await page.evaluate(
@@ -184,7 +232,9 @@ async function visit(context, url, shot) {
     'document.documentElement.scrollWidth',
   );
   if (width !== WIDTH) {
-    problems.push(`scrollWidth is ${width}, not ${WIDTH} — the page scrolls sideways`);
+    problems.push(
+      `scrollWidth is ${width}, not ${WIDTH} — the page scrolls sideways`,
+    );
   }
   await page.screenshot({ path: join(SHOTS, shot) });
   await page.close();
@@ -205,24 +255,56 @@ async function personaWalks(context, origin) {
     // Marcus: find and open the PDF, then reveal the Household Wi-Fi value.
     await page.goto(`${origin}/?state=all`, { waitUntil: 'load' });
     await page.locator('.search input').fill('passport');
-    await page.locator('.body .row').filter({ hasText: 'passport-scan.pdf' }).click();
-    check(await page.locator('.details .dh h2').textContent() === 'passport-scan.pdf', 'Marcus could not open the passport PDF details');
+    await page
+      .locator('.body .row')
+      .filter({ hasText: 'passport-scan.pdf' })
+      .click();
+    check(
+      (await page.locator('.details .dh h2').textContent()) ===
+        'passport-scan.pdf',
+      'Marcus could not open the passport PDF details',
+    );
 
     await page.goto(`${origin}/?state=group`, { waitUntil: 'load' });
-    await page.locator('.details').getByRole('button', { name: 'Show', exact: true }).click();
+    await page
+      .locator('.details')
+      .getByRole('button', { name: 'Show', exact: true })
+      .click();
     await page.waitForSelector('.details .v.mono');
-    check(await page.locator('.details .v.mono').textContent() === 'sunny-kettle-42', 'Marcus could not reveal the Wi-Fi password');
+    check(
+      (await page.locator('.details .v.mono').textContent()) ===
+        'sunny-kettle-42',
+      'Marcus could not reveal the Wi-Fi password',
+    );
 
     // Jun: the same service account is excluded by Admin, included by Member 0.
     const selection = encodeURIComponent('team:eng|/deploy/production-token');
-    await page.goto(`${origin}/?state=store&store=team%3Aeng&sel=${selection}`, { waitUntil: 'load' });
-    const deployBot = page.locator('.details .party').filter({ hasText: 'deploy-bot' });
-    check((await deployBot.textContent())?.includes('cannot read this'), 'Sharing did not show that deploy-bot cannot read production-token');
-    await page.locator('.body .row').filter({ hasText: 'staging-token' }).click();
-    const stagingBot = page.locator('.details .party').filter({ hasText: 'deploy-bot' });
-    check(!(await stagingBot.textContent())?.includes('cannot read this'), 'Sharing did not show that deploy-bot can read staging-token');
+    await page.goto(
+      `${origin}/?state=store&store=team%3Aeng&sel=${selection}`,
+      { waitUntil: 'load' },
+    );
+    const deployBot = page
+      .locator('.details .party')
+      .filter({ hasText: 'deploy-bot' });
+    check(
+      (await deployBot.textContent())?.includes('cannot read this'),
+      'Sharing did not show that deploy-bot cannot read production-token',
+    );
+    await page
+      .locator('.body .row')
+      .filter({ hasText: 'staging-token' })
+      .click();
+    const stagingBot = page
+      .locator('.details .party')
+      .filter({ hasText: 'deploy-bot' });
+    check(
+      !(await stagingBot.textContent())?.includes('cannot read this'),
+      'Sharing did not show that deploy-bot can read staging-token',
+    );
   } catch (error) {
-    failures.push(`persona walk: ${error instanceof Error ? error.message : String(error)}`);
+    failures.push(
+      `persona walk: ${error instanceof Error ? error.message : String(error)}`,
+    );
   } finally {
     await page.close();
   }
@@ -238,12 +320,19 @@ async function writeWalk(context, origin) {
   });
   try {
     await page.goto(`${origin}/?state=new-resource`, { waitUntil: 'load' });
-    await page.locator('input[aria-label="Name"]').fill('PHASE3_ACCEPTANCE_KEY');
+    await page
+      .locator('input[aria-label="Name"]')
+      .fill('PHASE3_ACCEPTANCE_KEY');
     await page.locator('input[aria-label="Value"]').fill('acceptance value');
-    await page.getByRole('button', { name: 'Create in Personal', exact: true }).click();
+    await page
+      .getByRole('button', { name: 'Create in Personal', exact: true })
+      .click();
     await page.waitForSelector('.flash');
     await page.locator('.search input').fill('phase3_acceptance_key');
-    await page.locator('.body .row').filter({ hasText: 'phase3_acceptance_key' }).waitFor();
+    await page
+      .locator('.body .row')
+      .filter({ hasText: 'phase3_acceptance_key' })
+      .waitFor();
 
     await page.goto(`${origin}/?state=exists`, { waitUntil: 'load' });
     await page.getByRole('button', { name: /Open version/ }).click();
@@ -253,7 +342,9 @@ async function writeWalk(context, origin) {
     await page.getByRole('button', { name: 'Retry', exact: true }).click();
     await page.waitForSelector('.stopwrap', { state: 'detached' });
   } catch (error) {
-    failures.push(`write walk: ${error instanceof Error ? error.message : String(error)}`);
+    failures.push(
+      `write walk: ${error instanceof Error ? error.message : String(error)}`,
+    );
   } finally {
     await page.close();
   }
@@ -270,34 +361,52 @@ async function groupWalk(context, origin) {
   try {
     await page.goto(`${origin}/?state=add`, { waitUntil: 'load' });
     await page.locator('.sheet input').first().fill('phase4.person');
-    await page.getByRole('button', { name: 'Add as Member · visibility 0', exact: true }).click();
-    await page.locator('.rt .row', { hasText: 'phase4.person' }).waitFor();
+    await page.getByRole('button', { name: 'Add phase4.person' }).click();
+    await page.locator('.rt .prow', { hasText: 'phase4.person' }).waitFor();
 
     await page.goto(`${origin}/?state=party`, { waitUntil: 'load' });
-    await page.locator('.details', { hasText: 'What deploy-bot can read' }).waitFor();
+    await page.locator('.details', { hasText: 'deploy-bot' }).waitFor();
 
     await page.goto(`${origin}/?state=federation`, { waitUntil: 'load' });
-    const inactive = page.locator('.fcard', { hasText: 'Inactive' });
-    await inactive.getByRole('button', { name: 'Re-run', exact: true }).click();
+    const inactive = page.locator('.rt.fed .prow', { hasText: 'Inactive' });
+    await inactive.getByRole('button', { name: 'Restore access' }).click();
     await page.waitForSelector('.flash');
 
     await page.goto(`${origin}/?state=group`, { waitUntil: 'load' });
-    await page.getByRole('button', { name: 'Manage', exact: true }).click();
-    await page.locator('.sheet', { hasText: 'Manage Household' }).waitFor();
+    await page
+      .getByRole('button', { name: 'Group settings', exact: true })
+      .click();
+    await page.locator('.ghero', { hasText: 'Household' }).waitFor();
+    await page.locator('.ghero .sub', { hasText: 'Group settings' }).waitFor();
 
     await page.goto(`${origin}/?state=party-remove`, { waitUntil: 'load' });
-    const remove = page.getByRole('button', { name: 'Remove and rekey', exact: true });
-    if (!(await remove.isDisabled())) failures.push('short party-remove allowed a non-local service account removal');
+    const remove = page.getByRole('button', {
+      name: 'Remove and rekey',
+      exact: true,
+    });
+    if (!(await remove.isDisabled()))
+      failures.push(
+        'short party-remove allowed a non-local service account removal',
+      );
 
     await page.goto(`${origin}/?state=join`, { waitUntil: 'load' });
-    const inviteCount = await page.getByRole('button', { name: 'Invite someone…', exact: true }).count();
-    if (inviteCount !== 2) failures.push(`Join offered ${inviteCount} invite choices, not one per fixture account`);
+    const inviteCount = await page
+      .getByRole('button', { name: /^Invite as .+…$/ })
+      .count();
+    if (inviteCount !== 2)
+      failures.push(
+        `Settings Groups offered ${inviteCount} invite choices, not one per fixture account`,
+      );
 
     await page.goto(`${origin}/?state=demote`, { waitUntil: 'load' });
-    await page.getByRole('button', { name: /Lower to Member/ }).click();
+    await page
+      .getByRole('button', { name: 'Change role', exact: true })
+      .click();
     await page.waitForSelector('.flash');
   } catch (error) {
-    failures.push(`group walk: ${error instanceof Error ? error.message : String(error)}`);
+    failures.push(
+      `group walk: ${error instanceof Error ? error.message : String(error)}`,
+    );
   } finally {
     await page.close();
   }
@@ -313,25 +422,44 @@ async function groupItemWalk(context, origin) {
   });
   try {
     await page.goto(`${origin}/?state=group-new-text`, { waitUntil: 'load' });
-    await page.getByRole('button', { name: 'Read role Admin', exact: true }).click();
+    await page
+      .getByRole('button', { name: 'Read role Admin', exact: true })
+      .click();
     const preview = await page.locator('.sheet').textContent();
     const count = /would be readable by (\d+) of (\d+)/.exec(preview ?? '');
-    if (!count) failures.push('group create did not render a computed reader preview');
-    await page.getByRole('textbox', { name: 'Name', exact: true }).fill('PHASE7_BROWSER_KEY');
-    await page.getByRole('textbox', { name: 'Value', exact: true }).fill('browser value');
-    await page.getByRole('button', { name: 'Create in Engineering', exact: true }).click();
-    const created = page.locator('.body .row').filter({ hasText: 'phase7_browser_key' });
+    if (!count)
+      failures.push('group create did not render a computed reader preview');
+    await page
+      .getByRole('textbox', { name: 'Name', exact: true })
+      .fill('PHASE7_BROWSER_KEY');
+    await page
+      .getByRole('textbox', { name: 'Value', exact: true })
+      .fill('browser value');
+    await page
+      .getByRole('button', { name: 'Create in Engineering', exact: true })
+      .click();
+    const created = page
+      .locator('.body .row')
+      .filter({ hasText: 'phase7_browser_key' });
     await created.waitFor();
     const people = Number(count?.[1]);
-    if (!(await created.locator('.chip').textContent())?.includes(String(people))) {
-      failures.push('created group item did not retain its computed read-role count');
+    if (
+      !(await created.locator('.chip').textContent())?.includes(String(people))
+    ) {
+      failures.push(
+        'created group item did not retain its computed read-role count',
+      );
     }
 
     await created.click();
-    await page.locator('.details .dh h2', { hasText: 'phase7_browser_key' }).waitFor();
+    await page
+      .locator('.details .dh h2', { hasText: 'phase7_browser_key' })
+      .waitFor();
     await page.getByRole('button', { name: 'Edit', exact: true }).click();
     await page.locator('.details textarea').fill('edited browser value');
-    await page.getByRole('button', { name: 'Save version 2', exact: true }).click();
+    await page
+      .getByRole('button', { name: 'Save version 2', exact: true })
+      .click();
     await page.locator('.flash', { hasText: 'Saved version 2' }).waitFor();
     await page.getByRole('button', { name: 'Remove', exact: true }).click();
     await page.getByRole('button', { name: 'Remove', exact: true }).click();
@@ -339,15 +467,29 @@ async function groupItemWalk(context, origin) {
     await created.waitFor({ state: 'detached' });
 
     await page.goto(`${origin}/?state=group-new-link`, { waitUntil: 'load' });
-    await page.getByRole('textbox', { name: 'Points to', exact: true }).fill('/deploy/staging-token');
-    await page.getByRole('button', { name: 'Create in Engineering', exact: true }).click();
-    await page.locator('.body .row').filter({ hasText: 'latest-key' }).waitFor();
+    await page
+      .getByRole('textbox', { name: 'Points to', exact: true })
+      .fill('/deploy/staging-token');
+    await page
+      .getByRole('button', { name: 'Create in Engineering', exact: true })
+      .click();
+    await page
+      .locator('.body .row')
+      .filter({ hasText: 'latest-key' })
+      .waitFor();
 
     await page.goto(`${origin}/?state=group-new-file`, { waitUntil: 'load' });
-    await page.getByRole('button', { name: 'Choose file and create', exact: true }).click();
-    await page.locator('.body .row').filter({ hasText: 'emergency.pdf' }).waitFor();
+    await page
+      .getByRole('button', { name: 'Choose file and create', exact: true })
+      .click();
+    await page
+      .locator('.body .row')
+      .filter({ hasText: 'emergency.pdf' })
+      .waitFor();
   } catch (error) {
-    failures.push(`group item walk: ${error instanceof Error ? error.message : String(error)}`);
+    failures.push(
+      `group item walk: ${error instanceof Error ? error.message : String(error)}`,
+    );
   } finally {
     await page.close();
   }
@@ -370,39 +512,64 @@ async function firstRunWalk(context, origin) {
     await page.evaluate("window.localStorage.removeItem('foks.first-run.v1')");
     await page.reload({ waitUntil: 'load' });
     await page.getByRole('button', { name: /Someone invited me/ }).click();
-    await reloadAt('What did sam send you?');
-    await page.getByRole('button', { name: 'Check the server', exact: true }).click();
-    await page.locator('.pane', { hasText: 'Found it.' }).waitFor();
-    await reloadAt('Found it.');
+    await reloadAt('Select a server address');
+    await page
+      .getByRole('button', { name: 'Check the server', exact: true })
+      .click();
+    await page.locator('.pane', { hasText: 'Pinned on this Mac' }).waitFor();
+    await reloadAt('Pinned on this Mac');
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
-    await page.locator('.pane', { hasText: 'Your account on' }).waitFor();
-    await reloadAt('Your account on');
-    await page.getByRole('button', { name: 'Create my account', exact: true }).click();
-    await page.locator('.pane', { hasText: 'Protect it' }).waitFor();
-    await reloadAt('Protect it');
+    await page.locator('.pane', { hasText: 'Create an account' }).waitFor();
+    await reloadAt('Create an account');
+    await page
+      .getByRole('button', { name: 'Create my account', exact: true })
+      .click();
+    await page.locator('.pane', { hasText: 'Save recovery phrase' }).waitFor();
+    await reloadAt('Save recovery phrase');
 
-    await page.getByRole('button', { name: 'Show my phrase', exact: true }).click();
+    await page
+      .getByRole('button', { name: 'Show my phrase', exact: true })
+      .click();
     await page.locator('.sheet .word').first().waitFor();
     await page.reload({ waitUntil: 'load' });
-    if (await page.locator('.sheet').count()) failures.push('a prepared backup phrase survived reload');
-    await page.getByRole('button', { name: 'Show my phrase', exact: true }).click();
+    if (await page.locator('.sheet').count())
+      failures.push('a prepared backup phrase survived reload');
+    await page
+      .getByRole('button', { name: 'Show my phrase', exact: true })
+      .click();
     await page.locator('.sheet .word').first().waitFor();
     await page.locator('.sheet .check').click();
-    await page.locator('.sheet').getByRole('button', { name: 'Done', exact: true }).click();
+    await page
+      .locator('.sheet')
+      .getByRole('button', { name: 'Done', exact: true })
+      .click();
     await page.locator('.pane', { hasText: 'Written down' }).waitFor();
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await page.locator('.pane', { hasText: 'Waiting for sam.ortiz' }).waitFor();
     await reloadAt('Waiting for sam.ortiz');
-    await page.locator('.pcard').getByRole('button', { name: 'Check now', exact: true }).click();
-    await page.locator('.notice', { hasText: 'You’re in Engineering' }).waitFor();
+    await page
+      .locator('.pcard')
+      .getByRole('button', { name: 'Check now', exact: true })
+      .click();
+    await page
+      .locator('.notice', { hasText: 'You’re in Engineering' })
+      .waitFor();
     await reloadAt('You’re in Engineering');
 
-    const checkpoint = await page.evaluate("window.localStorage.getItem('foks.first-run.v1') ?? ''");
-    if (/orbit|"invite"|"passphrase"|"recoveryPhrase"|"backupPhrase"/.test(checkpoint)) {
+    const checkpoint = await page.evaluate(
+      "window.localStorage.getItem('foks.first-run.v1') ?? ''",
+    );
+    if (
+      /orbit|"invite"|"passphrase"|"recoveryPhrase"|"backupPhrase"/.test(
+        checkpoint,
+      )
+    ) {
       failures.push('the first-run checkpoint retained secret form material');
     }
   } catch (error) {
-    failures.push(`first-run walk: ${error instanceof Error ? error.message : String(error)}`);
+    failures.push(
+      `first-run walk: ${error instanceof Error ? error.message : String(error)}`,
+    );
   } finally {
     await page.close();
   }
@@ -413,38 +580,59 @@ async function adeWalk(context, origin) {
   const page = await context.newPage();
   const failures = [];
   page.on('pageerror', (error) => failures.push(`pageerror: ${error.message}`));
-  page.on('console', (message) => { if (message.type() === 'error') failures.push(`console: ${message.text()}`); });
+  page.on('console', (message) => {
+    if (message.type() === 'error') failures.push(`console: ${message.text()}`);
+  });
   try {
     await page.goto(`${origin}/?state=servers-unprobed`, { waitUntil: 'load' });
     await page.getByRole('button', { name: 'Check now', exact: true }).click();
     await page.locator('.main', { hasText: 'New pin' }).waitFor();
-    await page.locator('summary', { hasText: 'Details' }).click().catch(() => {});
+    await page
+      .locator('summary', { hasText: 'Details' })
+      .click()
+      .catch(() => {});
     await page.getByRole('button', { name: 'Show full', exact: true }).click();
     const host = await page.locator('.inset .mono').first().textContent();
     if (!host) failures.push('Ade could not inspect the checked host id');
     else {
-      if (!/^02[0-9a-f]{64}$/.test(host)) failures.push('Ade did not receive the full canonical host id');
+      if (!/^02[0-9a-f]{64}$/.test(host))
+        failures.push('Ade did not receive the full canonical host id');
       await page.getByLabel('They published').fill(host);
-      if ((await page.locator('.server-compare').textContent())?.includes('Match') !== true) failures.push('Ade out-of-band comparison did not report Match');
+      if (
+        (await page.locator('.server-compare').textContent())?.includes(
+          'Match',
+        ) !== true
+      )
+        failures.push('Ade out-of-band comparison did not report Match');
     }
 
     await page.goto(`${origin}/?state=servers-reset`, { waitUntil: 'load' });
     await page.locator('.sheet', { hasText: 'team-creation' }).waitFor();
     await page.locator('.sheet input').fill('personal');
-    await page.getByRole('button', { name: 'Reset local state', exact: true }).click();
+    await page
+      .getByRole('button', { name: 'Reset local state', exact: true })
+      .click();
     await page.waitForSelector('.sheet', { state: 'detached' });
 
     await page.goto(`${origin}/?state=settings-phrase`, { waitUntil: 'load' });
     const tokens = await page.locator('.sheet .word').count();
     if (tokens !== 17) failures.push(`Ade saw ${tokens} backup tokens, not 17`);
-    if (await page.getByRole('button', { name: /copy/i }).count()) failures.push('backup phrase offered a copy button');
+    if (await page.getByRole('button', { name: /copy/i }).count())
+      failures.push('backup phrase offered a copy button');
 
     await page.goto(`${origin}/?state=settings-enrol`, { waitUntil: 'load' });
-    await page.locator('.sheet', { hasText: 'Create a YubiKey account' }).waitFor();
-    if ((await page.locator('.sheet input[type="password"]').count()) < 2) failures.push('YubiKey PIN/PUK fields were not concealed');
+    await page
+      .locator('.sheet', { hasText: 'Create a YubiKey account' })
+      .waitFor();
+    if ((await page.locator('.sheet input[type="password"]').count()) < 2)
+      failures.push('YubiKey PIN/PUK fields were not concealed');
   } catch (error) {
-    failures.push(`Ade walk: ${error instanceof Error ? error.message : String(error)}`);
-  } finally { await page.close(); }
+    failures.push(
+      `Ade walk: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  } finally {
+    await page.close();
+  }
   return failures;
 }
 

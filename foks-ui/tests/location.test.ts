@@ -97,14 +97,17 @@ test('sameLocation compares the payload, not just the kind', () => {
     false,
   );
   assert.equal(
-    sameLocation({ kind: 'settings' }, { kind: 'settings', section: 'agent' }),
+    sameLocation({ kind: 'settings' }, { kind: 'settings', section: 'about' }),
     false,
   );
   assert.equal(
-    sameLocation({ kind: 'first-run', step: 'who' }, { kind: 'first-run', step: 'who' }),
+    sameLocation(
+      { kind: 'first-run', step: 'who' },
+      { kind: 'first-run', step: 'who' },
+    ),
     true,
   );
-  assert.equal(sameLocation({ kind: 'all' }, { kind: 'issues' }), false);
+  assert.equal(sameLocation({ kind: 'all' }, { kind: 'alerts' }), false);
 });
 
 /* -------------------------------------------------------------- URL codec -- */
@@ -113,13 +116,14 @@ const ROUND_TRIP: Location[] = [
   { kind: 'all' },
   { kind: 'store', ref: 'acct:personal' },
   { kind: 'store', ref: 'team:eng' },
-  { kind: 'issues' },
-  { kind: 'join' },
-  { kind: 'groups' },
-  { kind: 'group-admin', ref: 'team:eng' },
-  { kind: 'servers' },
+  { kind: 'alerts' },
+  { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  { kind: 'group-settings', ref: 'team:eng', tab: 'settings' },
+  { kind: 'settings', section: 'servers' },
+  { kind: 'settings', section: 'servers', profile: 'acme' },
   { kind: 'settings' },
-  { kind: 'settings', section: 'agent' },
+  { kind: 'settings', section: 'groups' },
+  { kind: 'settings', section: 'about' },
   { kind: 'first-run', step: 'who' },
 ];
 
@@ -144,14 +148,18 @@ test('encoding clears the parameters the previous location left behind', () => {
 });
 
 test('Phase 6 aliases do not collide with Groups or first-run states', () => {
-  assert.deepEqual(decodeLocation('?state=servers-add'), { kind: 'servers' });
+  assert.deepEqual(decodeLocation('?state=servers-add'), {
+    kind: 'settings',
+    section: 'servers',
+  });
   assert.deepEqual(decodeLocation('?state=settings-account'), {
     kind: 'settings',
     section: 'account',
   });
   assert.deepEqual(decodeLocation('?state=add'), {
-    kind: 'group-admin',
+    kind: 'group-settings',
     ref: 'team:eng',
+    tab: 'people',
   });
   assert.deepEqual(decodeLocation('?state=account&path=own'), {
     kind: 'first-run',
@@ -233,13 +241,18 @@ test('sameLocation tells two accounts with the same alias apart', () => {
 });
 
 test('the retired account parameter is ignored rather than resolved', () => {
-  assert.deepEqual(decodeLocation('?state=settings&section=macs&account=work'), {
-    kind: 'settings',
-    section: 'macs',
-  });
+  assert.deepEqual(
+    decodeLocation('?state=settings&section=macs&account=work'),
+    {
+      kind: 'settings',
+      section: 'macs',
+    },
+  );
   // An address carrying both reads only the exact one.
   assert.deepEqual(
-    decodeLocation('?state=settings&section=macs&account=work&store=acct:personal'),
+    decodeLocation(
+      '?state=settings&section=macs&account=work&store=acct:personal',
+    ),
     { kind: 'settings', section: 'macs', store: 'acct:personal' },
   );
   // And encoding a Settings location clears the obsolete parameter.
@@ -252,19 +265,16 @@ test('the retired account parameter is ignored rather than resolved', () => {
 });
 
 test('leaving Settings clears the account it was on', () => {
-  const from = 'http://localhost/?state=settings&section=macs&store=acct%3Awork&account=work';
+  const from =
+    'http://localhost/?state=settings&section=macs&store=acct%3Awork&account=work';
   for (const location of [
     { kind: 'all' } as const,
-    { kind: 'groups' } as const,
-    { kind: 'join' } as const,
-    { kind: 'servers', profile: 'personal' } as const,
+    { kind: 'alerts' } as const,
   ]) {
     const url = new URL(locationHref(from, location));
     assert.equal(url.searchParams.get('account'), null, location.kind);
     assert.equal(url.searchParams.get('section'), null, location.kind);
-    if (location.kind !== 'servers') {
-      assert.equal(url.searchParams.get('store'), null, location.kind);
-    }
+    assert.equal(url.searchParams.get('store'), null, location.kind);
   }
   // And a store location's own ref replaces it rather than joining it.
   const store = new URL(locationHref(from, { kind: 'store', ref: 'team:eng' }));
@@ -276,7 +286,14 @@ test('a location clears the parameters every other location owns', () => {
   const busy =
     'http://localhost/?state=first-run&store=team:eng&section=macs&profile=acme&step=who&path=own&account=work';
   const url = new URL(locationHref(busy, { kind: 'all' }));
-  for (const parameter of ['store', 'section', 'profile', 'step', 'path', 'account']) {
+  for (const parameter of [
+    'store',
+    'section',
+    'profile',
+    'step',
+    'path',
+    'account',
+  ]) {
     assert.equal(url.searchParams.get(parameter), null, parameter);
   }
 });
@@ -296,6 +313,14 @@ test('the named Settings scenes name an exact account store', () => {
   assert.deepEqual(decodeLocation('?state=settings-keys'), {
     kind: 'settings',
     section: 'keys',
+  });
+  assert.deepEqual(decodeLocation('?state=settings-agent'), {
+    kind: 'settings',
+    section: 'about',
+  });
+  assert.deepEqual(decodeLocation('?state=settings&section=agent'), {
+    kind: 'settings',
+    section: 'about',
   });
 });
 
@@ -324,8 +349,27 @@ test("the mock's own state names still deep-link", () => {
     kind: 'store',
     ref: 'team:household',
   });
-  assert.deepEqual(decodeLocation('?state=issues'), { kind: 'issues' });
-  assert.deepEqual(decodeLocation('?state=servers'), { kind: 'servers' });
+  assert.deepEqual(decodeLocation('?state=alerts'), { kind: 'alerts' });
+  assert.deepEqual(decodeLocation('?state=servers'), {
+    kind: 'settings',
+    section: 'servers',
+  });
+});
+
+test('removed group tabs route to People or the group vault', () => {
+  assert.deepEqual(decodeLocation('?state=federation'), {
+    kind: 'group-settings',
+    ref: 'team:eng',
+    tab: 'people',
+  });
+  assert.deepEqual(decodeLocation('?state=items'), {
+    kind: 'store',
+    ref: 'team:eng',
+  });
+  assert.deepEqual(
+    decodeLocation('?state=group-settings&store=team:eng&tab=federation'),
+    { kind: 'group-settings', ref: 'team:eng' },
+  );
 });
 
 test('path-specific first-run review states keep the path the mock defines', () => {
@@ -374,7 +418,10 @@ test('getState and setUrl behave as the mock s helpers do', () => {
 test('encodeLocation names the state the address carries', () => {
   assert.equal(encodeLocation({ kind: 'all' }).state, 'all');
   assert.equal(encodeLocation({ kind: 'store', ref: 'x' }).params.store, 'x');
-  assert.equal(encodeLocation({ kind: 'first-run', step: 'protect' }).params.step, 'protect');
+  assert.equal(
+    encodeLocation({ kind: 'first-run', step: 'protect' }).params.step,
+    'protect',
+  );
 });
 
 /* ----------------------------------------------------------------- scenes -- */
@@ -396,9 +443,9 @@ test('the mock s state names carry what is not a location', () => {
     ...INITIAL_SCENE,
     location: { kind: 'store', ref: 'team:homelab' },
   });
-  assert.deepEqual(decodeScene('?state=issues'), {
+  assert.deepEqual(decodeScene('?state=alerts'), {
     ...INITIAL_SCENE,
-    location: { kind: 'issues' },
+    location: { kind: 'alerts' },
     lease: 'lapsed',
   });
   assert.deepEqual(decodeScene('?state=show'), {
@@ -421,7 +468,10 @@ test('nothing a scene holds is dropped by a reload', () => {
       view: 'grid' as const,
       lease: 'lapsed' as const,
     },
-    { ...INITIAL_SCENE, location: { kind: 'settings' as const, section: 'agent' as const } },
+    {
+      ...INITIAL_SCENE,
+      location: { kind: 'settings' as const, section: 'about' as const },
+    },
   ];
   for (const scene of scenes) {
     const href = sceneHref('http://localhost/', scene);
@@ -430,11 +480,17 @@ test('nothing a scene holds is dropped by a reload', () => {
 });
 
 test('a scene at its defaults writes nothing but its state name', () => {
-  assert.equal(sceneHref('http://localhost/', INITIAL_SCENE), 'http://localhost/?state=all');
+  assert.equal(
+    sceneHref('http://localhost/', INITIAL_SCENE),
+    'http://localhost/?state=all',
+  );
   // An explicit parameter beats the alias it disagrees with.
   assert.equal(decodeScene('?state=grid&view=list').view, 'list');
   // Nonsense is ignored rather than guessed at.
-  assert.equal(decodeScene('?state=all&sort=sideways').sort, INITIAL_SCENE.sort);
+  assert.equal(
+    decodeScene('?state=all&sort=sideways').sort,
+    INITIAL_SCENE.sort,
+  );
   assert.equal(decodeScene('?state=all&sel=nostore').selection, null);
 });
 
@@ -448,13 +504,13 @@ test('the store publishes only when the state actually moved', () => {
   });
 
   assert.deepEqual(store.getSnapshot(), INITIAL_STATE);
-  store.navigate({ kind: 'issues' });
+  store.navigate({ kind: 'alerts' });
   assert.equal(notifications, 1);
-  assert.deepEqual(store.getSnapshot().location, { kind: 'issues' });
+  assert.deepEqual(store.getSnapshot().location, { kind: 'alerts' });
 
   // The same place again: `transition` returns the state unchanged, so no
   // listener runs and React does not re-render.
-  store.navigate({ kind: 'issues' });
+  store.navigate({ kind: 'alerts' });
   assert.equal(notifications, 1);
 
   store.dispatch({ type: 'search', query: 'wifi' });
@@ -469,6 +525,6 @@ test('the store publishes only when the state actually moved', () => {
 test('getSnapshot is stable across reads, as useSyncExternalStore requires', () => {
   const store = new LocationStore();
   assert.equal(store.getSnapshot(), store.getSnapshot());
-  store.navigate({ kind: 'servers' });
+  store.navigate({ kind: 'alerts' });
   assert.equal(store.getSnapshot(), store.getSnapshot());
 });

@@ -23,12 +23,9 @@ import type { LeaseState, StoreRef } from './model/types';
 
 /** Which settings pane is open. */
 export type SettingsSection =
-  | 'macs'
-  | 'phrase'
-  | 'keys'
-  | 'account'
-  | 'agent'
-  | 'about';
+  'macs' | 'phrase' | 'keys' | 'account' | 'servers' | 'groups' | 'about';
+
+export type GroupSettingsTab = 'people' | 'settings';
 
 /** A step in the first-run state machine. */
 export type FirstRunStep = string;
@@ -37,12 +34,18 @@ export type FirstRunPath = 'invited' | 'own';
 export type Location =
   | { kind: 'all' }
   | { kind: 'store'; ref: StoreRef }
-  | { kind: 'groups' }
-  | { kind: 'group-admin'; ref: StoreRef }
-  | { kind: 'issues' }
-  | { kind: 'join' }
-  | { kind: 'servers'; profile?: string }
-  | { kind: 'settings'; section?: SettingsSection; store?: StoreRef }
+  | { kind: 'group-settings'; ref: StoreRef; tab?: GroupSettingsTab }
+  | { kind: 'alerts' }
+  /**
+   * `profile` names the server the Servers section is open on; it means
+   * nothing on any other section and is dropped when moving between them.
+   */
+  | {
+      kind: 'settings';
+      section?: SettingsSection;
+      store?: StoreRef;
+      profile?: string;
+    }
   | { kind: 'first-run'; step: FirstRunStep; path?: FirstRunPath };
 
 /** The item the details panel is showing, or nothing. */
@@ -94,11 +97,12 @@ export type LocationAction =
 export function sameLocation(a: Location, b: Location): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === 'store' && b.kind === 'store') return a.ref === b.ref;
-  if (a.kind === 'group-admin' && b.kind === 'group-admin') return a.ref === b.ref;
+  if (a.kind === 'group-settings' && b.kind === 'group-settings')
+    return a.ref === b.ref && a.tab === b.tab;
   if (a.kind === 'settings' && b.kind === 'settings')
-    return a.section === b.section && a.store === b.store;
-  if (a.kind === 'servers' && b.kind === 'servers')
-    return a.profile === b.profile;
+    return (
+      a.section === b.section && a.store === b.store && a.profile === b.profile
+    );
   if (a.kind === 'first-run' && b.kind === 'first-run')
     return a.step === b.step && a.path === b.path;
   return true;
@@ -136,15 +140,21 @@ export function transition(
         ? state
         : { ...state, query: action.query };
     case 'view':
-      return state.view === action.view ? state : { ...state, view: action.view };
+      return state.view === action.view
+        ? state
+        : { ...state, view: action.view };
     case 'details':
       return state.details === action.open
         ? state
         : { ...state, details: action.open };
     case 'kind':
-      return state.kind === action.kind ? state : { ...state, kind: action.kind };
+      return state.kind === action.kind
+        ? state
+        : { ...state, kind: action.kind };
     case 'sort':
-      return state.sort === action.sort ? state : { ...state, sort: action.sort };
+      return state.sort === action.sort
+        ? state
+        : { ...state, sort: action.sort };
   }
 }
 
@@ -192,37 +202,61 @@ const STATE_ALIASES: Readonly<Record<string, Location>> = {
   household: { kind: 'store', ref: 'team:household' },
   group: { kind: 'store', ref: 'team:household' },
   homelab: { kind: 'store', ref: 'team:homelab' },
-  issues: { kind: 'issues' },
-  join: { kind: 'join' },
-  'join-invite': { kind: 'join' },
-  groups: { kind: 'groups' },
-  people: { kind: 'group-admin', ref: 'team:eng' },
-  party: { kind: 'group-admin', ref: 'team:eng' },
-  federation: { kind: 'group-admin', ref: 'team:eng' },
-  danger: { kind: 'group-admin', ref: 'team:eng' },
-  invite: { kind: 'group-admin', ref: 'team:eng' },
-  add: { kind: 'group-admin', ref: 'team:eng' },
-  demote: { kind: 'group-admin', ref: 'team:eng' },
-  remove: { kind: 'group-admin', ref: 'team:eng' },
-  admit: { kind: 'group-admin', ref: 'team:eng' },
-  create: { kind: 'groups' },
-  servers: { kind: 'servers' },
+  alerts: { kind: 'alerts' },
+  join: { kind: 'settings', section: 'groups' },
+  'join-invite': { kind: 'settings', section: 'groups' },
+  groups: { kind: 'settings', section: 'groups' },
+  people: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  party: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  federation: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  items: { kind: 'store', ref: 'team:eng' },
+  danger: { kind: 'group-settings', ref: 'team:eng', tab: 'settings' },
+  'rekey-menu': { kind: 'group-settings', ref: 'team:eng', tab: 'settings' },
+  invite: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  add: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  demote: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  remove: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  admit: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  create: { kind: 'settings', section: 'groups' },
+  // Servers used to be its own page; it is a Settings section now, and every
+  // former name for that page maps to this section.
+  servers: { kind: 'settings', section: 'servers' },
   settings: { kind: 'settings' },
-  'servers-list': { kind: 'servers' },
-  'servers-server': { kind: 'servers', profile: 'personal' },
-  'servers-lapsed': { kind: 'servers', profile: 'acme' },
-  'servers-rollback': { kind: 'servers', profile: 'personal' },
-  'servers-reset': { kind: 'servers', profile: 'personal' },
-  'servers-add': { kind: 'servers' },
-  'servers-unprobed': { kind: 'servers', profile: 'partner' },
-  'servers-check': { kind: 'servers', profile: 'partner' },
+  'servers-list': { kind: 'settings', section: 'servers' },
+  'servers-server': {
+    kind: 'settings',
+    section: 'servers',
+    profile: 'personal',
+  },
+  'servers-lapsed': { kind: 'settings', section: 'servers', profile: 'acme' },
+  'servers-rollback': {
+    kind: 'settings',
+    section: 'servers',
+    profile: 'personal',
+  },
+  'servers-reset': {
+    kind: 'settings',
+    section: 'servers',
+    profile: 'personal',
+  },
+  'servers-add': { kind: 'settings', section: 'servers' },
+  'servers-unprobed': {
+    kind: 'settings',
+    section: 'servers',
+    profile: 'partner',
+  },
+  'servers-check': { kind: 'settings', section: 'servers', profile: 'partner' },
   'settings-macs': { kind: 'settings', section: 'macs' },
-  'settings-macs-work': { kind: 'settings', section: 'macs', store: 'acct:work' },
+  'settings-macs-work': {
+    kind: 'settings',
+    section: 'macs',
+    store: 'acct:work',
+  },
   'settings-phrase': { kind: 'settings', section: 'phrase' },
   'settings-keys': { kind: 'settings', section: 'keys' },
   'settings-enrol': { kind: 'settings', section: 'keys' },
   'settings-account': { kind: 'settings', section: 'account' },
-  'settings-agent': { kind: 'settings', section: 'agent' },
+  'settings-agent': { kind: 'settings', section: 'about' },
   'settings-about': { kind: 'settings', section: 'about' },
 };
 
@@ -230,8 +264,8 @@ const STATE_ALIASES: Readonly<Record<string, Location>> = {
  * Every parameter any location owns, all cleared.
  *
  * `setUrl` leaves a parameter it is not told about alone, so a location that
- * names only its own parameters leaves the previous one's behind: Settings
- * would inherit `profile=` from Servers, and a `?state=all` reload would carry
+ * names only its own parameters leaves the previous one's behind: a store
+ * would inherit `section=` from Settings, and a `?state=all` reload would carry
  * a `store=` that means nothing there. Each encoder therefore spreads this and
  * overrides only what it owns. `account` is not a parameter of any location
  * any more — Settings is keyed by StoreRef — and is listed so that an address
@@ -243,6 +277,7 @@ const CLEARED_PARAMS: Readonly<Record<string, string | null>> = {
   profile: null,
   step: null,
   path: null,
+  tab: null,
   account: null,
 };
 
@@ -253,11 +288,18 @@ export function encodeLocation(location: Location): {
 } {
   switch (location.kind) {
     case 'store':
-      return { state: 'store', params: { ...CLEARED_PARAMS, store: location.ref } };
-    case 'group-admin':
       return {
-        state: 'group-admin',
+        state: 'store',
         params: { ...CLEARED_PARAMS, store: location.ref },
+      };
+    case 'group-settings':
+      return {
+        state: 'group-settings',
+        params: {
+          ...CLEARED_PARAMS,
+          store: location.ref,
+          tab: location.tab ?? null,
+        },
       };
     case 'settings':
       // The exact account this Settings page acts on, not its alias: two
@@ -268,12 +310,9 @@ export function encodeLocation(location: Location): {
           ...CLEARED_PARAMS,
           store: location.store ?? null,
           section: location.section ?? null,
+          profile:
+            location.section === 'servers' ? (location.profile ?? null) : null,
         },
-      };
-    case 'servers':
-      return {
-        state: 'servers',
-        params: { ...CLEARED_PARAMS, profile: location.profile ?? null },
       };
     case 'first-run':
       return {
@@ -294,14 +333,31 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'phrase',
   'keys',
   'account',
-  'agent',
+  'servers',
+  'groups',
   'about',
 ];
 
 const FIRST_RUN_STATE_NAMES = [
-  'boot', 'who', 'local', 'address', 'no-address', 'checked', 'compare', 'error',
-  'account', 'existing', 'protect', 'phrase', 'waiting', 'added',
-  'create-group', 'done', 'local-done', 'checklist-invited', 'checklist-own',
+  'boot',
+  'who',
+  'local',
+  'address',
+  'no-address',
+  'checked',
+  'compare',
+  'error',
+  'account',
+  'existing',
+  'protect',
+  'phrase',
+  'waiting',
+  'added',
+  'create-group',
+  'done',
+  'local-done',
+  'checklist-invited',
+  'checklist-own',
 ] as const;
 
 /**
@@ -319,9 +375,20 @@ export function decodeLocation(search: string): Location | null {
     const ref = params.get('store');
     return ref ? { kind: 'store', ref } : null;
   }
-  if (state === 'group-admin') {
+  if (state === 'group-settings') {
     const ref = params.get('store');
-    return ref ? { kind: 'group-admin', ref } : null;
+    const tab = params.get('tab');
+    const resolvedTab =
+      tab && (['people', 'settings'] as const).includes(tab as GroupSettingsTab)
+        ? (tab as GroupSettingsTab)
+        : undefined;
+    return ref
+      ? {
+          kind: 'group-settings',
+          ref,
+          ...(resolvedTab ? { tab: resolvedTab } : {}),
+        }
+      : null;
   }
   if (state === 'settings') {
     const section = params.get('section');
@@ -329,13 +396,28 @@ export function decodeLocation(search: string): Location | null {
     // an alias is ambiguous across profiles, and this project ships nothing to
     // be compatible with.
     const store = params.get('store') ?? undefined;
-    return section && (SETTINGS_SECTIONS as readonly string[]).includes(section)
-      ? { kind: 'settings', section: section as SettingsSection, ...(store ? { store } : {}) }
+    // `agent` used to be its own pane; that content now lives on About.
+    const resolved = section === 'agent' ? 'about' : section;
+    // `profile` is only the Servers section's; anywhere else it is stale.
+    const profile =
+      resolved === 'servers' ? (params.get('profile') ?? undefined) : undefined;
+    return resolved &&
+      (SETTINGS_SECTIONS as readonly string[]).includes(resolved)
+      ? {
+          kind: 'settings',
+          section: resolved as SettingsSection,
+          ...(store ? { store } : {}),
+          ...(profile ? { profile } : {}),
+        }
       : { kind: 'settings', ...(store ? { store } : {}) };
   }
   if (state === 'servers') {
     const profile = params.get('profile') ?? undefined;
-    return { kind: 'servers', ...(profile ? { profile } : {}) };
+    return {
+      kind: 'settings',
+      section: 'servers',
+      ...(profile ? { profile } : {}),
+    };
   }
   if (state === 'first-run') {
     const path = params.get('path');
@@ -350,7 +432,11 @@ export function decodeLocation(search: string): Location | null {
     const fixedPath: FirstRunPath | undefined =
       state === 'waiting' || state === 'added' || state === 'checklist-invited'
         ? 'invited'
-        : state === 'local' || state === 'local-done' || state === 'create-group' || state === 'done' || state === 'checklist-own'
+        : state === 'local' ||
+            state === 'local-done' ||
+            state === 'create-group' ||
+            state === 'done' ||
+            state === 'checklist-own'
           ? 'own'
           : undefined;
     return {
@@ -364,13 +450,25 @@ export function decodeLocation(search: string): Location | null {
     };
   }
   const alias = STATE_ALIASES[state];
+  if (alias?.kind === 'group-settings') {
+    const tab = params.get('tab');
+    const resolvedTab =
+      tab && (['people', 'settings'] as const).includes(tab as GroupSettingsTab)
+        ? (tab as GroupSettingsTab)
+        : alias.tab;
+    return { ...alias, ...(resolvedTab ? { tab: resolvedTab } : {}) };
+  }
   if (alias?.kind === 'settings') {
     const store = params.get('store') ?? alias.store;
-    return { ...alias, ...(store ? { store } : {}) };
-  }
-  if (alias?.kind === 'servers') {
-    const profile = params.get('profile') ?? alias.profile;
-    return { ...alias, ...(profile ? { profile } : {}) };
+    const profile =
+      alias.section === 'servers'
+        ? (params.get('profile') ?? alias.profile)
+        : undefined;
+    return {
+      ...alias,
+      ...(store ? { store } : {}),
+      ...(profile ? { profile } : {}),
+    };
   }
   return alias ?? null;
 }
@@ -432,12 +530,27 @@ const SCENE_ALIASES: Readonly<Record<string, Partial<Scene>>> = {
   conflict: {
     demo: 'password',
   },
-  store: { location: { kind: 'group-admin', ref: 'team:eng' } },
-  manage: { location: { kind: 'store', ref: 'team:household' }, demo: 'group' },
-  'join-invite': { location: { kind: 'join' } },
-  'party-remove': { location: { kind: 'store', ref: 'team:eng' } },
-  'groups-lease': { location: { kind: 'group-admin', ref: 'team:eng' }, lease: 'lapsed' },
-  'groups-inactive': { location: { kind: 'group-admin', ref: 'team:homelab' } },
+  store: {
+    location: { kind: 'store', ref: 'team:eng' },
+  },
+  items: {
+    location: { kind: 'store', ref: 'team:eng' },
+  },
+  'rekey-menu': {
+    location: { kind: 'group-settings', ref: 'team:eng', tab: 'settings' },
+  },
+  manage: {
+    location: { kind: 'group-settings', ref: 'team:household', tab: 'people' },
+  },
+  'join-invite': { location: { kind: 'settings', section: 'groups' } },
+  'party-remove': {
+    location: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  },
+  'groups-lease': {
+    location: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+    lease: 'lapsed',
+  },
+  'groups-inactive': { location: { kind: 'store', ref: 'team:homelab' } },
   'group-new-text': { location: { kind: 'store', ref: 'team:eng' } },
   'group-new-link': { location: { kind: 'store', ref: 'team:eng' } },
   'group-new-file': { location: { kind: 'store', ref: 'team:eng' } },
@@ -447,8 +560,8 @@ const SCENE_ALIASES: Readonly<Record<string, Partial<Scene>>> = {
   lease: { location: { kind: 'store', ref: 'acct:work' }, lease: 'lapsed' },
   // The group whose summary reports inactive.
   inactive: { location: { kind: 'store', ref: 'team:homelab' } },
-  // Issues is only worth looking at in the world that fills it.
-  issues: { lease: 'lapsed' },
+  // Alerts with the lapsed-lease fixture that populates it.
+  alerts: { lease: 'lapsed' },
 };
 
 const VIEWS: readonly ViewMode[] = ['list', 'grid'];
@@ -500,12 +613,16 @@ export function decodeScene(search: string): Scene {
   const params = new URLSearchParams(search);
   const name = params.get('state') ?? '';
   const alias = SCENE_ALIASES[name] ?? {};
-  const location = decodeLocation(search) ?? alias.location ?? INITIAL_SCENE.location;
+  const location =
+    decodeLocation(search) ?? alias.location ?? INITIAL_SCENE.location;
   return {
     location,
     selection: decodeSelection(params.get('sel')) ?? alias.selection ?? null,
     view: oneOf(VIEWS, params.get('view')) ?? alias.view ?? INITIAL_SCENE.view,
-    kind: oneOf(KIND_FILTERS, params.get('kind')) ?? alias.kind ?? INITIAL_SCENE.kind,
+    kind:
+      oneOf(KIND_FILTERS, params.get('kind')) ??
+      alias.kind ??
+      INITIAL_SCENE.kind,
     sort: oneOf(SORTS, params.get('sort')) ?? alias.sort ?? INITIAL_SCENE.sort,
     lease:
       oneOf(['fresh', 'lapsed'] as const, params.get('lease')) ??

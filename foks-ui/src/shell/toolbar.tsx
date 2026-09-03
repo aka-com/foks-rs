@@ -1,7 +1,7 @@
 /**
  * The item page's toolbar — `01-vault.html`'s `toolbar` string, as controls.
  *
- * New (a split button over the kind menu) · the kind filter · Sort · list or
+ * New (one primary button over the kind menu) · the kind filter · Sort · list or
  * cards · the details toggle. The filter, the sort, the view and the panel
  * are navigation state, so each one is a deep link and survives a reload.
  *
@@ -16,24 +16,15 @@ import {
   KindIcon,
   MenuButton,
   SegmentedControl,
-  SplitButton,
 } from '../components';
-import { KINDS, KIND_LIST } from '../model';
+import { KINDS, KIND_LIST, kindLabel } from '../model';
 import type { KindFilter, SortKey, ViewMode } from '../location';
 
 const SORT_LABELS: Readonly<Record<SortKey, string>> = {
-  name: 'Name',
-  kind: 'Kind',
-  group: 'Group',
-  version: 'Version',
-};
-
-/** The shortcuts the design prints beside the four kinds. */
-const NEW_KEYS: Readonly<Record<string, string>> = {
-  Password: '⌘N',
-  Resource: '⇧⌘N',
-  File: '⌘U',
-  Link: '⌘L',
+  name: 'Sort by name',
+  kind: 'Sort by kind',
+  group: 'Grouped',
+  version: 'Sort by version',
 };
 
 export interface ToolbarProps {
@@ -46,6 +37,42 @@ export interface ToolbarProps {
   onView: (view: ViewMode) => void;
   details: boolean;
   onDetails: (open: boolean) => void;
+  onSettings?: () => void;
+}
+
+/** The primary New control — kind menu, no plus, a down chevron. */
+export function NewItemButton({
+  onNew,
+}: {
+  onNew: (kind: Exclude<KindFilter, 'All'>) => void;
+}): ReactNode {
+  return (
+    <MenuButton
+      label="New"
+      variant="primary"
+      menuLabel="What to create"
+      align="start"
+    >
+      {(close) => (
+        <>
+          {KIND_LIST.map((name) => (
+            <button
+              key={name}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                close();
+                onNew(name);
+              }}
+            >
+              <KindIcon kind={name} />
+              {kindLabel(name)}
+            </button>
+          ))}
+        </>
+      )}
+    </MenuButton>
+  );
 }
 
 export function Toolbar({
@@ -58,33 +85,11 @@ export function Toolbar({
   onView,
   details,
   onDetails,
+  onSettings,
 }: ToolbarProps): ReactNode {
   return (
     <div className="toolbar">
-      <SplitButton label="New" icon="plus" menuLabel="What to create">
-        {(close) => (
-          <>
-            <div className="cap">
-              Saved into one vault or group; the sheet asks which.
-            </div>
-            {KIND_LIST.map((name) => (
-              <button
-                key={name}
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  close();
-                  onNew(name);
-                }}
-              >
-                <KindIcon kind={name} />
-                {name}
-                <kbd>{NEW_KEYS[name]}</kbd>
-              </button>
-            ))}
-          </>
-        )}
-      </SplitButton>
+      <NewItemButton onNew={onNew} />
       <SegmentedControl<KindFilter>
         label="Which kinds to list"
         value={kind}
@@ -141,6 +146,15 @@ export function Toolbar({
           onDetails(!details);
         }}
       />
+      {onSettings ? (
+        <Button
+          variant="quiet"
+          icon="gear"
+          title="Group settings"
+          aria-label="Group settings"
+          onClick={onSettings}
+        />
+      ) : null}
     </div>
   );
 }

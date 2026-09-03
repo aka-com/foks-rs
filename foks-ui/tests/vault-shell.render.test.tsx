@@ -49,6 +49,7 @@ import type {
   AccountDevice,
   AppLockState,
   Bridge,
+  CatalogFailureDto,
   CreateTextRequest,
 } from '../src/bridge';
 import { roleDto } from '../src/bridge';
@@ -120,7 +121,9 @@ function nativeAvailableBridge(base: Bridge): Bridge {
       const status = await base.describeServerStatus(profile);
       return {
         ...status,
-        leaseExpiresAt: status.host ? Math.floor(Date.now() / 1000) + 86_400 : null,
+        leaseExpiresAt: status.host
+          ? Math.floor(Date.now() / 1000) + 86_400
+          : null,
       };
     },
   };
@@ -128,6 +131,17 @@ function nativeAvailableBridge(base: Bridge): Bridge {
 
 const text = (selector: string): string =>
   document.querySelector(selector)?.textContent?.trim() ?? '';
+
+/** The role radio named `title` inside the "Who can read/change" group. */
+const roleRadio = (group: string, title: string): HTMLButtonElement => {
+  const found = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      `[role="radiogroup"][aria-label="${group}"] [role="radio"]`,
+    ),
+  ].find((radio) => radio.textContent?.trim().startsWith(title));
+  assert.ok(found, `no ${title} radio under ${group}`);
+  return found;
+};
 
 const all = (selector: string): string[] =>
   [...document.querySelectorAll(selector)].map(
@@ -168,14 +182,149 @@ test('?state=all lists the whole catalog, sorted by name', () => {
     (item) => itemKey(item) === 'acct:personal|/logins/github.com',
   );
   assert.ok(githubItem);
-  assert.equal(github.querySelector('.server')?.textContent, 'foks.example.net');
+  assert.equal(
+    github.querySelector('.server')?.textContent,
+    'foks.example.net',
+  );
   assert.equal(github.querySelector('.chip')?.textContent, '1');
-  assert.equal(github.querySelector(':scope > .n:last-child')?.textContent, String(githubItem.version));
-  assert.equal(github.querySelector('button'), null, 'rows select without inline actions');
+  assert.equal(
+    github.querySelector(':scope > .n:last-child')?.textContent,
+    String(githubItem.version),
+  );
+  assert.equal(
+    github.querySelector('button'),
+    null,
+    'rows select without inline actions',
+  );
   assert.equal(
     document.querySelector('.search input')?.getAttribute('placeholder'),
     'Search all items',
   );
+  assert.doesNotMatch(
+    text('.body'),
+    /unavailable because group setup is incomplete/,
+  );
+});
+
+function sidebarCurrentName(): string {
+  const title = document.querySelector('.side .nav[aria-current="page"] .t');
+  return title?.childNodes[0]?.textContent?.trim() ?? '';
+}
+
+test('Control-Tab cycles All items, vaults and group stores, skipping the footer', () => {
+  at('?state=all');
+  assert.equal(sidebarCurrentName(), 'All items');
+  testingLibrary.fireEvent.keyDown(document, { key: 'Tab', ctrlKey: true });
+  assert.equal(sidebarCurrentName(), 'Personal');
+  testingLibrary.fireEvent.keyDown(document, { key: 'Tab', ctrlKey: true });
+  assert.equal(sidebarCurrentName(), 'Work (Acme)');
+  testingLibrary.fireEvent.keyDown(document, { key: 'Tab', ctrlKey: true });
+  assert.equal(sidebarCurrentName(), 'Engineering');
+  testingLibrary.fireEvent.keyDown(document, {
+    key: 'Tab',
+    ctrlKey: true,
+    shiftKey: true,
+  });
+  assert.equal(sidebarCurrentName(), 'Work (Acme)');
+  testingLibrary.fireEvent.keyDown(document, { key: 'Tab' });
+  assert.equal(sidebarCurrentName(), 'Work (Acme)');
+  testingLibrary.fireEvent.keyDown(document, { key: 'Tab', metaKey: true });
+  assert.equal(sidebarCurrentName(), 'Work (Acme)');
+});
+
+test('the sidebar separates named groups from ad-hoc shares', () => {
+  at('?state=all');
+  const sections = new Map<string, string[]>();
+  let section: string | null = null;
+  for (const child of document.querySelector<HTMLElement>('.side')?.children ??
+    []) {
+    if (child.tagName === 'H6') {
+      section = child.textContent?.trim() ?? '';
+      sections.set(section, []);
+    } else if (section && child.classList.contains('nav')) {
+      sections
+        .get(section)
+        ?.push(
+          child.querySelector('.t')?.childNodes[0]?.textContent?.trim() ?? '',
+        );
+    }
+  }
+  assert.deepEqual(
+    [...sections],
+    [
+      ['Vaults', ['Personal', 'Work (Acme)']],
+      ['Groups', ['Engineering', 'Household']],
+      ['Shares', ['Homelab']],
+    ],
+  );
+
+  testingLibrary.cleanup();
+  at('?state=all', {
+    world: {
+      ...FIXTURE,
+      stores: FIXTURE.stores.filter(
+        (store) => store.kind !== 'team' || store.team_kind !== 'adhoc',
+      ),
+    },
+  });
+  assert.deepEqual(all('.side > h6'), ['Vaults', 'Groups']);
+});
+
+test('Control-Tab from Settings or Groups never lands on the footer', () => {
+  at('?state=settings');
+  testingLibrary.fireEvent.keyDown(document, { key: 'Tab', ctrlKey: true });
+  assert.equal(sidebarCurrentName(), 'All items');
+  testingLibrary.cleanup();
+  at('?state=groups');
+  testingLibrary.fireEvent.keyDown(document, {
+    key: 'Tab',
+    ctrlKey: true,
+    shiftKey: true,
+  });
+  assert.equal(sidebarCurrentName(), 'Homelab');
+  const names = new Set<string>();
+  for (let step = 0; step < 12; step += 1) {
+    testingLibrary.fireEvent.keyDown(document, { key: 'Tab', ctrlKey: true });
+    names.add(sidebarCurrentName());
+  }
+  assert.equal(names.has('Groups'), false);
+  assert.equal(names.has('Servers'), false);
+  assert.equal(names.has('Alerts'), false);
+  assert.equal(names.has('Settings'), false);
+  assert.equal(names.has('Set up new vault'), false);
+});
+
+test('the global Refresh action reloads the current world', async () => {
+  const base = mockBridge(FIXTURE);
+  let catalogs = 0;
+  const bridge: Bridge = {
+    ...base,
+    listCatalog: async () => {
+      catalogs += 1;
+      return base.listCatalog();
+    },
+  };
+  at('?state=all', { bridge });
+  const refresh = document.querySelector<HTMLButtonElement>(
+    '.titlebar button[aria-label="Refresh"]',
+  );
+  assert.ok(refresh);
+  assert.equal(refresh.textContent, '');
+  assert.equal(
+    refresh.previousElementSibling?.classList.contains('agent'),
+    true,
+  );
+  testingLibrary.fireEvent.click(refresh);
+  assert.equal(refresh.disabled, true);
+  assert.equal(
+    refresh.getAttribute('aria-label'),
+    'Refreshing vaults and groups',
+  );
+  await testingLibrary.waitFor(() => assert.equal(catalogs, 1));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.toast-message'), /Vaults and groups refreshed/),
+  );
+  assert.equal(refresh.disabled, false);
 });
 
 test('App with an injected world but no bridge fails closed instead of hanging', async () => {
@@ -184,6 +333,39 @@ test('App with an injected world but no bridge fails closed instead of hanging',
   await testingLibrary.waitFor(() =>
     assert.match(text('[role="alert"]'), /must include the bridge/),
   );
+  assert.equal(text('.app-lock button'), 'Retry');
+});
+
+test('a failed world load offers Retry and reloads', async () => {
+  window.history.replaceState(null, '', '/?state=all');
+  const base = nativeAvailableBridge(mockBridge(FIXTURE));
+  let catalogCalls = 0;
+  const bridge: Bridge = {
+    ...base,
+    listCatalog: async () => {
+      catalogCalls += 1;
+      if (catalogCalls === 1) {
+        throw new Error(
+          'FOKS account record is invalid: team creation is still pending',
+        );
+      }
+      return base.listCatalog();
+    },
+  };
+  testingLibrary.render(createElement(App, { bridge }));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('[role="alert"]'), /team creation is still pending/),
+  );
+  assert.match(text('.app-lock h1'), /Couldn’t load FOKS/);
+  const retry = [
+    ...document.querySelectorAll<HTMLButtonElement>('.app-lock button'),
+  ].find((button) => button.textContent === 'Retry');
+  assert.ok(retry);
+  testingLibrary.fireEvent.click(retry);
+  await testingLibrary.waitFor(() =>
+    assert.ok(document.querySelector('.window')),
+  );
+  assert.equal(catalogCalls, 2);
 });
 
 test('a native app lock unlocks before the agent or catalog can be read', async () => {
@@ -198,25 +380,29 @@ test('a native app lock unlocks before the agent or catalog can be read', async 
       calls.push('lock-state');
       return { locked, available: true, mechanism: 'biometry' };
     },
-    unlockApp: () => new Promise((resolve) => {
-      calls.push('unlock');
-      finishUnlock = resolve;
-    }),
+    unlockApp: () =>
+      new Promise((resolve) => {
+        calls.push('unlock');
+        finishUnlock = resolve;
+      }),
     agentStatus: async () => {
       calls.push('agent-status');
       return { phase: 'Ready' as const };
     },
   };
   testingLibrary.render(createElement(App, { bridge }));
-  await testingLibrary.waitFor(() => assert.match(text('.app-lock'), /Unlock FOKS/));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.app-lock'), /Unlock FOKS/),
+  );
   assert.equal(document.querySelector('.app-lock-brand'), null);
   assert.match(
     text('.app-lock'),
     /Authenticate with Touch ID or your Mac password to allow FOKS to connect to servers and read vault data\./,
   );
   assert.deepEqual(calls, ['lock-state']);
-  const unlockButton = [...document.querySelectorAll<HTMLButtonElement>('.app-lock button')]
-    .find((button) => button.textContent === 'Unlock')!;
+  const unlockButton = [
+    ...document.querySelectorAll<HTMLButtonElement>('.app-lock button'),
+  ].find((button) => button.textContent === 'Unlock')!;
   testingLibrary.fireEvent.click(unlockButton);
   await testingLibrary.waitFor(() => {
     assert.equal(unlockButton.disabled, true);
@@ -226,7 +412,9 @@ test('a native app lock unlocks before the agent or catalog can be read', async 
     locked = false;
     finishUnlock!({ locked, available: true, mechanism: 'biometry' });
   });
-  await testingLibrary.waitFor(() => assert.ok(document.querySelector('.window')));
+  await testingLibrary.waitFor(() =>
+    assert.ok(document.querySelector('.window')),
+  );
   assert.ok(document.querySelector('.native-window'));
   assert.equal(document.querySelector('.native-window .lights'), null);
   assert.deepEqual(calls.slice(0, 4), [
@@ -255,7 +443,7 @@ test('native Bootstrap initializes once and enters first run in the same window'
   };
   testingLibrary.render(createElement(App, { bridge }));
   await testingLibrary.waitFor(() =>
-    assert.match(text('.main'), /Who is setting you up/),
+    assert.match(text('.main'), /How are you joining/),
   );
   assert.equal(initialized, 1);
   assert.equal(document.querySelectorAll('.window').length, 1);
@@ -266,7 +454,15 @@ test('native Bootstrap reloads the world and enters managed local setup', async 
   window.history.replaceState(null, '', '/?state=all');
   const localWorld: World = {
     ...FIXTURE,
-    servers: [{ ...FIXTURE.servers[0], id: 'local', name: 'localhost:4430', accounts: [], state: 'ok' }],
+    servers: [
+      {
+        ...FIXTURE.servers[0],
+        id: 'local',
+        name: 'localhost:4430',
+        accounts: [],
+        state: 'ok',
+      },
+    ],
     stores: [],
     accounts: [],
     items: [],
@@ -276,9 +472,10 @@ test('native Bootstrap reloads the world and enters managed local setup', async 
   let initialized = false;
   const bridge: Bridge = {
     ...native,
-    agentStatus: async () => initialized
-      ? { phase: 'Ready' as const }
-      : { phase: 'Bootstrap' as const, step: 'create-state' },
+    agentStatus: async () =>
+      initialized
+        ? { phase: 'Ready' as const }
+        : { phase: 'Bootstrap' as const, step: 'create-state' },
     appInfo: async () => ({
       version: '0.3.0',
       agentSocket: '/private/foks/agent.sock',
@@ -297,10 +494,81 @@ test('native Bootstrap reloads the world and enters managed local setup', async 
   };
   testingLibrary.render(createElement(App, { bridge }));
   await testingLibrary.waitFor(() =>
-    assert.match(text('.first-run-main'), /A private FOKS server is already running on this Mac/),
+    assert.match(
+      text('.first-run-main'),
+      /A private FOKS server is already running on this Mac/,
+    ),
   );
   assert.equal(initialized, true);
   assert.match(text('.titlebar .agent'), /Agent ready/);
+});
+
+test('incomplete account discovery keeps known vaults in the shell instead of entering first run', async () => {
+  window.localStorage.removeItem('foks.first-run.v1');
+  window.history.replaceState(null, '', '/?state=all');
+  const base = mockBridge(FIXTURE);
+  const known = FIXTURE.stores.find((store) => store.id === 'acct:personal');
+  assert.ok(known);
+  let catalogCalls = 0;
+  const bridge: Bridge = {
+    ...nativeAvailableBridge(base),
+    listCatalog: async () => {
+      catalogCalls += 1;
+      const current = await base.listCatalog();
+      return catalogCalls === 1
+        ? {
+            ...current,
+            profiles: ['personal'],
+            stores: [],
+            knownStores: [known],
+            inventory: [
+              {
+                profile: 'personal',
+                accountsComplete: false,
+                teamsComplete: true,
+              },
+            ],
+            items: [],
+            failures: [
+              {
+                scope: 'profile',
+                profile: 'personal',
+                source: 'account stores',
+                error: {
+                  code: 'transport',
+                  message: 'offline',
+                  retryable: true,
+                  ambiguous: false,
+                  fatal: false,
+                },
+              },
+            ],
+          }
+        : current;
+    },
+    listAccounts: async () => (catalogCalls === 1 ? [] : base.listAccounts()),
+  };
+  testingLibrary.render(createElement(App, { bridge }));
+  await testingLibrary.waitFor(() =>
+    assert.equal(text('.loc h1'), 'All items'),
+  );
+  assert.equal(document.querySelector('.first-run-main'), null);
+  const personal = [
+    ...document.querySelectorAll<HTMLElement>('.side .nav'),
+  ].find((row) => row.textContent?.includes('Personal'));
+  assert.ok(personal);
+  assert.match(personal.className, /off/);
+  assert.match(personal.textContent ?? '', /Connection error/);
+  testingLibrary.fireEvent.click(
+    document.querySelector<HTMLButtonElement>(
+      '.titlebar button[aria-label="Refresh"]',
+    )!,
+  );
+  await testingLibrary.waitFor(() => assert.equal(catalogCalls, 2));
+  await testingLibrary.waitFor(() =>
+    assert.doesNotMatch(personal.className, /off/),
+  );
+  assert.doesNotMatch(personal.textContent ?? '', /Connection error/);
 });
 
 test('a failed native initialization has an explicit retry without concurrent replay', async () => {
@@ -328,7 +596,7 @@ test('a failed native initialization has an explicit retry without concurrent re
     )!,
   );
   await testingLibrary.waitFor(() =>
-    assert.match(text('.main'), /Who is setting you up/),
+    assert.match(text('.main'), /How are you joining/),
   );
   assert.equal(initialized, 2);
 });
@@ -350,6 +618,8 @@ test('a ready native client shows noninteractive first-run progress without init
     listCatalog: async () => ({
       profiles: [],
       stores: [],
+      knownStores: [],
+      inventory: [],
       items: [],
       failures: [],
       blockedProfiles: [],
@@ -359,20 +629,21 @@ test('a ready native client shows noninteractive first-run progress without init
   };
   testingLibrary.render(createElement(App, { bridge }));
   await testingLibrary.waitFor(() =>
-    assert.match(text('.main'), /Who is setting you up/),
+    assert.match(text('.main'), /How are you joining/),
   );
   const steps = [...document.querySelectorAll<HTMLElement>('.setup-step')];
   assert.equal(steps.length, 7);
   assert.equal(document.querySelectorAll('button.setup-step').length, 0);
   assert.equal(
-    steps.find((step) => step.textContent?.includes('Who is setting you up?'))
+    steps
+      .find((step) => step.textContent?.includes('How are you joining?'))
       ?.getAttribute('aria-current'),
     'step',
   );
   testingLibrary.fireEvent.click(
     steps.find((step) => step.textContent?.includes('Preparing this Mac'))!,
   );
-  assert.match(text('.main'), /Who is setting you up/);
+  assert.match(text('.main'), /How are you joining/);
   assert.equal(initializationAttempts, 0);
 });
 
@@ -382,7 +653,9 @@ test('managed local setup uses concise copy and noninteractive progress steps', 
   assert.equal(document.querySelectorAll('.setup-step').length, 3);
   assert.equal(document.querySelectorAll('button.setup-step').length, 0);
   assert.equal(
-    document.querySelector('.setup-step[aria-current="step"]')?.textContent?.trim(),
+    document
+      .querySelector('.setup-step[aria-current="step"]')
+      ?.textContent?.trim(),
     '1Local server',
   );
   assert.equal(text('.local-server-title small'), 'On this Mac');
@@ -410,16 +683,20 @@ test('managed account options stay optional and Recovery returns to the account 
     }),
   );
   at('?state=first-run&step=account&path=own');
-  const email = document.querySelector<HTMLInputElement>('input[placeholder="you@example.net"]');
-  const username = document.querySelector<HTMLInputElement>('.local-field-card input');
+  const email = document.querySelector<HTMLInputElement>(
+    'input[placeholder="you@example.net"]',
+  );
+  const username = document.querySelector<HTMLInputElement>(
+    '.local-field-card input',
+  );
   assert.ok(email);
   assert.ok(username);
   assert.match(text('.local-more'), /Email \(optional\).*Invite \(optional\)/s);
   testingLibrary.fireEvent.change(username, { target: { value: 'changed' } });
   assert.equal(email.placeholder, 'you@example.net');
   testingLibrary.fireEvent.click(
-    [...document.querySelectorAll<HTMLButtonElement>('button')].find(
-      (button) => button.textContent?.includes('Recover an existing account'),
+    [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+      button.textContent?.includes('Recover an existing account'),
     )!,
   );
   await testingLibrary.waitFor(() =>
@@ -455,7 +732,7 @@ test('explicit Who does not merge a saved managed-local completion', () => {
     }),
   );
   at('?state=first-run&step=who&path=own');
-  assert.match(text('.first-run-main'), /Who is setting you up/);
+  assert.match(text('.first-run-main'), /How are you joining/);
   assert.equal(document.querySelectorAll('.setup-step').length, 7);
   assert.doesNotMatch(text('.setup-side'), /Local server/);
 });
@@ -480,13 +757,16 @@ test('managed local completion opens its exact Personal store and reports recove
     }),
   );
   at('?state=first-run&step=local-done&path=own');
-  const count = FIXTURE.items.filter((item) => item.store === 'acct:personal').length;
+  const count = FIXTURE.items.filter(
+    (item) => item.store === 'acct:personal',
+  ).length;
   assert.equal(
     text('.local-vault-empty'),
     `${count} ${count === 1 ? 'item' : 'items'}`,
   );
-  const open = [...document.querySelectorAll<HTMLButtonElement>('.pfoot button')]
-    .find((button) => button.textContent === 'Open Personal');
+  const open = [
+    ...document.querySelectorAll<HTMLButtonElement>('.pfoot button'),
+  ].find((button) => button.textContent === 'Open Personal');
   assert.ok(open);
   assert.equal(open.disabled, false);
   testingLibrary.fireEvent.click(open);
@@ -500,7 +780,15 @@ test('managed local setup rejects a profile aimed at another endpoint', async ()
   window.history.replaceState(null, '', '/?state=all');
   const localWorld: World = {
     ...FIXTURE,
-    servers: [{ ...FIXTURE.servers[0], id: 'local', name: 'localhost:4430', accounts: [], state: 'ok' }],
+    servers: [
+      {
+        ...FIXTURE.servers[0],
+        id: 'local',
+        name: 'localhost:4430',
+        accounts: [],
+        state: 'ok',
+      },
+    ],
     stores: [],
     accounts: [],
     items: [],
@@ -524,8 +812,9 @@ test('managed local setup rejects a profile aimed at another endpoint', async ()
   await testingLibrary.waitFor(() =>
     assert.match(text('.first-run-main'), /Local server unavailable/),
   );
-  const continueButton = [...document.querySelectorAll<HTMLButtonElement>('.pfoot button')]
-    .find((button) => button.textContent === 'Continue');
+  const continueButton = [
+    ...document.querySelectorAll<HTMLButtonElement>('.pfoot button'),
+  ].find((button) => button.textContent === 'Continue');
   assert.equal(continueButton?.disabled, true);
 });
 
@@ -555,6 +844,8 @@ test('automatic native first-run entry resumes the saved step instead of injecte
     listCatalog: async () => ({
       profiles: [],
       stores: [],
+      knownStores: [],
+      inventory: [],
       items: [],
       failures: [],
       blockedProfiles: [],
@@ -564,7 +855,7 @@ test('automatic native first-run entry resumes the saved step instead of injecte
   };
   testingLibrary.render(createElement(App, { bridge }));
   await testingLibrary.waitFor(() =>
-    assert.match(text('.main'), /Found it/),
+    assert.match(text('.main'), /Pinned on this Mac/),
   );
   const search = new URLSearchParams(window.location.search);
   assert.equal(search.get('state'), 'first-run');
@@ -672,30 +963,32 @@ test('?state=password opens the masked GitHub login', () => {
       (button) => button.textContent?.trim() === 'Show',
     ),
   );
-  assert.deepEqual(
-    all('.details .irow .a button'),
-    ['Show', 'Copy'],
-  );
+  assert.deepEqual(all('.details .irow .a button'), ['Show', 'Copy']);
 });
 
 test('password Copy keeps its position and uses the concise notification', async () => {
   at('?state=password');
-  const copy = [...document.querySelectorAll<HTMLButtonElement>('.details .irow .a button')]
-    .find((button) => button.textContent?.trim() === 'Copy');
+  const copy = [
+    ...document.querySelectorAll<HTMLButtonElement>('.details .irow .a button'),
+  ].find((button) => button.textContent?.trim() === 'Copy');
   assert.ok(copy);
   testingLibrary.fireEvent.click(copy);
   await testingLibrary.waitFor(() => {
-    assert.equal(text('.details .action-message'), 'Password copied');
+    assert.equal(text('.toast-message'), 'Password copied');
   });
 });
 
 test('item removal uses a concise ordinary confirmation', () => {
   at('?state=password');
-  const remove = [...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button')]
-    .find((button) => button.textContent?.trim() === 'Remove');
+  const remove = [
+    ...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button'),
+  ].find((button) => button.textContent?.trim() === 'Remove');
   assert.ok(remove);
   testingLibrary.fireEvent.click(remove);
-  assert.equal(text('.sheet .sb'), 'This will remove the item. This can’t be undone.');
+  assert.equal(
+    text('.sheet .sb'),
+    'This will remove the item. This can’t be undone.',
+  );
   assert.equal(text('.sheet .ft .danger'), 'Remove');
 });
 
@@ -789,7 +1082,8 @@ test('?state=file offers a version-bound native download', () => {
 
 test('a binary small-file can be downloaded and replaced as a native file', async () => {
   const source = FIXTURE.items.find(
-    (item) => item.store === 'acct:personal' && item.path === '/env/prod/DATABASE_URL',
+    (item) =>
+      item.store === 'acct:personal' && item.path === '/env/prod/DATABASE_URL',
   );
   assert.ok(source);
   const item: Item = { ...source, path: '/certs/client.p12', value: undefined };
@@ -810,27 +1104,38 @@ test('a binary small-file can be downloaded and replaced as a native file', asyn
     return { applied: true };
   };
 
-  at(`?state=store&store=acct%3Apersonal&sel=${encodeURIComponent(`${item.store}|${item.path}`)}`, {
-    world,
-    bridge,
-  });
+  at(
+    `?state=store&store=acct%3Apersonal&sel=${encodeURIComponent(`${item.store}|${item.path}`)}`,
+    {
+      world,
+      bridge,
+    },
+  );
   testingLibrary.fireEvent.click(
-    [...document.querySelectorAll<HTMLButtonElement>('.details button')]
-      .find((button) => button.textContent?.trim() === 'Show')!,
+    [...document.querySelectorAll<HTMLButtonElement>('.details button')].find(
+      (button) => button.textContent?.trim() === 'Show',
+    )!,
   );
   await testingLibrary.waitFor(() => {
     assert.match(text('.details .dh'), /File in Personal/);
-    assert.ok([...document.querySelectorAll<HTMLButtonElement>('.details button')]
-      .some((button) => button.textContent?.trim() === 'Download'));
+    assert.ok(
+      [...document.querySelectorAll<HTMLButtonElement>('.details button')].some(
+        (button) => button.textContent?.trim() === 'Download',
+      ),
+    );
   });
   testingLibrary.fireEvent.click(
-    [...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button')]
-      .find((button) => button.textContent?.trim() === 'Edit')!,
+    [
+      ...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button'),
+    ].find((button) => button.textContent?.trim() === 'Edit')!,
   );
-  await testingLibrary.waitFor(() => assert.match(text('.details .prev'), /Replace/));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.details .prev'), /Replace/),
+  );
   testingLibrary.fireEvent.click(
-    [...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button')]
-      .find((button) => button.textContent?.startsWith('Save version'))!,
+    [
+      ...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button'),
+    ].find((button) => button.textContent?.startsWith('Save version'))!,
   );
   await testingLibrary.waitFor(() => assert.ok(replacement));
   assert.deepEqual(replacement, {
@@ -940,10 +1245,7 @@ test('Engineering computes Readable by from the roster and the read role', () =>
   // Member · visibility 0: everyone but the inactive admission.
   const staging = readerChip(FIXTURE, 'team:eng|/deploy/staging-token');
   assert.equal(staging, '5 people');
-  assert.equal(
-    row('staging-token').querySelector('.chip')?.textContent,
-    '5',
-  );
+  assert.equal(row('staging-token').querySelector('.chip')?.textContent, '5');
 
   assert.equal(
     document.querySelector('.body > .band'),
@@ -996,10 +1298,77 @@ test('?state=new draws the Password sheet with live group creation', () => {
     )?.type,
     'password',
   );
+  const password = document.querySelector<HTMLInputElement>(
+    '.sheet input[aria-label="Password"]',
+  );
+  assert.ok(password);
+  assert.equal(password.placeholder, '');
+  const path = document.querySelector<HTMLInputElement>(
+    '.sheet input[aria-label="Path"]',
+  );
+  assert.ok(path);
+  assert.equal(path.classList.contains('mono'), false);
+  testingLibrary.fireEvent.mouseDown(password.closest('.fr')!);
+  assert.equal(document.activeElement, password);
   const create = [
     ...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button'),
   ].at(-1);
   assert.equal(create?.disabled, false);
+});
+
+test('Save in orders vaults, named groups, then ad-hoc shares', () => {
+  at('?state=new', {
+    world: { ...FIXTURE, stores: [...FIXTURE.stores].reverse() },
+  });
+  const trigger = document.querySelector<HTMLButtonElement>(
+    '.sheet .card-select-trigger',
+  );
+  assert.ok(trigger);
+  assert.equal(trigger.getAttribute('aria-expanded'), 'false');
+  assert.equal(trigger.querySelector('b')?.textContent, 'Household');
+  testingLibrary.fireEvent.click(trigger);
+  assert.equal(trigger.getAttribute('aria-expanded'), 'true');
+  assert.deepEqual(
+    all('[role="listbox"][aria-label="Save in"] .card-select-option b'),
+    ['Work (Acme)', 'Personal', 'Household', 'Engineering', 'Homelab'],
+  );
+  const chosen = document.querySelector(
+    '[role="listbox"][aria-label="Save in"] [aria-selected="true"] b',
+  );
+  assert.equal(chosen?.textContent, 'Household');
+});
+
+test('Save in picks a vault from the dropdown and closes it', () => {
+  at('?state=new');
+  const trigger = document.querySelector<HTMLButtonElement>(
+    '.sheet .card-select-trigger',
+  );
+  assert.ok(trigger);
+  testingLibrary.fireEvent.click(trigger);
+  const options = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      '[role="listbox"][aria-label="Save in"] .card-select-option',
+    ),
+  ];
+  assert.notEqual(trigger.querySelector('b')?.textContent, 'Engineering');
+  const engineering = options.find((option) =>
+    option.textContent?.startsWith('Engineering'),
+  );
+  assert.ok(engineering);
+  testingLibrary.fireEvent.click(engineering);
+  assert.equal(document.querySelector('[role="listbox"]'), null);
+  assert.equal(trigger.querySelector('b')?.textContent, 'Engineering');
+  // An inactive store cannot be written to, so it stays out of the roving
+  // focus the listbox hands around.
+  testingLibrary.fireEvent.click(trigger);
+  const inactive = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      '[role="listbox"][aria-label="Save in"] .card-select-option',
+    ),
+  ].find((option) => option.textContent?.startsWith('Homelab'));
+  assert.ok(inactive);
+  assert.equal(inactive.getAttribute('aria-disabled'), 'true');
+  assert.equal(inactive.disabled, true);
 });
 
 test('?state=new-group computes the Engineering read preview from its roster', () => {
@@ -1015,7 +1384,7 @@ test('?state=new-group computes the Engineering read preview from its roster', (
   };
   const readers = readersOf(FIXTURE, draft);
   assert.ok(readers);
-  assert.equal(text('.sheet h2'), 'New resource');
+  assert.equal(text('.sheet h2'), 'New note');
   assert.match(
     text('.sheet'),
     new RegExp(
@@ -1026,7 +1395,9 @@ test('?state=new-group computes the Engineering read preview from its roster', (
     document.querySelector<HTMLButtonElement>('.sheet .ft .primary')?.disabled,
     false,
   );
-  assert.ok(document.querySelector('.sheet input[aria-label="Read visibility"]'));
+  assert.ok(
+    document.querySelector('.sheet input[aria-label="Read visibility"]'),
+  );
 });
 
 test('an active group text create carries both selected roles and refreshes the computed reader count', async () => {
@@ -1040,9 +1411,7 @@ test('an active group text create carries both selected roles and refreshes the 
     },
   };
   at('?state=group-new-text', { bridge });
-  testingLibrary.fireEvent.click(
-    document.querySelector<HTMLButtonElement>('[aria-label="Read role Admin"]')!,
-  );
+  testingLibrary.fireEvent.click(roleRadio('Who can read', 'Admin'));
   testingLibrary.fireEvent.change(
     document.querySelector<HTMLInputElement>('input[aria-label="Name"]')!,
     { target: { value: 'phase7-shared' } },
@@ -1052,12 +1421,22 @@ test('an active group text create carries both selected roles and refreshes the 
     { target: { value: 'shared value' } },
   );
   const candidate: Item = {
-    store: 'team:eng', path: '/preview', kind: 'Secret', size: 0, version: 0,
-    read: { role: 'Admin' }, write: { role: 'Admin' },
+    store: 'team:eng',
+    path: '/preview',
+    kind: 'Secret',
+    size: 0,
+    version: 0,
+    read: { role: 'Admin' },
+    write: { role: 'Admin' },
   };
   const expected = readersOf(FIXTURE, candidate)?.length;
   assert.notEqual(expected, undefined);
-  assert.match(text('.sheet'), new RegExp(`would be readable by ${expected} of ${partiesOf(FIXTURE, 'team:eng').length}`));
+  assert.match(
+    text('.sheet'),
+    new RegExp(
+      `would be readable by ${expected} of ${partiesOf(FIXTURE, 'team:eng').length}`,
+    ),
+  );
   testingLibrary.fireEvent.click(
     document.querySelector<HTMLButtonElement>('.sheet .ft .primary')!,
   );
@@ -1070,7 +1449,7 @@ test('an active group text create carries both selected roles and refreshes the 
     writeRole: 'Admin',
   });
   await testingLibrary.waitFor(() =>
-    assert.match(text('.flash'), /Resource created in Engineering/),
+    assert.match(text('.toast-message'), /Note created in Engineering/),
   );
   const rendered = row('phase7-shared');
   assert.equal(rendered.querySelector('.chip')?.textContent, String(expected));
@@ -1087,15 +1466,17 @@ test('group Member role controls carry the full canonical signed i16 range', asy
     },
   };
   at('?state=group-new-text', { bridge });
-  const read = document.querySelector<HTMLInputElement>('input[aria-label="Read visibility"]');
+  const read = document.querySelector<HTMLInputElement>(
+    'input[aria-label="Read visibility"]',
+  );
   assert.ok(read);
   assert.equal(read.min, '-32768');
   assert.equal(read.max, '32767');
   testingLibrary.fireEvent.change(read, { target: { value: '-32768' } });
-  testingLibrary.fireEvent.click(
-    document.querySelector<HTMLButtonElement>('[aria-label="Write role Member"]')!,
+  testingLibrary.fireEvent.click(roleRadio('Who can change', 'Member'));
+  const write = document.querySelector<HTMLInputElement>(
+    'input[aria-label="Write visibility"]',
   );
-  const write = document.querySelector<HTMLInputElement>('input[aria-label="Write visibility"]');
   assert.ok(write);
   assert.equal(write.min, '-32768');
   assert.equal(write.max, '32767');
@@ -1127,24 +1508,38 @@ test('group Link creation authors the product symlink with both selected roles',
     },
   };
   at('?state=group-new-link', { bridge });
-  testingLibrary.fireEvent.click(
-    document.querySelector<HTMLButtonElement>('[aria-label="Read role Owner"]')!,
-  );
+  testingLibrary.fireEvent.click(roleRadio('Who can read', 'Owner'));
   const ownerReaders = readersOf(FIXTURE, {
-    store: 'team:eng', path: '/preview', kind: 'Link', size: 0, version: 0,
-    read: { role: 'Owner' }, write: { role: 'Admin' },
+    store: 'team:eng',
+    path: '/preview',
+    kind: 'Link',
+    size: 0,
+    version: 0,
+    read: { role: 'Owner' },
+    write: { role: 'Admin' },
   });
   const adminChangers = readersOf(FIXTURE, {
-    store: 'team:eng', path: '/preview', kind: 'Link', size: 0, version: 0,
-    read: { role: 'Admin' }, write: { role: 'Admin' },
+    store: 'team:eng',
+    path: '/preview',
+    kind: 'Link',
+    size: 0,
+    version: 0,
+    read: { role: 'Admin' },
+    write: { role: 'Admin' },
   });
   assert.ok(ownerReaders);
   assert.ok(adminChangers);
   assert.match(
     text('.sheet'),
-    new RegExp(`would be readable by ${ownerReaders.length} of .*changeable by ${adminChangers.length} of`, 's'),
+    new RegExp(
+      `would be readable by ${ownerReaders.length} of .*changeable by ${adminChangers.length} of`,
+      's',
+    ),
   );
-  assert.match(text('.sheet'), /roles are independent.*might not be allowed to read/s);
+  assert.match(
+    text('.sheet'),
+    /roles are independent.*might not be allowed to read/s,
+  );
   testingLibrary.fireEvent.change(
     document.querySelector<HTMLInputElement>('input[aria-label="Points to"]')!,
     { target: { value: '/deploy/staging-token' } },
@@ -1205,7 +1600,7 @@ test('group native-picker file creation carries roles while renderer receives no
 
 test('?state=new-resource enables a concise account create', () => {
   at('?state=new-resource');
-  assert.equal(text('.sheet h2'), 'New resource');
+  assert.equal(text('.sheet h2'), 'New note');
   assert.doesNotMatch(text('.sheet'), /must not exist/i);
   assert.equal(
     document.querySelector<HTMLButtonElement>('.sheet .ft .primary')?.disabled,
@@ -1344,13 +1739,63 @@ test('conflict Discard exits edit and Refresh restores the retained draft for re
 
   testingLibrary.cleanup();
   at('?state=conflict');
-  testingLibrary.fireEvent.click(
+  const discard = (): HTMLButtonElement =>
     [...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find(
       (button) => button.textContent === 'Discard my edit',
+    )!;
+  // Discarding is a question first; the save-refused sheet is still behind it.
+  testingLibrary.fireEvent.click(discard());
+  assert.ok(
+    document.querySelector(
+      '[role="alertdialog"][aria-label="Discard your edit"]',
+    ),
+  );
+  testingLibrary.fireEvent.click(discard());
+  await testingLibrary.waitFor(() => {
+    assert.equal(document.querySelector('[aria-label="Edit conflict"]'), null);
+    assert.equal(
+      document.querySelector('[aria-label="Discard your edit"]'),
+      null,
+    );
+  });
+});
+
+test('Escape on the save-refused sheet asks before discarding the retained draft', () => {
+  at('?state=conflict');
+  const escape = (label: string): void => {
+    testingLibrary.fireEvent.keyDown(
+      document.querySelector(`[aria-label="${label}"]`)!,
+      { key: 'Escape' },
+    );
+  };
+  // The most reflexive key in the window used to destroy the edit this sheet
+  // had just promised to retain. It asks now.
+  escape('Edit conflict');
+  assert.ok(
+    document.querySelector(
+      '[role="alertdialog"][aria-label="Discard your edit"]',
+    ),
+  );
+
+  // Escape again backs out of the question, not out of the draft.
+  escape('Discard your edit');
+  assert.ok(document.querySelector('[aria-label="Edit conflict"]'));
+  assert.equal(
+    document.querySelector('[aria-label="Discard your edit"]'),
+    null,
+  );
+
+  // Keep editing returns to the sheet as well.
+  escape('Edit conflict');
+  testingLibrary.fireEvent.click(
+    [...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find(
+      (button) => button.textContent === 'Keep editing',
     )!,
   );
-  await testingLibrary.waitFor(() =>
-    assert.equal(document.querySelector('.details textarea'), null),
+  assert.ok(document.querySelector('[aria-label="Edit conflict"]'));
+  assert.equal(
+    document.querySelector('[aria-label="Discard your edit"]'),
+    null,
   );
 });
 
@@ -1442,10 +1887,10 @@ test('a native multi-file drop is refused before any import command', async () =
   assert.equal(imports, 0);
 });
 
-/* ---------------------------------------------------------------- issues -- */
+/* ---------------------------------------------------------------- alerts -- */
 
-test('?state=issues lists the notes that apply in the lapsed world', () => {
-  at('?state=issues');
+test('?state=alerts lists the notes that apply in the lapsed world', () => {
+  at('?state=alerts');
   const lapsed = applyLease(FIXTURE, 'lapsed');
   const notes = notesNow(lapsed);
   assert.equal(document.querySelectorAll('.cards .card').length, notes.length);
@@ -1455,7 +1900,7 @@ test('?state=issues lists the notes that apply in the lapsed world', () => {
   assert.doesNotMatch(text('.main'), /Nothing here refreshes on its own/);
   assert.match(
     text('.main'),
-    /lease for foks\.acme-corp\.com has expired.*Group setup incomplete\. Items and members are unavailable until setup is finished\..*Homelab’s membership in Engineering is inactive/s,
+    /check-in expired.*Group setup incomplete\. Items and members are unavailable until setup is finished\..*Homelab’s membership in Engineering is inactive/s,
   );
   assert.doesNotMatch(
     text('.main'),
@@ -1469,11 +1914,179 @@ test('?state=issues lists the notes that apply in the lapsed world', () => {
   );
 });
 
-test('the Issues badge is absent at zero, not a "0"', () => {
+test('the Alerts badge is absent at zero, not a "0"', () => {
   // A world with nothing outstanding — the fixture with its notes taken away.
   at('?state=all', { world: { ...FIXTURE, notifications: [] } });
   assert.equal(document.querySelector('.side .badge'), null);
-  assert.match(text('.side'), /Issues/, 'the row itself is still there');
+  assert.match(text('.side'), /Alerts/, 'the row itself is still there');
+});
+
+test('an Alerts list with no notes shows a quiet empty hint', () => {
+  at('?state=alerts', { world: { ...FIXTURE, notifications: [] } });
+  assert.equal(document.querySelectorAll('.cards .card').length, 0);
+  assert.match(text('.main'), /Nothing needs attention on this Mac/);
+});
+
+test('empty directory, roster, join, and sidebar lists show the existing empty copy', () => {
+  const noAccounts: World = {
+    ...FIXTURE,
+    stores: FIXTURE.stores.filter((store) => store.kind !== 'account'),
+    accounts: [],
+  };
+  at('?state=groups', {
+    world: {
+      ...noAccounts,
+      stores: [],
+    },
+  });
+  assert.match(
+    text('.settings-main'),
+    /No available account can create a group right now/,
+  );
+  assert.match(text('.side'), /No vaults yet/);
+  assert.match(text('.side'), /No groups yet/);
+  testingLibrary.cleanup();
+
+  at('?state=join', { world: noAccounts });
+  const joinHints = [
+    ...document.querySelectorAll<HTMLElement>('.settings-main .fr'),
+  ].filter((node) => node.textContent?.includes('No account on this Mac yet.'));
+  assert.equal(joinHints.length, 1);
+  testingLibrary.cleanup();
+
+  at('?state=people', {
+    world: {
+      ...FIXTURE,
+      parties: FIXTURE.parties.filter((party) => party.store !== 'team:eng'),
+    },
+  });
+  assert.equal(
+    document.querySelectorAll('.roster .rt:not(.fed) .prow').length,
+    0,
+  );
+  assert.match(text('.roster .callout'), /No people yet/);
+  testingLibrary.cleanup();
+
+  at('?state=manage', {
+    world: {
+      ...FIXTURE,
+      parties: FIXTURE.parties.filter(
+        (party) => party.store !== 'team:household',
+      ),
+    },
+  });
+  assert.equal(
+    document.querySelectorAll('.roster .rt:not(.fed) .prow').length,
+    0,
+  );
+  assert.match(text('.roster .callout'), /No people yet/);
+});
+
+test('Create with no usable account names the empty chooser', () => {
+  const allBlocked: World = {
+    ...FIXTURE,
+    servers: FIXTURE.servers.map((server) => ({
+      ...server,
+      state: 'blocked' as const,
+    })),
+  };
+  at('?state=create', { world: allBlocked });
+  assert.match(text('.sheet'), /No account can create a group/);
+  assert.equal(
+    document.querySelector(
+      '.sheet [role="radiogroup"][aria-label="Server and account"]',
+    ),
+    null,
+  );
+});
+
+test('New password with no stores names the empty Save-in chooser', () => {
+  at('?state=new', { world: { ...FIXTURE, stores: [], items: [] } });
+  assert.match(text('.sheet'), /No vault is available to save into/);
+  assert.equal(document.querySelector('.sheet .card-select'), null);
+});
+
+test('Settings Accounts with no stores reuses the Macs empty notice', async () => {
+  at('?state=settings-account', {
+    world: {
+      ...FIXTURE,
+      stores: FIXTURE.stores.filter((store) => store.kind !== 'account'),
+      accounts: [],
+    },
+  });
+  await flushPhase6Loads();
+  assert.match(text('.settings-main'), /No available account on this Mac/);
+  assert.match(
+    text('.settings-main'),
+    /Add and check a server, then create or recover an account/,
+  );
+});
+
+test('Provision with no connected card matches the enroll notice', async () => {
+  const world = { ...FIXTURE, cardsConnected: [] };
+  at('?state=settings-keys', { world, bridge: mockBridge(world) });
+  await flushPhase6Loads();
+  const provision = [
+    ...document.querySelectorAll<HTMLButtonElement>('.settings-main button'),
+  ].find((button) => button.textContent === 'Provision…');
+  assert.ok(provision);
+  testingLibrary.fireEvent.click(provision);
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.sheet'), /Connect a YubiKey/),
+  );
+  assert.match(text('.sheet'), /No card is connected/);
+  assert.equal(document.querySelector('.sheet select'), null);
+});
+
+test('?state=alerts lets a retryable catalog failure be retried', async () => {
+  window.history.replaceState(null, '', '/?state=alerts');
+  const base = nativeAvailableBridge(mockBridge(FIXTURE));
+  let catalogCalls = 0;
+  const profileBusy: CatalogFailureDto = {
+    scope: 'profile',
+    profile: 'local',
+    source: 'account stores',
+    error: {
+      code: 'profile-busy',
+      message: 'Another operation is using this profile.',
+      retryable: true,
+      ambiguous: false,
+      fatal: false,
+    },
+  };
+  const bridge: Bridge = {
+    ...base,
+    listCatalog: async () => {
+      catalogCalls += 1;
+      const response = await base.listCatalog();
+      if (catalogCalls === 1) {
+        return { ...response, failures: [profileBusy] };
+      }
+      return { ...response, failures: [] };
+    },
+  };
+  testingLibrary.render(createElement(App, { bridge }));
+  await testingLibrary.waitFor(() =>
+    assert.match(
+      document.body.textContent ?? '',
+      /Another operation is using this profile\./,
+    ),
+  );
+  const retryButton = [
+    ...document.querySelectorAll<HTMLButtonElement>('.cards .card button'),
+  ].find((button) => button.textContent?.trim() === 'Retry');
+  assert.ok(retryButton);
+  assert.equal(retryButton.disabled, false);
+  testingLibrary.fireEvent.click(retryButton);
+  await testingLibrary.waitFor(() =>
+    assert.equal(
+      [
+        ...document.querySelectorAll<HTMLButtonElement>('.cards .card button'),
+      ].some((button) => button.textContent?.trim() === 'Retry'),
+      false,
+    ),
+  );
+  assert.equal(catalogCalls, 2);
 });
 
 /* ------------------------------------------------------------------ show -- */
@@ -1571,7 +2184,7 @@ test('Copy path stays in Rust and names the selected exact version', async () =>
   assert.ok(copy);
   testingLibrary.fireEvent.click(copy);
   await testingLibrary.waitFor(() =>
-    assert.match(text('.action-message'), /Path copied/),
+    assert.match(text('.toast-message'), /Path copied/),
   );
   assert.deepEqual(called, [
     {
@@ -1637,7 +2250,9 @@ test('Edit reads then saves only the inspected ExactVersion', async () => {
 test('group text Edit is live and preserves roles by sending only the exact version and value', async () => {
   const base = mockBridge(FIXTURE);
   const item = FIXTURE.items.find(
-    (candidate) => candidate.store === 'team:eng' && candidate.path === '/deploy/staging-token',
+    (candidate) =>
+      candidate.store === 'team:eng' &&
+      candidate.path === '/deploy/staging-token',
   );
   assert.ok(item);
   let written: Parameters<Bridge['editTextItem']>[0] | null = null;
@@ -1648,21 +2263,29 @@ test('group text Edit is live and preserves roles by sending only the exact vers
       return base.editTextItem(request);
     },
   };
-  at(`?state=store&store=team%3Aeng&sel=${encodeURIComponent(`${item.store}|${item.path}`)}`, { bridge });
-  const edit = [...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button')]
-    .find((button) => button.textContent?.trim() === 'Edit');
+  at(
+    `?state=store&store=team%3Aeng&sel=${encodeURIComponent(`${item.store}|${item.path}`)}`,
+    { bridge },
+  );
+  const edit = [
+    ...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button'),
+  ].find((button) => button.textContent?.trim() === 'Edit');
   assert.ok(edit);
   assert.equal(edit.disabled, false);
   testingLibrary.fireEvent.click(edit);
   const editor = await testingLibrary.waitFor(() => {
-    const found = document.querySelector<HTMLTextAreaElement>('.details textarea');
+    const found =
+      document.querySelector<HTMLTextAreaElement>('.details textarea');
     assert.ok(found);
     return found;
   });
-  testingLibrary.fireEvent.change(editor, { target: { value: 'group replacement' } });
+  testingLibrary.fireEvent.change(editor, {
+    target: { value: 'group replacement' },
+  });
   testingLibrary.fireEvent.click(
-    [...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button')]
-      .find((button) => button.textContent?.startsWith('Save version'))!,
+    [
+      ...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button'),
+    ].find((button) => button.textContent?.startsWith('Save version'))!,
   );
   await testingLibrary.waitFor(() => assert.ok(written));
   assert.deepEqual(written, {
@@ -1675,14 +2298,20 @@ test('group text Edit is live and preserves roles by sending only the exact vers
 
 test('a group item above this account role keeps Edit and Remove disabled', () => {
   const item = FIXTURE.items.find(
-    (candidate) => candidate.store === 'team:eng' && candidate.path === '/deploy/production-token',
+    (candidate) =>
+      candidate.store === 'team:eng' &&
+      candidate.path === '/deploy/production-token',
   );
   assert.ok(item);
-  at(`?state=store&store=team%3Aeng&sel=${encodeURIComponent(`${item.store}|${item.path}`)}`);
-  const edit = [...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button')]
-    .find((button) => button.textContent?.trim() === 'Edit');
-  const remove = [...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button')]
-    .find((button) => button.textContent?.trim() === 'Remove');
+  at(
+    `?state=store&store=team%3Aeng&sel=${encodeURIComponent(`${item.store}|${item.path}`)}`,
+  );
+  const edit = [
+    ...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button'),
+  ].find((button) => button.textContent?.trim() === 'Edit');
+  const remove = [
+    ...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button'),
+  ].find((button) => button.textContent?.trim() === 'Remove');
   assert.equal(edit?.disabled, true);
   assert.equal(remove?.disabled, true);
   assert.match(edit?.title ?? '', /does not admit the Owner write role/);
@@ -1691,7 +2320,9 @@ test('a group item above this account role keeps Edit and Remove disabled', () =
 test('a streamed group file conflict keeps the exact-version file and never overwrites it', async () => {
   const base = mockBridge(FIXTURE);
   const item = FIXTURE.items.find(
-    (candidate) => candidate.store === 'team:eng' && candidate.path === '/release/bundle.tar',
+    (candidate) =>
+      candidate.store === 'team:eng' &&
+      candidate.path === '/release/bundle.tar',
   );
   assert.ok(item);
   let replacement: Parameters<Bridge['replaceDroppedFile']>[0] | null = null;
@@ -1703,20 +2334,31 @@ test('a streamed group file conflict keeps the exact-version file and never over
     },
     replaceDroppedFile: async (request) => {
       replacement = request;
-      throw { code: 'conflict', message: 'changed first', retryable: false, ambiguous: false, fatal: false };
+      throw {
+        code: 'conflict',
+        message: 'changed first',
+        retryable: false,
+        ambiguous: false,
+        fatal: false,
+      };
     },
   };
-  at(`?state=store&store=team%3Aeng&sel=${encodeURIComponent(`${item.store}|${item.path}`)}`, { bridge });
+  at(
+    `?state=store&store=team%3Aeng&sel=${encodeURIComponent(`${item.store}|${item.path}`)}`,
+    { bridge },
+  );
   testingLibrary.fireEvent.click(
-    [...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button')]
-      .find((button) => button.textContent?.trim() === 'Edit')!,
+    [
+      ...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button'),
+    ].find((button) => button.textContent?.trim() === 'Edit')!,
   );
   await testingLibrary.waitFor(() =>
     assert.match(text('.details'), /new-bundle\.tar/),
   );
   testingLibrary.fireEvent.click(
-    [...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button')]
-      .find((button) => button.textContent?.startsWith('Save version'))!,
+    [
+      ...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button'),
+    ].find((button) => button.textContent?.startsWith('Save version'))!,
   );
   await testingLibrary.waitFor(() =>
     assert.match(text('.sheet h2'), /Someone else changed this first/),
@@ -1728,7 +2370,8 @@ test('a streamed group file conflict keeps the exact-version file and never over
     sourcePath: '/tmp/new-bundle.tar',
   });
   const retained = (await base.listCatalog()).items.find(
-    (candidate) => candidate.store === item.store && candidate.path === item.path,
+    (candidate) =>
+      candidate.store === item.store && candidate.path === item.path,
   );
   assert.equal(retained?.version, item.version);
   assert.deepEqual(retained?.read, roleDto(item.read));
@@ -1778,7 +2421,9 @@ test('Remove confirmation carries the selected version and is danger-last', asyn
 test('group Remove is live, danger-confirmed, and carries its listed exact version', async () => {
   const base = mockBridge(FIXTURE);
   const item = FIXTURE.items.find(
-    (candidate) => candidate.store === 'team:eng' && candidate.path === '/onboarding/README.md',
+    (candidate) =>
+      candidate.store === 'team:eng' &&
+      candidate.path === '/onboarding/README.md',
   );
   assert.ok(item);
   let removed: Parameters<Bridge['removeItem']>[0] | null = null;
@@ -1789,13 +2434,19 @@ test('group Remove is live, danger-confirmed, and carries its listed exact versi
       return base.removeItem(request);
     },
   };
-  at(`?state=store&store=team%3Aeng&sel=${encodeURIComponent(`${item.store}|${item.path}`)}`, { bridge });
-  const open = [...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button')]
-    .find((button) => button.textContent?.trim() === 'Remove');
+  at(
+    `?state=store&store=team%3Aeng&sel=${encodeURIComponent(`${item.store}|${item.path}`)}`,
+    { bridge },
+  );
+  const open = [
+    ...document.querySelectorAll<HTMLButtonElement>('.details .dfoot button'),
+  ].find((button) => button.textContent?.trim() === 'Remove');
   assert.ok(open);
   assert.equal(open.disabled, false);
   testingLibrary.fireEvent.click(open);
-  const actions = [...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button')];
+  const actions = [
+    ...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button'),
+  ];
   assert.equal(removed, null, 'opening the sheet does not remove anything');
   testingLibrary.fireEvent.click(actions.at(-1)!);
   await testingLibrary.waitFor(() => assert.ok(removed));
@@ -1882,88 +2533,54 @@ test('a forced conflict refreshes before restoring the draft under the fresh ver
 /* --------------------------------------------------------------- groups -- */
 
 const GROUP_STATES: ReadonlyArray<[string, string]> = [
-  ['groups', 'Your usernames'],
-  ['join', 'Join or create a group'],
+  ['groups', 'Create group'],
+  ['join', 'Invite someone'],
   ['join-invite', 'Invite to foks.acme-corp.com'],
   ['people', 'People & groups'],
-  ['party', 'What deploy-bot can read'],
-  ['federation', 'Take it back'],
-  ['store', '4 items in Engineering’s store'],
-  ['danger', 'Rekeys Engineering'],
-  ['invite', 'Invite someone to Engineering'],
+  ['party', 'deploy-bot'],
+  ['federation', 'Groups on other servers'],
+  ['items', 'Engineering'],
+  ['store', 'Engineering'],
+  ['danger', 'About this group'],
   ['add', 'Add someone to Engineering'],
-  ['demote', 'Change priya.n’s role'],
+  ['demote', 'Lower priya.n’s role'],
   ['remove', 'Remove dana.okafor from Engineering?'],
   ['admit', 'Add a group to Engineering'],
   ['create', 'Create a group'],
-  ['manage', 'Manage Household'],
+  ['manage', 'People & groups'],
   ['party-remove', 'Remove deploy-bot from Engineering?'],
+  ['rekey-menu', 'Remove a group member'],
 ];
 
 for (const [stateName, phrase] of GROUP_STATES) {
   test(`?state=${stateName} renders its Phase 4 group surface`, () => {
     at(`?state=${stateName}`);
     assert.match(
-      text('.window'),
+      text('body'),
       new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
     );
   });
 }
 
-test('group cards and usernames use compact server-account identities', () => {
+test('Settings Groups consolidates create, discovery, attention, and invites', () => {
   at('?state=groups');
-  const engineeringStore = FIXTURE.stores.find(
-    (store) => store.name === 'Engineering',
-  );
-  assert.ok(engineeringStore);
-  const engineeringServer = FIXTURE.servers.find(
-    (server) => server.id === engineeringStore.server,
-  );
-  const engineeringAccount = FIXTURE.accounts.find(
-    (account) =>
-      account.alias === engineeringStore.account &&
-      account.server === engineeringStore.server,
-  );
-  assert.ok(engineeringServer);
-  assert.ok(engineeringAccount);
-  const engineering = [
-    ...document.querySelectorAll<HTMLElement>('.gcard'),
-  ].find((card) => card.textContent?.includes('Engineering'));
-  assert.ok(engineering);
-  assert.ok(
-    engineering.textContent?.includes(
-      `${engineeringServer.name} · ${engineeringAccount.username}`,
-    ),
-  );
-  const headerChips = engineering.querySelectorAll('.ghead .chip');
-  assert.equal(headerChips.length, 2);
-  assert.notEqual(headerChips[0]?.textContent, 'named');
-  assert.equal(headerChips[1]?.textContent, 'named');
-  assert.doesNotMatch(engineering.textContent ?? '', /via your account|your role/);
-  const groups = FIXTURE.stores.filter((store) => store.kind === 'team');
-  assert.ok(text('.groups-path').includes(`Groups${groups.length} groupsCreate group`));
-  assert.doesNotMatch(text('.groups-path'), /servers/);
-  assert.equal(document.querySelector('.groups-usernames .v b'), null);
+  assert.equal(text('.loc h1'), 'Settings');
+  assert.match(text('.settings-main'), /Create a group/);
+  assert.doesNotMatch(text('.settings-main'), /Groups you were added to/);
+  assert.match(text('.settings-main'), /Needs attention/);
+  assert.match(text('.settings-main'), /Invite someone/);
+  assert.equal(document.querySelector('.settings-main .tag'), null);
   assert.doesNotMatch(
-    text('.groups-wrap'),
-    /Not seeing a group you expect|Ask to be added|Copy the sentence/,
+    text('.settings-main'),
+    /A group is a shared vault|Copy the sentence|Check for groups|you are .* there/,
   );
-  assert.match(
-    text('.groups-wrap'),
-    /Group discovery is not available.*currently lists only groups it created or added as members/s,
-  );
-  assert.doesNotMatch(
-    text('.groups-wrap'),
-    /Creating it stopped part way|journaled — resuming verifies/,
-  );
-  assert.match(text('.groups-wrap'), /Creation interrupted.*Resume creation/s);
 });
 
-test('the short Join pane offers one account-specific invite per server', () => {
+test('Settings Groups offers one account-specific invite per server', () => {
   at('?state=join');
   const invites = [
-    ...document.querySelectorAll<HTMLButtonElement>('.plain button'),
-  ].filter((button) => button.textContent === 'Invite someone…');
+    ...document.querySelectorAll<HTMLButtonElement>('.settings-main button'),
+  ].filter((button) => /^Invite as .+…$/.test(button.textContent ?? ''));
   assert.equal(invites.length, FIXTURE.accounts.length);
   const firstInvite = invites[0];
   const firstServer = FIXTURE.servers[0];
@@ -1972,9 +2589,7 @@ test('the short Join pane offers one account-specific invite per server', () => 
   testingLibrary.fireEvent.click(firstInvite);
   assert.match(
     text('.sheet h2'),
-    new RegExp(
-      `Invite to ${firstServer.name.replaceAll('.', '\\.')}`,
-    ),
+    new RegExp(`Invite to ${firstServer.name.replaceAll('.', '\\.')}`),
   );
 });
 
@@ -1992,6 +2607,14 @@ test('Create defaults to the work account and sends an ad-hoc group without a se
   });
   assert.match(text('.sheet .hd'), /foks\.acme-corp\.com/);
   assert.doesNotMatch(text('.sheet .hd'), /Household/);
+  assert.ok(
+    document.querySelector('#overlays .backdrop'),
+    'the create sheet portals onto #overlays',
+  );
+  assert.ok(
+    document.querySelector('#overlays #toasts'),
+    'toasts share #overlays so they paint above the sheet',
+  );
   const adhoc = [
     ...document.querySelectorAll<HTMLButtonElement>('.sheet .radio'),
   ].find((button) => button.textContent?.includes('Ad-hoc'));
@@ -1999,7 +2622,7 @@ test('Create defaults to the work account and sends an ad-hoc group without a se
   testingLibrary.fireEvent.click(adhoc);
   testingLibrary.fireEvent.click(
     [...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button')].find(
-      (button) => button.textContent === 'Create ad-hoc group',
+      (button) => button.textContent === 'Create Platform',
     )!,
   );
   await testingLibrary.waitFor(() => assert.ok(created));
@@ -2015,6 +2638,17 @@ test('Create defaults to the work account and sends an ad-hoc group without a se
   });
 });
 
+test('successful Settings group creation opens the new vault', async () => {
+  at('?state=create');
+  testingLibrary.fireEvent.click(
+    [...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button')].find(
+      (button) => button.textContent === 'Create Platform',
+    )!,
+  );
+  await testingLibrary.waitFor(() => assert.equal(text('.loc h1'), 'Platform'));
+  assert.ok(document.querySelector('.toolbar [aria-label="Group settings"]'));
+});
+
 test('Create excludes blocked account stores and disables when none remain', () => {
   const blocked: World = {
     ...FIXTURE,
@@ -2023,14 +2657,8 @@ test('Create excludes blocked account stores and disables when none remain', () 
     ),
   };
   at('?state=create', { world: blocked });
-  assert.doesNotMatch(
-    text('.sheet'),
-    /foks\.acme-corp\.com.*rae\.chen/s,
-  );
-  assert.match(
-    text('.sheet'),
-    /foks\.example\.net.*rae/s,
-  );
+  assert.doesNotMatch(text('.sheet'), /foks\.acme-corp\.com.*rae\.chen/s);
+  assert.match(text('.sheet'), /foks\.example\.net.*rae/s);
   testingLibrary.cleanup();
   const allBlocked: World = {
     ...FIXTURE,
@@ -2041,7 +2669,7 @@ test('Create excludes blocked account stores and disables when none remain', () 
   };
   at('?state=groups', { world: allBlocked });
   const create = [
-    ...document.querySelectorAll<HTMLButtonElement>('.groups-path button'),
+    ...document.querySelectorAll<HTMLButtonElement>('.settings-main button'),
   ].find((button) => button.textContent?.includes('Create group'));
   assert.ok(create?.disabled);
 });
@@ -2074,7 +2702,7 @@ test('a Member demotion derives the next lower visibility band from the inspecte
   assert.match(text('.sheet'), /Member · visibility 2.*Member · visibility 1/);
   testingLibrary.fireEvent.click(
     [...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button')].find(
-      (button) => button.textContent === 'Lower to Member · visibility 1',
+      (button) => button.textContent === 'Change role',
     )!,
   );
   await testingLibrary.waitFor(() => assert.ok(request));
@@ -2113,135 +2741,194 @@ test('an Owner demotion can choose Admin and sends that strict destination', asy
   testingLibrary.fireEvent.click(admin);
   testingLibrary.fireEvent.click(
     [...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button')].find(
-      (button) => button.textContent === 'Lower to Admin',
+      (button) => button.textContent === 'Change role',
     )!,
   );
   await testingLibrary.waitFor(() => assert.ok(request));
   assert.deepEqual(request!.destination, { role: 'Admin' });
 });
 
-test('inactive group memberships are struck through and read zero items', () => {
+test('inactive group memberships are dimmed and read nothing', () => {
   at('?state=people');
-  const row = [...document.querySelectorAll<HTMLElement>('.rt .row')].find(
+  const row = [...document.querySelectorAll<HTMLElement>('.rt .prow')].find(
     (candidate) => candidate.textContent?.includes('homelab'),
   );
   assert.ok(row);
-  assert.match(
-    row.textContent ?? '',
-    /membership inactive · no access here/,
-  );
-  assert.match(row.querySelector('.strike')?.textContent ?? '', /^0 of /);
+  assert.ok(row.classList.contains('dim'));
+  // The role cell carries the reason now that there is no access column.
+  assert.match(row.querySelector('.rolecell')?.textContent ?? '', /Member/);
+  assert.match(row.textContent ?? '', /admission inactive/);
 });
 
-test('People renders source role and generation facts and labels the fixture machine locally', () => {
+test('People renders Who / Role and no overflow on you or ad-hoc rows', () => {
   at('?state=people');
-  assert.deepEqual(all('.rt .hdr span').slice(0, 7), [
-    'Party',
-    'Kind',
-    'Role here',
-    'Role at source',
-    'Generation',
-    `Reads · of ${FIXTURE.items.filter((item) => item.store === 'team:eng' && item.kind !== 'Folder').length}`,
-    'Actions',
-  ]);
-  const deploy = [...document.querySelectorAll<HTMLElement>('.rt .row')].find(
+  assert.deepEqual(all('.rt .hdr span').slice(0, 2), ['Who', 'Role']);
+  const deploy = [...document.querySelectorAll<HTMLElement>('.rt .prow')].find(
     (row) => row.textContent?.includes('deploy-bot'),
   );
   assert.ok(deploy);
-  assert.match(deploy.textContent ?? '', /machine.*label kept on this Mac/);
-  assert.match(deploy.textContent ?? '', /6/);
+  assert.match(deploy.textContent ?? '', /machine · generation 6/);
+  // One Role cell: the role, and the access level only a Member carries. The
+  // count of items a party can read is not a fact about its role.
+  assert.match(
+    deploy.querySelector('.rolecell')?.textContent ?? '',
+    /Membervisibility 0/,
+  );
+  assert.doesNotMatch(deploy.textContent ?? '', /\d+ of \d+/);
+  const owner = [...document.querySelectorAll<HTMLElement>('.rt .prow')].find(
+    (row) => row.textContent?.includes('sam.ortiz'),
+  );
+  assert.ok(owner);
+  assert.equal(owner.querySelector('.rolecell')?.textContent, 'Owner');
+  const self = [...document.querySelectorAll<HTMLElement>('.rt .prow')].find(
+    (row) => row.textContent?.includes('rae.chen'),
+  );
+  assert.ok(self);
+  assert.equal(self.querySelector('.acts button'), null);
+  const admitted = [
+    ...document.querySelectorAll<HTMLElement>('.rt .prow'),
+  ].find((row) => row.textContent?.includes('homelab'));
+  assert.ok(admitted);
+  assert.equal(admitted.querySelector('.acts button'), null);
+  testingLibrary.cleanup();
+  at('?state=group-settings&store=team%3Ahousehold&tab=people');
+  const householdRows = [
+    ...document.querySelectorAll<HTMLElement>('.rt .prow'),
+  ];
+  // Household is named; rows that are you still have no overflow.
+  const you = householdRows.find((row) => row.textContent?.includes('you'));
+  assert.ok(you);
+  assert.equal(you.querySelector('.acts button'), null);
 });
 
-test('Danger offers the safest actionable roster member, derived from authority', () => {
+test('Settings offers the safest actionable roster member from the remove menu', () => {
   at('?state=danger');
-  const remove = [
-    ...document.querySelectorAll<HTMLButtonElement>('.dz button'),
-  ].find((button) => button.textContent?.startsWith('Remove '));
-  assert.equal(
-    remove?.textContent,
-    `Remove ${partiesOf(FIXTURE, 'team:eng').find((party) => party.username === 'dana.okafor')?.username}…`,
+  const danger = document.querySelector(
+    '.group-settings .inset.danger.settings-inset',
   );
+  assert.ok(danger);
+  const dangerRows = [...danger.querySelectorAll('.fr')];
+  assert.equal(dangerRows.length, 4);
+  for (const dangerRow of dangerRows) {
+    assert.equal(dangerRow.querySelector('.k'), null);
+    assert.ok(dangerRow.querySelector('.v > .t > b'));
+    assert.ok(dangerRow.querySelector('.v > .t > small'));
+    assert.ok(dangerRow.querySelector('.a > button, .a > .menuwrap'));
+  }
+  const remove = [
+    ...document.querySelectorAll<HTMLButtonElement>('button'),
+  ].find((button) => button.textContent === 'Remove…');
   assert.ok(remove);
   testingLibrary.fireEvent.click(remove);
+  const dana = [
+    ...document.querySelectorAll<HTMLButtonElement>('.menu button'),
+  ].find((button) => button.textContent?.includes('dana.okafor'));
+  assert.ok(dana);
+  testingLibrary.fireEvent.click(dana);
   assert.match(text('.sheet h2'), /Remove dana\.okafor from Engineering/);
 });
 
-test('Federation compares the retained remote host id with this Mac pin and shows source role', () => {
-  at('?state=federation');
-  assert.match(text('.fcard'), /matches this Mac’s pin/);
-  assert.match(text('.fcard'), /at source: Owner/);
+test('People combines roster and federation with one count and two tabs', () => {
+  at('?state=people');
+  assert.equal(text('.ghero .sub'), 'Group settings');
+  const combined =
+    partiesOf(FIXTURE, 'team:eng').length +
+    FIXTURE.federation.filter((entry) => entry.store === 'team:eng').length;
+  assert.deepEqual(all('.tabs .tab'), [`People${combined}`, 'Settings']);
+  const sections = document.querySelectorAll('.groups-wrap > .roster');
+  assert.equal(sections.length, 2);
+  assert.match(sections[0]?.textContent ?? '', /People & groups/);
+  assert.match(sections[1]?.textContent ?? '', /Groups on other servers/);
+  assert.match(text('.rt.fed'), /Inactive/);
+  assert.match(text('.rt.fed'), /members read nothing here/);
+  assert.match(text('.rt.fed'), /for every member/);
+  assert.match(text('.groups-wrap'), /Restore access/);
 });
 
-test('Federation does not infer that a missing passive host snapshot was never checked', () => {
+test('Federation still names the recorded host when this Mac has no pin', () => {
   const world: World = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) => ({ ...server, host_id: null })),
   };
   at('?state=federation', { world });
-  assert.match(text('.fcard'), /local pin fact unavailable/);
-  assert.doesNotMatch(text('.fcard'), /never checked/);
+  assert.match(text('.rt.fed'), /host/);
+  assert.doesNotMatch(text('.groups-wrap'), /never checked|Take it back/);
 });
 
 test('the selected party uses the shell right inspector instead of stacking below the roster', () => {
   at('?state=party');
   assert.ok(document.querySelector('.main > .details'));
   assert.ok(document.querySelector('.body.group-panel-open'));
-  assert.match(
-    text('.main > .details'),
-    /Identity.*What deploy-bot can read.*Connect an agent/,
-  );
-  const selected = document.querySelector<HTMLElement>('.rt .row.sel');
+  assert.match(text('.main > .details'), /Can read.*Details/);
+  const selected = document.querySelector<HTMLElement>('.rt .prow.sel');
   assert.ok(selected);
-  assert.match(selected.textContent ?? '', /shown in the panel/);
-  assert.doesNotMatch(selected.textContent ?? '', /Change role|Remove…/);
-  assert.match(text('.main > .details .dfoot'), /Change role.*Remove/);
+  assert.match(selected.textContent ?? '', /deploy-bot/);
+  assert.doesNotMatch(selected.textContent ?? '', /Lower role|Remove…/);
+  assert.match(text('.main > .details .dfoot'), /Lower role….*Remove…/);
 });
 
-test('roster id Copy does not select the row', async () => {
-  let copied = '';
-  at('?state=people', {
-    bridge: {
-      ...mockBridge(FIXTURE),
-      copyText: async (value) => {
-        copied = value;
-        return { ok: true };
-      },
-    },
-  });
-  const first = document.querySelector<HTMLElement>('.rt .row');
-  const copy = first?.querySelector<HTMLButtonElement>('button');
-  assert.ok(first && copy);
-  testingLibrary.fireEvent.click(copy);
-  await testingLibrary.waitFor(() => assert.ok(copied.length > 14));
-  assert.equal(document.querySelector('.main > .details'), null);
+test('the overflow on a roster row selects it instead of copying an id', () => {
+  at('?state=people');
+  const dana = [...document.querySelectorAll<HTMLElement>('.rt .prow')].find(
+    (row) => row.textContent?.includes('dana.okafor'),
+  );
+  const more = dana?.querySelector<HTMLButtonElement>('.acts button');
+  assert.ok(dana && more);
+  testingLibrary.fireEvent.click(more);
+  assert.ok(document.querySelector('.main > .details'));
+  assert.match(text('.main > .details'), /dana\.okafor/);
 });
 
 test('changing groups clears the previous group tab, party and mutation target', async () => {
   at('?state=party');
   assert.match(text('.main > .details'), /deploy-bot/);
-  const back = [
-    ...document.querySelectorAll<HTMLButtonElement>('.path button'),
-  ].find((button) => button.textContent?.includes('Groups'));
+  const back = document.querySelector<HTMLButtonElement>('.ghero .back');
   assert.ok(back);
   testingLibrary.fireEvent.click(back);
-  const household = [...document.querySelectorAll<HTMLElement>('.gcard')].find(
-    (card) => card.textContent?.includes('Household'),
+  const household = [
+    ...document.querySelectorAll<HTMLButtonElement>('.side .nav'),
+  ].find((row) => row.textContent?.includes('Household'));
+  assert.ok(household);
+  testingLibrary.fireEvent.click(household);
+  testingLibrary.fireEvent.click(
+    document.querySelector<HTMLButtonElement>(
+      '.toolbar [aria-label="Group settings"]',
+    )!,
   );
-  const open = household?.querySelector<HTMLButtonElement>('button');
-  assert.ok(open);
-  testingLibrary.fireEvent.click(open);
   assert.equal(document.querySelector('.main > .details'), null);
   await testingLibrary.waitFor(() => {
-    assert.match(text('.path'), /Household/);
+    assert.match(text('.ghero'), /Household/);
     assert.equal(document.querySelector('.main > .details'), null);
   });
-  assert.match(text('.toolbar .tabs .on'), /People & groups/);
+  assert.match(text('.tabs .tab.on'), /People/);
   assert.equal(document.querySelector('.sheet'), null);
 });
 
-test('only unique local usernames get group role and removal actions', () => {
+test('leaving Group settings resets Settings before opening another group', async () => {
+  at('?state=danger');
+  assert.match(text('.tabs .tab.on'), /Settings/);
+  const back = document.querySelector<HTMLButtonElement>('.ghero .back');
+  assert.ok(back);
+  testingLibrary.fireEvent.click(back);
+  const household = [
+    ...document.querySelectorAll<HTMLButtonElement>('.side .nav'),
+  ].find((row) => row.textContent?.includes('Household'));
+  assert.ok(household);
+  testingLibrary.fireEvent.click(household);
+  testingLibrary.fireEvent.click(
+    document.querySelector<HTMLButtonElement>(
+      '.toolbar [aria-label="Group settings"]',
+    )!,
+  );
+  await testingLibrary.waitFor(() => {
+    assert.match(text('.ghero'), /Household/);
+  });
+  assert.match(text('.tabs .tab.on'), /People/);
+});
+
+test('only unique local usernames get a roster overflow control', () => {
   at('?state=people');
-  const rows = [...document.querySelectorAll<HTMLElement>('.rt .row')];
+  const rows = [...document.querySelectorAll<HTMLElement>('.rt .prow')];
   const deploy = rows.find((candidate) =>
     candidate.textContent?.includes('deploy-bot'),
   );
@@ -2252,12 +2939,12 @@ test('only unique local usernames get group role and removal actions', () => {
     candidate.textContent?.includes('homelab'),
   );
   assert.ok(deploy && self && admitted);
-  assert.match(deploy.textContent ?? '', /Change role.*Remove/);
-  assert.doesNotMatch(self.textContent ?? '', /Remove…/);
-  assert.doesNotMatch(admitted.textContent ?? '', /Remove…/);
+  assert.ok(deploy.querySelector('.acts button'));
+  assert.equal(self.querySelector('.acts button'), null);
+  assert.equal(admitted.querySelector('.acts button'), null);
 });
 
-test('duplicate locally manageable usernames fail closed with no role or removal action', () => {
+test('duplicate locally manageable usernames fail closed with no overflow control', () => {
   const dana = FIXTURE.parties.find(
     (party) => party.username === 'dana.okafor',
   );
@@ -2270,13 +2957,13 @@ test('duplicate locally manageable usernames fail closed with no role or removal
     ],
   };
   at('?state=people', { world });
-  const rows = [...document.querySelectorAll<HTMLElement>('.rt .row')].filter(
+  const rows = [...document.querySelectorAll<HTMLElement>('.rt .prow')].filter(
     (row) => row.textContent?.includes('dana.okafor'),
   );
   assert.equal(rows.length, 2);
   for (const row of rows) {
-    assert.doesNotMatch(row.textContent ?? '', /Change role|Remove…/);
-    assert.match(
+    assert.equal(row.querySelector('.acts button'), null);
+    assert.doesNotMatch(
       row.textContent ?? '',
       /not a unique locally manageable username/,
     );
@@ -2299,79 +2986,101 @@ test('the short party removal refuses a non-local service account without invoki
   ].find((button) => button.textContent === 'Remove and rekey');
   assert.ok(remove);
   assert.ok(remove.disabled);
-  assert.match(text('.sheet'), /does not have a unique username managed by this account/);
-  assert.ok(document.querySelector('.main .search'));
-  assert.match(text('.main'), /production-token/);
+  assert.match(
+    text('.sheet'),
+    /does not have a unique username managed by this account/,
+  );
+  assert.match(text('.ghero'), /Engineering.*Group settings/s);
+  assert.match(text('.tabs .tab.on'), /People/);
   testingLibrary.fireEvent.click(remove);
   assert.equal(removed, false);
 });
 
-test('the short Manage scene stays over the Household vault and carries membership facts', () => {
+test('the Manage scene now lands on Household Group settings People', () => {
   at('?state=manage');
-  assert.ok(document.querySelector('.main .search'));
-  assert.match(
-    text('.sheet'),
-    /id .*People and groups in Household.*foks\.example\.net.*gen 2.*Add people/s,
-  );
-  assert.match(text('.sheet .vis'), /−Visibility 0\+/);
-  const members = document.querySelectorAll('.manage-members .manage-member');
-  assert.equal(members.length, partiesOf(FIXTURE, 'team:household').length);
-  for (const member of members) {
-    assert.ok(member.querySelector('.manage-member-name'));
-    assert.ok(member.querySelector('.manage-member-meta'));
-    assert.ok(member.querySelector('.manage-member-access'));
-  }
+  assert.match(text('.ghero'), /Household/);
+  assert.match(text('.ghero'), /Group settings/);
+  assert.match(text('.tabs .tab.on'), /People/);
+  assert.equal(document.querySelector('.sheet'), null);
   assert.equal(
-    [...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button')].at(
-      -1,
-    )?.textContent,
-    'Add',
+    document.querySelectorAll('.rt .prow').length,
+    partiesOf(FIXTURE, 'team:household').length,
   );
 });
 
 test('Phase 4 group marks and primary action labels match the acceptance surfaces', () => {
   at('?state=groups');
-  assert.equal(document.querySelectorAll('.gcard .kico.group').length, 3);
+  assert.match(text('.settings-main'), /Create a group.*Invite someone/s);
   testingLibrary.cleanup();
   at('?state=groups-lease');
-  assert.match(text('.path'), /‹ Groups.*Engineering/);
-  assert.ok(document.querySelector('.path .kico.group'));
+  assert.match(text('.ghero'), /Engineering.*Group settings/s);
+  assert.ok(document.querySelector('.ghero .kico.group'));
   testingLibrary.cleanup();
   at('?state=groups-inactive');
-  assert.match(text('.path'), /‹ Groups.*Homelab/);
-  assert.ok(document.querySelector('.path .kico.group'));
+  assert.match(text('.main'), /Homelab.*Finish setup/s);
+  assert.ok(
+    [...document.querySelectorAll<HTMLButtonElement>('.notice button')].some(
+      (button) => button.textContent?.includes('Finish setup'),
+    ),
+  );
   testingLibrary.cleanup();
   at('?state=add');
   assert.equal(
     [...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button')].at(
       -1,
     )?.textContent,
-    'Add as Member · visibility 0',
+    'Add jules.park',
   );
   testingLibrary.cleanup();
   at('?state=admit');
-  assert.equal(
+  assert.ok(document.querySelector('.sheet .inset .radios'));
+  assert.match(text('.sheet'), /for every member/);
+  assert.match(text('.sheet .fn'), /keeps following/);
+  assert.match(
     [...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button')].at(
       -1,
-    )?.textContent,
-    'Add as Member · visibility 0',
+    )?.textContent ?? '',
+    /^Admit /,
   );
   testingLibrary.cleanup();
   at('?state=create');
+  assert.ok(document.querySelector('.sheet .inset .radios'));
+  assert.match(text('.sheet .fn'), /Others find it as/);
   assert.doesNotMatch(text('.sheet'), /account there is unavailable/);
 });
 
-test('Manage on a group vault navigates and opens that group management overlay', async () => {
+test('the group vault toolbar gear opens Household Group settings', async () => {
   at('?state=group');
-  const manage = [
-    ...document.querySelectorAll<HTMLButtonElement>('.path button'),
-  ].find((button) => button.textContent === 'Manage');
-  assert.ok(manage);
-  testingLibrary.fireEvent.click(manage);
-  await testingLibrary.waitFor(() =>
-    assert.match(text('.sheet h2'), /Manage Household/),
+  const settings = document.querySelector<HTMLButtonElement>(
+    '.toolbar [aria-label="Group settings"]',
   );
-  assert.match(text('.sheet'), /Reads \d+ of \d+/);
+  assert.ok(settings);
+  testingLibrary.fireEvent.click(settings);
+  await testingLibrary.waitFor(() => assert.match(text('.ghero'), /Household/));
+  assert.match(text('.ghero'), /Group settings/);
+  assert.match(text('.tabs .tab.on'), /People/);
+});
+
+test('a sidebar group opens its vault before the toolbar gear opens Group settings', async () => {
+  at('?state=all');
+  const engineering = [
+    ...document.querySelectorAll<HTMLButtonElement>('.side .nav'),
+  ].find((row) =>
+    row.querySelector('.t')?.textContent?.startsWith('Engineering'),
+  );
+  assert.ok(engineering);
+  testingLibrary.fireEvent.click(engineering);
+  await testingLibrary.waitFor(() =>
+    assert.equal(document.querySelector('.loc h1')?.textContent, 'Engineering'),
+  );
+  const settings = document.querySelector<HTMLButtonElement>(
+    '.toolbar [aria-label="Group settings"]',
+  );
+  assert.ok(settings);
+  testingLibrary.fireEvent.click(settings);
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.ghero'), /Engineering/),
+  );
 });
 
 test('active ad-hoc groups expose roster facts but no management controls', () => {
@@ -2383,27 +3092,115 @@ test('active ad-hoc groups expose roster facts but no management controls', () =
         : store,
     ),
   };
-  at('?state=group-admin&store=team%3Ahomelab', { world });
-  assert.match(
-    text('.groups-wrap'),
-    /changes are unavailable.*read-only roster facts/i,
-  );
-  assert.equal(document.querySelector('.groups-wrap > .band'), null);
-  assert.ok(document.querySelector('.groups-wrap > .group-limit'));
-  const invite = [
-    ...document.querySelectorAll<HTMLButtonElement>('.toolbar button'),
-  ].find((button) => button.textContent === 'Invite someone');
-  const add = [
+  at('?state=group-settings&store=team%3Ahomelab&tab=people', { world });
+  assert.equal(text('.ghero .sub'), 'Group settings');
+  assert.equal(document.querySelector('.ghero .tag'), null);
+  assert.match(text('.band.info'), /Ad-hoc group/);
+  assert.doesNotMatch(text('.groups-wrap'), /Only you so far/);
+  const addActions = [
     ...document.querySelectorAll<HTMLButtonElement>('.groups-wrap button'),
-  ].find((button) => button.textContent === 'Add someone');
-  assert.ok(invite?.disabled);
-  assert.ok(add?.disabled);
+  ].filter((button) =>
+    ['Add a group', 'Add someone'].includes(button.textContent ?? ''),
+  );
+  assert.deepEqual(addActions, []);
+  const rows = [...document.querySelectorAll<HTMLElement>('.rt .prow')];
+  for (const row of rows) {
+    assert.equal(row.querySelector('.acts button'), null);
+  }
+  const settingsTab = [
+    ...document.querySelectorAll<HTMLButtonElement>('.tabs .tab'),
+  ].find((button) => button.textContent === 'Settings');
+  assert.ok(settingsTab);
+  testingLibrary.fireEvent.click(settingsTab);
+  assert.equal(document.querySelector('.group-settings .tag'), null);
   testingLibrary.cleanup();
   at('?state=homelab', { world });
-  const manage = [
-    ...document.querySelectorAll<HTMLButtonElement>('.path button'),
-  ].find((button) => button.textContent === 'Manage');
-  assert.ok(manage?.disabled);
+  const settings = document.querySelector<HTMLButtonElement>(
+    '.toolbar [aria-label="Group settings"]',
+  );
+  assert.ok(settings);
+  assert.equal(settings.disabled, false);
+});
+
+test('group detail failures stay partial and gate only their dependent actions', () => {
+  const world: World = {
+    ...FIXTURE,
+    parties: FIXTURE.parties.filter((party) => party.store !== 'team:eng'),
+    federation: [],
+    groupDetailFailures: [
+      {
+        store: 'team:eng',
+        source: 'roster',
+        code: 'rate-limited',
+        message: 'Roster request was limited.',
+        retryable: true,
+      },
+      {
+        store: 'team:eng',
+        source: 'federation',
+        code: 'quota-exceeded',
+        message: 'Federation capacity was reached.',
+        retryable: false,
+      },
+    ],
+  };
+  at('?state=people', { world });
+  assert.equal(text('.ghero .sub'), 'Group settings');
+  assert.match(
+    text('.roster:not(.federation-section) .notice'),
+    /Roster unavailable.*Roster request was limited/s,
+  );
+  assert.match(
+    text('.federation-section .notice'),
+    /Federation unavailable.*Federation capacity was reached/s,
+  );
+  assert.doesNotMatch(text('.roster'), /0 people|No people yet/);
+  assert.equal(
+    [...document.querySelectorAll<HTMLButtonElement>('.roster button')].some(
+      (button) =>
+        button.textContent === 'Add someone' ||
+        button.textContent === 'Add a group',
+    ),
+    false,
+  );
+  testingLibrary.cleanup();
+
+  at('?state=add', { world });
+  assert.match(text('.sheet .notice'), /Roster unavailable/);
+  const submit = [
+    ...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button'),
+  ].find((button) => button.textContent?.startsWith('Add '));
+  assert.ok(submit?.disabled);
+  testingLibrary.cleanup();
+
+  at('?state=group', { world });
+  assert.match(text('.body'), /guest-password/);
+});
+
+test('manual Refresh replaces a partial group-detail failure with the recovered roster', async () => {
+  const world: World = {
+    ...FIXTURE,
+    parties: FIXTURE.parties.filter((party) => party.store !== 'team:eng'),
+    groupDetailFailures: [
+      {
+        store: 'team:eng',
+        source: 'roster',
+        code: 'rate-limited',
+        message: 'Roster request was limited.',
+        retryable: true,
+      },
+    ],
+  };
+  at('?state=people', { world, bridge: mockBridge(FIXTURE) });
+  const refresh = [
+    ...document.querySelectorAll<HTMLButtonElement>('.roster button'),
+  ].find((button) => button.textContent === 'Refresh');
+  assert.ok(refresh);
+  testingLibrary.fireEvent.click(refresh);
+  await testingLibrary.waitFor(() =>
+    assert.ok(document.querySelector('.rt .prow')),
+  );
+  assert.equal(document.querySelector('.roster .notice'), null);
 });
 
 test('a truly lapsed native-style world stays stopped on the ordinary People deep link', () => {
@@ -2413,14 +3210,14 @@ test('a truly lapsed native-style world stays stopped on the ordinary People dee
   assert.equal(document.querySelector('.rt'), null);
 });
 
-test('the Groups list never turns a suppressed lapsed roster into a zero-member fact', () => {
+test('Settings Groups attention never turns a suppressed roster into a zero-member fact', () => {
   at('?state=groups', { world: applyLease(FIXTURE, 'lapsed') });
   const engineering = [
-    ...document.querySelectorAll<HTMLElement>('.gcard'),
-  ].find((card) => card.textContent?.includes('Engineering'));
+    ...document.querySelectorAll<HTMLElement>('.settings-main .fr'),
+  ].find((row) => row.textContent?.includes('Engineering'));
   assert.ok(engineering);
-  assert.match(engineering.textContent ?? '', /Roster unavailable/);
-  assert.doesNotMatch(engineering.textContent ?? '', /\d+ people/);
+  assert.match(engineering.textContent ?? '', /Unavailable/);
+  assert.doesNotMatch(engineering.textContent ?? '', /0 people/);
 });
 
 test('an ambiguous group resumable refreshes once and is never replayed', async () => {
@@ -2446,12 +3243,18 @@ test('an ambiguous group resumable refreshes once and is never replayed', async 
       },
     },
   });
-  const resume = document.querySelector<HTMLButtonElement>('.notice button');
+  const resume = [
+    ...document.querySelectorAll<HTMLButtonElement>('button'),
+  ].find((button) => button.textContent === 'Finish setup');
   assert.ok(resume);
   testingLibrary.fireEvent.click(resume);
-  await testingLibrary.waitFor(() =>
-    assert.match(text('.flash'), /outcome is uncertain.*State refreshed/i),
-  );
+  // The failure and the refresh are now two toasts rather than one line that
+  // overwrote itself, and neither restates the other.
+  await testingLibrary.waitFor(() => {
+    const shown = all('.toast-message').join(' | ');
+    assert.match(shown, /outcome is uncertain/i);
+    assert.match(shown, /State refreshed/i);
+  });
   assert.equal(resumes, 1);
   assert.equal(catalogs, 1);
 });
@@ -2463,10 +3266,12 @@ test('group member add reloads and the stateful mock exposes the new roster entr
   testingLibrary.fireEvent.change(input, { target: { value: 'new.person' } });
   testingLibrary.fireEvent.click(
     [...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button')].find(
-      (button) => button.textContent === 'Add as Member · visibility 0',
+      (button) => button.textContent === 'Add new.person',
     )!,
   );
-  await testingLibrary.waitFor(() => assert.match(text('.flash'), /completed/));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.toast-message'), /completed/),
+  );
   assert.match(text('.rt'), /new.person/);
 });
 
@@ -2493,13 +3298,13 @@ const FIRST_RUN_RENDER_STATES = [
 const FIRST_RUN_COPY: Record<(typeof FIRST_RUN_RENDER_STATES)[number], RegExp> =
   {
     boot: /Preparing this Mac/,
-    who: /Who is setting you up/,
-    address: /What did sam send you|Which server/,
-    'no-address': /Ask .* this|Which server/,
-    checked: /Found it/,
-    compare: /Published id/,
+    who: /How are you joining/,
+    address: /Select a server/,
+    'no-address': /Ask .* this|Select a server/,
+    checked: /Pinned on this Mac/,
+    compare: /Pinned on this Mac/,
     error: /nothing was saved|Nothing was checked/i,
-    account: /Your account on/,
+    account: /Create an account/,
     existing: /Add this Mac to your account/,
     protect: /Right now this Mac holds the only key/,
     phrase: /Write these tokens down/,
@@ -2515,9 +3320,13 @@ for (const path of ['invited', 'own'] as const) {
   for (const state of FIRST_RUN_RENDER_STATES) {
     test(`Phase 5 ${path} first-run state ${state} renders in the shared shell`, async () => {
       const effectivePath =
-        state === 'waiting' || state === 'added' || state === 'checklist-invited'
+        state === 'waiting' ||
+        state === 'added' ||
+        state === 'checklist-invited'
           ? 'invited'
-          : state === 'create-group' || state === 'done' || state === 'checklist-own'
+          : state === 'create-group' ||
+              state === 'done' ||
+              state === 'checklist-own'
             ? 'own'
             : path;
       at(`?state=${state}&path=${path}`);
@@ -2531,6 +3340,13 @@ for (const path of ['invited', 'own'] as const) {
       );
       assert.ok(document.querySelector('.app .side'));
       assert.ok(document.querySelector('.app .main'));
+      assert.equal(
+        document.querySelector(
+          '.first-run-main .lead code, .first-run-main h1 code',
+        ),
+        null,
+        'headings and lead copy use the surrounding type, not monospace',
+      );
       assert.equal(document.querySelector('.setup-side .slabel'), null);
       const footerNote = document.querySelector<HTMLElement>(
         '.first-run-main .pfoot .note',
@@ -2538,9 +3354,14 @@ for (const path of ['invited', 'own'] as const) {
       if (footerNote) {
         const action = footerNote.querySelector('button');
         assert.ok(action, 'footer notes contain actions, not guide text');
-        assert.equal(footerNote.textContent?.trim(), action.textContent?.trim());
+        assert.equal(
+          footerNote.textContent?.trim(),
+          action.textContent?.trim(),
+        );
       }
-      if (!['added', 'done', 'checklist-invited', 'checklist-own'].includes(state)) {
+      if (
+        !['added', 'done', 'checklist-invited', 'checklist-own'].includes(state)
+      ) {
         assert.equal(
           document.querySelector('.first-run-main > .path'),
           null,
@@ -2564,8 +3385,14 @@ for (const path of ['invited', 'own'] as const) {
       }
       if (
         [
-          'checked', 'compare', 'account', 'existing', 'waiting', 'added',
-          'create-group', 'done', 'checklist-invited',
+          'checked',
+          'compare',
+          'existing',
+          'waiting',
+          'added',
+          'create-group',
+          'done',
+          'checklist-invited',
           'checklist-own',
         ].includes(state)
       ) {
@@ -2589,21 +3416,45 @@ for (const path of ['invited', 'own'] as const) {
       }
       if (state === 'existing') {
         const cards = [...document.querySelectorAll<HTMLElement>('.pcard')];
-        assert.match(cards[0]?.textContent ?? '', /Recover with your backup phrase/);
-        assert.doesNotMatch(cards[0]?.textContent ?? '', /Works today|Requires|interrupted/);
-        assert.match(cards[1]?.textContent ?? '', /Pair from a Mac you already use/);
+        assert.match(
+          cards[0]?.textContent ?? '',
+          /Recover with your backup phrase/,
+        );
+        assert.doesNotMatch(
+          cards[0]?.textContent ?? '',
+          /Works today|Requires|interrupted/,
+        );
+        assert.match(
+          cards[1]?.textContent ?? '',
+          /Pair from a Mac you already use/,
+        );
         assert.equal(
           cards[1]?.querySelector('p')?.textContent?.trim(),
-          'On another signed-in Mac, open Settings › Your Macs & recovery and choose Add another Mac.',
+          'On another signed-in Mac, open Settings › Recovery devices and choose Start pairing.',
         );
         assert.equal(cards[1]?.querySelector('p b'), null);
-        assert.doesNotMatch(cards[1]?.textContent ?? '', /available now|Requires/);
-        const pairingButtons = cards[1]?.querySelectorAll<HTMLButtonElement>('button');
-        assert.equal(pairingButtons?.[0]?.disabled, true, 'Accept waits for the secret phrase');
-        assert.equal(pairingButtons?.[1]?.disabled, false, 'Resume needs only the authenticated pending identity');
+        assert.doesNotMatch(
+          cards[1]?.textContent ?? '',
+          /available now|Requires/,
+        );
+        const pairingButtons =
+          cards[1]?.querySelectorAll<HTMLButtonElement>('button');
+        assert.equal(
+          pairingButtons?.[0]?.disabled,
+          true,
+          'Accept waits for the secret phrase',
+        );
+        assert.equal(
+          pairingButtons?.[1]?.disabled,
+          false,
+          'Resume needs only the authenticated pending identity',
+        );
       }
       if (state === 'added') {
-        assert.doesNotMatch(document.body.textContent ?? '', /\[object Object\]/);
+        assert.doesNotMatch(
+          document.body.textContent ?? '',
+          /\[object Object\]/,
+        );
         if (effectivePath === 'invited') {
           const bundle = [
             ...document.querySelectorAll<HTMLElement>('.first-run-main .row'),
@@ -2621,18 +3472,12 @@ for (const path of ['invited', 'own'] as const) {
           new RegExp(facts.report.hostId.slice(0, 4)),
         );
         assert.match(checked, /Pinned on this Mac/);
-        assert.match(checked, /compatibility lease.*current/s);
-        assert.match(checked, /Server check result.*New pin.*Same as before.*Advanced/s);
-        assert.match(
+        assert.match(checked, /The host ID is pinned on this Mac/);
+        assert.doesNotMatch(
           checked,
-          effectivePath === 'invited'
-            ? /Compare with a host id sam published/
-            : /Compare with a host id your server’s operator published/,
+          /Future checks must match it|check-in is\s+current/s,
         );
-        assert.match(
-          checked,
-          /Optional.*Paste the published host ID.*comparison is optional and runs only on this Mac.*does not change the pinned host ID/s,
-        );
+        assert.match(checked, /Everything in FOKS lives on a server/);
         assert.equal(
           document.querySelector<HTMLInputElement>(
             '.first-run-main .inset input',
@@ -2652,23 +3497,29 @@ for (const path of ['invited', 'own'] as const) {
           '.first-run-main .lead',
         );
         assert.ok(introduction);
-        assert.match(
+        assert.match(introduction.textContent ?? '', /Pick the one that fits/);
+        // The Personal/groups concept sentence is not needed to make this
+        // choice and now belongs to the "You're in" step.
+        assert.doesNotMatch(introduction.textContent ?? '', /encrypted stores/);
+        assert.doesNotMatch(
           introduction.textContent ?? '',
-          /encrypted stores.*your own in Personal, shared ones in groups/s,
+          /shared store with a roster/,
         );
-        assert.doesNotMatch(introduction.textContent ?? '', /shared store with a roster/);
-        assert.equal(
-          [...introduction.querySelectorAll('b')].some(
-            (element) => element.textContent === 'stores',
-          ),
-          false,
+        // The returning-user route is a link beside Continue, not a third card.
+        assert.doesNotMatch(
+          text('.first-run-main'),
+          /This Mac is added to your devices/,
         );
-        assert.match(text('.first-run-main'), /This Mac is added to your devices/);
+        assert.match(text('.actions .alt'), /Add this as a secondary device/);
       }
       if (state === 'account') {
-        assert.match(
+        assert.doesNotMatch(
           text('.first-run-main'),
-          /Letters, digits and dots.*rename it any time/s,
+          /How others on|Letters, digits and dots|rename it any time|Email is optional|Enter an invite only/,
+        );
+        assert.doesNotMatch(
+          text('.first-run-main'),
+          /does not save the invite/,
         );
       }
       if (
@@ -2681,16 +3532,16 @@ for (const path of ['invited', 'own'] as const) {
           /17 words|17-word/i,
         );
       }
+      if (state === 'protect' || state === 'phrase') {
+        assert.doesNotMatch(text('.pfoot'), /Skip for now/);
+      }
       if (state === 'waiting') {
         assert.match(
           text('.first-run-main .band'),
           /Group discovery.*Check now.*authenticated account/s,
         );
         const waiting = text('.first-run-main');
-        assert.match(
-          waiting,
-          /FOKS lists groups after it checks the server/s,
-        );
+        assert.match(waiting, /FOKS lists groups after it checks the server/s);
         assert.match(
           waiting,
           /visibility level.*above your role or visibility level remain locked/s,
@@ -2705,14 +3556,31 @@ for (const path of ['invited', 'own'] as const) {
       if (state === 'create-group') {
         assert.match(
           text('.first-run-main'),
-          /Add people by username from Manage.*select Resume/s,
+          /You can add people by username after creating a group/,
         );
+        assert.doesNotMatch(
+          text('.first-run-main'),
+          /You become its Owner|from Manage|select Resume|I’ll do this later/,
+        );
+        const skip = [
+          ...document.querySelectorAll<HTMLButtonElement>('.pfoot .lnk'),
+        ].find((button) => button.textContent === 'Skip this step');
+        const create = [
+          ...document.querySelectorAll<HTMLButtonElement>('.pfoot button'),
+        ].find((button) => button.textContent === 'Create group');
+        assert.ok(skip);
+        assert.ok(create);
+        assert.equal(skip.nextElementSibling, create);
       }
       if (state.startsWith('checklist-')) {
         assert.match(text('.first-run-main'), /Get started3 of 5 done/);
-        assert.match(
+        assert.doesNotMatch(
           text('.first-run-main'),
           /Continue the remaining setup steps/,
+        );
+        assert.doesNotMatch(
+          text('.first-run-main'),
+          /Incomplete steps remain in the sidebar|Alerts shows the pending group invitation|Manage backup phrases and Macs|Manage YubiKeys/,
         );
         if (effectivePath === 'invited') {
           assert.match(
@@ -2743,6 +3611,7 @@ test('the own-server prompt omits the extra explanation and no-server help', () 
     'input[aria-label="Server address"]',
   );
   assert.ok(address);
+  assert.equal(address.classList.contains('mono'), false);
   assert.ok(
     address.closest('label.server-address-row'),
     'the whole address row labels and focuses its input',
@@ -2777,20 +3646,154 @@ test('the one-time backup reveal does not issue concurrent prepares in StrictMod
   assert.equal(prepares, 1);
 });
 
+/* --------------------------------------------------- first run: joining -- */
+
+/** The two option cards on the `who` screen, in the order they are drawn. */
+const joiningOptions = (): HTMLButtonElement[] => [
+  ...document.querySelectorAll<HTMLButtonElement>('.opts .opt'),
+];
+
+const continueButton = (): HTMLButtonElement => {
+  const found = [
+    ...document.querySelectorAll<HTMLButtonElement>('.actions button'),
+  ].find((button) => button.textContent === 'Continue');
+  assert.ok(found, 'Continue is on the who screen');
+  return found;
+};
+
+/** The sidebar step labels, which name the two path-dependent steps. */
+const stepLabels = (): string[] =>
+  [...document.querySelectorAll('.setup-step .t')].map(
+    (node) => node.textContent?.trim() ?? '',
+  );
+
+test('the joining choice offers starting alone first and commits only on Continue', () => {
+  window.localStorage.removeItem('foks.first-run.v1');
+  at('?state=who&path=invited');
+
+  const [own, invited] = joiningOptions();
+  assert.match(own.textContent ?? '', /I’m starting on my own/);
+  assert.match(invited.textContent ?? '', /Someone invited me to their group/);
+  assert.equal(own.getAttribute('aria-checked'), 'false');
+  assert.equal(invited.getAttribute('aria-checked'), 'false');
+
+  // Nothing is chosen, so Continue is disabled and the next-steps module
+  // stays off the page until a path is picked.
+  assert.equal(continueButton().disabled, true);
+  assert.equal(document.querySelector('.next'), null);
+
+  testingLibrary.fireEvent.click(own);
+  assert.equal(own.getAttribute('aria-checked'), 'true');
+  assert.equal(invited.getAttribute('aria-checked'), 'false');
+  assert.equal(continueButton().disabled, false);
+  assert.match(text('.next'), /Create a group/);
+  assert.match(text('.next'), /save your recovery phrase/);
+
+  // The choice is reversible right up to Continue.
+  testingLibrary.fireEvent.click(invited);
+  assert.equal(invited.getAttribute('aria-checked'), 'true');
+  assert.match(text('.next'), /Wait to be added/);
+  assert.match(text('.next'), /Joining a server requires admin approval/);
+});
+
+test('the sidebar names the path-dependent steps only once one is chosen', () => {
+  window.localStorage.removeItem('foks.first-run.v1');
+  at('?state=who&path=invited');
+
+  // The checkpoint's path defaults to `invited`, so without the pending
+  // selection the group step would assert a route nobody has taken.
+  assert.deepEqual(stepLabels().slice(2, 5), [
+    'Select a server',
+    'Create your account',
+    'Save recovery phrase',
+  ]);
+  assert.deepEqual(stepLabels().slice(5, 6), ['Group']);
+  const pending = [...document.querySelectorAll('.setup-step.pending')].map(
+    (node) => node.querySelector('.t')?.textContent?.trim(),
+  );
+  assert.deepEqual(pending, ['Group']);
+
+  const [own, invited] = joiningOptions();
+  testingLibrary.fireEvent.click(invited);
+  assert.deepEqual(stepLabels().slice(2, 3), ['Select a server']);
+  assert.deepEqual(stepLabels().slice(5, 6), ['Wait to be added']);
+  assert.equal(document.querySelectorAll('.setup-step.pending').length, 0);
+
+  testingLibrary.fireEvent.click(own);
+  assert.deepEqual(stepLabels().slice(2, 3), ['Select a server']);
+  assert.deepEqual(stepLabels().slice(5, 6), ['Create a group']);
+});
+
+test('arrow keys move between the joining options', () => {
+  window.localStorage.removeItem('foks.first-run.v1');
+  at('?state=who&path=invited');
+  const [own, invited] = joiningOptions();
+  testingLibrary.fireEvent.click(own);
+  testingLibrary.fireEvent.keyDown(own, { key: 'ArrowRight' });
+  assert.equal(invited.getAttribute('aria-checked'), 'true');
+  testingLibrary.fireEvent.keyDown(invited, { key: 'ArrowLeft' });
+  assert.equal(own.getAttribute('aria-checked'), 'true');
+});
+
+test('Continue takes the invited path to the server address step', async () => {
+  window.localStorage.removeItem('foks.first-run.v1');
+  at('?state=who&path=invited');
+  testingLibrary.fireEvent.click(joiningOptions()[1]);
+  testingLibrary.fireEvent.click(continueButton());
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.pane h1'), /Select a server address/),
+  );
+});
+
+test('Continue takes the own path to the server address step', async () => {
+  window.localStorage.removeItem('foks.first-run.v1');
+  at('?state=who&path=invited');
+  testingLibrary.fireEvent.click(joiningOptions()[0]);
+  testingLibrary.fireEvent.click(continueButton());
+  await testingLibrary.waitFor(() => {
+    assert.match(text('.first-run-main'), /Select a server/);
+    assert.doesNotMatch(text('.pane h1'), /Select a server address/);
+  });
+});
+
+test('Add this as a secondary device marks the run as returning without a card of its own', async () => {
+  window.localStorage.removeItem('foks.first-run.v1');
+  at('?state=who&path=invited');
+  const link = [
+    ...document.querySelectorAll<HTMLButtonElement>('.actions .alt button'),
+  ].find((button) => button.textContent === 'Add this as a secondary device');
+  assert.ok(link);
+  testingLibrary.fireEvent.click(link);
+  // The returning route is the existing one: the same server-address step,
+  // carrying the flag that sends it to "Add this Mac to your account" after
+  // the server is checked rather than creating an account.
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.first-run-main'), /Select a server/),
+  );
+  const saved = decodeFirstRunCheckpoint(
+    window.localStorage.getItem('foks.first-run.v1'),
+  );
+  assert.equal(saved?.returning, true);
+  assert.equal(saved?.path, 'own');
+});
+
 test('the Sol flow uses authenticated discovery and survives reload checkpoints', async () => {
   window.localStorage.removeItem('foks.first-run.v1');
   at('?state=who&path=invited');
-  const choiceCards = [...document.querySelectorAll<HTMLElement>('.choice-card')];
-  assert.equal(choiceCards.length, 3);
-  assert.ok(choiceCards.every((card) => card.tagName === 'ARTICLE'));
-  assert.ok(choiceCards.every((card) => card.querySelector('ol')));
-  assert.ok(choiceCards.every((card) => card.querySelector('button.primary')));
-  const invited = [...document.querySelectorAll<HTMLButtonElement>('.choice-card button')]
-    .find((button) => button.textContent === 'Start here');
-  assert.ok(invited);
-  testingLibrary.fireEvent.click(invited);
+  const options = [...document.querySelectorAll<HTMLElement>('.opt')];
+  assert.equal(options.length, 2);
+  assert.ok(options.every((option) => option.getAttribute('role') === 'radio'));
+  // Starting on your own comes first; being invited is the second option.
+  assert.match(options[0].textContent ?? '', /starting on my own/);
+  assert.match(options[1].textContent ?? '', /invited me to their group/);
+  testingLibrary.fireEvent.click(options[1]);
+  testingLibrary.fireEvent.click(
+    [...document.querySelectorAll<HTMLButtonElement>('.actions button')].find(
+      (button) => button.textContent === 'Continue',
+    )!,
+  );
   await testingLibrary.waitFor(() =>
-    assert.match(text('.pane h1'), /What did sam send you/),
+    assert.match(text('.pane h1'), /Select a server address/),
   );
   testingLibrary.fireEvent.click(
     [...document.querySelectorAll<HTMLButtonElement>('.pfoot button')].find(
@@ -2798,7 +3801,7 @@ test('the Sol flow uses authenticated discovery and survives reload checkpoints'
     )!,
   );
   await testingLibrary.waitFor(() =>
-    assert.match(text('.pane h1'), /Found it/),
+    assert.equal(text('.pane h1'), 'Select a server'),
   );
   testingLibrary.fireEvent.click(
     [...document.querySelectorAll<HTMLButtonElement>('.pfoot button')].find(
@@ -2806,7 +3809,7 @@ test('the Sol flow uses authenticated discovery and survives reload checkpoints'
     )!,
   );
   await testingLibrary.waitFor(() =>
-    assert.match(text('.pane h1'), /Your account on/),
+    assert.equal(text('.pane h1'), 'Create an account'),
   );
   testingLibrary.fireEvent.click(
     [...document.querySelectorAll<HTMLButtonElement>('.pfoot button')].find(
@@ -2814,7 +3817,7 @@ test('the Sol flow uses authenticated discovery and survives reload checkpoints'
     )!,
   );
   await testingLibrary.waitFor(() =>
-    assert.match(text('.pane h1'), /Protect it/),
+    assert.equal(text('.pane h1'), 'Save recovery phrase'),
   );
   const saved = window.localStorage.getItem('foks.first-run.v1') ?? '';
   assert.match(saved, /"username":"sol"/);
@@ -2836,18 +3839,10 @@ test('the Sol flow uses authenticated discovery and survives reload checkpoints'
     assert.match(text('.main'), /only key to.*sol/s),
   );
   testingLibrary.fireEvent.click(
-    [...document.querySelectorAll<HTMLButtonElement>('.pfoot .lnk')].find(
-      (button) => /Skip for now/.test(button.textContent ?? ''),
+    [...document.querySelectorAll<HTMLButtonElement>('.pfoot button')].find(
+      (button) => button.textContent === 'Continue',
     )!,
   );
-  await testingLibrary.waitFor(() =>
-    assert.match(text('.main'), /Get started/),
-  );
-  const checkNow = [
-    ...document.querySelectorAll<HTMLButtonElement>('.main button'),
-  ].find((button) => button.textContent === 'Check now');
-  assert.ok(checkNow);
-  testingLibrary.fireEvent.click(checkNow);
   await testingLibrary.waitFor(() =>
     assert.match(text('.pane h1'), /Waiting for sam/),
   );
@@ -2861,17 +3856,17 @@ test('the Sol flow uses authenticated discovery and survives reload checkpoints'
   );
 });
 
-test('Set up again starts a clean first-run flow', async () => {
+test('Set up new vault starts a clean first-run flow', async () => {
   window.localStorage.removeItem('foks.first-run.v1');
   at('?state=done&path=own');
   assert.match(text('.main'), /Household exists/);
   testingLibrary.fireEvent.click(
     [...document.querySelectorAll<HTMLButtonElement>('.side button')].find(
-      (button) => button.textContent?.includes('Set up again'),
+      (button) => button.textContent?.includes('Set up new vault'),
     )!,
   );
   await testingLibrary.waitFor(() =>
-    assert.match(text('.main'), /Who is setting you up/),
+    assert.match(text('.main'), /How are you joining/),
   );
   const cancel = [
     ...document.querySelectorAll<HTMLButtonElement>('.side .foot button'),
@@ -2993,7 +3988,9 @@ test('a new Mac can accept pairing from first run before it has an account store
   );
   const base = mockBridge(FIXTURE);
   let paired = false;
-  let accepted: { profile: string; alias: string; device: string; phrase: string } | undefined;
+  let accepted:
+    | { profile: string; alias: string; device: string; phrase: string }
+    | undefined;
   const bridge: Bridge = {
     ...nativeAvailableBridge(base),
     listCatalog: async () => {
@@ -3001,16 +3998,30 @@ test('a new Mac can accept pairing from first run before it has an account store
       return {
         ...catalog,
         profiles: ['personal'],
-        stores: paired ? catalog.stores.filter((store) => store.id === 'acct:personal') : [],
-        items: paired ? catalog.items.filter((item) => item.store === 'acct:personal') : [],
+        stores: paired
+          ? catalog.stores.filter((store) => store.id === 'acct:personal')
+          : [],
+        knownStores: paired
+          ? catalog.knownStores.filter((store) => store.id === 'acct:personal')
+          : [],
+        inventory: [
+          { profile: 'personal', accountsComplete: true, teamsComplete: true },
+        ],
+        items: paired
+          ? catalog.items.filter((item) => item.store === 'acct:personal')
+          : [],
         failures: [],
         blockedProfiles: [],
       };
     },
-    listServers: async () => (await base.listServers()).filter((server) => server.id === 'personal'),
-    listAccounts: async () => paired
-      ? (await base.listAccounts()).filter((account) => account.store === 'acct:personal')
-      : [],
+    listServers: async () =>
+      (await base.listServers()).filter((server) => server.id === 'personal'),
+    listAccounts: async () =>
+      paired
+        ? (await base.listAccounts()).filter(
+            (account) => account.store === 'acct:personal',
+          )
+        : [],
     listParties: async () => [],
     listFederation: async () => [],
     acceptDevicePairing: async (server, alias, device, phrase) => {
@@ -3019,7 +4030,9 @@ test('a new Mac can accept pairing from first run before it has an account store
       return base.acceptDevicePairing(server, alias, device, phrase);
     },
   };
-  const personalServer = FIXTURE.servers.find((server) => server.id === 'personal');
+  const personalServer = FIXTURE.servers.find(
+    (server) => server.id === 'personal',
+  );
   assert.ok(personalServer);
   at('?state=existing&path=own', {
     bridge,
@@ -3035,27 +4048,47 @@ test('a new Mac can accept pairing from first run before it has an account store
     },
   });
   testingLibrary.fireEvent.change(
-    document.querySelector<HTMLInputElement>('[aria-label="Pairing account alias"]')!,
+    document.querySelector<HTMLInputElement>(
+      '[aria-label="Pairing account alias"]',
+    )!,
     { target: { value: 'personal' } },
   );
   testingLibrary.fireEvent.change(
-    document.querySelector<HTMLInputElement>('[aria-label="Pairing device name"]')!,
+    document.querySelector<HTMLInputElement>(
+      '[aria-label="Pairing device name"]',
+    )!,
     { target: { value: 'New Mac' } },
   );
-  const phrase = document.querySelector<HTMLInputElement>('[aria-label="Pairing phrase"]');
+  const phrase = document.querySelector<HTMLInputElement>(
+    '[aria-label="Pairing phrase"]',
+  );
   assert.ok(phrase);
-  testingLibrary.fireEvent.change(phrase, { target: { value: 'cobalt window' } });
+  testingLibrary.fireEvent.change(phrase, {
+    target: { value: 'cobalt window' },
+  });
   testingLibrary.fireEvent.click(
     [...document.querySelectorAll<HTMLButtonElement>('.pcard button')].find(
       (button) => button.textContent === 'Accept pairing',
     )!,
   );
-  assert.equal(phrase.value, '', 'the phrase is cleared before awaiting the command');
-  await testingLibrary.waitFor(() => assert.match(text('.main'), /Protect it/));
+  assert.equal(
+    phrase.value,
+    '',
+    'the phrase is cleared before awaiting the command',
+  );
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.main'), /Save recovery phrase/),
+  );
   assert.deepEqual(accepted, {
-    profile: 'personal', alias: 'personal', device: 'New Mac', phrase: 'cobalt window',
+    profile: 'personal',
+    alias: 'personal',
+    device: 'New Mac',
+    phrase: 'cobalt window',
   });
-  assert.doesNotMatch(window.localStorage.getItem('foks.first-run.v1') ?? '', /cobalt window/);
+  assert.doesNotMatch(
+    window.localStorage.getItem('foks.first-run.v1') ?? '',
+    /cobalt window/,
+  );
 });
 
 test('native discovery carries the authenticated group identity and refreshes before drawing it', async () => {
@@ -3405,9 +4438,8 @@ test('own-path group creation refuses success until refresh binds one authentica
   );
   assert.match(text('.main'), /Create a group/);
   assert.equal(
-    decodeFirstRunCheckpoint(
-      window.localStorage.getItem('foks.first-run.v1'),
-    )?.state,
+    decodeFirstRunCheckpoint(window.localStorage.getItem('foks.first-run.v1'))
+      ?.state,
     'create-group',
   );
 });
@@ -3481,34 +4513,14 @@ test('Protect refuses mismatched passphrase confirmation before a command', () =
   assert.ok(button?.disabled);
 });
 
-test('intentionally skipping protection clears its secret draft before review', async () => {
+test('Save recovery phrase does not offer Skip for now', () => {
   at('?state=protect&path=invited');
-  const input = document.querySelector<HTMLInputElement>(
-    'input[aria-label="Passphrase"]',
+  assert.doesNotMatch(text('.pfoot'), /Skip for now/);
+  assert.ok(
+    [...document.querySelectorAll<HTMLButtonElement>('.pfoot button')].some(
+      (button) => button.textContent === 'Continue',
+    ),
   );
-  assert.ok(input);
-  testingLibrary.fireEvent.change(input, {
-    target: { value: 'do-not-retain-this' },
-  });
-  testingLibrary.fireEvent.click(
-    [...document.querySelectorAll<HTMLButtonElement>('.pfoot button')].find(
-      (button) => button.textContent?.includes('Skip for now'),
-    )!,
-  );
-  await testingLibrary.waitFor(() =>
-    assert.match(text('.main'), /Get started/),
-  );
-  testingLibrary.fireEvent.click(
-    [...document.querySelectorAll<HTMLButtonElement>('.main button')].find(
-      (button) => button.textContent === 'Protect now',
-    )!,
-  );
-  await testingLibrary.waitFor(() => {
-    const revisited = document.querySelector<HTMLInputElement>(
-      'input[aria-label="Passphrase"]',
-    );
-    assert.equal(revisited?.value, '');
-  });
 });
 
 /* ---------------------------------------------------------------- search -- */
@@ -3544,13 +4556,23 @@ test('typing in the search field filters and keeps the caret', async () => {
 
 /* ------------------------------------------------------------ the toolbar -- */
 
-test('the New split button opens the kind menu over the kit primitive', async () => {
+test('the New button opens the kind menu over the kit primitive', async () => {
   at('?state=all');
-  const chevron = document.querySelector<HTMLButtonElement>(
-    '.split button[aria-label="What to create"]',
+  const trigger = document.querySelector<HTMLButtonElement>(
+    '.toolbar .menuwrap .btn.primary',
   );
-  assert.ok(chevron);
-  testingLibrary.fireEvent.click(chevron);
+  assert.ok(trigger);
+  assert.match(trigger.textContent ?? '', /New/);
+  assert.ok(
+    trigger.querySelector('.chevron'),
+    'the label carries a down chevron',
+  );
+  assert.equal(
+    trigger.querySelector('.ic:not(.chevron)'),
+    null,
+    'New has no plus',
+  );
+  testingLibrary.fireEvent.click(trigger);
 
   const menu = await testingLibrary.waitFor(() => {
     const found = document.querySelector('#overlays [role="menu"]');
@@ -3558,12 +4580,10 @@ test('the New split button opens the kind menu over the kit primitive', async ()
     return found;
   });
   const items = [...menu.querySelectorAll('button')];
-  // The label is the item's own text with its shortcut taken off.
-  const label = (item: HTMLButtonElement): string =>
-    (item.textContent ?? '')
-      .replace(item.querySelector('kbd')?.textContent ?? '', '')
-      .trim();
-  assert.deepEqual(items.map(label), ['Password', 'Resource', 'File', 'Link']);
+  assert.deepEqual(
+    items.map((item) => item.textContent?.trim() ?? ''),
+    ['Password', 'Note', 'File', 'Link'],
+  );
   for (const item of items) assert.equal(item.disabled, false);
   testingLibrary.fireEvent.click(items[0]);
   await testingLibrary.waitFor(() =>
@@ -3571,50 +4591,198 @@ test('the New split button opens the kind menu over the kit primitive', async ()
   );
 });
 
+test('the empty-state New button opens the same kind menu', async () => {
+  at('?state=all', {
+    world: { ...FIXTURE, items: [] },
+    bridge: mockBridge({ ...FIXTURE, items: [] }),
+  });
+  assert.match(text('.empty h2'), /No items here/);
+  const trigger = document.querySelector<HTMLButtonElement>(
+    '.empty .menuwrap .btn.primary',
+  );
+  assert.ok(trigger);
+  assert.match(trigger.textContent ?? '', /New/);
+  assert.ok(trigger.querySelector('.chevron'));
+  testingLibrary.fireEvent.click(trigger);
+  const menu = await testingLibrary.waitFor(() => {
+    const found = document.querySelector('#overlays [role="menu"]');
+    assert.ok(found);
+    return found;
+  });
+  const items = [...menu.querySelectorAll('button')];
+  assert.deepEqual(
+    items.map((item) => item.textContent?.trim() ?? ''),
+    ['Password', 'Note', 'File', 'Link'],
+  );
+  testingLibrary.fireEvent.click(items[2]);
+  await testingLibrary.waitFor(() =>
+    assert.equal(text('.sheet h2'), 'New file'),
+  );
+});
+
 /* --------------------------------------------------------------- phase 6 -- */
 
-test('Servers is a live status list rather than the earlier placeholder', async () => {
+test('Servers is a live status list inside Settings rather than a page of its own', async () => {
   at('?state=servers');
   await flushPhase6Loads();
-  assert.equal(text('.loc h1'), 'Servers & devices');
-  assert.equal(text('.header-action'), 'Add a server…');
+  // It is a Settings section: the shared header, the section nav on it, and
+  // no Servers row in the sidebar footer any more.
+  assert.equal(text('.loc h1'), 'Settings');
+  assert.equal(text('.settings-sections .nav.on'), 'Servers');
+  assert.equal(all('.side .foot button').includes('Servers'), false);
   assert.equal(document.querySelector('.main > .toolbar'), null);
   await testingLibrary.waitFor(() =>
-    assert.equal(document.querySelectorAll('.server-card').length, FIXTURE.servers.length),
+    assert.equal(
+      document.querySelectorAll('.settings-main .srow').length,
+      FIXTURE.servers.length,
+    ),
   );
+  // The broken servers lead; the healthy ones follow under their own label,
+  // and Add is a small button on that label rather than a page action.
+  const labels = [...document.querySelectorAll('.settings-main .sec')].map(
+    (node) => node.childNodes[0]?.textContent?.trim() ?? '',
+  );
+  assert.deepEqual(labels, ['Needs attention', 'Ready']);
+  assert.equal(text('.settings-main .sec .right'), 'Add a server…');
   assert.equal(document.querySelector('.plain'), null);
   assert.doesNotMatch(
-    text('.server-wrap'),
+    text('.settings-main'),
     /No account here yet|Account and group facts are not listed|Servers store encrypted data/,
   );
 });
 
-test('server details put status before Back and omit explanatory header copy', async () => {
+test('rapid Servers re-entry shares its pending profile status read', async () => {
+  const base = nativeAvailableBridge(mockBridge(FIXTURE));
+  type Status = Awaited<ReturnType<Bridge['describeServerStatus']>>;
+  let release!: (status: Status) => void;
+  let personalReads = 0;
+  const pending = new Promise<Status>((resolve) => {
+    release = resolve;
+  });
+  const bridge: Bridge = {
+    ...base,
+    describeServerStatus: async (profile) => {
+      if (profile !== 'personal') return base.describeServerStatus(profile);
+      personalReads += 1;
+      if (personalReads > 1)
+        throw new Error('Another operation is using this profile.');
+      return pending;
+    },
+  };
+  at('?state=servers', { bridge });
+  await testingLibrary.waitFor(() => assert.equal(personalReads, 1));
+  assert.match(text('.settings-main'), /Reading status/);
+  assert.doesNotMatch(
+    document.body.textContent ?? '',
+    /Another operation is using this profile\.|Check-in status unknown/,
+  );
+  const place = (scope: string, label: string): HTMLButtonElement => {
+    const button = [
+      ...document.querySelectorAll<HTMLButtonElement>(`${scope} button`),
+    ].find((candidate) => candidate.textContent?.trim() === label);
+    assert.ok(button);
+    return button;
+  };
+  testingLibrary.fireEvent.click(place('.side', 'All items'));
+  testingLibrary.fireEvent.click(place('.side', 'Settings'));
+  testingLibrary.fireEvent.click(place('.settings-sections', 'Servers'));
+  await flushPhase6Loads();
+  assert.equal(personalReads, 1);
+  release(await base.describeServerStatus('personal'));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /rae.*check-in until/s),
+  );
+  assert.doesNotMatch(
+    document.body.textContent ?? '',
+    /Another operation is using this profile\.|Check-in status unknown/,
+  );
+});
+
+test('rapid Settings re-entry shares its pending profile status read', async () => {
+  const base = nativeAvailableBridge(mockBridge(FIXTURE));
+  type Status = Awaited<ReturnType<Bridge['describeServerStatus']>>;
+  let release!: (status: Status) => void;
+  let personalReads = 0;
+  const pending = new Promise<Status>((resolve) => {
+    release = resolve;
+  });
+  const bridge: Bridge = {
+    ...base,
+    describeServerStatus: async (profile) => {
+      if (profile !== 'personal') return base.describeServerStatus(profile);
+      personalReads += 1;
+      if (personalReads > 1)
+        throw new Error('Another operation is using this profile.');
+      return pending;
+    },
+  };
+  at('?state=settings', { bridge });
+  await testingLibrary.waitFor(() => assert.equal(personalReads, 1));
+  assert.match(text('.settings-main'), /Loading devices/);
+  assert.doesNotMatch(
+    document.body.textContent ?? '',
+    /Another operation is using this profile\.|Account access is stopped/,
+  );
+  const place = (label: string): HTMLButtonElement => {
+    const button = [
+      ...document.querySelectorAll<HTMLButtonElement>('.side button'),
+    ].find((candidate) => candidate.textContent?.trim() === label);
+    assert.ok(button);
+    return button;
+  };
+  testingLibrary.fireEvent.click(place('All items'));
+  testingLibrary.fireEvent.click(place('Settings'));
+  await flushPhase6Loads();
+  assert.equal(personalReads, 1);
+  release(await base.describeServerStatus('personal'));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /MacBook Pro/),
+  );
+  assert.doesNotMatch(
+    document.body.textContent ?? '',
+    /Another operation is using this profile\.|Account access is stopped/,
+  );
+});
+
+test('a server opens inside the section, with a crumb back and its state said once', async () => {
   at('?state=servers-lapsed');
   await flushPhase6Loads();
-  const controls = [
-    ...document.querySelectorAll<HTMLElement>('.main > .toolbar > *'),
-  ].map((node) => node.textContent?.trim() ?? '');
-  assert.deepEqual(controls.slice(0, 2), [
-    'Server check-in lapsed',
-    '‹ Servers',
-  ]);
+  // The shared Settings header stays; the server's own heading line carries
+  // the crumb back to the list and the state chip, and the band beneath says
+  // what stops work. Nothing is in a toolbar row of its own.
+  assert.equal(text('.loc h1'), 'Settings');
+  assert.equal(document.querySelector('.main > .toolbar'), null);
+  assert.equal(text('.settings-main .crumb'), 'Servers');
+  assert.equal(text('.settings-main .shead .chip'), 'Check-in expired');
+  assert.match(text('.settings-main .band.stop'), /Check-in expired\./);
   assert.doesNotMatch(
-    text('.main > .path'),
+    text('.settings-main'),
     /account facts not listed|no account here yet/i,
   );
-  assert.doesNotMatch(text('.main > .toolbar'), /Host facts from the latest check/);
+  testingLibrary.fireEvent.click(
+    document.querySelector<HTMLButtonElement>('.settings-main .crumb')!,
+  );
+  await testingLibrary.waitFor(() =>
+    assert.equal(
+      document.querySelectorAll('.settings-main .srow').length,
+      FIXTURE.servers.length,
+    ),
+  );
+  assert.equal(
+    new URLSearchParams(window.location.search).get('profile'),
+    null,
+  );
 });
 
 const PHASE6_STATES = [
-  ['servers-list', 'Servers & devices', null],
-  ['servers-server', 'foks.example.net', null],
-  ['servers-lapsed', 'foks.acme-corp.com', null],
-  ['servers-rollback', 'foks.example.net', null],
-  ['servers-reset', 'foks.example.net', 'Reset foks.example.net?'],
-  ['servers-add', 'Servers & devices', 'Add a server'],
-  ['servers-unprobed', 'foks.partner.dev', null],
-  ['servers-check', 'foks.partner.dev', null],
+  ['servers-list', 'Settings', null],
+  ['servers-server', 'Settings', null],
+  ['servers-lapsed', 'Settings', null],
+  ['servers-rollback', 'Settings', null],
+  ['servers-reset', 'Settings', 'Reset foks.example.net?'],
+  ['servers-add', 'Settings', 'Add a server'],
+  ['servers-unprobed', 'Settings', null],
+  ['servers-check', 'Settings', null],
   ['settings-macs', 'Settings', null],
   ['settings-phrase', 'Settings', 'Write these 17 tokens down'],
   ['settings-keys', 'Settings', null],
@@ -3630,7 +4798,9 @@ for (const [stateName, title, sheetTitle] of PHASE6_STATES) {
     await flushPhase6Loads();
     assert.equal(text('.loc h1'), title);
     if (sheetTitle) {
-      await testingLibrary.waitFor(() => assert.equal(text('.sheet h2'), sheetTitle));
+      await testingLibrary.waitFor(() =>
+        assert.equal(text('.sheet h2'), sheetTitle),
+      );
     } else {
       assert.equal(document.querySelector('.sheet'), null);
     }
@@ -3644,7 +4814,10 @@ test('Settings account switch selects work without colliding with first-run acco
     assert.match(text('.settings-main'), /MacBook Pro/),
   );
   // The exact store the address names, not the first account in the catalog.
-  assert.equal(new URLSearchParams(window.location.search).get('store'), 'acct:work');
+  assert.equal(
+    new URLSearchParams(window.location.search).get('store'),
+    'acct:work',
+  );
   assert.match(text('.settings-main'), /rae\.chen/);
   assert.doesNotMatch(text('.settings-main'), /Account access is stopped/);
   assert.match(text('.settings-main'), /MacBook Pro/);
@@ -3654,96 +4827,171 @@ test('Settings account switch selects work without colliding with first-run acco
 
 test('Settings renders exact app version and socket from app_info', async () => {
   at('?state=settings-about');
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /FOKS Desktop 0\.3\.0/));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /FOKS Desktop 0\.3\.0/),
+  );
+  assert.match(text('.settings-main'), /\/private\/foks\/agent\.sock/);
+  assert.match(text('.settings-main'), /Inspect AgentStatus/);
+  assert.equal(
+    [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '.settings-sections button',
+      ),
+    ].some((button) => button.textContent?.trim() === 'Agent'),
+    false,
+  );
   testingLibrary.cleanup();
   at('?state=settings-agent');
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /\/private\/foks\/agent\.sock/));
-  assert.equal([...document.querySelectorAll<HTMLButtonElement>('.settings-main button')].some((button) => /restart/i.test(button.textContent ?? '')), false);
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /\/private\/foks\/agent\.sock/),
+  );
+  assert.match(text('.settings-main'), /FOKS Desktop 0\.3\.0/);
+  assert.equal(
+    [
+      ...document.querySelectorAll<HTMLButtonElement>('.settings-main button'),
+    ].some((button) => /restart/i.test(button.textContent ?? '')),
+    false,
+  );
 });
 
 test('server Check uses the explicit command and reports typed acceptance', async () => {
   const base = mockBridge(FIXTURE);
   let checks = 0;
-  const bridge = { ...base, checkServer: async (profile: string) => {
-    checks += 1;
-    return base.checkServer(profile);
-  } };
+  const bridge = {
+    ...base,
+    checkServer: async (profile: string) => {
+      checks += 1;
+      return base.checkServer(profile);
+    },
+  };
   at('?state=servers-unprobed', { bridge });
-  await testingLibrary.waitFor(() => assert.ok(document.querySelector('.server-details')));
-  const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.includes('Check now'));
+  await testingLibrary.waitFor(() =>
+    assert.ok(document.querySelector('.settings-main .band')),
+  );
+  const button = [
+    ...document.querySelectorAll<HTMLButtonElement>('button'),
+  ].find((item) => item.textContent?.includes('Check now'));
   assert.ok(button);
   testingLibrary.fireEvent.click(button);
   await testingLibrary.waitFor(() => assert.equal(checks, 1));
-  await testingLibrary.waitFor(() => assert.match(document.body.textContent ?? '', /New pin/));
+  await testingLibrary.waitFor(() =>
+    assert.match(document.body.textContent ?? '', /New pin/),
+  );
 });
 
 test('the checked fixture scene re-reads its fresh signed status before enabling access', async () => {
   at('?state=servers-check');
-  await testingLibrary.waitFor(() => assert.match(document.body.textContent ?? '', /New pin/));
-  await testingLibrary.waitFor(() => assert.match(document.body.textContent ?? '', /Signed expiry/));
-  assert.doesNotMatch(text('.server-wrap'), /reads and writes stopped/i);
+  // A check in this view says so on the page; the typed acceptance goes to
+  // the toast that the interactive Check raises.
+  await testingLibrary.waitFor(() =>
+    assert.match(
+      text('.settings-main'),
+      /Checked just now\. History unchanged\./,
+    ),
+  );
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /Expires/),
+  );
+  assert.doesNotMatch(text('.settings-main'), /reads and writes stopped/i);
 });
 
 test('a successful Check verdict remains visible when its passive status refresh fails', async () => {
-  const base = mockBridge(FIXTURE); let partnerDescriptions = 0;
+  const base = mockBridge(FIXTURE);
+  let partnerDescriptions = 0;
   const bridge = {
     ...base,
     native: true as const,
     describeServerStatus: async (profile: string) => {
-      if (profile === 'partner' && ++partnerDescriptions > 1) throw new Error('passive status unavailable after check');
+      if (profile === 'partner' && ++partnerDescriptions > 1)
+        throw new Error('passive status unavailable after check');
       return base.describeServerStatus(profile);
     },
   };
   at('?state=servers-unprobed', { bridge });
-  await testingLibrary.waitFor(() => assert.ok(document.querySelector('.server-details')));
-  const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.includes('Check now'));
-  assert.ok(button); testingLibrary.fireEvent.click(button);
-  await testingLibrary.waitFor(() => assert.match(document.body.textContent ?? '', /New pin/));
-  await testingLibrary.waitFor(() => assert.match(document.body.textContent ?? '', /passive status unavailable after check/));
+  await testingLibrary.waitFor(() =>
+    assert.ok(document.querySelector('.settings-main .band')),
+  );
+  const button = [
+    ...document.querySelectorAll<HTMLButtonElement>('button'),
+  ].find((item) => item.textContent?.includes('Check now'));
+  assert.ok(button);
+  testingLibrary.fireEvent.click(button);
+  await testingLibrary.waitFor(() =>
+    assert.match(document.body.textContent ?? '', /New pin/),
+  );
+  await testingLibrary.waitFor(() =>
+    assert.match(
+      document.body.textContent ?? '',
+      /passive status unavailable after check/,
+    ),
+  );
   assert.match(document.body.textContent ?? '', /New pin/);
 });
 
 test('reset previews exact resumables and consumes its authorization once', async () => {
   const base = mockBridge(FIXTURE);
   let calls = 0;
-  const bridge = { ...base, resetServer: async (profile: string, confirmation: string, token: string) => {
-    calls += 1;
-    return base.resetServer(profile, confirmation, token);
-  } };
+  const bridge = {
+    ...base,
+    resetServer: async (
+      profile: string,
+      confirmation: string,
+      token: string,
+    ) => {
+      calls += 1;
+      return base.resetServer(profile, confirmation, token);
+    },
+  };
   at('?state=servers-reset', { bridge });
   await flushPhase6Loads();
-  await testingLibrary.waitFor(() => assert.match(text('.sheet'), /team-creation.*homelab/s));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.sheet'), /team-creation.*homelab/s),
+  );
   const input = document.querySelector<HTMLInputElement>('.sheet input');
   assert.ok(input);
   testingLibrary.fireEvent.change(input, { target: { value: 'personal' } });
-  const resetButton = [...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find((item) => item.textContent?.includes('Reset local state'));
+  const resetButton = [
+    ...document.querySelectorAll<HTMLButtonElement>('.sheet button'),
+  ].find((item) => item.textContent?.includes('Reset local state'));
   assert.ok(resetButton);
   testingLibrary.fireEvent.click(resetButton);
   await testingLibrary.waitFor(() => assert.equal(calls, 1));
-  await testingLibrary.waitFor(() => assert.match(text('.flash'), /Reset foks\.example\.net/));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.toast-message'), /Reset foks\.example\.net/),
+  );
   await flushPhase6Loads();
 });
 
 test('a failed reset cannot re-arm its consumed preview token on rerender', async () => {
   const base = mockBridge(FIXTURE);
   let calls = 0;
-  const bridge = { ...base,
-    describeServerStatus: () => new Promise<never>(() => undefined),
+  const bridge = {
+    ...base,
     resetServer: async () => {
-    calls += 1;
-    throw new Error('network stopped after submission');
-  } };
+      calls += 1;
+      throw new Error('network stopped after submission');
+    },
+  };
   at('?state=servers-reset', { bridge });
-  await testingLibrary.waitFor(() => assert.match(text('.sheet'), /team-creation/));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.sheet'), /team-creation/),
+  );
   const input = document.querySelector<HTMLInputElement>('.sheet input');
   assert.ok(input);
   testingLibrary.fireEvent.change(input, { target: { value: 'personal' } });
-  const resetButton = [...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find((item) => item.textContent?.includes('Reset local state'));
+  const resetButton = [
+    ...document.querySelectorAll<HTMLButtonElement>('.sheet button'),
+  ].find((item) => item.textContent?.includes('Reset local state'));
   assert.ok(resetButton);
   testingLibrary.fireEvent.click(resetButton);
   await testingLibrary.waitFor(() => assert.equal(calls, 1));
   await testingLibrary.waitFor(() => assert.equal(resetButton.disabled, true));
-  await testingLibrary.waitFor(() => assert.match(document.body.textContent ?? '', /network stopped after submission/));
+  await testingLibrary.waitFor(() =>
+    assert.match(
+      document.body.textContent ?? '',
+      /network stopped after submission/,
+    ),
+  );
   testingLibrary.fireEvent.click(resetButton);
   assert.equal(calls, 1);
   assert.match(text('.sheet'), /closing and reopening Reset/);
@@ -3752,117 +5000,315 @@ test('a failed reset cannot re-arm its consumed preview token on rerender', asyn
 test('Add server profile validation matches the Rust bounded local name', () => {
   at('?state=servers-add');
   const inputs = document.querySelectorAll<HTMLInputElement>('.sheet input');
-  const submit = [...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find((item) => item.textContent === 'Add server');
+  const submit = [
+    ...document.querySelectorAll<HTMLButtonElement>('.sheet button'),
+  ].find((item) => item.textContent === 'Add server');
   assert.ok(submit);
   testingLibrary.fireEvent.change(inputs[0], { target: { value: 'Work_2' } });
   assert.equal(submit.disabled, false);
-  testingLibrary.fireEvent.change(inputs[0], { target: { value: 'work.profile' } });
+  testingLibrary.fireEvent.change(inputs[0], {
+    target: { value: 'work.profile' },
+  });
   assert.equal(submit.disabled, true);
-  testingLibrary.fireEvent.change(inputs[0], { target: { value: 'x'.repeat(65) } });
+  testingLibrary.fireEvent.change(inputs[0], {
+    target: { value: 'x'.repeat(65) },
+  });
   assert.equal(submit.disabled, true);
   testingLibrary.fireEvent.change(inputs[0], { target: { value: 'work' } });
-  testingLibrary.fireEvent.change(inputs[1], { target: { value: 'a'.repeat(2049) } });
+  testingLibrary.fireEvent.change(inputs[1], {
+    target: { value: 'a'.repeat(2049) },
+  });
   assert.equal(submit.disabled, true);
-  testingLibrary.fireEvent.change(inputs[1], { target: { value: 'é'.repeat(1025) } });
+  testingLibrary.fireEvent.change(inputs[1], {
+    target: { value: 'é'.repeat(1025) },
+  });
   assert.equal(submit.disabled, true);
+});
+
+test('Recovery devices names an account without a backup phrase concisely', async () => {
+  at('?state=settings-macs-work');
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /No backup phrase for this account/),
+  );
 });
 
 test('pairing Start, Resume, Finish and Accept remain explicit and clear phrases', async () => {
   at('?state=settings-macs');
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /Set up another Mac/));
-  const start = [...document.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.includes('Start pairing'));
+  await testingLibrary.waitFor(() => {
+    const copy = text('.settings-main');
+    assert.match(copy, /Pairing/);
+    assert.match(
+      copy,
+      /Get a pairing phrase to connect another device to your account/,
+    );
+    assert.match(
+      copy,
+      /Type a pairing phrase from another FOKS device you use/,
+    );
+    assert.match(copy, /Use a backup phrase to recover another account/);
+  });
+  const start = [
+    ...document.querySelectorAll<HTMLButtonElement>('button'),
+  ].find((item) => item.textContent?.includes('Start pairing'));
   assert.ok(start);
   testingLibrary.fireEvent.click(start);
-  await testingLibrary.waitFor(() => assert.equal(text('.sheet h2'), 'Set up another Mac'));
-  const startInside = [...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find((item) => item.textContent === 'Start');
+  await testingLibrary.waitFor(() =>
+    assert.equal(text('.sheet h2'), 'Set up another Mac'),
+  );
+  assert.match(text('.sheet'), /Start or resume pairing a device/);
+  const startInside = [
+    ...document.querySelectorAll<HTMLButtonElement>('.sheet button'),
+  ].find((item) => item.textContent === 'Start');
   assert.ok(startInside);
   testingLibrary.fireEvent.click(startInside);
-  await testingLibrary.waitFor(() => assert.match(text('.sheet'), /cobalt window/));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.sheet'), /cobalt window/),
+  );
   assert.match(text('.sheet'), /Resume offer/);
   assert.match(text('.sheet'), /Finish/);
-  const acceptTab = [...document.querySelectorAll<HTMLButtonElement>('.sheet .seg button')].find((item) => item.textContent === 'On this Mac');
+  const acceptTab = [
+    ...document.querySelectorAll<HTMLButtonElement>('.sheet .seg button'),
+  ].find((item) => item.textContent === 'On this Mac');
   assert.ok(acceptTab);
   testingLibrary.fireEvent.click(acceptTab);
-  assert.match(text('.sheet'), /Accept.*Resume acceptance/s);
-  assert.equal(document.querySelector<HTMLInputElement>('input[aria-label="Pairing phrase"]')?.type ?? document.querySelectorAll<HTMLInputElement>('.sheet input')[2]?.type, 'password');
+  assert.match(text('.sheet .ft'), /Close.*Resume acceptance.*Accept/s);
+  assert.equal(
+    document.querySelector<HTMLInputElement>(
+      'input[aria-label="Pairing phrase"]',
+    )?.type ??
+      document.querySelectorAll<HTMLInputElement>('.sheet input')[2]?.type,
+    'password',
+  );
 });
 
 test('Accept or resume opens pairing on the receiving path', async () => {
   at('?state=settings-macs');
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /Set up another Mac/));
-  const acceptRoute = [...document.querySelectorAll<HTMLButtonElement>('.settings-main button')].find((item) => item.textContent?.includes('Accept or resume'));
-  assert.ok(acceptRoute); testingLibrary.fireEvent.click(acceptRoute);
-  await testingLibrary.waitFor(() => assert.equal(text('.sheet h2'), 'Set up another Mac'));
-  assert.equal([...document.querySelectorAll<HTMLButtonElement>('.sheet .seg button')].find((item) => item.classList.contains('on'))?.textContent, 'On this Mac');
-  assert.ok([...document.querySelectorAll<HTMLButtonElement>('.sheet button')].some((item) => item.textContent === 'Accept'));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /Pairing/),
+  );
+  const acceptRoute = [
+    ...document.querySelectorAll<HTMLButtonElement>('.settings-main button'),
+  ].find((item) => item.textContent?.includes('Accept or resume'));
+  assert.ok(acceptRoute);
+  testingLibrary.fireEvent.click(acceptRoute);
+  await testingLibrary.waitFor(() =>
+    assert.equal(text('.sheet h2'), 'Set up another Mac'),
+  );
+  assert.equal(
+    [
+      ...document.querySelectorAll<HTMLButtonElement>('.sheet .seg button'),
+    ].find((item) => item.classList.contains('on'))?.textContent,
+    'On this Mac',
+  );
+  assert.ok(
+    [...document.querySelectorAll<HTMLButtonElement>('.sheet button')].some(
+      (item) => item.textContent === 'Accept',
+    ),
+  );
 });
 
 test('a failed offer refresh clears the previously shown pairing phrase', async () => {
   const base = mockBridge(FIXTURE);
-  const bridge = { ...base, resumeDevicePairingOffer: async () => { throw new Error('offer unavailable'); } };
+  const bridge = {
+    ...base,
+    resumeDevicePairingOffer: async () => {
+      throw new Error('offer unavailable');
+    },
+  };
   at('?state=settings-macs', { bridge });
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /Set up another Mac/));
-  testingLibrary.fireEvent.click([...document.querySelectorAll<HTMLButtonElement>('.settings-main button')].find((item) => item.textContent?.includes('Start pairing'))!);
-  testingLibrary.fireEvent.click([...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find((item) => item.textContent === 'Start')!);
-  await testingLibrary.waitFor(() => assert.match(text('.sheet'), /cobalt window/));
-  testingLibrary.fireEvent.click([...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find((item) => item.textContent === 'Resume offer')!);
-  await testingLibrary.waitFor(() => assert.doesNotMatch(text('.sheet'), /cobalt window/));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /Pairing/),
+  );
+  testingLibrary.fireEvent.click(
+    [
+      ...document.querySelectorAll<HTMLButtonElement>('.settings-main button'),
+    ].find((item) => item.textContent?.includes('Start pairing'))!,
+  );
+  testingLibrary.fireEvent.click(
+    [...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find(
+      (item) => item.textContent === 'Start',
+    )!,
+  );
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.sheet'), /cobalt window/),
+  );
+  testingLibrary.fireEvent.click(
+    [...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find(
+      (item) => item.textContent === 'Resume offer',
+    )!,
+  );
+  await testingLibrary.waitFor(() =>
+    assert.doesNotMatch(text('.sheet'), /cobalt window/),
+  );
 });
 
 test('failed pairing acceptance clears its secret immediately and persists nothing', async () => {
   window.localStorage.clear();
   const base = mockBridge(FIXTURE);
-  const bridge = { ...base, acceptDevicePairing: async () => { throw new Error('refused'); } };
+  const bridge = {
+    ...base,
+    acceptDevicePairing: async () => {
+      throw new Error('refused');
+    },
+  };
   at('?state=settings-macs', { bridge });
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /Set up another Mac/));
-  const start = [...document.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.includes('Start pairing'));
-  assert.ok(start); testingLibrary.fireEvent.click(start);
-  const acceptTab = [...document.querySelectorAll<HTMLButtonElement>('.sheet .seg button')].find((item) => item.textContent === 'On this Mac');
-  assert.ok(acceptTab); testingLibrary.fireEvent.click(acceptTab);
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /Pairing/),
+  );
+  const start = [
+    ...document.querySelectorAll<HTMLButtonElement>('button'),
+  ].find((item) => item.textContent?.includes('Start pairing'));
+  assert.ok(start);
+  testingLibrary.fireEvent.click(start);
+  const acceptTab = [
+    ...document.querySelectorAll<HTMLButtonElement>('.sheet .seg button'),
+  ].find((item) => item.textContent === 'On this Mac');
+  assert.ok(acceptTab);
+  testingLibrary.fireEvent.click(acceptTab);
   const fields = document.querySelectorAll<HTMLInputElement>('.sheet input');
-  testingLibrary.fireEvent.change(fields[2], { target: { value: 'secret offer phrase' } });
-  const accept = [...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find((item) => item.textContent === 'Accept');
-  assert.ok(accept); testingLibrary.fireEvent.click(accept);
+  testingLibrary.fireEvent.change(fields[2], {
+    target: { value: 'secret offer phrase' },
+  });
+  const accept = [
+    ...document.querySelectorAll<HTMLButtonElement>('.sheet button'),
+  ].find((item) => item.textContent === 'Accept');
+  assert.ok(accept);
+  testingLibrary.fireEvent.click(accept);
   await testingLibrary.waitFor(() => assert.equal(fields[2].value, ''));
-  assert.doesNotMatch(JSON.stringify(window.localStorage), /secret offer phrase/);
+  assert.doesNotMatch(
+    JSON.stringify(window.localStorage),
+    /secret offer phrase/,
+  );
 });
 
 test('window blur closes a Settings secret sheet and drops its pairing offer', async () => {
   at('?state=settings-macs');
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /Set up another Mac/));
-  testingLibrary.fireEvent.click([...document.querySelectorAll<HTMLButtonElement>('.settings-main button')].find((button) => button.textContent === 'Start pairing…')!);
-  testingLibrary.fireEvent.click([...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find((button) => button.textContent === 'Start')!);
-  await testingLibrary.waitFor(() => assert.match(text('.sheet'), /cobalt window/));
-  await testingLibrary.act(async () => { window.dispatchEvent(new Event('blur')); });
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /Pairing/),
+  );
+  testingLibrary.fireEvent.click(
+    [
+      ...document.querySelectorAll<HTMLButtonElement>('.settings-main button'),
+    ].find((button) => button.textContent === 'Start pairing…')!,
+  );
+  testingLibrary.fireEvent.click(
+    [...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find(
+      (button) => button.textContent === 'Start',
+    )!,
+  );
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.sheet'), /cobalt window/),
+  );
+  await testingLibrary.act(async () => {
+    window.dispatchEvent(new Event('blur'));
+  });
   assert.equal(document.querySelector('.sheet'), null);
   assert.doesNotMatch(document.body.textContent ?? '', /cobalt window/);
 });
 
+test('the CLI connection sheet survives a Keychain blur while clearing pairing input', async () => {
+  const base = mockBridge(FIXTURE);
+  const report = base.firstRunFixture!.own.report;
+  const bridge: Bridge = {
+    ...base,
+    discoverGoProfiles: async () => ({
+      installed: true,
+      candidates: [
+        {
+          candidateId: 'a'.repeat(64),
+          username: 'raymond',
+          serverHint: base.firstRunFixture!.own.server,
+          hostId: report.hostId,
+          userId: `01${'c'.repeat(64)}`,
+          deviceId: `04${'d'.repeat(64)}`,
+          role: 'owner',
+          storageKind: 'macos-keychain',
+          hidden: false,
+          provisional: false,
+          pairable: true,
+          copyable: true,
+        },
+      ],
+    }),
+  };
+  at('?state=settings&section=account', { bridge });
+  testingLibrary.fireEvent.click(
+    testingLibrary.getByRole(document.body, 'button', {
+      name: 'Connect from FOKS CLI…',
+    }),
+  );
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.sheet'), /CLI accounts on this Mac/),
+  );
+  testingLibrary.fireEvent.click(
+    testingLibrary.getByRole(document.body, 'button', { name: 'Select' }),
+  );
+  testingLibrary.fireEvent.click(
+    testingLibrary.getByRole(document.body, 'button', { name: 'Check server' }),
+  );
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.sheet'), /Connection method/),
+  );
+  const phrase = testingLibrary.getByLabelText(
+    document.body,
+    'Key-exchange code',
+  );
+  testingLibrary.fireEvent.change(phrase, {
+    target: { value: 'secret phrase' },
+  });
+  await testingLibrary.act(async () => {
+    window.dispatchEvent(new Event('blur'));
+  });
+  assert.ok(document.querySelector('.sheet'));
+  assert.ok(phrase instanceof HTMLInputElement);
+  assert.equal(phrase.value, '');
+});
+
 test('device removal is software-only and remains behind a danger confirmation sheet', async () => {
-  const base = mockBridge(FIXTURE); let removed = 0;
+  const base = mockBridge(FIXTURE);
+  let removed = 0;
   const bridge = {
     ...base,
     listAccountDevices: async () => [
       { id: `04${'4'.repeat(64)}`, role: 'owner' as const, current: false },
       { id: `08${'8'.repeat(66)}`, role: 'owner' as const, current: false },
     ],
-    removeAccountDevice: async (_store: string, id: string) => { removed += 1; return { deviceId: id, userChainSequence: 2, alreadyAbsent: false }; },
+    removeAccountDevice: async (_store: string, id: string) => {
+      removed += 1;
+      return { deviceId: id, userChainSequence: 2, alreadyAbsent: false };
+    },
   };
   at('?state=settings-macs', { bridge });
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /managed under Security keys/));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /managed under Security keys/),
+  );
   assert.match(text('.settings-main'), /Device/);
-  const removes = [...document.querySelectorAll<HTMLButtonElement>('.settings-main button')].filter((item) => item.textContent?.includes('Remove'));
+  const removes = [
+    ...document.querySelectorAll<HTMLButtonElement>('.settings-main button'),
+  ].filter((item) => item.textContent?.includes('Remove'));
   assert.equal(removes.length, 1);
   testingLibrary.fireEvent.click(removes[0]);
   assert.equal(removed, 0);
-  assert.match(text('.sheet'), /Copies of values it already read cannot be recalled/);
-  assert.equal([...document.querySelectorAll<HTMLButtonElement>('.sheet button')].filter((item) => item.classList.contains('danger')).length, 1);
+  assert.match(
+    text('.sheet'),
+    /Copies of values it already read cannot be recalled/,
+  );
+  assert.equal(
+    [...document.querySelectorAll<HTMLButtonElement>('.sheet button')].filter(
+      (item) => item.classList.contains('danger'),
+    ).length,
+    1,
+  );
   const confirm = document.querySelector<HTMLInputElement>('.sheet input');
-  const remove = [...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find((item) => item.textContent === 'Remove device');
+  const remove = [
+    ...document.querySelectorAll<HTMLButtonElement>('.sheet button'),
+  ].find((item) => item.textContent === 'Remove device');
   assert.ok(confirm && remove);
   testingLibrary.fireEvent.change(confirm, { target: { value: 'wrong' } });
   assert.equal(remove.disabled, true);
-  testingLibrary.fireEvent.change(confirm, { target: { value: `04${'4'.repeat(64)}` } });
+  testingLibrary.fireEvent.change(confirm, {
+    target: { value: `04${'4'.repeat(64)}` },
+  });
   assert.equal(remove.disabled, false);
   testingLibrary.fireEvent.click(remove);
   await testingLibrary.waitFor(() => assert.equal(removed, 1));
@@ -3870,18 +5316,85 @@ test('device removal is software-only and remains behind a danger confirmation s
 
 test('a current Yubi device is not called this Mac', async () => {
   const base = mockBridge(FIXTURE);
-  const bridge = { ...base, listAccountDevices: async () => [
-    { id: `08${'8'.repeat(66)}`, role: 'owner' as const, current: true },
-  ] };
+  const bridge = {
+    ...base,
+    listAccountDevices: async () => [
+      { id: `08${'8'.repeat(66)}`, role: 'owner' as const, current: true },
+    ],
+  };
   at('?state=settings-macs', { bridge });
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /current security key/));
-  const deviceRow = [...document.querySelectorAll<HTMLElement>('.settings-inset .fr')].find((row) => row.textContent?.includes(`08${'8'.repeat(10)}`));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /current security key/),
+  );
+  const deviceRow = [
+    ...document.querySelectorAll<HTMLElement>('.settings-inset .fr'),
+  ].find((row) => row.textContent?.includes(`08${'8'.repeat(10)}`));
   assert.ok(deviceRow);
   assert.doesNotMatch(deviceRow.textContent ?? '', /this Mac/);
 });
 
+test('a missing catalog silently reloads then retries this account', async () => {
+  const base = nativeAvailableBridge(mockBridge(FIXTURE));
+  let deviceCalls = 0;
+  const bridge: Bridge = {
+    ...base,
+    listAccountDevices: async (storeId) => {
+      deviceCalls += 1;
+      if (deviceCalls === 1) {
+        throw {
+          code: 'catalog-required',
+          message: 'Refresh the vault before using this account.',
+          retryable: true,
+          ambiguous: false,
+          fatal: false,
+        };
+      }
+      return base.listAccountDevices(storeId);
+    },
+  };
+  at('?state=settings-macs', { bridge });
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /MacBook Pro/),
+  );
+  assert.equal(document.querySelector('#toasts .toast'), null);
+  assert.ok(deviceCalls >= 2);
+});
+
+test('a catalog that stays missing still asks to refresh this account without a danger toast', async () => {
+  const base = mockBridge(FIXTURE);
+  const bridge = {
+    ...base,
+    listAccountDevices: async () => {
+      throw {
+        code: 'catalog-required',
+        message: 'Refresh the vault before using this account.',
+        retryable: true,
+        ambiguous: false,
+        fatal: false,
+      };
+    },
+  };
+  at('?state=settings-macs', { bridge });
+  await testingLibrary.waitFor(() =>
+    assert.equal(
+      text('.toast-message'),
+      'Refresh the vault before using this account.',
+    ),
+  );
+  const toast = document.querySelector<HTMLElement>('#toasts .toast');
+  assert.ok(toast);
+  assert.equal(toast.dataset.toastTone, 'info');
+  await flushPhase6Loads();
+  assert.equal(
+    document.querySelectorAll('#toasts .toast').length,
+    1,
+    'a persistent catalog miss must not loop refreshes',
+  );
+});
+
 test('an expired passive lease stops Settings reads and every account action', async () => {
-  const base = mockBridge(FIXTURE); let detailReads = 0;
+  const base = mockBridge(FIXTURE);
+  let detailReads = 0;
   const bridge = {
     ...base,
     native: true as const,
@@ -3889,52 +5402,118 @@ test('an expired passive lease stops Settings reads and every account action', a
       const status = await base.describeServerStatus(profile);
       return profile === 'personal' ? { ...status, leaseExpiresAt: 1 } : status;
     },
-    listAccountDevices: async (store: string) => { detailReads += 1; return base.listAccountDevices(store); },
-    listBackupEnrollments: async (store: string) => { detailReads += 1; return base.listBackupEnrollments(store); },
-    listYubiCards: async (profile: string) => { detailReads += 1; return base.listYubiCards(profile); },
-    listYubiAccounts: async (profile: string) => { detailReads += 1; return base.listYubiAccounts(profile); },
+    listAccountDevices: async (store: string) => {
+      detailReads += 1;
+      return base.listAccountDevices(store);
+    },
+    listBackupEnrollments: async (store: string) => {
+      detailReads += 1;
+      return base.listBackupEnrollments(store);
+    },
+    listYubiCards: async (profile: string) => {
+      detailReads += 1;
+      return base.listYubiCards(profile);
+    },
+    listYubiAccounts: async (profile: string) => {
+      detailReads += 1;
+      return base.listYubiAccounts(profile);
+    },
   };
   at('?state=settings-macs', { bridge });
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /Account access is stopped/));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /Account access is stopped/),
+  );
+  assert.match(text('.settings-main'), /Not listed while access is stopped/);
   assert.equal(detailReads, 0);
-  const actionButtons = [...document.querySelectorAll<HTMLButtonElement>('.settings-main button')].filter((button) => !button.closest('.settings-label'));
+  const actionButtons = [
+    ...document.querySelectorAll<HTMLButtonElement>('.settings-main button'),
+  ].filter((button) => !button.closest('.settings-label'));
   assert.ok(actionButtons.length > 0);
-  assert.equal(actionButtons.every((button) => button.disabled), true);
+  assert.equal(
+    actionButtons.every((button) => button.disabled),
+    true,
+  );
   await flushPhase6Loads();
 });
 
 test('Account passphrase buttons open the operation that was selected', async () => {
   at('?state=settings-account');
   await flushPhase6Loads();
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /Device.*MacBook Pro.*Device.*Not listed while access is stopped/s));
-  const change = [...document.querySelectorAll<HTMLButtonElement>('.settings-main button')].find((item) => item.textContent === 'Change…' && !item.disabled);
-  assert.ok(change); testingLibrary.fireEvent.click(change);
-  assert.equal([...document.querySelectorAll<HTMLButtonElement>('.sheet .seg button')].find((item) => item.classList.contains('on'))?.textContent, 'Change');
-  assert.equal([...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button')].find((item) => item.classList.contains('primary'))?.textContent, 'Change passphrase');
+  await testingLibrary.waitFor(() =>
+    assert.match(
+      text('.settings-main'),
+      /Device.*MacBook Pro.*Device.*Not listed while access is stopped/s,
+    ),
+  );
+  const change = [
+    ...document.querySelectorAll<HTMLButtonElement>('.settings-main button'),
+  ].find((item) => item.textContent === 'Change…' && !item.disabled);
+  assert.ok(change);
+  testingLibrary.fireEvent.click(change);
+  assert.equal(
+    [
+      ...document.querySelectorAll<HTMLButtonElement>('.sheet .seg button'),
+    ].find((item) => item.classList.contains('on'))?.textContent,
+    'Change',
+  );
+  assert.equal(
+    [...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button')].find(
+      (item) => item.classList.contains('primary'),
+    )?.textContent,
+    'Change passphrase',
+  );
 });
 
 test('each Account passphrase row targets its own opaque store', async () => {
-  const base = mockBridge(FIXTURE); let target = '';
+  const base = mockBridge(FIXTURE);
+  let target = '';
   const bridge = {
     ...base,
     describeServerStatus: async (profile: string) => {
       const status = await base.describeServerStatus(profile);
-      return { ...status, leaseExpiresAt: Math.floor(Date.now() / 1000) + 86_400 };
+      return {
+        ...status,
+        leaseExpiresAt: Math.floor(Date.now() / 1000) + 86_400,
+      };
     },
     changeAccountPassphrase: async (store: string) => {
       target = store;
-      return { generation: 2, stretchVersion: 'v1' as const, verified: true as const };
+      return {
+        generation: 2,
+        stretchVersion: 'v1' as const,
+        verified: true as const,
+      };
     },
   };
-  at('?state=settings&section=account&store=acct%3Awork', { bridge, world: applyLease(FIXTURE, 'fresh') });
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /signed check-in available/));
-  const workBlock = [...document.querySelectorAll<HTMLElement>('.settings-main > div')].find((node) => node.textContent?.includes('Acme'));
-  const change = [...(workBlock?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find((button) => button.textContent === 'Change…');
-  assert.ok(change); testingLibrary.fireEvent.click(change);
-  const passwords = document.querySelectorAll<HTMLInputElement>('.sheet input[type="password"]');
-  testingLibrary.fireEvent.change(passwords[0], { target: { value: 'new phrase' } });
-  testingLibrary.fireEvent.change(passwords[1], { target: { value: 'new phrase' } });
-  testingLibrary.fireEvent.click([...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find((button) => button.textContent === 'Change passphrase')!);
+  at('?state=settings&section=account&store=acct%3Awork', {
+    bridge,
+    world: applyLease(FIXTURE, 'fresh'),
+  });
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /signed check-in available/),
+  );
+  const workBlock = [
+    ...document.querySelectorAll<HTMLElement>('.settings-main > div'),
+  ].find((node) => node.textContent?.includes('Acme'));
+  const change = [
+    ...(workBlock?.querySelectorAll<HTMLButtonElement>('button') ?? []),
+  ].find((button) => button.textContent === 'Change…');
+  assert.ok(change);
+  testingLibrary.fireEvent.click(change);
+  const passwords = document.querySelectorAll<HTMLInputElement>(
+    '.sheet input[type="password"]',
+  );
+  testingLibrary.fireEvent.change(passwords[0], {
+    target: { value: 'new phrase' },
+  });
+  testingLibrary.fireEvent.change(passwords[1], {
+    target: { value: 'new phrase' },
+  });
+  testingLibrary.fireEvent.click(
+    [...document.querySelectorAll<HTMLButtonElement>('.sheet button')].find(
+      (button) => button.textContent === 'Change passphrase',
+    )!,
+  );
   await testingLibrary.waitFor(() => assert.equal(target, 'acct:work'));
 });
 
@@ -3945,33 +5524,74 @@ test('each Account passphrase row targets its own opaque store', async () => {
  * this Mac calls `personal`. These are the exact StoreRefs
  * `foks-tauri/src/commands.rs` writes, JSON punctuation and all.
  */
-const SAME_ALIAS_A = '{"kind":"account","profile":"home","accountAlias":"personal"}';
-const SAME_ALIAS_B = '{"kind":"account","profile":"acme-b","accountAlias":"personal"}';
+const SAME_ALIAS_A =
+  '{"kind":"account","profile":"home","accountAlias":"personal"}';
+const SAME_ALIAS_B =
+  '{"kind":"account","profile":"acme-b","accountAlias":"personal"}';
 
 /** A world holding both of them, in either catalog order, optionally minus one. */
-function sharedAliasWorld({ order = 'a-first', without }: { order?: 'a-first' | 'b-first'; without?: string } = {}): World {
+function sharedAliasWorld({
+  order = 'a-first',
+  without,
+}: { order?: 'a-first' | 'b-first'; without?: string } = {}): World {
   const rows = [
     {
       store: {
-        id: SAME_ALIAS_A, kind: 'account' as const, name: 'personal',
-        server: 'home', account: 'personal',
+        id: SAME_ALIAS_A,
+        kind: 'account' as const,
+        name: 'personal',
+        server: 'home',
+        account: 'personal',
       },
-      account: { store: SAME_ALIAS_A, alias: 'personal', username: 'rae', server: 'home' },
+      account: {
+        store: SAME_ALIAS_A,
+        alias: 'personal',
+        username: 'rae',
+        server: 'home',
+      },
     },
     {
       store: {
-        id: SAME_ALIAS_B, kind: 'account' as const, name: 'personal',
-        server: 'acme-b', account: 'personal',
+        id: SAME_ALIAS_B,
+        kind: 'account' as const,
+        name: 'personal',
+        server: 'acme-b',
+        account: 'personal',
       },
-      account: { store: SAME_ALIAS_B, alias: 'personal', username: 'rae.chen', server: 'acme-b' },
+      account: {
+        store: SAME_ALIAS_B,
+        alias: 'personal',
+        username: 'rae.chen',
+        server: 'acme-b',
+      },
     },
   ].filter((row) => row.store.id !== without);
   const ordered = order === 'b-first' ? [...rows].reverse() : rows;
   return {
     ...FIXTURE,
     servers: [
-      { id: 'home', name: 'foks.home.example', label: 'Home', host_id: 'aa11223344', chain: 4, epoch: 91, lease: { state: 'fresh', expires_in: '6 d' }, accounts: ['personal'], state: 'ok' },
-      { id: 'acme-b', name: 'foks.acme-corp.com', label: 'Acme', host_id: 'bb55667788', chain: 9, epoch: 42, lease: { state: 'fresh', expires_in: '6 d' }, accounts: ['personal'], state: 'ok' },
+      {
+        id: 'home',
+        name: 'foks.home.example',
+        label: 'Home',
+        host_id: 'aa11223344',
+        chain: 4,
+        epoch: 91,
+        lease: { state: 'fresh', expires_in: '6 d' },
+        accounts: ['personal'],
+        state: 'ok',
+      },
+      {
+        id: 'acme-b',
+        name: 'foks.acme-corp.com',
+        label: 'Acme',
+        host_id: 'bb55667788',
+        chain: 9,
+        epoch: 42,
+        lease: { state: 'fresh', expires_in: '6 d' },
+        accounts: ['personal'],
+        state: 'ok',
+      },
     ],
     accounts: ordered.map((row) => row.account),
     stores: ordered.map((row) => row.store),
@@ -3993,10 +5613,19 @@ interface SharedAliasCalls {
   recovery: [string, string][];
 }
 
-function sharedAliasBridge(world: World, calls: SharedAliasCalls, gate?: Map<string, (devices: AccountDevice[]) => void>): Bridge {
+function sharedAliasBridge(
+  world: World,
+  calls: SharedAliasCalls,
+  gate?: Map<string, (devices: AccountDevice[]) => void>,
+): Bridge {
   const base = mockBridge(world);
   const device = (store: string): AccountDevice[] => [
-    { id: `04${(store === SAME_ALIAS_A ? 'a' : 'b').repeat(64)}`, name: store === SAME_ALIAS_A ? 'Home Mac' : 'Acme Mac', role: 'owner', current: true },
+    {
+      id: `04${(store === SAME_ALIAS_A ? 'a' : 'b').repeat(64)}`,
+      name: store === SAME_ALIAS_A ? 'Home Mac' : 'Acme Mac',
+      role: 'owner',
+      current: true,
+    },
   ];
   return {
     ...base,
@@ -4006,28 +5635,76 @@ function sharedAliasBridge(world: World, calls: SharedAliasCalls, gate?: Map<str
     describeServerStatus: async (profile: string) => ({
       profile,
       configuredProbe: profile,
-      host: { lookupName: profile, canonicalName: profile, hostId: `${profile}-host-id`, chain: 4, epoch: 91 },
+      host: {
+        lookupName: profile,
+        canonicalName: profile,
+        hostId: `${profile}-host-id`,
+        chain: 4,
+        epoch: 91,
+      },
       leaseRequired: true,
       leaseExpiresAt: Math.floor(Date.now() / 1000) + 86_400,
     }),
     listAccountDevices: async (store: string) => {
       calls.devices.push(store);
-      if (gate) return new Promise<AccountDevice[]>((resolve) => gate.set(store, resolve));
+      if (gate)
+        return new Promise<AccountDevice[]>((resolve) =>
+          gate.set(store, resolve),
+        );
       return device(store);
     },
-    listBackupEnrollments: async (store: string) => { calls.backups.push(store); return []; },
+    listBackupEnrollments: async (store: string) => {
+      calls.backups.push(store);
+      return [];
+    },
     listYubiCards: async () => [],
     listYubiAccounts: async () => [],
-    startDevicePairing: async (store: string) => { calls.pairing.push(store); return { accountAlias: 'personal', phrase: 'cobalt window ladder' }; },
-    removeAccountDevice: async (store: string) => { calls.removed.push(store); return { deviceId: '04', userChainSequence: 2, alreadyAbsent: false }; },
-    changeAccountPassphrase: async (store: string) => { calls.passphrase.push(store); return { generation: 2, stretchVersion: 'v1' as const, verified: true as const }; },
-    prepareOwnerBackup: async (profile: string, alias: string, backupAlias: string) => { calls.phrase.push([profile, alias]); return { backupAlias, phrase: Array.from({ length: 17 }, (_, index) => `word${index}`).join(' ') }; },
-    recoverOwnerAccount: async (profile: string, alias: string) => { calls.recovery.push([profile, alias]); return { applied: true }; },
+    startDevicePairing: async (store: string) => {
+      calls.pairing.push(store);
+      return { accountAlias: 'personal', phrase: 'cobalt window ladder' };
+    },
+    removeAccountDevice: async (store: string) => {
+      calls.removed.push(store);
+      return { deviceId: '04', userChainSequence: 2, alreadyAbsent: false };
+    },
+    changeAccountPassphrase: async (store: string) => {
+      calls.passphrase.push(store);
+      return {
+        generation: 2,
+        stretchVersion: 'v1' as const,
+        verified: true as const,
+      };
+    },
+    prepareOwnerBackup: async (
+      profile: string,
+      alias: string,
+      backupAlias: string,
+    ) => {
+      calls.phrase.push([profile, alias]);
+      return {
+        backupAlias,
+        phrase: Array.from({ length: 17 }, (_, index) => `word${index}`).join(
+          ' ',
+        ),
+      };
+    },
+    recoverOwnerAccount: async (profile: string, alias: string) => {
+      calls.recovery.push([profile, alias]);
+      return { applied: true };
+    },
   };
 }
 
 function noCalls(): SharedAliasCalls {
-  return { devices: [], backups: [], pairing: [], removed: [], passphrase: [], phrase: [], recovery: [] };
+  return {
+    devices: [],
+    backups: [],
+    pairing: [],
+    removed: [],
+    passphrase: [],
+    phrase: [],
+    recovery: [],
+  };
 }
 
 /** The address bar as the shell has rewritten it. */
@@ -4040,8 +5717,13 @@ const settingsAt = (store: string, section = 'macs'): string =>
 test('Settings selects the account the address names, not the first one with that alias', async () => {
   const world = sharedAliasWorld();
   const calls = noCalls();
-  at(settingsAt(SAME_ALIAS_B), { world, bridge: sharedAliasBridge(world, calls) });
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /Acme Mac/));
+  at(settingsAt(SAME_ALIAS_B), {
+    world,
+    bridge: sharedAliasBridge(world, calls),
+  });
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /Acme Mac/),
+  );
   // A is listed first and shares the alias; B is the one selected and read.
   assert.equal(world.stores[0]?.id, SAME_ALIAS_A);
   assert.deepEqual(calls.devices, [SAME_ALIAS_B]);
@@ -4051,7 +5733,11 @@ test('Settings selects the account the address names, not the first one with tha
   // Both switcher buttons carry their server, because the alias cannot tell
   // them apart on its own.
   assert.deepEqual(
-    [...document.querySelectorAll<HTMLButtonElement>('.settings-label .seg button')].map((button) => button.textContent),
+    [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '.settings-label .seg button',
+      ),
+    ].map((button) => button.textContent),
     ['personal · foks.home.example', 'personal · foks.acme-corp.com'],
   );
 });
@@ -4060,8 +5746,13 @@ test('the selected account survives a catalog reordering', async () => {
   for (const order of ['a-first', 'b-first'] as const) {
     const world = sharedAliasWorld({ order });
     const calls = noCalls();
-    at(settingsAt(SAME_ALIAS_B), { world, bridge: sharedAliasBridge(world, calls) });
-    await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /Acme Mac/));
+    at(settingsAt(SAME_ALIAS_B), {
+      world,
+      bridge: sharedAliasBridge(world, calls),
+    });
+    await testingLibrary.waitFor(() =>
+      assert.match(text('.settings-main'), /Acme Mac/),
+    );
     assert.deepEqual(calls.devices, [SAME_ALIAS_B], order);
     assert.equal(storeParam(), SAME_ALIAS_B, order);
     testingLibrary.cleanup();
@@ -4071,19 +5762,31 @@ test('the selected account survives a catalog reordering', async () => {
 test('Settings carries the exact account across its sections', async () => {
   const world = sharedAliasWorld();
   const calls = noCalls();
-  at(settingsAt(SAME_ALIAS_B), { world, bridge: sharedAliasBridge(world, calls) });
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /Acme Mac/));
-  for (const label of ['Account', 'Security keys', 'Your Macs & recovery']) {
-    const nav = [...document.querySelectorAll<HTMLButtonElement>('.settings-sections button')]
-      .find((button) => button.textContent?.trim() === label);
+  at(settingsAt(SAME_ALIAS_B), {
+    world,
+    bridge: sharedAliasBridge(world, calls),
+  });
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /Acme Mac/),
+  );
+  for (const label of ['Accounts', 'Security keys', 'Recovery devices']) {
+    const nav = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '.settings-sections button',
+      ),
+    ].find((button) => button.textContent?.trim() === label);
     assert.ok(nav, label);
     testingLibrary.fireEvent.click(nav);
-    await testingLibrary.waitFor(() => assert.equal(storeParam(), SAME_ALIAS_B));
+    await testingLibrary.waitFor(() =>
+      assert.equal(storeParam(), SAME_ALIAS_B),
+    );
   }
   // Back on Macs, still reading B and only B. (The Account section reads every
   // account's current device on purpose — it lists them all — so `calls` is not
   // the assertion here; what this screen is *about* is.)
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /Acme Mac/));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /Acme Mac/),
+  );
   assert.doesNotMatch(text('.settings-main'), /Home Mac/);
   assert.equal(storeParam(), SAME_ALIAS_B);
 });
@@ -4091,40 +5794,66 @@ test('Settings carries the exact account across its sections', async () => {
 test('every account-specific Settings action carries the selected StoreRef', async () => {
   const world = sharedAliasWorld();
   const calls = noCalls();
-  at(settingsAt(SAME_ALIAS_B), { world, bridge: sharedAliasBridge(world, calls) });
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /Acme Mac/));
+  at(settingsAt(SAME_ALIAS_B), {
+    world,
+    bridge: sharedAliasBridge(world, calls),
+  });
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /Acme Mac/),
+  );
 
   const click = (label: string): void => {
-    const button = [...document.querySelectorAll<HTMLButtonElement>('.settings-main button')]
-      .find((candidate) => candidate.textContent?.trim() === label);
+    const button = [
+      ...document.querySelectorAll<HTMLButtonElement>('.settings-main button'),
+    ].find((candidate) => candidate.textContent?.trim() === label);
     assert.ok(button, label);
     testingLibrary.fireEvent.click(button);
   };
   const inSheet = (label: string): HTMLButtonElement => {
-    const button = [...document.querySelectorAll<HTMLButtonElement>('.sheet button')]
-      .find((candidate) => candidate.textContent?.trim() === label);
+    const button = [
+      ...document.querySelectorAll<HTMLButtonElement>('.sheet button'),
+    ].find((candidate) => candidate.textContent?.trim() === label);
     assert.ok(button, label);
     return button;
   };
 
   click('Start pairing…');
   testingLibrary.fireEvent.click(inSheet('Start'));
-  await testingLibrary.waitFor(() => assert.deepEqual(calls.pairing, [SAME_ALIAS_B]));
+  await testingLibrary.waitFor(() =>
+    assert.deepEqual(calls.pairing, [SAME_ALIAS_B]),
+  );
   testingLibrary.fireEvent.click(inSheet('Close'));
 
-  click('Enrol…');
+  click('Enroll…');
   testingLibrary.fireEvent.click(inSheet('Prepare phrase'));
   // The native call is (profile, alias) — an alias scoped by its profile, not
   // an alias on its own — and the profile is the selected account's.
-  await testingLibrary.waitFor(() => assert.deepEqual(calls.phrase, [['acme-b', 'personal']]));
+  await testingLibrary.waitFor(() =>
+    assert.deepEqual(calls.phrase, [['acme-b', 'personal']]),
+  );
 });
 
 test('a Settings address naming an account that has gone says so instead of picking another', async () => {
   const world = sharedAliasWorld({ without: SAME_ALIAS_B });
   const calls = noCalls();
-  at(settingsAt(SAME_ALIAS_B), { world, bridge: sharedAliasBridge(world, calls) });
+  at(settingsAt(SAME_ALIAS_B), {
+    world,
+    bridge: sharedAliasBridge(world, calls),
+  });
   await testingLibrary.waitFor(() =>
-    assert.match(text('.settings-main'), /no longer available in the current catalog/),
+    assert.match(
+      text('.settings-main'),
+      /no longer available in the current catalog/,
+    ),
+  );
+  const acts = document.querySelector('.notice .acts2');
+  const lastCopy = document.querySelector('.notice p:last-of-type');
+  assert.ok(acts && lastCopy);
+  assert.match(text('.notice .acts2'), /Refresh the catalog/);
+  assert.equal(
+    lastCopy.nextElementSibling,
+    acts,
+    'the action sits under the copy, not between paragraphs',
   );
   // A is the only account left and is emphatically not selected in B's place.
   assert.deepEqual(calls.devices, []);
@@ -4135,14 +5864,24 @@ test('a Settings address naming an account that has gone says so instead of pick
 test('choosing the other account is a deliberate route change', async () => {
   const world = sharedAliasWorld();
   const calls = noCalls();
-  at(settingsAt(SAME_ALIAS_B), { world, bridge: sharedAliasBridge(world, calls) });
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /Acme Mac/));
-  const other = [...document.querySelectorAll<HTMLButtonElement>('.settings-label .seg button')]
-    .find((button) => button.textContent?.includes('foks.home.example'));
+  at(settingsAt(SAME_ALIAS_B), {
+    world,
+    bridge: sharedAliasBridge(world, calls),
+  });
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /Acme Mac/),
+  );
+  const other = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      '.settings-label .seg button',
+    ),
+  ].find((button) => button.textContent?.includes('foks.home.example'));
   assert.ok(other);
   testingLibrary.fireEvent.click(other);
   await testingLibrary.waitFor(() => assert.equal(storeParam(), SAME_ALIAS_A));
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /Home Mac/));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /Home Mac/),
+  );
   assert.deepEqual(calls.devices, [SAME_ALIAS_B, SAME_ALIAS_A]);
 });
 
@@ -4150,21 +5889,46 @@ test('a late device answer for one account never lands under another', async () 
   const world = sharedAliasWorld();
   const calls = noCalls();
   const gate = new Map<string, (devices: AccountDevice[]) => void>();
-  at(settingsAt(SAME_ALIAS_A), { world, bridge: sharedAliasBridge(world, calls, gate) });
-  await testingLibrary.waitFor(() => assert.deepEqual(calls.devices, [SAME_ALIAS_A]));
+  at(settingsAt(SAME_ALIAS_A), {
+    world,
+    bridge: sharedAliasBridge(world, calls, gate),
+  });
+  await testingLibrary.waitFor(() =>
+    assert.deepEqual(calls.devices, [SAME_ALIAS_A]),
+  );
 
-  const other = [...document.querySelectorAll<HTMLButtonElement>('.settings-label .seg button')]
-    .find((button) => button.textContent?.includes('foks.acme-corp.com'));
+  const other = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      '.settings-label .seg button',
+    ),
+  ].find((button) => button.textContent?.includes('foks.acme-corp.com'));
   assert.ok(other);
   testingLibrary.fireEvent.click(other);
-  await testingLibrary.waitFor(() => assert.deepEqual(calls.devices, [SAME_ALIAS_A, SAME_ALIAS_B]));
+  await testingLibrary.waitFor(() =>
+    assert.deepEqual(calls.devices, [SAME_ALIAS_A, SAME_ALIAS_B]),
+  );
 
   // B answers, then A's earlier request answers late.
   await testingLibrary.act(async () => {
-    gate.get(SAME_ALIAS_B)?.([{ id: `04${'b'.repeat(64)}`, name: 'Acme Mac', role: 'owner', current: true }]);
+    gate.get(SAME_ALIAS_B)?.([
+      {
+        id: `04${'b'.repeat(64)}`,
+        name: 'Acme Mac',
+        role: 'owner',
+        current: true,
+      },
+    ]);
     await Promise.resolve();
-    gate.get(SAME_ALIAS_A)?.([{ id: `04${'a'.repeat(64)}`, name: 'Home Mac', role: 'owner', current: true }]);
-    for (let pass = 0; pass < 5; pass += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    gate.get(SAME_ALIAS_A)?.([
+      {
+        id: `04${'a'.repeat(64)}`,
+        name: 'Home Mac',
+        role: 'owner',
+        current: true,
+      },
+    ]);
+    for (let pass = 0; pass < 5; pass += 1)
+      await new Promise((resolve) => setTimeout(resolve, 0));
   });
   assert.equal(storeParam(), SAME_ALIAS_B);
   assert.match(text('.settings-main'), /Acme Mac/);
@@ -4178,19 +5942,40 @@ test('Join invites from the exact account, not the first with the alias', async 
   const calls = noCalls();
   const copied: string[] = [];
   const base = sharedAliasBridge(world, calls);
-  at('?state=join', { world, bridge: { ...base, copyText: async (text: string) => { copied.push(text); return { ok: true as const }; } } });
-  const invites = [...document.querySelectorAll<HTMLButtonElement>('.plain button')]
-    .filter((button) => button.textContent?.includes('Invite someone'));
+  at('?state=join', {
+    world,
+    bridge: {
+      ...base,
+      copyText: async (text: string) => {
+        copied.push(text);
+        return { ok: true as const };
+      },
+    },
+  });
+  const invites = [
+    ...document.querySelectorAll<HTMLButtonElement>('.settings-main button'),
+  ].filter((button) => button.textContent?.startsWith('Invite as '));
   assert.equal(invites.length, 2);
   // The second card is profile B; its own box names B's server.
-  const bInvite = invites.find((button) => button.closest('.copybox')?.textContent?.includes('rae.chen'));
+  const bInvite = invites.find((button) =>
+    button.closest('.fr')?.textContent?.includes('rae.chen'),
+  );
   assert.ok(bInvite);
-  assert.match(bInvite.closest('.copybox')?.textContent ?? '', /foks\.acme-corp\.com/);
+  assert.match(
+    bInvite.closest('.fr')?.textContent ?? '',
+    /foks\.acme-corp\.com/,
+  );
   testingLibrary.fireEvent.click(bInvite);
-  await testingLibrary.waitFor(() => assert.match(text('.sheet h2'), /foks\.acme-corp\.com/));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.sheet h2'), /foks\.acme-corp\.com/),
+  );
   assert.match(text('.sheet'), /rae\.chen/);
   assert.doesNotMatch(text('.sheet'), /foks\.home\.example/);
-  testingLibrary.fireEvent.click([...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button')].find((button) => button.textContent === 'Copy message')!);
+  testingLibrary.fireEvent.click(
+    [...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button')].find(
+      (button) => button.textContent === 'Copy message',
+    )!,
+  );
   await testingLibrary.waitFor(() => assert.equal(copied.length, 1));
   assert.match(copied[0], /foks\.acme-corp\.com/);
   assert.match(copied[0], /rae\.chen/);
@@ -4201,18 +5986,27 @@ test('a Join invitation whose account leaves the catalog reports it rather than 
   const world = sharedAliasWorld();
   const calls = noCalls();
   at('?state=join', { world, bridge: sharedAliasBridge(world, calls) });
-  const bInvite = [...document.querySelectorAll<HTMLButtonElement>('.plain button')]
-    .filter((button) => button.textContent?.includes('Invite someone'))
-    .find((button) => button.closest('.copybox')?.textContent?.includes('rae.chen'));
+  const bInvite = [
+    ...document.querySelectorAll<HTMLButtonElement>('.settings-main button'),
+  ]
+    .filter((button) => button.textContent?.startsWith('Invite as '))
+    .find((button) => button.closest('.fr')?.textContent?.includes('rae.chen'));
   assert.ok(bInvite);
   testingLibrary.fireEvent.click(bInvite);
-  await testingLibrary.waitFor(() => assert.match(text('.sheet h2'), /foks\.acme-corp\.com/));
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.sheet h2'), /foks\.acme-corp\.com/),
+  );
   testingLibrary.cleanup();
 
   // The same open invitation, in a world that no longer holds that account.
   const shrunk = sharedAliasWorld({ without: SAME_ALIAS_B });
-  at('?state=join-invite', { world: shrunk, bridge: sharedAliasBridge(shrunk, noCalls()) });
-  await testingLibrary.waitFor(() => assert.match(text('.sheet h2'), /Invite to foks\.home\.example/));
+  at('?state=join-invite', {
+    world: shrunk,
+    bridge: sharedAliasBridge(shrunk, noCalls()),
+  });
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.sheet h2'), /Invite to foks\.home\.example/),
+  );
   // The one account left is invited on its own terms, never as a stand-in for
   // the missing one: nothing here names the account that is gone.
   assert.match(text('.sheet'), /rae\b/);
@@ -4221,36 +6015,56 @@ test('a Join invitation whose account leaves the catalog reports it rather than 
 
 test('Yubi actions bind pending and complete aliases and require their secret fields', async () => {
   const base = mockBridge(FIXTURE);
-  const bridge = { ...base, listYubiAccounts: async () => [
-    { alias: 'unfinished', state: 'pending' as const },
-    { alias: 'daily', state: 'complete' as const },
-  ] };
+  const bridge = {
+    ...base,
+    listYubiAccounts: async () => [
+      { alias: 'unfinished', state: 'pending' as const },
+      { alias: 'daily', state: 'complete' as const },
+    ],
+  };
   at('?state=settings-keys', { bridge });
-  await testingLibrary.waitFor(() => assert.match(text('.settings-main'), /unfinished.*daily/s));
-  const rows = [...document.querySelectorAll<HTMLElement>('.settings-inset .fr')];
-  const resume = rows.find((row) => row.textContent?.includes('Resume enrolment'))?.querySelector<HTMLButtonElement>('button');
-  assert.ok(resume); testingLibrary.fireEvent.click(resume);
+  await testingLibrary.waitFor(() =>
+    assert.match(text('.settings-main'), /unfinished.*daily/s),
+  );
+  const rows = [
+    ...document.querySelectorAll<HTMLElement>('.settings-inset .fr'),
+  ];
+  const resume = rows
+    .find((row) => row.textContent?.includes('Resume enrollment'))
+    ?.querySelector<HTMLButtonElement>('button');
+  assert.ok(resume);
+  testingLibrary.fireEvent.click(resume);
   assert.match(text('.sheet'), /unfinished/);
-  const submit = [...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button')].find((item) => item.textContent === 'Continue');
+  const submit = [
+    ...document.querySelectorAll<HTMLButtonElement>('.sheet .ft button'),
+  ].find((item) => item.textContent === 'Continue');
   assert.ok(submit?.disabled);
-  testingLibrary.fireEvent.change(document.querySelector<HTMLInputElement>('.sheet input[type="password"]')!, { target: { value: '123456' } });
+  testingLibrary.fireEvent.change(
+    document.querySelector<HTMLInputElement>('.sheet input[type="password"]')!,
+    { target: { value: '123456' } },
+  );
   assert.equal(submit.disabled, false);
 });
 
 test('rollback leaves host facts legible but every control except Back and Reset inert', async () => {
   at('?state=servers-rollback');
-  await testingLibrary.waitFor(() => assert.match(text('.main'), /history does not match/));
-  // The blocked notice renders from the route; the host facts arrive from the
-  // status load. Wait for those too, so the controls this test asserts are
-  // inert are actually on the page rather than not yet rendered.
   await testingLibrary.waitFor(() =>
-    assert.ok(document.querySelector('[aria-label="They published"]')),
+    assert.match(text('.main'), /history no longer matches/),
   );
-  const details = document.querySelector<HTMLDetailsElement>('.server-details');
-  assert.ok(details); details.open = true;
-  const enabled = [...document.querySelectorAll<HTMLButtonElement>('.main button:not([disabled])')].map((button) => button.textContent?.trim());
-  assert.deepEqual(enabled.sort(), ['Reset…', '‹ Servers'].sort());
-  assert.equal(document.querySelector<HTMLInputElement>('[aria-label="They published"]')?.disabled, true);
+  // The host facts arrive from the status load; wait for them so the controls
+  // this test asserts are inert are actually on the page.
+  await testingLibrary.waitFor(() =>
+    assert.ok(document.querySelector('.hostid')),
+  );
+  const enabled = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      '.settings-main button:not([disabled])',
+    ),
+  ].map((button) => button.textContent?.trim());
+  // Reset is offered twice — in the band and in the danger inset — and the
+  // crumb leaves. Nothing else in the section is live while the server is
+  // locked; the section nav around it is not the server's.
+  assert.deepEqual([...new Set(enabled)].sort(), ['Reset…', 'Servers'].sort());
   assert.doesNotMatch(text('.main'), /Never checked|Not pinned|Nothing yet/);
 });
 
@@ -4258,9 +6072,17 @@ test('an unavailable signed status makes no claim that the server was never chec
   const base = mockBridge(FIXTURE);
   const world: World = {
     ...FIXTURE,
-    servers: FIXTURE.servers.map((server) => server.id === 'personal'
-      ? { ...server, host_id: null, chain: null, epoch: null, state: 'lease-unavailable' as const }
-      : server),
+    servers: FIXTURE.servers.map((server) =>
+      server.id === 'personal'
+        ? {
+            ...server,
+            host_id: null,
+            chain: null,
+            epoch: null,
+            state: 'lease-unavailable' as const,
+          }
+        : server,
+    ),
   };
   at('?state=servers-server', {
     world,
@@ -4269,14 +6091,25 @@ test('an unavailable signed status makes no claim that the server was never chec
       native: true as const,
       fixtureWorld: undefined,
       describeServerStatus: async (profile: string) => {
-        if (profile === 'personal') throw new Error('signed status unavailable');
+        if (profile === 'personal')
+          throw new Error('signed status unavailable');
         return base.describeServerStatus(profile);
       },
     },
   });
-  await testingLibrary.waitFor(() => assert.match(text('.main'), /Host, pin and prior-check facts are not available/));
-  assert.match(text('.main'), /Pin fact unavailable/);
-  assert.doesNotMatch(text('.main'), /Never checked|Not pinned|Nothing yet|Added, never checked/);
+  await testingLibrary.waitFor(() =>
+    assert.match(
+      text('.main'),
+      /The agent has no signed check-in for this server/,
+    ),
+  );
+  // It says the status is unknown; it never claims the server was never
+  // checked or never pinned.
+  assert.match(text('.main'), /Hidden while locked/);
+  assert.doesNotMatch(
+    text('.main'),
+    /Never checked|Not pinned|Nothing yet|Added, never checked/,
+  );
 });
 
 test('an extreme signed expiry is displayed without crashing the server screen', async () => {
@@ -4290,6 +6123,9 @@ test('an extreme signed expiry is displayed without crashing the server screen',
   };
   at('?state=servers-server', { bridge });
   await testingLibrary.waitFor(() =>
-    assert.match(document.body.textContent ?? '', /Unix time 9007199254740991 seconds/),
+    assert.match(
+      document.body.textContent ?? '',
+      /Unix time 9007199254740991 seconds/,
+    ),
   );
 });

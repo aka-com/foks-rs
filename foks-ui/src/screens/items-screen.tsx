@@ -13,6 +13,7 @@
 
 import { Fragment, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useToast } from '/kit/toasts';
 import { virtualListWindow } from '/kit/virtual-list';
 import {
   Band,
@@ -26,10 +27,11 @@ import {
 import type { FilterKind } from '../components';
 import type { FoksIconName } from '../icons';
 import { PageHeader, headerFor } from '../shell/page-header';
-import { Toolbar } from '../shell/toolbar';
+import { NewItemButton, Toolbar } from '../shell/toolbar';
 import {
   KINDS,
   canChangeItem,
+  catalog,
   fmtSize,
   kindOf,
   nameOf,
@@ -38,9 +40,9 @@ import {
   prefixOf,
   readersOf,
   serverOf,
-  storeOf,
   storeDescriptionState,
   storeDisplayOrder,
+  storeOf,
   storeReadable,
 } from '../model';
 import type { Item, Store, World } from '../model';
@@ -118,9 +120,17 @@ function ItemActions({
       {kind === 'Password' || kind === 'Resource' ? (
         <>
           {action('Show', 'eye', onReveal)}
-          {action(kind === 'Password' ? 'Copy password' : 'Copy value', 'copy', onCopyValue)}
+          {action(
+            kind === 'Password' ? 'Copy password' : 'Copy value',
+            'copy',
+            onCopyValue,
+          )}
         </>
-      ) : kind === 'File' ? action('Download', 'download', onDownload) : action('Open target', 'arrow', onOpen)}
+      ) : kind === 'File' ? (
+        action('Download', 'download', onDownload)
+      ) : (
+        action('Open target', 'arrow', onOpen)
+      )}
       {action('Copy path', 'path', onCopyPath)}
       {action(
         removeDisabled
@@ -165,7 +175,12 @@ function Row({
         </span>
         <small>
           {whereOf(world, item)}
-          {searching ? <> · <code>{item.path}</code></> : null}
+          {searching ? (
+            <>
+              {' '}
+              · <code>{item.path}</code>
+            </>
+          ) : null}
         </small>
       </span>
       <span className="n server">{serverOf(world, item.store)?.name}</span>
@@ -217,7 +232,18 @@ function Tile({
           />
         ) : null}
         <span className="qa">
-          <ItemActions {...{ item, onReveal, onCopyValue, onCopyPath, onDownload, onOpen, onRemove, removeDisabled }} />
+          <ItemActions
+            {...{
+              item,
+              onReveal,
+              onCopyValue,
+              onCopyPath,
+              onDownload,
+              onOpen,
+              onRemove,
+              removeDisabled,
+            }}
+          />
         </span>
       </div>
       <div className="cap">
@@ -242,7 +268,13 @@ function Tile({
   );
 }
 
-function TileSection({ world, store }: { world: World; store: Store }): ReactNode {
+function TileSection({
+  world,
+  store,
+}: {
+  world: World;
+  store: Store;
+}): ReactNode {
   if (store.kind === 'team') {
     return (
       <div className="gsec">
@@ -271,7 +303,7 @@ export interface ItemsScreenProps {
   onNew: (kind: NewKind, storeId: string) => void;
   onResume: (storeId: string) => Promise<void>;
   onRemove: (item: Item) => void;
-  onManage: (storeId: string) => void;
+  onSettings: (storeId: string) => void;
   onCommandError: (error: unknown, item?: Item) => void;
 }
 
@@ -284,23 +316,18 @@ export function ItemsScreen({
   onNew,
   onResume,
   onRemove,
-  onManage,
+  onSettings,
   onCommandError,
 }: ItemsScreenProps): ReactNode {
-  const [message, setMessage] = useState<string | null>(null);
+  const toasts = useToast();
   const bodyRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [listMetrics, setListMetrics] = useState({ top: 0, viewport: 600 });
   const { location } = state;
-  const store = location.kind === 'store' ? storeOf(world, location.ref) : undefined;
-  const header = headerFor(
-    world,
-    location,
-    store?.kind === 'team'
-      ? () => onManage(store.id)
-      : undefined,
-  );
+  const store =
+    location.kind === 'store' ? storeOf(world, location.ref) : undefined;
+  const header = headerFor(world, location);
   const head = (
     <PageHeader
       {...header}
@@ -328,7 +355,10 @@ export function ItemsScreen({
       });
     };
     measure();
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
     observer?.observe(body);
     return () => observer?.disconnect();
   }, [items.length, state.view, state.kind, state.query, location.kind]);
@@ -338,9 +368,26 @@ export function ItemsScreen({
       <StoreAccessTakeover
         world={world}
         store={store}
-        lead={store.kind === 'team' ? <Stack parties={partiesOf(world, store.id)} size="lg" /> : undefined}
-        onOpenServer={(profile) => locations.navigate({ kind: 'servers', profile })}
+        lead={
+          store.kind === 'team' ? (
+            <Stack parties={partiesOf(world, store.id)} />
+          ) : undefined
+        }
+        onOpenServer={(profile) =>
+          locations.navigate({ kind: 'settings', section: 'servers', profile })
+        }
         onFinishSetup={() => void onResume(store.id)}
+        headerAction={
+          store.kind === 'team' ? (
+            <Button
+              variant="quiet"
+              icon="gear"
+              title="Group settings"
+              aria-label="Group settings"
+              onClick={() => onSettings(store.id)}
+            />
+          ) : undefined
+        }
       />
     );
   }
@@ -353,42 +400,65 @@ export function ItemsScreen({
     version: item.version,
   });
   const report = (error: unknown): void => {
-    if (normalizeCommandError(error).code === 'agent-lost') onCommandError(error);
-    else setMessage(normalizeCommandError(error).message);
+    if (normalizeCommandError(error).code === 'agent-lost')
+      onCommandError(error);
+    else toasts.show(normalizeCommandError(error).message);
   };
   const copyValue = (item: Item): void => {
-    void bridge.copyItemValue(requestOf(item)).then(
-      () => setMessage(`${kindOf(item) === 'Password' ? 'Password' : 'Value'} copied`),
-      report,
-    );
+    void bridge
+      .copyItemValue(requestOf(item))
+      .then(
+        () =>
+          toasts.show(
+            `${kindOf(item) === 'Password' ? 'Password' : 'Value'} copied`,
+          ),
+        report,
+      );
   };
   const copyPath = (item: Item): void => {
-    void bridge.copyItemPath(requestOf(item)).then(
-      () => setMessage(`Path copied: ${item.path}`),
-      report,
-    );
+    void bridge
+      .copyItemPath(requestOf(item))
+      .then(() => toasts.show(`Path copied: ${item.path}`), report);
   };
   const download = (item: Item): void => {
     locations.select({ store: item.store, path: item.path });
-    void bridge.downloadFile(requestOf(item)).then(
-      ({ saved }) => setMessage(saved ? `Downloaded ${nameOf(item.path)} at version ${item.version}` : 'Download cancelled'),
-      report,
-    );
+    void bridge
+      .downloadFile(requestOf(item))
+      .then(
+        ({ saved }) =>
+          toasts.show(
+            saved
+              ? `Downloaded ${nameOf(item.path)} at version ${item.version}`
+              : 'Download cancelled',
+          ),
+        report,
+      );
   };
   const openLink = (item: Item): void => {
-    void bridge.readItem(requestOf(item)).then(
-      (response) => {
-        if (response.store !== item.store || response.path !== item.path || response.version !== item.version) {
-          throw new Error('The local agent returned a target for a different catalog selection.');
+    void bridge
+      .readItem(requestOf(item))
+      .then((response) => {
+        if (
+          response.store !== item.store ||
+          response.path !== item.path ||
+          response.version !== item.version
+        ) {
+          throw new Error(
+            'The local agent returned a target for a different catalog selection.',
+          );
         }
-        const target = world.items.find(
-          (candidate) => candidate.store === item.store && candidate.path === response.value,
+        // Resolved against the catalog, not the raw item list: the raw list
+        // still holds folders, and selecting one reaches KindIcon with a kind
+        // it does not draw.
+        const target = catalog(world).find(
+          (candidate) =>
+            candidate.store === item.store && candidate.path === response.value,
         );
-        if (target) locations.select({ store: target.store, path: target.path });
-        else setMessage(`Nothing is currently at ${response.value}`);
-      },
-      report,
-    ).catch(report);
+        if (target)
+          locations.select({ store: target.store, path: target.path });
+        else toasts.show(`Nothing is currently at ${response.value}`);
+      }, report)
+      .catch(report);
   };
   const reveal = (item: Item): void => {
     locations.select({ store: item.store, path: item.path });
@@ -397,12 +467,12 @@ export function ItemsScreen({
   };
 
   const rowWindow = virtualListWindow({
-      heights: items.map(() => 50),
-      listTop: listMetrics.top,
-      scrollTop,
-      viewport: listMetrics.viewport,
-      overscan: 3,
-    });
+    heights: items.map(() => 50),
+    listTop: listMetrics.top,
+    scrollTop,
+    viewport: listMetrics.viewport,
+    overscan: 3,
+  });
   const visibleRows = items.slice(rowWindow.start, rowWindow.end);
   const gridItems = items.slice(0, GRID_CAP);
   const callbacks = (item: Item) => ({
@@ -427,7 +497,9 @@ export function ItemsScreen({
         onNew={(itemKind) =>
           onNew(
             itemKind,
-            store && storeReadable(world, store.id) ? store.id : 'acct:personal',
+            store && storeReadable(world, store.id)
+              ? store.id
+              : 'acct:personal',
           )
         }
         kind={state.kind}
@@ -446,18 +518,22 @@ export function ItemsScreen({
         onDetails={(open) => {
           locations.setDetails(open);
         }}
+        onSettings={
+          store?.kind === 'team' ? () => onSettings(store.id) : undefined
+        }
       />
       <div
         className="body"
         ref={bodyRef}
         onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
       >
-        {location.kind === 'all' ? accessBands.map((band) => (
-          <Band key={band.key}>{band.text}</Band>
-        )) : null}
+        {location.kind === 'all'
+          ? accessBands.map((band) => <Band key={band.key}>{band.text}</Band>)
+          : null}
         {state.view === 'grid' && items.length > GRID_CAP ? (
           <Band>
-            Showing the first {GRID_CAP} cards. Narrow the list with search or a kind filter to see the rest.
+            Showing the first {GRID_CAP} cards. Narrow the list with search or a
+            kind filter to see the rest.
           </Band>
         ) : null}
 
@@ -469,30 +545,31 @@ export function ItemsScreen({
                 {state.query}”
               </h2>
               <p>
-                Search covers paths and store names. Contents stay masked, so
-                they are not searched.
+                Search covers paths and store names only, and not private
+                contents of items in the vault.
               </p>
             </div>
           ) : (
             <div className="empty">
               <div className="big">
-                <Icon name={kindMeta ? (kindMeta.icon as FoksIconName) : 'key'} />
+                <Icon
+                  name={kindMeta ? (kindMeta.icon as FoksIconName) : 'key'}
+                />
               </div>
               <h2>
                 No {kindMeta ? kindMeta.plural.toLowerCase() : 'items'} here
               </h2>
-              <p>
-                {kindMeta
-                  ? kindMeta.blurb
-                  : 'Use New to add a password, resource, file or link. Nothing is listed until something is written.'}
-              </p>
-              <Button
-                variant="primary"
-                icon="plus"
-                onClick={() => onNew('Password', store?.id ?? 'acct:personal')}
-              >
-                New
-              </Button>
+              <p>{(kindMeta ?? KINDS.Password).blurb}</p>
+              <NewItemButton
+                onNew={(itemKind) =>
+                  onNew(
+                    itemKind,
+                    store && storeReadable(world, store.id)
+                      ? store.id
+                      : 'acct:personal',
+                  )
+                }
+              />
             </div>
           )
         ) : state.view === 'list' ? (
@@ -521,7 +598,12 @@ export function ItemsScreen({
               </button>
             </div>
             <div className="virtual-rows" ref={listRef}>
-              {rowWindow.padTop ? <div className="virtual-spacer" style={{ height: rowWindow.padTop }} /> : null}
+              {rowWindow.padTop ? (
+                <div
+                  className="virtual-spacer"
+                  style={{ height: rowWindow.padTop }}
+                />
+              ) : null}
               {visibleRows.map((item) => (
                 <Row
                   key={`${item.store}|${item.path}`}
@@ -537,7 +619,12 @@ export function ItemsScreen({
                   }}
                 />
               ))}
-              {rowWindow.padBottom ? <div className="virtual-spacer" style={{ height: rowWindow.padBottom }} /> : null}
+              {rowWindow.padBottom ? (
+                <div
+                  className="virtual-spacer"
+                  style={{ height: rowWindow.padBottom }}
+                />
+              ) : null}
             </div>
           </div>
         ) : location.kind === 'all' ? (
@@ -559,7 +646,10 @@ export function ItemsScreen({
                         state.selection.path === item.path
                       }
                       onSelect={() => {
-                        locations.select({ store: item.store, path: item.path });
+                        locations.select({
+                          store: item.store,
+                          path: item.path,
+                        });
                       }}
                       {...callbacks(item)}
                     />
@@ -593,7 +683,6 @@ export function ItemsScreen({
             </div>
           </>
         )}
-        {message ? <div className="flash" aria-live="polite">{message}</div> : null}
       </div>
     </>
   );

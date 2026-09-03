@@ -10,6 +10,8 @@
 import { admissionActive, partiesOf, peopleGroups, storeOf } from './readers';
 import { admits } from './roles';
 import type {
+  GroupDetailFailure,
+  GroupDetailSource,
   Item,
   LeaseState,
   Notification,
@@ -65,6 +67,11 @@ export function serverBlocked(world: World, ref: StoreRef): boolean {
   return serverOf(world, ref)?.state === 'blocked';
 }
 
+/** A server that has never been checked hides its stores until it is. */
+export function serverNeverProbed(world: World, ref: StoreRef): boolean {
+  return serverOf(world, ref)?.state === 'never-probed';
+}
+
 /** No usable signed expiry was available, so access fails closed without claiming lapse. */
 export function serverLeaseUnavailable(world: World, ref: StoreRef): boolean {
   return serverOf(world, ref)?.state === 'lease-unavailable';
@@ -75,6 +82,8 @@ export type StoreDescriptionState =
   | 'blocked'
   | 'lease-unavailable'
   | 'lease-lapsed'
+  | 'never-probed'
+  | 'catalog-unavailable'
   | 'inactive';
 
 /** The condition that replaces a store's ordinary sidebar/header description. */
@@ -85,17 +94,55 @@ export function storeDescriptionState(
   if (serverBlocked(world, store.id)) return 'blocked';
   if (serverLeaseUnavailable(world, store.id)) return 'lease-unavailable';
   if (leaseLapsed(world, store.id)) return 'lease-lapsed';
+  // `loadWorld` drops an unchecked server's items and accounts exactly as it
+  // drops a lapsed one's, but this said `normal` for it — so the sidebar row
+  // rendered undimmed and the page showed an ordinary empty list with no
+  // explanation anywhere.
+  if (serverNeverProbed(world, store.id)) return 'never-probed';
+  if (world.unavailableStores.includes(store.id)) return 'catalog-unavailable';
   if (store.kind === 'team' && !store.active) return 'inactive';
   return 'normal';
 }
 
+export function groupDetailFailure(
+  world: World,
+  store: StoreRef,
+  source: GroupDetailSource,
+): GroupDetailFailure | undefined {
+  return world.groupDetailFailures.find(
+    (failure) => failure.store === store && failure.source === source,
+  );
+}
+
 /** The one description used for a store in both navigation and page headers. */
 export function storeDescription(world: World, store: Store): string {
-  if (storeDescriptionState(world, store) !== 'normal') {
+  const state = storeDescriptionState(world, store);
+  if (state === 'inactive') return 'Setup incomplete';
+  if (state !== 'normal') {
     return 'Connection error';
   }
   if (store.kind === 'account') return serverOf(world, store.id)?.name ?? '';
+  if (groupDetailFailure(world, store.id, 'roster'))
+    return 'Roster unavailable';
+  if (groupDetailFailure(world, store.id, 'federation'))
+    return 'Federation unavailable';
   return peopleGroups(partiesOf(world, store.id));
+}
+
+/**
+ * The description a page heading may show.
+ *
+ * A heading names a place. When something has gone wrong the page under it
+ * already says so — the access takeover's notice, the roster's own warning —
+ * so repeating "Setup incomplete" beside the title says it twice, and says
+ * it in the one spot with no room to explain it or act on it. Every failing
+ * reading is dropped here; the ordinary one is kept.
+ */
+export function storeHeadingDescription(world: World, store: Store): string {
+  if (storeDescriptionState(world, store) !== 'normal') return '';
+  if (groupDetailFailure(world, store.id, 'roster')) return '';
+  if (groupDetailFailure(world, store.id, 'federation')) return '';
+  return storeDescription(world, store);
 }
 
 /**
@@ -106,6 +153,7 @@ export function storeReadable(world: World, ref: StoreRef): boolean {
   const store = storeOf(world, ref);
   if (!store) return false;
   return (
+    !world.unavailableStores.includes(store.id) &&
     serverOf(world, ref)?.state === 'ok' &&
     (store.kind !== 'team' || store.active)
   );

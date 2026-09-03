@@ -7,26 +7,36 @@ import {
   useState,
 } from 'react';
 import type { ReactNode } from 'react';
-import { createPortal } from 'react-dom';
-import { Dialog } from '/kit/overlay-primitives';
 import {
   Band,
   Button,
   Chip,
+  CopyBox,
   Icon,
   Inset,
   InsetRow,
   KindIcon,
   Notice,
+  RadioCard,
+  RadioGroup,
+  SectionLabel,
+  SheetDialog,
+  Toggle,
 } from '../components';
 import type { FilterKind } from '../components';
 import type {
   Bridge,
   CheckedProfileResponse,
+  GoProfileCandidate,
+  GoProfileDiscovery,
   PendingOperation,
   ServerStatusSnapshot,
 } from '../bridge';
-import { normalizeCommandError } from '../bridge';
+import {
+  enqueueProfileWork,
+  normalizeCommandError,
+  sharedServerStatus,
+} from '../bridge';
 import {
   FIRST_RUN_CHECKPOINT_KEY,
   completedFirstRunSteps,
@@ -42,11 +52,15 @@ import type {
   FirstRunPath,
   FirstRunStateName,
 } from '../first-run-state';
+import type { FoksIconName } from '../icons';
 import type { Location } from '../location';
-import { formatRole, kindOf, parseRole } from '../model';
+import { NavRow, Sidebar } from '../shell/sidebar';
+import { formatRole, kindOf, parseRole, plural, storeReadable } from '../model';
 import type { RoleWire, TeamStore, World } from '../model';
 import { PageHeader } from '../shell/page-header';
+import { GoProfileChooser } from './go-profile-chooser';
 import { readableBy } from './scope';
+import { useToast } from '/kit/toasts';
 
 const PERSONAL_FIXED =
   'Your Personal vault belongs only to your account and has no members. Put items in a group to share them.';
@@ -69,6 +83,16 @@ const localStepOf = (state: FirstRunStateName): number => {
   if (state === 'protect' || state === 'phrase') return 2;
   return 3;
 };
+
+/** Apple's Computer Name is "{Owner}'s MacBook Pro". Without that string, use the product family. */
+function suggestedDeviceName(): string {
+  if (typeof navigator === 'undefined') return 'Mac';
+  const source = `${navigator.platform} ${navigator.userAgent}`;
+  if (/iPhone/i.test(source)) return 'iPhone';
+  if (/iPad/i.test(source)) return 'iPad';
+  if (/Mac/i.test(source)) return 'Mac';
+  return 'This computer';
+}
 
 function fixtureSeed(
   bridge: Bridge,
@@ -170,25 +194,34 @@ function initialCheckpoint(
   // A phrase URL can remain in browser history, but the prepared phrase
   // itself never survives reload. Resume at Protect and require a fresh
   // explicit reveal.
-  const state = location.step === 'phrase'
-    ? 'protect'
-    : (location.step as FirstRunStateName);
+  const state =
+    location.step === 'phrase'
+      ? 'protect'
+      : (location.step as FirstRunStateName);
   if (
     !saved ||
     (location.path !== undefined && location.path !== saved.path) ||
     (state === 'who' && saved.state !== 'who')
-  ) return initialFirstRun(path, state);
+  )
+    return initialFirstRun(path, state);
   return { ...saved, path: location.path ?? saved.path, state };
 }
 
 function SetupSidebar({
   checkpoint,
+  pendingPath,
   onCancel,
   onAnotherServer,
   onRecoverAccount,
   recoverEnabled = false,
 }: {
   checkpoint: FirstRunCheckpoint;
+  /**
+   * What the reader has picked on the `who` screen but not yet confirmed.
+   * The checkpoint's path defaults to `invited` before anyone chooses, so
+   * without this the sidebar would assert a path the reader has not taken.
+   */
+  pendingPath?: FirstRunPath | null;
   onCancel?: () => void;
   onAnotherServer?: () => void;
   onRecoverAccount?: () => void;
@@ -196,7 +229,7 @@ function SetupSidebar({
 }): ReactNode {
   if (checkpoint.managedLocal) {
     const current = localStepOf(checkpoint.state);
-    const labels = ['Local server', 'Your account', 'Recovery'];
+    const labels = ['Local server', 'Create your account', 'Recovery'];
     return (
       <nav className="side setup-side" aria-label="Setting up">
         <div className="setup-steps">
@@ -222,7 +255,12 @@ function SetupSidebar({
               </button>
             ) : null}
             {onRecoverAccount ? (
-              <button type="button" className="nav" disabled={!recoverEnabled} onClick={onRecoverAccount}>
+              <button
+                type="button"
+                className="nav"
+                disabled={!recoverEnabled}
+                onClick={onRecoverAccount}
+              >
                 <Icon name="person" />
                 <span className="t">Recover account</span>
               </button>
@@ -239,15 +277,26 @@ function SetupSidebar({
     );
   }
   const current = stepOf(checkpoint.state);
+  // On the `who` screen the path is whatever the reader has selected, which
+  // may be nothing yet. Step 6 is the one that reads differently per path;
+  // until there is a path it says the neutral thing and is drawn pending,
+  // rather than naming a route nobody has chosen.
+  const choosing = checkpoint.state === 'who';
+  const path = choosing ? (pendingPath ?? null) : checkpoint.path;
   const labels = [
     'Preparing this Mac',
-    'Who is setting you up?',
-    checkpoint.path === 'invited' ? 'Their server' : 'A server',
-    'Your account',
-    'Protect it',
-    checkpoint.path === 'invited' ? 'Wait to be added' : 'Create a group',
+    'How are you joining?',
+    'Select a server',
+    'Create your account',
+    'Save recovery phrase',
+    path === null
+      ? 'Group'
+      : path === 'invited'
+        ? 'Wait to be added'
+        : 'Create a group',
     'You’re in',
   ];
+  const pendingSteps = path === null ? new Set([5]) : new Set<number>();
   return (
     <nav className="side setup-side" aria-label="Setting up">
       <div className="setup-steps">
@@ -277,52 +326,35 @@ function SetupSidebar({
 }
 
 function FirstRunAppSidebar({
+  world,
   checkpoint,
-  server,
   groupName,
+  location,
   onNavigate,
   onReenter,
 }: {
+  world: World;
   checkpoint: FirstRunCheckpoint;
-  server: string;
   groupName: string;
+  location: Location;
   onNavigate: (location: Location) => void;
   onReenter: () => void;
 }): ReactNode {
-  const hasGroup = checkpoint.added || Boolean(checkpoint.group);
   const left = completedFirstRunSteps(checkpoint);
-  return (
-    <nav className="side" aria-label="Places">
-      <button className="nav" onClick={() => onNavigate({ kind: 'all' })}>
-        <Icon name="grid" />
-        <span className="t">All items</span>
-      </button>
-      <div className="slabel">Vaults</div>
-      <button className="nav">
-        <Icon name="vault" />
-        <span className="t">
-          Personal<small>{server}</small>
-        </span>
-      </button>
-      <div className="slabel">Groups</div>
-      {hasGroup ? (
-        <button className="nav">
-          <Icon name="people" />
-          <span className="t">
-            {groupName}
-            <small>
-              {checkpoint.added
-                ? 'membership discovered just now'
-                : 'you are Owner'}
-            </small>
-          </span>
-        </button>
-      ) : null}
-      <div className="slabel">Status</div>
+  // The vault and the group are real by the time this sidebar is on screen,
+  // so the shared sidebar lists them from the world rather than from a
+  // preview that could disagree with it. What first run adds is its own
+  // progress, which is what the `status` slot is for.
+  const status = (
+    <>
+      <SectionLabel as="side">Status</SectionLabel>
       {left < 5 ? (
-        <button
-          className="nav on"
-          onClick={() =>
+        <NavRow
+          active
+          glyph={<Icon name="flag" />}
+          name="Get started"
+          tail={<span className="badge">{left} of 5</span>}
+          onSelect={() =>
             onNavigate({
               kind: 'first-run',
               step:
@@ -332,11 +364,7 @@ function FirstRunAppSidebar({
               path: checkpoint.path,
             })
           }
-        >
-          <Icon name="flag" />
-          <span className="t">Get started</span>
-          <span className="badge">{left} of 5</span>
-        </button>
+        />
       ) : null}
       {checkpoint.path === 'invited' && !checkpoint.added ? (
         <p className="side-note">
@@ -344,35 +372,17 @@ function FirstRunAppSidebar({
           Mac asks the server for it; nothing is pushed here.
         </p>
       ) : null}
-      <div className="foot">
-        <button className="nav" onClick={() => onNavigate({ kind: 'join' })}>
-          <Icon name="plus" />
-          <span className="t">Join or create a group</span>
-        </button>
-        <button className="nav" onClick={() => onNavigate({ kind: 'servers' })}>
-          <Icon name="server" />
-          <span className="t">Servers &amp; devices</span>
-        </button>
-        <button className="nav" onClick={() => onNavigate({ kind: 'issues' })}>
-          <Icon name="bell" />
-          <span className="t">Issues</span>
-          {checkpoint.path === 'invited' && !checkpoint.added ? (
-            <span className="badge">1</span>
-          ) : null}
-        </button>
-        <button
-          className="nav"
-          onClick={() => onNavigate({ kind: 'settings' })}
-        >
-          <Icon name="gear" />
-          <span className="t">Settings</span>
-        </button>
-        <button className="nav" onClick={onReenter}>
-          <Icon name="again" />
-          <span className="t">Set up again</span>
-        </button>
-      </div>
-    </nav>
+    </>
+  );
+  return (
+    <Sidebar
+      world={world}
+      location={location}
+      alerts={checkpoint.path === 'invited' && !checkpoint.added ? 1 : 0}
+      onNavigate={onNavigate}
+      status={status}
+      onReenter={onReenter}
+    />
   );
 }
 
@@ -412,7 +422,7 @@ function AddedDetails({
         </span>
       </div>
       <div className="scroll">
-        <div className="sec">Value</div>
+        <SectionLabel>Value</SectionLabel>
         <Inset variant="preview">
           <InsetRow
             label="Value"
@@ -429,7 +439,7 @@ function AddedDetails({
         <p className="pfn">
           Your Member role determines whether this exact version can be opened.
         </p>
-        <div className="sec">Info</div>
+        <SectionLabel>Info</SectionLabel>
         <div className="meta">
           <b>Path</b>
           <code>{item.path}</code>
@@ -444,7 +454,7 @@ function AddedDetails({
           <b>Write role</b>
           <Chip>{roleText(item.write)}</Chip>
         </div>
-        <div className="sec">Sharing</div>
+        <SectionLabel>Sharing</SectionLabel>
         <p>
           Everyone in {store?.name ?? 'this group'} at the item’s read role or
           above can read it. These facts were learned from the current roster.
@@ -493,7 +503,8 @@ function Pane({
   foot,
 }: {
   title: string;
-  subtitle: string;
+  /** Only drawn when `header` is true. */
+  subtitle?: string;
   scope?: string;
   header?: boolean;
   wide?: boolean;
@@ -505,7 +516,7 @@ function Pane({
       {header ? (
         <PageHeader
           title={title}
-          subtitle={subtitle}
+          subtitle={subtitle ?? ''}
           tail={scope ? <span className="scope">{scope}</span> : null}
         />
       ) : null}
@@ -514,6 +525,140 @@ function Pane({
       </div>
       {foot}
     </>
+  );
+}
+
+/**
+ * The `who` screen's fork: setting up alone, or being added to someone's
+ * group. Two options rather than three — "I already use FOKS on another device"
+ * is a returning user with no account to create, so it competed with the real
+ * choice and now sits beside Continue as a link.
+ *
+ * Each option carries exactly one fact — what you need before you start —
+ * because that is the only thing that distinguishes them at this point. The
+ * rest is deferred to `WhatHappensNext`, which fills in for the chosen path.
+ */
+const JOINING_OPTIONS: readonly {
+  path: FirstRunPath;
+  icon: FoksIconName;
+  title: string;
+  detail: string;
+  need: string;
+}[] = [
+  {
+    path: 'own',
+    icon: 'person',
+    title: 'I’m starting on my own',
+    detail: 'For yourself, or to start a group that others will join.',
+    need: 'You’ll need a server address',
+  },
+  {
+    path: 'invited',
+    icon: 'people',
+    title: 'Someone invited me to their group',
+    detail: 'They said something like “install this and I’ll add you”.',
+    need: 'You’ll need their server address',
+  },
+];
+
+function JoiningChoice({
+  value,
+  onChange,
+}: {
+  value: FirstRunPath | null;
+  onChange: (path: FirstRunPath) => void;
+}): ReactNode {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  // A radiogroup is one tab stop; the arrows move within it. Nothing is
+  // checked at first, so the group is entered at the first option.
+  const move = (from: number, step: number): void => {
+    const next =
+      (from + step + JOINING_OPTIONS.length) % JOINING_OPTIONS.length;
+    onChange(JOINING_OPTIONS[next].path);
+    refs.current[next]?.focus();
+  };
+  return (
+    <div className="opts" role="radiogroup" aria-label="How are you joining">
+      {JOINING_OPTIONS.map((option, index) => {
+        const on = value === option.path;
+        return (
+          <button
+            key={option.path}
+            ref={(node) => {
+              refs.current[index] = node;
+            }}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            tabIndex={on || (value === null && index === 0) ? 0 : -1}
+            className={on ? 'opt on' : 'opt'}
+            onClick={() => onChange(option.path)}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+                event.preventDefault();
+                move(index, 1);
+              } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                move(index, -1);
+              }
+            }}
+          >
+            <span className="pip" aria-hidden="true" />
+            <Icon name={option.icon} className="ic" />
+            <span className="txt">
+              <span className="ptitle">{option.title}</span>
+              <span className="bd">{option.detail}</span>
+            </span>
+            <span className="need">
+              <Icon name="server" />
+              {option.need}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The three steps the chosen path actually leads through. */
+const NEXT_STEPS: Readonly<Record<FirstRunPath, readonly ReactNode[]>> = {
+  invited: [
+    <>
+      Enter <b>their server address</b> and check it is the right one.
+    </>,
+    <>
+      Pick a <b>username</b> and save your recovery phrase.
+    </>,
+    <>
+      <b>Wait to be added.</b> Joining a server requires admin approval.
+    </>,
+  ],
+  own: [
+    <>
+      Enter a <b>server address</b>: yours, or one you were given.
+    </>,
+    <>
+      Pick a <b>username</b> and save your recovery phrase.
+    </>,
+    <>
+      <b>Create a group</b> for others to join, or skip it and keep things
+      personal.
+    </>,
+  ],
+};
+
+function WhatHappensNext({ path }: { path: FirstRunPath }): ReactNode {
+  return (
+    <section className="next" aria-live="polite">
+      <h3>What happens next</h3>
+      <ol>
+        {NEXT_STEPS[path].map((step, index) => (
+          <li key={index}>
+            <span>{step}</span>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -527,26 +672,21 @@ function GroupKindChoice({
   server: string;
 }): ReactNode {
   return (
-    <>
+    <RadioGroup label="Group kind">
       {(['named', 'adhoc'] as const).map((kind) => (
-        <button
-          type="button"
-          className={`radio${value === kind ? ' on' : ''}`}
+        <RadioCard
           key={kind}
-          onClick={() => onChange(kind)}
-        >
-          <span className="rb" />
-          <span className="t">
-            <b>{kind === 'named' ? 'Named' : 'Ad-hoc'}</b>
-            <small>
-              {kind === 'named'
-                ? `Has a name others on ${server} can look up, and can be added to other groups.`
-                : 'Known only by its id — for a quick group that never needs to be found by name.'}
-            </small>
-          </span>
-        </button>
+          selected={value === kind}
+          onSelect={() => onChange(kind)}
+          title={kind === 'named' ? 'Named' : 'Ad-hoc'}
+          detail={
+            kind === 'named'
+              ? `Has a name others on ${server} can look up, and can be added to other groups.`
+              : 'Known only by its id — for a quick group that never needs to be found by name.'
+          }
+        />
       ))}
-    </>
+    </RadioGroup>
   );
 }
 
@@ -571,6 +711,7 @@ export function FirstRunExperience({
   automaticEntry = false,
   managedProfile,
 }: FirstRunExperienceProps): ReactNode {
+  const toasts = useToast();
   const [checkpoint, setCheckpoint] = useState(() =>
     initialCheckpoint(bridge, location, automaticEntry),
   );
@@ -585,11 +726,15 @@ export function FirstRunExperience({
   const [address, setAddress] = useState(
     () => checkpoint.serverAddress ?? facts?.server ?? '',
   );
+  const [addressInvalid, setAddressInvalid] = useState(false);
   const [username, setUsername] = useState(
     () => checkpoint.account?.username ?? facts?.username ?? '',
   );
   const [deviceName, setDeviceName] = useState(
-    () => checkpoint.account?.deviceName ?? facts?.deviceName ?? '',
+    () =>
+      checkpoint.account?.deviceName ??
+      facts?.deviceName ??
+      suggestedDeviceName(),
   );
   const [email, setEmail] = useState('');
   const [invite, setInvite] = useState('');
@@ -597,14 +742,23 @@ export function FirstRunExperience({
   const [confirmation, setConfirmation] = useState('');
   const [recoveryPhrase, setRecoveryPhrase] = useState('');
   const [pairingPhrase, setPairingPhrase] = useState('');
+  const [goDiscovery, setGoDiscovery] = useState<GoProfileDiscovery | null>(
+    null,
+  );
+  const [goCandidate, setGoCandidate] = useState<GoProfileCandidate | null>(
+    null,
+  );
+  const [goChooserDismissed, setGoChooserDismissed] = useState(false);
+  const [goScanError, setGoScanError] = useState<string | null>(null);
+  const goScanStarted = useRef(false);
   const [recoveryAlias, setRecoveryAlias] = useState(
     () => checkpoint.account?.alias ?? facts?.accountAlias ?? '',
   );
   const [backupPhrase, setBackupPhrase] = useState<string | null>(null);
   const [phraseWritten, setPhraseWritten] = useState(false);
-  const [publishedId, setPublishedId] = useState(() =>
-    checkpoint.state === 'compare' ? (checkpoint.profile?.hostId ?? '') : '',
-  );
+  // The `who` screen's selection, before Continue commits it. It is screen
+  // state, not checkpoint state: nothing has been chosen until Continue.
+  const [pendingPath, setPendingPath] = useState<FirstRunPath | null>(null);
   const [groupName, setGroupName] = useState(
     () => checkpoint.group?.name ?? facts?.groupName ?? 'Household',
   );
@@ -639,6 +793,47 @@ export function FirstRunExperience({
     });
   }, [checkpoint.path, checkpoint.state, onNavigate]);
 
+  useEffect(() => {
+    if (checkpoint.account?.deviceName || facts?.deviceName) return;
+    const fallback = suggestedDeviceName();
+    let alive = true;
+    void bridge
+      .appInfo()
+      .then((info) => {
+        const name = info.computerName?.trim();
+        if (!alive || !name) return;
+        setDeviceName((current) => (current === fallback ? name : current));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [bridge, checkpoint.account?.deviceName, facts?.deviceName]);
+
+  useEffect(() => {
+    if (
+      checkpoint.state !== 'who' ||
+      !bridge.native ||
+      goChooserDismissed ||
+      goScanStarted.current
+    )
+      return;
+    goScanStarted.current = true;
+    let alive = true;
+    setGoScanError(null);
+    void bridge
+      .discoverGoProfiles()
+      .then((discovery) => {
+        if (alive) setGoDiscovery(discovery);
+      })
+      .catch((error) => {
+        if (alive) setGoScanError(normalizeCommandError(error).message);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [bridge, checkpoint.state, goChooserDismissed]);
+
   const state = checkpoint.state;
   const profile = checkpoint.profile;
   const accountAlias =
@@ -646,6 +841,10 @@ export function FirstRunExperience({
     facts?.accountAlias ??
     username.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
   const recoveryTargetAlias = recoveryAlias.trim() || accountAlias;
+  const goCandidates =
+    goDiscovery?.candidates.filter(
+      (candidate) => candidate.pairable || candidate.copyable,
+    ) ?? [];
   const admin = facts?.admin ?? 'the group admin';
   const adminShort = admin.split('.')[0];
   const group = checkpoint.group?.name ?? facts?.groupName ?? 'the group';
@@ -654,6 +853,7 @@ export function FirstRunExperience({
         (store) =>
           store.kind === 'team' &&
           store.active &&
+          storeReadable(world, store.id) &&
           store.server === profile?.profile &&
           store.name === checkpoint.group?.name &&
           store.alias === checkpoint.group.alias &&
@@ -664,14 +864,16 @@ export function FirstRunExperience({
       )
     : [];
   const addedStore = addedStores.length === 1 ? addedStores[0]?.id : undefined;
-  const accountStores = checkpoint.account && profile
-    ? world.accounts.filter(
-        (candidate) =>
-          candidate.server === profile.profile &&
-          candidate.alias === checkpoint.account?.alias,
-      )
-    : [];
-  const accountStore = accountStores.length === 1 ? accountStores[0]?.store : undefined;
+  const accountStores =
+    checkpoint.account && profile
+      ? world.accounts.filter(
+          (candidate) =>
+            candidate.server === profile.profile &&
+            candidate.alias === checkpoint.account?.alias,
+        )
+      : [];
+  const accountStore =
+    accountStores.length === 1 ? accountStores[0]?.store : undefined;
   const accountItemCount = accountStore
     ? world.items.filter((item) => item.store === accountStore).length
     : 0;
@@ -681,13 +883,15 @@ export function FirstRunExperience({
     setManagedStatus(null);
     let alive = true;
     setManagedStatusError(null);
-    if (!world.servers.some(
-      (server) => server.id === managedProfile && server.state === 'ok',
-    )) {
+    if (
+      !world.servers.some(
+        (server) => server.id === managedProfile && server.state === 'ok',
+      )
+    ) {
       setManagedStatusError('The managed local server is not ready.');
       return;
     }
-    void bridge.describeServerStatus(managedProfile).then(
+    void sharedServerStatus(bridge, managedProfile).then(
       (status) => {
         if (!alive) return;
         if (
@@ -819,7 +1023,9 @@ export function FirstRunExperience({
       return;
     }
     let alive = true;
-    void bridge.listPendingOperations(profile.profile).then(
+    void enqueueProfileWork(bridge, profile.profile, () =>
+      bridge.listPendingOperations(profile.profile),
+    ).then(
       (rows) => {
         if (!alive) return;
         const current = pendingRef.current;
@@ -869,11 +1075,14 @@ export function FirstRunExperience({
         void onRefreshWorld().then(
           (refreshed) => {
             const localReady = Boolean(
-              managedProfile && refreshed.servers.some(
-                (server) => server.id === managedProfile && server.state === 'ok',
+              managedProfile &&
+              refreshed.servers.some(
+                (server) =>
+                  server.id === managedProfile && server.state === 'ok',
               ),
             );
-            if (alive) sendRef.current({ type: 'initialize', managedLocal: localReady });
+            if (alive)
+              sendRef.current({ type: 'initialize', managedLocal: localReady });
           },
           (error) => {
             if (alive) fail(error);
@@ -930,10 +1139,11 @@ export function FirstRunExperience({
 
   const checkServer = async (): Promise<void> => {
     if (!address.trim()) {
-      setMessage('Nothing was checked — the address is empty.');
-      send({ type: 'go', state: 'error' });
+      setAddressInvalid(true);
+      if (state === 'error') send({ type: 'go', state: 'address' });
       return;
     }
+    setAddressInvalid(false);
     setBusy(true);
     setMessage(null);
     try {
@@ -943,10 +1153,14 @@ export function FirstRunExperience({
           .toLowerCase()
           .replace(/[^a-z0-9_-]+/g, '-')
           .slice(0, 52)}`;
-      const report = await bridge.checkAndAddProfile(
-        profileName,
-        address.trim(),
-      );
+      const report = goCandidate
+        ? await bridge.checkAndAddGoProfile(
+            goCandidate.candidateId,
+            goCandidate.hostId,
+            profileName,
+            address.trim(),
+          )
+        : await bridge.checkAndAddProfile(profileName, address.trim());
       send({
         type: 'profile-checked',
         address: address.trim(),
@@ -988,6 +1202,32 @@ export function FirstRunExperience({
       send({
         type: 'account-complete',
         alias: accountAlias,
+        username: identity.username,
+        deviceName: deviceName.trim(),
+      });
+    } catch (error) {
+      fail(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copyGoCandidate = async (): Promise<void> => {
+    if (!profile || !goCandidate?.copyable || !recoveryTargetAlias) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const copied = await bridge.copyGoProfileDevice(
+        goCandidate.candidateId,
+        profile.profile,
+        recoveryTargetAlias,
+      );
+      if (copied.alias !== recoveryTargetAlias)
+        throw new Error('Device copy returned a different account.');
+      const identity = await refreshAccountIdentity(recoveryTargetAlias);
+      send({
+        type: 'account-complete',
+        alias: recoveryTargetAlias,
         username: identity.username,
         deviceName: deviceName.trim(),
       });
@@ -1053,16 +1293,30 @@ export function FirstRunExperience({
     setMessage(null);
     try {
       const provision = resume
-        ? await bridge.resumeDevicePairingAcceptance(
-            profile.profile,
-            recoveryTargetAlias,
-          )
-        : await bridge.acceptDevicePairing(
-            profile.profile,
-            recoveryTargetAlias,
-            deviceName.trim(),
-            phrase,
-          );
+        ? goCandidate
+          ? await bridge.resumeGoProfilePairing(
+              goCandidate.candidateId,
+              profile.profile,
+              recoveryTargetAlias,
+            )
+          : await bridge.resumeDevicePairingAcceptance(
+              profile.profile,
+              recoveryTargetAlias,
+            )
+        : goCandidate
+          ? await bridge.acceptGoProfilePairing(
+              goCandidate.candidateId,
+              profile.profile,
+              recoveryTargetAlias,
+              deviceName.trim(),
+              phrase,
+            )
+          : await bridge.acceptDevicePairing(
+              profile.profile,
+              recoveryTargetAlias,
+              deviceName.trim(),
+              phrase,
+            );
       if (provision.alias !== recoveryTargetAlias) {
         throw new Error('Device pairing returned a different account.');
       }
@@ -1177,12 +1431,12 @@ export function FirstRunExperience({
 
   const discover = async (): Promise<void> => {
     if (!profile || !checkpoint.account) return;
+    const accountAlias = checkpoint.account.alias;
     setBusy(true);
     setMessage(null);
     try {
-      const result = await bridge.discoverGroups(
-        profile.profile,
-        checkpoint.account.alias,
+      const result = await enqueueProfileWork(bridge, profile.profile, () =>
+        bridge.discoverGroups(profile.profile, accountAlias),
       );
       if (result.accountAlias !== checkpoint.account.alias) {
         throw new Error(
@@ -1333,27 +1587,11 @@ export function FirstRunExperience({
     });
   };
 
-  const compare = useMemo(() => {
-    if (!profile || !publishedId.trim())
-      return 'Optional. Paste the published host ID to compare it with this Mac’s pinned ID.';
-    const input = publishedId.replace(/[\s:]/g, '').toLowerCase();
-    const who =
-      checkpoint.path === 'invited'
-        ? `${adminShort} published`
-        : 'your server’s operator published';
-    if (input === profile.hostId)
-      return `Match. The host ID ${who} matches this Mac’s pinned host ID.`;
-    if (input.length >= 10 && profile.hostId.startsWith(input))
-      return `The first ${input.length} characters match. Paste all ${profile.hostId.length} characters to verify the host ID.`;
-    return `Mismatch. Do not create an account. Confirm the host ID with ${checkpoint.path === 'invited' ? adminShort : 'the server operator'}.`;
-  }, [adminShort, checkpoint.path, profile, publishedId]);
-
   let content: ReactNode;
   if (state === 'boot')
     content = (
       <Pane
         title="Preparing this Mac"
-        subtitle="Step 0 of 6"
         scope="Automatic — the same on both paths"
         header={false}
         foot={
@@ -1426,7 +1664,6 @@ export function FirstRunExperience({
     content = (
       <Pane
         title="Set up FOKS"
-        subtitle="Step 1 of 3"
         header={false}
         foot={
           <Foot>
@@ -1484,7 +1721,7 @@ export function FirstRunExperience({
           </div>
         ) : null}
         <div className="local-alternates">
-          <div className="sec">Other ways to begin</div>
+          <SectionLabel>Other ways to begin</SectionLabel>
           <div className="btns">
             <Button onClick={() => send({ type: 'choose', path: 'own' })}>
               Connect to another server…
@@ -1499,113 +1736,102 @@ export function FirstRunExperience({
         </div>
       </Pane>
     );
+  else if (
+    state === 'who' &&
+    bridge.native &&
+    !goChooserDismissed &&
+    !goDiscovery &&
+    !goScanError
+  )
+    content = (
+      <Pane title="Checking this Mac" header={false}>
+        <h1>Looking for existing FOKS accounts</h1>
+        <p className="lead">
+          Checking the official FOKS client’s standard local profile store.
+          Nothing is changed or unlocked.
+        </p>
+        <Button disabled>Checking…</Button>
+      </Pane>
+    );
+  else if (state === 'who' && !goChooserDismissed && goCandidates.length > 0)
+    content = (
+      <Pane title="FOKS is already set up" header={false} wide>
+        <h1>FOKS is already set up on this Mac</h1>
+        <p className="lead">
+          Choose an account from the official FOKS command-line client. The next
+          step adds this desktop as a separate device or copies the existing
+          device with your approval.
+        </p>
+        <GoProfileChooser
+          candidates={goCandidates}
+          selected={goCandidate?.candidateId ?? null}
+          onSelect={setGoCandidate}
+        />
+        <div className="actions">
+          <Button
+            variant="primary"
+            disabled={!goCandidate}
+            onClick={() => {
+              if (!goCandidate) return;
+              setAddress(goCandidate.serverHint ?? '');
+              setRecoveryAlias(
+                goCandidate.username
+                  ?.toLowerCase()
+                  .replace(/[^a-z0-9_-]+/g, '-') ?? 'personal',
+              );
+              send({ type: 'choose', path: 'own', returning: true });
+            }}
+          >
+            Connect selected account
+          </Button>
+          <Button
+            onClick={() => {
+              setGoCandidate(null);
+              setGoChooserDismissed(true);
+            }}
+          >
+            Set up another account
+          </Button>
+        </div>
+      </Pane>
+    );
   else if (state === 'who')
     content = (
-      <Pane
-        title="Who is setting you up?"
-        subtitle="Step 1 of 6"
-        header={false}
-        wide
-      >
-        <h1>Who is setting you up?</h1>
+      <Pane title="How are you joining?" header={false} wide>
+        <h1>How are you joining?</h1>
         <p className="lead">
-          FOKS keeps passwords, resources and files in encrypted stores — your
-          own in <b>Personal</b>, shared ones in <b>groups</b>.
+          Pick the one that fits. Everything else is figured out in the next few
+          steps.
         </p>
-        <div className="choices c3">
-          <article className="choice-card">
-            <Icon name="people" />
-            <h2 className="ptitle">Someone invited me to their group</h2>
-            <span className="bd">
-              You were told something like “install this and I’ll add you”.
-            </span>
-            <ol>
-              <li>
-                <span>
-                  You need one thing from them: the{' '}
-                  <b>address of their server</b>.
-                </span>
-              </li>
-              <li>
-                <span>
-                  They add you by the <b>username you pick</b> in a minute.
-                </span>
-              </li>
-              <li>
-                <span>
-                  You cannot add yourself — there is no link or code to wait
-                  for.
-                </span>
-              </li>
-            </ol>
-            <Button
-              variant="primary"
-              aria-label="Start here: Someone invited me to their group"
-              onClick={() => send({ type: 'choose', path: 'invited' })}
-            >
-              Start here
-            </Button>
-          </article>
-          <article className="choice-card">
-            <Icon name="person" />
-            <h2 className="ptitle">I’m setting up on my own</h2>
-            <span className="bd">
-              You have a server of your own, or you’ll start a group for other
-              people to join.
-            </span>
-            <ol>
-              <li>
-                <span>
-                  You need a <b>server address</b> — yours, or one you were
-                  given.
-                </span>
-              </li>
-              <li>
-                <span>You pick a username and protect your keys.</span>
-              </li>
-              <li>
-                <span>At the end you can create a group, or skip it.</span>
-              </li>
-            </ol>
-            <Button
-              variant="primary"
-              aria-label="Set up on my own"
-              onClick={() => send({ type: 'choose', path: 'own' })}
-            >
-              Set up
-            </Button>
-          </article>
-          <article className="choice-card">
-            <Icon name="server" />
-            <h2 className="ptitle">I already use FOKS on another Mac</h2>
-            <span className="bd">
-              Your account exists already; this Mac needs a key of its own.
-            </span>
-            <ol>
-              <li>
-                <span>
-                  You need the <b>same server address</b> you use over there.
-                </span>
-              </li>
-              <li>
-                <span>
-                  Your <b>17-token backup phrase</b> adds this Mac on its own.
-                </span>
-              </li>
-              <li>
-                <span>This Mac is added to your devices.</span>
-              </li>
-            </ol>
-            <Button
-              variant="primary"
-              aria-label="Add this Mac from an existing FOKS account"
+        {goScanError ? (
+          <p className="crit">
+            Existing CLI profiles could not be inspected: {goScanError}
+          </p>
+        ) : null}
+        <JoiningChoice value={pendingPath} onChange={setPendingPath} />
+        {pendingPath ? <WhatHappensNext path={pendingPath} /> : null}
+        <div className="actions">
+          <Button
+            variant="primary"
+            disabled={!pendingPath}
+            onClick={() => {
+              if (pendingPath) send({ type: 'choose', path: pendingPath });
+            }}
+          >
+            Continue
+          </Button>
+          <span className="alt">
+            Already use FOKS on another device?{' '}
+            <button
+              type="button"
+              className="lnk"
               onClick={() =>
                 send({ type: 'choose', path: 'own', returning: true })
               }
             >
-              Add this Mac
-            </Button>
-          </article>
+              Add this as a secondary device
+            </button>
+          </span>
         </div>
       </Pane>
     );
@@ -1613,7 +1839,6 @@ export function FirstRunExperience({
     content = (
       <Pane
         title={checkpoint.path === 'invited' ? 'Their server' : 'A server'}
-        subtitle="Step 2 of 6"
         header={false}
         scope={
           state === 'no-address' && checkpoint.path === 'invited'
@@ -1634,8 +1859,8 @@ export function FirstRunExperience({
       >
         <h1>
           {checkpoint.path === 'invited'
-            ? `What did ${adminShort} send you?`
-            : 'Which server?'}
+            ? 'Select a server address'
+            : 'Select a server'}
         </h1>
         <p className="lead">
           Everything in FOKS lives on a server — a machine someone runs, where
@@ -1644,16 +1869,20 @@ export function FirstRunExperience({
             ? `Enter the server address from ${adminShort}.`
             : null}
         </p>
-        <div className="sec">Server</div>
-        <Inset className={state === 'error' ? 'err' : undefined}>
+        <SectionLabel>Server</SectionLabel>
+        <Inset
+          className={state === 'error' || addressInvalid ? 'err' : undefined}
+        >
           <label className="fr server-address-row">
             <span className="k">Address</span>
             <input
-              className="mono"
               aria-label="Server address"
               value={address}
-              placeholder={facts?.server ?? 'foks.example.net'}
-              onChange={(event) => setAddress(event.target.value)}
+              placeholder="e.g. foks.example.net, localhost, etc."
+              onChange={(event) => {
+                setAddress(event.target.value);
+                if (addressInvalid) setAddressInvalid(false);
+              }}
             />
           </label>
         </Inset>
@@ -1664,7 +1893,7 @@ export function FirstRunExperience({
             already have.
           </p>
         ) : null}
-        {state === 'error' ? (
+        {state === 'error' && !addressInvalid ? (
           <div className="crit">
             <b>
               {message ??
@@ -1681,20 +1910,16 @@ export function FirstRunExperience({
               Any way you normally talk to them. It is the only thing you need
               from them right now.
             </p>
-            <div className="copybox">
-              <span className="v">
-                “What’s the address of the FOKS server our group is on?”
-              </span>
-              <Button
-                onClick={() =>
-                  void bridge.copyText(
-                    'What’s the address of the FOKS server our group is on?',
-                  )
-                }
-              >
-                Copy
-              </Button>
-            </div>
+            <CopyBox
+              text="What’s the address of the FOKS server our group is on?"
+              onCopy={(value) =>
+                void bridge
+                  .copyText(value)
+                  .then(() => toasts.show('Sentence copied.'))
+              }
+            >
+              “What’s the address of the FOKS server our group is on?”
+            </CopyBox>
             <p>
               Your username is next — you choose it here and send it to them
               after. They add you from their side; you never need a code or a
@@ -1714,43 +1939,42 @@ export function FirstRunExperience({
     content = (
       <Pane
         title={checkpoint.path === 'invited' ? 'Their server' : 'A server'}
-        subtitle="Step 2 of 6"
         header={false}
         scope="Checked and pinned — nothing about you sent yet"
         foot={
           <Foot back={() => go('address')}>
             <Button
               variant="primary"
-              disabled={!profile || compare.startsWith('Mismatch')}
-              onClick={() => checkpoint.returning
-                ? openExisting('checked')
-                : go('account')}
+              disabled={!profile}
+              onClick={() =>
+                checkpoint.returning ? openExisting('checked') : go('account')
+              }
             >
               Continue
             </Button>
           </Foot>
         }
       >
-        <h1>Found it.</h1>
+        <h1>Select a server</h1>
         <p className="lead">
-          This Mac pinned the signed identity for{' '}
-          <b>
-            <code>{profile?.canonicalName}</code>
-          </b>
-          . Requests with a different host ID will be rejected. No account data
-          was sent.
+          Everything in FOKS lives on a server — a machine someone runs, where
+          your account, your groups and their encrypted stores are kept.
         </p>
-        <Inset>
-          <InsetRow label="Address">
+        <Inset className="checked-address">
+          <InsetRow
+            label="Address"
+            action={
+              <Button disabled={busy} onClick={() => void checkServer()}>
+                Check again
+              </Button>
+            }
+          >
             <input
-              className="mono"
               value={address}
+              placeholder="e.g. foks.example.net, localhost, etc."
               spellCheck={false}
               onChange={(event) => setAddress(event.target.value)}
             />
-            <Button disabled={busy} onClick={() => void checkServer()}>
-              Check again
-            </Button>
           </InsetRow>
         </Inset>
         <div className="pcard">
@@ -1760,87 +1984,42 @@ export function FirstRunExperience({
           </h3>
           <p>
             Saved as <b>{profile?.canonicalName}</b>. The host ID is pinned on
-            this Mac. Future checks must match it. The compatibility lease is
-            current.
+            this Mac.
           </p>
-          <Band label="Server check result">
-            <b>New pin</b> means this is the first successful check on this Mac.
-            Later checks can report <b>Same as before</b> or <b>Advanced</b>.
-          </Band>
           <details className="dd" open={state === 'compare'}>
             <summary>Details</summary>
-            <div className="facts">
-              <div>
-                <span className="k">Lookup name</span>
-                <code>{profile?.lookupName}</code>
+            <div className="dbody">
+              <div className="facts">
+                <div>
+                  <span className="k">Lookup name</span>
+                  <code>{profile?.lookupName}</code>
+                </div>
+                <div>
+                  <span className="k">Confirmed name</span>
+                  <code>{profile?.canonicalName}</code>
+                </div>
+                <div>
+                  <span className="k">Chain sequence</span>
+                  <span>{profile?.chain}</span>
+                </div>
+                <div>
+                  <span className="k">Merkle epoch</span>
+                  <span>{profile?.epoch.toLocaleString()}</span>
+                </div>
+                <div className="wide">
+                  <span className="k">Host ID</span>
+                  <code>{profile?.hostId.match(/.{1,4}/g)?.join(' ')}</code>
+                </div>
               </div>
-              <div>
-                <span className="k">Canonical name</span>
-                <code>{profile?.canonicalName}</code>
-              </div>
-              <div>
-                <span className="k">Chain sequence</span>
-                <span>{profile?.chain}</span>
-              </div>
-              <div>
-                <span className="k">Merkle epoch</span>
-                <span>{profile?.epoch.toLocaleString()}</span>
-              </div>
-              <div className="wide">
-                <span className="k">Host id</span>
-                <code>{profile?.hostId.match(/.{1,4}/g)?.join(' ')}</code>
-              </div>
+              <p className="hint">
+                These values came from this check. The certificate established
+                the first connection; future checks use the pinned host ID.
+              </p>
+              <Toggle label="Inspect response">
+                <pre>{JSON.stringify(profile, null, 1)}</pre>
+              </Toggle>
             </div>
-            <p className="hint">
-              These values came from this check. The certificate established the
-              first connection; future checks use the pinned host ID.
-            </p>
-            <details className="insp">
-              <summary>Inspect response</summary>
-              <pre>{JSON.stringify(profile, null, 1)}</pre>
-            </details>
           </details>
-          <div className="sec">
-            Compare with a host id{' '}
-            {checkpoint.path === 'invited'
-              ? `${adminShort} published`
-              : 'your server’s operator published'}
-          </div>
-          <Inset>
-            <InsetRow label="Published id">
-              <input
-                className="mono"
-                value={publishedId}
-                placeholder="66 hex characters — spaces and colons ignored"
-                onChange={(event) => {
-                  setPublishedId(event.target.value);
-                  if (
-                    event.target.value.replace(/[\s:]/g, '').toLowerCase() ===
-                    profile?.hostId
-                  )
-                    send({ type: 'go', state: 'compare' });
-                }}
-              />
-            </InsetRow>
-          </Inset>
-          <div
-            className={`res${compare.startsWith('Match') ? ' match' : compare.startsWith('Mismatch') ? ' miss' : ''}`}
-          >
-            <i>
-              {compare.startsWith('Match')
-                ? '✓'
-                : compare.startsWith('Mismatch')
-                  ? '✕'
-                  : compare.startsWith('Prefix')
-                    ? '…'
-                    : '·'}
-            </i>
-            <span>{compare}</span>
-          </div>
-          <p className="hint">
-            This comparison is optional and runs only on this Mac. It does not
-            change the pinned host ID.
-          </p>
         </div>
       </Pane>
     );
@@ -1848,21 +2027,29 @@ export function FirstRunExperience({
     content = (
       <Pane
         title="Your account"
-        subtitle="Step 2 of 3"
         header={false}
         foot={
           <Foot back={() => go('local')}>
             <Button
               variant="primary"
-              disabled={busy || (!checkpoint.account && (!username.trim() || !deviceName.trim() || !accountAlias))}
-              onClick={() => checkpoint.account ? go('protect') : void createAccount()}
+              disabled={
+                busy ||
+                (!checkpoint.account &&
+                  (!username.trim() || !deviceName.trim() || !accountAlias))
+              }
+              onClick={() =>
+                checkpoint.account ? go('protect') : void createAccount()
+              }
             >
-              {checkpoint.account ? 'Continue' : pending.some(
-                (row) =>
-                  row.kind === 'account-signup' && row.alias === accountAlias,
-              )
-                ? 'Resume account setup'
-                : 'Create my account'}
+              {checkpoint.account
+                ? 'Continue'
+                : pending.some(
+                      (row) =>
+                        row.kind === 'account-signup' &&
+                        row.alias === accountAlias,
+                    )
+                  ? 'Resume account setup'
+                  : 'Create my account'}
             </Button>
           </Foot>
         }
@@ -1875,7 +2062,6 @@ export function FirstRunExperience({
           <label className="local-field-row">
             <span>Username</span>
             <input
-              className="mono"
               value={username}
               autoFocus
               disabled={Boolean(checkpoint.account)}
@@ -1905,10 +2091,8 @@ export function FirstRunExperience({
           <label className="local-field-row">
             <span>Invite (optional)</span>
             <input
-              className="mono"
               value={invite}
               disabled={Boolean(checkpoint.account)}
-              placeholder="Leave empty unless you were given one"
               onChange={(event) => setInvite(event.target.value)}
             />
           </label>
@@ -1926,7 +2110,6 @@ export function FirstRunExperience({
     content = (
       <Pane
         title="Your account"
-        subtitle={checkpoint.managedLocal ? 'Step 2 of 3' : 'Step 3 of 6'}
         header={false}
         scope="Your keys are made on this Mac; only their public halves are registered"
         wide
@@ -1934,31 +2117,43 @@ export function FirstRunExperience({
           <Foot back={() => go(checkpoint.managedLocal ? 'local' : 'checked')}>
             <Button
               variant="primary"
-              disabled={busy || !username.trim() || !deviceName.trim()}
-              onClick={() => void createAccount()}
+              disabled={
+                busy ||
+                (!checkpoint.account &&
+                  (!username.trim() || !deviceName.trim()))
+              }
+              // Back from Protect lands here with the account already made.
+              // The managed-local pane already continues in that case; this
+              // one re-ran creation, which the agent refuses, stranding the
+              // reader on a screen whose only button fails.
+              onClick={() =>
+                checkpoint.account ? go('protect') : void createAccount()
+              }
             >
-              {pending.some(
-                (row) =>
-                  row.kind === 'account-signup' && row.alias === accountAlias,
-              )
-                ? 'Resume account setup'
-                : 'Create my account'}
+              {checkpoint.account
+                ? 'Continue'
+                : pending.some(
+                      (row) =>
+                        row.kind === 'account-signup' &&
+                        row.alias === accountAlias,
+                    )
+                  ? 'Resume account setup'
+                  : 'Create my account'}
             </Button>
           </Foot>
         }
       >
-        <h1>Your account on {profile?.canonicalName}</h1>
+        <h1>Create an account</h1>
         <p className="lead">
           FOKS creates your account keys on this Mac and registers only the
           public keys with the server.
         </p>
         <div className="two account-form">
           <div>
-            <div className="sec">You</div>
+            <SectionLabel>You</SectionLabel>
             <Inset>
               <InsetRow label="Username">
                 <input
-                  className="mono"
                   value={username}
                   onChange={(event) => setUsername(event.target.value)}
                 />
@@ -1970,20 +2165,9 @@ export function FirstRunExperience({
                 />
               </InsetRow>
             </Inset>
-            <p className="hint">
-              {checkpoint.path === 'invited' ? (
-                <>
-                  <b>This is what {adminShort} will type</b> to add you.
-                </>
-              ) : (
-                <>How others on {profile?.canonicalName} add you to groups.</>
-              )}{' '}
-              Letters, digits and dots. The Mac’s name is how this device
-              appears in your device list; rename it any time.
-            </p>
           </div>
           <div>
-            <div className="sec">Optional</div>
+            <SectionLabel>Optional</SectionLabel>
             <Inset>
               <InsetRow label="Email (optional)">
                 <input
@@ -1994,21 +2178,11 @@ export function FirstRunExperience({
               </InsetRow>
               <InsetRow label="Invite (optional)">
                 <input
-                  className="mono"
-                  placeholder="Leave empty unless you were given one"
                   value={invite}
                   onChange={(event) => setInvite(event.target.value)}
                 />
               </InsetRow>
             </Inset>
-            <p className="hint">
-              Email is optional. Enter an invite only if this server requires
-              one
-              {checkpoint.path === 'invited'
-                ? `; ask ${adminShort} for it`
-                : ''}
-              . FOKS does not save the invite in the setup checkpoint.
-            </p>
           </div>
         </div>
         {message ? <p className="crit">{message}</p> : null}
@@ -2021,7 +2195,6 @@ export function FirstRunExperience({
     content = (
       <Pane
         title="Your account"
-        subtitle={checkpoint.managedLocal ? 'Step 2 of 3' : 'Step 3 of 6'}
         header={false}
         scope="This Mac needs a key of its own"
         wide
@@ -2035,12 +2208,8 @@ export function FirstRunExperience({
       >
         <h1>Add this Mac to your account</h1>
         <p className="lead">
-          Your account already exists on{' '}
-          <b>
-            <code>{profile?.canonicalName}</code>
-          </b>
-          . Add this Mac with your backup phrase or approve it from another
-          signed-in Mac.
+          Your account already exists on {profile?.canonicalName}. Add this Mac
+          with your backup phrase or approve it from another signed-in Mac.
         </p>
         <div className="two">
           <div className="pcard">
@@ -2096,11 +2265,38 @@ export function FirstRunExperience({
             </div>
           </div>
           <div className="pcard">
-            <h3>Pair from a Mac you already use</h3>
-            <p>
-              On another signed-in Mac, open Settings › Your Macs &amp; recovery
-              and choose Add another Mac.
-            </p>
+            <h3>
+              {goCandidate
+                ? 'Pair from the official FOKS CLI'
+                : 'Pair from a Mac you already use'}
+            </h3>
+            {goCandidate ? (
+              <>
+                <p>
+                  In Terminal, switch the official FOKS CLI to this account,
+                  then run:
+                </p>
+                <CopyBox
+                  text="foks --simple-ui key assist"
+                  onCopy={(value) =>
+                    void bridge
+                      .copyText(value)
+                      .then(() => toasts.show('Command copied.'))
+                  }
+                >
+                  <code>foks --simple-ui key assist</code>
+                </CopyBox>
+                <p>
+                  Confirm the account, paste its key-exchange code below, and
+                  leave the command running until this Mac connects.
+                </p>
+              </>
+            ) : (
+              <p>
+                On another signed-in Mac, open Settings › Recovery devices and
+                choose Start pairing.
+              </p>
+            )}
             <Inset className="recovery-fields">
               <InsetRow label="Account alias">
                 <input
@@ -2146,10 +2342,35 @@ export function FirstRunExperience({
               </Button>
             </div>
           </div>
+          {goCandidate?.copyable ? (
+            <div className="pcard">
+              <h3>Copy this Mac’s CLI device</h3>
+              <p>
+                Advanced: both apps will use the same FOKS device. macOS may
+                request Keychain access. Revoking it disables both, and CLI
+                passphrase changes will not alter this desktop copy.
+              </p>
+              <Inset className="recovery-fields">
+                <InsetRow label="Account alias">
+                  <input
+                    aria-label="Copied account alias"
+                    value={recoveryAlias}
+                    onChange={(event) => setRecoveryAlias(event.target.value)}
+                  />
+                </InsetRow>
+              </Inset>
+              <Button
+                disabled={busy || !recoveryTargetAlias}
+                onClick={() => void copyGoCandidate()}
+              >
+                Copy existing device
+              </Button>
+            </div>
+          ) : null}
         </div>
         {message ? <p className="crit">{message}</p> : null}
         <p className="hint">
-          This Mac will become an owner device for{' '}
+          This Mac will become a device for{' '}
           <code>{checkpoint.account?.username ?? username}</code>. You can also
           use an enrolled YubiKey.
         </p>
@@ -2162,7 +2383,6 @@ export function FirstRunExperience({
     content = (
       <Pane
         title="Recovery"
-        subtitle="Step 3 of 3"
         header={false}
         foot={
           <Foot
@@ -2251,7 +2471,7 @@ export function FirstRunExperience({
           </div>
           <div className="local-quiet-card">
             <b>Security key</b>
-            <span>Enrol a YubiKey later from Settings.</span>
+            <span>Enroll a YubiKey later from Settings.</span>
           </div>
         </div>
         {message ? <p className="crit">{message}</p> : null}
@@ -2269,7 +2489,8 @@ export function FirstRunExperience({
               variant="primary"
               disabled={!accountStore}
               onClick={() => {
-                if (accountStore) onNavigate({ kind: 'store', ref: accountStore });
+                if (accountStore)
+                  onNavigate({ kind: 'store', ref: accountStore });
               }}
             >
               Open Personal
@@ -2296,7 +2517,7 @@ export function FirstRunExperience({
                 ? 'Personal vault unavailable'
                 : accountItemCount === 0
                   ? 'No items yet'
-                  : `${accountItemCount} ${accountItemCount === 1 ? 'item' : 'items'}`}
+                  : plural(accountItemCount, 'item')}
             </div>
           </div>
         </div>
@@ -2305,26 +2526,12 @@ export function FirstRunExperience({
   else if (state === 'protect' || state === 'phrase')
     content = (
       <Pane
-        title="Protect it"
-        subtitle="Step 4 of 6"
+        title="Save recovery phrase"
         header={false}
         scope="Set at least one now — the rest later, from Settings"
         wide
         foot={
-          <Foot
-            back={() => go('account')}
-            note={
-              <button
-                className="lnk"
-                onClick={() => {
-                  clearSecrets();
-                  send({ type: 'skip-protect' });
-                }}
-              >
-                Skip for now
-              </button>
-            }
-          >
+          <Foot back={() => go('account')}>
             <Button
               variant="primary"
               disabled={busy || passphrase !== confirmation}
@@ -2335,16 +2542,14 @@ export function FirstRunExperience({
           </Foot>
         }
       >
-        <h1>Protect it</h1>
+        <h1>Save recovery phrase</h1>
         <p className="lead">
           Right now this Mac holds the only key to{' '}
-          <b>
-            <code>{checkpoint.account?.username}</code>
-          </b>
-          . Add at least one recovery method now. You can add more later under{' '}
-          <b>Your Macs &amp; recovery</b> or <b>Security keys</b>.
+          {checkpoint.account?.username}. Add at least one recovery method now.
+          You can add more later under <b>Recovery devices</b> or{' '}
+          <b>Security keys</b>.
         </p>
-        <div className="three">
+        <div className="two">
           <div className="pcard">
             <h3>Passphrase</h3>
             <p>
@@ -2378,25 +2583,27 @@ export function FirstRunExperience({
               YubiKey <Chip>Later</Chip>
             </h3>
             <p>
-              Enrol a hardware key later from <b>Settings › Security keys</b>.
+              Enroll a hardware key later from <b>Settings › Security keys</b>.
             </p>
             <details className="dd">
               <summary>What to know first</summary>
-              <ol>
-                <li>
-                  <b>Preparing the card cannot be split or resumed.</b> If it
-                  stops part way, recovery requires resetting its PIV applet,
-                  which erases everything on it.
-                </li>
-                <li>
-                  <b>It must still hold its factory management key.</b> A card
-                  that has already been managed will refuse.
-                </li>
-                <li>
-                  <b>The unlock code is yours to choose and keep.</b> Nothing
-                  generates one for you or shows it later.
-                </li>
-              </ol>
+              <div className="dbody">
+                <ol>
+                  <li>
+                    <b>Preparing the card cannot be split or resumed.</b> If it
+                    stops part way, recovery requires resetting its PIV applet,
+                    which erases everything on it.
+                  </li>
+                  <li>
+                    <b>It must still hold its factory management key.</b> A card
+                    that has already been managed will refuse.
+                  </li>
+                  <li>
+                    <b>The unlock code is yours to choose and keep.</b> Nothing
+                    generates one for you or shows it later.
+                  </li>
+                </ol>
+              </div>
             </details>
             <Button
               onClick={() =>
@@ -2405,7 +2612,7 @@ export function FirstRunExperience({
                 )
               }
             >
-              Enrol a YubiKey…
+              Enroll a YubiKey…
             </Button>
           </div>
           <div className="pcard">
@@ -2430,66 +2637,61 @@ export function FirstRunExperience({
           </div>
         </div>
         {message ? <p className="crit">{message}</p> : null}
-        {state === 'phrase'
-          ? createPortal(
-              <Dialog className="backdrop" role="dialog">
-                <div className="sheet wide">
-                  <div className="hd">
-                    <Icon name="key" />
-                    <span className="t">
-                      <h2>Write these tokens down</h2>
-                      <small>Shown once and cannot be copied</small>
-                    </span>
-                  </div>
-                  <div className="sb">
-                    <p>
-                      Anyone with these tokens can access your account. Store
-                      them somewhere other than this Mac.
-                    </p>
-                    {backupPhrase ? (
-                      <div className="words">
-                        {backupPhrase.split(/\s+/).map((word, index) => (
-                          <div className="word" key={`${index}-${word}`}>
-                            <i>{index + 1}</i>
-                            {word}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p>Preparing the one-time phrase…</p>
-                    )}
-                    <button
-                      type="button"
-                      aria-label="I have written these 17 tokens down"
-                      className={`check${phraseWritten ? ' on' : ''}`}
-                      onClick={() => setPhraseWritten((value) => !value)}
-                    >
-                      <span className="bx">{phraseWritten ? '✓' : ''}</span>I
-                      have written these 17 tokens down
-                    </button>
-                  </div>
-                  <div className="ft">
-                    <Button onClick={() => go('protect')}>Not now</Button>
-                    <Button
-                      variant="primary"
-                      disabled={!backupPhrase || !phraseWritten || busy}
-                      onClick={() => void commitBackup()}
-                    >
-                      Done
-                    </Button>
-                  </div>
+        {state === 'phrase' ? (
+          <SheetDialog
+            width="wide"
+            onClose={() => go('protect')}
+            glyph={<Icon name="key" />}
+            title="Write these tokens down"
+            subtitle="Shown once and cannot be copied"
+            footer={
+              <>
+                <Button onClick={() => go('protect')}>Not now</Button>
+                <Button
+                  variant="primary"
+                  disabled={!backupPhrase || !phraseWritten || busy}
+                  onClick={() => void commitBackup()}
+                >
+                  Done
+                </Button>
+              </>
+            }
+          >
+            <>
+              <p>
+                Anyone with these tokens can access your account. Store them
+                somewhere other than this Mac.
+              </p>
+              {backupPhrase ? (
+                <div className="words">
+                  {backupPhrase.split(/\s+/).map((word, index) => (
+                    <div className="word" key={`${index}-${word}`}>
+                      <i>{index + 1}</i>
+                      {word}
+                    </div>
+                  ))}
                 </div>
-              </Dialog>,
-              document.getElementById('overlays') ?? document.body,
-            )
-          : null}
+              ) : (
+                <p>Preparing the one-time phrase…</p>
+              )}
+              <button
+                type="button"
+                aria-label="I have written these 17 tokens down"
+                className={`check${phraseWritten ? ' on' : ''}`}
+                onClick={() => setPhraseWritten((value) => !value)}
+              >
+                <span className="bx">{phraseWritten ? '✓' : ''}</span>I have
+                written these 17 tokens down
+              </button>
+            </>
+          </SheetDialog>
+        ) : null}
       </Pane>
     );
   else if (state === 'waiting')
     content = (
       <Pane
         title={`Waiting for ${admin} to add ${checkpoint.account?.username}`}
-        subtitle="Step 5 of 6"
         header={false}
         wide
         foot={
@@ -2504,36 +2706,25 @@ export function FirstRunExperience({
           Waiting for {admin} to add {checkpoint.account?.username}
         </h1>
         <p className="lead">
-          Your account{' '}
-          <b>
-            <code>{checkpoint.account?.username}</code>
-          </b>{' '}
-          on{' '}
-          <b>
-            <code>{profile?.canonicalName}</code>
-          </b>{' '}
-          exists. {adminShort} must add you to <b>{group}</b>. Check again after
-          they do.
+          Your account {checkpoint.account?.username} on{' '}
+          {profile?.canonicalName} exists. {adminShort} must add you to{' '}
+          <b>{group}</b>. Check again after they do.
         </p>
         <div className="two">
           <div className="col">
             <div className="pcard">
               <h3>Send {adminShort} this</h3>
-              <div className="copybox">
-                <span className="v">
-                  “Add {checkpoint.account?.username} on{' '}
-                  {profile?.canonicalName} to {group}”
-                </span>
-                <Button
-                  onClick={() =>
-                    void bridge.copyText(
-                      `Add ${checkpoint.account?.username} on ${profile?.canonicalName} to ${group}`,
-                    )
-                  }
-                >
-                  Copy the sentence
-                </Button>
-              </div>
+              <CopyBox
+                text={`Add ${checkpoint.account?.username} on ${profile?.canonicalName} to ${group}`}
+                onCopy={(value) =>
+                  void bridge
+                    .copyText(value)
+                    .then(() => toasts.show('Sentence copied.'))
+                }
+              >
+                “Add {checkpoint.account?.username} on {profile?.canonicalName}{' '}
+                to {group}”
+              </CopyBox>
               <p>
                 {adminShort} needs your username exactly as written. Nothing
                 else — no code, no link.
@@ -2623,21 +2814,16 @@ export function FirstRunExperience({
     content = (
       <Pane
         title="Create a group"
-        subtitle="Step 5 of 6"
-        scope="Or skip — Join or create a group is always in the sidebar"
+        scope="Or skip — Groups is always in the sidebar"
         header={false}
         foot={
-          <Foot
-            back={() => go('protect')}
-            note={
-              <button
-                className="lnk"
-                onClick={() => send({ type: 'skip-group' })}
-              >
-                Skip — I’ll do this later
-              </button>
-            }
-          >
+          <Foot back={() => go('protect')}>
+            <button
+              className="lnk"
+              onClick={() => send({ type: 'skip-group' })}
+            >
+              Skip this step
+            </button>
             <Button
               variant="primary"
               disabled={busy || !groupName.trim()}
@@ -2651,9 +2837,9 @@ export function FirstRunExperience({
         <h1>Create a group</h1>
         <p className="lead">
           {PERSONAL_FIXED} Start one now, or skip and do it later from{' '}
-          <b>Join or create a group</b>.
+          <b>Groups</b>.
         </p>
-        <div className="sec">Your first group</div>
+        <SectionLabel>Your first group</SectionLabel>
         <Inset>
           <InsetRow label="Group name">
             <input
@@ -2669,9 +2855,7 @@ export function FirstRunExperience({
         </Inset>
         {message ? <p className="crit">{message}</p> : null}
         <p className="hint">
-          You become its <b>Owner</b>. Add people by username from Manage after
-          they create an account on {profile?.canonicalName}. If creation is
-          interrupted, select Resume.
+          You can add people by username after creating a group.
         </p>
       </Pane>
     );
@@ -2680,7 +2864,6 @@ export function FirstRunExperience({
       <Pane
         title="Get started"
         subtitle={`${completedFirstRunSteps(checkpoint)} of 5 done`}
-        scope="Continue the remaining setup steps"
         wide
       >
         <p className="lead">
@@ -2699,7 +2882,7 @@ export function FirstRunExperience({
           <InsetRow label="✓">
             <b>{checkpoint.path === 'invited' ? 'Their server' : 'A server'}</b>
             <span className="hint">
-              <code>{profile?.canonicalName}</code> · host id{' '}
+              <code>{profile?.canonicalName}</code> · host ID{' '}
               <code>{profile?.hostId.slice(0, 10)}…</code> · checked and pinned
               on this Mac.
             </span>
@@ -2713,20 +2896,30 @@ export function FirstRunExperience({
             </span>
           </InsetRow>
           <InsetRow
-            label={checkpoint.protectSkipped ? '!' : '✓'}
+            label={
+              !(checkpoint.passphraseSet || checkpoint.backupCommitted)
+                ? '!'
+                : '✓'
+            }
             action={
               <Button
                 size="sm"
-                variant={checkpoint.protectSkipped ? 'primary' : undefined}
+                variant={
+                  !(checkpoint.passphraseSet || checkpoint.backupCommitted)
+                    ? 'primary'
+                    : undefined
+                }
                 onClick={() => go('protect')}
               >
-                {checkpoint.protectSkipped ? 'Protect now' : 'Review'}
+                {!(checkpoint.passphraseSet || checkpoint.backupCommitted)
+                  ? 'Protect now'
+                  : 'Review'}
               </Button>
             }
           >
-            <b>Protect it</b>
+            <b>Save recovery phrase</b>
             <span className="hint">
-              {checkpoint.protectSkipped
+              {!(checkpoint.passphraseSet || checkpoint.backupCommitted)
                 ? `Skipped. This Mac holds the only key to ${checkpoint.account?.username}; a passphrase, YubiKey or 17-token backup phrase gives you a second way in.`
                 : 'Passphrase set · backup phrase written down · YubiKey later, from Settings'}
             </span>
@@ -2746,9 +2939,11 @@ export function FirstRunExperience({
                     size="sm"
                     icon="copy"
                     onClick={() =>
-                      void bridge.copyText(
-                        `Add ${checkpoint.account?.username} on ${profile?.canonicalName} to ${group}`,
-                      )
+                      void bridge
+                        .copyText(
+                          `Add ${checkpoint.account?.username} on ${profile?.canonicalName} to ${group}`,
+                        )
+                        .then(() => toasts.show('Sentence copied.'))
                     }
                   >
                     Copy the sentence
@@ -2779,7 +2974,7 @@ export function FirstRunExperience({
             <span className="hint">
               {checkpoint.path === 'invited'
                 ? `${group} isn’t listed yet. Check again after ${adminShort} adds you, or send them the sentence above.`
-                : `${PERSONAL_FIXED} You become its Owner and add people by username from Manage.`}
+                : `${PERSONAL_FIXED} You become its Owner and add people by username from the group’s settings.`}
             </span>
             {checkpoint.path === 'invited' ? (
               <Band label="Group discovery">
@@ -2788,11 +2983,10 @@ export function FirstRunExperience({
             ) : null}
           </InsetRow>
         </Inset>
-        {checkpoint.protectSkipped ? (
+        {!(checkpoint.passphraseSet || checkpoint.backupCommitted) ? (
           <div className="checklist-notice">
             <Notice
-              eyebrow="Protect it · skipped"
-              title={`This Mac holds the only key to ${checkpoint.account?.username}`}
+              title={`Only this Mac can recover ${checkpoint.account?.username}`}
             >
               Lose it and the account is gone — a passphrase, YubiKey or
               17-token backup phrase is a second way in. Nothing else in the
@@ -2800,15 +2994,6 @@ export function FirstRunExperience({
             </Notice>
           </div>
         ) : null}
-        <p className="note">
-          Incomplete steps remain in the sidebar.
-          {checkpoint.path === 'invited' && !checkpoint.added
-            ? ' Issues shows the pending group invitation.'
-            : ''}{' '}
-          Manage backup phrases and Macs under{' '}
-          <b>Settings › Your Macs &amp; recovery</b>. Manage YubiKeys under{' '}
-          <b>Settings › Security keys</b>.
-        </p>
       </Pane>
     );
   else
@@ -2874,17 +3059,17 @@ export function FirstRunExperience({
           ) : (
             <>
               <p>
-                You are its Owner and nobody else is in it yet. Add people from{' '}
-                <b>Manage</b>, by username — they need an account on{' '}
+                You are its Owner and nobody else is in it yet. Add people by
+                username from the group’s settings — they need an account on{' '}
                 {profile?.canonicalName} first: send them the address, ask for
                 the username they picked, then add them as Member, Admin or
                 Owner.
               </p>
               <p className="fn">
                 Select Resume to continue interrupted group creation without
-                repeating completed steps. Add another Mac is under{' '}
-                <b>Settings › Your Macs &amp; recovery</b>, alongside your
-                17-token backup phrase.
+                repeating completed steps. Pairing is under{' '}
+                <b>Settings › Recovery devices</b>, alongside your 17-token
+                backup phrase.
               </p>
             </>
           )}
@@ -2942,21 +3127,27 @@ export function FirstRunExperience({
     <>
       {appMode ? (
         <FirstRunAppSidebar
+          world={world}
           checkpoint={checkpoint}
-          server={profile?.canonicalName ?? address}
           groupName={checkpoint.group?.name ?? group}
+          location={location}
           onNavigate={onNavigate}
           onReenter={() => send({ type: 'reenter' })}
         />
       ) : (
         <SetupSidebar
           checkpoint={checkpoint}
-          onAnotherServer={checkpoint.managedLocal && !checkpoint.account
-            ? () => send({ type: 'choose', path: 'own' })
-            : undefined}
-          onRecoverAccount={checkpoint.managedLocal && !checkpoint.account
-            ? () => selectManagedProfile(true)
-            : undefined}
+          pendingPath={pendingPath}
+          onAnotherServer={
+            checkpoint.managedLocal && !checkpoint.account
+              ? () => send({ type: 'choose', path: 'own' })
+              : undefined
+          }
+          onRecoverAccount={
+            checkpoint.managedLocal && !checkpoint.account
+              ? () => selectManagedProfile(true)
+              : undefined
+          }
           recoverEnabled={Boolean(managedReport)}
           onCancel={
             canCancelSetup ? () => onNavigate({ kind: 'all' }) : undefined

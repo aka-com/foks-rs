@@ -64,11 +64,20 @@ export function installDom(options: InstallDomOptions = {}): JSDOM {
     Node: { configurable: true, value: dom.window.Node },
     Element: { configurable: true, value: dom.window.Element },
     HTMLElement: { configurable: true, value: dom.window.HTMLElement },
-    HTMLButtonElement: { configurable: true, value: dom.window.HTMLButtonElement },
-    HTMLInputElement: { configurable: true, value: dom.window.HTMLInputElement },
+    HTMLButtonElement: {
+      configurable: true,
+      value: dom.window.HTMLButtonElement,
+    },
+    HTMLInputElement: {
+      configurable: true,
+      value: dom.window.HTMLInputElement,
+    },
     MouseEvent: { configurable: true, value: dom.window.MouseEvent },
     Event: { configurable: true, value: dom.window.Event },
-    MutationObserver: { configurable: true, value: dom.window.MutationObserver },
+    MutationObserver: {
+      configurable: true,
+      value: dom.window.MutationObserver,
+    },
     ResizeObserver: { configurable: true, value: TestResizeObserver },
     getComputedStyle: {
       configurable: true,

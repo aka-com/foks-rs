@@ -130,7 +130,8 @@ export interface Lease {
   expires_in: string | null;
 }
 
-export type ServerState = 'ok' | 'lease-lapsed' | 'lease-unavailable' | 'never-probed' | 'blocked';
+export type ServerState =
+  'ok' | 'lease-lapsed' | 'lease-unavailable' | 'never-probed' | 'blocked';
 
 /** The last `ProbeReport` for a server, plus its lease. */
 export interface Server {
@@ -201,14 +202,27 @@ export interface AgentStatus {
  * bridge are the same code path and the lease switch is a pure function
  * (`applyLease`) rather than a mutation.
  */
+export type GroupDetailSource = 'roster' | 'federation';
+
+export interface GroupDetailFailure {
+  store: StoreRef;
+  source: GroupDetailSource;
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
 export interface World {
   agent: AgentStatus;
   servers: readonly Server[];
   accounts: readonly Account[];
   stores: readonly Store[];
+  unavailableStores: readonly StoreRef[];
+  accountInventoryComplete: boolean;
   items: readonly Item[];
   parties: readonly Party[];
   federation: readonly FederationEntry[];
+  groupDetailFailures: readonly GroupDetailFailure[];
   devices: readonly Device[];
   yubiAccounts: readonly YubiAccount[];
   cardsConnected: readonly Card[];
