@@ -120,6 +120,8 @@ impl AgentError {
             ErrorCode::RollbackDetected => ("rollback-detected", false),
             ErrorCode::CheckpointResetRequired => ("checkpoint-reset-required", false),
             ErrorCode::ProfileBusy => ("profile-busy", true),
+            ErrorCode::RateLimited => ("rate-limited", true),
+            ErrorCode::QuotaExceeded => ("quota-exceeded", false),
             ErrorCode::OperationFailed => ("operation-failed", false),
         };
         let mut mapped = Self::new(slug, message, retryable);
@@ -766,6 +768,12 @@ mod tests {
         let timeout = AgentError::from_agent(ErrorCode::DeadlineExceeded, "slow".to_owned());
         assert!(timeout.retryable && timeout.ambiguous);
         assert!(AgentError::from_agent(ErrorCode::VersionMismatch, "old".to_owned()).fatal);
+        let rate_limited = AgentError::from_agent(ErrorCode::RateLimited, "slow down".to_owned());
+        assert_eq!(rate_limited.code, "rate-limited");
+        assert!(rate_limited.retryable);
+        let quota = AgentError::from_agent(ErrorCode::QuotaExceeded, "full".to_owned());
+        assert_eq!(quota.code, "quota-exceeded");
+        assert!(!quota.retryable);
         let ambiguous =
             AgentError::from_client(&foks_agent_client::Error::Ambiguous("write".to_owned()));
         assert!(ambiguous.ambiguous && !ambiguous.retryable);

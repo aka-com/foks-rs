@@ -147,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn json_wire_shape_is_stable_with_v2_envelopes() {
+    fn json_wire_shape_is_stable_with_current_envelopes() {
         let request = Request::new(
             9,
             Operation::SyncTeam {
@@ -158,7 +158,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 2,
+                "version": 3,
                 "id": 9,
                 "operation": {
                     "operation": "sync-team",
@@ -170,12 +170,20 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Response::error(9, ErrorCode::Busy, "locked")).unwrap(),
             serde_json::json!({
-                "version": 2,
+                "version": 3,
                 "id": 9,
                 "status": "error",
                 "code": "busy",
                 "message": "locked"
             })
+        );
+        assert_eq!(
+            serde_json::to_value(ErrorCode::RateLimited).unwrap(),
+            serde_json::json!("rate-limited")
+        );
+        assert_eq!(
+            serde_json::to_value(ErrorCode::QuotaExceeded).unwrap(),
+            serde_json::json!("quota-exceeded")
         );
     }
 
@@ -195,7 +203,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&admission).unwrap(),
             serde_json::json!({
-                "version": 2,
+                "version": 3,
                 "id": 13,
                 "operation": {
                     "operation": "admit-federated-team",
@@ -224,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_catalog_dtos_bind_store_cursor_and_native_roles() {
+    fn catalog_dtos_bind_store_cursor_and_native_roles() {
         let operation = Operation::ListTeamKv {
             store: TeamStoreRef {
                 profile: "local".to_owned(),
@@ -457,7 +465,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 2,
+                "version": 3,
                 "id": 25,
                 "operation": {
                     "operation": "demote-team-member",
@@ -480,7 +488,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 2,
+                "version": 3,
                 "id": 26,
                 "operation": {
                     "operation": "remove-team-member",

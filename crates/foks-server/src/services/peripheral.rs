@@ -120,7 +120,7 @@ fn map_write_error(error: impl Into<crate::Error>) -> RpcStatus {
         crate::Error::Database(foks_server_db::Error::Duplicate(message)) => {
             RpcStatus::Duplicate(message.to_owned())
         }
-        crate::Error::Database(error) if error.is_quota() => RpcStatus::RateLimited,
+        crate::Error::Database(error) if error.is_quota() => RpcStatus::QuotaExceeded,
         _ => RpcStatus::TransactionRetry,
     }
 }

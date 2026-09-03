@@ -51,121 +51,6 @@ impl Database {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn issue_team_view_challenge(
-        &mut self,
-        challenge_hash: &[u8; 32],
-        token_hash: &[u8; 32],
-        authority: &TeamViewAuthoritySnapshot,
-        key_generation: &[u8; 16],
-        expires_at: u64,
-        now: u64,
-    ) -> Result<()> {
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        reclaim(&transaction, now)?;
-        crate::capability_keys::require_active_generation(&transaction, key_generation)?;
-        let global: i64 = transaction.query_row(
-            "SELECT (SELECT count(*) FROM team_view_challenges WHERE consumed = 0)
-                    + (SELECT count(*) FROM team_view_tokens)",
-            [],
-            |row| row.get(0),
-        )?;
-        let scoped: i64 = transaction.query_row(
-            "SELECT (SELECT count(*) FROM team_view_challenges
-                     WHERE consumed = 0 AND team_id = ?1 AND member_id = ?2)
-                    + (SELECT count(*) FROM team_view_tokens
-                       WHERE team_id = ?1 AND member_id = ?2)",
-            params![authority.team_id, authority.member_id],
-            |row| row.get(0),
-        )?;
-        if usize::try_from(global).unwrap_or(usize::MAX)
-            >= self.config.maximum_active_team_view_capabilities
-            || usize::try_from(scoped).unwrap_or(usize::MAX)
-                >= self.config.maximum_team_view_capabilities_per_pair
-        {
-            return Err(Error::QuotaExceeded);
-        }
-        ensure_current_authority(&transaction, authority)?;
-        transaction.execute(
-            "INSERT INTO team_view_challenges
-             (challenge_hash, token_hash, team_id, member_id, member_host_id,
-              source_role_type, source_visibility, source_generation, key_generation,
-              expires_at, consumed, activation_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, NULL)",
-            params![
-                challenge_hash,
-                token_hash,
-                authority.team_id,
-                authority.member_id,
-                authority.member_host_id,
-                sql_integer(authority.source_role_type)?,
-                authority.source_visibility,
-                sql_integer(authority.source_generation)?,
-                key_generation,
-                sql_integer(expires_at)?
-            ],
-        )?;
-        transaction.commit()?;
-        Ok(())
-    }
-
-    pub fn activate_team_view_challenge(
-        &mut self,
-        challenge_hash: &[u8; 32],
-        activation_hash: &[u8; 32],
-        now: u64,
-    ) -> Result<Option<TeamViewAuthoritySnapshot>> {
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let row = challenge_row(&transaction, challenge_hash)?;
-        let Some((token_hash, mut authority, expires_at, consumed, stored_activation)) = row else {
-            return Ok(None);
-        };
-        if expires_at <= now {
-            return Ok(None);
-        }
-        authority.expires_at = Some(expires_at);
-        if consumed {
-            if stored_activation.as_deref() == Some(activation_hash) {
-                return Ok(Some(authority));
-            }
-            return Err(Error::ReceiptConflict);
-        }
-        ensure_current_authority(&transaction, &authority)?;
-        let updated = transaction.execute(
-            "UPDATE team_view_challenges SET consumed = 1, activation_hash = ?2
-             WHERE challenge_hash = ?1 AND consumed = 0",
-            params![challenge_hash, activation_hash],
-        )?;
-        if updated != 1 {
-            return Err(Error::Invalid("team-view challenge activation transition"));
-        }
-        transaction.execute(
-            "INSERT INTO team_view_tokens
-             (token_hash, team_id, member_id, member_host_id, source_role_type,
-              source_visibility, source_generation, effective_role_type,
-              effective_visibility, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                token_hash,
-                authority.team_id,
-                authority.member_id,
-                authority.member_host_id,
-                sql_integer(authority.source_role_type)?,
-                authority.source_visibility,
-                sql_integer(authority.source_generation)?,
-                sql_integer(authority.effective_role_type)?,
-                authority.effective_visibility,
-                sql_integer(expires_at)?
-            ],
-        )?;
-        transaction.commit()?;
-        Ok(Some(authority))
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub fn activate_stateless_team_view_challenge(
         &mut self,
         challenge_hash: &[u8; 32],
@@ -180,10 +65,13 @@ impl Database {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         reclaim(&transaction, now)?;
-        if let Some((_, mut stored, stored_expiry, consumed, stored_activation)) =
+        if let Some((stored_token, mut stored, stored_expiry, consumed, stored_activation)) =
             challenge_row(&transaction, challenge_hash)?
         {
             if consumed && stored_activation.as_deref() == Some(activation_hash) {
+                if !team_view_token_active(&transaction, &stored_token, now)? {
+                    return Ok(None);
+                }
                 stored.expires_at = Some(stored_expiry);
                 return Ok(Some(stored));
             }
@@ -194,20 +82,40 @@ impl Database {
         }
         crate::capability_keys::require_active_generation(&transaction, key_generation)?;
         ensure_current_authority(&transaction, authority)?;
-        let global: i64 =
-            transaction.query_row("SELECT count(*) FROM team_view_tokens", [], |row| {
-                row.get(0)
-            })?;
-        let scoped: i64 = transaction.query_row(
+        let mut scoped: i64 = transaction.query_row(
             "SELECT count(*) FROM team_view_tokens
              WHERE team_id = ?1 AND member_id = ?2",
             params![authority.team_id, authority.member_id],
             |row| row.get(0),
         )?;
+        while usize::try_from(scoped).unwrap_or(usize::MAX)
+            >= self.config.maximum_team_view_capabilities_per_pair
+        {
+            let oldest: Option<Vec<u8>> = transaction
+                .query_row(
+                    "SELECT token_hash FROM team_view_tokens
+                     WHERE team_id = ?1 AND member_id = ?2
+                     ORDER BY expires_at, token_hash
+                     LIMIT 1",
+                    params![authority.team_id, authority.member_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(oldest) = oldest else {
+                return Err(Error::QuotaExceeded);
+            };
+            transaction.execute(
+                "DELETE FROM team_view_tokens WHERE token_hash = ?1",
+                [oldest],
+            )?;
+            scoped -= 1;
+        }
+        let global: i64 =
+            transaction.query_row("SELECT count(*) FROM team_view_tokens", [], |row| {
+                row.get(0)
+            })?;
         if usize::try_from(global).unwrap_or(usize::MAX)
             >= self.config.maximum_active_team_view_capabilities
-            || usize::try_from(scoped).unwrap_or(usize::MAX)
-                >= self.config.maximum_team_view_capabilities_per_pair
         {
             return Err(Error::QuotaExceeded);
         }
@@ -707,6 +615,23 @@ fn ensure_current_authority(
         return Err(Error::Invalid("stale team-view authority"));
     }
     Ok(())
+}
+
+fn team_view_token_active(
+    connection: &rusqlite::Connection,
+    token_hash: &[u8],
+    now: u64,
+) -> Result<bool> {
+    connection
+        .query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM team_view_tokens
+                 WHERE token_hash = ?1 AND expires_at > ?2
+             )",
+            params![token_hash, sql_integer(now)?],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
 }
 
 type ChallengeRow = (

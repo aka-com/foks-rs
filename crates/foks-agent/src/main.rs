@@ -1119,6 +1119,13 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
     }
     let mut source = Some(error);
     while let Some(candidate) = source {
+        if let Some(foks_rpc::Error::RemoteStatus { code, .. }) =
+            candidate.downcast_ref::<foks_rpc::Error>()
+        {
+            if let Some(response) = remote_status_response(id, *code, candidate.to_string()) {
+                return response;
+            }
+        }
         if matches!(
             candidate.downcast_ref::<foks_client::Error>(),
             Some(foks_client::Error::DeadlineExceeded)
@@ -1153,6 +1160,29 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
         ErrorCode::OperationFailed,
         bounded_error(error.to_string()),
     )
+}
+
+fn remote_status_response(id: u64, status: u64, reason: String) -> Option<Response> {
+    let (code, message) = match status {
+        foks_rpc::STATUS_RATE_LIMIT_ERROR => (
+            ErrorCode::RateLimited,
+            "The FOKS server is busy or rate-limiting requests. Retry after a short delay.",
+        ),
+        foks_rpc::STATUS_OVER_QUOTA_ERROR => (
+            ErrorCode::QuotaExceeded,
+            "The FOKS server reached a configured capacity limit. Review its capacity or remove unused data before retrying.",
+        ),
+        _ => return None,
+    };
+    Some(Response::error_with_fields(
+        Some(id),
+        code,
+        message,
+        ErrorFields {
+            reason: Some(bounded_error(reason)),
+            ..ErrorFields::default()
+        },
+    ))
 }
 
 fn database_error_invalidates_trust(error: &foks_client_db::Error) -> bool {
@@ -3891,6 +3921,37 @@ mod tests {
         assert!(message.contains("Quit FOKS"));
         assert!(message.contains("/private/foks/profiles/local/soft.sqlite3"));
         assert!(message.contains("credentials"));
+    }
+
+    #[test]
+    fn remote_capacity_statuses_keep_retry_semantics_and_diagnostics() {
+        for (status, expected, message) in [
+            (
+                foks_rpc::STATUS_RATE_LIMIT_ERROR,
+                ErrorCode::RateLimited,
+                "Retry after a short delay.",
+            ),
+            (
+                foks_rpc::STATUS_OVER_QUOTA_ERROR,
+                ErrorCode::QuotaExceeded,
+                "capacity limit",
+            ),
+        ] {
+            let response = remote_status_response(8, status, format!("remote status {status}"))
+                .expect("known status maps");
+            let foks_agent_proto::ResponseResult::Error {
+                code,
+                message: mapped,
+                fields,
+            } = response.result
+            else {
+                panic!("remote status returned success");
+            };
+            assert_eq!(code, expected);
+            assert!(mapped.contains(message));
+            assert_eq!(fields.reason, Some(format!("remote status {status}")));
+        }
+        assert!(remote_status_response(8, 9999, "unknown".to_owned()).is_none());
     }
 
     #[test]

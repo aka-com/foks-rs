@@ -287,31 +287,42 @@ fn every_team_publication_boundary_is_atomic() {
             .team_view_authority(&team, &[1; 33], &[2; 33], 3, 0, 1)
             .unwrap()
             .unwrap();
-        fixture
+        assert!(fixture
             .database
-            .issue_team_view_challenge(
+            .activate_stateless_team_view_challenge(
                 &[0x81; 32],
+                &[0x84; 32],
                 &[0x82; 32],
                 &authority,
                 &[0x83; 16],
                 2_000_000,
-                1_000_002,
+                1_000_003,
             )
-            .unwrap();
-        assert!(fixture
-            .database
-            .activate_team_view_challenge(&[0x81; 32], &[0x84; 32], 1_000_003)
             .unwrap()
             .is_some());
         assert!(fixture
             .database
-            .activate_team_view_challenge(&[0x81; 32], &[0x84; 32], 1_000_004)
+            .activate_stateless_team_view_challenge(
+                &[0x81; 32],
+                &[0x84; 32],
+                &[0x82; 32],
+                &authority,
+                &[0x83; 16],
+                2_000_000,
+                1_000_004,
+            )
             .unwrap()
             .is_some());
         assert!(matches!(
-            fixture
-                .database
-                .activate_team_view_challenge(&[0x81; 32], &[0x85; 32], 1_000_004),
+            fixture.database.activate_stateless_team_view_challenge(
+                &[0x81; 32],
+                &[0x85; 32],
+                &[0x82; 32],
+                &authority,
+                &[0x83; 16],
+                2_000_000,
+                1_000_004,
+            ),
             Err(foks_server_db::Error::ReceiptConflict)
         ));
         assert!(reader
@@ -320,53 +331,6 @@ fn every_team_publication_boundary_is_atomic() {
             .is_some());
         assert!(reader
             .resolve_team_view_token(&[0x82; 32], 2_000_000)
-            .unwrap()
-            .is_none());
-
-        fixture
-            .database
-            .issue_team_view_challenge(
-                &[0x86; 32],
-                &[0x87; 32],
-                &authority,
-                &[0x83; 16],
-                1_000_010,
-                1_000_006,
-            )
-            .unwrap();
-        {
-            let sabotage = rusqlite::Connection::open(&fixture.path).unwrap();
-            sabotage
-                .execute_batch(
-                    "CREATE TRIGGER ignore_team_view_activation
-                     BEFORE UPDATE OF consumed ON team_view_challenges
-                     WHEN OLD.consumed = 0
-                     BEGIN SELECT RAISE(IGNORE); END;",
-                )
-                .unwrap();
-            assert!(matches!(
-                fixture
-                    .database
-                    .activate_team_view_challenge(&[0x86; 32], &[0x89; 32], 1_000_009),
-                Err(foks_server_db::Error::Invalid(
-                    "team-view challenge activation transition"
-                ))
-            ));
-            let stored: i64 = sabotage
-                .query_row(
-                    "SELECT count(*) FROM team_view_tokens WHERE token_hash = ?1",
-                    [[0x87; 32]],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(stored, 0);
-            sabotage
-                .execute_batch("DROP TRIGGER ignore_team_view_activation")
-                .unwrap();
-        }
-        assert!(fixture
-            .database
-            .activate_team_view_challenge(&[0x86; 32], &[0x89; 32], 1_000_010)
             .unwrap()
             .is_none());
 
@@ -398,6 +362,33 @@ fn every_team_publication_boundary_is_atomic() {
             .unwrap();
         assert_eq!(stored_tokens, 1);
         assert_eq!(raw_tokens, 0, "raw bearer tokens must never be stored");
+        connection
+            .execute(
+                "DELETE FROM team_view_tokens WHERE token_hash = ?1",
+                [[0x82; 32]],
+            )
+            .unwrap();
+        assert!(fixture
+            .database
+            .activate_stateless_team_view_challenge(
+                &[0x81; 32],
+                &[0x84; 32],
+                &[0x82; 32],
+                &authority,
+                &[0x83; 16],
+                2_000_000,
+                1_000_011,
+            )
+            .unwrap()
+            .is_none());
+        let resurrected: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM team_view_tokens WHERE token_hash = ?1",
+                [[0x82; 32]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(resurrected, 0);
 
         let admin = reader
             .team_admin_authority(&team, &[1_u8; 33], 3, 1)

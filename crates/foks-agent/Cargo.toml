@@ -17,6 +17,7 @@ foks-client-app = { workspace = true }
 foks-client-db = { workspace = true }
 foks-compat-artifact = { workspace = true }
 foks-keystore = { workspace = true }
+foks-rpc = { workspace = true }
 foks-verify = { workspace = true }
 foks-yubi = { workspace = true, features = ["hardware"] }
 fs2 = { workspace = true }
