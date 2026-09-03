@@ -163,7 +163,9 @@ pub(crate) fn activate(
             )?)
         })
         .map_err(map_write_error)?
-        .ok_or(RpcStatus::Expired)?;
+        .ok_or_else(|| {
+            RpcStatus::TeamBearerTokenStale("team-view capability was superseded".to_owned())
+        })?;
     if activated.team_id != challenge.request.team.as_bytes()
         || activated.member_id != challenge.request.member.as_bytes()
         || activated.member_host_id != challenge.request.member_host.as_bytes()
