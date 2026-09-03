@@ -661,10 +661,27 @@ fn permission_denied() -> RpcStatus {
 fn map_write_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::WriterQueue => RpcStatus::RateLimited,
-        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::RateLimited,
+        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
         crate::Error::Database(foks_server_db::Error::ReceiptConflict) => {
             bad_arguments("conflicting team-view activation replay")
         }
         _ => RpcStatus::TransactionRetry,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persistent_quota_is_not_reported_as_transient_rate_limiting() {
+        assert_eq!(
+            map_write_error(crate::Error::Database(foks_server_db::Error::QuotaExceeded)),
+            RpcStatus::QuotaExceeded
+        );
+        assert_eq!(
+            map_write_error(crate::Error::WriterQueue),
+            RpcStatus::RateLimited
+        );
     }
 }

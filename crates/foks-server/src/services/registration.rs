@@ -550,7 +550,7 @@ fn require_normalized_name(name: &[u8]) -> Result<(), RpcStatus> {
 fn map_write_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::WriterQueue => RpcStatus::RateLimited,
-        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::RateLimited,
+        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
         _ => RpcStatus::TransactionRetry,
     }
 }
@@ -558,10 +558,10 @@ fn map_write_error(error: crate::Error) -> RpcStatus {
 fn map_passphrase_write_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::WriterQueue
-        | crate::Error::Database(foks_server_db::Error::QuotaExceeded)
         | crate::Error::Database(foks_server_db::Error::PassphraseRateLimited) => {
             RpcStatus::RateLimited
         }
+        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
         _ => RpcStatus::TransactionRetry,
     }
 }

@@ -508,8 +508,8 @@ fn map_write_error(error: crate::Error) -> RpcStatus {
         | crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => {
             permission_denied()
         }
-        crate::Error::WriterQueue
-        | crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::RateLimited,
+        crate::Error::WriterQueue => RpcStatus::RateLimited,
+        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
         _ => RpcStatus::TransactionRetry,
     }
 }

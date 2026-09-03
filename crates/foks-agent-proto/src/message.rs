@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -1645,6 +1645,8 @@ pub enum ErrorCode {
     RollbackDetected,
     CheckpointResetRequired,
     ProfileBusy,
+    RateLimited,
+    QuotaExceeded,
     OperationFailed,
 }
 

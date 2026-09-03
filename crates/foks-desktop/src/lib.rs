@@ -48,7 +48,10 @@ impl AgentError {
         matches!(
             self,
             Self::Protocol {
-                code: ErrorCode::Busy | ErrorCode::DeadlineExceeded | ErrorCode::ProfileBusy,
+                code: ErrorCode::Busy
+                    | ErrorCode::DeadlineExceeded
+                    | ErrorCode::ProfileBusy
+                    | ErrorCode::RateLimited,
                 ..
             } | Self::Transport(_)
                 | Self::Ambiguous(_)
@@ -2988,6 +2991,18 @@ mod tests {
         assert!(deadline.transient());
         assert!(deadline.ambiguous());
         assert!(!deadline.fatal());
+        assert!(AgentError::Protocol {
+            code: ErrorCode::RateLimited,
+            message: "wait".to_owned(),
+            fields: ErrorFields::default(),
+        }
+        .transient());
+        assert!(!AgentError::Protocol {
+            code: ErrorCode::QuotaExceeded,
+            message: "full".to_owned(),
+            fields: ErrorFields::default(),
+        }
+        .transient());
 
         let mismatch = AgentError::Protocol {
             code: ErrorCode::VersionMismatch,
