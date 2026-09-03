@@ -17,6 +17,7 @@ use serde_json::Value;
 pub const SOCKET_ENV: &str = "FOKS_AGENT_SOCKET";
 pub const SOCKET_ARG: &str = "--agent-socket";
 const AGENT_BINARY_ENV: &str = "FOKS_AGENT_BINARY";
+const DEFAULT_SOCKET_NAME: &str = "foks-rs.sock";
 
 /// The socket selected for this process and any state that this desktop owns.
 ///
@@ -571,7 +572,7 @@ where
     }
     let state = default_state_directory()?;
     Some(AgentEndpoint {
-        socket: state.join("agent.sock"),
+        socket: state.join(DEFAULT_SOCKET_NAME),
         managed_crash_directory: Some(state.join("crashes")),
     })
 }
@@ -605,7 +606,7 @@ where
 fn default_state_directory() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
     #[cfg(target_os = "macos")]
-    return Some(home.join("Library/Application Support/FOKS"));
+    return Some(home.join("Library/Application Support/foks-rs"));
     #[cfg(not(target_os = "macos"))]
     return Some(
         std::env::var_os("XDG_DATA_HOME")
@@ -616,13 +617,23 @@ fn default_state_directory() -> Option<PathBuf> {
 }
 
 pub fn default_socket() -> Option<PathBuf> {
-    Some(default_state_directory()?.join("agent.sock"))
+    Some(default_state_directory()?.join(DEFAULT_SOCKET_NAME))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    #[test]
+    fn managed_endpoint_uses_rust_specific_names() {
+        let state = default_state_directory().unwrap();
+        #[cfg(target_os = "macos")]
+        assert!(state.ends_with("Library/Application Support/foks-rs"));
+        #[cfg(not(target_os = "macos"))]
+        assert!(state.ends_with("foks-rs"));
+        assert_eq!(default_socket(), Some(state.join(DEFAULT_SOCKET_NAME)));
+    }
 
     #[test]
     fn socket_resolution_precedence_is_stable() {

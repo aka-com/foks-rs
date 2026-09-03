@@ -62,28 +62,31 @@ test('the shared tokens come from the kit and are not re-declared here', async (
   }
 });
 
-test('the thirteen FOKS tokens are the five that diverge and the eight that are ours', async () => {
+test('the nineteen FOKS tokens are the five that diverge and the fourteen that are ours', async () => {
   const shell = await readSource(SHELL, import.meta.url);
   const tokens = rootTokens(shell);
 
-  assert.deepEqual(
-    [...tokens.keys()].sort(),
-    [
-      '--c-file',
-      '--c-link',
-      '--c-none',
-      '--c-password',
-      '--c-resource',
-      '--c-team',
-      '--faint',
-      '--hover',
-      '--main-surface',
-      '--mono',
-      '--sans',
-      '--shadow-menu',
-      '--surface',
-    ],
-  );
+  assert.deepEqual([...tokens.keys()].sort(), [
+    '--c-file',
+    '--c-link',
+    '--c-none',
+    '--c-password',
+    '--c-resource',
+    '--c-team',
+    '--faint',
+    '--hover',
+    '--main-surface',
+    '--mono',
+    '--ok-wash',
+    '--radius-lg',
+    '--radius-md',
+    '--radius-pill',
+    '--radius-sm',
+    '--radius-xl',
+    '--sans',
+    '--shadow-menu',
+    '--surface',
+  ]);
 
   // The five that share a name with AKA keep the design's values, not AKA's.
   assert.equal(tokens.get('--faint'), '#8a8a92');
@@ -108,22 +111,72 @@ test('the shell layout the design specifies survived the lift', async () => {
 
   // The two- and three-column shells (sidebar · items · details).
   assert.match(shell, /\.app\{[^}]*grid-template-columns:224px 1fr\}/);
-  assert.match(shell, /\.app\.with-details\{grid-template-columns:224px 1fr 300px\}/);
+  assert.match(
+    shell,
+    /\.app\.with-details\{grid-template-columns:224px 1fr 300px\}/,
+  );
+  // Group roster stacks sit on the trailing edge, including a one-person
+  // stack that would otherwise rest on the left of the 28px slot.
+  assert.match(shell, /\.nav \.stack\{margin-left:auto\}/);
+  assert.match(shell, /\.nav \.stack \.av:only-child\{right:0\}/);
   // The main column must be allowed to shrink, or a long path scrolls the
   // window instead of the list.
   assert.match(shell, /\.main\{[^}]*min-width:0[^}]*\}/);
-  assert.match(shell, /\.path\{[^}]*padding:8px 20px;/);
+  assert.match(
+    shell,
+    /\.path\{[^}]*padding:8px 20px;[^}]*border-bottom:1px solid var\(--line-soft\)/,
+  );
   assert.match(shell, /\.header-action\{[^}]*margin-left:auto;[^}]*flex:none/);
-  assert.match(shell, /\.loc h1\{[^}]*text-overflow:ellipsis/);
+  // The title row must shrink so takeover actions stay in `.header-action`
+  // instead of being pushed off the clipped window by a long group subtitle.
+  assert.match(shell, /\.loc\{[^}]*flex:1 1 auto/);
+  assert.match(shell, /\.loc-copy\{[^}]*white-space:nowrap/);
+  assert.match(shell, /\.header-action \.btn\.cap\{height:28px;font-size:13px/);
+  assert.match(shell, /\.loc h1\{display:inline;/);
+  assert.match(shell, /\.loc small\{display:inline;/);
   // The windowing estimate in ItemsScreen and the design's fixed row must agree.
   assert.match(shell, /\.row\{height:50px;/);
   assert.match(shell, /\.toolbar \.btn,\.toolbar \.seg\{height:32px\}/);
-  assert.match(shell, /\.toolbar \.btn,\.toolbar \.seg\.txt button\{font-size:13px\}/);
+  assert.match(
+    shell,
+    /\.toolbar \.btn\.primary,\.empty \.btn\.primary\{height:30px\}/,
+  );
+  assert.match(
+    shell,
+    /\.toolbar \.btn,\.toolbar \.seg\.txt button\{font-size:13px\}/,
+  );
   assert.match(shell, /\.btn \.ic\.chevron\{font-size:14px\}/);
-  assert.match(shell, /\.meta code\{[^}]*overflow-wrap:anywhere[^}]*word-break:normal/);
+  // Disabled primary hover must not fall back to --btn-bg, or the blue
+  // fill disappears against the card while the pointer is still over it.
+  assert.match(
+    shell,
+    /\.btn\.primary\[disabled\]:hover\{background:var\(--accent\)\}/,
+  );
+  assert.match(
+    shell,
+    /\.meta code\{[^}]*overflow-wrap:anywhere[^}]*word-break:normal/,
+  );
   assert.match(shell, /\.tile \.qa\{[^}]*right:8px;top:8px;/);
-  assert.match(shell, /\.radio\{[^}]*text-align:left/);
-  assert.match(shell, /\.server-actions\{[^}]*align-self:start/);
+  assert.match(shell, /\.radio\{[^}]*text-align:left[^}]*width:100%/);
+  // The servers rows sit in a settings inset: the value column runs across,
+  // and the band's action hugs its right edge.
+  assert.match(shell, /\.settings-inset \.fr \.v\.srv\{flex-direction:row/);
+  assert.match(shell, /\.band \.a\{margin-left:auto/);
+  // Settings value columns are a flex stack; chips must hug their text
+  // instead of stretching across the row.
+  assert.match(shell, /\.chip\{[^}]*width:max-content/);
+  assert.match(
+    shell,
+    /\.settings-inset \.fr \.v \.chip\{align-self:flex-start\}/,
+  );
+  // Sheet field rows: the value column grows, and the input fills it, so a
+  // click anywhere in the row hits the control rather than a shrink-wrapped
+  // text width.
+  assert.match(shell, /\.inset \.fr \.v\{flex:1;min-width:0/);
+  assert.match(shell, /\.inset \.fr input\{[^}]*width:100%/);
+  // Toasts share `#overlays` with sheets; they must paint above `.backdrop`.
+  assert.match(shell, /\.backdrop\{[^}]*z-index:10\}/);
+  assert.match(shell, /\.toasts\{[^}]*position:fixed;[^}]*z-index:20/);
 });
 
 test('the app sheet only adapts the mock window; it invents no colours', async () => {
@@ -138,12 +191,15 @@ test('the app sheet only adapts the mock window; it invents no colours', async (
     app,
     /\.first-run-main \.checklist \.fr \.v\s*\{[^}]*display: flex;[^}]*flex-direction: column;/,
   );
-  assert.match(app, /\.first-run-main \.crit\s*\{/);
+  assert.match(app, /\.first-run-main \.crit\s*\{[^}]*margin-bottom: 16px;/);
   assert.doesNotMatch(app, /(?:^|\n)\.crit\s*\{/);
-  assert.match(app, /\.local-field-row\s*\{[^}]*min-height: 48px;[^}]*padding: 0 16px;/);
   assert.match(
     app,
-    /\.first-run-main \.recovery-fields \.fr\s*\{[^}]*align-items: stretch;[^}]*min-height: 48px;[^}]*padding: 0;[^}]*border-top: 0;/,
+    /\.local-field-row\s*\{[^}]*min-height: 36px;[^}]*padding: 0 16px;/,
+  );
+  assert.match(
+    app,
+    /\.first-run-main \.recovery-fields \.fr\s*\{[^}]*align-items: stretch;[^}]*min-height: 36px;[^}]*padding: 0;/,
   );
   assert.match(
     app,
@@ -159,7 +215,7 @@ test('the app sheet only adapts the mock window; it invents no colours', async (
   );
   assert.match(
     app,
-    /\.first-run-main \.account-form \.fr\s*\{[^}]*align-items: stretch;[^}]*min-height: 48px;[^}]*padding: 0;[^}]*border-top: 0;/,
+    /\.first-run-main \.account-form \.fr\s*\{[^}]*align-items: stretch;[^}]*min-height: 36px;[^}]*padding: 0;/,
   );
   assert.match(
     app,
@@ -173,15 +229,21 @@ test('the app sheet only adapts the mock window; it invents no colours', async (
     app,
     /\.first-run-main \.account-form \.fr input\s*\{[^}]*align-self: stretch;[^}]*width: 100%;[^}]*padding: 0 14px;/,
   );
-  assert.match(app, /\.app-lock-card p\s*\{[^}]*margin-bottom: 8px;/);
+  assert.match(app, /\.app-lock-card p\s*\{[^}]*margin-bottom: 20px;/);
   assert.match(
     app,
-    /\.sheet \.manage-members \.manage-member\s*\{[^}]*display: grid;[^}]*grid-template-columns:/,
+    /\.rt \.hdr,\s*\.rt \.prow\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) 168px 36px/,
   );
   assert.match(
     app,
-    /@media \(max-width: 620px\)\s*\{\s*\.sheet \.manage-members \.manage-member\s*\{[^}]*grid-template-columns: 1fr;/,
+    /\.rt\.fed \.hdr,\s*\.rt\.fed \.prow\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) 150px 168px 80px 150px/,
   );
+  assert.match(
+    app,
+    /\.rt\.items \.hdr,\s*\.rt\.items \.prow\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) 118px 118px 96px 64px/,
+  );
+  assert.match(app, /\.tab\.on::after/);
+  assert.match(app, /\.inset\.danger\s*\{[^}]*overflow: visible/);
 });
 
 test('the desktop title clears the macOS traffic lights', async () => {
@@ -196,6 +258,6 @@ test('the desktop title clears the macOS traffic lights', async () => {
   );
   assert.match(
     app,
-    /#root > \.window > \.titlebar > \.agent\s*\{[^}]*margin-right: 0\.25rem;/,
+    /#root > \.window > \.titlebar > \.agent\s*\{[^}]*margin-right: 0\.25rem;[^}]*transform: translateY\(1px\);/,
   );
 });

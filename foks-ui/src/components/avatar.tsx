@@ -36,11 +36,7 @@ export function Avatar({ party, className = 'av' }: AvatarProps): ReactNode {
   }
   const name = partyName(party);
   return (
-    <span
-      className={className}
-      style={{ background: hue(name) }}
-      title={name}
-    >
+    <span className={className} style={{ background: hue(name) }} title={name}>
       {initials(name)}
     </span>
   );
@@ -57,13 +53,15 @@ export interface StackProps {
 }
 
 export function Stack({ parties, size = 'md', title }: StackProps): ReactNode {
-  const classes = ['stack', size === 'md' ? '' : size].filter(Boolean).join(' ');
+  const classes = ['stack', size === 'md' ? '' : size]
+    .filter(Boolean)
+    .join(' ');
   return (
     <span className={classes} title={title}>
       {parties.length ? (
-        parties.slice(0, 2).map((party) => (
-          <Avatar key={party.party_id_hex} party={party} />
-        ))
+        parties
+          .slice(0, 2)
+          .map((party) => <Avatar key={party.party_id_hex} party={party} />)
       ) : (
         // No roster at all — an account store, or a group with nobody in it
         // yet. The design gives it the neutral glyph rather than a gap.

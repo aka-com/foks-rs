@@ -402,6 +402,18 @@ impl FoksClient {
         serial: u64,
         device_seed: SecretSeed,
     ) -> Result<ProvisionedSoftwareDevice> {
+        self.accept_kex_provisioning_for_user(host, phrase, device_name, serial, device_seed, None)
+    }
+
+    pub fn accept_kex_provisioning_for_user(
+        &self,
+        host: &PinnedHost,
+        phrase: &str,
+        device_name: &str,
+        serial: u64,
+        device_seed: SecretSeed,
+        expected_user: Option<&[u8; 33]>,
+    ) -> Result<ProvisionedSoftwareDevice> {
         if serial == 0 {
             return Err(Error::Kex("device serial is zero"));
         }
@@ -451,6 +463,9 @@ impl FoksClient {
             return Err(Error::Kex(
                 "provision link targets the wrong host or device set",
             ));
+        }
+        if expected_user.is_some_and(|user| change.uid.as_bytes() != user) {
+            return Err(Error::Kex("provision link targets the wrong user"));
         }
         let signed = countersign_software_kex_provision_link(&request.link, &device_seed)?;
         let signature = signed

@@ -17,6 +17,7 @@ import { useRef, useState } from 'react';
 import type { MouseEvent, ReactNode, RefObject } from 'react';
 import { Menu, Popover } from '/kit/overlay-primitives';
 import { Button } from './button';
+import type { ButtonSize, ButtonVariant } from './button';
 import { Icon } from './icon';
 import type { FoksIconName } from '../icons';
 
@@ -68,10 +69,18 @@ export interface MenuButtonProps {
   /** What the menu chooses between, for the screen reader. */
   menuLabel: string;
   align?: 'start' | 'end';
+  variant?: ButtonVariant;
+  size?: ButtonSize;
   icon?: FoksIconName;
-  /** Drawn after the label — the design's chevron. */
-  trailingIcon?: FoksIconName;
+  /** Drawn after the label — the design's chevron. Pass `null` for none. */
+  trailingIcon?: FoksIconName | null;
   className?: string;
+  disabled?: boolean;
+  title?: string;
+  /** Accessible name when `label` is empty — icon-only triggers. */
+  'aria-label'?: string;
+  /** Open on the first paint — the acceptance scene for a dropdown. */
+  defaultOpen?: boolean;
   /** The menu's items, given a closer to call when one is taken. */
   children: MenuContent;
 }
@@ -80,29 +89,46 @@ export function MenuButton({
   label,
   menuLabel,
   align = 'end',
+  variant = 'plain',
+  size = 'md',
   icon,
   trailingIcon = 'chev',
   className,
+  disabled = false,
+  title,
+  'aria-label': ariaLabel,
+  defaultOpen = false,
   children,
 }: MenuButtonProps): ReactNode {
   const anchorRef = useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen && !disabled);
   const close = (): void => {
     setOpen(false);
   };
+  const emptyLabel = typeof label === 'string' && label.trim() === '';
   return (
     <span className={['menuwrap', className ?? ''].filter(Boolean).join(' ')}>
       <Button
         ref={anchorRef}
+        variant={variant}
+        size={size}
         icon={icon}
+        disabled={disabled}
+        title={title}
+        aria-label={
+          ariaLabel ?? (emptyLabel ? (title ?? menuLabel) : undefined)
+        }
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => {
+          if (disabled) return;
           setOpen((was) => !was);
         }}
       >
         {label}
-        {trailingIcon ? <Icon name={trailingIcon} className="chevron" /> : null}
+        {trailingIcon != null ? (
+          <Icon name={trailingIcon} className="chevron" />
+        ) : null}
       </Button>
       {open ? (
         <AnchoredMenu

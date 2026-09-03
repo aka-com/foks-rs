@@ -54,3 +54,22 @@ export function hue(name: string): string {
   const sum = [...name].reduce((total, char) => total + char.charCodeAt(0), 0);
   return HUES[sum % HUES.length];
 }
+
+/**
+ * A long hex id, shortened for a row that has no room for all of it.
+ *
+ * `tail` is how many trailing characters survive: four is enough to tell two
+ * ids apart, but a host id is read out and compared by hand, so the server
+ * screen keeps eight. A value that is already short is returned whole rather
+ * than being padded out with an ellipsis into something longer than it was.
+ */
+export function shortId(value: string, tail = 4): string {
+  return value.length > 10 + tail
+    ? `${value.slice(0, 10)}…${value.slice(-tail)}`
+    : value;
+}
+
+/** "1 group" / "0 groups" — the count and the word that agrees with it. */
+export function plural(count: number, one: string, many = `${one}s`): string {
+  return `${count} ${count === 1 ? one : many}`;
+}

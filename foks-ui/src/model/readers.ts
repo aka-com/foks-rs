@@ -26,7 +26,9 @@ export function actionableGroupMember(world: World, party: Party): boolean {
     party.party_kind === 'user' &&
     party.locally_manageable &&
     party.label !== 'you' &&
-    partiesOf(world, party.store).filter((candidate) => candidate.username === party.username).length === 1,
+    partiesOf(world, party.store).filter(
+      (candidate) => candidate.username === party.username,
+    ).length === 1,
   );
 }
 
@@ -35,7 +37,10 @@ export function actionableGroupMember(world: World, party: Party): boolean {
  * Member visibility is live authority too: a lower band is safer than a
  * higher band before considering the next roster row.
  */
-export function safestRemovalTarget(world: World, ref: StoreRef): Party | undefined {
+export function safestRemovalTarget(
+  world: World,
+  ref: StoreRef,
+): Party | undefined {
   let safest: Party | undefined;
   let safestRank = Number.POSITIVE_INFINITY;
   let safestVisibility = Number.POSITIVE_INFINITY;
@@ -45,7 +50,10 @@ export function safestRemovalTarget(world: World, ref: StoreRef): Party | undefi
     if (!role) continue;
     const rank = roleRank(role);
     const visibility = role.kind === 'member' ? visibilityOf(role) : 0;
-    if (rank < safestRank || (rank === safestRank && visibility < safestVisibility)) {
+    if (
+      rank < safestRank ||
+      (rank === safestRank && visibility < safestVisibility)
+    ) {
       safest = party;
       safestRank = rank;
       safestVisibility = visibility;
@@ -67,8 +75,16 @@ export function admissionActive(
   ref: StoreRef,
 ): boolean {
   if (party.party_kind === 'user') return true;
+  // The same admission `loadWorld` selects for this party: when the party is
+  // scoped to a host, the admission must be from that host. Matching on team
+  // id alone counted an admission from a different host as this party's,
+  // and listed the group as a live reader while its name stayed unresolved.
   const entries = world.federation.filter(
-    (f) => f.store === ref && f.remote_team_id_hex === party.party_id_hex,
+    (f) =>
+      f.store === ref &&
+      f.remote_team_id_hex === party.party_id_hex &&
+      (!party.scoped_host_id_hex ||
+        f.remote_host_id_hex === party.scoped_host_id_hex),
   );
   return entries.length === 1 && entries[0]?.active === true;
 }

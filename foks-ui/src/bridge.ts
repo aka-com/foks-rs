@@ -13,6 +13,7 @@ import { itemKey, parseRole } from './model';
 import type {
   AgentStatus,
   Account,
+  GroupDetailFailure,
   Item,
   NodeKind,
   Party,
@@ -48,6 +49,14 @@ export interface CommandError {
   };
 }
 
+export type GroupDetailResult<T> =
+  { status: 'success'; value: T } | { status: 'error'; error: CommandError };
+
+export interface GroupDetailsDto {
+  parties: GroupDetailResult<Party[]>;
+  federation: GroupDetailResult<FederationEntry[]>;
+}
+
 export type RoleDto =
   | { role: 'Member'; visibility: number }
   | { role: 'Admin' }
@@ -76,9 +85,17 @@ export interface ItemDto {
   write: RoleDto;
 }
 
+export interface CatalogInventoryDto {
+  profile: string;
+  accountsComplete: boolean;
+  teamsComplete: boolean;
+}
+
 export interface CatalogDto {
   profiles: string[];
   stores: StoreDto[];
+  knownStores: StoreDto[];
+  inventory: CatalogInventoryDto[];
   items: ItemDto[];
   failures: CatalogFailureDto[];
   blockedProfiles: string[];
@@ -174,6 +191,11 @@ export interface ReplaceDroppedFileRequest extends ItemRequest {
 
 export interface DropHoverEvent {
   hovering: boolean;
+}
+
+export interface WindowStateEvent {
+  maximized: boolean;
+  fullscreen: boolean;
 }
 
 export interface CreateGroupRequest {
@@ -288,6 +310,33 @@ export interface AppInfo {
   agentSocket: string;
   /** Profile prepared and authenticated by the launcher before opening the app. */
   managedProfile?: string;
+  /** macOS Computer Name, the same string System Settings shows for this Mac. */
+  computerName?: string;
+}
+
+export interface GoProfileCandidate {
+  candidateId: string;
+  username?: string;
+  serverHint?: string;
+  hostId: string;
+  userId: string;
+  deviceId: string;
+  role: string;
+  storageKind:
+    | 'plaintext'
+    | 'passphrase'
+    | 'macos-keychain'
+    | 'noise-file'
+    | 'generic-keychain';
+  hidden: boolean;
+  provisional: boolean;
+  pairable: boolean;
+  copyable: boolean;
+}
+
+export interface GoProfileDiscovery {
+  installed: boolean;
+  candidates: GoProfileCandidate[];
 }
 
 export interface AppLockState {
@@ -381,20 +430,71 @@ export interface ProvisionYubiDeviceRequest {
 
 export type YubiCommand =
   | { command: 'create_yubi_account'; args: CreateYubiAccountRequest }
-  | { command: 'resume_yubi_account'; args: { profile: string; alias: string; pin: string } }
+  | {
+      command: 'resume_yubi_account';
+      args: { profile: string; alias: string; pin: string };
+    }
   | { command: 'provision_yubi_device'; args: ProvisionYubiDeviceRequest }
-  | { command: 'sync_yubi_account'; args: { profile: string; alias: string; pin: string; withFederation: boolean } }
+  | {
+      command: 'sync_yubi_account';
+      args: {
+        profile: string;
+        alias: string;
+        pin: string;
+        withFederation: boolean;
+      };
+    }
   | { command: 'yubi_pin_status'; args: { profile: string; alias: string } }
-  | { command: 'change_yubi_pin'; args: { profile: string; alias: string; oldPin: string; newPin: string } }
-  | { command: 'set_yubi_passphrase' | 'change_yubi_passphrase'; args: { profile: string; alias: string; pin: string; passphrase: string; confirmation: string } }
-  | { command: 'verify_yubi_passphrase'; args: { profile: string; alias: string; pin: string; passphrase: string } }
-  | { command: 'change_yubi_puk'; args: { profile: string; alias: string; oldPuk: string; newPuk: string } }
-  | { command: 'unblock_yubi_pin'; args: { profile: string; alias: string; puk: string; newPin: string } }
-  | { command: 'rotate_yubi_management_key'; args: { profile: string; alias: string; pin: string } }
-  | { command: 'resume_yubi_management_key'; args: { profile: string; alias: string; pin?: string } }
-  | { command: 'recover_yubi_management_key'; args: { accountStoreId: StoreRef; yubiAlias: string } }
-  | { command: 'recover_yubi_subkey'; args: { profile: string; alias: string; pin: string } }
-  | { command: 'revoke_yubi_device'; args: { accountStoreId: StoreRef; yubiAlias: string; confirmation: string } };
+  | {
+      command: 'change_yubi_pin';
+      args: { profile: string; alias: string; oldPin: string; newPin: string };
+    }
+  | {
+      command: 'set_yubi_passphrase' | 'change_yubi_passphrase';
+      args: {
+        profile: string;
+        alias: string;
+        pin: string;
+        passphrase: string;
+        confirmation: string;
+      };
+    }
+  | {
+      command: 'verify_yubi_passphrase';
+      args: { profile: string; alias: string; pin: string; passphrase: string };
+    }
+  | {
+      command: 'change_yubi_puk';
+      args: { profile: string; alias: string; oldPuk: string; newPuk: string };
+    }
+  | {
+      command: 'unblock_yubi_pin';
+      args: { profile: string; alias: string; puk: string; newPin: string };
+    }
+  | {
+      command: 'rotate_yubi_management_key';
+      args: { profile: string; alias: string; pin: string };
+    }
+  | {
+      command: 'resume_yubi_management_key';
+      args: { profile: string; alias: string; pin?: string };
+    }
+  | {
+      command: 'recover_yubi_management_key';
+      args: { accountStoreId: StoreRef; yubiAlias: string };
+    }
+  | {
+      command: 'recover_yubi_subkey';
+      args: { profile: string; alias: string; pin: string };
+    }
+  | {
+      command: 'revoke_yubi_device';
+      args: {
+        accountStoreId: StoreRef;
+        yubiAlias: string;
+        confirmation: string;
+      };
+    };
 
 /** Mock-only review facts. Ordinary production builds eliminate their module. */
 export interface FirstRunFixturePath {
@@ -425,6 +525,7 @@ export interface Bridge {
   readonly fixtureWorld?: World;
   readonly firstRunFixture?: FirstRunFixture;
   appLockState(): Promise<AppLockState>;
+  windowState(): Promise<WindowStateEvent>;
   lockApp(): Promise<AppLockState>;
   unlockApp(): Promise<AppLockState>;
   agentStatus(): Promise<AgentStatus>;
@@ -435,6 +536,7 @@ export interface Bridge {
   listStores(): Promise<CatalogDto>;
   listServers(): Promise<Server[]>;
   listAccounts(): Promise<Account[]>;
+  listGroupDetails(storeId: StoreRef): Promise<GroupDetailsDto>;
   listParties(storeId: StoreRef): Promise<Party[]>;
   listFederation(storeId: StoreRef): Promise<FederationEntry[]>;
   readItem(request: ItemRequest): Promise<ReadItemResponse>;
@@ -446,55 +548,218 @@ export interface Bridge {
   createFolder(request: CreateFolderRequest): Promise<MutationResponse>;
   editTextItem(request: EditTextRequest): Promise<MutationResponse>;
   removeItem(request: RemoveItemRequest): Promise<MutationResponse>;
-  importDroppedFile(request: ImportDroppedFileRequest): Promise<MutationResponse>;
+  importDroppedFile(
+    request: ImportDroppedFileRequest,
+  ): Promise<MutationResponse>;
   pickAndImportFile(request: CreateFileRequest): Promise<MutationResponse>;
-  replaceDroppedFile(request: ReplaceDroppedFileRequest): Promise<MutationResponse>;
+  replaceDroppedFile(
+    request: ReplaceDroppedFileRequest,
+  ): Promise<MutationResponse>;
   pickAndReplaceFile(request: ItemRequest): Promise<MutationResponse>;
   resumeGroupCreation(storeId: StoreRef): Promise<MutationResponse>;
   takeAgentConnectionLoss(): Promise<string | null>;
   retryAgentConnection(): Promise<AgentStatus>;
   createGroup(request: CreateGroupRequest): Promise<MutationResponse>;
   addGroupMember(request: GroupRoleRequest): Promise<MutationResponse>;
-  resumeGroupMemberAddition(request: GroupMemberRequest): Promise<MutationResponse>;
+  resumeGroupMemberAddition(
+    request: GroupMemberRequest,
+  ): Promise<MutationResponse>;
   demoteGroupMember(request: GroupRoleRequest): Promise<MutationResponse>;
   removeGroupMember(request: GroupMemberRequest): Promise<MutationResponse>;
   resumeGroupMemberEdit(storeId: StoreRef): Promise<MutationResponse>;
   admitGroup(request: AdmitGroupRequest): Promise<MutationResponse>;
-  rerunGroupAdmission(storeId: StoreRef, operationId: string): Promise<MutationResponse>;
+  rerunGroupAdmission(
+    storeId: StoreRef,
+    operationId: string,
+  ): Promise<MutationResponse>;
   copyText(text: string): Promise<CopyResponse>;
   initializeClientState(): Promise<AgentStatus>;
-  checkAndAddProfile(profileName: string, probe: string): Promise<CheckedProfileResponse>;
+  discoverGoProfiles(): Promise<GoProfileDiscovery>;
+  checkAndAddProfile(
+    profileName: string,
+    probe: string,
+  ): Promise<CheckedProfileResponse>;
+  checkAndAddGoProfile(
+    candidateId: string,
+    hostId: string,
+    profileName: string,
+    probe: string,
+  ): Promise<CheckedProfileResponse>;
   listPendingOperations(profile: string): Promise<PendingOperation[]>;
-  createFirstRunAccount(request: FirstRunAccountRequest): Promise<MutationResponse>;
-  resumeFirstRunAccount(profile: string, alias: string): Promise<MutationResponse>;
-  setFirstRunPassphrase(request: FirstRunPassphraseRequest): Promise<MutationResponse>;
-  prepareOwnerBackup(profile: string, accountAlias: string, backupAlias: string): Promise<BackupPhraseResponse>;
-  commitOwnerBackup(profile: string, accountAlias: string, backupAlias: string, phrase: string): Promise<MutationResponse>;
-  recoverOwnerAccount(profile: string, targetAlias: string, phrase: string, deviceName: string): Promise<MutationResponse>;
-  resumeOwnerRecovery(profile: string, targetAlias: string, phrase: string, deviceName: string): Promise<MutationResponse>;
-  discoverGroups(profile: string, accountAlias: string): Promise<GroupDiscoveryResponse>;
+  createFirstRunAccount(
+    request: FirstRunAccountRequest,
+  ): Promise<MutationResponse>;
+  resumeFirstRunAccount(
+    profile: string,
+    alias: string,
+  ): Promise<MutationResponse>;
+  setFirstRunPassphrase(
+    request: FirstRunPassphraseRequest,
+  ): Promise<MutationResponse>;
+  prepareOwnerBackup(
+    profile: string,
+    accountAlias: string,
+    backupAlias: string,
+  ): Promise<BackupPhraseResponse>;
+  commitOwnerBackup(
+    profile: string,
+    accountAlias: string,
+    backupAlias: string,
+    phrase: string,
+  ): Promise<MutationResponse>;
+  recoverOwnerAccount(
+    profile: string,
+    targetAlias: string,
+    phrase: string,
+    deviceName: string,
+  ): Promise<MutationResponse>;
+  resumeOwnerRecovery(
+    profile: string,
+    targetAlias: string,
+    phrase: string,
+    deviceName: string,
+  ): Promise<MutationResponse>;
+  discoverGroups(
+    profile: string,
+    accountAlias: string,
+  ): Promise<GroupDiscoveryResponse>;
   describeServerStatus(profile: string): Promise<ServerStatusSnapshot>;
   checkServer(profile: string): Promise<CheckedServer>;
-  addServer(profileName: string, probe: string): Promise<{ profile: string; configuredProbe: string }>;
-  forgetServer(profile: string, confirmation: string): Promise<{ profile: string; removed: true }>;
+  addServer(
+    profileName: string,
+    probe: string,
+  ): Promise<{ profile: string; configuredProbe: string }>;
+  forgetServer(
+    profile: string,
+    confirmation: string,
+  ): Promise<{ profile: string; removed: true }>;
   listAccountDevices(accountStoreId: StoreRef): Promise<AccountDevice[]>;
-  removeAccountDevice(accountStoreId: StoreRef, deviceId: string): Promise<{ deviceId: string; userChainSequence: number; alreadyAbsent: boolean }>;
+  removeAccountDevice(
+    accountStoreId: StoreRef,
+    deviceId: string,
+  ): Promise<{
+    deviceId: string;
+    userChainSequence: number;
+    alreadyAbsent: boolean;
+  }>;
   listBackupEnrollments(accountStoreId: StoreRef): Promise<BackupEnrollment[]>;
   startDevicePairing(accountStoreId: StoreRef): Promise<PairingOffer>;
   resumeDevicePairingOffer(accountStoreId: StoreRef): Promise<PairingOffer>;
   finishDevicePairing(accountStoreId: StoreRef): Promise<DeviceProvision>;
-  acceptDevicePairing(profile: string, targetAlias: string, deviceName: string, phrase: string): Promise<DeviceProvision>;
-  resumeDevicePairingAcceptance(profile: string, targetAlias: string): Promise<DeviceProvision>;
-  setAccountPassphrase(accountStoreId: StoreRef, passphrase: string, confirmation: string): Promise<PassphraseReport>;
-  changeAccountPassphrase(accountStoreId: StoreRef, passphrase: string, confirmation: string): Promise<PassphraseReport>;
-  verifyAccountPassphrase(accountStoreId: StoreRef, passphrase: string): Promise<PassphraseReport>;
+  acceptDevicePairing(
+    profile: string,
+    targetAlias: string,
+    deviceName: string,
+    phrase: string,
+  ): Promise<DeviceProvision>;
+  acceptGoProfilePairing(
+    candidateId: string,
+    profile: string,
+    targetAlias: string,
+    deviceName: string,
+    phrase: string,
+  ): Promise<DeviceProvision>;
+  resumeDevicePairingAcceptance(
+    profile: string,
+    targetAlias: string,
+  ): Promise<DeviceProvision>;
+  resumeGoProfilePairing(
+    candidateId: string,
+    profile: string,
+    targetAlias: string,
+  ): Promise<DeviceProvision>;
+  copyGoProfileDevice(
+    candidateId: string,
+    profile: string,
+    targetAlias: string,
+  ): Promise<DeviceProvision>;
+  setAccountPassphrase(
+    accountStoreId: StoreRef,
+    passphrase: string,
+    confirmation: string,
+  ): Promise<PassphraseReport>;
+  changeAccountPassphrase(
+    accountStoreId: StoreRef,
+    passphrase: string,
+    confirmation: string,
+  ): Promise<PassphraseReport>;
+  verifyAccountPassphrase(
+    accountStoreId: StoreRef,
+    passphrase: string,
+  ): Promise<PassphraseReport>;
   describeReset(profile: string): Promise<ResetPreview>;
-  resetServer(profile: string, confirmation: string, token: string): Promise<MutationResponse>;
+  resetServer(
+    profile: string,
+    confirmation: string,
+    token: string,
+  ): Promise<MutationResponse>;
   listYubiCards(profile: string): Promise<{ serial: number }[]>;
   listYubiAccounts(profile: string): Promise<YubiEnrollment[]>;
   runYubi(command: YubiCommand): Promise<Record<string, unknown>>;
   onDropHover(listener: (event: DropHoverEvent) => void): Promise<Unlisten>;
   onDropPaths(listener: (paths: string[]) => void): Promise<Unlisten>;
+  onWindowState(listener: (event: WindowStateEvent) => void): Promise<Unlisten>;
+}
+
+const pendingServerStatuses = new WeakMap<
+  Bridge,
+  Map<string, Promise<ServerStatusSnapshot>>
+>();
+const profileWork = new WeakMap<Bridge, Map<string, Promise<void>>>();
+
+/**
+ * The agent tries the per-profile lock and does not wait. Overlapping UI
+ * reads for one profile therefore fail with `profile-busy` instead of
+ * queuing. Run `work` after other profile-scoped UI work for this bridge
+ * and profile has finished, so the UI can wait behind a loading state.
+ */
+export function enqueueProfileWork<T>(
+  bridge: Bridge,
+  profile: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  let queues = profileWork.get(bridge);
+  if (!queues) {
+    queues = new Map();
+    profileWork.set(bridge, queues);
+  }
+  const previous = queues.get(profile) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  queues.set(profile, gate);
+  return previous
+    .catch(() => undefined)
+    .then(async () => {
+      try {
+        return await work();
+      } finally {
+        release();
+      }
+    });
+}
+
+export function sharedServerStatus(
+  bridge: Bridge,
+  profile: string,
+): Promise<ServerStatusSnapshot> {
+  let statuses = pendingServerStatuses.get(bridge);
+  if (!statuses) {
+    statuses = new Map();
+    pendingServerStatuses.set(bridge, statuses);
+  }
+  const active = statuses.get(profile);
+  if (active) return active;
+  const pending = enqueueProfileWork(bridge, profile, () =>
+    bridge.describeServerStatus(profile),
+  );
+  statuses.set(profile, pending);
+  const clear = (): void => {
+    if (statuses.get(profile) === pending) statuses.delete(profile);
+  };
+  void pending.then(clear, clear);
+  return pending;
 }
 
 function record(value: unknown, at: string): Record<string, unknown> {
@@ -509,7 +774,11 @@ function string(value: unknown, at: string): string {
   return value;
 }
 
-function entityId(value: unknown, prefix: '02' | '03' | '04' | '0d' | '10' | '14', at: string): string {
+function entityId(
+  value: unknown,
+  prefix: '01' | '02' | '03' | '04' | '0d' | '10' | '14',
+  at: string,
+): string {
   const result = string(value, at);
   if (!new RegExp(`^${prefix}[0-9a-f]{64}$`).test(result)) {
     throw new Error(`${at} must be a canonical ${prefix} entity id`);
@@ -538,7 +807,11 @@ function integer(value: unknown, at: string): number {
 }
 
 function signed16(value: unknown, at: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < -32768 || (value as number) > 32767) {
+  if (
+    !Number.isSafeInteger(value) ||
+    (value as number) < -32768 ||
+    (value as number) > 32767
+  ) {
     throw new Error(`${at} must be a signed 16-bit integer`);
   }
   return value as number;
@@ -629,7 +902,8 @@ function decodeServer(value: unknown, at: string): Server {
   if (!['ok', 'lease-lapsed', 'never-probed', 'blocked'].includes(state)) {
     throw new Error(`${at}.state is not a server state`);
   }
-  if (item.lease !== null) throw new Error(`${at}.lease must be null until lease facts exist`);
+  if (item.lease !== null)
+    throw new Error(`${at}.lease must be null until lease facts exist`);
   return {
     id: string(item.id, `${at}.id`),
     name: string(item.name, `${at}.name`),
@@ -649,19 +923,29 @@ function decodeParty(value: unknown, at: string): Party {
   if (kind !== 'user' && kind !== 'named-team' && kind !== 'ad-hoc-team') {
     throw new Error(`${at}.party_kind is not user, named-team, or ad-hoc-team`);
   }
-  const username = item.username === null
-    ? null
-    : optionalString(item.username, `${at}.username`);
+  const username =
+    item.username === null
+      ? null
+      : optionalString(item.username, `${at}.username`);
   return {
     store: string(item.store, `${at}.store`),
     username,
     party_kind: kind,
     generation: integer(item.generation, `${at}.generation`),
-    locally_manageable: bool(item.locally_manageable, `${at}.locally_manageable`),
+    locally_manageable: bool(
+      item.locally_manageable,
+      `${at}.locally_manageable`,
+    ),
     party_id_hex: string(item.party_id_hex, `${at}.party_id_hex`),
-    scoped_host_id_hex: optionalString(item.scoped_host_id_hex, `${at}.scoped_host_id_hex`),
+    scoped_host_id_hex: optionalString(
+      item.scoped_host_id_hex,
+      `${at}.scoped_host_id_hex`,
+    ),
     source_role: decodeRole(item.source_role, `${at}.source_role`),
-    destination_role: decodeRole(item.destination_role, `${at}.destination_role`),
+    destination_role: decodeRole(
+      item.destination_role,
+      `${at}.destination_role`,
+    ),
     label: optionalString(item.label, `${at}.label`),
     team_name: optionalString(item.team_name, `${at}.team_name`),
   };
@@ -686,16 +970,31 @@ function decodeFederationEntry(value: unknown, at: string): FederationEntry {
   return {
     store: string(item.store, `${at}.store`),
     remote_profile: string(item.remote_profile, `${at}.remote_profile`),
-    remote_team_alias: string(item.remote_team_alias, `${at}.remote_team_alias`),
-    remote_host_id_hex: string(item.remote_host_id_hex, `${at}.remote_host_id_hex`),
-    remote_team_id_hex: string(item.remote_team_id_hex, `${at}.remote_team_id_hex`),
+    remote_team_alias: string(
+      item.remote_team_alias,
+      `${at}.remote_team_alias`,
+    ),
+    remote_host_id_hex: string(
+      item.remote_host_id_hex,
+      `${at}.remote_host_id_hex`,
+    ),
+    remote_team_id_hex: string(
+      item.remote_team_id_hex,
+      `${at}.remote_team_id_hex`,
+    ),
     destination: decodeRole(item.destination, `${at}.destination`),
-    operation_id_hex: optionalString(item.operation_id_hex, `${at}.operation_id_hex`),
+    operation_id_hex: optionalString(
+      item.operation_id_hex,
+      `${at}.operation_id_hex`,
+    ),
     active: bool(item.active, `${at}.active`),
   };
 }
 
-function decodeErrorDetails(value: unknown, at: string): CommandError['details'] {
+function decodeErrorDetails(
+  value: unknown,
+  at: string,
+): CommandError['details'] {
   if (value === undefined) return undefined;
   const item = record(value, at);
   return {
@@ -726,7 +1025,12 @@ function decodeFailure(value: unknown, at: string): CatalogFailureDto {
   const profile = string(item.profile, `${at}.profile`);
   const error = decodeCommandError(item.error, `${at}.error`);
   if (scope === 'profile') {
-    return { scope, profile, source: string(item.source, `${at}.source`), error };
+    return {
+      scope,
+      profile,
+      source: string(item.source, `${at}.source`),
+      error,
+    };
   }
   if (scope === 'store') {
     return { scope, profile, store: string(item.store, `${at}.store`), error };
@@ -741,11 +1045,51 @@ export const decodeParties = (value: unknown): Party[] =>
 export const decodeFederation = (value: unknown): FederationEntry[] =>
   array(value, 'list_federation response', decodeFederationEntry);
 
+function decodeGroupDetailResult<T>(
+  value: unknown,
+  at: string,
+  decode: (value: unknown) => T,
+): GroupDetailResult<T> {
+  const item = record(value, at);
+  const status = string(item.status, `${at}.status`);
+  if (status === 'success') return { status, value: decode(item.value) };
+  if (status === 'error')
+    return { status, error: decodeCommandError(item.error, `${at}.error`) };
+  throw new Error(`${at}.status is not success or error`);
+}
+
+export function decodeGroupDetails(value: unknown): GroupDetailsDto {
+  const item = record(value, 'list_group_details response');
+  return {
+    parties: decodeGroupDetailResult(
+      item.parties,
+      'list_group_details response.parties',
+      decodeParties,
+    ),
+    federation: decodeGroupDetailResult(
+      item.federation,
+      'list_group_details response.federation',
+      decodeFederation,
+    ),
+  };
+}
+
+function decodeInventory(value: unknown, at: string): CatalogInventoryDto {
+  const item = record(value, at);
+  return {
+    profile: string(item.profile, `${at}.profile`),
+    accountsComplete: bool(item.accountsComplete, `${at}.accountsComplete`),
+    teamsComplete: bool(item.teamsComplete, `${at}.teamsComplete`),
+  };
+}
+
 export function decodeCatalog(value: unknown): CatalogDto {
   const item = record(value, 'list_catalog response');
   return {
     profiles: array(item.profiles, 'profiles', string),
     stores: array(item.stores, 'stores', decodeStore),
+    knownStores: array(item.knownStores, 'knownStores', decodeStore),
+    inventory: array(item.inventory, 'inventory', decodeInventory),
     items: array(item.items, 'items', decodeItem),
     failures: array(item.failures, 'failures', decodeFailure),
     blockedProfiles: array(item.blockedProfiles, 'blockedProfiles', string),
@@ -780,7 +1124,10 @@ export function decodeMutation(value: unknown): MutationResponse {
 
 export function decodeCheckedProfile(value: unknown): CheckedProfileResponse {
   const item = record(value, 'check_and_add_profile response');
-  const acceptance = string(item.acceptance, 'check_and_add_profile.acceptance');
+  const acceptance = string(
+    item.acceptance,
+    'check_and_add_profile.acceptance',
+  );
   if (
     acceptance !== 'inserted' &&
     acceptance !== 'advanced' &&
@@ -792,7 +1139,10 @@ export function decodeCheckedProfile(value: unknown): CheckedProfileResponse {
     profile: string(item.profile, 'check_and_add_profile.profile'),
     acceptance,
     lookupName: string(item.lookupName, 'check_and_add_profile.lookupName'),
-    canonicalName: string(item.canonicalName, 'check_and_add_profile.canonicalName'),
+    canonicalName: string(
+      item.canonicalName,
+      'check_and_add_profile.canonicalName',
+    ),
     hostId: entityId(item.hostId, '02', 'check_and_add_profile.hostId'),
     chain: integer(item.chain, 'check_and_add_profile.chain'),
     epoch: integer(item.epoch, 'check_and_add_profile.epoch'),
@@ -800,9 +1150,16 @@ export function decodeCheckedProfile(value: unknown): CheckedProfileResponse {
 }
 
 const PENDING_KINDS: readonly PendingOperationKind[] = [
-  'account-signup', 'device-provision', 'pairing-offer', 'pairing-acceptance',
-  'account-recovery', 'yubi-enrollment', 'team-creation',
-  'team-member-addition', 'team-member-edit', 'team-rekey',
+  'account-signup',
+  'device-provision',
+  'pairing-offer',
+  'pairing-acceptance',
+  'account-recovery',
+  'yubi-enrollment',
+  'team-creation',
+  'team-member-addition',
+  'team-member-edit',
+  'team-rekey',
 ];
 
 function decodePendingOperation(value: unknown, at: string): PendingOperation {
@@ -832,7 +1189,8 @@ export function decodeBackupPhrase(value: unknown): BackupPhraseResponse {
 function decodeDiscoveredGroup(value: unknown, at: string): DiscoveredGroup {
   const item = record(value, at);
   const kind = string(item.kind, `${at}.kind`);
-  if (kind !== 'named' && kind !== 'adhoc') throw new Error(`${at}.kind is not named or adhoc`);
+  if (kind !== 'named' && kind !== 'adhoc')
+    throw new Error(`${at}.kind is not named or adhoc`);
   const name = optionalString(item.name, `${at}.name`);
   if ((kind === 'named') !== Boolean(name)) {
     throw new Error(`${at}.name must be present only for a named group`);
@@ -853,15 +1211,26 @@ function decodeDiscoveredGroup(value: unknown, at: string): DiscoveredGroup {
 
 export function decodeGroupDiscovery(value: unknown): GroupDiscoveryResponse {
   const item = record(value, 'discover_groups response');
-  const accountAlias = string(item.accountAlias, 'discover_groups.accountAlias');
-  const groups = array(item.groups, 'discover_groups.groups', decodeDiscoveredGroup);
+  const accountAlias = string(
+    item.accountAlias,
+    'discover_groups.accountAlias',
+  );
+  const groups = array(
+    item.groups,
+    'discover_groups.groups',
+    decodeDiscoveredGroup,
+  );
   if (groups.some((group) => group.accountAlias !== accountAlias)) {
     throw new Error('discover_groups returned a group for a different account');
   }
   return { accountAlias, groups };
 }
 
-function nullable<T>(value: unknown, at: string, decode: (value: unknown, at: string) => T): T | null {
+function nullable<T>(
+  value: unknown,
+  at: string,
+  decode: (value: unknown, at: string) => T,
+): T | null {
   return value === null ? null : decode(value, at);
 }
 
@@ -880,25 +1249,132 @@ export function decodeServerStatus(value: unknown): ServerStatusSnapshot {
   const item = record(value, 'describe_server_status response');
   const status = {
     profile: string(item.profile, 'describe_server_status.profile'),
-    configuredProbe: string(item.configuredProbe, 'describe_server_status.configuredProbe'),
+    configuredProbe: string(
+      item.configuredProbe,
+      'describe_server_status.configuredProbe',
+    ),
     host: nullable(item.host, 'describe_server_status.host', decodeStoredHost),
-    leaseRequired: bool(item.leaseRequired, 'describe_server_status.leaseRequired'),
-    leaseExpiresAt: nullable(item.leaseExpiresAt, 'describe_server_status.leaseExpiresAt', integer),
+    leaseRequired: bool(
+      item.leaseRequired,
+      'describe_server_status.leaseRequired',
+    ),
+    leaseExpiresAt: nullable(
+      item.leaseExpiresAt,
+      'describe_server_status.leaseExpiresAt',
+      integer,
+    ),
   };
   if (!status.leaseRequired && status.leaseExpiresAt !== null) {
-    throw new Error('describe_server_status returned a lease for a lease-free protocol');
+    throw new Error(
+      'describe_server_status returned a lease for a lease-free protocol',
+    );
   }
   return status;
 }
 
 export function decodeAppInfo(value: unknown): AppInfo {
   const item = record(value, 'app_info response');
-  const managedProfile = optionalString(item.managedProfile, 'app_info.managedProfile');
+  const managedProfile = optionalString(
+    item.managedProfile,
+    'app_info.managedProfile',
+  );
+  const computerName = optionalString(
+    item.computerName,
+    'app_info.computerName',
+  );
   return {
     version: string(item.version, 'app_info.version'),
     agentSocket: string(item.agentSocket, 'app_info.agentSocket'),
     ...(managedProfile ? { managedProfile } : {}),
+    ...(computerName ? { computerName } : {}),
   };
+}
+
+function decodeGoProfileCandidate(
+  value: unknown,
+  at: string,
+): GoProfileCandidate {
+  const item = record(value, at);
+  const candidateId = string(item.candidateId, `${at}.candidateId`);
+  if (!/^[0-9a-f]{64}$/.test(candidateId))
+    throw new Error(`${at}.candidateId is not canonical hex`);
+  const username = optionalString(item.username, `${at}.username`);
+  const serverHint = optionalString(item.serverHint, `${at}.serverHint`);
+  const hostId = entityId(item.hostId, '02', `${at}.hostId`);
+  const userId = entityId(item.userId, '01', `${at}.userId`);
+  const deviceId = string(item.deviceId, `${at}.deviceId`);
+  if (
+    !/^(04|10|13)[0-9a-f]{64}$/.test(deviceId) &&
+    !/^08[0-9a-f]{66}$/.test(deviceId)
+  )
+    throw new Error(`${at}.deviceId is not a supported FOKS key id`);
+  const role = string(item.role, `${at}.role`);
+  const member = /^member\((-?(?:0|[1-9][0-9]{0,4}))\)$/.exec(role);
+  if (
+    !['none', 'admin', 'owner'].includes(role) &&
+    (!member || Math.abs(Number(member[1])) > 16384)
+  )
+    throw new Error(`${at}.role is invalid`);
+  const storageKind = string(item.storageKind, `${at}.storageKind`);
+  if (
+    ![
+      'plaintext',
+      'passphrase',
+      'macos-keychain',
+      'noise-file',
+      'generic-keychain',
+    ].includes(storageKind)
+  )
+    throw new Error(`${at}.storageKind is unsupported`);
+  const hidden = bool(item.hidden, `${at}.hidden`);
+  const provisional = bool(item.provisional, `${at}.provisional`);
+  const pairable = bool(item.pairable, `${at}.pairable`);
+  const copyable = bool(item.copyable, `${at}.copyable`);
+  if ((hidden || provisional) && (pairable || copyable))
+    throw new Error(`${at} exposes an incomplete Go profile`);
+  if (
+    copyable &&
+    (!pairable ||
+      !deviceId.startsWith('04') ||
+      storageKind !== 'macos-keychain')
+  )
+    throw new Error(`${at} exposes an unsupported device copy`);
+  return {
+    candidateId,
+    ...(username ? { username } : {}),
+    ...(serverHint ? { serverHint } : {}),
+    hostId,
+    userId,
+    deviceId,
+    role,
+    storageKind: storageKind as GoProfileCandidate['storageKind'],
+    hidden,
+    provisional,
+    pairable,
+    copyable,
+  };
+}
+
+export function decodeGoProfileDiscovery(value: unknown): GoProfileDiscovery {
+  const item = record(value, 'discover_go_profiles response');
+  const installed = bool(item.installed, 'discover_go_profiles.installed');
+  const candidates = array(
+    item.candidates,
+    'discover_go_profiles.candidates',
+    decodeGoProfileCandidate,
+  );
+  if (candidates.length > 128)
+    throw new Error('discover_go_profiles returned too many candidates');
+  if (!installed && candidates.length)
+    throw new Error(
+      'discover_go_profiles returned candidates without an installation',
+    );
+  if (
+    new Set(candidates.map((candidate) => candidate.candidateId)).size !==
+    candidates.length
+  )
+    throw new Error('discover_go_profiles returned duplicate candidates');
+  return { installed, candidates };
 }
 
 export function decodeAppLockState(value: unknown): AppLockState {
@@ -916,7 +1392,10 @@ export function decodeAppLockState(value: unknown): AppLockState {
   if (locked && !available) {
     throw new Error('an unavailable app lock cannot be armed');
   }
-  if ((available && mechanism === 'none') || (!available && mechanism !== 'none')) {
+  if (
+    (available && mechanism === 'none') ||
+    (!available && mechanism !== 'none')
+  ) {
     throw new Error('app_lock_state capability and mechanism disagree');
   }
   if ((!available && !unavailableReason) || (available && unavailableReason)) {
@@ -934,7 +1413,9 @@ export function decodeCheckedServer(value: unknown): CheckedServer {
   const item = record(value, 'check_server response');
   const acceptance = string(item.acceptance, 'check_server.acceptance');
   if (!['inserted', 'advanced', 'unchanged'].includes(acceptance)) {
-    throw new Error('check_server.acceptance must be inserted, advanced, or unchanged');
+    throw new Error(
+      'check_server.acceptance must be inserted, advanced, or unchanged',
+    );
   }
   return {
     profile: string(item.profile, 'check_server.profile'),
@@ -943,109 +1424,249 @@ export function decodeCheckedServer(value: unknown): CheckedServer {
   };
 }
 
-const decodeAddedServer = (value: unknown): { profile: string; configuredProbe: string } => {
+const decodeAddedServer = (
+  value: unknown,
+): { profile: string; configuredProbe: string } => {
   const item = record(value, 'add_server response');
-  return { profile: string(item.profile, 'add_server.profile'), configuredProbe: string(item.configuredProbe, 'add_server.configuredProbe') };
+  return {
+    profile: string(item.profile, 'add_server.profile'),
+    configuredProbe: string(item.configuredProbe, 'add_server.configuredProbe'),
+  };
 };
 
-const decodeForgottenServer = (value: unknown): { profile: string; removed: true } => {
+const decodeForgottenServer = (
+  value: unknown,
+): { profile: string; removed: true } => {
   const item = record(value, 'forget_server response');
-  if (item.removed !== true) throw new Error('forget_server.removed must be true');
-  return { profile: string(item.profile, 'forget_server.profile'), removed: true };
+  if (item.removed !== true)
+    throw new Error('forget_server.removed must be true');
+  return {
+    profile: string(item.profile, 'forget_server.profile'),
+    removed: true,
+  };
 };
 
 function decodeAccountDevice(value: unknown, at: string): AccountDevice {
   const item = record(value, at);
   const role = string(item.role, `${at}.role`);
-  if (role !== 'owner' && role !== 'admin' && role !== 'member') throw new Error(`${at}.role is invalid`);
-  return { id: deviceMemberId(item.id, `${at}.id`), name: optionalString(item.name, `${at}.name`), role, current: bool(item.current, `${at}.current`) };
+  if (role !== 'owner' && role !== 'admin' && role !== 'member')
+    throw new Error(`${at}.role is invalid`);
+  return {
+    id: deviceMemberId(item.id, `${at}.id`),
+    name: optionalString(item.name, `${at}.name`),
+    role,
+    current: bool(item.current, `${at}.current`),
+  };
 }
-export const decodeAccountDevices = (value: unknown): AccountDevice[] => array(value, 'list_account_devices response', decodeAccountDevice);
+export const decodeAccountDevices = (value: unknown): AccountDevice[] =>
+  array(value, 'list_account_devices response', decodeAccountDevice);
 
 function decodeBackupEnrollment(value: unknown, at: string): BackupEnrollment {
   const item = record(value, at);
-  return { backupAlias: string(item.backupAlias, `${at}.backupAlias`), accountAlias: string(item.accountAlias, `${at}.accountAlias`), backupId: entityId(item.backupId, '10', `${at}.backupId`) };
+  return {
+    backupAlias: string(item.backupAlias, `${at}.backupAlias`),
+    accountAlias: string(item.accountAlias, `${at}.accountAlias`),
+    backupId: entityId(item.backupId, '10', `${at}.backupId`),
+  };
 }
-export const decodeBackupEnrollments = (value: unknown): BackupEnrollment[] => array(value, 'list_backup_enrollments response', decodeBackupEnrollment);
+export const decodeBackupEnrollments = (value: unknown): BackupEnrollment[] =>
+  array(value, 'list_backup_enrollments response', decodeBackupEnrollment);
 
 export function decodePairingOffer(value: unknown): PairingOffer {
   const item = record(value, 'pairing offer response');
-  return { accountAlias: string(item.accountAlias, 'pairing offer.accountAlias'), phrase: string(item.phrase, 'pairing offer.phrase') };
+  return {
+    accountAlias: string(item.accountAlias, 'pairing offer.accountAlias'),
+    phrase: string(item.phrase, 'pairing offer.phrase'),
+  };
 }
 export function decodeDeviceProvision(value: unknown): DeviceProvision {
   const item = record(value, 'device provision response');
-  return { alias: string(item.alias, 'device provision.alias'), deviceId: entityId(item.deviceId, '04', 'device provision.deviceId'), userChainSequence: integer(item.userChainSequence, 'device provision.userChainSequence') };
+  return {
+    alias: string(item.alias, 'device provision.alias'),
+    deviceId: entityId(item.deviceId, '04', 'device provision.deviceId'),
+    userChainSequence: integer(
+      item.userChainSequence,
+      'device provision.userChainSequence',
+    ),
+  };
 }
 
-export function decodeDeviceRemoval(value: unknown): { deviceId: string; userChainSequence: number; alreadyAbsent: boolean } {
+export function decodeDeviceRemoval(value: unknown): {
+  deviceId: string;
+  userChainSequence: number;
+  alreadyAbsent: boolean;
+} {
   const item = record(value, 'remove_account_device response');
   return {
     deviceId: entityId(item.deviceId, '04', 'remove_account_device.deviceId'),
-    userChainSequence: integer(item.userChainSequence, 'remove_account_device.userChainSequence'),
-    alreadyAbsent: bool(item.alreadyAbsent, 'remove_account_device.alreadyAbsent'),
+    userChainSequence: integer(
+      item.userChainSequence,
+      'remove_account_device.userChainSequence',
+    ),
+    alreadyAbsent: bool(
+      item.alreadyAbsent,
+      'remove_account_device.alreadyAbsent',
+    ),
   };
 }
 export function decodePassphraseReport(value: unknown): PassphraseReport {
   const item = record(value, 'passphrase response');
-  if (item.stretchVersion !== 'v1' || item.verified !== true) throw new Error('passphrase response is invalid');
-  return { generation: integer(item.generation, 'passphrase.generation'), stretchVersion: 'v1', verified: true };
+  if (item.stretchVersion !== 'v1' || item.verified !== true)
+    throw new Error('passphrase response is invalid');
+  return {
+    generation: integer(item.generation, 'passphrase.generation'),
+    stretchVersion: 'v1',
+    verified: true,
+  };
 }
 
-function decodeResetArtifact(value: unknown, at: string): ResetPreview['artifacts'][number] {
+function decodeResetArtifact(
+  value: unknown,
+  at: string,
+): ResetPreview['artifacts'][number] {
   const item = record(value, at);
-  return { kind: string(item.kind, `${at}.kind`), entries: integer(item.entries, `${at}.entries`), bytes: integer(item.bytes, `${at}.bytes`) };
+  return {
+    kind: string(item.kind, `${at}.kind`),
+    entries: integer(item.entries, `${at}.entries`),
+    bytes: integer(item.bytes, `${at}.bytes`),
+  };
 }
 export function decodeResetPreview(value: unknown): ResetPreview {
   const item = record(value, 'describe_reset response');
   return {
     profile: string(item.profile, 'describe_reset.profile'),
-    resumables: array(item.resumables, 'describe_reset.resumables', decodePendingOperation),
-    artifacts: array(item.artifacts, 'describe_reset.artifacts', decodeResetArtifact),
+    resumables: array(
+      item.resumables,
+      'describe_reset.resumables',
+      decodePendingOperation,
+    ),
+    artifacts: array(
+      item.artifacts,
+      'describe_reset.artifacts',
+      decodeResetArtifact,
+    ),
     token: string(item.token, 'describe_reset.token'),
-    expiresInSeconds: integer(item.expiresInSeconds, 'describe_reset.expiresInSeconds'),
+    expiresInSeconds: integer(
+      item.expiresInSeconds,
+      'describe_reset.expiresInSeconds',
+    ),
   };
 }
 
-export const decodeYubiCards = (value: unknown): { serial: number }[] => array(value, 'list_yubi_cards response', (entry, at) => ({ serial: integer(record(entry, at).serial, `${at}.serial`) }));
-export const decodeYubiAccounts = (value: unknown): YubiEnrollment[] => array(value, 'list_yubi_accounts response', (entry, at) => {
-  const item = record(entry, at);
-  const state = string(item.state, `${at}.state`);
-  if (state !== 'pending' && state !== 'complete') throw new Error(`${at}.state is invalid`);
-  return { alias: string(item.alias, `${at}.alias`), state };
-});
+export const decodeYubiCards = (value: unknown): { serial: number }[] =>
+  array(value, 'list_yubi_cards response', (entry, at) => ({
+    serial: integer(record(entry, at).serial, `${at}.serial`),
+  }));
+export const decodeYubiAccounts = (value: unknown): YubiEnrollment[] =>
+  array(value, 'list_yubi_accounts response', (entry, at) => {
+    const item = record(entry, at);
+    const state = string(item.state, `${at}.state`);
+    if (state !== 'pending' && state !== 'complete')
+      throw new Error(`${at}.state is invalid`);
+    return { alias: string(item.alias, `${at}.alias`), state };
+  });
 
-export function decodeYubiResult(command: YubiCommand['command'], value: unknown): Record<string, unknown> {
+export function decodeYubiResult(
+  command: YubiCommand['command'],
+  value: unknown,
+): Record<string, unknown> {
   const item = record(value, `${command} response`);
-  if (command === 'yubi_pin_status' || command === 'change_yubi_pin' || command === 'unblock_yubi_pin') {
-    return { remaining: integer(item.remaining, `${command}.remaining`), blocked: bool(item.blocked, `${command}.blocked`) };
+  if (
+    command === 'yubi_pin_status' ||
+    command === 'change_yubi_pin' ||
+    command === 'unblock_yubi_pin'
+  ) {
+    return {
+      remaining: integer(item.remaining, `${command}.remaining`),
+      blocked: bool(item.blocked, `${command}.blocked`),
+    };
   } else if (command.includes('passphrase')) {
     return { ...decodePassphraseReport(item) };
-  } else if (command === 'create_yubi_account' || command === 'resume_yubi_account' || command === 'provision_yubi_device') {
+  } else if (
+    command === 'create_yubi_account' ||
+    command === 'resume_yubi_account' ||
+    command === 'provision_yubi_device'
+  ) {
     const yubiId = string(item.yubiId, `${command}.yubiId`);
-    if (!/^08[0-9a-f]{66}$/.test(yubiId)) throw new Error(`${command}.yubiId must be a canonical YubiKey id`);
+    if (!/^08[0-9a-f]{66}$/.test(yubiId))
+      throw new Error(`${command}.yubiId must be a canonical YubiKey id`);
     const subkeyId = entityId(item.subkeyId, '0d', `${command}.subkeyId`);
-    return { alias: string(item.alias, `${command}.alias`), username: string(item.username, `${command}.username`), yubiId, subkeyId, userChainSequence: integer(item.userChainSequence, `${command}.userChainSequence`), managementEnrolled: bool(item.managementEnrolled, `${command}.managementEnrolled`) };
+    return {
+      alias: string(item.alias, `${command}.alias`),
+      username: string(item.username, `${command}.username`),
+      yubiId,
+      subkeyId,
+      userChainSequence: integer(
+        item.userChainSequence,
+        `${command}.userChainSequence`,
+      ),
+      managementEnrolled: bool(
+        item.managementEnrolled,
+        `${command}.managementEnrolled`,
+      ),
+    };
   } else if (command === 'sync_yubi_account') {
     return {
       username: string(item.username, `${command}.username`),
-      userChainSequence: integer(item.userChainSequence, `${command}.userChainSequence`),
+      userChainSequence: integer(
+        item.userChainSequence,
+        `${command}.userChainSequence`,
+      ),
       directories: integer(item.directories, `${command}.directories`),
       entries: integer(item.entries, `${command}.entries`),
-      federation: array(item.federation, `${command}.federation`, (value, at) => {
-        const row = record(value, at);
-        return { localProfile: string(row.localProfile, `${at}.localProfile`), localTeamAlias: string(row.localTeamAlias, `${at}.localTeamAlias`), refreshed: bool(row.refreshed, `${at}.refreshed`), deferred: nullable(row.deferred, `${at}.deferred`, string) };
-      }),
+      federation: array(
+        item.federation,
+        `${command}.federation`,
+        (value, at) => {
+          const row = record(value, at);
+          return {
+            localProfile: string(row.localProfile, `${at}.localProfile`),
+            localTeamAlias: string(row.localTeamAlias, `${at}.localTeamAlias`),
+            refreshed: bool(row.refreshed, `${at}.refreshed`),
+            deferred: nullable(row.deferred, `${at}.deferred`, string),
+          };
+        },
+      ),
     };
   } else if (command === 'change_yubi_puk') {
-    if (item.changed !== true) throw new Error(`${command}.changed must be true`);
+    if (item.changed !== true)
+      throw new Error(`${command}.changed must be true`);
     return { alias: string(item.alias, `${command}.alias`), changed: true };
   } else if (command === 'recover_yubi_subkey') {
     const subkeyId = entityId(item.subkeyId, '0d', `${command}.subkeyId`);
-    return { alias: string(item.alias, `${command}.alias`), subkeyId, certificateCount: integer(item.certificateCount, `${command}.certificateCount`) };
+    return {
+      alias: string(item.alias, `${command}.alias`),
+      subkeyId,
+      certificateCount: integer(
+        item.certificateCount,
+        `${command}.certificateCount`,
+      ),
+    };
   } else if (command === 'revoke_yubi_device') {
-    return { alias: string(item.alias, `${command}.alias`), userChainSequence: integer(item.userChainSequence, `${command}.userChainSequence`), removedLocalCredential: bool(item.removedLocalCredential, `${command}.removedLocalCredential`) };
+    return {
+      alias: string(item.alias, `${command}.alias`),
+      userChainSequence: integer(
+        item.userChainSequence,
+        `${command}.userChainSequence`,
+      ),
+      removedLocalCredential: bool(
+        item.removedLocalCredential,
+        `${command}.removedLocalCredential`,
+      ),
+    };
   }
-  return { alias: string(item.alias, `${command}.alias`), managementEnrolled: bool(item.managementEnrolled, `${command}.managementEnrolled`), managementGeneration: nullable(item.managementGeneration, `${command}.managementGeneration`, integer) };
+  return {
+    alias: string(item.alias, `${command}.alias`),
+    managementEnrolled: bool(
+      item.managementEnrolled,
+      `${command}.managementEnrolled`,
+    ),
+    managementGeneration: nullable(
+      item.managementGeneration,
+      `${command}.managementGeneration`,
+      integer,
+    ),
+  };
 }
 
 function decodeDropHover(value: unknown): DropHoverEvent {
@@ -1057,13 +1678,24 @@ function decodeDropPaths(value: unknown): string[] {
   return array(value, 'foks://drop-paths payload', string);
 }
 
+function decodeWindowState(value: unknown): WindowStateEvent {
+  const item = record(value, 'foks://window-state payload');
+  return {
+    maximized: bool(item.maximized, 'foks://window-state.maximized'),
+    fullscreen: bool(item.fullscreen, 'foks://window-state.fullscreen'),
+  };
+}
+
 export function normalizeCommandError(value: unknown): CommandError {
   try {
     return decodeCommandError(value, 'command error');
   } catch {
     return {
       code: 'invalid-command-error',
-      message: value instanceof Error ? value.message : 'The local agent returned an invalid error.',
+      message:
+        value instanceof Error
+          ? value.message
+          : 'The local agent returned an invalid error.',
       retryable: false,
       ambiguous: true,
       fatal: true,
@@ -1071,31 +1703,54 @@ export function normalizeCommandError(value: unknown): CommandError {
   }
 }
 
-function notificationsOf(catalog: CatalogDto, servers: readonly Server[]): Notification[] {
-  const notes: Notification[] = servers
-    .filter((server) => server.state === 'lease-lapsed' || server.state === 'lease-unavailable' || server.state === 'blocked')
-    .map((server) => ({
-      id: `${server.state}-${server.id}`,
-      severity: 'crit' as const,
-      title: server.state === 'lease-lapsed'
-        ? `Nothing on ${server.name} can be read or changed`
-        : server.state === 'lease-unavailable'
-          ? `Signed status for ${server.name} is unavailable`
-        : `Access to ${server.name} is blocked`,
-      detail: server.state === 'lease-lapsed'
-        ? `The compatibility lease has expired. This server's stores are hidden and cannot be changed until the lease is renewed.`
-        : server.state === 'lease-unavailable'
-          ? `The signed compatibility-lease status is unavailable. This server's stores are hidden and cannot be changed until a valid status is available.`
-        : `A protocol safety check blocked this server. Its stores are hidden. Open the server details to see the reported error.`,
-      action: server.state === 'lease-lapsed' ? 'Wait for lease refresh' : 'Inspect',
-    }));
+function notificationsOf(
+  catalog: CatalogDto,
+  servers: readonly Server[],
+): Notification[] {
+  // Every state that hides a server's stores gets a note, including
+  // `never-probed`: its contents were dropped just the same, but nothing
+  // said so anywhere.
+  const stopped: Partial<
+    Record<Server['state'], { detail: string; action: string }>
+  > = {
+    'lease-lapsed': {
+      detail: `The server's check-in expired. Its stores are hidden until the agent renews it.`,
+      action: 'Wait for the agent',
+    },
+    'lease-unavailable': {
+      detail: `The agent has no signed check-in for this server. Its stores are hidden until it gets one.`,
+      action: 'Inspect',
+    },
+    blocked: {
+      detail: `The server's history no longer matches what this Mac pinned. Its stores are hidden. Open the server to see the reported error.`,
+      action: 'Inspect',
+    },
+    'never-probed': {
+      detail: `This server has not been checked. Its stores are hidden until it is checked and its identity pinned.`,
+      action: 'Check',
+    },
+  };
+  const notes: Notification[] = servers.flatMap((server) => {
+    const reason = stopped[server.state];
+    return reason
+      ? [
+          {
+            id: `${server.state}-${server.id}`,
+            severity: 'crit' as const,
+            title: `${server.name} is locked`,
+            ...reason,
+          },
+        ]
+      : [];
+  });
   for (const [index, failure] of catalog.failures.entries()) {
     notes.push({
       id: `catalog-${failure.scope}-${index}`,
       severity: failure.error.fatal ? 'crit' : 'warn',
-      title: failure.scope === 'store'
-        ? `Could not list one store on ${failure.profile}`
-        : `Could not load ${failure.source} on ${failure.profile}`,
+      title:
+        failure.scope === 'store'
+          ? `Could not list one store on ${failure.profile}`
+          : `Could not load ${failure.source} on ${failure.profile}`,
       detail: failure.error.message,
       action: failure.error.retryable ? 'Retry' : 'Inspect',
     });
@@ -1124,6 +1779,7 @@ function decodeAgentStatus(value: unknown): AgentStatus {
 export const tauriBridge: Bridge = {
   native: true,
   appLockState: () => checked('app_lock_state', undefined, decodeAppLockState),
+  windowState: () => checked('get_window_state', undefined, decodeWindowState),
   lockApp: () => checked('lock_app', undefined, decodeAppLockState),
   unlockApp: () => checked('unlock_app', undefined, decodeAppLockState),
   agentStatus: () => checked('agent_status', undefined, decodeAgentStatus),
@@ -1132,6 +1788,8 @@ export const tauriBridge: Bridge = {
   listStores: () => checked('list_stores', undefined, decodeCatalog),
   listServers: () => checked('list_servers', undefined, decodeServers),
   listAccounts: () => checked('list_accounts', undefined, decodeAccounts),
+  listGroupDetails: (storeId) =>
+    checked('list_group_details', { storeId }, decodeGroupDetails),
   listParties: (storeId) => checked('list_parties', { storeId }, decodeParties),
   listFederation: (storeId) =>
     checked('list_federation', { storeId }, decodeFederation),
@@ -1179,7 +1837,11 @@ export const tauriBridge: Bridge = {
       decodeMutation,
     ),
   editTextItem: ({ storeId, path, version, value }) =>
-    checked('edit_text_item', { storeId, path, version, value }, decodeMutation),
+    checked(
+      'edit_text_item',
+      { storeId, path, version, value },
+      decodeMutation,
+    ),
   removeItem: ({ storeId, path, version }) =>
     checked('remove_item', { storeId, path, version }, decodeMutation),
   importDroppedFile: ({ storeId, path, sourcePath, readRole, writeRole }) =>
@@ -1206,9 +1868,17 @@ export const tauriBridge: Bridge = {
       decodeMutation,
     ),
   replaceDroppedFile: ({ storeId, path, version, sourcePath }) =>
-    checked('replace_dropped_file', { storeId, path, version, sourcePath }, decodeMutation),
+    checked(
+      'replace_dropped_file',
+      { storeId, path, version, sourcePath },
+      decodeMutation,
+    ),
   pickAndReplaceFile: ({ storeId, path, version }) =>
-    checked('pick_and_replace_file', { storeId, path, version }, decodeMutation),
+    checked(
+      'pick_and_replace_file',
+      { storeId, path, version },
+      decodeMutation,
+    ),
   resumeGroupCreation: (storeId) =>
     checked('resume_group_creation', { storeId }, decodeMutation),
   takeAgentConnectionLoss: () =>
@@ -1216,42 +1886,116 @@ export const tauriBridge: Bridge = {
   retryAgentConnection: () =>
     checked('retry_agent_connection', undefined, decodeAgentStatus),
   createGroup: ({ accountStoreId, teamAlias, name, kind }) =>
-    checked('create_group', { accountStoreId, teamAlias, name, kind }, decodeMutation),
+    checked(
+      'create_group',
+      { accountStoreId, teamAlias, name, kind },
+      decodeMutation,
+    ),
   addGroupMember: ({ storeId, username, destination }) =>
-    checked('add_group_member', { storeId, username, destination }, decodeMutation),
+    checked(
+      'add_group_member',
+      { storeId, username, destination },
+      decodeMutation,
+    ),
   resumeGroupMemberAddition: ({ storeId, username }) =>
-    checked('resume_group_member_addition', { storeId, username }, decodeMutation),
+    checked(
+      'resume_group_member_addition',
+      { storeId, username },
+      decodeMutation,
+    ),
   demoteGroupMember: ({ storeId, username, destination }) =>
-    checked('demote_group_member', { storeId, username, destination }, decodeMutation),
+    checked(
+      'demote_group_member',
+      { storeId, username, destination },
+      decodeMutation,
+    ),
   removeGroupMember: ({ storeId, username }) =>
     checked('remove_group_member', { storeId, username }, decodeMutation),
   resumeGroupMemberEdit: (storeId) =>
     checked('resume_group_member_edit', { storeId }, decodeMutation),
   admitGroup: ({ storeId, remoteStoreId, visibility }) =>
-    checked('admit_group', { storeId, remoteStoreId, visibility }, decodeMutation),
+    checked(
+      'admit_group',
+      { storeId, remoteStoreId, visibility },
+      decodeMutation,
+    ),
   rerunGroupAdmission: (storeId, operationId) =>
     checked('rerun_group_admission', { storeId, operationId }, decodeMutation),
   copyText: (text) => checked('copy_text', { text }, decodeCopy),
   initializeClientState: () =>
     checked('initialize_client_state', undefined, decodeAgentStatus),
+  discoverGoProfiles: () =>
+    checked('discover_go_profiles', undefined, decodeGoProfileDiscovery),
   checkAndAddProfile: (profileName, probe) =>
-    checked('check_and_add_profile', { profileName, probe }, decodeCheckedProfile),
+    checked(
+      'check_and_add_profile',
+      { profileName, probe },
+      decodeCheckedProfile,
+    ),
+  checkAndAddGoProfile: (candidateId, hostId, profileName, probe) =>
+    checked(
+      'check_and_add_go_profile',
+      { candidateId, hostId, profileName, probe },
+      decodeCheckedProfile,
+    ),
   listPendingOperations: (profile) =>
     checked('list_pending_operations', { profile }, decodePendingOperations),
-  createFirstRunAccount: ({ profile, alias, username, deviceName, email, invite, passphrase, passphraseConfirmation }) =>
-    checked('create_first_run_account', { profile, alias, username, deviceName, email, invite, passphrase, passphraseConfirmation }, decodeMutation),
+  createFirstRunAccount: ({
+    profile,
+    alias,
+    username,
+    deviceName,
+    email,
+    invite,
+    passphrase,
+    passphraseConfirmation,
+  }) =>
+    checked(
+      'create_first_run_account',
+      {
+        profile,
+        alias,
+        username,
+        deviceName,
+        email,
+        invite,
+        passphrase,
+        passphraseConfirmation,
+      },
+      decodeMutation,
+    ),
   resumeFirstRunAccount: (profile, alias) =>
     checked('resume_first_run_account', { profile, alias }, decodeMutation),
   setFirstRunPassphrase: ({ profile, alias, passphrase, confirmation }) =>
-    checked('set_first_run_passphrase', { profile, alias, passphrase, confirmation }, decodeMutation),
+    checked(
+      'set_first_run_passphrase',
+      { profile, alias, passphrase, confirmation },
+      decodeMutation,
+    ),
   prepareOwnerBackup: (profile, accountAlias, backupAlias) =>
-    checked('prepare_owner_backup', { profile, accountAlias, backupAlias }, decodeBackupPhrase),
+    checked(
+      'prepare_owner_backup',
+      { profile, accountAlias, backupAlias },
+      decodeBackupPhrase,
+    ),
   commitOwnerBackup: (profile, accountAlias, backupAlias, phrase) =>
-    checked('commit_owner_backup', { profile, accountAlias, backupAlias, phrase }, decodeMutation),
+    checked(
+      'commit_owner_backup',
+      { profile, accountAlias, backupAlias, phrase },
+      decodeMutation,
+    ),
   recoverOwnerAccount: (profile, targetAlias, phrase, deviceName) =>
-    checked('recover_owner_account', { profile, targetAlias, phrase, deviceName }, decodeMutation),
+    checked(
+      'recover_owner_account',
+      { profile, targetAlias, phrase, deviceName },
+      decodeMutation,
+    ),
   resumeOwnerRecovery: (profile, targetAlias, phrase, deviceName) =>
-    checked('resume_owner_recovery', { profile, targetAlias, phrase, deviceName }, decodeMutation),
+    checked(
+      'resume_owner_recovery',
+      { profile, targetAlias, phrase, deviceName },
+      decodeMutation,
+    ),
   discoverGroups: (profile, accountAlias) =>
     checked('discover_groups', { profile, accountAlias }, decodeGroupDiscovery),
   describeServerStatus: (profile) =>
@@ -1265,38 +2009,103 @@ export const tauriBridge: Bridge = {
   listAccountDevices: (accountStoreId) =>
     checked('list_account_devices', { accountStoreId }, decodeAccountDevices),
   removeAccountDevice: (accountStoreId, deviceId) =>
-    checked('remove_account_device', { accountStoreId, deviceId }, decodeDeviceRemoval),
+    checked(
+      'remove_account_device',
+      { accountStoreId, deviceId },
+      decodeDeviceRemoval,
+    ),
   listBackupEnrollments: (accountStoreId) =>
-    checked('list_backup_enrollments', { accountStoreId }, decodeBackupEnrollments),
+    checked(
+      'list_backup_enrollments',
+      { accountStoreId },
+      decodeBackupEnrollments,
+    ),
   startDevicePairing: (accountStoreId) =>
     checked('start_device_pairing', { accountStoreId }, decodePairingOffer),
   resumeDevicePairingOffer: (accountStoreId) =>
-    checked('resume_device_pairing_offer', { accountStoreId }, decodePairingOffer),
+    checked(
+      'resume_device_pairing_offer',
+      { accountStoreId },
+      decodePairingOffer,
+    ),
   finishDevicePairing: (accountStoreId) =>
     checked('finish_device_pairing', { accountStoreId }, decodeDeviceProvision),
   acceptDevicePairing: (profile, targetAlias, deviceName, phrase) =>
-    checked('accept_device_pairing', { profile, targetAlias, deviceName, phrase }, decodeDeviceProvision),
+    checked(
+      'accept_device_pairing',
+      { profile, targetAlias, deviceName, phrase },
+      decodeDeviceProvision,
+    ),
+  acceptGoProfilePairing: (
+    candidateId,
+    profile,
+    targetAlias,
+    deviceName,
+    phrase,
+  ) =>
+    checked(
+      'accept_go_profile_pairing',
+      { request: { candidateId, profile, targetAlias, deviceName, phrase } },
+      decodeDeviceProvision,
+    ),
   resumeDevicePairingAcceptance: (profile, targetAlias) =>
-    checked('resume_device_pairing_acceptance', { profile, targetAlias }, decodeDeviceProvision),
+    checked(
+      'resume_device_pairing_acceptance',
+      { profile, targetAlias },
+      decodeDeviceProvision,
+    ),
+  resumeGoProfilePairing: (candidateId, profile, targetAlias) =>
+    checked(
+      'resume_go_profile_pairing',
+      { candidateId, profile, targetAlias },
+      decodeDeviceProvision,
+    ),
+  copyGoProfileDevice: (candidateId, profile, targetAlias) =>
+    checked(
+      'copy_go_profile_device',
+      { candidateId, profile, targetAlias },
+      decodeDeviceProvision,
+    ),
   setAccountPassphrase: (accountStoreId, passphrase, confirmation) =>
-    checked('set_account_passphrase', { accountStoreId, passphrase, confirmation }, decodePassphraseReport),
+    checked(
+      'set_account_passphrase',
+      { accountStoreId, passphrase, confirmation },
+      decodePassphraseReport,
+    ),
   changeAccountPassphrase: (accountStoreId, passphrase, confirmation) =>
-    checked('change_account_passphrase', { accountStoreId, passphrase, confirmation }, decodePassphraseReport),
+    checked(
+      'change_account_passphrase',
+      { accountStoreId, passphrase, confirmation },
+      decodePassphraseReport,
+    ),
   verifyAccountPassphrase: (accountStoreId, passphrase) =>
-    checked('verify_account_passphrase', { accountStoreId, passphrase }, decodePassphraseReport),
+    checked(
+      'verify_account_passphrase',
+      { accountStoreId, passphrase },
+      decodePassphraseReport,
+    ),
   describeReset: (profile) =>
     checked('describe_reset', { profile }, decodeResetPreview),
   resetServer: (profile, confirmation, token) =>
     checked('reset_server', { profile, confirmation, token }, decodeMutation),
-  listYubiCards: (profile) => checked('list_yubi_cards', { profile }, decodeYubiCards),
-  listYubiAccounts: (profile) => checked('list_yubi_accounts', { profile }, decodeYubiAccounts),
-  runYubi: ({ command, args }) => checked(command, { ...args }, (value) => decodeYubiResult(command, value)),
-  onDropHover: async (listener) => listen<unknown>('foks://drop-hover', (event) => {
-    listener(decodeDropHover(event.payload));
-  }),
-  onDropPaths: async (listener) => listen<unknown>('foks://drop-paths', (event) => {
-    listener(decodeDropPaths(event.payload));
-  }),
+  listYubiCards: (profile) =>
+    checked('list_yubi_cards', { profile }, decodeYubiCards),
+  listYubiAccounts: (profile) =>
+    checked('list_yubi_accounts', { profile }, decodeYubiAccounts),
+  runYubi: ({ command, args }) =>
+    checked(command, { ...args }, (value) => decodeYubiResult(command, value)),
+  onDropHover: async (listener) =>
+    listen<unknown>('foks://drop-hover', (event) => {
+      listener(decodeDropHover(event.payload));
+    }),
+  onDropPaths: async (listener) =>
+    listen<unknown>('foks://drop-paths', (event) => {
+      listener(decodeDropPaths(event.payload));
+    }),
+  onWindowState: async (listener) =>
+    listen<unknown>('foks://window-state', (event) => {
+      listener(decodeWindowState(event.payload));
+    }),
 };
 
 export function isNativeHost(): boolean {
@@ -1319,7 +2128,44 @@ export async function selectBridge(): Promise<Bridge> {
     const { mockBridge } = await import('./mock-bridge');
     return mockBridge();
   }
-  throw new Error('This production build must run inside the FOKS desktop host.');
+  throw new Error(
+    'This production build must run inside the FOKS desktop host.',
+  );
+}
+
+function recoverableGroupDetailFailure(
+  error: unknown,
+  store: StoreRef,
+  source: GroupDetailFailure['source'],
+): GroupDetailFailure {
+  const typed = normalizeCommandError(error);
+  if (
+    ![
+      'rate-limited',
+      'quota-exceeded',
+      'capability-denied',
+      'operation-failed',
+      'io',
+      'deadline-exceeded',
+      'profile-busy',
+      'busy',
+      'cancelled',
+    ].includes(typed.code)
+  ) {
+    if (typed.code === 'invalid-command-error') {
+      throw new Error(
+        'The local agent returned an invalid group-detail error.',
+      );
+    }
+    throw typed;
+  }
+  return {
+    store,
+    source,
+    code: typed.code,
+    message: typed.message,
+    retryable: typed.retryable,
+  };
 }
 
 /** Load once. `list_catalog` already includes stores, so no cancelling race. */
@@ -1332,39 +2178,87 @@ export async function loadWorld(
     bridge.agentStatus(),
     bridge.listCatalog(),
   ]);
-  const stores = response.stores as Store[];
+  const liveStores = response.stores as Store[];
+  const storesById = new Map<StoreRef, Store>();
+  for (const store of response.knownStores as Store[])
+    storesById.set(store.id, store);
+  for (const store of liveStores) storesById.set(store.id, store);
+  const stores = [...storesById.values()];
+  const liveStoreIds = new Set(liveStores.map((store) => store.id));
+  const unavailableStores = stores
+    .filter((store) => !liveStoreIds.has(store.id))
+    .map((store) => store.id);
+  const inventoryProfiles = new Set(
+    response.inventory.map((state) => state.profile),
+  );
+  if (
+    inventoryProfiles.size !== response.inventory.length ||
+    response.inventory.some(
+      (state) => !response.profiles.includes(state.profile),
+    )
+  ) {
+    throw new Error(
+      'list_catalog returned duplicate or unknown inventory profiles.',
+    );
+  }
+  const accountInventoryComplete = response.profiles.every((profile) =>
+    response.inventory.some(
+      (state) => state.profile === profile && state.accountsComplete,
+    ),
+  );
   // A profile safety block is whole-server. Do not issue follow-up roster
   // reads against it merely to construct the screen that explains the block.
   const blockedProfiles = new Set(response.blockedProfiles);
   const listedServers = await bridge.listServers();
   const statusResults = bridge.native
-    ? await Promise.all(listedServers
-      .filter((server) => server.state !== 'blocked' && !blockedProfiles.has(server.id))
-      .map(async (server) => {
-        try {
-          const status = await bridge.describeServerStatus(server.id);
-          if (status.profile !== server.id) {
-            throw new Error('describe_server_status returned a different profile.');
-          }
-          return { profile: server.id, status };
-        } catch (error) {
-          return {
-            profile: server.id,
-            error: error instanceof Error ? error.message : 'The signed server status was unavailable.',
-          };
-        }
-      }))
+    ? await Promise.all(
+        listedServers
+          .filter(
+            (server) =>
+              server.state !== 'blocked' && !blockedProfiles.has(server.id),
+          )
+          .map(async (server) => {
+            try {
+              const status = await sharedServerStatus(bridge, server.id);
+              if (status.profile !== server.id) {
+                throw new Error(
+                  'describe_server_status returned a different profile.',
+                );
+              }
+              return { profile: server.id, status };
+            } catch (error) {
+              return {
+                profile: server.id,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : 'The signed server status was unavailable.',
+              };
+            }
+          }),
+      )
     : [];
-  const statuses = new Map(statusResults.flatMap((result) => result.status ? [[result.profile, result.status] as const] : []));
-  const statusFailures = new Map(statusResults.flatMap((result) => result.error ? [[result.profile, result.error] as const] : []));
+  const statuses = new Map(
+    statusResults.flatMap((result) =>
+      result.status ? [[result.profile, result.status] as const] : [],
+    ),
+  );
+  const statusFailures = new Map(
+    statusResults.flatMap((result) =>
+      result.error ? [[result.profile, result.error] as const] : [],
+    ),
+  );
   const servers = listedServers.map((server) => {
     if (!bridge.native) return server;
-    if (server.state === 'blocked' || blockedProfiles.has(server.id)) return { ...server, state: 'blocked' as const };
+    if (server.state === 'blocked' || blockedProfiles.has(server.id))
+      return { ...server, state: 'blocked' as const };
     const status = statuses.get(server.id);
-    if (!status || statusFailures.has(server.id)) return { ...server, state: 'lease-unavailable' as const };
+    if (!status || statusFailures.has(server.id))
+      return { ...server, state: 'lease-unavailable' as const };
     if (!status.host) return { ...server, state: 'never-probed' as const };
     const lease = serverLeaseState(status, nowSeconds);
-    if (lease === 'lapsed') return { ...server, state: 'lease-lapsed' as const };
+    if (lease === 'lapsed')
+      return { ...server, state: 'lease-lapsed' as const };
     if (lease === 'fresh') return { ...server, state: 'ok' as const };
     return { ...server, state: 'lease-unavailable' as const };
   });
@@ -1374,31 +2268,80 @@ export async function loadWorld(
       .filter((server) => server.state !== 'ok')
       .map((server) => server.id),
   );
-  const teams = stores.filter(
+  // Inactive teams stay in the catalog so Finish setup can resume them, but
+  // ListTeamMembers and federation fail closed until creation finishes. Skip
+  // those reads the same way the catalog skips KV for `active: false`.
+  const teams = liveStores.filter(
     (store) =>
       store.kind === 'team' &&
+      store.active &&
       !blockedProfiles.has(store.server) &&
       !unavailableServers.has(store.server),
   );
-  const rosters = await Promise.all(teams.map(async (store) => {
-      const [parties, federation] = await Promise.all([
-        bridge.listParties(store.id),
-        bridge.listFederation(store.id),
-      ]);
+  const rosters = await Promise.all(
+    teams.map(async (store) => {
+      const { parties, federation, failures } = await enqueueProfileWork(
+        bridge,
+        store.server,
+        async () => {
+          let parties: Party[] = [];
+          let federation: FederationEntry[] = [];
+          const failures: GroupDetailFailure[] = [];
+          try {
+            const details = await bridge.listGroupDetails(store.id);
+            if (details.parties.status === 'success')
+              parties = details.parties.value;
+            else
+              failures.push(
+                recoverableGroupDetailFailure(
+                  details.parties.error,
+                  store.id,
+                  'roster',
+                ),
+              );
+            if (details.federation.status === 'success')
+              federation = details.federation.value;
+            else
+              failures.push(
+                recoverableGroupDetailFailure(
+                  details.federation.error,
+                  store.id,
+                  'federation',
+                ),
+              );
+          } catch (error) {
+            failures.push(
+              recoverableGroupDetailFailure(error, store.id, 'roster'),
+            );
+            failures.push(
+              recoverableGroupDetailFailure(error, store.id, 'federation'),
+            );
+          }
+          return { parties, federation, failures };
+        },
+      );
       if (parties.some((party) => party.store !== store.id)) {
-        throw new Error('list_parties returned a roster for a different store.');
+        throw new Error(
+          'list_parties returned a roster for a different store.',
+        );
       }
       if (federation.some((entry) => entry.store !== store.id)) {
-        throw new Error('list_federation returned group memberships for a different store.');
+        throw new Error(
+          'list_federation returned group memberships for a different store.',
+        );
       }
-      return { parties, federation };
-    }));
-  const storeIds = new Set(stores.map((store) => store.id));
+      return { parties, federation, failures };
+    }),
+  );
+  const groupDetailFailures = rosters.flatMap((roster) => roster.failures);
+  const storeIds = new Set(liveStores.map((store) => store.id));
   if (response.items.some((item) => !storeIds.has(item.store))) {
-    throw new Error('list_catalog returned an item for a store it did not include.');
+    throw new Error(
+      'list_catalog returned an item for a store it did not include.',
+    );
   }
   const availableAccountStoreIds = new Set(
-    stores
+    liveStores
       .filter(
         (store) =>
           store.kind === 'account' &&
@@ -1407,16 +2350,27 @@ export async function loadWorld(
       )
       .map((store) => store.id),
   );
-  const accounts = rawAccounts.filter((account) => account.store !== undefined && availableAccountStoreIds.has(account.store));
+  const accounts = rawAccounts.filter(
+    (account) =>
+      account.store !== undefined &&
+      availableAccountStoreIds.has(account.store),
+  );
   if (
-    rawAccounts.some((account) => !account.store || !storeIds.has(account.store)) ||
+    rawAccounts.some(
+      (account) => !account.store || !storeIds.has(account.store),
+    ) ||
     rawAccounts.some((account) => {
-      const store = stores.find((candidate) => candidate.id === account.store);
+      const store = liveStores.find(
+        (candidate) => candidate.id === account.store,
+      );
       return store?.kind !== 'account';
     }) ||
-    new Set(rawAccounts.map((account) => account.store)).size !== rawAccounts.length
+    new Set(rawAccounts.map((account) => account.store)).size !==
+      rawAccounts.length
   ) {
-    throw new Error('list_accounts returned an unknown, non-account, or duplicate store.');
+    throw new Error(
+      'list_accounts returned an unknown, non-account, or duplicate store.',
+    );
   }
   if (accounts.length !== availableAccountStoreIds.size) {
     throw new Error('list_accounts omitted an available account store.');
@@ -1426,70 +2380,103 @@ export async function loadWorld(
     throw new Error('list_servers omitted a server used by the catalog.');
   }
   const federation = rosters.flatMap((roster) => roster.federation);
-  const parties = rosters.flatMap((roster) => roster.parties).map((party) => {
-    const team = stores.find((store) => store.id === party.store && store.kind === 'team');
-    const ownerStore = team
-      ? stores.find(
-          (store) => store.kind === 'account' && store.account === team.account && store.server === team.server,
-        )
-      : undefined;
-    const ownerAccount = ownerStore
-      ? accounts.find((account) => account.store === ownerStore.id)
-      : undefined;
-    const admissions = party.party_kind === 'named-team'
-      ? federation.filter(
-          (entry) =>
-            entry.store === party.store &&
-            entry.remote_team_id_hex === party.party_id_hex &&
-            (!party.scoped_host_id_hex || entry.remote_host_id_hex === party.scoped_host_id_hex),
-        )
-      : [];
-    return {
-      ...party,
-      label:
-        party.party_kind === 'user' &&
-        ownerAccount &&
-        party.locally_manageable &&
-        !party.scoped_host_id_hex &&
-        party.username === ownerAccount.username
-          ? 'you'
-          : bridge.native
-            ? undefined
-            : party.label,
-      team_name:
-        admissions.length === 1
-          ? `${admissions[0].remote_team_alias} @ ${admissions[0].remote_profile}`
-          : party.team_name,
-    };
-  });
-  const baseItems = new Map((base?.items ?? []).map((item) => [itemKey(item), item]));
+  const parties = rosters
+    .flatMap((roster) => roster.parties)
+    .map((party) => {
+      const team = liveStores.find(
+        (store) => store.id === party.store && store.kind === 'team',
+      );
+      const ownerStore = team
+        ? liveStores.find(
+            (store) =>
+              store.kind === 'account' &&
+              store.account === team.account &&
+              store.server === team.server,
+          )
+        : undefined;
+      const ownerAccount = ownerStore
+        ? accounts.find((account) => account.store === ownerStore.id)
+        : undefined;
+      const admissions =
+        party.party_kind === 'named-team'
+          ? federation.filter(
+              (entry) =>
+                entry.store === party.store &&
+                entry.remote_team_id_hex === party.party_id_hex &&
+                (!party.scoped_host_id_hex ||
+                  entry.remote_host_id_hex === party.scoped_host_id_hex),
+            )
+          : [];
+      return {
+        ...party,
+        label:
+          party.party_kind === 'user' &&
+          ownerAccount &&
+          party.locally_manageable &&
+          !party.scoped_host_id_hex &&
+          party.username === ownerAccount.username
+            ? 'you'
+            : bridge.native
+              ? undefined
+              : party.label,
+        // `remote_profile` is the profile name; the reader sees the server's
+        // address, resolved here, so the data can be exact without the name
+        // turning into `homelab @ personal`.
+        team_name:
+          admissions.length === 1
+            ? `${admissions[0].remote_team_alias} @ ${servers.find((server) => server.id === admissions[0].remote_profile)?.name ?? admissions[0].remote_profile}`
+            : party.team_name,
+      };
+    });
+  const baseItems = new Map(
+    (base?.items ?? []).map((item) => [itemKey(item), item]),
+  );
   const items: Item[] = response.items
     .filter((item) => {
-      const store = stores.find((candidate) => candidate.id === item.store);
+      const store = liveStores.find((candidate) => candidate.id === item.store);
       return Boolean(store && !unavailableServers.has(store.server));
     })
     .map((item) => ({
-    ...(bridge.native ? {} : baseItems.get(itemKey(item))),
-    ...item,
+      ...(bridge.native ? {} : baseItems.get(itemKey(item))),
+      ...item,
     }));
   if (!bridge.native) {
-    if (!base) throw new Error('The mock bridge did not supply its fixture world.');
-    return { ...base, agent, servers, accounts, stores, items, parties, federation };
+    if (!base)
+      throw new Error('The mock bridge did not supply its fixture world.');
+    return {
+      ...base,
+      agent,
+      servers,
+      accounts,
+      stores,
+      unavailableStores,
+      accountInventoryComplete,
+      items,
+      parties,
+      federation,
+      groupDetailFailures,
+    };
   }
   return {
     agent,
     servers,
     accounts,
     stores,
+    unavailableStores,
+    accountInventoryComplete,
     items,
     parties,
     federation,
+    groupDetailFailures,
     devices: [],
     yubiAccounts: [],
     cardsConnected: [],
     notifications: [
-      ...notificationsOf(response, servers).filter((note) =>
-        ![...statusFailures.keys()].some((profile) => note.id === `lease-unavailable-${profile}`),
+      ...notificationsOf(response, servers).filter(
+        (note) =>
+          ![...statusFailures.keys()].some(
+            (profile) => note.id === `lease-unavailable-${profile}`,
+          ),
       ),
       ...[...statusFailures].map(([profile, message]) => ({
         id: `status-unavailable-${profile}`,
@@ -1497,6 +2484,13 @@ export async function loadWorld(
         title: `Signed status for ${profile} is unavailable`,
         detail: `${message} Nothing on this server is listed until a usable signed expiry is available.`,
         action: 'Inspect',
+      })),
+      ...groupDetailFailures.map((failure) => ({
+        id: `group-${failure.source}-unavailable-${failure.store}`,
+        severity: 'warn' as const,
+        title: `Group ${failure.source} is unavailable`,
+        detail: failure.message,
+        action: failure.retryable ? 'Refresh' : 'Inspect',
       })),
     ],
     leaseState: servers.some((server) => server.state === 'lease-lapsed')

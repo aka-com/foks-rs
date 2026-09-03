@@ -367,6 +367,81 @@ impl CheckedProfileSession<'_> {
         })
     }
 
+    pub fn import_software_device(
+        &self,
+        target_alias: &str,
+        expected_user: &[u8; 33],
+        expected_device: &[u8; 33],
+        device_seed: SecretSeed,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<DeviceProvisionReport> {
+        self.profile.require(Capability::UserSync)?;
+        validate_name(target_alias)?;
+        for alias in vault.aliases()? {
+            let existing = vault.account(&alias)?;
+            let device = derive_device_public(&existing.credential.seed)?;
+            if existing.credential.uid.as_bytes() == expected_user
+                && device.id.as_bytes() == expected_device
+            {
+                if alias != target_alias {
+                    return Err(Error::AccountExists);
+                }
+                let host = self.pinned_host()?;
+                let authenticated = self
+                    .client
+                    .authenticate_and_pin(&host, &existing.credential)?;
+                self.register_default_refresh_jobs_for(
+                    &existing.credential.uid,
+                    now_microseconds()?,
+                )?;
+                return Ok(DeviceProvisionReport {
+                    alias: target_alias.to_owned(),
+                    device_id_hex: hex(device.id.as_bytes()),
+                    user_chain_sequence: authenticated.verified.chain_seqno(),
+                });
+            }
+        }
+        if vault.contains(target_alias)? {
+            return Err(Error::AccountExists);
+        }
+        let uid = EntityId::from_bytes(expected_user.to_vec())?;
+        let device = derive_device_public(&device_seed)?;
+        if device.id.as_bytes() != expected_device {
+            return Err(Error::InvalidAccount(
+                "imported device seed does not match the selected profile",
+            ));
+        }
+        let host = self.pinned_host()?;
+        let certificate_chain =
+            self.client
+                .fetch_device_certificate_chain(&host, &uid, &device_seed)?;
+        let credential = DeviceCredential {
+            uid,
+            seed: device_seed,
+            certificate_chain,
+        };
+        let authenticated = self.client.authenticate_and_pin(&host, &credential)?;
+        if authenticated.verified.uid().as_bytes() != expected_user
+            || !authenticated
+                .verified
+                .devices()
+                .iter()
+                .any(|entry| entry.id.as_bytes() == expected_device)
+        {
+            return Err(Error::InvalidAccount(
+                "imported device is not enrolled for the selected account",
+            ));
+        }
+        let username = String::from_utf8_lossy(authenticated.verified.username_utf8()).into_owned();
+        vault.commit_created(target_alias, &username, &credential)?;
+        self.register_default_refresh_jobs_for(&credential.uid, now_microseconds()?)?;
+        Ok(DeviceProvisionReport {
+            alias: target_alias.to_owned(),
+            device_id_hex: hex(device.id.as_bytes()),
+            user_chain_sequence: authenticated.verified.chain_seqno(),
+        })
+    }
+
     pub fn start_owner_device_pairing(
         &self,
         account_alias: &str,
@@ -460,12 +535,30 @@ impl CheckedProfileSession<'_> {
         input: KexAcceptanceInput,
         vault: &mut AccountVault<'_>,
     ) -> Result<DeviceProvisionReport> {
+        self.accept_owner_device_pairing_for_user(input, None, None, vault)
+    }
+
+    pub fn accept_owner_device_pairing_for_user(
+        &self,
+        input: KexAcceptanceInput,
+        expected_user: Option<&[u8; 33]>,
+        source_candidate_id: Option<&str>,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<DeviceProvisionReport> {
         self.profile.require(Capability::DeviceAdministration)?;
         validate_name(&input.target_alias)?;
         if vault.contains(&input.target_alias)? {
             return Err(Error::AccountExists);
         }
         foks_crypto::KexSecret::from_phrase(&input.phrase)?;
+        if source_candidate_id.is_some_and(|id| {
+            id.len() != 64
+                || !id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }) {
+            return Err(Error::InvalidAccount("source candidate id is invalid"));
+        }
         let pending = PendingKexAcceptance {
             version: CREDENTIAL_VERSION,
             target_alias: input.target_alias.clone(),
@@ -473,9 +566,11 @@ impl CheckedProfileSession<'_> {
             serial: input.serial,
             device_seed: random_array()?,
             phrase: input.phrase.clone(),
+            source_candidate_id: source_candidate_id.map(str::to_owned),
+            expected_user: expected_user.map(|user| user.to_vec()),
         };
         vault.put_pending_kex(&pending)?;
-        self.finish_kex_acceptance(pending, vault)
+        self.finish_kex_acceptance(pending, expected_user, vault)
     }
 
     pub fn resume_owner_device_pairing_acceptance(
@@ -483,13 +578,43 @@ impl CheckedProfileSession<'_> {
         target_alias: &str,
         vault: &mut AccountVault<'_>,
     ) -> Result<DeviceProvisionReport> {
+        self.resume_owner_device_pairing_acceptance_for_user(target_alias, None, None, vault)
+    }
+
+    pub fn resume_owner_device_pairing_acceptance_for_user(
+        &self,
+        target_alias: &str,
+        expected_user: Option<&[u8; 33]>,
+        source_candidate_id: Option<&str>,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<DeviceProvisionReport> {
         self.profile.require(Capability::DeviceAdministration)?;
         let pending = vault.pending_kex(target_alias)?;
+        if pending.source_candidate_id.as_deref() != source_candidate_id
+            || expected_user.is_some_and(|user| pending.expected_user.as_deref() != Some(user))
+            || (source_candidate_id.is_none() && pending.expected_user.is_some())
+        {
+            return Err(Error::InvalidAccount(
+                "pending KEX source binding does not match",
+            ));
+        }
+        let bound_user: Option<[u8; 33]> = pending
+            .expected_user
+            .as_deref()
+            .map(|user| {
+                user.try_into()
+                    .map_err(|_| Error::InvalidAccount("pending KEX user binding is invalid"))
+            })
+            .transpose()?;
         if vault.account_record_exists(target_alias)? {
             let account = vault.account(target_alias)?;
             let expected = derive_device_public(&SecretSeed::new(pending.device_seed))?;
             let actual = derive_device_public(&account.credential.seed)?;
-            if expected.id != actual.id {
+            if expected.id != actual.id
+                || bound_user
+                    .as_ref()
+                    .is_some_and(|user| account.credential.uid.as_bytes() != user)
+            {
                 return Err(Error::InvalidAccount(
                     "completed KEX credential binding changed",
                 ));
@@ -506,22 +631,29 @@ impl CheckedProfileSession<'_> {
                 user_chain_sequence: authenticated.verified.chain_seqno(),
             });
         }
-        self.finish_kex_acceptance(pending, vault)
+        self.finish_kex_acceptance(pending, bound_user.as_ref(), vault)
     }
 
     fn finish_kex_acceptance(
         &self,
         pending: PendingKexAcceptance,
+        expected_user: Option<&[u8; 33]>,
         vault: &mut AccountVault<'_>,
     ) -> Result<DeviceProvisionReport> {
         let host = self.pinned_host()?;
-        let provisioned = self.client.accept_kex_provisioning(
+        let provisioned = self.client.accept_kex_provisioning_for_user(
             &host,
             &pending.phrase,
             &pending.device_name,
             pending.serial,
             SecretSeed::new(pending.device_seed),
+            expected_user,
         )?;
+        if expected_user.is_some_and(|user| provisioned.credential.uid.as_bytes() != user) {
+            return Err(Error::InvalidAccount(
+                "paired account does not match the selected Go profile",
+            ));
+        }
         let username = String::from_utf8_lossy(provisioned.authenticated.verified.username_utf8())
             .into_owned();
         vault.commit_created(&pending.target_alias, &username, &provisioned.credential)?;
@@ -903,6 +1035,8 @@ struct PendingKexAcceptance {
     serial: u64,
     device_seed: [u8; 32],
     phrase: String,
+    source_candidate_id: Option<String>,
+    expected_user: Option<Vec<u8>>,
 }
 
 impl Drop for PendingKexAcceptance {
@@ -1499,6 +1633,17 @@ fn validate_pending_kex(pending: &PendingKexAcceptance) -> Result<()> {
         || pending.serial == 0
         || pending.device_name.is_empty()
         || pending.device_name.len() > 256
+        || pending.source_candidate_id.is_some() != pending.expected_user.is_some()
+        || pending.source_candidate_id.as_ref().is_some_and(|id| {
+            id.len() != 64
+                || !id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+        || pending
+            .expected_user
+            .as_ref()
+            .is_some_and(|user| user.len() != 33 || user[0] != 1)
     {
         return Err(Error::InvalidAccount(
             "pending KEX version, device name, or serial is invalid",
@@ -1690,6 +1835,97 @@ mod tests {
                     )
                     .is_err());
                 assert_eq!(session.list_devices("personal", &mut vault)?.len(), 2);
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn imported_software_device_is_reauthenticated_and_idempotent() {
+        let environment = TestEnvironment::new().unwrap();
+        let _server = environment.start_server().unwrap();
+        let addresses = environment.addresses().unwrap();
+        let root = environment
+            .client_path("import-copy", "probe-root.der")
+            .unwrap();
+        environment.write_probe_root(&root).unwrap();
+        let profile = Profile {
+            name: "local".to_owned(),
+            probe: format!("localhost:{}", addresses.probe.port()),
+            protocol: ProtocolPolicy::V019,
+            trust: TrustRoot::CertificateDer { path: root },
+        };
+
+        let source_state = environment
+            .client_path("import-copy-source", "state")
+            .unwrap();
+        let source_credentials =
+            ClientCredentials::initialize(&source_state, CredentialBackend::PrivateFile).unwrap();
+        let source_master = source_credentials.master_key().unwrap();
+        let mut source_registry = ProfileRegistry::open(&source_state).unwrap();
+        source_registry.add(profile.clone()).unwrap();
+        let source_session = ProfileSession::open(&source_registry, "local").unwrap();
+        let (uid, device_id, seed) = source_credentials
+            .with_checked_session(&source_session, |session| {
+                session.probe_and_pin()?;
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&source_master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+                session.create_account(
+                    "source",
+                    "importowner",
+                    "source laptop",
+                    "",
+                    "",
+                    None,
+                    &mut vault,
+                    &source_master,
+                )?;
+                let loaded = vault.account("source")?;
+                let uid: [u8; 33] = loaded.credential.uid.as_bytes().try_into().unwrap();
+                let device = derive_device_public(&loaded.credential.seed)?;
+                let device_id: [u8; 33] = device.id.as_bytes().try_into().unwrap();
+                Ok::<_, Error>((uid, device_id, *loaded.credential.seed.as_bytes()))
+            })
+            .unwrap();
+
+        let destination_state = environment
+            .client_path("import-copy-destination", "state")
+            .unwrap();
+        let destination_credentials =
+            ClientCredentials::initialize(&destination_state, CredentialBackend::PrivateFile)
+                .unwrap();
+        let destination_master = destination_credentials.master_key().unwrap();
+        let mut destination_registry = ProfileRegistry::open(&destination_state).unwrap();
+        destination_registry.add(profile).unwrap();
+        let destination_session = ProfileSession::open(&destination_registry, "local").unwrap();
+        destination_credentials
+            .with_checked_session(&destination_session, |session| {
+                session.probe_and_pin()?;
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&destination_master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+                let first = session.import_software_device(
+                    "imported",
+                    &uid,
+                    &device_id,
+                    SecretSeed::new(seed),
+                    &mut vault,
+                )?;
+                let repeated = session.import_software_device(
+                    "imported",
+                    &uid,
+                    &device_id,
+                    SecretSeed::new(seed),
+                    &mut vault,
+                )?;
+                assert_eq!(first, repeated);
+                assert_eq!(vault.aliases()?, vec!["imported"]);
+                assert_eq!(vault.account("imported")?.username, "importowner");
                 Ok::<_, Error>(())
             })
             .unwrap();

@@ -1,32 +1,47 @@
 import { useEffect, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
-import { Dialog } from '/kit/overlay-primitives';
+import { Dialog, DismissibleDialog } from '/kit/overlay-primitives';
 import {
+  Band,
   Button,
+  CardSelect,
+  Field,
   Icon,
   Inset,
   InsetRow,
   KindIcon,
-  Stack,
+  RadioCard,
+  RadioGroup,
+  SectionLabel,
+  Sheet,
+  SheetDialog,
 } from '../components';
-import type { FilterKind } from '../components';
+import type { CardOption, FilterKind } from '../components';
 import {
   isLogin,
   itemKey,
+  kindLabel,
   kindOf,
   canCreateInStore,
   leaseLapsed,
   nameOf,
   partiesOf,
   partyName,
-  peopleGroups,
   readersOf,
   serverBlocked,
   serverLeaseUnavailable,
-  serverOf,
+  storeDescription,
+  storeNavigationOrder,
   storeOf,
 } from '../model';
-import type { Item, ItemKind, RoleWire, Store, StoreRef, World } from '../model';
+import type {
+  Item,
+  ItemKind,
+  RoleWire,
+  Store,
+  StoreRef,
+  World,
+} from '../model';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, KvRoleInput } from '../bridge';
 import { editableValue } from './edit-value';
@@ -135,49 +150,47 @@ interface NewSheetProps {
   onError: (error: unknown) => void;
 }
 
-function StoreChoice({
-  world,
-  store,
-  chosen,
-  onChoose,
-}: {
-  world: World;
-  store: Store;
-  chosen: boolean;
-  onChoose: () => void;
-}): ReactNode {
-  const server = serverOf(world, store.id);
-  const unavailable = !canCreateInStore(world, store.id);
-  const detail = leaseLapsed(world, store.id)
-    ? 'server check-in lapsed — nothing can be written here'
-    : serverBlocked(world, store.id)
-      ? 'server access is blocked — nothing can be written here'
-      : serverLeaseUnavailable(world, store.id)
-        ? 'signed check-in unavailable — nothing can be written here'
-      : store.kind === 'team'
-        ? store.active && unavailable
-          ? 'no authenticated local group identity — writing is unavailable'
-          : store.active
-          ? `shared with ${peopleGroups(partiesOf(world, store.id))} · ${server?.name ?? ''}`
-          : 'reports inactive — resume its creation first'
-        : `only you · your account on ${server?.name ?? ''}`;
-  return (
-    <button
-      type="button"
-      className={`radio store-choice${chosen ? ' on' : ''}${unavailable ? ' off' : ''}`}
-      disabled={unavailable}
-      onClick={onChoose}
-    >
-      <span className="rb" />
-      <span className="t">
-        <b>{store.name}</b>
-        <small>{detail}</small>
-      </span>
-      {store.kind === 'team' ? (
-        <Stack parties={partiesOf(world, store.id)} />
-      ) : null}
-    </button>
-  );
+/**
+ * One vault, group or ad-hoc share as the "Save in" dropdown draws it.
+ *
+ * The reading is `storeDescription` — the same sentence the sidebar row and
+ * the page header give this store. The sheet used to compose its own, so a
+ * group read "shared with 3 people · local" here and "3 people" two inches
+ * to the left, and a lapsed server was explained in words no other surface
+ * used. Whether the store can be written to is a separate question, and it
+ * is the one `off` answers.
+ */
+function storeOption(world: World, store: Store): CardOption {
+  return {
+    id: store.id,
+    title: store.name,
+    detail: storeDescription(world, store),
+    off: !canCreateInStore(world, store.id),
+  };
+}
+
+/**
+ * Why the chosen store cannot take a new item, when it cannot.
+ *
+ * The chooser reads the way the sidebar reads, and that sentence says what a
+ * store *is*, never whether this sheet may write to it. The reason belongs
+ * with the choice rather than inside its label, so it is drawn as a band
+ * under the chooser — otherwise a disabled Create button would be the only
+ * word on the subject.
+ */
+function writeBlockReason(world: World, store: Store): string | null {
+  if (canCreateInStore(world, store.id)) return null;
+  if (leaseLapsed(world, store.id))
+    return 'server check-in lapsed — nothing can be written here';
+  if (serverBlocked(world, store.id))
+    return 'server access is blocked — nothing can be written here';
+  if (serverLeaseUnavailable(world, store.id))
+    return 'check-in status unknown — nothing can be written here';
+  if (store.kind === 'team' && !store.active)
+    return 'reports inactive — resume its creation first';
+  if (store.kind === 'team')
+    return 'no authenticated local group identity — writing is unavailable';
+  return 'nothing can be written here';
 }
 
 function AccessBlock({
@@ -214,51 +227,63 @@ function AccessBlock({
   const roster = partiesOf(world, store.id);
   const admitted = readersOf(world, candidate) ?? [];
   const excluded = roster.filter((party) => !admitted.includes(party));
-  const changers = readersOf(world, { ...candidate, read: candidate.write }) ?? [];
+  const changers =
+    readersOf(world, { ...candidate, read: candidate.write }) ?? [];
   const readVisibility = readRole.startsWith('Member:')
     ? Number(readRole.slice('Member:'.length))
     : 0;
   const choices: readonly [string, KvRoleInput, string][] = [
     ['Owner', 'Owner', 'Only owners.'],
     ['Admin', 'Admin', 'Admins and owners.'],
-    ['Member', `Member:${readVisibility}`, 'Members at this visibility level and above.'],
+    [
+      'Member',
+      `Member:${readVisibility}`,
+      'Members at this visibility level and above.',
+    ],
   ];
   const roleChoices = (
     selected: KvRoleInput,
     choose: (role: KvRoleInput) => void,
     forWrite: boolean,
-  ) => choices.map(([label, role, detail]) => {
-    const next = label === 'Member'
-      ? (`Member:${selected.startsWith('Member:') ? Number(selected.slice('Member:'.length)) : 0}` as KvRoleInput)
-      : role;
-    const on = selected === next || (label === 'Member' && selected.startsWith('Member:'));
-    return (
-      <button
-        type="button"
-        className={`radio${on ? ' on' : ''}`}
-        key={label}
-        aria-label={`${forWrite ? 'Write' : 'Read'} role ${label}`}
-        aria-pressed={on}
-        onClick={() => choose(next)}
-      >
-        <span className="rb" />
-        <span className="t"><b>{label}</b><small>{forWrite ? detail.replace('.', ' can change or remove it.') : detail}</small></span>
-      </button>
-    );
-  });
+  ) =>
+    choices.map(([label, role, detail]) => {
+      const next =
+        label === 'Member'
+          ? (`Member:${selected.startsWith('Member:') ? Number(selected.slice('Member:'.length)) : 0}` as KvRoleInput)
+          : role;
+      const on =
+        selected === next ||
+        (label === 'Member' && selected.startsWith('Member:'));
+      return (
+        <RadioCard
+          key={label}
+          selected={on}
+          onSelect={() => choose(next)}
+          title={label}
+          detail={
+            forWrite ? detail.replace('.', ' can change or remove it.') : detail
+          }
+        />
+      );
+    });
   return (
     <>
-      <div className="sec">
+      <SectionLabel
+        action={
+          <span className="pv">
+            would be readable by{' '}
+            <b>
+              {admitted.length} of {roster.length}
+            </b>
+          </span>
+        }
+      >
         Who can read
-        <span className="pv">
-          would be readable by{' '}
-          <b>
-            {admitted.length} of {roster.length}
-          </b>
-        </span>
-      </div>
+      </SectionLabel>
       <Inset>
-        {roleChoices(readRole, onReadRole, false)}
+        <RadioGroup label="Who can read">
+          {roleChoices(readRole, onReadRole, false)}
+        </RadioGroup>
         {readRole.startsWith('Member:') ? (
           <InsetRow label="Member visibility">
             <input
@@ -277,7 +302,13 @@ function AccessBlock({
         ) : null}
       </Inset>
       <p className="hint">
-        At <b>{readRole === 'Owner' || readRole === 'Admin' ? readRole : `Member · visibility ${readVisibility}`}</b> this item would be readable by{' '}
+        At{' '}
+        <b>
+          {readRole === 'Owner' || readRole === 'Admin'
+            ? readRole
+            : `Member · visibility ${readVisibility}`}
+        </b>{' '}
+        this item would be readable by{' '}
         <b>
           {admitted.length} of {roster.length}
         </b>{' '}
@@ -286,9 +317,19 @@ function AccessBlock({
           ? ` ${excluded.map(partyName).join(', ')} is not counted when its role or group membership provides no access here.`
           : ''}
       </p>
-      <div className="sec">Who can change <span className="pv">changeable by <b>{changers.length} of {roster.length}</b></span></div>
+      <SectionLabel>
+        Who can change{' '}
+        <span className="pv">
+          changeable by{' '}
+          <b>
+            {changers.length} of {roster.length}
+          </b>
+        </span>
+      </SectionLabel>
       <Inset>
-        {roleChoices(writeRole, onWriteRole, true)}
+        <RadioGroup label="Who can change">
+          {roleChoices(writeRole, onWriteRole, true)}
+        </RadioGroup>
         {writeRole.startsWith('Member:') ? (
           <InsetRow label="Member visibility">
             <input
@@ -307,10 +348,10 @@ function AccessBlock({
         ) : null}
       </Inset>
       <p className="hint">
-        The read and write roles are independent and carried by this group
-        item, so someone allowed to change it might not be allowed to read it.
-        They are checked against the current authenticated roster, so the
-        preview is computed rather than typed.
+        The read and write roles are independent and carried by this group item,
+        so someone allowed to change it might not be allowed to read it. They
+        are checked against the current authenticated roster, so the preview is
+        computed rather than typed.
       </p>
     </>
   );
@@ -355,6 +396,7 @@ function NewSheet({
   const store = storeOf(world, storeId);
   const group = store?.kind === 'team';
   const canWrite = Boolean(store && canCreateInStore(world, store.id));
+  const blocked = store ? writeBlockReason(world, store) : null;
   const itemKind = workflow.itemKind;
   const roleArgs = group ? { readRole, writeRole } : {};
 
@@ -418,11 +460,26 @@ function NewSheet({
           ...roleArgs,
         });
       } else if (itemKind === 'Resource') {
-        await bridge.createTextItem({ storeId: store.id, path, value, ...roleArgs });
+        await bridge.createTextItem({
+          storeId: store.id,
+          path,
+          value,
+          ...roleArgs,
+        });
       } else if (itemKind === 'Link') {
-        await bridge.createLink({ storeId: store.id, path, target, ...roleArgs });
+        await bridge.createLink({
+          storeId: store.id,
+          path,
+          target,
+          ...roleArgs,
+        });
       } else if (sourcePath) {
-        await bridge.importDroppedFile({ storeId: store.id, path, sourcePath, ...roleArgs });
+        await bridge.importDroppedFile({
+          storeId: store.id,
+          path,
+          sourcePath,
+          ...roleArgs,
+        });
       } else {
         const result = await bridge.pickAndImportFile({
           storeId: store.id,
@@ -431,7 +488,7 @@ function NewSheet({
         });
         if (!result.applied) return;
       }
-      await onApplied(`${itemKind} created in ${store.name}`);
+      await onApplied(`${kindLabel(itemKind)} created in ${store.name}`);
       setWorkflow(null);
     } catch (error) {
       const typed = normalizeCommandError(error);
@@ -476,47 +533,66 @@ function NewSheet({
     mono = false,
     type: 'text' | 'password' = 'text',
   ) => (
-    <InsetRow label={label} valueClass={mono ? 'mono' : undefined}>
-      <input
-        type={type}
-        aria-label={label}
-        className={mono ? 'mono' : undefined}
-        placeholder={placeholder}
-        value={current}
-        onChange={(event) => set(event.target.value)}
-      />
-    </InsetRow>
+    <Field
+      label={label}
+      value={current}
+      onChange={set}
+      type={type}
+      placeholder={placeholder}
+      mono={mono}
+    />
   );
   return (
-    <div className="sheet mid" aria-label={`New ${itemKind.toLowerCase()}`}>
-      <div className="hd">
-        <KindIcon kind={itemKind} />
-        <span className="t">
-          <h2>New {itemKind.toLowerCase()}</h2>
-          <small>
-            {itemKind === 'Password'
-              ? 'A login with a masked password.'
-              : itemKind === 'Resource'
-                ? 'A value such as an API key or recovery code.'
-                : itemKind === 'File'
-                  ? 'A file streamed from its path by the local agent.'
-                  : 'A path pointing to another path in the same store.'}
-          </small>
-        </span>
-      </div>
-      <div className="sb">
-        <div className="sec">Save in</div>
+    <Sheet
+      width="mid"
+      glyph={<KindIcon kind={itemKind} />}
+      title={`New ${kindLabel(itemKind).toLowerCase()}`}
+      subtitle={
+        itemKind === 'Password'
+          ? 'A login with a masked password.'
+          : itemKind === 'Resource'
+            ? 'A value such as an API key or recovery code.'
+            : itemKind === 'File'
+              ? 'A file streamed from its path by the local agent.'
+              : 'A path pointing to another path in the same store.'
+      }
+      footer={
+        <>
+          <Button onClick={() => setWorkflow(null)}>Cancel</Button>
+          <Button
+            variant="primary"
+            disabled={!canWrite || saving}
+            onClick={() => void submit()}
+          >
+            {saving
+              ? 'Creating…'
+              : itemKind === 'File' && !sourcePath
+                ? 'Choose file and create'
+                : 'Create in this vault'}
+          </Button>
+        </>
+      }
+    >
+      <>
+        <SectionLabel>Save in</SectionLabel>
         <Inset>
-          {world.stores.map((candidate) => (
-            <StoreChoice
-              key={candidate.id}
-              world={world}
-              store={candidate}
-              chosen={candidate.id === storeId}
-              onChoose={() => setStoreId(candidate.id)}
+          {world.stores.length ? (
+            <CardSelect
+              label="Save in"
+              options={storeNavigationOrder(world).map((candidate) =>
+                storeOption(world, candidate),
+              )}
+              value={storeId}
+              onChange={setStoreId}
+              placeholder="Choose a vault"
             />
-          ))}
+          ) : (
+            <InsetRow label="Vault">
+              <span className="dim">No vault is available to save into.</span>
+            </InsetRow>
+          )}
         </Inset>
+        {store && blocked ? <Band>{`${store.name}: ${blocked}`}</Band> : null}
         {store ? (
           <AccessBlock
             world={world}
@@ -527,7 +603,7 @@ function NewSheet({
             onWriteRole={setWriteRole}
           />
         ) : null}
-        <div className="sec">{itemKind}</div>
+        <SectionLabel>{kindLabel(itemKind)}</SectionLabel>
         <Inset
           className={itemKind === 'File' && hovering ? 'drop-hover' : undefined}
         >
@@ -542,22 +618,15 @@ function NewSheet({
                 },
                 'e.g. github.com',
               )}
-              {field('User name', username, setUsername, 'rae')}
-              {field(
-                'Password',
-                password,
-                setPassword,
-                'Password',
-                true,
-                'password',
-              )}
+              {field('User name', username, setUsername, 'username')}
+              {field('Password', password, setPassword, '', false, 'password')}
               {field(
                 'Website',
                 website,
                 setWebsite,
                 'https://github.com/login',
               )}
-              {field('Path', path, setPath, DRAFT_PATH.Password, true)}
+              {field('Path', path, setPath, DRAFT_PATH.Password)}
             </>
           ) : null}
           {itemKind === 'Resource' ? (
@@ -575,13 +644,13 @@ function NewSheet({
                 'e.g. ANTHROPIC_API_KEY',
               )}
               {field('Value', value, setValue, 'sk-ant-…', true)}
-              {field('Path', path, setPath, DRAFT_PATH.Resource, true)}
+              {field('Path', path, setPath, DRAFT_PATH.Resource)}
             </>
           ) : null}
           {itemKind === 'Link' ? (
             <>
               {field('Points to', target, setTarget, '/ssh/id_ed25519', true)}
-              {field('Path', path, setPath, DRAFT_PATH.Link, true)}
+              {field('Path', path, setPath, DRAFT_PATH.Link)}
             </>
           ) : null}
           {itemKind === 'File' ? (
@@ -595,7 +664,7 @@ function NewSheet({
                       : 'Drop a file here, or use the native picker'}
                 </span>
               </InsetRow>
-              {field('Path', path, setPath, DRAFT_PATH.File, true)}
+              {field('Path', path, setPath, DRAFT_PATH.File)}
             </>
           ) : null}
         </Inset>
@@ -604,22 +673,8 @@ function NewSheet({
             {fileError}
           </p>
         ) : null}
-      </div>
-      <div className="ft">
-        <Button onClick={() => setWorkflow(null)}>Cancel</Button>
-        <Button
-          variant="primary"
-          disabled={!canWrite || saving}
-          onClick={() => void submit()}
-        >
-          {saving
-            ? 'Creating…'
-            : itemKind === 'File' && !sourcePath
-              ? 'Choose file and create'
-              : `Create in ${store?.name ?? ''}`}
-        </Button>
-      </div>
-    </div>
+      </>
+    </Sheet>
   );
 }
 
@@ -643,15 +698,41 @@ function ExistsSheet({
   );
   const version = clash?.version;
   return (
-    <div className="sheet">
-      <div className="hd">
-        {clash ? <KindIcon kind={kindOf(clash) as FilterKind} /> : null}
-        <span className="t">
-          <h2>Something is already at {workflow.path}</h2>
-          <small>New {workflow.itemKind.toLowerCase()} · not created</small>
-        </span>
-      </div>
-      <div className="sb">
+    <Sheet
+      glyph={
+        clash ? <KindIcon kind={kindOf(clash) as FilterKind} /> : undefined
+      }
+      title={`Something is already at ${workflow.path}`}
+      subtitle={`New ${kindLabel(workflow.itemKind).toLowerCase()} · not created`}
+      footer={
+        <>
+          <Button
+            onClick={() =>
+              setWorkflow({
+                kind: 'new',
+                itemKind: workflow.itemKind,
+                storeId: workflow.storeId,
+                draft: workflow.draft,
+              })
+            }
+          >
+            Change the path
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              void onOpenExisting(workflow).then(
+                () => setWorkflow(null),
+                onError,
+              );
+            }}
+          >
+            Open{version ? ` version ${version}` : ' existing item'}
+          </Button>
+        </>
+      }
+    >
+      <>
         <p>
           Nothing was created and nothing was overwritten. Creating carries
           “must not exist”
@@ -664,33 +745,8 @@ function ExistsSheet({
           Refresh and open what is there to review its exact version, or save
           this one at another path. There is no “create anyway”.
         </p>
-      </div>
-      <div className="ft">
-        <Button
-          onClick={() =>
-            setWorkflow({
-              kind: 'new',
-              itemKind: workflow.itemKind,
-              storeId: workflow.storeId,
-              draft: workflow.draft,
-            })
-          }
-        >
-          Change the path
-        </Button>
-        <Button
-          variant="primary"
-          onClick={() => {
-            void onOpenExisting(workflow).then(
-              () => setWorkflow(null),
-              onError,
-            );
-          }}
-        >
-          Open{version ? ` version ${version}` : ' existing item'}
-        </Button>
-      </div>
-    </div>
+      </>
+    </Sheet>
   );
 }
 
@@ -754,17 +810,12 @@ export function WriteOverlay({
         </div>
       </Dialog>
     );
-  const dismiss = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key !== 'Escape') return;
-    if (workflow.kind === 'conflict') onDiscardConflict();
-    else setWorkflow(null);
-  };
   if (workflow.kind === 'new')
     return (
-      <Dialog
+      <DismissibleDialog
         className="backdrop"
-        aria-label={`New ${workflow.itemKind.toLowerCase()}`}
-        onKeyDown={dismiss}
+        aria-label={`New ${kindLabel(workflow.itemKind).toLowerCase()}`}
+        onDismiss={() => setWorkflow(null)}
       >
         <NewSheet
           world={world}
@@ -774,14 +825,14 @@ export function WriteOverlay({
           onApplied={onApplied}
           onError={(error) => onError(error)}
         />
-      </Dialog>
+      </DismissibleDialog>
     );
   if (workflow.kind === 'exists')
     return (
-      <Dialog
+      <DismissibleDialog
         className="backdrop"
         aria-label="Creation refused because the path exists"
-        onKeyDown={dismiss}
+        onDismiss={() => setWorkflow(null)}
       >
         <ExistsSheet
           world={world}
@@ -790,37 +841,113 @@ export function WriteOverlay({
           onOpenExisting={onOpenExisting}
           onError={(error) => onError(error)}
         />
-      </Dialog>
+      </DismissibleDialog>
     );
   if (workflow.kind === 'conflict')
     return (
+      <ConflictSheet
+        workflow={workflow}
+        setWorkflow={setWorkflow}
+        onRefreshConflict={onRefreshConflict}
+        onDiscardConflict={onDiscardConflict}
+        onError={onError}
+      />
+    );
+  return (
+    <RemoveSheet
+      workflow={workflow}
+      bridge={bridge}
+      setWorkflow={setWorkflow}
+      onApplied={onApplied}
+      onError={onError}
+    />
+  );
+}
+
+/**
+ * The save-refused sheet.
+ *
+ * Escape used to be wired straight to "discard my edit" here, while every
+ * other overlay in the app treats Escape as a harmless cancel — and the body
+ * of this very sheet promises the draft is retained. Pressing the most
+ * reflexive key in the window therefore destroyed work the sheet had just
+ * said it was keeping. Escape now asks; the discard itself is still one
+ * deliberate click away in the footer.
+ */
+function ConflictSheet({
+  workflow,
+  setWorkflow,
+  onRefreshConflict,
+  onDiscardConflict,
+  onError,
+}: {
+  workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'conflict' }>;
+  setWorkflow: (workflow: WriteWorkflow) => void;
+  onRefreshConflict: (item: Item, draft: string) => Promise<void>;
+  onDiscardConflict: () => void;
+  onError: (error: unknown, item?: Item) => void;
+}): ReactNode {
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+
+  if (confirmingDiscard)
+    return (
       <Dialog
         className="backdrop"
-        aria-label="Edit conflict"
-        onKeyDown={dismiss}
+        role="alertdialog"
+        aria-label="Discard your edit"
+        onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+          // Escape backs out of the question, not out of the draft.
+          if (event.key === 'Escape') setConfirmingDiscard(false);
+        }}
       >
-        <div className="sheet">
-          <div className="hd">
-            <KindIcon kind={kindOf(workflow.item) as FilterKind} />
-            <span className="t">
-              <h2>Someone else changed this first</h2>
-              <small>{nameOf(workflow.item.path)} · save refused</small>
+        <Sheet
+          glyph={
+            <span className="kico md danger">
+              <Icon name="trash" />
             </span>
-          </div>
-          <div className="sb">
-            <p>
-              You edited version {workflow.item.version}, but that exact version
-              is no longer current, so nothing was saved and nothing was
-              overwritten.
-            </p>
-            <p className="fn">
-              Refresh to see the current version beside your retained draft,
-              review it, and save again under the refreshed version. There is no
-              “save anyway” and Retry never replays this write.
-            </p>
-          </div>
-          <div className="ft">
-            <Button onClick={onDiscardConflict}>Discard my edit</Button>
+          }
+          title="Discard your edit?"
+          subtitle={`${nameOf(workflow.item.path)} · not saved anywhere`}
+          footer={
+            <>
+              <Button onClick={() => setConfirmingDiscard(false)}>
+                Keep editing
+              </Button>
+              <Button
+                variant="primary"
+                className="danger"
+                onClick={onDiscardConflict}
+              >
+                Discard my edit
+              </Button>
+            </>
+          }
+        >
+          <p>
+            Your draft has not been saved. Discarding it here is the only copy
+            gone — the item itself is untouched at its current version.
+          </p>
+        </Sheet>
+      </Dialog>
+    );
+
+  return (
+    <Dialog
+      className="backdrop"
+      aria-label="Edit conflict"
+      onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+        if (event.key === 'Escape') setConfirmingDiscard(true);
+      }}
+    >
+      <Sheet
+        glyph={<KindIcon kind={kindOf(workflow.item) as FilterKind} />}
+        title="Someone else changed this first"
+        subtitle={`${nameOf(workflow.item.path)} · save refused`}
+        footer={
+          <>
+            <Button onClick={() => setConfirmingDiscard(true)}>
+              Discard my edit
+            </Button>
             <Button
               variant="primary"
               onClick={() => {
@@ -832,36 +959,70 @@ export function WriteOverlay({
             >
               Refresh and review
             </Button>
-          </div>
-        </div>
-      </Dialog>
-    );
+          </>
+        }
+      >
+        <>
+          <p>
+            You edited version {workflow.item.version}, but that exact version
+            is no longer current, so nothing was saved and nothing was
+            overwritten.
+          </p>
+          <p className="fn">
+            Refresh to see the current version beside your retained draft,
+            review it, and save again under the refreshed version. There is no
+            “save anyway” and Retry never replays this write.
+          </p>
+        </>
+      </Sheet>
+    </Dialog>
+  );
+}
+
+/**
+ * The remove confirmation.
+ *
+ * Unlike every other write on this screen it had no busy flag, so the natural
+ * response to a slow remove — clicking again — sent a second exact-version
+ * remove. The item was already gone, so that one came back as a *conflict*,
+ * and the user was shown "Someone else changed this first" with a retained
+ * draft that never existed, for an item that no longer did.
+ */
+function RemoveSheet({
+  workflow,
+  bridge,
+  setWorkflow,
+  onApplied,
+  onError,
+}: {
+  workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'remove' }>;
+  bridge: Bridge;
+  setWorkflow: (workflow: WriteWorkflow) => void;
+  onApplied: (message: string) => Promise<void>;
+  onError: (error: unknown, item?: Item) => void;
+}): ReactNode {
+  const [removing, setRemoving] = useState(false);
   return (
-    <Dialog
-      className="backdrop"
-      role="alertdialog"
-      aria-label={`Remove ${nameOf(workflow.item.path)}`}
-      onKeyDown={dismiss}
-    >
-      <div className="sheet">
-        <div className="hd">
-          <span className="kico md danger">
-            <Icon name="trash" />
-          </span>
-          <span className="t">
-            <h2>Remove {nameOf(workflow.item.path)}?</h2>
-            <small>{workflow.item.path}</small>
-          </span>
-        </div>
-        <div className="sb">
-          <p>This will remove the item. This can’t be undone.</p>
-        </div>
-        <div className="ft">
+    <SheetDialog
+      danger
+      onClose={() => setWorkflow(null)}
+      glyph={
+        <span className="kico md danger">
+          <Icon name="trash" />
+        </span>
+      }
+      title={`Remove ${nameOf(workflow.item.path)}?`}
+      subtitle={workflow.item.path}
+      footer={
+        <>
           <Button onClick={() => setWorkflow(null)}>Cancel</Button>
           <Button
             className="danger"
             variant="primary"
+            disabled={removing}
             onClick={() => {
+              if (removing) return;
+              setRemoving(true);
               void (async () => {
                 try {
                   await bridge.removeItem({
@@ -873,14 +1034,18 @@ export function WriteOverlay({
                   setWorkflow(null);
                 } catch (error) {
                   onError(error, workflow.item);
+                } finally {
+                  setRemoving(false);
                 }
               })();
             }}
           >
-            Remove
+            {removing ? 'Removing…' : 'Remove'}
           </Button>
-        </div>
-      </div>
-    </Dialog>
+        </>
+      }
+    >
+      <p>This will remove the item. This can’t be undone.</p>
+    </SheetDialog>
   );
 }

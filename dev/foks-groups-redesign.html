@@ -1,0 +1,818 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FOKS · Groups redesign</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+/* ---- tokens: ui/kit/tokens.css + the :root block of foks-ui/src/styles/shell.css, verbatim ---- */
+:root {
+  --ink: #1d1d1f; --ink-2: #2c2c30; --ink-3: #3c3c42; --muted: #66666f; --muted-2: #6d6d76;
+  --accent: #0a7cff; --accent-ink: #0a63d0; --accent-wash: rgba(10, 124, 255, .08); --accent-wash-2: rgba(10, 124, 255, .12); --accent-border: rgba(10, 124, 255, .32);
+  --danger: #ff3b30; --danger-ink: #d70015; --danger-text: #7a1208; --danger-wash: rgba(255, 59, 48, .08); --danger-border: rgba(255, 59, 48, .38);
+  --amber-ink: #7a5410; --amber-strong: #b06a00; --amber-wash: rgba(255, 190, 50, .16); --amber-border: rgba(200, 140, 20, .3); --warning-dot: #d59600;
+  --ok-ink: #248a3d; --ok-solid: #34c759;
+  --panel: #fbfbfd; --btn-bg: #fff; --btn-hover: #f2f2f5; --chip-bg: rgba(0, 0, 0, .06); --chip-ink: #4c4c53; --wash: rgba(0, 0, 0, .025); --backdrop: rgba(20, 20, 30, .28);
+  --line: rgba(0, 0, 0, .08); --line-soft: rgba(0, 0, 0, .06); --line-mid: rgba(0, 0, 0, .10); --line-field: rgba(0, 0, 0, .16);
+  --shadow-xs: 0 1px 1px rgba(15, 20, 45, .04); --shadow-sheet: 0 14px 34px rgba(15, 20, 45, .16);
+  --faint:#8a8a92; --surface:#f6f6f9; --main-surface:#fff; --hover:rgba(0,0,0,.05); --shadow-menu:0 10px 28px rgba(15,20,45,.14);
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  --c-password:#3b82f6;--c-file:#64748b;--c-resource:#d97706;--c-link:#7c3aed;--c-team:#636366;--c-none:#aeaeb2;
+  --ok-wash:rgba(52,199,89,.14);
+  --radius-sm:7px;--radius-md:9px;--radius-lg:12px;--radius-xl:16px;--radius-pill:99px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
+body{background:#e7e8ee;color:var(--ink);font:14px/1.45 var(--sans);min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:12px 16px 16px;-webkit-font-smoothing:antialiased}
+button,input,textarea{font:inherit;color:inherit}
+button{background:none;border:0;cursor:pointer}
+a{color:inherit;text-decoration:none}
+svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* ---- window + sidebar: foks-ui/src/styles/shell.css, trimmed to what this page uses ---- */
+.window{position:relative;width:min(1180px,96vw);height:min(760px,88vh);background:var(--main-surface);border-radius:var(--radius-lg);border:1px solid rgba(0,0,0,.16);box-shadow:0 24px 60px rgba(15,20,45,.26),0 2px 8px rgba(15,20,45,.12);overflow:hidden;display:flex;flex-direction:column}
+.titlebar{height:44px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--surface);border-bottom:1px solid var(--line-soft);user-select:none}
+.lights{display:flex;gap:8px;margin-right:6px}.light{width:12px;height:12px;border-radius:50%}
+.light.r{background:#ff5f57}.light.y{background:#febc2e}.light.g{background:#28c840}
+.titlebar .brand{font-weight:700;font-size:13.5px;letter-spacing:-.01em}
+.titlebar .spacer{flex:1}
+.agent{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.agent i{width:7px;height:7px;border-radius:50%;background:var(--ok-solid)}
+.app{flex:1;min-height:0;display:grid;grid-template-columns:224px 1fr}
+.side{background:var(--surface);border-right:1px solid var(--line-soft);display:flex;flex-direction:column;padding:12px 10px 10px;overflow:auto}
+.side h6{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:10px 10px 5px}
+.nav{display:flex;align-items:center;gap:9px;width:100%;padding:6px 9px;border-radius:8px;text-align:left;color:var(--ink-2);font-weight:500;line-height:1.25}
+.nav:hover{background:var(--hover)}.nav.on{background:var(--accent-wash-2);color:var(--accent-ink)}
+.nav .ic{font-size:17px;color:var(--muted);width:18px}.nav.on .ic{color:var(--accent-ink)}
+.nav .t{min-width:0;flex:1}.nav .t small{display:block;font-size:11.5px;font-weight:400;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nav.on .t small{color:var(--accent-ink);opacity:.85}
+.nav.off{opacity:.55}
+.nav .dot{width:7px;height:7px;border-radius:50%;background:var(--warning-dot);flex:none}
+.nav .badge{font-size:11px;font-weight:600;color:var(--amber-ink);background:var(--amber-wash);padding:0 7px;border-radius:var(--radius-pill);line-height:18px}
+.nav .stack{margin-left:auto}
+.nav .stack .av:nth-child(1){left:auto;right:10px}
+.nav .stack .av:nth-child(2){left:auto;right:0}
+.nav .stack .av:only-child{right:0}
+.side .foot{margin-top:auto;padding-top:10px;border-top:1px solid var(--line-soft)}
+.side .foot .nav{font-size:13px}
+.side .foot-separator{margin:7px 9px;border-top:1px solid var(--line-soft)}
+.stack{display:inline-flex;position:relative;width:28px;height:20px;flex:none}
+.av{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:8.5px;font-weight:700;color:#fff;border:2px solid var(--surface);position:absolute;top:0}
+.av .ic{font-size:11px;color:#fff;width:auto}
+.stack .av:nth-child(1){left:0;z-index:2}.stack .av:nth-child(2){left:10px;z-index:1}
+.av.team{border-radius:6px;font-size:11px;border:0}
+.main{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;background:#fff}
+.path{display:flex;align-items:center;gap:10px;padding:8px 20px;min-height:48px;border-bottom:1px solid var(--line-soft);background:#fff}
+.loc{display:flex;align-items:center;gap:9px;min-width:0;flex:1 0 auto}
+.loc h1{font-size:15px;font-weight:650;letter-spacing:-.01em;white-space:nowrap}
+.loc small{font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.header-action{display:flex;align-items:center;gap:6px;margin-left:auto;flex:none}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--line-mid);border-radius:var(--radius-md);background:var(--btn-bg);font-weight:500;box-shadow:var(--shadow-xs);white-space:nowrap}
+.btn:hover{background:var(--btn-hover)}.btn.primary{background:var(--accent);border-color:color-mix(in srgb,var(--accent) 58%,#fff);color:#fff;font-weight:600}
+.btn.primary:hover{background:var(--accent-ink)}.btn.danger{color:var(--danger-ink)}.btn.danger:hover{background:var(--danger-wash)}
+.btn[disabled]{opacity:.5;cursor:default;box-shadow:none}.btn[disabled]:hover{background:var(--btn-bg)}
+.btn .ic{font-size:16px}
+.btn.icon{width:32px;padding:0;justify-content:center;color:var(--ink-3)}
+.btn.sm{height:28px;font-size:13px;padding:0 10px}
+.btn.cap{height:24px;padding:0 9px;font-size:12px;border-radius:var(--radius-pill);background:var(--chip-bg);border-color:transparent;box-shadow:none;color:var(--ink-2)}
+.btn.cap:hover{background:rgba(0,0,0,.1)}.btn.cap .ic{font-size:13px}
+.menuwrap{position:relative}
+.menu{position:absolute;top:36px;right:0;min-width:220px;background:#fff;border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow-menu);padding:6px;z-index:5}
+.menu button{display:flex;align-items:center;gap:9px;width:100%;padding:7px 9px;border-radius:var(--radius-sm);text-align:left}.menu button:hover{background:var(--hover)}
+.menu button .ic{font-size:16px;width:18px}
+.menu button.danger{color:var(--danger-ink)}
+.menu button .pav{width:24px;height:24px;font-size:9px}
+.menu button .t{min-width:0;line-height:1.25}.menu button .t b{display:block;font-weight:500}.menu button .t small{display:block;font-size:11.5px;color:var(--muted)}
+.inset .fr .a .menu{top:34px;min-width:250px}
+.settings .inset{overflow:visible}
+.menu hr{border:0;border-top:1px solid var(--line-soft);margin:5px 4px}
+.body{flex:1;min-height:0;overflow:auto;padding:8px 20px 80px}
+.chip{display:inline-block;width:max-content;font-size:12px;font-weight:600;padding:1px 8px;border-radius:var(--radius-pill);background:var(--chip-bg);color:var(--chip-ink);white-space:nowrap}
+.chip.you{color:var(--accent-ink);background:var(--accent-wash-2)}
+.chip.warn{color:var(--amber-ink);background:var(--amber-wash)}
+.chip.ok{color:var(--ok-ink);background:var(--ok-wash)}
+.chip.bad{color:var(--danger-ink);background:var(--danger-wash)}
+.tag{display:inline-block;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--muted);background:var(--chip-bg);border-radius:5px;padding:1px 6px;white-space:nowrap;vertical-align:1px}
+.tag.warn{color:var(--amber-ink);background:var(--amber-wash)}
+.kico{width:26px;height:26px;border-radius:var(--radius-sm);display:grid;place-items:center;color:#fff;font-weight:700;font-size:13px;flex:none}
+.kico.md{width:30px;height:30px;border-radius:8px;font-size:15px}
+.kico.big{width:40px;height:40px;border-radius:11px;font-size:19px}
+.kic{width:26px;height:26px;border-radius:var(--radius-sm);display:grid;place-items:center;font-size:16px;flex:none}
+.kic.Password{background:rgba(59,130,246,.12);color:var(--c-password)}
+.kic.File{background:rgba(100,116,139,.13);color:var(--c-file)}
+.kic.Resource{background:rgba(217,119,6,.13);color:var(--c-resource)}
+.pchip{display:inline-block;flex:none;font:11px var(--mono);color:var(--muted);background:var(--chip-bg);padding:1px 6px;border-radius:5px;line-height:16px}
+.band{display:flex;align-items:flex-start;gap:8px;padding:8px 12px;border-radius:var(--radius-md);background:var(--amber-wash);border:1px solid var(--amber-border);color:var(--amber-ink);font-size:12.5px;line-height:1.45}
+.band b{font-weight:700}
+.band .ic{flex:none;margin-top:1px}
+.band.info{background:var(--surface);border-color:var(--line);color:var(--ink-3)}
+.band.info .ic{color:var(--muted)}
+.band.stop{background:var(--danger-wash);border-color:var(--danger-border);color:var(--danger-text)}
+.band .lnk{margin-left:auto;flex:none}
+.lnk{color:var(--accent-ink);font-weight:500;font-size:13px}
+.sec{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin:18px 0 8px}
+.sec .n{text-transform:none;letter-spacing:0;font-weight:500}
+.sec .right{margin-left:auto;display:flex;gap:6px;text-transform:none;letter-spacing:0}
+.inset{border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden;background:var(--main-surface)}
+.inset .fr{display:flex;align-items:center;gap:10px;min-height:40px;padding:7px 12px;border-top:1px solid var(--line-soft);font-size:13px}
+.inset .fr:first-child{border-top:0}
+.inset .fr .k{color:var(--muted);flex:none;width:112px}
+.inset .fr .v{flex:1;min-width:0}
+.inset .fr .v code{font:12.5px var(--mono);color:var(--ink-2);overflow-wrap:anywhere}
+.inset .fr .a{margin-left:auto;display:flex;gap:6px;flex:none}
+.inset.danger{border-color:var(--danger-border)}
+.inset .fr .t{flex:1;min-width:0}.inset .fr .t b{display:block;font-weight:600}.inset .fr .t small{display:block;font-size:12.5px;color:var(--muted)}
+details.dd{font-size:12.5px;color:var(--muted);margin-top:14px}
+details.dd summary{cursor:pointer;color:var(--accent-ink);font-weight:500}
+details.dd pre{font:11.5px/1.5 var(--mono);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:6px;white-space:pre-wrap}
+.backdrop{position:absolute;inset:0;background:var(--backdrop);display:grid;place-items:center;z-index:10}
+.sheet{width:460px;max-height:92%;display:flex;flex-direction:column;background:#fff;border-radius:var(--radius-xl);box-shadow:var(--shadow-sheet);padding:20px 24px 18px;overflow:hidden}
+.sheet .hd{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.sheet .hd .t{flex:1;min-width:0}.sheet .hd small{display:block;font-size:12.5px;color:var(--muted)}
+.sheet h2{font-size:16px;font-weight:650;letter-spacing:-.01em}
+.sheet p{color:var(--ink-3);font-size:13.5px;margin-bottom:8px}.sheet .fn{font-size:12.5px;color:var(--muted)}
+.sheet .ft{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;align-items:center}
+.sheet .ft .spacer{flex:1}
+.sheet label{display:block;font-size:12.5px;font-weight:600;color:var(--ink-2);margin:12px 0 4px}
+.sheet input[type=text]{width:100%;height:32px;border:1px solid var(--line-field);border-radius:var(--radius-md);padding:0 10px;background:#fff;outline:0}
+.sheet .radio{display:flex;flex-direction:column;gap:6px}
+.sheet .rc{display:flex;gap:10px;align-items:flex-start;padding:9px 11px;border:1px solid var(--line);border-radius:var(--radius-md);cursor:pointer}
+.sheet .rc.on{border-color:var(--accent-border);background:var(--accent-wash)}
+.sheet .rc input{margin-top:3px}
+.sheet .rc b{display:block;font-weight:600}.sheet .rc small{display:block;color:var(--muted);font-size:12.5px}
+.copybox{display:flex;align-items:flex-start;gap:10px;padding:9px 12px;background:var(--surface);border:1px solid var(--line-soft);border-radius:var(--radius-md);margin:6px 0}
+.copybox .v{flex:1;min-width:0;font-size:12.5px;line-height:1.55;white-space:pre-line;color:var(--ink-2)}
+.flash{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);background:var(--ink);color:#fff;font-size:13px;padding:8px 14px;border-radius:var(--radius-pill);z-index:20}
+
+/* =====================================================================
+   NEW in this proposal — the groups list, the group page, the party panel
+   ===================================================================== */
+
+/* -- groups list: rows, grouped by server -- */
+.glist{max-width:820px}
+.gserver{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin:16px 0 6px}
+.gserver:first-child{margin-top:6px}
+.gserver .n{text-transform:none;letter-spacing:0;font-weight:500}
+.gserver .btn.cap{margin-left:auto;text-transform:none;letter-spacing:0;font-weight:500}
+.grow{display:grid;grid-template-columns:44px minmax(0,1fr) 150px 120px 24px;gap:12px;align-items:center;min-height:56px;padding:6px 10px 6px 12px;border-radius:var(--radius-md);cursor:default;text-align:left;width:100%}
+.grow:hover{background:var(--hover)}
+.grow .stack{width:44px;height:30px}.grow .stack .av{width:30px;height:30px;font-size:11px;border-color:#fff}.grow .stack .av:nth-child(2){left:16px}
+.grow .stack .av .ic{font-size:15px}
+.grow .t{min-width:0}.grow .t b{display:flex;align-items:center;gap:7px;font-weight:600}
+.grow .t small{display:block;font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.grow .who{font-size:13px;color:var(--ink-3);display:flex;align-items:center;gap:6px}
+.grow .who .ic{color:var(--muted)}
+.grow .chev{color:var(--faint);font-size:15px;transform:rotate(-90deg)}
+.grow.off .t,.grow.off .who{opacity:.6}
+.gempty{margin:60px auto 0;max-width:420px;text-align:center;color:var(--muted)}
+.gempty .big{width:72px;height:72px;border-radius:20px;background:var(--surface);display:grid;place-items:center;font-size:36px;color:var(--c-team);margin:0 auto 14px}
+.gempty h2{font-size:17px;font-weight:650;color:var(--ink);margin-bottom:4px}
+.gempty p{margin-bottom:14px}
+
+/* -- group page header: the one place the identity of the group is stated -- */
+.ghero{display:flex;align-items:center;gap:12px;padding:14px 20px 0}
+.ghero .back{width:28px;height:28px;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--muted);font-size:16px;margin-left:-8px}
+.ghero .back:hover{background:var(--hover);color:var(--ink)}
+.ghero .back .ic{transform:rotate(90deg)}
+.ghero .t{flex:1;min-width:0}
+.ghero h1{font-size:19px;font-weight:700;letter-spacing:-.015em;line-height:1.2;display:flex;align-items:center;gap:8px;min-width:0}
+.ghero h1 span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ghero .sub{font-size:13px;color:var(--muted);margin-top:2px}
+.ghero .sub .sep{color:var(--faint)}
+.ghero .sub code{font:12px var(--mono);color:var(--muted)}
+.ghero .sub .btn.cap{height:20px;font-size:11.5px;padding:0 7px}
+.ghero .header-action{align-self:flex-start;margin-top:2px}
+.ghero .header-action .btn{height:30px;font-size:13px}
+.ghero .header-action .btn.icon{width:30px}
+
+/* -- tabs: a strip with an underline, counts drawn quiet, no red tab -- */
+.tabs{display:flex;align-items:flex-end;gap:2px;padding:12px 20px 0;border-bottom:1px solid var(--line-soft)}
+.tab{position:relative;display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 10px;font-weight:500;color:var(--muted);border-radius:var(--radius-sm) var(--radius-sm) 0 0}
+.tab:hover{color:var(--ink-2);background:var(--wash)}
+.tab.on{color:var(--ink);font-weight:600}
+.tab.on::after{content:"";position:absolute;left:8px;right:8px;bottom:-1px;height:2px;background:var(--accent);border-radius:2px 2px 0 0}
+.tab .n{font-size:11.5px;font-weight:600;color:var(--muted);background:var(--chip-bg);border-radius:var(--radius-pill);padding:0 6px;line-height:17px;font-variant-numeric:tabular-nums}
+.tab.on .n{color:var(--accent-ink);background:var(--accent-wash-2)}
+.tab .n.zero{background:transparent;color:var(--faint)}
+
+/* -- roster -- */
+.roster{max-width:880px}
+.rhead{display:flex;align-items:center;gap:10px;margin:14px 0 6px}
+.rhead h2{font-size:14px;font-weight:650}
+.rhead .n{font-size:13px;color:var(--muted)}
+.rhead .right{margin-left:auto;display:flex;gap:6px}
+.rhead .btn{height:28px;font-size:13px}
+.rt{border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden}
+.rt .hdr,.rt .prow{display:grid;grid-template-columns:minmax(0,1fr) 168px 132px 36px;gap:12px;align-items:center;padding:0 12px}
+.rt .hdr{height:30px;font-size:11.5px;color:var(--faint);font-weight:600;letter-spacing:.02em;background:var(--surface);border-bottom:1px solid var(--line-soft)}
+.rt .prow{min-height:54px;border-top:1px solid var(--line-soft);cursor:default;width:100%;text-align:left}
+.rt .prow:first-of-type{border-top:0}
+.rt .prow:hover{background:var(--hover)}.rt .prow.sel{background:var(--accent-wash)}
+.rt .prow.dim>*:not(.acts){opacity:.55}
+.who2{display:flex;align-items:center;gap:10px;min-width:0}
+.pav{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:10.5px;font-weight:700;color:#fff;flex:none}
+.pav .ic{font-size:14px;color:#fff;width:auto}
+.pav.team{border-radius:var(--radius-sm)}
+.who2 .t{min-width:0;line-height:1.3}
+.who2 .t b{display:flex;align-items:center;gap:6px;font-weight:500}
+.who2 .t b span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who2 .t small{display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rolecell{display:flex;flex-direction:column;gap:2px;align-items:flex-start;min-width:0}
+.rolecell small{font-size:11.5px;color:var(--muted);white-space:nowrap}
+.reads{font-size:13px;color:var(--ink-3);font-variant-numeric:tabular-nums;line-height:1.25}
+.reads small{display:block;font-size:11.5px;color:var(--muted)}
+.reads.none{color:var(--muted)}
+.rt .acts{display:flex;justify-content:flex-end;opacity:0;transition:opacity .12s}
+.rt .prow:hover .acts,.rt .prow.sel .acts,.rt .prow .acts.open{opacity:1}
+.rt .acts button{width:28px;height:28px;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--ink-3);font-size:16px}
+.rt .acts button:hover{background:rgba(0,0,0,.08)}
+.rfoot{font-size:12.5px;color:var(--muted);margin:10px 2px 0;line-height:1.5}
+.callout{display:flex;align-items:center;gap:12px;margin-top:12px;padding:12px 14px;border:1px dashed var(--line-mid);border-radius:var(--radius-lg);color:var(--muted);font-size:13px}
+.callout .kico{background:var(--accent-wash-2);color:var(--accent-ink)}
+.callout .t{flex:1}.callout .t b{display:block;color:var(--ink);font-weight:600}
+.callout .btn{height:28px;font-size:13px}
+
+/* -- federation & items lists reuse the roster box -- */
+.rt.fed .hdr,.rt.fed .prow{grid-template-columns:minmax(0,1fr) 150px 168px 80px 150px}
+.cellact{display:flex;justify-content:flex-end}
+.rt.items .hdr,.rt.items .prow{grid-template-columns:minmax(0,1fr) 118px 118px 96px 64px}
+.vern{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.rt.items .prow{min-height:48px}
+.ipath{display:flex;align-items:center;gap:10px;min-width:0;font-weight:500}
+.ipath span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ipath .pchip{font-weight:400}
+.ver{font:12px var(--mono);color:var(--muted)}
+.readby{display:flex;align-items:center;gap:8px;min-width:0;font-size:12.5px;color:var(--muted)}
+.readby .chip{font-variant-numeric:tabular-nums;cursor:default}
+.readby .names{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* -- party panel: what one row is, on the right -- */
+.app.with-details{grid-template-columns:224px 1fr 300px}
+.details{border-left:1px solid var(--line-soft);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+.details .dh{display:flex;align-items:center;gap:10px;padding:14px 16px 10px}
+.details .dh .t{flex:1;min-width:0}
+.details .dh h2{font-size:15px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;gap:6px;align-items:center}
+.details .dh small{display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.details .x{width:26px;height:26px;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--muted);flex:none}
+.details .x:hover{background:var(--hover)}
+.details .scroll{flex:1;min-height:0;overflow:auto;padding:0 16px 16px}
+.details .sec{margin:14px 0 6px}
+.details .scroll>.sec:first-child{margin-top:2px}
+.meta{display:grid;grid-template-columns:86px 1fr;gap:6px 10px;font-size:13px}
+.meta b{font-weight:500;color:var(--muted)}.meta code{font:12px var(--mono);overflow-wrap:anywhere}
+.rlist{border:1px solid var(--line);border-radius:var(--radius-md);background:#fff;overflow:hidden}
+.rlist .ir{display:flex;align-items:center;gap:8px;padding:6px 10px;border-top:1px solid var(--line-soft);font-size:13px;min-width:0}
+.rlist .ir:first-child{border-top:0}
+.rlist .ir .kic{width:22px;height:22px;font-size:13px}
+.rlist .ir .ipth{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rlist .ir .pchip{flex:none}
+.rlist .ir.no{color:var(--faint)}
+.rlist .ir.no .kic{opacity:.45}
+.details .hint{font-size:12.5px;color:var(--muted);line-height:1.5;margin-top:8px}
+.dfoot{padding:10px 16px 14px;border-top:1px solid var(--line-soft);display:flex;gap:8px}
+.dfoot .btn{flex:1;justify-content:center;height:30px;font-size:13px;padding:0 8px}
+
+/* -- settings tab -- */
+.settings{max-width:640px}
+.settings .sec:first-child{margin-top:6px}
+.settings p.fn{font-size:12.5px;color:var(--muted);margin:8px 2px 0;line-height:1.5}
+
+/* -- review strip (outside the window; not part of the app) -- */
+#review{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-top:12px;font-size:12px;color:#55555c;max-width:1180px}
+#review b{margin-right:6px}
+#review button{border:1px solid rgba(0,0,0,.14);background:#fff;border-radius:6px;padding:2px 8px;font-size:12px}
+#review button.on{background:#1d1d1f;color:#fff;border-color:#1d1d1f}
+#review .grp{margin-left:10px;color:#8a8a92}
+#notes{max-width:1180px;width:100%;margin-top:14px;font-size:12.5px;color:#3c3c42;line-height:1.55}
+#notes h3{font-size:13px;margin:10px 0 4px}
+#notes ul{padding-left:1.2em}
+#notes li{margin:2px 0}
+</style>
+</head>
+<body>
+<div class="window" id="win">
+  <div class="titlebar"><div class="lights"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div><span class="brand">FOKS</span><span class="spacer"></span><span class="agent"><i></i>Agent ready</span></div>
+  <div class="app" id="app"></div>
+  <div id="overlay"></div>
+</div>
+<div id="review"></div>
+<div id="notes"></div>
+
+<script>
+/* ===================== fixture (wave 6 BRIEF §4 subset, plus the 1-person ad-hoc group from the screenshot) ===================== */
+const FX = {
+  servers: [
+    { id:"local",    name:"local",              state:"ok" },
+    { id:"personal", name:"foks.example.net",   state:"ok" },
+    { id:"acme",     name:"foks.acme-corp.com", state:"ok" },
+  ],
+  accounts: [
+    { alias:"raykyri",  username:"raykyri",  server:"local",    store:"acct:raykyri" },
+    { alias:"personal", username:"rae",      server:"personal", store:"acct:personal" },
+    { alias:"work",     username:"rae.chen", server:"acme",     store:"acct:work" },
+  ],
+  stores: [
+    { id:"acct:raykyri",  kind:"account", name:"raykyri",  server:"local",    account:"raykyri" },
+    { id:"acct:personal", kind:"account", name:"Personal", server:"personal", account:"personal" },
+    { id:"acct:work",     kind:"account", name:"Work",     server:"acme",     account:"work" },
+    { id:"team:hh",   kind:"team", name:"household",   server:"local",    account:"raykyri",  active:true,  team_kind:"adhoc", team_id_hex:"14ae9d1ac2b7f0e83d4c6a19e5b2f7c0d3a8e1f4b6c9d2a5e8f1b4c7d0a3e6bdf4" },
+    { id:"team:eng",  kind:"team", name:"Engineering", server:"acme",     account:"work",     active:true,  team_kind:"named", team_id_hex:"033f91c2aa07b45e18d0c73a9f2e5b6417ac8d0192f3e4b5c6d7089a1b2c3d4e5f" },
+    { id:"team:fam",  kind:"team", name:"Household",   server:"personal", account:"personal", active:true,  team_kind:"named", team_id_hex:"037b83d4f0241a67933c59ed218458ce03a5b98e691e81c544b8cc93c52f4e02ab" },
+    { id:"team:lab",  kind:"team", name:"Homelab",     server:"personal", account:"personal", active:false, team_kind:"adhoc", team_id_hex:"038b17e4a055c93d2fe60148ab7f2c9d3140e5b8a71c6f93d20ba48e5739d1c0f6" },
+  ],
+  items: [
+    { store:"team:hh",  path:"/wifi/home",              kind:"Password", version:2, read:{role:"Owner"}, write:{role:"Owner"} },
+    { store:"team:eng", path:"/deploy/production-token", kind:"Resource", version:12, read:{role:"Admin"}, write:{role:"Owner"} },
+    { store:"team:eng", path:"/deploy/staging-token",    kind:"Resource", version:3,  read:{role:"Member",visibility:0}, write:{role:"Admin"} },
+    { store:"team:eng", path:"/release/bundle.tar",      kind:"File",     version:5,  read:{role:"Member",visibility:0}, write:{role:"Admin"} },
+    { store:"team:eng", path:"/onboarding/README.md",    kind:"File",     version:2,  read:{role:"Member",visibility:-1}, write:{role:"Admin"} },
+    { store:"team:fam", path:"/wifi/guest-password",     kind:"Password", version:4,  read:{role:"Member",visibility:0}, write:{role:"Admin"} },
+    { store:"team:fam", path:"/documents/emergency.pdf", kind:"File",     version:7,  read:{role:"Member",visibility:0}, write:{role:"Owner"} },
+    { store:"team:fam", path:"/streaming/netflix",       kind:"Password", version:1,  read:{role:"Member",visibility:0}, write:{role:"Admin"} },
+  ],
+  parties: [
+    { store:"team:hh",  username:"raykyri",  label:"you", party_kind:"user", generation:1, locally_manageable:false, party_id_hex:"01e2b7c4d9a1f6e3b8c5d2a7f4e1b8c5d2a9f6e3b0c7d4a1f8e5b2c9d6a3f0e7b4", source_role:null, destination_role:{role:"Owner"} },
+    { store:"team:eng", username:"sam.ortiz", party_kind:"user", generation:4, locally_manageable:true, party_id_hex:"01a4c107f822ee91b05d3c44a7e0186b297f10cd439b62ae0831d5f7c46e29b0a5", source_role:null, destination_role:{role:"Owner"} },
+    { store:"team:eng", username:"rae.chen", label:"you", party_kind:"user", generation:6, locally_manageable:true, party_id_hex:"016ab09cd4e11f207877c31b900b44aa193d90c1e45f22c8d13e91c7a29c04e211", source_role:null, destination_role:{role:"Admin"} },
+    { store:"team:eng", username:"priya.n", party_kind:"user", generation:5, locally_manageable:true, party_id_hex:"0184f0c2a71b3d95e6082c47fa19b6d3e05c84719fb2a6c308d5e71f94c3b0d726", source_role:null, destination_role:{role:"Admin"} },
+    { store:"team:eng", username:"dana.okafor", party_kind:"user", generation:5, locally_manageable:true, party_id_hex:"012f8b6d13c07a4e5991b2f8d04a6c3e17bd50927fe83a1c4670d9b2e518f4a06c", source_role:null, destination_role:{role:"Member",visibility:0} },
+    { store:"team:eng", username:"deploy-bot", party_kind:"user", generation:6, locally_manageable:true, party_id_hex:"01c93d2f8b17e4a0148ab7f2e60155c9a71c6f93d23140e5b839d1c0f60ba48e57", source_role:null, destination_role:{role:"Member",visibility:-1}, note:"labelled a machine on this Mac — a user of foks.acme-corp.com like any other, so its role can be changed from here" },
+    { store:"team:eng", username:null, party_kind:"named-team", team_name:"homelab @ foks.example.net", generation:3, locally_manageable:false, party_id_hex:"038b17e4a055c93d2fe60148ab7f2c9d3140e5b8a71c6f93d20ba48e5739d1c0f6", scoped_host_id_hex:"9f31c2aa07", source_role:{role:"Owner"}, destination_role:{role:"Member",visibility:0} },
+    { store:"team:fam", username:"rae", label:"you", party_kind:"user", generation:2, locally_manageable:true, party_id_hex:"016ab09cd4e11f207877c31b900b44aa193d90c1e45f22c8d13e91c7a29c04e211", source_role:null, destination_role:{role:"Owner"} },
+    { store:"team:fam", username:"sam", party_kind:"user", generation:2, locally_manageable:true, party_id_hex:"01a4c107f822ee91b05d3c44a7e0186b297f10cd439b62ae0831d5f7c46e29b0a5", source_role:null, destination_role:{role:"Member",visibility:0} },
+  ],
+  federation: [
+    { store:"team:eng", remote_profile:"foks.example.net", remote_team_alias:"homelab", remote_host_id_hex:"9f31c2aa07", remote_team_id_hex:"038b17e4a055c93d2fe60148ab7f2c9d3140e5b8a71c6f93d20ba48e5739d1c0f6", destination:{role:"Member",visibility:0}, operation_id_hex:"7c14a9f0", active:false },
+  ],
+};
+
+/* ===================== icons (wave 6 set) ===================== */
+const I = {
+  people:'<circle cx="9" cy="8" r="3.2"/><path d="M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M15.5 5.2a3.2 3.2 0 0 1 0 5.6"/><path d="M17 13.6c2.4.5 4 2.5 4 5.4"/>',
+  person:'<circle cx="12" cy="8" r="3.6"/><path d="M5 20c.6-4 3.4-6 7-6s6.4 2 7 6"/>',
+  vault:'<rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="12" cy="12" r="3.5"/><path d="M12 8.5v1.5M12 14v1.5M8.5 12H10M14 12h1.5"/>',
+  grid:'<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>',
+  chev:'<path d="M6 9l6 6 6-6"/>',
+  info:'<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
+  copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
+  trash:'<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  bell:'<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  x:'<path d="M6 6l12 12M18 6L6 18"/>',
+  gear:'<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4A2 2 0 0 0 4 9.9l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.8l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.8v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  server:'<rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/>',
+  check:'<path d="M5 12l5 5 9-10"/>',
+  alert:'<circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16h.01"/>',
+  again:'<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v4h-4"/>',
+  more:'<circle cx="5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="19" cy="12" r="1.2" fill="currentColor"/>',
+  key:'<circle cx="8" cy="14" r="4"/><path d="M11 11l9-9M17 5l2.5 2.5M14.5 7.5 17 10"/>',
+  term:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/>',
+  file:'<path d="M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4"/>',
+  mail:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+  out:'<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+  arrowdown:'<path d="M12 5v14M6 13l6 6 6-6"/>',
+};
+const ic = (n, cls='') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${I[n]}</svg>`;
+const KIC = { Password:'key', Resource:'term', File:'file' };
+
+/* ===================== helpers ===================== */
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const store = id => FX.stores.find(s => s.id === id);
+const server = id => FX.servers.find(s => s.id === id);
+const serverOf = sid => server(store(sid).server);
+const accountOf = st => FX.accounts.find(a => a.alias === st.account && a.server === st.server);
+const partiesOf = id => FX.parties.filter(p => p.store === id);
+const itemsOf = id => FX.items.filter(i => i.store === id);
+const fedOf = id => FX.federation.filter(f => f.store === id);
+const pname = p => p.username || p.team_name || p.party_id_hex.slice(0, 10) + '…';
+const shortName = p => p.party_kind === 'user' ? pname(p) : (p.team_name || '').split(' @')[0];
+const initials = s => s.replace(/@.*/, '').split(/[.\-_ ]/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('');
+const HUES = ["#5e5ce6","#ff9f0a","#30b0c7","#ff2d55","#34c759","#af52de","#0a7cff","#a2845e"];
+const hue = s => HUES[[...s].reduce((a, c) => a + c.charCodeAt(0), 0) % HUES.length];
+const shortId = h => h.slice(0, 10) + '…' + h.slice(-4);
+const fmtRole = r => !r ? '—' : r.role === 'Member' ? (r.visibility ? `Member · visibility ${r.visibility}` : 'Member') : r.role;
+const roleRank = r => ({ Owner:3, Admin:2, Member:1 })[r.role] || 0;
+/* a role drawn as a chip, with anything after the role name (the visibility band) small beneath it */
+const roleChip = (r, extra = '') => !r ? '<span class="rolecell"><span class="chip">—</span></span>'
+  : `<span class="rolecell"><span class="chip">${r.role}</span>${r.role === 'Member' && r.visibility ? `<small>visibility ${r.visibility}</small>` : ''}${extra ? `<small>${extra}</small>` : ''}</span>`;
+function admits(held, need) {
+  const hr = roleRank(held), nr = roleRank(need);
+  if (hr !== nr) return hr > nr;
+  return held.role === 'Member' ? (held.visibility||0) >= (need.visibility||0) : true;
+}
+const admissionActive = (p, sid) => p.party_kind !== 'named-team' ? true : !!(fedOf(sid).find(f => f.remote_team_id_hex === p.party_id_hex)?.active);
+const readsOf = (p) => itemsOf(p.store).filter(it => admissionActive(p, p.store) && admits(p.destination_role, it.read));
+const readersOf = it => partiesOf(it.store).filter(p => admissionActive(p, it.store) && admits(p.destination_role, it.read));
+const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+function peopleGroups(parties) {
+  const groups = parties.filter(p => p.party_kind === 'named-team').length, ppl = parties.length - groups;
+  return groups ? `${plural(ppl, 'person', 'people')} · ${plural(groups, 'group')}` : plural(ppl, 'person', 'people');
+}
+const avatar = (p, cls='av') => p.party_kind === 'named-team'
+  ? `<span class="${cls} team" style="background:var(--c-team)">${ic('people')}</span>`
+  : `<span class="${cls}" style="background:${hue(pname(p))}">${esc(initials(pname(p)))}</span>`;
+const stackOf = (parties, cls='') => `<span class="stack ${cls}">${parties.slice(0, 2).map(p => avatar(p)).join('') || `<span class="av" style="background:var(--c-none)">${ic('people')}</span>`}</span>`;
+const gmark = (st, size='md') => `<span class="kico ${size}" style="background:${st.active ? hue(st.name) : 'var(--c-none)'}">${esc(st.name[0].toUpperCase())}</span>`;
+const you = sid => partiesOf(sid).find(p => p.label === 'you');
+const isAdhoc = st => st.team_kind === 'adhoc';
+const kindLabel = st => isAdhoc(st) ? 'ad-hoc group' : 'group';
+/* the world in this mock: `lapsed` puts foks.acme-corp.com behind a lapsed lease */
+const unavailable = st => serverOf(st.id).state !== 'ok';
+
+/* ===================== state ===================== */
+const Q = new URLSearchParams(location.search);
+const S = {
+  s: Q.get('s') || 'list',           // list | people | federation | items | settings
+  g: Q.get('g') || 'team:eng',       // which group
+  party: Q.get('party') || null,     // selected party id (opens the panel)
+  sheet: Q.get('sheet') || null,     // add | role | remove | admit | create | leave
+  menu: false,
+  world: Q.get('world') || 'ok',     // ok | lapsed
+};
+if (Q.get('menu') === 'rekey') S.menu = 'rekey';
+if (S.world === 'lapsed') server('acme').state = 'lease-lapsed';
+if (S.s === 'inactive') { S.s = 'people'; S.g = 'team:lab'; }
+if (S.s === 'adhoc') { S.s = 'people'; S.g = 'team:hh'; }
+if (S.s === 'party') { S.s = 'people'; S.party = S.party || FX.parties.find(p => p.store === S.g && p.username === 'dana.okafor')?.party_id_hex; }
+
+function setUrl() {
+  const u = new URL(location.href);
+  ['s','g','party','sheet','world'].forEach(k => u.searchParams.delete(k));
+  u.searchParams.set('s', S.s);
+  if (S.s !== 'list') u.searchParams.set('g', S.g);
+  if (S.party) u.searchParams.set('party', S.party);
+  if (S.sheet) u.searchParams.set('sheet', S.sheet);
+  if (S.world !== 'ok') u.searchParams.set('world', S.world);
+  try { history.replaceState(null, '', u); } catch (_) {}
+}
+
+/* ===================== sidebar (shell.css .side) ===================== */
+function sidebar() {
+  const navRow = (on, glyph, name, cap, off, tail = '') =>
+    `<button class="nav ${on ? 'on' : ''} ${off ? 'off' : ''}">${glyph}<span class="t">${esc(name)}${cap ? `<small>${esc(cap)}</small>` : ''}</span>${off ? '<span class="dot"></span>' : ''}${tail}</button>`;
+  const storeRow = st => {
+    const off = unavailable(st) || (st.kind === 'team' && !st.active);
+    const cap = off ? 'Connection error' : st.kind === 'account' ? serverOf(st.id).name : peopleGroups(partiesOf(st.id));
+    return navRow(false, st.kind === 'account' ? ic('vault') : ic('people'), st.name, cap, off, st.kind === 'team' ? stackOf(partiesOf(st.id)) : '');
+  };
+  return `<aside class="side">
+    ${navRow(false, ic('grid'), 'All items')}
+    <h6>Vaults</h6>${FX.stores.filter(s => s.kind === 'account').map(storeRow).join('')}
+    <h6>Groups</h6>${FX.stores.filter(s => s.kind === 'team').map(storeRow).join('')}
+    <div class="foot">
+      <button class="nav on">${ic('people')}<span class="t">Groups</span></button>
+      <button class="nav">${ic('server')}<span class="t">Servers</span></button>
+      <button class="nav">${ic('bell')}<span class="t">Alerts</span><span class="badge">1</span></button>
+      <button class="nav">${ic('gear')}<span class="t">Settings</span></button>
+      <div class="foot-separator"></div>
+      <button class="nav">${ic('again')}<span class="t">Set up new vault</span></button>
+    </div>
+  </aside>`;
+}
+
+/* ===================== the groups list ===================== */
+function groupsList() {
+  const groups = FX.stores.filter(s => s.kind === 'team');
+  const byServer = FX.servers.map(sv => ({ sv, groups: groups.filter(g => g.server === sv.id), accounts: FX.accounts.filter(a => a.server === sv.id) })).filter(x => x.groups.length || x.accounts.length);
+  const row = g => {
+    const ps = partiesOf(g.id), me = you(g.id), off = unavailable(g) || !g.active;
+    const acct = accountOf(g);
+    const status = !g.active ? `<span class="chip warn">Inactive</span>` : unavailable(g) ? `<span class="chip warn">Unavailable</span>` : me ? `<span class="chip ${me.destination_role.role === 'Owner' ? '' : ''}">${fmtRole(me.destination_role)}</span>` : '';
+    return `<button class="grow ${off ? 'off' : ''}" data-act="open" data-id="${g.id}">
+      ${stackOf(ps)}
+      <span class="t"><b><span>${esc(g.name)}</span>${isAdhoc(g) ? '<span class="tag">ad-hoc</span>' : ''}</b><small>as ${esc(acct?.username || g.account)}${!g.active ? ' · setup not finished' : ''}</small></span>
+      <span class="who">${ic('people')}${g.active ? esc(peopleGroups(ps)) : '—'}</span>
+      <span>${status}</span>
+      <span class="chev">${ic('chev')}</span>
+    </button>`;
+  };
+  const section = ({ sv, groups, accounts }) => `
+    <div class="gserver">${ic('server')}${esc(sv.name)}<span class="n">· ${accounts.map(a => a.username).join(', ')}</span>
+      <button class="btn cap" title="Check for groups ${accounts[0]?.username} belongs to on ${esc(sv.name)}" aria-label="Check for groups">${ic('again')}</button></div>
+    ${groups.length ? groups.map(row).join('') : `<p class="rfoot" style="margin:2px 12px 6px">No groups on this server yet.</p>`}`;
+  return `
+    <div class="path"><div class="loc"><h1>Groups</h1><small>${plural(groups.length, 'group')} on ${plural(byServer.length, 'server')}</small></div>
+      <div class="header-action"><button class="btn primary" data-act="sheet" data-id="create">${ic('plus')}Create group</button></div></div>
+    <div class="body"><div class="glist">${byServer.map(section).join('')}
+      <p class="rfoot" style="margin-top:18px">A group is a shared vault on one server. Everyone in it holds a role there; the role decides which items they can read. Groups you were added to elsewhere appear after a check.</p>
+    </div></div>`;
+}
+
+/* ===================== the group page ===================== */
+function groupPage() {
+  const g = store(S.g), ps = partiesOf(g.id), me = you(g.id), items = itemsOf(g.id), fed = fedOf(g.id);
+  const acct = accountOf(g), sv = serverOf(g.id);
+  const off = unavailable(g), inactive = !g.active;
+  const canManage = !off && !inactive && !isAdhoc(g) && me && roleRank(me.destination_role) >= 2;
+  const tab = (id, label, n) => `<button class="tab ${S.s === id ? 'on' : ''}" data-act="tab" data-id="${id}">${label}${n != null ? `<span class="n ${n ? '' : 'zero'}">${n}</span>` : ''}</button>`;
+
+  const hero = `<div class="ghero">
+    <button class="back" data-act="back" title="Back to Groups">${ic('chev')}</button>
+    ${gmark(g, 'big')}
+    <div class="t">
+      <h1><span>${esc(g.name)}</span>${isAdhoc(g) ? '<span class="tag">ad-hoc</span>' : ''}${inactive ? '<span class="chip warn">Inactive</span>' : off ? '<span class="chip warn">Unavailable</span>' : ''}</h1>
+      <div class="sub">${esc(inactive ? `Setup not finished · ${sv.name}` : `${peopleGroups(ps)} · ${sv.name}`)}</div>
+    </div>
+    <div class="header-action">
+      ${inactive ? `<button class="btn primary" data-act="noop">${ic('again')}Finish setup</button>` : ''}
+      <div class="menuwrap"><button class="btn icon" data-act="menu" title="More">${ic('more')}</button>
+        ${S.menu === true ? `<div class="menu">
+          <button data-act="noop">${ic('again')}Refresh group</button>
+          <button data-act="copy" data-text="${g.team_id_hex}">${ic('copy')}Copy group ID</button>
+          <button data-act="tab" data-id="settings">${ic('gear')}Group settings</button>
+
+        </div>` : ''}
+      </div>
+    </div>
+  </div>`;
+
+  const tabs = `<div class="tabs">${tab('people', 'People', ps.length)}${tab('federation', 'Federation', fed.length)}${tab('items', 'Items', items.length)}${tab('settings', 'Settings')}</div>`;
+
+  let body = '';
+  const situation = off
+    ? `<div class="band stop">${ic('alert')}<span><b>${esc(sv.name)} can’t be reached.</b> Nothing in ${esc(g.name)} can be read or changed until the agent renews its lease. What’s shown is from the last successful read.</span><a class="lnk" data-act="noop">Open server</a></div>`
+    : inactive
+      ? `<div class="band">${ic('alert')}<span><b>Setup didn’t finish.</b> The roster and items are unavailable until the group is finished. Nothing done so far is lost.</span><a class="lnk" data-act="noop">Finish setup</a></div>`
+      : isAdhoc(g) && S.s !== 'settings'
+        ? `<div class="band info">${ic('info')}<span><b>Ad-hoc group.</b> Membership is fixed when it’s created; people can’t be added or removed here. Its items and roles read normally.</span></div>`
+        : '';
+
+  if (S.s === 'people') body = peopleTab(g, ps, items, me, canManage, situation);
+  else if (S.s === 'federation') body = federationTab(g, fed, ps, canManage, situation);
+  else if (S.s === 'items') body = itemsTab(g, items, ps, situation);
+  else body = settingsTab(g, ps, me, acct, sv, situation);
+
+  return hero + tabs + `<div class="body">${body}</div>`;
+}
+
+function peopleTab(g, ps, items, me, canManage, situation) {
+  const readsCell = p => {
+    if (!admissionActive(p, g.id)) return `<span class="reads none">Nothing<small>admission inactive</small></span>`;
+    const n = readsOf(p).length;
+    return `<span class="reads ${n ? '' : 'none'}">${n} of ${items.length}<small>${items.length ? (n === items.length ? 'every item' : n ? 'items at or above its role' : 'no items at its role') : 'no items yet'}</small></span>`;
+  };
+  const roleCell = p => p.party_kind === 'named-team'
+    ? roleChip(p.destination_role, `${fmtRole(p.source_role)} at ${esc(shortName(p))}`)
+    : roleChip(p.destination_role);
+  const row = p => {
+    const sel = S.party === p.party_id_hex;
+    const isMe = p.label === 'you';
+    const sub = p.party_kind === 'named-team' ? `group on ${esc(p.team_name.split('@ ')[1] || '')}${p.scoped_host_id_hex ? ` · host <code>${p.scoped_host_id_hex}</code>` : ''}` : `${p.note ? 'machine' : 'person'} · generation ${p.generation}`;
+    return `<div class="prow ${sel ? 'sel' : ''} ${!admissionActive(p, g.id) ? 'dim' : ''}" role="button" tabindex="0" data-act="party" data-id="${p.party_id_hex}">
+      <span class="who2">${avatar(p, 'pav')}<span class="t"><b><span>${esc(shortName(p))}</span>${isMe ? '<span class="chip you">you</span>' : ''}</b><small>${sub}</small></span></span>
+      ${roleCell(p)}
+      ${readsCell(p)}
+      <span class="acts">${canManage && !isMe ? `<button data-act="rowmenu" data-id="${p.party_id_hex}" title="Change role or remove">${ic('more')}</button>` : ''}</span>
+    </div>`;
+  };
+  const sorted = [...ps].sort((a, b) => roleRank(b.destination_role) - roleRank(a.destination_role) || (a.label === 'you' ? -1 : 0));
+  const onlyMe = ps.length === 1 && me;
+  if (!g.active) return `<div class="roster">${situation}<p class="rfoot">The roster, federation and items of ${esc(g.name)} are read from the server once setup finishes. Until then there is nothing to show here.</p></div>`;
+  return `<div class="roster">
+    ${situation}
+    <div class="rhead"><h2>People &amp; groups</h2><span class="n">${esc(peopleGroups(ps))}</span>
+      <div class="right">
+        <button class="btn" data-act="sheet" data-id="admit" ${canManage ? '' : 'disabled'} title="${canManage ? 'Give every member of another group a role here' : 'Not available for this group'}">${ic('people')}Add a group</button>
+        <button class="btn" data-act="sheet" data-id="add" ${canManage ? '' : 'disabled'} title="${canManage ? 'Add someone who already has an account on this server' : 'Not available for this group'}">${ic('plus')}Add someone</button>
+      </div></div>
+    <div class="rt">
+      <div class="hdr"><span>Who</span><span>Role here</span><span>Access level</span><span></span></div>
+      ${sorted.map(row).join('')}
+    </div>
+    ${onlyMe ? `<div class="callout"><span class="kico">${ic('mail')}</span><span class="t"><b>Only you so far.</b>${isAdhoc(g) ? ' An ad-hoc group keeps the members it started with. To share with more people, create a named group.' : ' Add someone by their username on this server.'}</span>${isAdhoc(g) ? `<button class="btn" data-act="sheet" data-id="create">Create a group</button>` : `<button class="btn" data-act="sheet" data-id="add">Add someone</button>`}</div>` : ''}
+    <p class="rfoot">Access level counts what each row can open today: an item is readable at or above its read role. Select a row to see exactly which items.${canManage ? ' Roles can only be lowered from here; a promotion is a remove and re-add.' : ''}</p>
+    <details class="dd"><summary>Inspect response</summary><pre>${esc(JSON.stringify(ps.map(p => ({ username:p.username, party_kind:p.party_kind, generation:p.generation, locally_manageable:p.locally_manageable, party_id_hex:p.party_id_hex, source_role:p.source_role, destination_role:p.destination_role })), null, 2))}</pre></details>
+  </div>`;
+}
+
+function federationTab(g, fed, ps, canManage, situation) {
+  const row = f => {
+    const p = ps.find(p => p.party_id_hex === f.remote_team_id_hex);
+    return `<div class="prow">
+      <span class="who2"><span class="pav team" style="background:var(--c-team)">${ic('people')}</span><span class="t"><b><span>${esc(f.remote_team_alias)}</span></b><small>on ${esc(f.remote_profile)} · host <code>${f.remote_host_id_hex}</code></small></span></span>
+      ${roleChip(f.destination, 'for every member')}
+      <span class="reads"><span class="chip ${f.active ? 'ok' : 'warn'}">${f.active ? 'Active' : 'Inactive'}</span><small>${f.active ? `${p ? plural(readsOf(p).length, 'item') : ''} readable` : 'members read nothing here'}</small></span>
+      <span class="ver">${f.operation_id_hex}</span>
+      <span class="cellact">${!f.active ? `<button class="btn sm" data-act="noop" ${canManage ? '' : 'disabled'}>${ic('again')}Restore access</button>` : ''}</span>
+    </div>`;
+  };
+  if (!g.active) return `<div class="roster">${situation}</div>`;
+  return `<div class="roster">
+    ${situation}
+    <div class="rhead"><h2>Groups on other servers</h2>
+      <div class="right"><button class="btn" data-act="sheet" data-id="admit" ${canManage ? '' : 'disabled'}>${ic('plus')}Add a group</button></div></div>
+    ${fed.length ? `<div class="rt fed">
+      <div class="hdr"><span>Group</span><span>Role here</span><span>Admission</span><span>Operation</span><span></span></div>
+      ${fed.map(row).join('')}
+    </div>` : `<div class="callout"><span class="kico" style="background:var(--chip-bg);color:var(--muted)">${ic('people')}</span><span class="t"><b>No groups from other servers.</b>Admitting a group gives every one of its members the same role here, and keeps following that group’s roster.</span>${canManage ? `<button class="btn" data-act="sheet" data-id="admit">Add a group</button>` : ''}</div>`}
+    <p class="rfoot">An inactive admission still lists the group, but its members read nothing until Restore access continues the operation; that needs both servers checked in and does not rotate keys. An admission can’t be taken back from this Mac: a member group is identified by id and host, not username.</p>
+  </div>`;
+}
+
+function itemsTab(g, items, ps, situation) {
+  const row = it => {
+    const rs = readersOf(it), name = it.path.slice(it.path.lastIndexOf('/') + 1), prefix = it.path.slice(1, it.path.lastIndexOf('/'));
+    return `<div class="prow">
+      <span class="ipath"><span class="kic ${it.kind}">${ic(KIC[it.kind])}</span><span>${esc(name)}</span>${prefix ? `<span class="pchip">${esc(prefix)}/</span>` : ''}</span>
+      ${roleChip(it.read)}
+      ${roleChip(it.write)}
+      <span class="readby" title="${esc(rs.map(shortName).join(', '))}"><span class="chip">${rs.filter(p => p.party_kind === 'user').length}</span></span>
+      <span class="vern">${it.version}</span>
+    </div>`;
+  };
+  if (!g.active) return `<div class="roster">${situation}</div>`;
+  return `<div class="roster">
+    ${situation}
+    <div class="rhead"><h2>Items</h2>
+      <div class="right"><button class="btn" data-act="noop">${ic('out')}Open in vault</button></div></div>
+    ${items.length ? `<div class="rt items">
+      <div class="hdr"><span>Item</span><span>Read role</span><span>Change role</span><span>Readable by</span><span>Version</span></div>
+      ${items.map(row).join('')}
+    </div>` : `<div class="callout"><span class="kico" style="background:var(--chip-bg);color:var(--muted)">${ic('grid')}</span><span class="t"><b>Nothing here yet.</b>Items saved into ${esc(g.name)} appear here with who can read them.</span></div>`}
+    <p class="rfoot">Add items from a vault instead: Open in vault, then move them here.</p>
+  </div>`;
+}
+
+function settingsTab(g, ps, me, acct, sv, situation) {
+  const owner = ps.find(p => p.destination_role.role === 'Owner');
+  const others = ps.filter(p => p.label !== 'you' && roleRank(p.destination_role) >= 2 && p.party_kind === 'user').map(shortName);
+  const removable = ps.filter(p => p.party_kind === 'user' && p.label !== 'you' && p.locally_manageable && !isAdhoc(g));
+  const safest = [...removable].sort((a, b) => roleRank(a.destination_role) - roleRank(b.destination_role) || (a.destination_role.visibility||0) - (b.destination_role.visibility||0))[0];
+  return `<div class="settings">
+    ${situation}
+    <div class="sec">About this group</div>
+    <div class="inset">
+      <div class="fr"><span class="k">Name</span><span class="v">${esc(g.name)}${isAdhoc(g) ? ' <span class="tag">ad-hoc</span>' : ''}</span></div>
+      <div class="fr"><span class="k">Server</span><span class="v">${esc(sv.name)}</span><span class="a"><button class="btn cap" data-act="noop">Open server</button></span></div>
+      <div class="fr"><span class="k">Your account</span><span class="v">${esc(acct?.username || g.account)} · ${me ? fmtRole(me.destination_role) : '—'}</span></div>
+      <div class="fr"><span class="k">Owner</span><span class="v">${owner ? esc(shortName(owner)) : '—'}</span></div>
+      <div class="fr"><span class="k">Group ID</span><span class="v"><code>${g.team_id_hex}</code></span><span class="a"><button class="btn cap" data-act="copy" data-text="${g.team_id_hex}">${ic('copy')}Copy</button></span></div>
+    </div>
+    ${isAdhoc(g) ? '<p class="fn">An ad-hoc group has no name on the server and a fixed membership.</p>' : ''}
+
+    <div class="sec">Danger</div>
+    <div class="inset danger">
+      <div class="fr"><span class="t"><b>Remove a group member</b><small>Removing anyone rotates the group key and blocks their future reads. Copies already downloaded are not erased.</small></span><span class="a"><div class="menuwrap"><button class="btn danger" data-act="rekeymenu" ${removable.length ? '' : 'disabled'}>Remove…${ic('chev')}</button>
+        ${S.menu === 'rekey' ? `<div class="menu">${[...removable].sort((a, b) => roleRank(a.destination_role) - roleRank(b.destination_role) || (a.destination_role.visibility||0) - (b.destination_role.visibility||0)).map(p => `<button data-act="removeSafest" data-id="${p.party_id_hex}">${avatar(p, 'pav')}<span class="t"><b>${esc(shortName(p))}</b><small>${fmtRole(p.destination_role)} · reads ${readsOf(p).length} of ${itemsOf(g.id).length}</small></span></button>`).join('')}</div>` : ''}
+      </div></span></div>
+      <div class="fr"><span class="t"><b>Leave ${esc(g.name)}</b><small>${others.length ? `You can’t remove yourself yet. To leave, ask ${others.length === 1 ? others[0] : others.slice(0, -1).join(', ') + ' or ' + others[others.length - 1]} to remove you.` : 'You can’t remove yourself yet, and no one else here can remove you.'}</small></span><span class="a"><button class="btn danger" disabled>Leave…</button></span></div>
+      <div class="fr"><span class="t"><b>Delete ${esc(g.name)}</b><small>Removes the group and every item in it for everyone. Not available yet.</small></span><span class="a"><button class="btn danger" disabled>Delete…</button></span></div>
+      <div class="fr"><span class="t"><b>Reset this Mac’s state for ${esc(sv.name)}</b><small>Forgets what this Mac has read and pinned about the server.</small></span><span class="a"><button class="btn" data-act="noop">Servers ${ic('out')}</button></span></div>
+    </div>
+  </div>`;
+}
+
+/* ===================== party panel ===================== */
+function partyPanel() {
+  const p = FX.parties.find(x => x.party_id_hex === S.party && x.store === S.g);
+  if (!p) return '';
+  const g = store(S.g), items = itemsOf(g.id), reads = readsOf(p), me = you(g.id);
+  const canManage = !unavailable(g) && g.active && !isAdhoc(g) && me && roleRank(me.destination_role) >= 2 && p.label !== 'you';
+  const irow = it => `<div class="ir ${reads.includes(it) ? '' : 'no'}"><span class="kic ${it.kind}">${ic(KIC[it.kind])}</span><span class="ipth">${esc(it.path)}</span><span class="pchip">${fmtRole(it.read)}</span></div>`;
+  return `<aside class="details">
+    <div class="dh">${avatar(p, 'pav')}<div class="t"><h2>${esc(shortName(p))}${p.label === 'you' ? '<span class="chip you">you</span>' : ''}</h2><small>${p.party_kind === 'user' ? 'person' : 'group'} · ${fmtRole(p.destination_role)} here</small></div><button class="x" data-act="party" data-id="">${ic('x')}</button></div>
+    <div class="scroll">
+      <div class="sec">Can read <span class="n">· ${reads.length} of ${items.length}</span></div>
+      ${items.length ? `<div class="rlist">${items.map(irow).join('')}</div>` : `<p class="hint">No items in ${esc(g.name)} yet.</p>`}
+      ${!admissionActive(p, g.id) ? `<p class="hint">This group’s admission is inactive, so its members read nothing here until it is re-run.</p>` : reads.length < items.length ? `<p class="hint">Greyed items need a higher role than ${fmtRole(p.destination_role)}.</p>` : ''}
+      <div class="sec">Details</div>
+      <div class="meta">
+        <b>Role here</b><span>${fmtRole(p.destination_role)}</span>
+        ${p.party_kind === 'named-team' ? `<b>At source</b><span>${fmtRole(p.source_role)} in ${esc(shortName(p))}</span><b>Host</b><code>${p.scoped_host_id_hex}</code>` : ''}
+        <b>Generation</b><span>${p.generation}</span>
+        <b>Party id</b><code>${p.party_id_hex}</code>
+        <b>Managed</b><span>${p.locally_manageable ? 'from this server' : 'from its own group'}</span>
+      </div>
+      ${p.note ? `<p class="hint">${esc(p.note[0].toUpperCase() + p.note.slice(1))}.</p>` : ''}
+    </div>
+    ${canManage ? `<div class="dfoot"><button class="btn" data-act="sheet" data-id="role">Lower role…</button><button class="btn danger" data-act="sheet" data-id="remove">Remove…</button></div>`
+      : p.party_kind === 'named-team' ? `<div class="dfoot"><button class="btn" data-act="tab" data-id="federation">Open in Federation</button></div>` : ''}
+  </aside>`;
+}
+
+/* ===================== sheets ===================== */
+function sheet() {
+  if (!S.sheet) return '';
+  const g = store(S.g) || store('team:eng'), sv = serverOf(g.id), acct = accountOf(g);
+  const p = FX.parties.find(x => x.party_id_hex === S.party && x.store === S.g);
+  const hd = (title, sub, mark = gmark(g, 'md')) => `<div class="hd">${mark}<div class="t"><h2>${title}</h2>${sub ? `<small>${sub}</small>` : ''}</div></div>`;
+  const ft = (primary, danger = false) => `<div class="ft"><span class="spacer"></span><button class="btn" data-act="sheet" data-id="">Cancel</button><button class="btn primary ${danger ? 'danger' : ''}" data-act="done">${primary}</button></div>`;
+  const roles = (cur = 'Member') => `<div class="radio">
+    ${[['Member','Opens items at or above its visibility band. Visibility 0 is the default.'],['Admin','Changes items and adds or removes people. Cannot change other Admins or the Owner.'],['Owner','Everything, including deleting the group.']].map(([r, d]) => `<label class="rc ${cur === r ? 'on' : ''}"><input type="radio" name="role" ${cur === r ? 'checked' : ''}><span><b>${r}</b><small>${d}</small></span></label>`).join('')}</div>`;
+  let html = '';
+  switch (S.sheet) {
+    case 'add':
+      html = hd(`Add someone to ${esc(g.name)}`, `They must already have an account on ${esc(sv.name)}`) +
+        `<label>Username</label><input type="text" value="jules.park"><label>Role in ${esc(g.name)}</label>${roles('Member')}
+        <p class="fn" style="margin-top:10px">They read every item at or below their role as soon as this applies. No invitation is sent; they see ${esc(g.name)} the next time their app checks.</p>` + ft('Add jules.park');
+      break;
+    case 'admit':
+      html = hd(`Add a group to ${esc(g.name)}`, 'Every member of that group gets the same role here') +
+        `<label>Group</label><input type="text" value="homelab @ foks.example.net"><label>Role for its members</label>${roles('Member')}
+        <p class="fn" style="margin-top:10px">${esc(g.name)} keeps following that group’s roster. This can’t be taken back from here yet.</p>` + ft('Admit homelab');
+      break;
+    case 'role':
+      html = hd(`Lower ${esc(p ? shortName(p) : 'their')} role`, `${p ? fmtRole(p.destination_role) : ''} in ${esc(g.name)} today`) +
+        `<p>Roles can only be lowered from here. To raise one, remove the person and add them again at the higher role.</p>${roles('Member')}` + ft('Change role');
+      break;
+    case 'remove':
+      html = hd(`Remove ${esc(p ? shortName(p) : 'them')} from ${esc(g.name)}?`, '') +
+        `<p>Removing blocks future reads and rekeys the group. This user may retain a local copy of their current records.</p>` + ft('Remove and rekey', true);
+      break;
+    case 'leave':
+      html = hd(`Leave ${esc(g.name)}?`, 'You stop reading its items') +
+        `<p>An Admin can add you back by username. Your copy of nothing is kept.</p>` + ft('Leave', true);
+      break;
+    case 'delete':
+      html = hd(`Delete ${esc(g.name)}?`, `Every item in it is gone for ${plural(partiesOf(g.id).length, 'person', 'people')}`) +
+        `<p>Type the group’s name to confirm.</p><input type="text" placeholder="${esc(g.name)}">` + ft('Delete group', true);
+      break;
+    case 'create': {
+      const accts = FX.accounts.filter(a => server(a.server).state === 'ok');
+      html = hd('Create a group', esc(server(accts[0].server).name), `<span class="kico md" style="background:${hue('Platform')}">P</span>`) +
+        `<label>Name</label><input type="text" value="Platform"><p class="fn" style="margin-top:4px">Others find it as <code>platform</code> on the server.</p>
+        <label>Server and account</label><div class="radio">${accts.map((a, i) => `<label class="rc ${i === 0 ? 'on' : ''}"><input type="radio" name="acct" ${i === 0 ? 'checked' : ''}><span><b>${esc(server(a.server).name)}</b><small>as ${esc(a.username)}</small></span></label>`).join('')}</div>
+        <label>Kind</label><div class="radio"><label class="rc on"><input type="radio" name="kind" checked><span><b>Named</b><small>Has an alias on the server; people can be added and removed over time.</small></span></label><label class="rc"><input type="radio" name="kind"><span><b>Ad-hoc</b><small>Fixed membership, chosen now, no alias. For a one-off share.</small></span></label></div>` + ft('Create Platform');
+      break;
+    }
+  }
+  return `<div class="backdrop" data-act="sheet" data-id=""><div class="sheet" onclick="event.stopPropagation()">${html}</div></div>`;
+}
+
+/* ===================== render + events ===================== */
+function render() {
+  const app = document.getElementById('app');
+  const panel = S.s !== 'list' && S.party ? partyPanel() : '';
+  app.className = 'app' + (panel ? ' with-details' : '');
+  app.innerHTML = sidebar() + `<main class="main">${S.s === 'list' ? groupsList() : groupPage()}</main>` + panel;
+  document.getElementById('overlay').innerHTML = sheet();
+  reviewStrip();
+  setUrl();
+}
+function flash(msg) {
+  const w = document.getElementById('win'); w.querySelector('.flash')?.remove();
+  const el = document.createElement('div'); el.className = 'flash'; el.textContent = msg; w.appendChild(el);
+  clearTimeout(flash.t); flash.t = setTimeout(() => el.remove(), 1600);
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-act]'); if (!t) { if (S.menu) { S.menu = false; render(); } return; }
+  const act = t.dataset.act, id = t.dataset.id;
+  S.menu = false;
+  if (act === 'open') { S.s = 'people'; S.g = id; S.party = null; }
+  else if (act === 'back') { S.s = 'list'; S.party = null; }
+  else if (act === 'tab') { S.s = id; if (id !== 'people') S.party = null; }
+  else if (act === 'party') { S.party = S.party === id || !id ? null : id; }
+  else if (act === 'rowmenu') { S.party = id; }
+  else if (act === 'removeSafest') { S.party = id; S.sheet = 'remove'; }
+  else if (act === 'sheet') { S.sheet = id || null; }
+  else if (act === 'done') { S.sheet = null; flash('Applied (mock)'); }
+  else if (act === 'menu') { S.menu = true; }
+  else if (act === 'rekeymenu') { S.menu = 'rekey'; }
+  else if (act === 'copy') { flash('Group ID copied.'); return; }
+  else if (act === 'state') { Object.assign(S, JSON.parse(id)); }
+  else if (act === 'noop') { flash('Not wired in this mock'); return; }
+  render();
+});
+
+const STATES = [
+  ['list', { s:'list', g:'team:eng', party:null, sheet:null, world:'ok' }],
+  ['people', { s:'people', g:'team:eng', party:null, sheet:null, world:'ok' }],
+  ['party', { s:'people', g:'team:eng', party:'012f8b6d13c07a4e5991b2f8d04a6c3e17bd50927fe83a1c4670d9b2e518f4a06c', sheet:null, world:'ok' }],
+  ['group party', { s:'people', g:'team:eng', party:'038b17e4a055c93d2fe60148ab7f2c9d3140e5b8a71c6f93d20ba48e5739d1c0f6', sheet:null, world:'ok' }],
+  ['federation', { s:'federation', g:'team:eng', party:null, sheet:null, world:'ok' }],
+  ['items', { s:'items', g:'team:eng', party:null, sheet:null, world:'ok' }],
+  ['settings', { s:'settings', g:'team:eng', party:null, sheet:null, world:'ok' }],
+  ['rekey menu', { s:'settings', g:'team:eng', party:null, sheet:null, world:'ok', menu:'rekey' }],
+  ['ad-hoc (screenshot)', { s:'people', g:'team:hh', party:null, sheet:null, world:'ok' }],
+  ['household', { s:'people', g:'team:fam', party:null, sheet:null, world:'ok' }],
+  ['inactive', { s:'people', g:'team:lab', party:null, sheet:null, world:'ok' }],
+  ['lapsed', { s:'people', g:'team:eng', party:null, sheet:null, world:'lapsed' }],
+  ['add', { s:'people', g:'team:eng', party:null, sheet:'add', world:'ok' }],
+  ['remove', { s:'people', g:'team:eng', party:'012f8b6d13c07a4e5991b2f8d04a6c3e17bd50927fe83a1c4670d9b2e518f4a06c', sheet:'remove', world:'ok' }],
+  ['admit', { s:'federation', g:'team:eng', party:null, sheet:'admit', world:'ok' }],
+  ['create', { s:'list', g:'team:eng', party:null, sheet:'create', world:'ok' }],
+];
+function reviewStrip() {
+  const r = document.getElementById('review');
+  r.innerHTML = `<b>Review controls · not part of the app</b>` + STATES.map(([k, v]) => {
+    const on = v.s === S.s && v.g === S.g && (v.party || null) === (S.party || null) && (v.sheet || null) === (S.sheet || null) && v.world === S.world;
+    return `<button class="${on ? 'on' : ''}" data-act="state" data-id='${JSON.stringify(v)}'>${k}</button>`;
+  }).join('');
+}
+document.getElementById('notes').innerHTML = `
+<h3>What changed, and why</h3>
+<ul>
+<li><b>One identity row.</b> The group's name, your role, its kind, the count, the server, the account and the id sit in one header instead of being split across a breadcrumb row and a toolbar. The id is quiet monospace with a Copy pill, not a chip that competes with the name.</li>
+<li><b>Tabs look like tabs.</b> Underline, counts as small pills, zero counts drawn faint. "Store" is renamed "Items" (that is what the sidebar calls them). "Danger" is no longer a red tab beside three neutral ones; leave and delete live at the bottom of Settings and in the ··· menu, which is where people look for them.</li>
+<li><b>Two primary actions, not four.</b> Invite is the one button in the header. Add someone / Add a group sit with the roster they change. Refresh group and Copy group ID move to the ··· menu.</li>
+<li><b>The roster is three columns.</b> Who (name, kind, generation in the second line), Role here (the source role for a group goes underneath, not in its own column), Access level (the "reads N of M" number Priya asked for, with what it means underneath). Generation lost its 60px box. Per-row "management unavailable" text is gone: the ad-hoc situation is said once in a band, and rows just have no ··· button.</li>
+<li><b>A row opens a panel.</b> Selecting a party shows exactly which items it can read, the party id, generation, and the Lower role / Remove buttons. That replaces the Actions column and the overlapping Party/Kind headers.</li>
+<li><b>Situations are bands, said once.</b> Ad-hoc (info), inactive (amber, with Finish setup), lapsed (red, with Open server). The same band renders on every tab. Today a lapsed or blocked server replaces the whole page with a takeover; this proposes keeping the last-read roster visible under a red band instead, so the page still answers "who is in this group" while access is stopped. If the roster is genuinely not cached, the takeover stays.</li>
+<li><b>Nothing is drawn that can't be done.</b> Leave and delete are not offered by the product, so Settings says so in a sentence and offers what does exist: remove-and-rekey with the safest target, and the server reset link. Federation offers Restore access for an inactive admission and says plainly that an admission can't be taken back from this Mac.</li>
+<li><b>One-person groups get a callout</b> under the roster instead of an empty-feeling table: what to do next, in one sentence, with the button.</li>
+<li><b>The list is rows grouped by server</b> with a refresh icon on the server heading (Check for groups, on hover), since discovery is a per-account act. Cards hid the server and stretched a single group across the page.</li>
+</ul>`;
+render();
+</script>
+</body>
+</html>

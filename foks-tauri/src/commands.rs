@@ -10,11 +10,13 @@ use std::sync::{Arc, Mutex};
 use foks_agent_proto::{
     CredentialBackend, FederationRole, KvChunkResult, KvReadResult, KvRole, KvStoreRef,
     KvUploadHeader, Operation, PendingOperationKind, PendingOperationSummary, ProfileProtocol,
-    ProfileTrust, SecretString, TeamKind, TeamRole, YubiRetryConfiguration,
+    ProfileTrust, ResponseResult, SecretString, TeamDetailsSummary, TeamKind, TeamRole,
+    YubiRetryConfiguration,
 };
 use foks_desktop::{
-    CatalogFailureScope, CatalogInventoryState, CatalogItem, CatalogLoadToken, CatalogSnapshot,
-    CatalogStoreRef, CatalogStoreSummary, KvAccountMutation, KvItemRead, KvItemValue,
+    AgentError as DesktopAgentError, CatalogFailureScope, CatalogInventoryState, CatalogItem,
+    CatalogLoadToken, CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary, KvAccountMutation,
+    KvItemRead, KvItemValue,
 };
 use foks_protocol_metadata::PINNED_PROTOCOL_METADATA_SHA256;
 use serde::{Deserialize, Serialize};
@@ -170,6 +172,35 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(store, entries.to_vec());
+        Ok(())
+    }
+
+    fn retain_group_details(
+        &self,
+        generation: u64,
+        store: String,
+        parties: Option<&[PartyDto]>,
+        federation: Option<&[FederationEntryDto]>,
+    ) -> Result<(), AgentError> {
+        let _coordination = self
+            .catalog_coordination
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.catalog_generation.load(Ordering::Acquire) != generation {
+            return Err(catalog_changed_during_group_read());
+        }
+        if let Some(parties) = parties {
+            self.rosters
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(store.clone(), parties.to_vec());
+        }
+        if let Some(federation) = federation {
+            self.federations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(store, federation.to_vec());
+        }
         Ok(())
     }
 
@@ -858,6 +889,13 @@ fn valid_device_member_id_hex(value: &str) -> bool {
             && value
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+}
+
+fn valid_go_candidate_id(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn valid_operation_id_hex(value: &str) -> bool {
@@ -2162,6 +2200,146 @@ impl GroupDiscoveryDto {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GoProfileCandidateResponse {
+    candidate_id: String,
+    username: Option<String>,
+    server_hint: Option<String>,
+    host_id_hex: String,
+    user_id_hex: String,
+    device_id_hex: String,
+    role: String,
+    storage_kind: String,
+    hidden: bool,
+    provisional: bool,
+    pairable: bool,
+    copyable: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GoProfilePairingRequest {
+    candidate_id: String,
+    profile: String,
+    target_alias: String,
+    device_name: String,
+    phrase: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GoProfileDiscoveryResponse {
+    installed: bool,
+    candidates: Vec<GoProfileCandidateResponse>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoProfileCandidateDto {
+    pub candidate_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_hint: Option<String>,
+    pub host_id: String,
+    pub user_id: String,
+    pub device_id: String,
+    pub role: String,
+    pub storage_kind: String,
+    pub hidden: bool,
+    pub provisional: bool,
+    pub pairable: bool,
+    pub copyable: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoProfileDiscoveryDto {
+    pub installed: bool,
+    pub candidates: Vec<GoProfileCandidateDto>,
+}
+
+fn go_profile_discovery_response(
+    value: serde_json::Value,
+) -> Result<GoProfileDiscoveryDto, AgentError> {
+    let response: GoProfileDiscoveryResponse =
+        serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
+    if response.candidates.len() > MAXIMUM_FIRST_RUN_ROWS
+        || (!response.installed && !response.candidates.is_empty())
+    {
+        return Err(invalid_response(
+            "The agent returned an inconsistent Go FOKS installation.",
+        ));
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    let candidates = response
+        .candidates
+        .into_iter()
+        .map(|candidate| {
+            let candidate_id_valid = valid_go_candidate_id(&candidate.candidate_id);
+            let device_id_valid = valid_device_member_id_hex(&candidate.device_id_hex)
+                || valid_typed_entity_id_hex(&candidate.device_id_hex, BACKUP_ID_PREFIX)
+                || valid_typed_entity_id_hex(&candidate.device_id_hex, "13");
+            let role_valid = matches!(candidate.role.as_str(), "none" | "admin" | "owner")
+                || candidate
+                    .role
+                    .strip_prefix("member(")
+                    .and_then(|value| value.strip_suffix(')'))
+                    .and_then(|value| value.parse::<i16>().ok())
+                    .is_some_and(|visibility| (-16384..=16384).contains(&visibility));
+            let storage_valid = matches!(
+                candidate.storage_kind.as_str(),
+                "plaintext" | "passphrase" | "macos-keychain" | "noise-file" | "generic-keychain"
+            );
+            if !candidate_id_valid
+                || !ids.insert(candidate.candidate_id.clone())
+                || !valid_typed_entity_id_hex(&candidate.host_id_hex, HOST_ID_PREFIX)
+                || !valid_typed_entity_id_hex(&candidate.user_id_hex, USER_ID_PREFIX)
+                || !device_id_valid
+                || !role_valid
+                || !storage_valid
+                || candidate
+                    .username
+                    .as_ref()
+                    .is_some_and(|value| !valid_response_text(value, 256))
+                || candidate
+                    .server_hint
+                    .as_ref()
+                    .is_some_and(|value| !valid_response_text(value, 2048))
+                || ((candidate.hidden || candidate.provisional)
+                    && (candidate.pairable || candidate.copyable))
+                || (candidate.copyable
+                    && (!candidate.pairable
+                        || !candidate.device_id_hex.starts_with(DEVICE_ID_PREFIX)
+                        || candidate.storage_kind != "macos-keychain"))
+            {
+                return Err(invalid_response(
+                    "The agent returned an invalid Go FOKS profile candidate.",
+                ));
+            }
+            Ok(GoProfileCandidateDto {
+                candidate_id: candidate.candidate_id,
+                username: candidate.username,
+                server_hint: candidate.server_hint,
+                host_id: candidate.host_id_hex,
+                user_id: candidate.user_id_hex,
+                device_id: candidate.device_id_hex,
+                role: candidate.role,
+                storage_kind: candidate.storage_kind,
+                hidden: candidate.hidden,
+                provisional: candidate.provisional,
+                pairable: candidate.pairable,
+                copyable: candidate.copyable,
+            })
+        })
+        .collect::<Result<Vec<_>, AgentError>>()?;
+    Ok(GoProfileDiscoveryDto {
+        installed: response.installed,
+        candidates,
+    })
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
@@ -2169,6 +2347,8 @@ pub struct AppInfo {
     pub agent_socket: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub managed_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub computer_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -3108,6 +3288,19 @@ pub struct FederationEntryDto {
     pub active: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum GroupDetailResultDto<T> {
+    Success { value: T },
+    Error { error: AgentError },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GroupDetailsDto {
+    pub parties: GroupDetailResultDto<Vec<PartyDto>>,
+    pub federation: GroupDetailResultDto<Vec<FederationEntryDto>>,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AccountResponse {
@@ -3248,6 +3441,28 @@ fn load_backup_enrollments(
         })
         .map_err(AgentError::from_desktop)?;
     backup_enrollment_dtos(value, &account.account_alias)
+}
+
+fn group_detail_result<T>(
+    result: ResponseResult,
+    decode: impl FnOnce(serde_json::Value) -> Result<T, AgentError>,
+) -> Result<GroupDetailResultDto<T>, AgentError> {
+    match result {
+        ResponseResult::Success { value } => Ok(GroupDetailResultDto::Success {
+            value: decode(value)?,
+        }),
+        ResponseResult::Error {
+            code,
+            message,
+            fields,
+        } => Ok(GroupDetailResultDto::Error {
+            error: AgentError::from_desktop(DesktopAgentError::Protocol {
+                code,
+                message,
+                fields,
+            }),
+        }),
+    }
 }
 
 fn party_dtos(store: &str, members: Vec<MemberResponse>) -> Result<Vec<PartyDto>, AgentError> {
@@ -4247,6 +4462,7 @@ fn check_existing_or_add_profile(
     transport: &dyn foks_desktop::AgentTransport,
     profile_name: String,
     probe: String,
+    go_candidate: Option<(String, String)>,
 ) -> Result<CheckedProfileDto, AgentError> {
     let requested_endpoint = normalized_probe_endpoint(&probe)
         .ok_or_else(|| invalid_request("Enter a valid DNS name, IP address, or host and port."))?;
@@ -4272,19 +4488,38 @@ fn check_existing_or_add_profile(
                 profile: profile.name.clone(),
             })
             .map_err(|error| map_mutation_error(error, MutationKind::Guarded))?;
-        return CheckedProfileDto::from_existing_probe(&probe, &profile, value)
-            .map_err(|error| checked_profile_response_error(error.message));
+        let checked = CheckedProfileDto::from_existing_probe(&probe, &profile, value)
+            .map_err(|error| checked_profile_response_error(error.message))?;
+        if go_candidate
+            .as_ref()
+            .is_some_and(|(_, host)| checked.host_id != *host)
+        {
+            return Err(invalid_response(
+                "The saved server does not match the selected Go FOKS profile.",
+            ));
+        }
+        return Ok(checked);
     }
 
     let expected_profile = profile_name.clone();
     let expected_probe = probe.clone();
-    let value = transport
-        .call(Operation::CheckAndAddProfile {
+    let operation = match go_candidate {
+        Some((candidate_id, _)) => Operation::CheckAndAddGoProfile {
+            candidate_id,
             name: profile_name,
             probe,
             protocol: ProfileProtocol::V019,
             trust: ProfileTrust::WebPki,
-        })
+        },
+        None => Operation::CheckAndAddProfile {
+            name: profile_name,
+            probe,
+            protocol: ProfileProtocol::V019,
+            trust: ProfileTrust::WebPki,
+        },
+    };
+    let value = transport
+        .call(operation)
         .map_err(|error| map_mutation_error(error, MutationKind::Create))?;
     let response: CheckedProfileResponse = serde_json::from_value(value).map_err(|error| {
         checked_profile_response_error(format!("invalid checked-server response: {error}"))
@@ -4755,6 +4990,18 @@ pub async fn initialize_client_state(
 }
 
 #[tauri::command]
+pub async fn discover_go_profiles(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+) -> Result<GoProfileDiscoveryDto, AgentError> {
+    require_main_window(&webview)?;
+    crate::applock::require_unlocked(&app)?;
+    let value = success_value(state.agent.call(Operation::DiscoverGoProfiles).await?)?;
+    go_profile_discovery_response(value)
+}
+
+#[tauri::command]
 pub async fn check_and_add_profile(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -4782,7 +5029,68 @@ pub async fn check_and_add_profile(
     state.invalidate_catalog();
     let transport = state.agent.transport();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        check_existing_or_add_profile(transport.as_ref(), profile_name, probe)
+        check_existing_or_add_profile(transport.as_ref(), profile_name, probe, None)
+    })
+    .await
+    .map_err(|error| {
+        ambiguous_worker_failure(
+            &state,
+            format!("The server-check worker stopped before reporting its outcome: {error}"),
+        )
+    })?;
+    match result {
+        Ok(checked) => Ok(checked),
+        Err(error) => {
+            if error.ambiguous {
+                state
+                    .mutation_requires_refresh
+                    .store(true, Ordering::Release);
+            }
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn check_and_add_go_profile(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    candidate_id: String,
+    host_id: String,
+    profile_name: String,
+    probe: String,
+) -> Result<CheckedProfileDto, AgentError> {
+    require_main_window(&webview)?;
+    crate::applock::require_unlocked(&app)?;
+    let _mutation = state.begin_mutation()?;
+    if !valid_go_candidate_id(&candidate_id) || !valid_typed_entity_id_hex(&host_id, HOST_ID_PREFIX)
+    {
+        return Err(invalid_request("Choose a valid Go FOKS profile."));
+    }
+    let profile_name = bounded_local_name(
+        &profile_name,
+        "Use 1–64 letters, numbers, hyphens, or underscores for the server profile.",
+    )?;
+    let probe = bounded_field(
+        &probe,
+        2 * 1024,
+        "Enter a server address of at most 2,048 bytes.",
+    )?;
+    if !valid_probe_target(&probe) {
+        return Err(invalid_request(
+            "Enter a valid DNS name, IP address, or host and port.",
+        ));
+    }
+    state.invalidate_catalog();
+    let transport = state.agent.transport();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        check_existing_or_add_profile(
+            transport.as_ref(),
+            profile_name,
+            probe,
+            Some((candidate_id, host_id)),
+        )
     })
     .await
     .map_err(|error| {
@@ -6092,6 +6400,46 @@ pub async fn accept_device_pairing(
 }
 
 #[tauri::command]
+pub async fn accept_go_profile_pairing(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    request: GoProfilePairingRequest,
+) -> Result<DeviceProvisionDto, AgentError> {
+    require_main_window(&webview)?;
+    let GoProfilePairingRequest {
+        candidate_id,
+        profile,
+        target_alias,
+        device_name,
+        phrase,
+    } = request;
+    crate::applock::require_unlocked(&app)?;
+    let _mutation = state.begin_mutation()?;
+    if !valid_go_candidate_id(&candidate_id) {
+        return Err(invalid_request("Choose a valid Go FOKS profile."));
+    }
+    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let target_alias = bounded_local_name(&target_alias, "Enter a valid local account alias.")?;
+    let expected = target_alias.clone();
+    let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
+    let phrase = pairing_phrase(phrase)?;
+    let serial = positive_recovery_serial()?;
+    let operation = Operation::AcceptGoProfilePairing {
+        candidate_id,
+        profile: profile.clone(),
+        target_alias,
+        device_name,
+        serial,
+        phrase,
+    };
+    let value =
+        apply_profile_operation_value(&state, profile, operation, MutationKind::Create).await?;
+    device_provision_response(value, &expected)
+        .map_err(|error| ambiguous_mutation_response(&state, error.message))
+}
+
+#[tauri::command]
 pub async fn resume_device_pairing_acceptance(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -6119,6 +6467,78 @@ pub async fn resume_device_pairing_acceptance(
         target_alias,
         None,
         operation,
+    )
+    .await?;
+    device_provision_response(value, &expected)
+        .map_err(|error| ambiguous_mutation_response(&state, error.message))
+}
+
+#[tauri::command]
+pub async fn resume_go_profile_pairing(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    candidate_id: String,
+    profile: String,
+    target_alias: String,
+) -> Result<DeviceProvisionDto, AgentError> {
+    require_main_window(&webview)?;
+    crate::applock::require_unlocked(&app)?;
+    let _mutation = state.begin_mutation()?;
+    if !valid_go_candidate_id(&candidate_id) {
+        return Err(invalid_request("Choose a valid Go FOKS profile."));
+    }
+    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let target_alias = bounded_local_name(
+        &target_alias,
+        "Choose a valid pending device-pairing alias.",
+    )?;
+    let expected = target_alias.clone();
+    let operation = Operation::ResumeGoProfilePairing {
+        candidate_id,
+        profile: profile.clone(),
+        target_alias: target_alias.clone(),
+    };
+    let value = apply_pending_operation_value(
+        &state,
+        profile,
+        PendingOperationKind::PairingAcceptance,
+        target_alias,
+        None,
+        operation,
+    )
+    .await?;
+    device_provision_response(value, &expected)
+        .map_err(|error| ambiguous_mutation_response(&state, error.message))
+}
+
+#[tauri::command]
+pub async fn copy_go_profile_device(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    candidate_id: String,
+    profile: String,
+    target_alias: String,
+) -> Result<DeviceProvisionDto, AgentError> {
+    require_main_window(&webview)?;
+    crate::applock::require_unlocked(&app)?;
+    let _mutation = state.begin_mutation()?;
+    if !valid_go_candidate_id(&candidate_id) {
+        return Err(invalid_request("Choose a valid Go FOKS profile."));
+    }
+    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let target_alias = bounded_local_name(&target_alias, "Enter a valid local account alias.")?;
+    let expected = target_alias.clone();
+    let value = apply_profile_operation_value(
+        &state,
+        profile.clone(),
+        Operation::CopyGoProfileDevice {
+            candidate_id,
+            profile,
+            target_alias,
+        },
+        MutationKind::Create,
     )
     .await?;
     device_provision_response(value, &expected)
@@ -6294,6 +6714,27 @@ pub async fn discover_groups(
         .map_err(|error| ambiguous_mutation_response(&state, error.message))
 }
 
+fn macos_computer_name() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("/usr/sbin/scutil")
+            .args(["--get", "ComputerName"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let name = String::from_utf8(output.stdout).ok()?;
+        let name = name.trim();
+        if name.is_empty() || name.len() > 256 {
+            return None;
+        }
+        Some(name.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
 #[tauri::command]
 pub fn app_info(
     app: tauri::AppHandle,
@@ -6313,6 +6754,7 @@ pub fn app_info(
                         .bytes()
                         .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
             }),
+        computer_name: macos_computer_name(),
     })
 }
 
@@ -6420,6 +6862,64 @@ pub async fn list_accounts(
             })??;
     state.retain_accounts(generation, &accounts)?;
     Ok(accounts)
+}
+
+#[tauri::command]
+pub async fn list_group_details(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    store_id: String,
+) -> Result<GroupDetailsDto, AgentError> {
+    require_main_window(&webview)?;
+    let generation = state.catalog_generation.load(Ordering::Acquire);
+    let (profile, team_alias) = state.selected_team(&store_id)?;
+    let transport = state.agent.transport();
+    let expected_profile = profile.clone();
+    let expected_team_alias = team_alias.clone();
+    let result_store = store_id.clone();
+    let details = tauri::async_runtime::spawn_blocking(move || {
+        let value = transport
+            .call(Operation::ListTeamDetails {
+                profile,
+                team_alias,
+            })
+            .map_err(AgentError::from_desktop)?;
+        let details: TeamDetailsSummary =
+            serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
+        let parties = group_detail_result(details.members, |value| {
+            require_response_row_cap(&value, "group roster entries")?;
+            let members: Vec<MemberResponse> = serde_json::from_value(value)
+                .map_err(|error| invalid_response(error.to_string()))?;
+            party_dtos(&result_store, members)
+        })?;
+        let federation = group_detail_result(details.federation, |value| {
+            require_response_row_cap(&value, "federation entries")?;
+            let memberships: Vec<FederationResponse> = serde_json::from_value(value)
+                .map_err(|error| invalid_response(error.to_string()))?;
+            federation_dtos(
+                &result_store,
+                &expected_profile,
+                &expected_team_alias,
+                memberships,
+            )
+        })?;
+        Ok::<_, AgentError>(GroupDetailsDto {
+            parties,
+            federation,
+        })
+    })
+    .await
+    .map_err(|error| AgentError::unknown(format!("the group details did not finish: {error}")))??;
+    let parties = match &details.parties {
+        GroupDetailResultDto::Success { value } => Some(value.as_slice()),
+        GroupDetailResultDto::Error { .. } => None,
+    };
+    let federation = match &details.federation {
+        GroupDetailResultDto::Success { value } => Some(value.as_slice()),
+        GroupDetailResultDto::Error { .. } => None,
+    };
+    state.retain_group_details(generation, store_id, parties, federation)?;
+    Ok(details)
 }
 
 #[tauri::command]
@@ -7190,8 +7690,30 @@ mod tests {
             version: "0.3.0".to_owned(),
             agent_socket: "/private/foks/agent.sock".to_owned(),
             managed_profile: Some("local".to_owned()),
+            computer_name: None,
         };
         assert_eq!(serde_json::to_value(app_info).unwrap(), fixture["appInfo"]);
+        let discovery = GoProfileDiscoveryDto {
+            installed: true,
+            candidates: vec![GoProfileCandidateDto {
+                candidate_id: "aa".repeat(32),
+                username: Some("raymond".to_owned()),
+                server_hint: Some("foks.app".to_owned()),
+                host_id: format!("02{}", "bb".repeat(32)),
+                user_id: format!("01{}", "cc".repeat(32)),
+                device_id: format!("04{}", "dd".repeat(32)),
+                role: "owner".to_owned(),
+                storage_kind: "macos-keychain".to_owned(),
+                hidden: false,
+                provisional: false,
+                pairable: true,
+                copyable: true,
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(discovery).unwrap(),
+            fixture["goProfileDiscovery"]
+        );
         let error = AgentError::from_agent(
             foks_agent_proto::ErrorCode::VersionMismatch,
             "changed".to_owned(),
@@ -8008,6 +8530,7 @@ mod tests {
             &transport,
             "setup-localhost".to_owned(),
             "localhost".to_owned(),
+            None,
         )
         .unwrap();
 
@@ -8037,6 +8560,7 @@ mod tests {
             &transport,
             "setup-localhost".to_owned(),
             "localhost:4431".to_owned(),
+            None,
         )
         .unwrap();
 
@@ -8067,6 +8591,7 @@ mod tests {
             &duplicate,
             "setup-localhost".to_owned(),
             "localhost".to_owned(),
+            None,
         )
         .unwrap_err();
         assert_eq!(error.code, "profile-conflict");
@@ -8088,6 +8613,7 @@ mod tests {
             &failed,
             "setup-localhost".to_owned(),
             "localhost".to_owned(),
+            None,
         )
         .unwrap_err();
         assert_eq!(error.code, "operation-failed");
@@ -9328,6 +9854,38 @@ mod tests {
             self.calls.lock().unwrap().push(operation);
             Ok(serde_json::Value::Null)
         }
+    }
+
+    #[test]
+    fn go_profile_candidates_are_bounded_and_copy_support_is_coherent() {
+        let candidate = serde_json::json!({
+            "candidate_id": "aa".repeat(32),
+            "username": null,
+            "server_hint": null,
+            "host_id_hex": format!("02{}", "bb".repeat(32)),
+            "user_id_hex": format!("01{}", "cc".repeat(32)),
+            "device_id_hex": format!("04{}", "dd".repeat(32)),
+            "role": "owner",
+            "storage_kind": "macos-keychain",
+            "hidden": false,
+            "provisional": false,
+            "pairable": true,
+            "copyable": true
+        });
+        let decoded = go_profile_discovery_response(serde_json::json!({
+            "installed": true,
+            "candidates": [candidate.clone()]
+        }))
+        .unwrap();
+        assert_eq!(decoded.candidates.len(), 1);
+        assert!(decoded.candidates[0].copyable);
+        let mut invalid = candidate;
+        invalid["storage_kind"] = serde_json::json!("passphrase");
+        assert!(go_profile_discovery_response(serde_json::json!({
+            "installed": true,
+            "candidates": [invalid]
+        }))
+        .is_err());
     }
 
     #[test]
@@ -10576,6 +11134,44 @@ mod tests {
             .unwrap_err()
             .code,
             "invalid-response"
+        );
+    }
+
+    #[test]
+    fn combined_group_detail_results_preserve_independent_errors() {
+        assert_eq!(
+            group_detail_result(
+                ResponseResult::Success {
+                    value: serde_json::json!(7)
+                },
+                |value| {
+                    serde_json::from_value(value)
+                        .map_err(|error| invalid_response(error.to_string()))
+                }
+            )
+            .unwrap(),
+            GroupDetailResultDto::Success { value: 7_i64 }
+        );
+        let mapped = group_detail_result::<i64>(
+            ResponseResult::Error {
+                code: foks_agent_proto::ErrorCode::RateLimited,
+                message: "wait".to_owned(),
+                fields: foks_agent_proto::ErrorFields {
+                    reason: Some("status 1012".to_owned()),
+                    ..foks_agent_proto::ErrorFields::default()
+                },
+            },
+            |_| panic!("error result decoded a value"),
+        )
+        .unwrap();
+        let GroupDetailResultDto::Error { error } = mapped else {
+            panic!("nested error became success");
+        };
+        assert_eq!(error.code, "rate-limited");
+        assert!(error.retryable);
+        assert_eq!(
+            error.details.unwrap().reason.as_deref(),
+            Some("status 1012")
         );
     }
 

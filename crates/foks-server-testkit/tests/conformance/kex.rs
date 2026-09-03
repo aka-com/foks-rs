@@ -24,6 +24,7 @@ pub(crate) fn interactive_software_device_pairing() {
 
     let provisioner = fixture.client.foks().clone();
     let provisioner_host = fixture.host().clone();
+    let expected_user: [u8; 33] = created.credential.uid.as_bytes().try_into().unwrap();
     let existing = created.credential;
     let mut protected = fixture.client.open_protected_store().unwrap();
     let finish = std::thread::spawn(move || {
@@ -40,12 +41,13 @@ pub(crate) fn interactive_software_device_pairing() {
 
     let accepted = provisionee
         .foks()
-        .accept_kex_provisioning(
+        .accept_kex_provisioning_for_user(
             &provisionee_host,
             &phrase,
             "paired laptop",
             2,
             SecretSeed::new([0x41; 32]),
+            Some(&expected_user),
         )
         .unwrap();
     let (finished, resumed) = finish.join().unwrap();

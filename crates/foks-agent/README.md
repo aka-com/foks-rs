@@ -1,10 +1,12 @@
 # foks-agent
 
 Bounded resident process for standalone FOKS clients. It listens on a private
-Unix-domain socket below an explicit `--state-dir`, runs blocking client work
-through a bounded worker semaphore, limits active connections and requests per
-connection, and applies read/write/dispatch deadlines. Dispatch cancellation is
-propagated into the synchronous FOKS network client; a timed-out operation
+Unix-domain socket below an explicit `--state-dir`, defaulting to
+`foks-rs.sock`, and holds `.foks-rs.lock` for its process lifetime. It runs
+blocking client work through a bounded worker semaphore, limits active
+connections and requests per connection, and applies read/write/dispatch
+deadlines. Dispatch cancellation is propagated into the synchronous FOKS
+network client; a timed-out operation
 closes its local connection because its durable outcome can be ambiguous, and
 any surviving blocking work retains its worker permit until it exits.
 

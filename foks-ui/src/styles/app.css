@@ -18,10 +18,10 @@ body {
 }
 
 body {
-  background: var(--main-surface);
+  min-height: 100%;
   padding: 0;
   display: block;
-  min-height: 100%;
+  background: var(--main-surface);
 }
 
 #root {
@@ -45,12 +45,21 @@ body {
   padding-left: 5.5rem;
 }
 
+#root > .native-window.window-chrome-hidden > .titlebar {
+  padding-left: 14px;
+}
+
 #root > .window > .titlebar .brand {
   transform: translateY(1px);
 }
 
 #root > .window > .titlebar > .agent {
   margin-right: 0.25rem;
+  transform: translateY(1px);
+}
+
+#root > .window > .titlebar > .global-refresh {
+  transform: translateY(1px);
 }
 
 .inset.drop-hover,
@@ -59,18 +68,8 @@ body {
   outline-offset: 2px;
 }
 
-.sheet .sec .pv {
-  margin-left: auto;
-  text-align: right;
-}
-
 .groups-wrap {
   max-width: 900px;
-}
-
-.groups-path .btn {
-  align-self: center;
-  margin-left: auto;
 }
 
 .main > .details {
@@ -80,8 +79,19 @@ body {
   z-index: 3;
 }
 
+.app > .details {
+  position: relative;
+  z-index: 3;
+}
+
 .body.group-panel-open {
   padding-right: 320px;
+}
+
+.main > .details .dh h2 {
+  display: flex;
+  gap: 6px;
+  align-items: center;
 }
 
 .main > .details .dh .stack.lg {
@@ -101,14 +111,535 @@ body {
   flex: 1 1 60%;
 }
 
-.gcards {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+/* Group settings header. */
+.ghero {
+  display: flex;
+  align-items: center;
   gap: 12px;
+  padding: 14px 20px 0;
+}
+
+.ghero .back {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 16px;
+  margin-left: -8px;
+}
+
+.ghero .back:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.ghero .back .ic {
+  transform: rotate(90deg);
+}
+
+.ghero .t {
+  flex: 1;
+  min-width: 0;
+}
+
+.ghero h1 {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ghero h1 span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ghero .sub {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.ghero .header-action {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.ghero .header-action .btn {
+  height: 30px;
+  font-size: 13px;
+}
+
+.ghero .header-action .btn.icon {
+  width: 30px;
+}
+
+/* Tabs: underline, quiet counts, a faint zero. */
+.tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 12px 20px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px;
+  font-weight: 500;
+  color: var(--muted);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.tab:hover {
+  color: var(--ink-2);
+  background: var(--wash);
+}
+
+.tab.on {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.tab.on::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+}
+
+.tab .n {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--chip-bg);
+  border-radius: var(--radius-pill);
+  padding: 0 6px;
+  line-height: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tab.on .n {
+  color: var(--accent-ink);
+  background: var(--accent-wash-2);
+}
+
+.tab .n.zero {
+  background: transparent;
+  color: var(--faint);
+}
+
+/* Roster, federation, and items tables. */
+.roster {
+  max-width: 880px;
+}
+
+.rhead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 6px;
+}
+
+.rhead h2 {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.rhead .n {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.rhead .right {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.rhead .btn {
+  height: 28px;
+  font-size: 13px;
+}
+
+.rt {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.rt .hdr,
+.rt .prow {
+  display: grid;
+  /* Who · Role · the row's overflow. The roster used to spend a fourth
+     column on an item count; the role and the access level it carries are
+     one reading, so they share one cell. */
+  grid-template-columns: minmax(0, 1fr) 168px 36px;
+  gap: 12px;
+  align-items: center;
+  padding: 0 12px;
+}
+
+.rt .hdr {
+  height: 30px;
+  font-size: 11.5px;
+  color: var(--faint);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.rt .prow {
+  min-height: 54px;
+  border-top: 1px solid var(--line-soft);
+  cursor: default;
+  width: 100%;
+  text-align: left;
+}
+
+.rt .prow:first-of-type {
+  border-top: 0;
+}
+
+.rt .prow:hover {
+  background: var(--hover);
+}
+
+.rt .prow.sel {
+  background: var(--accent-wash);
+}
+
+.rt .prow.dim > *:not(.acts) {
+  opacity: 0.55;
+}
+
+.who2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pav {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--main-surface);
+  flex: none;
+}
+
+.pav .ic {
+  font-size: 14px;
+  color: var(--main-surface);
+  width: auto;
+}
+
+.pav.team {
+  border-radius: var(--radius-sm);
+}
+
+.who2 .t {
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.who2 .t b {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.who2 .t b span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.who2 .t small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-inset .fr .v.group-attention {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.group-attention .who2 {
+  flex: 1;
+}
+
+.settings-inset .fr .v.group-attention .chip {
+  align-self: center;
+}
+
+.rolecell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.rolecell small {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.reads {
+  font-size: 13px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+
+.reads small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.rt .acts {
+  display: flex;
+  justify-content: flex-end;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.rt .prow:hover .acts,
+.rt .prow.sel .acts,
+.rt .prow:focus-within .acts,
+.rt .prow .acts.open {
+  opacity: 1;
+}
+
+.rt .acts button {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+  font-size: 16px;
+}
+
+.rt .acts button:hover {
+  background: var(--hover);
+}
+
+.rfoot {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 10px 2px 0;
+  line-height: 1.5;
+}
+
+.callout {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px dashed var(--line-mid);
+  border-radius: var(--radius-lg);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.callout .kico {
+  background: var(--accent-wash-2);
+  color: var(--accent-ink);
+}
+
+.callout .t {
+  flex: 1;
+}
+
+.callout .t b {
+  display: block;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.callout .btn {
+  height: 28px;
+  font-size: 13px;
+}
+
+.rt.fed .hdr,
+.rt.fed .prow {
+  grid-template-columns: minmax(0, 1fr) 150px 168px 80px 150px;
+}
+
+.cellact {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.rt.items .hdr,
+.rt.items .prow {
+  grid-template-columns: minmax(0, 1fr) 118px 118px 96px 64px;
+}
+
+.vern {
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rt.items .prow {
+  min-height: 48px;
+}
+
+.ipath {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-weight: 500;
+}
+
+.ipath span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ipath .pchip {
+  font-weight: 400;
+}
+
+.readby {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.readby .chip {
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+
+.rlist {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--main-surface);
+  overflow: hidden;
+}
+
+.rlist .ir {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 13px;
+  min-width: 0;
+}
+
+.rlist .ir:first-child {
+  border-top: 0;
+}
+
+.rlist .ir .kic {
+  width: 22px;
+  height: 22px;
+  font-size: 13px;
+}
+
+.rlist .ir .ipth {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rlist .ir .pchip {
+  flex: none;
+}
+
+.rlist .ir.no {
+  color: var(--faint);
+}
+
+.rlist .ir.no .kic {
+  opacity: 0.45;
+}
+
+.details .meta {
+  grid-template-columns: 86px 1fr;
+  gap: 6px 10px;
+}
+
+.group-settings {
+  max-width: 640px;
+}
+
+.group-settings .sec:first-child {
+  margin-top: 6px;
+}
+
+.group-settings p.fn {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 8px 2px 0;
+  line-height: 1.5;
+}
+
+.inset.danger {
+  border-color: var(--danger-border);
+  overflow: visible;
+}
+
+.band.info {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--ink-3);
+}
+
+.band.info .ic {
+  color: var(--muted);
+}
+
+.roster > .band {
+  margin: 4px 0 10px;
 }
 
 .kico.group {
   background: var(--c-team);
+  border: 0;
+  box-shadow: none;
 }
 
 .kico.invite {
@@ -117,12 +648,12 @@ body {
 
 .copybox {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
   padding: 9px 12px;
   background: var(--surface);
   border: 1px solid var(--line-soft);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   margin: 6px 0;
 }
 
@@ -144,11 +675,31 @@ body {
   flex: none;
 }
 
-.gcard,
+/* A copy box that carries a second action keeps the pair together, so at a
+   narrow width the buttons wrap as a unit instead of squeezing the sentence. */
+.copybox-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: none;
+}
+
+/* Every card in the app draws the same box. Only the padding, the fill and
+   what each lays out inside it differ — those stay with the variant. */
+.pcard,
+.fcard,
+.local-quiet-card,
+.app-lock-card,
+.local-field-card,
+.local-more,
+.local-recovery-card,
+.local-vault-preview {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+
 .pcard,
 .fcard {
-  border: 1px solid var(--line);
-  border-radius: 12px;
   padding: 12px 14px;
 }
 
@@ -158,24 +709,6 @@ body {
   margin-top: 12px;
 }
 
-.ghead,
-.party {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.ghead .t,
-.party .t {
-  flex: 1;
-  min-width: 0;
-}
-
-.ghead .t small {
-  display: block;
-}
-
-.gcard .party,
 .fcard .inset {
   border-top: 1px solid var(--line);
   padding-top: 8px;
@@ -217,6 +750,7 @@ body {
   min-width: 0;
   font-size: 13px;
   font-weight: 600;
+  transform: translateY(1px);
 }
 
 .setup-mark {
@@ -230,7 +764,8 @@ body {
   font-size: 11px;
 }
 
-.setup-step.done .setup-mark {
+.setup-step.done .setup-mark,
+.setup-step.on .setup-mark {
   background: var(--ok-solid);
   border-color: var(--ok-solid);
   color: var(--main-surface);
@@ -239,7 +774,7 @@ body {
 .local-server-card {
   padding: 18px 20px;
   border: 1px solid var(--accent-border);
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   background: var(--accent-wash);
 }
 
@@ -255,7 +790,7 @@ body {
   place-items: center;
   width: 42px;
   height: 42px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--accent);
   color: var(--main-surface);
 }
@@ -276,7 +811,7 @@ body {
   gap: 6px;
   align-items: center;
   padding: 3px 9px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--surface);
   color: var(--ok-ink);
   font-size: 12px;
@@ -322,8 +857,6 @@ body {
 .local-field-card,
 .local-more {
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 14px;
   background: var(--main-surface);
 }
 
@@ -331,7 +864,7 @@ body {
   display: grid;
   grid-template-columns: 145px minmax(0, 1fr);
   align-items: center;
-  min-height: 48px;
+  min-height: 36px;
   padding: 0 16px;
   border-top: 1px solid var(--line-soft);
   cursor: text;
@@ -370,7 +903,7 @@ body {
 }
 
 .local-more .local-field-row {
-  min-height: 48px;
+  min-height: 36px;
   font-size: 13px;
 }
 
@@ -381,8 +914,6 @@ body {
 
 .local-recovery-card {
   padding: 18px 20px;
-  border: 1px solid var(--line);
-  border-radius: 15px;
   background: var(--main-surface);
 }
 
@@ -434,8 +965,6 @@ body {
 
 .local-quiet-card {
   padding: 13px 14px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
   background: var(--surface);
 }
 
@@ -477,8 +1006,6 @@ body {
   overflow: hidden;
   max-width: 560px;
   margin: 22px auto 0;
-  border: 1px solid var(--line);
-  border-radius: 14px;
   background: var(--main-surface);
   text-align: left;
 }
@@ -501,60 +1028,209 @@ body {
   text-align: center;
 }
 
-.choices {
+.two {
+  display: grid;
+  gap: 12px;
+  align-items: start;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* ---------- the first-run fork ----------
+   Two option cards, always side by side. The pane caps its own width so the
+   pair stays a comfortable reading measure instead of stretching, which is
+   why there is no stacked fallback to drop to. */
+.opts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-top: 4px;
+  max-width: 720px;
 }
 
-.choices.c3,
-.three {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.two,
-.three {
-  display: grid;
-  gap: 12px;
-  align-items: start;
-}
-
-.two {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.choice-card {
+.opt {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
-  min-height: 196px;
-  padding: 16px 18px 14px;
+  width: 100%;
+  padding: 16px 18px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--btn-bg);
   text-align: left;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s,
+    background 0.12s;
 }
 
-.choice-card .bd {
+.opt:hover {
+  background: var(--panel);
+  border-color: var(--line-mid);
+}
+
+.opt:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 2px;
+}
+
+.opt.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.opt .ic {
+  font-size: 20px;
+  color: var(--ink-3);
+}
+
+.opt.on .ic {
+  color: var(--accent-ink);
+}
+
+.opt .txt {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-right: 28px;
+}
+
+.opt .bd {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.45;
 }
 
-.choice-card ol {
-  display: grid;
+.opt .pip {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-field);
+  background: var(--btn-bg);
+}
+
+.opt.on .pip {
+  border-color: var(--accent);
+  border-width: 5.5px;
+}
+
+/* The one fact that distinguishes the two options. */
+.need {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
-  padding-left: 20px;
+  margin-top: 4px;
+  padding: 3px 9px 3px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--chip-bg);
+  color: var(--chip-ink);
+  font-size: 12.5px;
+  font-weight: 500;
 }
 
-.choice-card li {
-  padding-left: 2px;
+.need svg {
+  font-size: 13px;
+  color: var(--muted);
 }
 
-.choice-card .btn {
-  margin-top: auto;
+.opt.on .need {
+  background: var(--accent-wash);
+  color: var(--accent-ink);
+}
+
+.opt.on .need svg {
+  color: var(--accent-ink);
+}
+
+/* What the chosen path leads through — deferred until there is a choice. */
+.next {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px 16px;
+  align-items: start;
+  max-width: 720px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg);
+  background: var(--wash);
+}
+
+.next h3 {
+  padding-top: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.next ol {
+  display: flex;
+  gap: 0;
+  list-style: none;
+  counter-reset: s;
+}
+
+.next li {
+  position: relative;
+  display: flex;
+  flex: 1;
+  gap: 8px;
+  padding-right: 18px;
+  counter-increment: s;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.next li::before {
+  content: counter(s);
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border: 1px solid var(--line-mid);
+  border-radius: 50%;
+  background: var(--btn-bg);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.next li b {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: 720px;
+  margin-top: 22px;
+}
+
+.actions .alt {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* A step whose name depends on a choice nobody has made yet. */
+.setup-step.pending {
+  color: var(--muted);
+}
+
+.setup-step.pending .setup-mark {
+  border-style: dashed;
 }
 
 .first-run-main .pcard {
@@ -566,6 +1242,17 @@ body {
 
 .first-run-main .server-address-row {
   cursor: text;
+}
+
+.first-run-main .checked-address .fr .v {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.first-run-main .checked-address .fr .a {
+  margin-left: auto;
+  flex: none;
 }
 
 .first-run-main .pcard h3 {
@@ -591,10 +1278,9 @@ body {
 
 .first-run-main .recovery-fields .fr {
   align-items: stretch;
-  min-height: 48px;
+  min-height: 36px;
   gap: 0;
   padding: 0;
-  border-top: 0;
 }
 
 .first-run-main .recovery-fields .fr .k {
@@ -620,10 +1306,9 @@ body {
 
 .first-run-main .account-form .fr {
   align-items: stretch;
-  min-height: 48px;
+  min-height: 36px;
   gap: 0;
   padding: 0;
-  border-top: 0;
 }
 
 .first-run-main .account-form .fr .k {
@@ -654,7 +1339,7 @@ body {
   margin-top: 8px;
   padding: 10px 12px;
   border: 1px solid var(--line-soft);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   background: var(--surface);
 }
 
@@ -695,6 +1380,12 @@ body {
   color: var(--ok-ink);
 }
 
+/* A prefix that matches so far: encouraging, but not yet a verification. */
+.res.part {
+  border-color: var(--amber-border);
+  color: var(--amber-ink);
+}
+
 .res.miss,
 .first-run-main .crit {
   border-color: var(--danger-border);
@@ -702,44 +1393,22 @@ body {
   color: var(--danger-text);
 }
 
+.first-run-main .inset.err {
+  border-color: var(--danger-border);
+}
+
 .first-run-main .crit {
   margin-top: 10px;
+  margin-bottom: 16px;
   padding: 12px 14px;
   border: 1px solid var(--danger-border);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   line-height: 1.5;
 }
 
 .first-run-main .crit b {
   display: block;
-}
-
-.words {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  margin: 6px 0 14px;
-}
-
-.word {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface);
-  font: 13.5px var(--mono);
-  user-select: none;
-}
-
-.word i {
-  width: 14px;
-  color: var(--faint);
-  font-size: 10.5px;
-  font-style: normal;
-  text-align: right;
 }
 
 .check {
@@ -799,7 +1468,6 @@ body {
 
 @media (max-width: 900px) {
   .choices.c3,
-  .three,
   .local-other-protection {
     grid-template-columns: 1fr;
   }
@@ -808,45 +1476,6 @@ body {
     grid-template-columns: 1fr;
     gap: 4px;
   }
-}
-
-.tabs {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: 1;
-}
-
-.tabs .btn.danger {
-  margin-left: auto;
-}
-
-.rt .hdr,
-.rt .row {
-  grid-template-columns: minmax(0, 1fr) 76px 142px 124px 72px 78px 138px;
-}
-
-.rt.narrow .hdr,
-.rt.narrow .row {
-  grid-template-columns: minmax(0, 1fr) 70px 142px 74px 118px;
-}
-
-.rt.narrow .opt {
-  display: none;
-}
-
-.rt .row {
-  min-height: 54px;
-  height: auto;
-  padding-top: 7px;
-  padding-bottom: 7px;
-}
-
-.rt .acts2 {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
 }
 
 .strike {
@@ -860,69 +1489,20 @@ body {
 
 .dz {
   border: 1px solid var(--danger-border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 10px 14px 12px;
 }
 
-.vis {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 8px;
+.sheet .fn {
   margin-top: 8px;
 }
 
-.sheet .manage-members .manage-member {
-  display: grid;
-  grid-template-columns: minmax(140px, 0.7fr) minmax(0, 1.3fr);
-  align-items: center;
-  gap: 8px 14px;
-  padding-top: 8px;
-  padding-bottom: 8px;
-}
-
-.sheet .manage-members .manage-member .k {
-  width: auto;
-  min-width: 0;
-}
-
-.sheet .manage-members .manage-member .v {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.manage-member-name,
-.manage-member-meta,
-.manage-member-access {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-}
-
-.manage-member-name {
-  gap: 8px;
-}
-
-.manage-member-meta,
-.manage-member-access {
-  flex-wrap: wrap;
-}
-
-.sheet .manage-member-meta .dim {
-  flex: none;
-}
-
-.sheet .manage-member .hint {
-  margin: 0;
-}
-
-@media (max-width: 620px) {
-  .sheet .manage-members .manage-member {
-    grid-template-columns: 1fr;
-  }
+.sheet .inset .fr .v small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 1px;
 }
 
 /* Until React mounts. Matches the shell's ground so there is no flash. */
@@ -947,20 +1527,19 @@ body {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 12px;
+  gap: 0;
   padding: 24px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
   background: var(--surface);
   box-shadow: var(--shadow-sheet);
 }
 
 .app-lock-card h1 {
+  margin-bottom: 8px;
   font-size: 20px;
 }
 
 .app-lock-card p {
-  margin-bottom: 8px;
+  margin-bottom: 20px;
   color: var(--muted);
   line-height: 1.5;
 }
@@ -993,4 +1572,152 @@ body {
   top: auto;
   left: auto;
   right: auto;
+}
+
+/* ---------------------------------------------------------- card select --
+   The dropdown form of the design's `.radio` card. `shell.css` has no
+   collapsed variant of that row, so the trigger and the list are drawn here —
+   but only with the card's own geometry and tokens, so an option in the list
+   and a radio card in a sheet are the same object seen twice. The list is a
+   portaled `Listbox` in a `.menu-portal` wrap, matched to the trigger's
+   width, and it borrows `.menu`'s panel chrome rather than inventing a
+   second one. */
+.card-select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.card-select-trigger:hover {
+  background: var(--wash);
+}
+
+.card-select-trigger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.card-select-trigger:disabled:hover {
+  background: none;
+}
+
+.card-select-chevron {
+  flex: none;
+  margin-left: auto;
+  font-size: 15px;
+  color: var(--faint);
+  transition: transform 0.15s ease;
+}
+
+.card-select-trigger[aria-expanded='true'] .card-select-chevron {
+  transform: rotate(180deg);
+}
+
+.card-select-menu {
+  background: var(--main-surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-menu);
+  padding: 4px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.card-select-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.card-select-option:hover,
+.card-select-option:focus-visible {
+  background: var(--hover);
+}
+
+.card-select-option.on {
+  background: var(--accent-wash);
+}
+
+.card-select-option.off {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.card-select-option.off:hover {
+  background: none;
+}
+
+.card-select-check {
+  flex: none;
+  font-size: 15px;
+  color: var(--accent);
+}
+
+/* The card's own text block, in both the trigger and the list. */
+.card-select-trigger .t,
+.card-select-option .t {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.card-select-trigger .t b,
+.card-select-option .t b {
+  display: block;
+  font-weight: 600;
+}
+
+.card-select-trigger .t small,
+.card-select-option .t small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+  margin-top: 1px;
+}
+
+/* Sheets: a segmented control at the top of the body breathes before what
+   follows it, and a numbered checklist reads as one column with its markers
+   inside the box rather than as a two-column facts grid. */
+.sheet .sb > .seg {
+  margin-bottom: 10px;
+}
+
+.sheet .sb > .seg + p {
+  margin-top: 0;
+}
+
+.sheet .sheet-steps {
+  margin: 4px 0 10px;
+  padding: 10px 12px 10px 30px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--ink-3);
+  font-size: 13.5px;
+}
+
+.sheet .sheet-steps li {
+  padding-left: 2px;
+}
+
+.sheet .sheet-steps b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.sheet .band + .inset {
+  margin-top: 10px;
 }

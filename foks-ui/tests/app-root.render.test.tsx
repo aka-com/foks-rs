@@ -75,7 +75,7 @@ test('the sidebar lists the fixture s vaults and groups', () => {
   );
 });
 
-test('issues carries the badge for the notes that apply now', () => {
+test('alerts carries the badge for the notes that apply now', () => {
   // The fresh lease world: the two warnings, not the lapsed-lease critical.
   assert.equal(document.querySelector('.side .badge')?.textContent, '2');
 });
@@ -100,12 +100,23 @@ test('the boot address lands on All items, listing the whole catalog', () => {
 
 test('clicking a group navigates the shell to it', async () => {
   const rows = [...document.querySelectorAll<HTMLButtonElement>('.side .nav')];
-  // The row's own text starts with its avatar stack's initials, so the name
-  // is read off `.t` — the same span the captions above are read from.
+  // People outline on the left (same column as vault icons); roster stack
+  // on the right. The name is in `.t`, not the stack's initials.
   const engineering = rows.find((row) =>
     row.querySelector('.t')?.textContent?.startsWith('Engineering'),
   );
   assert.ok(engineering, 'the Engineering row is in the sidebar');
+  const icon = engineering.querySelector('.ic');
+  const stack = engineering.querySelector('.stack');
+  assert.ok(icon, 'the people outline is the leading icon');
+  assert.ok(stack, 'the roster stack sits on the trailing edge');
+  assert.equal(
+    Boolean(
+      icon.compareDocumentPosition(stack) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ),
+    true,
+    'the people icon precedes the avatars',
+  );
 
   testingLibrary.fireEvent.click(engineering);
   await testingLibrary.waitFor(() => {

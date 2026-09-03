@@ -1,0 +1,1075 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FOKS Desktop — Component Kit</title>
+<!--
+  A self-contained, browser-openable catalogue of the FOKS desktop surface.
+  It reuses the design tokens and component classes from
+  dev/foks-desktop/iteration/wave6/shell.css, so the colours, sizes and
+  spacing stay the single source of truth.
+
+  The fixture data below is the same shape the foks-ui tests and mocks use:
+  three servers, two account stores, three group stores, a roster with users
+  and a federated group, plus the masked items the catalog returns.
+-->
+<link rel="stylesheet" href="iteration/wave6/shell.css" />
+<link rel="stylesheet" href="../../foks-ui/src/styles/app.css" />
+<style>
+  /* Tokens the app layer expects but the mock stylesheet does not define. */
+  :root {
+    --radius-sm: 7px;
+    --radius-md: 9px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --radius-pill: 99px;
+    --selected: rgba(10, 124, 255, .11);
+  }
+
+  /* Guide-only overrides: turn the mock's centred fake-window page into a
+     long, readable catalogue page. */
+  html, body { height: auto; }
+  body {
+    display: block;
+    padding: 0;
+    background: #e7e8ee;
+  }
+  .guide-wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 28px 24px 80px;
+  }
+  .guide-head {
+    margin-bottom: 22px;
+  }
+  .guide-head h1 {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 6px;
+  }
+  .guide-head p {
+    font-size: 13.5px;
+    color: var(--muted);
+    line-height: 1.5;
+    margin: 0;
+  }
+  .guide-nav {
+    position: sticky;
+    top: 0;
+    z-index: 9;
+    background: rgba(231, 232, 238, 0.92);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+    padding: 10px 0;
+    margin-bottom: 22px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .guide-nav a {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink-2);
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 99px;
+    padding: 4px 11px;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .guide-nav a:hover {
+    border-color: var(--accent-border);
+    color: var(--accent-ink);
+  }
+  .guide-section {
+    margin-bottom: 34px;
+  }
+  .guide-section h2 {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    margin: 0 0 8px;
+  }
+  .guide-section .lead {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.55;
+    margin: 0 0 14px;
+    max-width: 820px;
+  }
+  .guide-section .lead code {
+    font: 12px var(--mono);
+    background: rgba(0,0,0,0.05);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .demo {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px;
+    margin-bottom: 14px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: center;
+  }
+  .demo.col {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .demo h3 {
+    width: 100%;
+    font-size: 12px;
+    font-weight: 650;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--faint);
+    margin: 0 0 2px;
+  }
+  .demo + .demo { margin-top: -4px; }
+  .new-plus { display: inline-block; transform: translate(-1px, -1px); }
+
+  /* Standalone badge (shell.css only styles .nav .badge) */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--danger);
+    color: #fff;
+    font-size: 10.5px;
+    font-weight: 700;
+  }
+  .badge.amber { background: var(--amber-dot); }
+  .badge.grey { background: #c9c9d1; color: #3c3c42; }
+
+  /* Danger zone (component-kit demo only — app.css has no such component) */
+  .danger-zone {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    background: #fff;
+    overflow: hidden;
+  }
+  .danger-zone .dz-head {
+    padding: 10px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--danger-ink);
+    background: var(--danger-wash);
+    border-bottom: 1px solid var(--danger-border);
+  }
+  .danger-zone .irow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 54px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--line-soft);
+  }
+  .danger-zone .irow:first-child { border-top: 0; }
+  .danger-zone .irow .v {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .danger-zone .irow .v b { font-weight: 600; }
+  .danger-zone .irow .v .sub {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+
+  /* Fake window for full-screen examples */
+  .demo-window {
+    width: min(1120px, 100%);
+    height: 640px;
+    margin: 0 auto;
+    border: 1px solid rgba(0,0,0,0.16);
+    border-radius: 12px;
+    background: var(--main-surface);
+    box-shadow: 0 24px 60px rgba(15,20,45,0.24), 0 2px 8px rgba(15,20,45,0.1);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .demo-window .app {
+    height: calc(100% - 44px);
+  }
+
+  /* Token swatches */
+  .swatches {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
+    width: 100%;
+  }
+  .swatch {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: #fff;
+  }
+  .swatch .chip { font-family: var(--mono); font-size: 10.5px; }
+  .swatch .dot {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--ink);
+  }
+
+  /* Icon grid */
+  .icon-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 10px;
+    width: 100%;
+  }
+  .icon-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 7px;
+    padding: 12px 8px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: #fff;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .icon-cell .ic { font-size: 22px; }
+
+  /* Tables used in guide */
+  .component-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+  }
+  .component-table th,
+  .component-table td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .component-table th {
+    color: var(--faint);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+  }
+  .component-table code { font: 12px var(--mono); }
+
+  /* First-run and app-lock extras that the shell does not include */
+  .app-lock {
+    position: absolute;
+    inset: 0;
+    background: rgba(231, 232, 238, 0.85);
+    backdrop-filter: blur(8px);
+    display: grid;
+    place-items: center;
+    z-index: 12;
+  }
+  .app-lock-card {
+    width: min(420px, 92%);
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 26px;
+    box-shadow: var(--shadow-sheet);
+  }
+  .app-lock-card h1 {
+    font-size: 19px;
+    font-weight: 700;
+    margin: 0 0 8px;
+  }
+  .app-lock-card p {
+    font-size: 13.5px;
+    color: var(--ink-3);
+    line-height: 1.5;
+    margin: 0 0 18px;
+  }
+  .app-lock-card .btn { margin-top: 4px; }
+
+  /* Section anchor spacing */
+  .anchor { scroll-margin-top: 62px; }
+</style>
+</head>
+<body>
+<div class="guide-wrap">
+  <header class="guide-head">
+    <h1>FOKS Desktop — Component Kit</h1>
+    <p>A catalogue of every reusable piece in the FOKS desktop interface. Values are realistic fixture data from the foks-ui test suite and design mocks.</p>
+  </header>
+
+  <nav class="guide-nav" aria-label="Component sections">
+    <a href="#tokens">Tokens</a>
+    <a href="#icons">Icons</a>
+    <a href="#buttons">Buttons</a>
+    <a href="#chips">Chips &amp; avatars</a>
+    <a href="#kinds">Kind icons</a>
+    <a href="#forms">Forms</a>
+    <a href="#selection">Selection</a>
+    <a href="#lists">Lists</a>
+    <a href="#notices">Notices</a>
+    <a href="#sheets">Sheets</a>
+    <a href="#shell">Shell</a>
+    <a href="#screens">Full screens</a>
+  </nav>
+
+  <!-- TOKENS -->
+  <section class="guide-section anchor" id="tokens">
+    <h2>Design tokens</h2>
+    <p class="lead">The variables from <code>shell.css</code> that every component consumes. No component invents its own colour or type size.</p>
+    <div class="demo swatches" id="tokenSwatches"></div>
+  </section>
+
+  <!-- ICONS -->
+  <section class="guide-section anchor" id="icons">
+    <h2>Icons</h2>
+    <p class="lead">The 31 icons from <code>foks-ui/src/icons.ts</code>. Each is a 24×24 stroke icon drawn with a 1.7&nbsp;px weight and round caps/joins.</p>
+    <div class="demo icon-grid" id="iconGrid"></div>
+  </section>
+
+  <!-- BUTTONS -->
+  <section class="guide-section anchor" id="buttons">
+    <h2>Buttons</h2>
+    <p class="lead"><code>Button</code> has four variants — <code>primary</code>, <code>plain</code>, <code>danger</code>, <code>quiet</code> — and a small pill size <code>cap</code>. Split and menu buttons wrap the same base classes.</p>
+
+    <div class="demo">
+      <h3>Variants</h3>
+      <button class="btn primary">Primary</button>
+      <button class="btn">Plain</button>
+      <button class="btn danger">Danger</button>
+      <button class="btn icon"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></svg></button>
+      <button class="btn cap">Manage</button>
+      <button class="btn" disabled>Disabled</button>
+      <button class="btn icon on"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></svg></button>
+    </div>
+
+    <div class="demo">
+      <h3>With leading icons</h3>
+      <button class="btn primary" id="btnNew"><span class="new-plus">+</span> New</button>
+      <button class="btn"><span class="ic">⇅</span> Sort</button>
+      <button class="btn cap"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.5-1L19 8.5a2 2 0 0 0-3-3L5.5 16z"/><path d="M14 7l3 3"/></svg> Edit</button>
+    </div>
+
+    <div class="demo">
+      <h3>Split button</h3>
+      <span class="split">
+        <button class="btn primary">New password</button>
+        <button class="btn primary"><svg class="ic chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+      </span>
+    </div>
+
+    <div class="demo" style="position:relative;min-height:120px;">
+      <h3>Menu button (hover to open)</h3>
+      <span class="menuwrap">
+        <button class="btn" aria-haspopup="menu" aria-expanded="true" onclick="this.nextElementSibling.classList.toggle('open')">
+          New <svg class="ic chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="menu open" style="position:absolute;top:38px;left:0;">
+          <div class="cap">Create in Personal</div>
+          <button><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="14" r="4"/><path d="M11 11l9-9M17 5l2.5 2.5M14.5 7.5 17 10"/></svg> Password</button>
+          <button><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg> Note</button>
+          <button><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4"/></svg> File</button>
+          <button><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg> Link</button>
+        </div>
+      </span>
+    </div>
+  </section>
+
+  <!-- CHIPS / TAGS / BADGES / AVATARS -->
+  <section class="guide-section anchor" id="chips">
+    <h2>Chips, tags, badges &amp; avatars</h2>
+    <p class="lead"><code>Chip</code> is a computed fact, <code>Tag</code> is a quieter classification, and <code>Badge</code> is a count on navigation rows. <code>Avatar</code> and <code>Stack</code> draw people and groups with deterministic colours.</p>
+
+    <div class="demo">
+      <h3>Chips</h3>
+      <span class="chip">Owner</span>
+      <span class="chip you">you</span>
+      <span class="chip admin">Admin</span>
+      <span class="chip member">Member</span>
+      <span class="chip ok">Ready</span>
+      <span class="chip warn">Inactive</span>
+      <span class="chip bad">Blocked</span>
+      <span class="tag">small-file</span>
+      <span class="tag warn">pending</span>
+    </div>
+
+    <div class="demo">
+      <h3>Badges</h3>
+      <span class="badge">3</span>
+      <span class="badge amber">1</span>
+      <span class="badge grey">0</span>
+    </div>
+
+    <div class="demo">
+      <h3>Avatars</h3>
+      <span id="avatarDemo"></span>
+    </div>
+
+    <div class="demo">
+      <h3>Avatar stacks</h3>
+      <span id="stackDemo"></span>
+    </div>
+  </section>
+
+  <!-- KIND ICONS -->
+  <section class="guide-section anchor" id="kinds">
+    <h2>Kind icons &amp; glyphs</h2>
+    <p class="lead"><code>KindIcon</code> is the tinted square on rows and details. <code>KindGlyph</code> is the larger solid square used in cards. Logins under <code>/logins/</code> render a site-initial favicon.</p>
+
+    <div class="demo" id="kindIcons"></div>
+    <div class="demo" id="kindGlyphs"></div>
+  </section>
+
+  <!-- FORMS -->
+  <section class="guide-section anchor" id="forms">
+    <h2>Form fields &amp; insets</h2>
+    <p class="lead"><code>Field</code> is a controlled input inside an <code>Inset</code>. The label column is fixed width; the input fills the value column. <code>SearchField</code> carries the ⌘K hint.</p>
+
+    <div class="demo col" style="max-width:520px;">
+      <h3>Search field</h3>
+      <label class="search">
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+        <input type="text" placeholder="Search all items" value="github" />
+        <kbd>⌘K</kbd>
+      </label>
+    </div>
+
+    <div class="demo col" style="max-width:520px;">
+      <h3>Inset rows</h3>
+      <div class="inset">
+        <div class="fr"><span class="k">Username</span><span class="v"><input type="text" value="rae" /></span></div>
+        <div class="fr"><span class="k">Device name</span><span class="v"><input type="text" value="Raymond’s MacBook" /></span></div>
+        <div class="fr"><span class="k">Server</span><span class="v dim">localhost:4430</span><span class="a"><button class="btn cap">Change</button></span></div>
+      </div>
+    </div>
+
+    <div class="demo col" style="max-width:520px;">
+      <h3>Preview rows (details panel)</h3>
+      <div class="prev">
+        <div class="irow"><span class="k">Path</span><span class="v mono">/env/prod/DATABASE_URL</span></div>
+        <div class="irow rev"><span class="k">Value</span><span class="v mask">postgres://service:••••••••@db.internal/prod</span><span class="a"><button><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="3"/></svg> Show</button></span></div>
+        <div class="irow"><span class="k">Version</span><span class="v">3</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SELECTION -->
+  <section class="guide-section anchor" id="selection">
+    <h2>Selection controls</h2>
+    <p class="lead"><code>SegmentedControl</code>, <code>Tabs</code>, <code>RadioCard</code> and <code>Toggle</code> are the four ways the app lets a person choose or disclose.</p>
+
+    <div class="demo col" style="align-items:flex-start;">
+      <h3>Segmented control (text)</h3>
+      <span class="seg txt" role="group" aria-label="Filter by kind">
+        <button class="on" aria-pressed="true">All</button>
+        <button aria-pressed="false">Passwords</button>
+        <button aria-pressed="false">Notes</button>
+        <button aria-pressed="false">Files</button>
+        <button aria-pressed="false">Links</button>
+      </span>
+    </div>
+
+    <div class="demo">
+      <h3>Segmented control (icon)</h3>
+      <span class="seg" role="group" aria-label="View mode">
+        <button class="on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="5" cy="6" r="1" fill="currentColor"/><circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="5" cy="18" r="1" fill="currentColor"/></svg></button>
+        <button aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></svg></button>
+      </span>
+    </div>
+
+    <div class="demo col" style="align-items:flex-start;">
+      <h3>Tabs</h3>
+      <div class="tabs" role="tablist" aria-label="Group sections">
+        <button class="tab on" role="tab" aria-selected="true">Items <span class="n">4</span></button>
+        <button class="tab" role="tab" aria-selected="false">People <span class="n">5</span></button>
+        <button class="tab" role="tab" aria-selected="false">Federation <span class="n zero">0</span></button>
+      </div>
+    </div>
+
+    <div class="demo col" style="align-items:flex-start;max-width:520px;">
+      <h3>Radio cards</h3>
+      <div class="radios" role="radiogroup" aria-label="Choose a store">
+        <button class="radio on" role="radio" aria-checked="true">
+          <span class="rb"></span>
+          <span class="t"><b>Personal</b><small>Your account vault; new items default to Owner</small></span>
+        </button>
+        <button class="radio" role="radio" aria-checked="false">
+          <span class="rb"></span>
+          <span class="t"><b>Engineering</b><small>5 people · 1 group</small></span>
+        </button>
+        <button class="radio off" role="radio" aria-checked="false" disabled>
+          <span class="rb"></span>
+          <span class="t"><b>Work (Acme)</b><small>Locked until the agent renews its lease</small></span>
+        </button>
+      </div>
+    </div>
+
+    <div class="demo col" style="align-items:flex-start;max-width:520px;">
+      <h3>Toggle (disclosure)</h3>
+      <div class="toggle">
+        <button class="toggle-trigger" aria-expanded="true">
+          <svg class="toggle-chevron" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          Inspect response
+        </button>
+        <div class="toggle-body" hidden>
+          <pre style="background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;font:11.5px var(--mono);white-space:pre-wrap;">{
+  "profile": "local",
+  "probe": "foks.example.net:443",
+  "protocol": { "generation": "v019" },
+  "trust": { "kind": "web-pki" }
+}</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LISTS -->
+  <section class="guide-section anchor" id="lists">
+    <h2>Lists &amp; tables</h2>
+    <p class="lead">The item list, roster, federation table and group list all share the same row language with hover actions, selection and read-by counts.</p>
+
+    <div class="demo col" style="align-items:stretch;">
+      <h3>Item rows</h3>
+      <div class="rt items" id="itemRows" style="border:1px solid var(--line);border-radius:12px;overflow:hidden;"></div>
+    </div>
+
+    <div class="demo col" style="align-items:stretch;">
+      <h3>Roster rows</h3>
+      <div class="rt" id="rosterRows" style="border:1px solid var(--line);border-radius:12px;overflow:hidden;"></div>
+    </div>
+
+    <div class="demo col" style="align-items:stretch;">
+      <h3>Group rows</h3>
+      <div id="groupRows" style="display:flex;flex-direction:column;gap:10px;"></div>
+    </div>
+  </section>
+
+  <!-- NOTICES -->
+  <section class="guide-section anchor" id="notices">
+    <h2>Notices, bands, banners &amp; empty states</h2>
+    <p class="lead"><code>Notice</code> replaces a full pane; <code>Band</code> sits beside or above what it qualifies; <code>banner</code> is the compact inline alert. <code>empty</code> is the consistent nothing-to-show state.</p>
+
+    <div class="demo col" style="align-items:stretch;gap:18px;">
+      <h3>Notice panel</h3>
+      <div class="notice stop">
+        <div class="who">Server issue</div>
+        <h2>foks.acme-corp.com is locked</h2>
+        <p>The server’s check-in expired. Work and Engineering groups are unavailable until the agent renews it.</p>
+        <p class="fn">Other servers are unaffected. You can still use your Personal vault.</p>
+        <div class="acts2"><button class="btn">Wait for the agent</button></div>
+      </div>
+
+      <div class="notice">
+        <div class="who">Group setup</div>
+        <h2>Homelab is inactive</h2>
+        <p>Group setup incomplete. Items and members are unavailable until setup is finished.</p>
+        <div class="acts2"><button class="btn primary">Resume creation</button></div>
+      </div>
+    </div>
+
+    <div class="demo col" style="align-items:flex-start;">
+      <h3>Bands</h3>
+      <div class="band"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16h.01"/></svg><span><b>Deferred</b> This product is not implemented yet; it will arrive in a later release.</span></div>
+      <div class="band stop"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16h.01"/></svg><span>The KV item changed; refresh before retrying.</span></div>
+      <div class="band info"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></svg><span><b>Proposed</b> New group items use the roles you select below.</span></div>
+    </div>
+
+    <div class="demo" style="height:360px;align-items:stretch;justify-content:flex-start;flex-direction:column;flex-wrap:nowrap;">
+      <h3>Empty state</h3>
+      <div class="empty" style="flex:1;min-height:0;padding:50px 30px;">
+        <div class="big"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="font-size:44px;"><circle cx="8" cy="14" r="4"/><path d="M11 11l9-9M17 5l2.5 2.5M14.5 7.5 17 10"/></svg></div>
+        <h2>No items yet</h2>
+        <p>Passwords, files, resources and links you add here belong only to your account.</p>
+        <button class="btn primary">New item</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- SHEETS -->
+  <section class="guide-section anchor" id="sheets">
+    <h2>Sheets, copy boxes &amp; menus</h2>
+    <p class="lead"><code>Sheet</code> is the modal panel for creation, confirmation and inspection. <code>CopyBox</code> shows a sentence the user can copy. Menus are anchored to a trigger.</p>
+
+    <div class="demo" style="position:relative;min-height:240px;justify-content:center;background:var(--backdrop);">
+      <div class="sheet" style="position:relative;box-shadow:var(--shadow-sheet);margin:0;">
+        <div class="hd">
+          <span class="kic Password" style="width:34px;height:34px;font-size:20px;"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="14" r="4"/><path d="M11 11l9-9M17 5l2.5 2.5M14.5 7.5 17 10"/></svg></span>
+          <span class="t"><h2>New password</h2><small>Personal · Owner read · Owner write</small></span>
+        </div>
+        <div class="sb">
+          <div class="inset">
+            <div class="fr"><span class="k">Path</span><span class="v"><input type="text" value="/logins/" /></span></div>
+            <div class="fr"><span class="k">Value</span><span class="v"><input type="text" value="" placeholder="username: ..." /></span></div>
+          </div>
+          <p class="hint">The path determines whether this is a login (under /logins/) or a general resource.</p>
+        </div>
+        <div class="ft">
+          <button class="btn">Cancel</button>
+          <button class="btn primary">Create</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="demo col" style="align-items:flex-start;max-width:540px;">
+      <h3>Copy box</h3>
+      <div class="copybox">
+        <span class="v">Add sam on foks.example.net to Household</span>
+        <button class="btn">Copy</button>
+      </div>
+      <div class="copybox">
+        <span class="v"><code>foks.example.net:443</code></span>
+        <span class="copybox-actions"><button class="btn">Copy</button><button class="btn">Open</button></span>
+      </div>
+    </div>
+
+    <div class="demo col" style="align-items:flex-start;max-width:480px;">
+      <h3>Danger zone / destructive confirmation</h3>
+      <div class="danger-zone" style="width:100%;">
+        <div class="dz-head">Danger zone</div>
+        <div class="irow">
+          <span class="v"><b>Remove profile</b><span class="sub">This removes the profile from the Console but retains its durable profile directory.</span></span>
+          <button class="btn danger">Remove</button>
+        </div>
+        <div class="irow">
+          <span class="v"><b>Reset hard state</b><span class="sub">This discards the rollback checkpoint and hard-state database, including the authenticated host pin.</span></span>
+          <button class="btn danger">Reset</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SHELL -->
+  <section class="guide-section anchor" id="shell">
+    <h2>Shell chrome</h2>
+    <p class="lead">The window title bar, sidebar, page header, toolbar and details panel are the chrome that wraps every screen. The same classes are used in the Tauri app.</p>
+
+    <div class="demo-window" style="height:520px;">
+      <header class="titlebar">
+        <span class="lights" aria-hidden="true"><span class="light r"></span><span class="light y"></span><span class="light g"></span></span>
+        <span class="brand">FOKS</span>
+        <span class="spacer"></span>
+        <span class="agent"><i></i> Agent ready</span>
+        <button class="btn icon global-refresh" aria-label="Refresh" title="Refresh vaults and groups" style="transform:translateY(1px)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v4h-4"/></svg></button>
+      </header>
+      <div class="app" style="height:calc(100% - 44px);">
+        <nav class="side" aria-label="Places" id="shellSidebar" style="width:220px;flex:0 0 220px;"></nav>
+        <main class="main" style="min-width:0;">
+          <div class="path" id="shellHeader"></div>
+          <div class="toolbar" id="shellToolbar"></div>
+          <div class="body" id="shellBody"></div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- FULL SCREENS -->
+  <section class="guide-section anchor" id="screens">
+    <h2>Full screens in context</h2>
+    <p class="lead">The vault, groups, servers, settings, first run and app-lock states, populated with realistic fixture data and rendered with the same components above.</p>
+
+    <div class="demo-window" id="vaultScreen" style="height:680px;position:relative;">
+      <!-- rendered by JS below -->
+    </div>
+
+    <div style="height:24px;"></div>
+
+    <div class="demo-window" id="appLockScreen" style="height:520px;position:relative;">
+      <header class="titlebar">
+        <span class="lights" aria-hidden="true"><span class="light r"></span><span class="light y"></span><span class="light g"></span></span>
+        <span class="brand">FOKS</span>
+      </header>
+      <div class="app" style="height:calc(100% - 44px);position:relative;">
+        <nav class="side" aria-label="Places">
+          <div class="appname">Set up FOKS</div>
+          <button class="nav on" type="button"><span class="step-number">1</span><span class="t">Local server</span></button>
+          <button class="nav" type="button"><span class="step-number">2</span><span class="t">Your account</span></button>
+          <button class="nav" type="button"><span class="step-number">3</span><span class="t">Recovery</span></button>
+        </nav>
+        <main class="main setup-main" style="justify-content:center;">
+          <div class="app-lock">
+            <div class="app-lock-card">
+              <h1>Unlock FOKS</h1>
+              <p>Authenticate with Touch ID or your Mac password to allow FOKS to connect to servers and read vault data.</p>
+              <button class="btn primary">Unlock</button>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <footer style="margin-top:40px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);line-height:1.5;">
+    <p>FOKS Desktop — component kit. Data is illustrative fixture data from <code>foks-ui/src/fixture.ts</code> and <code>dev/foks-desktop/iteration/wave6/shell.js</code>. Components render with <code>shell.css</code> tokens so this page stays current with the design system.</p>
+  </footer>
+</div>
+
+<script>
+/* =====================================================================
+   Fixture and helpers, matching foks-ui/src/fixture.ts and shell.js.
+   ===================================================================== */
+const FX = {
+  agent: { phase: "Ready" },
+  servers: [
+    { id: "personal", name: "foks.example.net", label: "Personal server", host_id: "9f31c2aa07", chain: 12, epoch: 4821, lease: { state: "fresh", expires_in: "6 d" }, accounts: ["personal"], state: "ok" },
+    { id: "acme", name: "foks.acme-corp.com", label: "Acme", host_id: "b04d17e390", chain: 33, epoch: 90417, lease: { state: "lapsed", expires_in: null }, accounts: ["work"], state: "lease-lapsed" },
+    { id: "partner", name: "foks.partner.dev", label: null, host_id: null, chain: null, epoch: null, lease: null, accounts: [], state: "never-probed" },
+  ],
+  accounts: [
+    { store: "acct:personal", alias: "personal", username: "rae", server: "personal" },
+    { store: "acct:work", alias: "work", username: "rae.chen", server: "acme" },
+  ],
+  stores: [
+    { id: "acct:personal", kind: "account", name: "Personal", server: "personal", account: "personal" },
+    { id: "acct:work", kind: "account", name: "Work (Acme)", server: "acme", account: "work" },
+    { id: "team:eng", kind: "team", name: "Engineering", alias: "engineering", server: "acme", account: "work", active: true, team_kind: "named", team_id_hex: "033f91c2aa07b45e18d0c73a9f2e5b6417ac8d0192f3e4b5c6d7089a1b2c3d4e5f" },
+    { id: "team:household", kind: "team", name: "Household", alias: "household", server: "personal", account: "personal", active: true, team_kind: "named", team_id_hex: "037b83d4f0241a67933c59ed218458ce03a5b98e691e81c544b8cc93c52f4e02ab" },
+    { id: "team:homelab", kind: "team", name: "Homelab", alias: "homelab", server: "personal", account: "personal", active: false, team_kind: "adhoc", team_id_hex: "038b17e4a055c93d2fe60148ab7f2c9d3140e5b8a71c6f93d20ba48e5739d1c0f6" },
+  ],
+  items: [
+    { store: "acct:personal", path: "/logins/github.com", kind: "Secret", size: 142, version: 9, read: "Owner", write: "Owner", value: "user: rae\npassword: ••••••••••••\nurl: https://github.com/login" },
+    { store: "acct:personal", path: "/logins/fastmail.com", kind: "Secret", size: 96, version: 2, read: "Owner", write: "Owner", value: "user: rae@fastmail.com\npassword: ••••••••••" },
+    { store: "acct:personal", path: "/env/prod/DATABASE_URL", kind: "Secret", size: 96, version: 3, read: "Owner", write: "Owner", value: "postgres://service:••••••••@db.internal/prod" },
+    { store: "acct:personal", path: "/ssh/id_ed25519", kind: "File", size: 419, version: 1, read: "Owner", write: "Owner" },
+    { store: "acct:personal", path: "/agents/anthropic-api-key", kind: "Secret", size: 108, version: 4, read: "Owner", write: "Owner", value: "sk-ant-••••••••••••••••" },
+    { store: "team:eng", path: "/deploy/production-token", kind: "Secret", size: 88, version: 12, read: "Admin", write: "Owner", value: "foks_team_token_••••••••" },
+    { store: "team:eng", path: "/deploy/staging-token", kind: "Secret", size: 88, version: 3, read: "Member · visibility 0", write: "Admin", value: "foks_team_token_••••••••" },
+    { store: "team:eng", path: "/release/bundle.tar", kind: "File", size: 84399718, version: 5, read: "Member · visibility 0", write: "Admin" },
+    { store: "team:household", path: "/wifi/guest-password", kind: "Secret", size: 64, version: 4, read: "Member · visibility 0", write: "Admin", value: "ssid: Chen-Guest\npassword: ••••••••" },
+    { store: "team:household", path: "/documents/emergency.pdf", kind: "File", size: 2841992, version: 7, read: "Member · visibility 0", write: "Owner" },
+  ],
+  parties: [
+    { store: "team:eng", username: "sam.ortiz", party_kind: "user", generation: 4, locally_manageable: true, party_id_hex: "01a4c107f822ee91b05d3c44a7e0186b297f10cd439b62ae0831d5f7c46e29b0a5", source_role: { role: "Owner" }, destination_role: { role: "Owner" } },
+    { store: "team:eng", username: "rae.chen", label: "you", party_kind: "user", generation: 6, locally_manageable: true, party_id_hex: "016ab09cd4e11f207877c31b900b44aa193d90c1e45f22c8d13e91c7a29c04e211", source_role: { role: "Admin" }, destination_role: { role: "Admin" } },
+    { store: "team:eng", username: "priya.n", party_kind: "user", generation: 5, locally_manageable: true, party_id_hex: "0184f0c2a71b3d95e6082c47fa19b6d3e05c84719fb2a6c308d5e71f94c3b0d726", source_role: { role: "Admin" }, destination_role: { role: "Admin" } },
+    { store: "team:eng", username: "dana.okafor", party_kind: "user", generation: 5, locally_manageable: true, party_id_hex: "012f8b6d13c07a4e5991b2f8d04a6c3e17bd50927fe83a1c4670d9b2e518f4a06c", source_role: { role: "Member", visibility: 0 }, destination_role: { role: "Member", visibility: 0 } },
+    { store: "team:eng", username: null, party_kind: "named-team", team_name: "homelab @ foks.example.net", generation: 3, locally_manageable: false, party_id_hex: "038b17e4a055c93d2fe60148ab7f2c9d3140e5b8a71c6f93d20ba48e5739d1c0f6", scoped_host_id_hex: "9f31c2aa07", source_role: { role: "Owner" }, destination_role: { role: "Member", visibility: 0 } },
+    { store: "team:eng", username: "deploy-bot", party_kind: "user", generation: 6, locally_manageable: true, party_id_hex: "01c93d2f8b17e4a0148ab7f2e60155c9a71c6f93d23140e5b839d1c0f60ba48e57", source_role: { role: "Member", visibility: 0 }, destination_role: { role: "Member", visibility: 0 }, note: "a service account" },
+    { store: "team:household", username: "rae", label: "you", party_kind: "user", generation: 2, locally_manageable: true, party_id_hex: "016ab09cd4e11f207877c31b900b44aa193d90c1e45f22c8d13e91c7a29c04e211", source_role: { role: "Owner" }, destination_role: { role: "Owner" } },
+    { store: "team:household", username: "sam", party_kind: "user", generation: 2, locally_manageable: true, party_id_hex: "01a4c107f822ee91b05d3c44a7e0186b297f10cd439b62ae0831d5f7c46e29b0a5", source_role: { role: "Member", visibility: 0 }, destination_role: { role: "Member", visibility: 0 } },
+  ],
+};
+
+const I = {
+  key: '<circle cx="8" cy="14" r="4"/><path d="M11 11l9-9M17 5l2.5 2.5M14.5 7.5 17 10"/>',
+  term: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/>',
+  file: '<path d="M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  people: '<circle cx="9" cy="8" r="3.2"/><path d="M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M15.5 5.2a3.2 3.2 0 0 1 0 5.6"/><path d="M17 13.6c2.4.5 4 2.5 4 5.4"/>',
+  person: '<circle cx="12" cy="8" r="3.6"/><path d="M5 20c.6-4 3.4-6 7-6s6.4 2 7 6"/>',
+  vault: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="12" cy="12" r="3.5"/><path d="M12 8.5v1.5M12 14v1.5M8.5 12H10M14 12h1.5"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
+  grid: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>',
+  list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="5" cy="6" r="1" fill="currentColor"/><circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="5" cy="18" r="1" fill="currentColor"/>',
+  chev: '<path d="M6 9l6 6 6-6"/>',
+  info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
+  download: '<path d="M12 4v11M7 10l5 5 5-5M4 20h16"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
+  path: '<circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 6h5a4 4 0 0 1 0 8h-2a4 4 0 0 0 0 4h5"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  eye: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="3"/>',
+  eyeoff: '<path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M6.6 6.6C4 8.2 2 12 2 12s3.5 6 10 6c1.7 0 3.2-.4 4.4-1M9.9 6.2C10.5 6.1 11.2 6 12 6c6.5 0 10 6 10 6s-.8 1.4-2.3 2.9"/>',
+  bell: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  gear: '<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4A2 2 0 0 0 4 9.9l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.8l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.8v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  server: '<rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/>',
+  check: '<path d="M5 12l5 5 9-10"/>',
+  pencil: '<path d="M4 20l4.5-1L19 8.5a2 2 0 0 0-3-3L5.5 16z"/><path d="M14 7l3 3"/>',
+  alert: '<circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16h.01"/>',
+  minus: '<path d="M5 12h14"/>',
+  again: '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v4h-4"/>',
+  flag: '<path d="M5 21V4h13l-2.5 4L18 12H5"/>',
+  plug: '<path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/>',
+  shield: '<path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/>',
+  out: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+  more: '<circle cx="5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="19" cy="12" r="1.2" fill="currentColor"/>',
+};
+
+const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${I[n]}</svg>`;
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const nameOf = p => p.slice(p.lastIndexOf('/') + 1) || '/';
+const prefixOf = p => { const c = p.lastIndexOf('/'); return c <= 0 ? '' : p.slice(1, c); };
+const fmtSize = b => b === 0 ? '0 B' : b < 1000 ? b + ' B' : b < 1e6 ? (b / 1000).toFixed(b < 10000 ? 1 : 0) + ' KB' : (b / 1e6).toFixed(1) + ' MB';
+const partiesOf = id => FX.parties.filter(p => p.store === id);
+const people = n => `${n} ${n === 1 ? 'person' : 'people'}`;
+const peopleGroups = ps => { const g = ps.filter(p => p.party_kind !== 'user').length; const pp = ps.length - g; const h = people(pp); return g ? `${h} · ${g} ${g === 1 ? 'group' : 'groups'}` : h; };
+const pname = p => p.username || p.team_name || p.party_id_hex.slice(0, 10) + '…';
+const initials = s => s.replace(/@.*/, '').split(/[.\-_ ]/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('');
+const HUES = ["#5e5ce6", "#ff9f0a", "#30b0c7", "#ff2d55", "#34c759", "#af52de", "#0a7cff", "#a2845e"];
+const hue = s => HUES[[...s].reduce((a, c) => a + c.charCodeAt(0), 0) % HUES.length];
+const avatar = (p, cls = 'av') => p.party_kind === 'named-team'
+  ? `<span class="${cls} team" style="background:var(--c-team)">${ic('people')}</span>`
+  : `<span class="${cls}" style="background:${hue(pname(p))}">${esc(initials(pname(p)))}</span>`;
+const stack = (sid, cls = '') => {
+  const ps = partiesOf(sid).slice(0, 2);
+  return `<span class="stack ${cls}">${ps.length ? ps.map(p => avatar(p)).join('') : `<span class="av" style="background:var(--c-none)">${ic('people')}</span>`}</span>`;
+};
+const KINDS = {
+  Password: { plural: 'Passwords', icon: 'key', blurb: 'Keep passwords, secrets, and tokens here.', color: 'var(--c-password)' },
+  Resource: { plural: 'Notes', icon: 'term', blurb: 'Keep keys, tokens, connection strings, and notes here.', color: 'var(--c-resource)' },
+  File: { plural: 'Files', icon: 'file', blurb: 'Keep documents and files in encrypted storage.', color: 'var(--c-file)' },
+  Link: { plural: 'Links', icon: 'link', blurb: 'Keep links and shortcuts to other paths in the store.', color: 'var(--c-link)' },
+};
+const KIND_LIST = Object.keys(KINDS);
+const PASSWORD_LINE = /^password:/m;
+const kindOf = it => it.kind === 'Secret' ? (PASSWORD_LINE.test(it.value || '') || it.path.startsWith('/logins/') ? 'Password' : 'Resource') : it.kind;
+const kic = (k, extra = '') => `<span class="kic ${k} ${extra}">${ic(KINDS[k].icon)}</span>`;
+function kico(it, size = '') {
+  if (kindOf(it) === 'Password' && it.path.startsWith('/logins/')) {
+    const d = nameOf(it.path);
+    return `<span class="kico ${size}" style="background:${hue(d)}">${esc(d[0].toUpperCase())}</span>`;
+  }
+  const k = kindOf(it);
+  return `<span class="kico ${k} ${size}">${ic(KINDS[k].icon)}</span>`;
+}
+const fmtRole = r => typeof r === 'string' ? r : (r.role === 'Member' ? `Member · visibility ${r.visibility ?? 0}` : r.role);
+
+/* =====================================================================
+   Render the catalogue.
+   ===================================================================== */
+
+// Tokens
+const tokenMeta = [
+  { name: '--ink', label: 'Primary ink' },
+  { name: '--ink-2', label: 'Secondary ink' },
+  { name: '--muted', label: 'Muted text' },
+  { name: '--faint', label: 'Faint text' },
+  { name: '--accent', label: 'Accent blue' },
+  { name: '--accent-ink', label: 'Accent ink' },
+  { name: '--danger', label: 'Danger red' },
+  { name: '--danger-ink', label: 'Danger ink' },
+  { name: '--ok-solid', label: 'Success green' },
+  { name: '--amber-dot', label: 'Warning amber' },
+  { name: '--c-password', label: 'Password tint' },
+  { name: '--c-resource', label: 'Resource tint' },
+  { name: '--c-file', label: 'File tint' },
+  { name: '--c-link', label: 'Link tint' },
+  { name: '--surface', label: 'Surface' },
+  { name: '--main-surface', label: 'Main surface' },
+  { name: '--line', label: 'Divider' },
+];
+document.getElementById('tokenSwatches').innerHTML = tokenMeta.map(t =>
+  `<div class="swatch"><span class="dot" style="background:var(${t.name})"></span><span class="chip">${t.name}</span><span style="font-size:11px;color:var(--muted);">${t.label}</span></div>`
+).join('');
+
+// Icons
+const iconOrder = ['key','term','file','link','people','person','vault','search','grid','list','chev','info','download','copy','path','trash','eye','eyeoff','bell','plus','arrow','x','gear','server','check','pencil','alert','minus','again','flag','plug','shield','out','mail','more'];
+document.getElementById('iconGrid').innerHTML = iconOrder.map(n =>
+  `<div class="icon-cell">${ic(n)}<span>${n}</span></div>`
+).join('');
+
+// Avatars & stacks
+const avatarInStack = p => `<span class="stack" style="margin-right:8px;">${avatar(p)}</span>`;
+document.getElementById('avatarDemo').innerHTML = [FX.parties[0], FX.parties[2], FX.parties[4]].map(avatarInStack).join('');
+document.getElementById('stackDemo').innerHTML = `
+  <span style="margin-right:18px;">${stack('team:eng')}</span>
+  <span style="margin-right:18px;">${stack('team:eng', 'lg')}</span>
+  ${stack('team:eng', 'xs')}
+`;
+
+// Kind icons & glyphs
+const kindOrder = ['Password','Resource','File','Link'];
+document.getElementById('kindIcons').innerHTML = kindOrder.map(k =>
+  `<span style="display:flex;align-items:center;gap:8px;min-width:120px;">${kic(k)} <span class="chip">${k}</span></span>`
+).join('');
+document.getElementById('kindGlyphs').innerHTML = FX.items.filter(i => kindOf(i) !== 'Folder').slice(0, 4).map(i =>
+  `<span style="display:flex;align-items:center;gap:8px;min-width:160px;">${kico(i, 'md')} <span class="chip">${kindOf(i)}</span><small style="color:var(--muted);font-size:11px;">${nameOf(i.path)}</small></span>`
+).join('');
+
+// Item rows
+const itemHeader = `<div class="hdr"><span></span><span>Name</span><span>Kind</span><span>Size</span><span>Version</span></div>`;
+const itemRow = (it, sel = false) => {
+  const k = kindOf(it);
+  const pre = prefixOf(it.path);
+  return `<div class="prow ${sel ? 'sel' : ''}">
+    <div class="ipath">${kic(k)} <span class="pchip">${pre || '/'}</span> <span>${esc(nameOf(it.path))}</span></div>
+    <span class="chip">${k}</span>
+    <span class="vern">${fmtSize(it.size)}</span>
+    <span class="vern">${it.version}</span>
+    <span class="acts">
+      <button title="Show">${ic('eye')}</button>
+      <button title="Copy">${ic('copy')}</button>
+      <button title="Remove" class="danger">${ic('trash')}</button>
+    </span>
+  </div>`;
+};
+document.getElementById('itemRows').innerHTML = itemHeader + FX.items.slice(0, 5).map((it, i) => itemRow(it, i === 1)).join('');
+
+// Roster rows
+const rosterHeader = `<div class="hdr"><span>Member</span><span>Role</span><span>Readable by</span><span></span></div>`;
+const rosterRow = (p, engItems) => {
+  const role = fmtRole(p.destination_role);
+  const readable = p.party_kind === 'named-team' ? '—' : engItems.filter(it => {
+    const r = fmtRole(it.read);
+    const pr = typeof p.destination_role === 'object' ? p.destination_role : { role: p.destination_role.split(' · ')[0] };
+    return pr.role === 'Owner' || (pr.role === 'Admin' && r !== 'Owner') || (pr.role === 'Member' && r.startsWith('Member') && (pr.visibility ?? 0) >= (r.includes('visibility') ? +r.match(/-?\d+/)[0] : 0));
+  }).length;
+  return `<div class="prow">
+    <div class="who2">${avatar(p, 'pav')}<div class="t"><b><span>${esc(pname(p))}</span>${p.label === 'you' ? ' <span class="chip you">you</span>' : ''}</b><small>${p.party_kind === 'named-team' ? 'Admitted group' : 'Local user'}</small></div></div>
+    <div class="rolecell"><span class="chip ${role === 'Owner' ? 'owner' : role === 'Admin' ? 'admin' : 'member'}">${role}</span>${p.note ? `<small>${esc(p.note)}</small>` : ''}</div>
+    <div class="reads ${p.party_kind === 'named-team' ? 'none' : ''}">${p.party_kind === 'named-team' ? '—' : `${readable} <small>items</small>`}</div>
+    <span class="acts"><button title="Edit role">${ic('pencil')}</button><button title="Remove" class="danger">${ic('trash')}</button></span>
+  </div>`;
+};
+const engItems = FX.items.filter(i => i.store === 'team:eng');
+document.getElementById('rosterRows').innerHTML = rosterHeader + partiesOf('team:eng').slice(0, 5).map(p => rosterRow(p, engItems)).join('');
+
+// Group rows
+const groupRow = s => {
+  const ps = partiesOf(s.id);
+  const ok = s.active && FX.servers.find(x => x.id === s.server)?.state === 'ok';
+  return `<div class="grow ${ok ? '' : 'off'}">
+    <span class="stack" style="width:44px;height:30px;">${ps.slice(0, 2).map(p => avatar(p, 'av')).join('')}</span>
+    <div class="t"><b><span>${esc(s.name)}</span>${s.team_kind === 'adhoc' ? ' <span class="chip">ad-hoc</span>' : ''}</b><small>${s.active ? 'Active · ' + peopleGroups(ps) : 'Inactive · setup incomplete'}</small></div>
+    <div class="who">${esc(FX.servers.find(x => x.id === s.server)?.name || s.server)}</div>
+    <div class="who">${ok ? '<span class="dot"></span> Available' : '<span class="dot warn"></span> Unavailable'}</div>
+    <span class="chev">›</span>
+  </div>`;
+};
+document.getElementById('groupRows').innerHTML = FX.stores.filter(s => s.kind === 'team').map(groupRow).join('');
+
+// Shell
+const sidebarNav = (name, icon, on = false, dot = false, badge = '') =>
+  `<button class="nav ${on ? 'on' : ''}">${ic(icon)}<span class="t">${name}</span>${dot ? '<span class="dot" title="Has alerts"></span>' : ''}${badge}</button>`;
+document.getElementById('shellSidebar').innerHTML = `
+  ${sidebarNav('All items', 'grid', true)}
+  <h6>Vaults</h6>
+  ${sidebarNav('Personal', 'vault')}
+  ${sidebarNav('Work (Acme)', 'vault', false, true)}
+  <h6>Groups</h6>
+  ${sidebarNav('Engineering', 'people', false, false, stack('team:eng'))}
+  ${sidebarNav('Household', 'people', false, false, stack('team:household'))}
+  <h6>Shares</h6>
+  ${sidebarNav('Homelab', 'people', false, true, stack('team:homelab'))}
+  <div class="foot" style="margin-top:auto;">
+    ${sidebarNav('Groups', 'people')}
+    ${sidebarNav('Servers', 'server')}
+    ${sidebarNav('Alerts', 'bell', false, false, '<span class="badge amber">1</span>')}
+    ${sidebarNav('Settings', 'gear')}
+  </div>
+`;
+document.getElementById('shellHeader').innerHTML = `
+  <div class="loc">
+    <h1>All items</h1>
+  </div>
+  <label class="search">
+    ${ic('search')}
+    <input type="text" placeholder="Search all items" />
+    <kbd>⌘K</kbd>
+  </label>
+`;
+document.getElementById('shellToolbar').innerHTML = `
+  <button class="btn primary"><span class="new-plus">${ic('plus')}</span> New</button>
+  <span class="seg txt" role="group" aria-label="Filter by kind">
+    <button class="on" aria-pressed="true">All</button>
+    <button aria-pressed="false">Passwords</button>
+    <button aria-pressed="false">Notes</button>
+    <button aria-pressed="false">Files</button>
+    <button aria-pressed="false">Links</button>
+  </span>
+  <span class="spacer"></span>
+  <button class="btn">Sort</button>
+  <span class="seg" role="group" aria-label="View mode">
+    <button class="on" aria-pressed="true">${ic('list')}</button>
+    <button aria-pressed="false">${ic('grid')}</button>
+  </span>
+  <button class="btn icon on" aria-label="Details" aria-pressed="true">${ic('info')}</button>
+`;
+document.getElementById('shellBody').innerHTML = `<div class="rt items">${itemHeader + FX.items.slice(0, 5).map((it, i) => itemRow(it, i === 1)).join('')}</div>`;
+
+// Full vault screen with sidebar + list + details
+const selected = FX.items[1]; // /logins/fastmail.com
+const k = kindOf(selected);
+const readable = selected.store === 'team:eng' ? peopleGroups(partiesOf(selected.store).filter(p => {
+  const role = typeof p.destination_role === 'object' ? p.destination_role : { role: p.destination_role.split(' · ')[0] };
+  const rr = fmtRole(selected.read).split(' · ')[0];
+  return role.role === 'Owner' || (role.role === 'Admin' && rr !== 'Owner') || (role.role === 'Member' && rr === 'Member' && (role.visibility ?? 0) >= 0);
+})) : 'Only you';
+const detailsStore = FX.stores.find(s => s.id === selected.store);
+
+document.getElementById('vaultScreen').innerHTML = `
+  <header class="titlebar">
+    <span class="lights" aria-hidden="true"><span class="light r"></span><span class="light y"></span><span class="light g"></span></span>
+    <span class="brand">FOKS</span>
+    <span class="spacer"></span>
+    <span class="agent"><i></i> Agent ready</span>
+    <button class="btn icon global-refresh" aria-label="Refresh" title="Refresh vaults and groups" style="transform:translateY(1px)">${ic('again')}</button>
+  </header>
+  <div class="app with-details">
+    <nav class="side" aria-label="Places" style="width:220px;flex:0 0 220px;">
+      ${sidebarNav('All items', 'grid')}
+      <h6>Vaults</h6>
+      ${sidebarNav('Personal', 'vault', true)}
+      <h6>Groups</h6>
+      ${sidebarNav('Engineering', 'people', false, false, stack('team:eng'))}
+      ${sidebarNav('Household', 'people')}
+      <div class="foot" style="margin-top:auto;">
+        ${sidebarNav('Groups', 'people')}
+        ${sidebarNav('Servers', 'server')}
+        ${sidebarNav('Alerts', 'bell')}
+        ${sidebarNav('Settings', 'gear')}
+      </div>
+    </nav>
+    <main class="main" style="min-width:0;">
+      <div class="path">
+        <div class="loc text-only"><h1>Personal</h1><small>foks.example.net</small></div>
+        <label class="search">${ic('search')}<input type="text" placeholder="Search Personal" /><kbd>⌘K</kbd></label>
+      </div>
+      <div class="toolbar">
+        <button class="btn primary"><span class="new-plus">${ic('plus')}</span> New</button>
+        <span class="seg txt" role="group"><button class="on">All</button><button>Passwords</button><button>Notes</button><button>Files</button><button>Links</button></span>
+        <span class="spacer"></span>
+        <button class="btn">Sort</button>
+        <span class="seg" role="group"><button class="on">${ic('list')}</button><button>${ic('grid')}</button></span>
+        <button class="btn icon on" aria-pressed="true">${ic('info')}</button>
+      </div>
+      <div class="body">
+        <div class="rt items">${itemHeader + FX.items.filter(i => i.store === 'acct:personal').map((it, i) => itemRow(it, it.path === selected.path)).join('')}</div>
+      </div>
+    </main>
+    <aside class="details" style="width:300px;flex:0 0 300px;">
+      <div class="dh">
+        ${kic(k)}
+        <div class="t"><h2>${esc(nameOf(selected.path))}</h2><small>${detailsStore.name} · ${fmtSize(selected.size)}</small></div>
+        <button class="x" aria-label="Close details">${ic('x')}</button>
+      </div>
+      <div class="scroll">
+        <div class="prev">
+          <div class="irow"><span class="k">Path</span><span class="v mono">${esc(selected.path)}</span></div>
+          <div class="irow rev"><span class="k">Value</span><span class="v mask">${esc(selected.value).replace(/\n/g, '<br>')}</span><span class="a"><button>${ic('eye')} Show</button></span></div>
+          <div class="irow"><span class="k">Version</span><span class="v">${selected.version}</span></div>
+          <div class="irow"><span class="k">Read role</span><span class="v">${esc(fmtRole(selected.read))}</span></div>
+          <div class="irow"><span class="k">Write role</span><span class="v">${esc(fmtRole(selected.write))}</span></div>
+        </div>
+        <div class="sec">Readable by</div>
+        <div class="party"><div class="t">${readable}</div></div>
+        <div class="dfoot"><button class="btn">${ic('copy')} Copy</button><button class="btn">${ic('pencil')} Edit</button><button class="btn danger">${ic('trash')} Remove</button></div>
+      </div>
+    </aside>
+  </div>
+`;
+</script>
+</body>
+</html>

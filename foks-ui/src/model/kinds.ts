@@ -16,34 +16,47 @@
 import type { Item, ItemKind, NodeKind, NodeType } from './types';
 
 export interface KindMeta {
+  /** The singular a person reads — Resource is shown as Note. */
+  label: string;
   plural: string;
   /** A `FoksIconName`; kept as a plain string so the model imports no view. */
   icon: string;
   blurb: string;
 }
 
-export const KINDS: Readonly<Record<'Password' | 'Resource' | 'File' | 'Link', KindMeta>> = {
+export const KINDS: Readonly<
+  Record<'Password' | 'Resource' | 'File' | 'Link', KindMeta>
+> = {
   Password: {
+    label: 'Password',
     plural: 'Passwords',
     icon: 'key',
-    blurb: 'A login: user, password and website — read inline.',
+    blurb: 'Keep passwords, secrets, and tokens here.',
   },
   Resource: {
-    plural: 'Resources',
+    label: 'Note',
+    plural: 'Notes',
     icon: 'term',
-    blurb: 'A token, key, connection string or note — read inline.',
+    blurb: 'Keep keys, tokens, connection strings, and notes here.',
   },
   File: {
+    label: 'File',
     plural: 'Files',
     icon: 'file',
-    blurb: 'A document or bundle — read in version-bound chunks.',
+    blurb: 'Keep documents and files in encrypted storage.',
   },
   Link: {
+    label: 'Link',
     plural: 'Links',
     icon: 'link',
-    blurb: 'A pointer to another path in the same store.',
+    blurb: 'Keep links and shortcuts to other paths in the store.',
   },
 };
+
+/** The word a person sees for a kind. Resource is Note. */
+export function kindLabel(kind: keyof typeof KINDS): string {
+  return KINDS[kind].label;
+}
 
 /** The filter order the kind segmented control uses. */
 export const KIND_LIST = Object.keys(KINDS) as (keyof typeof KINDS)[];
@@ -53,7 +66,8 @@ const PASSWORD_LINE = /^password:/m;
 /** The kind a person reads this item as. */
 export function kindOf(item: Pick<Item, 'kind' | 'path' | 'value'>): ItemKind {
   if (item.kind !== 'Secret') return item.kind;
-  return PASSWORD_LINE.test(item.value ?? '') || item.path.startsWith('/logins/')
+  return PASSWORD_LINE.test(item.value ?? '') ||
+    item.path.startsWith('/logins/')
     ? 'Password'
     : 'Resource';
 }
@@ -94,5 +108,8 @@ export function nameOf(path: string): string {
 
 /** The folder chip: the path without its leading slash and last segment. */
 export function prefixOf(path: string): string {
-  return path.slice(1, path.lastIndexOf('/'));
+  // A path with no `/` has no prefix. `lastIndexOf` gives -1 for it, and
+  // `slice(1, -1)` then chopped the first and last character off the name.
+  const cut = path.lastIndexOf('/');
+  return cut <= 0 ? '' : path.slice(1, cut);
 }

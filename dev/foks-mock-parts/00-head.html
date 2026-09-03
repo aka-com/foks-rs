@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FOKS Architectural Mockup</title>
+<!--
+  FOKS Architectural Mockup — every screen the FOKS desktop app ships, transcribed from
+  foks-ui/src (app-root.tsx, shell/*, screens/*, components/*) and linking
+  the app's own stylesheets (ui/kit/tokens.css then foks-ui/src/styles/shell.css,
+  the design sheet that also draws the fake macOS window), so everything except
+  the mock scaffolding is the app as it is. The data is foks-ui/src/fixture.ts,
+  the same world the mocked bridge answers from.
+
+  Serve the repo root over http (qmux open rejects paths outside the pane
+  cwd):  python3 -m http.server -d . 8133
+  then open http://localhost:8133/dev/app-foks.html
+
+  Controls, left: walkthroughs — 29 of them, under four headings, one at a
+  time. The chosen flow's steps are a row of numbered circles (the current one
+  filled); the step's own sentence sits beside ‹ Previous / Next ›, which the
+  ← / → keys also drive. Below that, a nested page picker: every group open,
+  the current page highlighted, with the id a deep link needs. Controls,
+  right: app-wide state above view-specific state; the groups the current page
+  does not read are dimmed, disabled and foldable away behind the toggle in
+  the panel's title. Under it all, the amber band is the mock talking about
+  itself — a state the running app cannot be driven into, say — and the blue
+  line is the hint the last action left.
+
+  Deep links: ?page=<id> plus any state key (app-wide bare, view keys bare
+  too — the core knows which is which), e.g.
+
+    ?page=all&acme=lapsed                     the lapsed-check-in world
+    ?page=alerts&acme=unprobed                a server nobody has checked
+    ?page=store-personal&sheet=new-password   a write sheet, open
+    ?page=eng-people&sheet=add                the Add someone sheet
+    ?page=eng-people&failure=roster           a roster read that failed
+    ?page=set-devices&account=acct:personal   Settings, Recovery devices
+    ?page=srv-server&profile=acme&status=rollback   a server whose history moved
+    ?page=srv-server&profile=lab&applied=added,yes
+    ?page=fr-protect&path=own&written=1       first run, phrase committed
+    ?flow=first-run-own&step=3                a walkthrough, mid-way
+    ?flow=lease-lapsed&step=4                 ditto, and no ?page needed
+
+  Every control writes the address bar, so a state reloads into itself; a
+  ?flow= link with no ?page= lands on that step's own page.
+
+  This file is assembled from dev/foks-mock-parts/* by
+  dev/foks-mock-tools/assemble.mjs; edit the parts, not this file.
+-->
+<link rel="stylesheet" href="../ui/kit/tokens.css" />
+<link rel="stylesheet" href="../foks-ui/src/styles/shell.css" />
+<!-- app.css is loaded too. Its window rules are scoped to `#root`, which this
+     page has none of, so the fake `.window` frame survives; what it brings is
+     everything shell.css does not draw — the group hero, the roster, tabs, the
+     setup checklist, sheets, `.menu-portal`, `.card-select-*`, `.app-lock*`
+     and `.app-loading`. Nothing in the parts reproduces those as inline styles.
+     Its two unscoped rules (`html,body{height:100%}` and a `body` reset) do
+     reach this page, which is what the `height:auto !important` and the body
+     block below undo — they are later in the cascade, so they win. -->
+<link rel="stylesheet" href="../foks-ui/src/styles/app.css" />
+<style>
+  /* ------------------------------------------------- mockup scaffolding */
+  :root{ --mock-page:#eceef2; --mock-note:#66666f; --mock-panel:#ffffff; }
+  [hidden]{ display:none !important; }
+  html,body{ height:auto !important; min-height:0; overflow:auto; overscroll-behavior:auto !important; }
+  body{
+    background:var(--mock-page); min-height:100vh;
+    display:flex; flex-direction:column; align-items:center; gap:14px;
+    padding:28px 20px 60px; place-items:unset;
+  }
+  .mock-head{ width:min(1280px,100%); }
+  .mock-head h1{ font-size:1.0625rem; letter-spacing:-.01em; font-weight:700; }
+
+  /* The control deck: flows + pages on the left, state on the right. */
+  .mock-controls{
+    width:min(1280px,100%);
+    display:grid; grid-template-columns:minmax(0,5fr) minmax(0,7fr); gap:14px;
+    align-items:stretch;
+  }
+  .mc-col{ display:flex; flex-direction:column; gap:10px; min-width:0; }
+  .mc-panel{
+    border:1px dashed var(--line-mid); border-radius:10px; padding:10px 12px;
+    background:color-mix(in srgb, var(--mock-panel) 55%, transparent);
+    display:flex; flex-direction:column; gap:8px; min-width:0;
+  }
+  /* `grow` used to stretch the panel to the column's height while its
+     scroller stayed at 19rem, which left a half-clipped row above a band of
+     empty panel. The panel now wraps its scroller snugly and the scroller
+     alone is capped. */
+  .mc-panel.grow{ min-height:0; }
+  .mc-title{ font-size:.71875rem; font-weight:700; color:var(--mock-note); text-transform:uppercase; letter-spacing:.04em; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .mc-title .mc-sub{ font-weight:500; text-transform:none; letter-spacing:0; margin-left:auto; text-align:right; }
+  .mc-group{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+  .mc-group.dim{ opacity:.38; }
+  .mc-group.dim .mock-chip{ cursor:not-allowed; }
+  .mc-group.dim .mock-chip:hover{ background:var(--btn-bg); }
+  .mc-group.dim .mock-chip.on:hover{ background:var(--accent); }
+  .mc-label{ font-size:.71875rem; font-weight:650; color:var(--mock-note); min-width:7.5rem; }
+  .mc-group.dim .mc-label::after{ content:' · n/a'; font-weight:500; }
+  .mock-chip{
+    padding:3px 9px; border:1px solid var(--line-mid); border-radius:999px;
+    background:var(--btn-bg); color:var(--ink); font:inherit; font-size:.71875rem;
+    cursor:pointer; line-height:1.35; white-space:nowrap;
+  }
+  .mock-chip:hover{ background:var(--hover); }
+  .mock-chip.on{ background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  .mock-chip.on:hover{ background:var(--accent); }
+  .mock-chip.sub{ border-style:dashed; }
+  .mc-note{ font-size:.71875rem; color:var(--mock-note); line-height:1.45; }
+  .mc-note code{ font-family:ui-monospace,Menlo,monospace; font-size:.6875rem; }
+  .mc-divider{ border:0; border-top:1px dashed var(--line-mid); margin:2px 0; }
+  .mc-scroll{ overflow:auto; max-height:19rem; display:flex; flex-direction:column; gap:8px; padding-right:2px; }
+  /* `over` (set by the core while a scroller has more below the fold) fades the
+     last visible row, so a half-cut chip row reads as "scroll me", not as a
+     clipped panel. */
+  .mc-scroll.over{ -webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 20px),transparent); mask-image:linear-gradient(to bottom,#000 calc(100% - 20px),transparent); }
+  /* The view panel holds the page's own knobs and — behind the toggle in its
+     title — every other page's groups, so it gets more room than the six
+     app-wide ones need. Deep enough that a page's own groups never clip. */
+  .mc-panel.grow > .mc-scroll{ max-height:34rem; }
+  /* A value in the state that no chip in its group matches (a deep link with a
+     typo, a draft field, a flow step's free text): the deck shows it rather
+     than lighting nothing. */
+  .mock-chip.custom{ font-family:ui-monospace,Menlo,monospace; font-size:.6875rem; }
+  /* The title-bar toggle that folds the other pages' groups away. */
+  .mc-toggle{
+    border:1px solid var(--line-mid); border-radius:999px; background:var(--btn-bg);
+    color:var(--mock-note); font:inherit; font-size:.6875rem; font-weight:600;
+    text-transform:none; letter-spacing:0; padding:2px 8px; cursor:pointer; white-space:nowrap;
+  }
+  .mc-toggle:hover{ background:var(--hover); }
+
+  /* Flows: the walkthroughs under four headings; the chosen one shows its
+     steps below the list. */
+  .mc-flows{ display:flex; flex-direction:column; gap:6px; }
+  .mc-flowgroup{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+  /* The steps are numbered circles in a row, nothing else: a dozen titles and
+     page paths stacked vertically pushed the app frame off the screen, and the
+     step that matters is the one whose sentence is already printed beside
+     ‹ Previous / Next ›. Each circle keeps its label as `title`/`aria-label`,
+     so the text is a hover and a screen reader away, never a row of its own. */
+  .mc-steps{ display:flex; flex-flow:row wrap; align-items:center; gap:6px; }
+  .mc-steps:empty{ display:none; }
+  .mc-step{
+    width:1.6rem; height:1.6rem; padding:0; border-radius:50%;
+    display:grid; place-items:center; border:1px solid var(--line-mid);
+    background:var(--btn-bg); color:var(--muted);
+    font:inherit; font-size:.6875rem; font-weight:700; line-height:1; cursor:pointer;
+  }
+  .mc-step:hover{ background:var(--hover); }
+  .mc-step.on{ background:var(--accent); border-color:var(--accent); color:#fff; }
+  .mc-step.on:hover{ background:var(--accent); }
+  .mc-stepnav{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .mc-keys{ font-size:.6875rem; color:var(--mock-note); white-space:nowrap; }
+  .mc-keys kbd{ font-family:inherit; border:1px solid var(--line-mid); border-radius:4px; padding:0 4px; background:var(--btn-bg); }
+
+  /* The page picker: a button showing the path, and a nested tree popover. */
+  .mc-picker{ position:relative; }
+  .mc-picker-btn{
+    width:100%; display:flex; align-items:center; gap:8px; padding:7px 10px;
+    border:1px solid var(--line-mid); border-radius:8px; background:#fff; color:var(--ink);
+    font:inherit; font-size:.8125rem; cursor:pointer; text-align:left;
+  }
+  .mc-picker-btn .crumb{ color:var(--muted); }
+  .mc-picker-btn .crumb::after{ content:' › '; }
+  .mc-picker-btn .cur{ font-weight:650; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mc-picker-btn .caret{ color:var(--muted); font-size:.7rem; }
+  .mc-tree{
+    position:absolute; left:0; right:0; top:calc(100% + 6px); z-index:50;
+    max-height:24rem; overflow:auto; padding:6px;
+    background:#fff; border:1px solid var(--line-mid); border-radius:10px;
+    box-shadow:0 12px 34px rgba(0,0,0,.18);
+  }
+  .mc-tree details{ margin:0; }
+  .mc-tree summary{
+    list-style:none; cursor:pointer; padding:5px 8px; border-radius:6px; font-size:.75rem;
+    font-weight:650; color:var(--ink); display:flex; align-items:center; gap:6px;
+  }
+  .mc-tree summary::-webkit-details-marker{ display:none; }
+  .mc-tree summary::before{ content:'▸'; color:var(--muted); font-size:.7rem; width:.8rem; }
+  .mc-tree details[open] > summary::before{ content:'▾'; }
+  .mc-tree summary:hover{ background:var(--hover); }
+  .mc-tree .lvl{ padding-left:14px; }
+  .mc-tree .leaf{
+    display:flex; align-items:center; gap:6px; width:100%; padding:5px 8px 5px 22px; border:0;
+    border-radius:6px; background:transparent; text-align:left; font:inherit; font-size:.75rem;
+    color:var(--ink); cursor:pointer;
+  }
+  .mc-tree .leaf:hover{ background:var(--hover); }
+  .mc-tree .leaf.on{ background:var(--accent); color:#fff; font-weight:600; }
+  .mc-tree .leaf .id{ margin-left:auto; font-size:.65rem; color:var(--muted); font-family:ui-monospace,Menlo,monospace; }
+  .mc-tree .leaf.on .id{ color:rgba(255,255,255,.75); }
+  .mc-pages-quick{ display:flex; flex-wrap:wrap; gap:6px; }
+  /* The page id inside a sibling chip: what a deep link needs, and what keeps
+     the chip's text distinct from the same words on a button in the frame. */
+  .mock-chip .qid{ margin-left:5px; font-family:ui-monospace,Menlo,monospace; font-size:.625rem; opacity:.6; }
+  .mock-chip.on .qid{ opacity:.75; }
+
+  .mock-hint{
+    width:min(1280px,100%); min-height:1.2em;
+    font-size:.75rem; color:var(--accent-ink); transition:opacity .3s ease;
+  }
+
+  /* The frame: the app window at the design's 1280×860. shell.css draws the
+     fake macOS window (.window); the frame is the containing block for the
+     app's fixed-position overlays (sheets, menus, toasts) — a transform does
+     that, which is why it is always on. */
+  .frame{
+    width:min(1280px,100%); height:860px; position:relative; transform:translateZ(0);
+    border-radius:12px; overflow:hidden; box-shadow:var(--shadow-sheet);
+    background:var(--main-surface);
+  }
+  .frame > .window{ width:100%; height:100%; max-width:none; max-height:none; border:0; border-radius:0; box-shadow:none; margin:0; }
+  /* app.css's titlebar nudges are scoped to #root > .window; repeat them here. */
+  .frame > .window > .titlebar .brand{ transform:translateY(1px); }
+  .frame > .window > .titlebar > .agent{ margin-right:.25rem; transform:translateY(1px); }
+  .frame > .window > .titlebar > .global-refresh{ transform:translateY(1px); }
+  .frame #overlays{ position:absolute; inset:0; pointer-events:none; z-index:40; }
+  .frame #overlays > *{ pointer-events:auto; }
+  .mock-band{
+    width:min(1280px,100%); padding:8px 12px; border-radius:8px; font-size:.75rem; line-height:1.5;
+    background:color-mix(in srgb,#f5a400 12%,#fff); border:1px solid color-mix(in srgb,#d98b00 40%,var(--line));
+  }
+</style>
+</head>
+<body>
+<div class="mock-head">
+  <h1>FOKS Architectural Mockup</h1>
+</div>
+
+<div class="mock-controls" aria-label="Mockup controls">
+  <div class="mc-col">
+    <div class="mc-panel" id="mcFlows">
+      <div class="mc-title">Walkthroughs <span class="mc-sub" id="mcFlowSub"></span></div>
+      <div class="mc-flows" id="mcFlowList"></div>
+      <div class="mc-steps" id="mcSteps"></div>
+      <div class="mc-stepnav" id="mcStepNav" hidden>
+        <button class="mock-chip" data-act="flow-prev">‹ Previous</button>
+        <button class="mock-chip" data-act="flow-next">Next ›</button>
+        <span class="mc-keys" title="Arrow keys step the walkthrough from anywhere outside a text field."><kbd>←</kbd> <kbd>→</kbd></span>
+        <span class="mc-note" id="mcStepNote"></span>
+      </div>
+    </div>
+    <div class="mc-panel grow" id="mcPages">
+      <div class="mc-title">Page <span class="mc-sub" id="mcPageSub"></span></div>
+      <div class="mc-picker" id="mcPicker">
+        <button class="mc-picker-btn" id="mcPickerBtn" aria-haspopup="tree" aria-expanded="false"></button>
+        <div class="mc-tree" id="mcTree" hidden></div>
+      </div>
+      <div class="mc-pages-quick" id="mcPagesQuick"></div>
+      <div class="mc-note" id="mcPageNote"></div>
+    </div>
+  </div>
+  <div class="mc-col">
+    <div class="mc-panel" id="mcApp">
+      <div class="mc-title">App-wide state</div>
+      <div class="mc-scroll" id="mcAppGroups"></div>
+    </div>
+    <div class="mc-panel grow" id="mcView">
+      <div class="mc-title">View state
+        <button class="mc-toggle" id="mcDimToggle" aria-expanded="true" hidden></button>
+      </div>
+      <div class="mc-scroll" id="mcViewGroups"></div>
+    </div>
+  </div>
+</div>
+<div class="mock-hint" id="hint"></div>
+<div class="mock-band" id="mockBand" hidden></div>
+
+<div class="frame" id="frame">
+  <div class="window web-mock-window" id="win"></div>
+  <div id="overlays"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';

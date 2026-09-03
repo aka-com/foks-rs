@@ -64,10 +64,14 @@ export function visibilityOf(role: Role): number {
 export function admits(held: RoleWire, need: RoleWire): boolean {
   const h = parseRole(held);
   const n = parseRole(need);
+  // A role this client cannot parse is refused, whichever side it is on. The
+  // rank comparison must not run first: an unparseable `need` ranks 0, so a
+  // Member would out-rank it and this would answer "yes, you may read that"
+  // about an item whose read role it does not understand.
+  if (!h || !n) return false;
   const hr = roleRank(h);
   const nr = roleRank(n);
   if (hr !== nr) return hr > nr;
-  if (!h || !n) return false;
   return h.kind === 'member' ? visibilityOf(h) >= visibilityOf(n) : true;
 }
 

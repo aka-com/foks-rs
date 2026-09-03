@@ -406,3 +406,44 @@ test('invited and own completion transitions remain distinct and resumable', () 
     },
   );
 });
+
+test('setting a passphrase after skipping leaves a checkpoint that still decodes', () => {
+  // `skip-protect` then `passphrase-set` used to hold both `protectSkipped`
+  // and `passphraseSet`, a combination the decoder rejects — so the next
+  // launch threw the entire first run away with no message.
+  const atProtect = (): ReturnType<typeof initialFirstRun> => {
+    let state = initialFirstRun('own', 'boot');
+    state = transitionFirstRun(state, { type: 'initialize' });
+    state = transitionFirstRun(state, { type: 'choose', path: 'own' });
+    state = transitionFirstRun(state, {
+      type: 'profile-checked',
+      address: 'foks.example',
+      profile: checked,
+    });
+    return transitionFirstRun(state, {
+      type: 'account-complete',
+      alias: 'personal',
+      username: 'sol',
+      deviceName: 'Sol Mac',
+    });
+  };
+
+  let state = transitionFirstRun(atProtect(), { type: 'skip-protect' });
+  assert.equal(state.protectSkipped, true);
+  assert.ok(decodeFirstRunCheckpoint(encodeFirstRunCheckpoint(state)));
+
+  state = transitionFirstRun(state, { type: 'go', state: 'protect' });
+  state = transitionFirstRun(state, { type: 'passphrase-set' });
+  assert.equal(state.passphraseSet, true);
+  assert.equal(state.protectSkipped, false);
+  assert.ok(
+    decodeFirstRunCheckpoint(encodeFirstRunCheckpoint(state)),
+    'a passphrase set after a skip must still round-trip',
+  );
+
+  // Committing a backup already cleared the flag; the two transitions agree now.
+  let viaBackup = transitionFirstRun(atProtect(), { type: 'skip-protect' });
+  viaBackup = transitionFirstRun(viaBackup, { type: 'backup-committed' });
+  assert.equal(viaBackup.protectSkipped, false);
+  assert.ok(decodeFirstRunCheckpoint(encodeFirstRunCheckpoint(viaBackup)));
+});

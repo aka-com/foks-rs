@@ -85,6 +85,7 @@ rust_library(
         "//crates:foks_compat_artifact",
         "//crates:foks_crypto",
         "//crates:foks_desktop",
+        "//crates:foks_protocol_metadata",
         "@crates//:fs2",
         "@crates//:getrandom",
         "@crates//:libc",

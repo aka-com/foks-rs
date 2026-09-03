@@ -1,33 +1,60 @@
 /**
  * The sidebar, as `shell.js`'s `sidebar()` draws it.
  *
- * All items · VAULTS · GROUPS, then the footer. Three readings are
+ * All items · VAULTS · GROUPS · SHARES, then the footer. Three readings are
  * computed, never typed: an account names its server, an active group carries
  * its roster count, and an unavailable or inactive store says "Connection
- * error". The Issues badge is absent at zero (`Badge`), not a "0".
+ * error". The Alerts badge is absent at zero (`Badge`), not a "0".
  *
- * Rows are buttons in fixture order, which is the order the mock lists them:
- * `sidebar()` walks `FX.stores`; `storeDisplayOrder` is for the item page's
- * sections, not this list.
+ * Rows are buttons in fixture order within each section. Account vaults come
+ * first, followed by named groups and then ad-hoc shares.
+ *
+ * Control-Tab / Control-Shift-Tab walk All items, then each vault, named group
+ * and share — the same order those rows are drawn. The footer (Alerts,
+ * Settings, Set up new vault) is not in that walk. Servers is a Settings
+ * section, not a place of its own.
  */
 
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { Badge, Icon, SectionLabel, Stack } from '../components';
 import {
   partiesOf,
   storeDescription,
   storeDescriptionState,
+  storeNavigationOrder,
 } from '../model';
 import type { Store, World } from '../model';
+import { sameLocation } from '../location';
 import type { Location } from '../location';
 
-interface NavRowProps {
+/** Places Control-Tab walks, in sidebar order. The footer is not included. */
+export function sidebarCycleLocations(world: World): Location[] {
+  return [
+    { kind: 'all' },
+    ...storeNavigationOrder(world).map((store) => ({
+      kind: 'store' as const,
+      ref: store.id,
+    })),
+  ];
+}
+
+export function nextSidebarCycleLocation(
+  world: World,
+  current: Location,
+  delta: 1 | -1,
+): Location | null {
+  const places = sidebarCycleLocations(world);
+  if (!places.length) return null;
+  const index = places.findIndex((place) => sameLocation(place, current));
+  if (index < 0) return delta > 0 ? places[0] : places[places.length - 1];
+  return places[(index + delta + places.length) % places.length];
+}
+
+export interface NavRowProps {
   active: boolean;
-  glyph: ReactNode;
+  glyph?: ReactNode;
   name: string;
   caption?: string;
-  /** The amber issue dot. */
-  dot?: boolean;
   /** Dimmed: this row is not reachable in the world as it stands. */
   dimmed?: boolean;
   title?: string;
@@ -35,12 +62,11 @@ interface NavRowProps {
   onSelect: () => void;
 }
 
-function NavRow({
+export function NavRow({
   active,
   glyph,
   name,
   caption,
-  dot = false,
   dimmed = false,
   title,
   tail,
@@ -62,7 +88,6 @@ function NavRow({
         {name}
         {caption ? <small>{caption}</small> : null}
       </span>
-      {dot ? <span className="dot" title="Has issues" /> : null}
       {tail}
     </button>
   );
@@ -72,33 +97,83 @@ export interface SidebarProps {
   world: World;
   location: Location;
   /** How many notifications apply to the world as it stands. */
-  issues: number;
+  alerts: number;
   onNavigate: (location: Location) => void;
+  /**
+   * Rows between the store lists and the footer. First run puts its progress
+   * there; the shell proper has nothing to say at that point.
+   */
+  status?: ReactNode;
+  /**
+   * First run is already in the flow, so its last row re-enters rather than
+   * navigating to the flow's first step.
+   */
+  onReenter?: () => void;
 }
 
 export function Sidebar({
   world,
   location,
-  issues,
+  alerts,
   onNavigate,
+  status,
+  onReenter,
 }: SidebarProps): ReactNode {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (
+        event.key !== 'Tab' ||
+        !event.ctrlKey ||
+        event.metaKey ||
+        event.altKey
+      )
+        return;
+      const next = nextSidebarCycleLocation(
+        world,
+        location,
+        event.shiftKey ? -1 : 1,
+      );
+      if (!next) return;
+      event.preventDefault();
+      onNavigate(next);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [location, onNavigate, world]);
+
+  const stores = storeNavigationOrder(world);
+  const vaults = stores.filter((store) => store.kind === 'account');
+  const groups = stores.filter(
+    (store) => store.kind === 'team' && store.team_kind === 'named',
+  );
+  const shares = stores.filter(
+    (store) => store.kind === 'team' && store.team_kind === 'adhoc',
+  );
+
   const storeRow = (store: Store): ReactNode => {
     const connectionError = storeDescriptionState(world, store) !== 'normal';
     return (
       <NavRow
         key={store.id}
-        active={location.kind === 'store' && location.ref === store.id}
+        active={
+          (location.kind === 'store' || location.kind === 'group-settings') &&
+          location.ref === store.id
+        }
         glyph={
           store.kind === 'account' ? (
             <Icon name="vault" />
           ) : (
-            <Stack parties={partiesOf(world, store.id)} />
+            <Icon name="people" />
           )
         }
         name={store.name}
         caption={storeDescription(world, store)}
-        dot={connectionError}
         dimmed={connectionError}
+        tail={
+          store.kind === 'team' ? (
+            <Stack parties={partiesOf(world, store.id)} />
+          ) : undefined
+        }
         onSelect={() => {
           onNavigate({ kind: 'store', ref: store.id });
         }}
@@ -117,33 +192,32 @@ export function Sidebar({
         }}
       />
       <SectionLabel as="side">Vaults</SectionLabel>
-      {world.stores.filter((store) => store.kind === 'account').map(storeRow)}
+      {vaults.length ? (
+        vaults.map(storeRow)
+      ) : (
+        <p className="fn">No vaults yet</p>
+      )}
       <SectionLabel as="side">Groups</SectionLabel>
-      {world.stores.filter((store) => store.kind === 'team').map(storeRow)}
+      {groups.length ? (
+        groups.map(storeRow)
+      ) : (
+        <p className="fn">No groups yet</p>
+      )}
+      {shares.length ? (
+        <>
+          <SectionLabel as="side">Shares</SectionLabel>
+          {shares.map(storeRow)}
+        </>
+      ) : null}
+      {status}
       <div className="foot">
         <NavRow
-          active={location.kind === 'join' || location.kind === 'groups' || location.kind === 'group-admin'}
-          glyph={<Icon name="plus" />}
-          name="Join or create a group"
-          onSelect={() => {
-            onNavigate({ kind: 'groups' });
-          }}
-        />
-        <NavRow
-          active={location.kind === 'servers'}
-          glyph={<Icon name="server" />}
-          name="Servers & devices"
-          onSelect={() => {
-            onNavigate({ kind: 'servers' });
-          }}
-        />
-        <NavRow
-          active={location.kind === 'issues'}
+          active={location.kind === 'alerts'}
           glyph={<Icon name="bell" />}
-          name="Issues"
-          tail={<Badge count={issues} label="Open issues" />}
+          name="Alerts"
+          tail={<Badge count={alerts} label="Open alerts" />}
           onSelect={() => {
-            onNavigate({ kind: 'issues' });
+            onNavigate({ kind: 'alerts' });
           }}
         />
         <NavRow
@@ -154,14 +228,18 @@ export function Sidebar({
             onNavigate({ kind: 'settings' });
           }}
         />
+        <div className="foot-separator" />
         <NavRow
-          active={location.kind === 'first-run'}
+          active={location.kind === 'first-run' && !onReenter}
           glyph={<Icon name="again" />}
-          name="Set up again"
-          title="Walk the first run again — nothing already set up is undone"
-          onSelect={() => {
-            onNavigate({ kind: 'first-run', step: 'who' });
-          }}
+          name="Set up new vault"
+          title="Set up a new vault without changing existing vaults"
+          onSelect={
+            onReenter ??
+            (() => {
+              onNavigate({ kind: 'first-run', step: 'who' });
+            })
+          }
         />
       </div>
     </nav>

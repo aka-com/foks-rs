@@ -4,6 +4,25 @@
     "agentSocket": "/private/foks/agent.sock",
     "managedProfile": "local"
   },
+  "goProfileDiscovery": {
+    "installed": true,
+    "candidates": [
+      {
+        "candidateId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "username": "raymond",
+        "serverHint": "foks.app",
+        "hostId": "02bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "userId": "01cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "deviceId": "04dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "role": "owner",
+        "storageKind": "macos-keychain",
+        "hidden": false,
+        "provisional": false,
+        "pairable": true,
+        "copyable": true
+      }
+    ]
+  },
   "commandError": {
     "code": "version-mismatch",
     "message": "changed",

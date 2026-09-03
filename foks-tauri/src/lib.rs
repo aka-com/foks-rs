@@ -17,6 +17,7 @@ mod commands;
 mod dragdrop;
 mod navigation;
 mod startup;
+mod window_state;
 
 use std::sync::Arc;
 
@@ -94,7 +95,9 @@ pub fn run() {
             commands::agent_status,
             commands::retry_agent_connection,
             commands::initialize_client_state,
+            commands::discover_go_profiles,
             commands::check_and_add_profile,
+            commands::check_and_add_go_profile,
             commands::add_server,
             commands::forget_server,
             commands::describe_server_status,
@@ -133,17 +136,22 @@ pub fn run() {
             commands::resume_device_pairing_offer,
             commands::finish_device_pairing,
             commands::accept_device_pairing,
+            commands::accept_go_profile_pairing,
             commands::resume_device_pairing_acceptance,
+            commands::resume_go_profile_pairing,
+            commands::copy_go_profile_device,
             commands::set_account_passphrase,
             commands::change_account_passphrase,
             commands::verify_account_passphrase,
             commands::describe_reset,
             commands::reset_server,
             commands::app_info,
+            window_state::get_window_state,
             commands::list_stores,
             commands::list_catalog,
             commands::list_servers,
             commands::list_accounts,
+            commands::list_group_details,
             commands::list_parties,
             commands::list_federation,
             commands::read_item,
@@ -182,6 +190,7 @@ pub fn run() {
             startup::require_agent(app, &agent);
             if let Some(window) = app.get_webview_window(MAIN) {
                 dragdrop::observe(&window);
+                window_state::observe(&window);
             } else {
                 tracing::error!("the {MAIN} window is missing from tauri.conf.json");
             }

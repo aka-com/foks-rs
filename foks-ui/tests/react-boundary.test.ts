@@ -77,8 +77,16 @@ test('the model is pure: no DOM, no bridge, no fixture', async () => {
     const source = stripComments(await readSource(file.href, import.meta.url));
     // Member access, not the words: a KindMeta blurb legitimately says
     // "A document or bundle".
-    assert.doesNotMatch(source, /\b(document|window|globalThis)\s*[.[]/, file.pathname);
-    assert.doesNotMatch(source, /from '\.\.\/(fixture|bridge|mock-bridge)'/, file.pathname);
+    assert.doesNotMatch(
+      source,
+      /\b(document|window|globalThis)\s*[.[]/,
+      file.pathname,
+    );
+    assert.doesNotMatch(
+      source,
+      /from '\.\.\/(fixture|bridge|mock-bridge)'/,
+      file.pathname,
+    );
     assert.doesNotMatch(source, /from 'react'/, file.pathname);
   }
 });
@@ -97,10 +105,15 @@ test('ordinary production modules never import the fixture graph', async () => {
     if (
       file.pathname.endsWith('/src/fixture.ts') ||
       file.pathname.endsWith('/src/mock-bridge.ts')
-    ) continue;
+    )
+      continue;
     const source = stripComments(await readSource(file.href, import.meta.url));
     assert.doesNotMatch(source, /from ['"][^'"]*fixture['"]/, file.pathname);
-    assert.doesNotMatch(source, /from ['"][^'"]*mock-bridge['"]/, file.pathname);
+    assert.doesNotMatch(
+      source,
+      /from ['"][^'"]*mock-bridge['"]/,
+      file.pathname,
+    );
   }
 });
 
@@ -113,12 +126,14 @@ test('the host check reads __TAURI_INTERNALS__ and the mock switch is explicit',
 
 test('icons are structured data, not markup strings', async () => {
   // Keep icon geometry as structured data so no raw-markup sink is needed.
-  const icons = stripComments(await readSource('../src/icons.ts', import.meta.url));
+  const icons = stripComments(
+    await readSource('../src/icons.ts', import.meta.url),
+  );
   assert.doesNotMatch(icons, /<svg|<path|<circle|<rect/);
   const names = icons.match(/^ {2}[a-z]+: \[$/gm) ?? [];
   assert.equal(
     names.length,
-    32,
-    'all 31 shared shell icons and first-run s local door icon are ported',
+    25,
+    'all 24 shared shell icons and first-run’s local door icon are ported',
   );
 });

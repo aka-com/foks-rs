@@ -88,10 +88,14 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     writeRole?: KvRoleInput,
   ): { read: RoleWire; write: RoleWire } => {
     const store = stores.find((candidate) => candidate.id === storeId);
-    if (!store) throw failure('store-not-found', 'This store is no longer listed.');
+    if (!store)
+      throw failure('store-not-found', 'This store is no longer listed.');
     if (store.kind === 'account') {
       if (readRole !== undefined || writeRole !== undefined)
-        throw failure('invalid-request', 'Account item roles are fixed to Owner.');
+        throw failure(
+          'invalid-request',
+          'Account item roles are fixed to Owner.',
+        );
       return { read: { role: 'Owner' }, write: { role: 'Owner' } };
     }
     if (!store.active)
@@ -114,9 +118,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     (store) => store.id === 'team:household',
   );
   const fixtureHousehold =
-    fixtureHouseholdStore?.kind === 'team'
-      ? fixtureHouseholdStore
-      : undefined;
+    fixtureHouseholdStore?.kind === 'team' ? fixtureHouseholdStore : undefined;
   const firstRunFixture = {
     invited: {
       profile: 'acme',
@@ -178,9 +180,16 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       target?: string;
     }[]
   >();
-  const serverHosts = new Map<string, {
-    lookupName: string; canonicalName: string; hostId: string; chain: number; epoch: number;
-  }>();
+  const serverHosts = new Map<
+    string,
+    {
+      lookupName: string;
+      canonicalName: string;
+      hostId: string;
+      chain: number;
+      epoch: number;
+    }
+  >();
   const hostIds: Record<string, string> = {
     personal: `02${'9f31c2aa'.repeat(8)}`,
     acme: `02${'b04d17e3'.repeat(8)}`,
@@ -200,19 +209,56 @@ export function mockBridge(world: World = FIXTURE): Bridge {
   const pairingOffers = new Map<string, string>();
   const pairingAcceptances = new Set<string>();
   const resetTokens = new Set<string>();
-  const deviceRows = new Map<string, { id: string; name?: string; role: 'owner' | 'admin' | 'member'; current: boolean }[]>();
-  const backupRows = new Map<string, { backupAlias: string; accountAlias: string; backupId: string }[]>();
-  const yubi = world.yubiAccounts.map((entry) => ({ alias: entry.alias, state: 'complete' as const }));
-  const accountStore = (id: string) => stores.find((store) => store.id === id && store.kind === 'account');
+  const deviceRows = new Map<
+    string,
+    {
+      id: string;
+      name?: string;
+      role: 'owner' | 'admin' | 'member';
+      current: boolean;
+    }[]
+  >();
+  const backupRows = new Map<
+    string,
+    { backupAlias: string; accountAlias: string; backupId: string }[]
+  >();
+  const yubi = world.yubiAccounts.map((entry) => ({
+    alias: entry.alias,
+    state: 'complete' as const,
+  }));
+  const accountStore = (id: string) =>
+    stores.find((store) => store.id === id && store.kind === 'account');
   for (const store of stores) {
     if (store.kind !== 'account') continue;
-    const rows = store.account === 'personal'
-      ? world.devices.map((device) => ({ id: device.id_hex.replace(/^02/, '04'), name: device.name, role: 'owner' as const, current: device.current }))
-      : [{ id: `04${'8'.repeat(64)}`, name: 'MacBook Pro', role: 'owner' as const, current: true }];
+    const rows =
+      store.account === 'personal'
+        ? world.devices.map((device) => ({
+            id: device.id_hex.replace(/^02/, '04'),
+            name: device.name,
+            role: 'owner' as const,
+            current: device.current,
+          }))
+        : [
+            {
+              id: `04${'8'.repeat(64)}`,
+              name: 'MacBook Pro',
+              role: 'owner' as const,
+              current: true,
+            },
+          ];
     deviceRows.set(store.id, rows);
-    backupRows.set(store.id, store.account === 'personal'
-      ? [{ backupAlias: 'paper-backup', accountAlias: store.account, backupId: `10${'4'.repeat(64)}` }]
-      : []);
+    backupRows.set(
+      store.id,
+      store.account === 'personal'
+        ? [
+            {
+              backupAlias: 'paper-backup',
+              accountAlias: store.account,
+              backupId: `10${'4'.repeat(64)}`,
+            },
+          ]
+        : [],
+    );
   }
   const restoreFirstRunAccount = (): void => {
     if (typeof window === 'undefined') return;
@@ -280,6 +326,14 @@ export function mockBridge(world: World = FIXTURE): Bridge {
   const catalogResponse = (): CatalogDto => ({
     profiles: [...new Set(servers.map((server) => server.name))],
     stores: stores.map((store) => ({ ...store })),
+    knownStores: stores.map((store) => ({ ...store })),
+    inventory: [...new Set(servers.map((server) => server.name))].map(
+      (profile) => ({
+        profile,
+        accountsComplete: true,
+        teamsComplete: true,
+      }),
+    ),
     items: catalog({ ...world, items }).map((item) => ({
       store: item.store,
       path: item.path,
@@ -297,6 +351,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     fixtureWorld: world,
     firstRunFixture,
     appLockState: async () => appLockState(),
+    windowState: async () => ({ maximized: false, fullscreen: false }),
     lockApp: async () => {
       appLocked = true;
       return appLockState();
@@ -306,7 +361,10 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       return appLockState();
     },
     agentStatus: () => Promise.resolve({ ...world.agent }),
-    appInfo: async () => ({ version: '0.3.0', agentSocket: '/private/foks/agent.sock' }),
+    appInfo: async () => ({
+      version: '0.3.0',
+      agentSocket: '/private/foks/agent.sock',
+    }),
     listCatalog: () => {
       restoreFirstRunAccount();
       return Promise.resolve(catalogResponse());
@@ -318,10 +376,23 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       restoreFirstRunAccount();
       // Every fixture and checkpoint-restored account carries its exact store,
       // the same way `list_accounts` does; there is nothing to resolve here.
-      return Promise.resolve(
-        accounts.map((account) => ({ ...account })),
-      );
+      return Promise.resolve(accounts.map((account) => ({ ...account })));
     },
+    listGroupDetails: (storeId) =>
+      Promise.resolve({
+        parties: {
+          status: 'success' as const,
+          value: parties
+            .filter((party) => party.store === storeId)
+            .map((party) => ({ ...party })),
+        },
+        federation: {
+          status: 'success' as const,
+          value: federation
+            .filter((entry) => entry.store === storeId)
+            .map((entry) => ({ ...entry })),
+        },
+      }),
     listParties: (storeId) =>
       Promise.resolve(
         parties
@@ -608,9 +679,9 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       const operation = `admission-${federation.length + 1}`;
       federation.push({
         store: storeId,
-        remote_profile:
-          world.servers.find((server) => server.id === remote.server)?.name ??
-          remote.server,
+        // The profile name, as the agent records it (Rust: `remote.profile.name`)
+        // — not its address.
+        remote_profile: remote.server,
         remote_team_alias: remote.alias,
         remote_host_id_hex:
           world.servers.find((server) => server.id === remote.server)
@@ -652,6 +723,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     },
     copyText: async () => ({ ok: true }),
     initializeClientState: async () => ({ phase: 'Ready' }),
+    discoverGoProfiles: async () => ({ installed: false, candidates: [] }),
     checkAndAddProfile: async (profileName, probe) => {
       const path =
         probe === firstRunFixture.invited.server
@@ -661,6 +733,17 @@ export function mockBridge(world: World = FIXTURE): Bridge {
             : undefined;
       if (!path)
         throw failure('io', `${probe} did not answer, so nothing was saved.`);
+      return { ...path.report, profile: profileName };
+    },
+    checkAndAddGoProfile: async (_candidateId, hostId, profileName, probe) => {
+      const path =
+        probe === firstRunFixture.invited.server
+          ? firstRunFixture.invited
+          : probe === firstRunFixture.own.server
+            ? firstRunFixture.own
+            : undefined;
+      if (!path || path.report.hostId !== hostId)
+        throw failure('io', `${probe} did not match, so nothing was saved.`);
       return { ...path.report, profile: profileName };
     },
     listPendingOperations: async (profile) =>
@@ -726,7 +809,10 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       return { applied: true };
     },
     discoverGroups: async (profile, accountAlias) => {
-      if (profile !== firstRunFixture.invited.profile || accountAlias !== 'sol') {
+      if (
+        profile !== firstRunFixture.invited.profile ||
+        accountAlias !== 'sol'
+      ) {
         return { accountAlias, groups: [] };
       }
       const engineering = stores.find(
@@ -761,8 +847,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
           {
             alias: 'engineering',
             accountAlias,
-            teamIdHex:
-              fixtureEngineering?.team_id_hex ?? `03${'3'.repeat(64)}`,
+            teamIdHex: fixtureEngineering?.team_id_hex ?? `03${'3'.repeat(64)}`,
             kind: 'named',
             name: 'Engineering',
             active: true,
@@ -771,25 +856,32 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       };
     },
     describeServerStatus: async (profile) => {
-      const server = servers.find((entry) => entry.id === profile || entry.name === profile);
-      if (!server) throw failure('store-not-found', 'That server is not configured.');
+      const server = servers.find(
+        (entry) => entry.id === profile || entry.name === profile,
+      );
+      if (!server)
+        throw failure('store-not-found', 'That server is not configured.');
       return {
         profile: server.id,
         configuredProbe: server.name,
         host: serverHosts.get(server.id) ?? null,
         leaseRequired: true,
-        leaseExpiresAt: server.id === 'personal'
-          ? Math.floor(Date.now() / 1000) + 6 * 24 * 60 * 60
-          : server.id === 'acme'
-            ? Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60
-            : serverHosts.has(server.id)
-              ? Math.floor(Date.now() / 1000) + 6 * 24 * 60 * 60
-              : null,
+        leaseExpiresAt:
+          server.id === 'personal'
+            ? Math.floor(Date.now() / 1000) + 6 * 24 * 60 * 60
+            : server.id === 'acme'
+              ? Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60
+              : serverHosts.has(server.id)
+                ? Math.floor(Date.now() / 1000) + 6 * 24 * 60 * 60
+                : null,
       };
     },
     checkServer: async (profile) => {
-      const server = servers.find((entry) => entry.id === profile || entry.name === profile);
-      if (!server) throw failure('store-not-found', 'That server is not configured.');
+      const server = servers.find(
+        (entry) => entry.id === profile || entry.name === profile,
+      );
+      if (!server)
+        throw failure('store-not-found', 'That server is not configured.');
       const existing = serverHosts.get(server.id);
       const host = existing ?? {
         lookupName: server.name,
@@ -799,31 +891,53 @@ export function mockBridge(world: World = FIXTURE): Bridge {
         epoch: 118204,
       };
       serverHosts.set(server.id, host);
-      return { profile: server.id, acceptance: existing ? 'unchanged' as const : 'inserted' as const, ...host };
+      return {
+        profile: server.id,
+        acceptance: existing ? ('unchanged' as const) : ('inserted' as const),
+        ...host,
+      };
     },
     addServer: async (profileName, probe) => {
-      if (servers.some((server) => server.id === profileName)) throw failure('already-exists', 'That server profile already exists.');
-      servers.push({ id: profileName, name: probe, label: null, host_id: null, chain: null, epoch: null, lease: null, accounts: [], state: 'never-probed' });
+      if (servers.some((server) => server.id === profileName))
+        throw failure('already-exists', 'That server profile already exists.');
+      servers.push({
+        id: profileName,
+        name: probe,
+        label: null,
+        host_id: null,
+        chain: null,
+        epoch: null,
+        lease: null,
+        accounts: [],
+        state: 'never-probed',
+      });
       return { profile: profileName, configuredProbe: probe };
     },
     forgetServer: async (profile, confirmation) => {
-      if (profile !== confirmation) throw failure('invalid-request', 'Type the exact server profile to forget it.');
+      if (profile !== confirmation)
+        throw failure(
+          'invalid-request',
+          'Type the exact server profile to forget it.',
+        );
       const index = servers.findIndex((server) => server.id === profile);
       if (index >= 0) servers.splice(index, 1);
       serverHosts.delete(profile);
       return { profile, removed: true as const };
     },
-    listAccountDevices: async (accountStoreId) => (deviceRows.get(accountStoreId) ?? []).map((entry) => ({ ...entry })),
+    listAccountDevices: async (accountStoreId) =>
+      (deviceRows.get(accountStoreId) ?? []).map((entry) => ({ ...entry })),
     removeAccountDevice: async (accountStoreId, deviceId) => {
       const rows = deviceRows.get(accountStoreId) ?? [];
       const index = rows.findIndex((entry) => entry.id === deviceId);
       if (index >= 0) rows.splice(index, 1);
       return { deviceId, userChainSequence: 14, alreadyAbsent: index < 0 };
     },
-    listBackupEnrollments: async (accountStoreId) => (backupRows.get(accountStoreId) ?? []).map((entry) => ({ ...entry })),
+    listBackupEnrollments: async (accountStoreId) =>
+      (backupRows.get(accountStoreId) ?? []).map((entry) => ({ ...entry })),
     startDevicePairing: async (accountStoreId) => {
       const store = accountStore(accountStoreId);
-      if (!store) throw failure('store-not-found', 'That account is not available.');
+      if (!store)
+        throw failure('store-not-found', 'That account is not available.');
       const phrase = 'cobalt window';
       pairingOffers.set(accountStoreId, phrase);
       return { accountAlias: store.account, phrase };
@@ -831,61 +945,158 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     resumeDevicePairingOffer: async (accountStoreId) => {
       const store = accountStore(accountStoreId);
       const phrase = pairingOffers.get(accountStoreId);
-      if (!store || !phrase) throw failure('pending-operation-not-found', 'That pairing offer is no longer pending.');
+      if (!store || !phrase)
+        throw failure(
+          'pending-operation-not-found',
+          'That pairing offer is no longer pending.',
+        );
       return { accountAlias: store.account, phrase };
     },
     finishDevicePairing: async (accountStoreId) => {
       const store = accountStore(accountStoreId);
-      if (!store || !pairingOffers.has(accountStoreId)) throw failure('pending-operation-not-found', 'That pairing offer is not ready to finish.');
+      if (!store || !pairingOffers.has(accountStoreId))
+        throw failure(
+          'pending-operation-not-found',
+          'That pairing offer is not ready to finish.',
+        );
       pairingOffers.delete(accountStoreId);
-      return { alias: store.account, deviceId: `04${'5'.repeat(64)}`, userChainSequence: 15 };
+      return {
+        alias: store.account,
+        deviceId: `04${'5'.repeat(64)}`,
+        userChainSequence: 15,
+      };
     },
     acceptDevicePairing: async (profile, targetAlias) => {
       pairingAcceptances.add(`${profile}:${targetAlias}`);
-      return { alias: targetAlias, deviceId: `04${'6'.repeat(64)}`, userChainSequence: 15 };
+      return {
+        alias: targetAlias,
+        deviceId: `04${'6'.repeat(64)}`,
+        userChainSequence: 15,
+      };
+    },
+    acceptGoProfilePairing: async (_candidateId, profile, targetAlias) => {
+      pairingAcceptances.add(`${profile}:${targetAlias}`);
+      return {
+        alias: targetAlias,
+        deviceId: `04${'6'.repeat(64)}`,
+        userChainSequence: 15,
+      };
     },
     resumeDevicePairingAcceptance: async (profile, targetAlias) => {
-      if (!pairingAcceptances.has(`${profile}:${targetAlias}`)) throw failure('pending-operation-not-found', 'That pairing acceptance is no longer pending.');
+      if (!pairingAcceptances.has(`${profile}:${targetAlias}`))
+        throw failure(
+          'pending-operation-not-found',
+          'That pairing acceptance is no longer pending.',
+        );
       pairingAcceptances.delete(`${profile}:${targetAlias}`);
-      return { alias: targetAlias, deviceId: `04${'6'.repeat(64)}`, userChainSequence: 15 };
+      return {
+        alias: targetAlias,
+        deviceId: `04${'6'.repeat(64)}`,
+        userChainSequence: 15,
+      };
     },
-    setAccountPassphrase: async () => ({ generation: 1, stretchVersion: 'v1' as const, verified: true as const }),
-    changeAccountPassphrase: async () => ({ generation: 2, stretchVersion: 'v1' as const, verified: true as const }),
-    verifyAccountPassphrase: async () => ({ generation: 2, stretchVersion: 'v1' as const, verified: true as const }),
+    resumeGoProfilePairing: async (_candidateId, profile, targetAlias) => {
+      if (!pairingAcceptances.has(`${profile}:${targetAlias}`))
+        throw failure(
+          'pending-operation-not-found',
+          'That pairing acceptance is no longer pending.',
+        );
+      pairingAcceptances.delete(`${profile}:${targetAlias}`);
+      return {
+        alias: targetAlias,
+        deviceId: `04${'6'.repeat(64)}`,
+        userChainSequence: 15,
+      };
+    },
+    copyGoProfileDevice: async (_candidateId, _profile, targetAlias) => ({
+      alias: targetAlias,
+      deviceId: `04${'7'.repeat(64)}`,
+      userChainSequence: 15,
+    }),
+    setAccountPassphrase: async () => ({
+      generation: 1,
+      stretchVersion: 'v1' as const,
+      verified: true as const,
+    }),
+    changeAccountPassphrase: async () => ({
+      generation: 2,
+      stretchVersion: 'v1' as const,
+      verified: true as const,
+    }),
+    verifyAccountPassphrase: async () => ({
+      generation: 2,
+      stretchVersion: 'v1' as const,
+      verified: true as const,
+    }),
     describeReset: async (profile) => {
       const token = `reset-${profile}-${Date.now()}`;
       resetTokens.add(token);
       return {
         profile,
-        resumables: profile === 'personal' ? [{ kind: 'team-creation' as const, alias: 'homelab' }] : [],
+        resumables:
+          profile === 'personal'
+            ? [{ kind: 'team-creation' as const, alias: 'homelab' }]
+            : [],
         artifacts: [{ kind: 'catalog-cache', entries: 5, bytes: 8192 }],
         token,
         expiresInSeconds: 60,
       };
     },
     resetServer: async (profile, confirmation, token) => {
-      if (profile !== confirmation || !resetTokens.delete(token)) throw failure('invalid-request', 'Preview the reset again and type the exact profile.');
+      if (profile !== confirmation || !resetTokens.delete(token))
+        throw failure(
+          'invalid-request',
+          'Preview the reset again and type the exact profile.',
+        );
       return { applied: true };
     },
-    listYubiCards: async () => world.cardsConnected.map((card) => ({ ...card })),
+    listYubiCards: async () =>
+      world.cardsConnected.map((card) => ({ ...card })),
     listYubiAccounts: async () => yubi.map((entry) => ({ ...entry })),
     runYubi: async ({ command, args }) => {
-      if (command === 'yubi_pin_status' || command === 'change_yubi_pin' || command === 'unblock_yubi_pin') return { remaining: 3, blocked: false };
-      if (command.includes('passphrase')) return { generation: 2, stretchVersion: 'v1', verified: true };
+      if (
+        command === 'yubi_pin_status' ||
+        command === 'change_yubi_pin' ||
+        command === 'unblock_yubi_pin'
+      )
+        return { remaining: 3, blocked: false };
+      if (command.includes('passphrase'))
+        return { generation: 2, stretchVersion: 'v1', verified: true };
       const alias =
         'alias' in args && typeof args.alias === 'string'
           ? args.alias
           : 'yubiAlias' in args && typeof args.yubiAlias === 'string'
             ? args.yubiAlias
             : 'primary key';
-      if (command === 'create_yubi_account') yubi.push({ alias, state: 'complete' });
-      if (command === 'create_yubi_account' || command === 'resume_yubi_account' || command === 'provision_yubi_device') {
-        return { alias, username: 'rae', yubiId: `08${'8'.repeat(66)}`, subkeyId: `0d${'d'.repeat(64)}`, userChainSequence: 22, managementEnrolled: true };
+      if (command === 'create_yubi_account')
+        yubi.push({ alias, state: 'complete' });
+      if (
+        command === 'create_yubi_account' ||
+        command === 'resume_yubi_account' ||
+        command === 'provision_yubi_device'
+      ) {
+        return {
+          alias,
+          username: 'rae',
+          yubiId: `08${'8'.repeat(66)}`,
+          subkeyId: `0d${'d'.repeat(64)}`,
+          userChainSequence: 22,
+          managementEnrolled: true,
+        };
       }
-      if (command === 'sync_yubi_account') return { username: 'rae', userChainSequence: 22, directories: 2, entries: 7, federation: [] };
+      if (command === 'sync_yubi_account')
+        return {
+          username: 'rae',
+          userChainSequence: 22,
+          directories: 2,
+          entries: 7,
+          federation: [],
+        };
       if (command === 'change_yubi_puk') return { alias, changed: true };
-      if (command === 'recover_yubi_subkey') return { alias, subkeyId: `0d${'d'.repeat(64)}`, certificateCount: 2 };
-      if (command === 'revoke_yubi_device') return { alias, userChainSequence: 23, removedLocalCredential: true };
+      if (command === 'recover_yubi_subkey')
+        return { alias, subkeyId: `0d${'d'.repeat(64)}`, certificateCount: 2 };
+      if (command === 'revoke_yubi_device')
+        return { alias, userChainSequence: 23, removedLocalCredential: true };
       return { alias, managementEnrolled: true, managementGeneration: 2 };
     },
     onDropHover: async (listener) => {
@@ -896,5 +1107,6 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       pathListeners.add(listener);
       return () => pathListeners.delete(listener);
     },
+    onWindowState: async () => () => {},
   };
 }

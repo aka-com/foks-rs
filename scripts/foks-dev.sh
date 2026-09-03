@@ -102,7 +102,7 @@ server_dir="$state_root/server"
 client_dir="$state_root/client"
 server_config="$server_dir/server.toml"
 server_certificate="$server_dir/probe-certificate.der"
-agent_socket="$client_dir/agent.sock"
+agent_socket="$client_dir/foks-rs.sock"
 agent_log="$state_root/agent.log"
 
 cd "$repo_root"
