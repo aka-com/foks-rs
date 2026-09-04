@@ -2820,6 +2820,7 @@ impl FoksClient {
                 parcel,
                 actor.source,
                 actor.history,
+                host.host_id(),
                 verified.members(),
                 &chain.hepks,
             )?;
@@ -2975,15 +2976,15 @@ fn team_parcel_sender_hepk<'a>(
     parcel: &foks_proto::PukParcel,
     receiver: &'a foks_verify::VerifiedSharedKey,
     user_history: &'a [foks_verify::VerifiedSharedKey],
+    expected_host: &foks_proto::EntityId,
     members: &'a [foks_verify::VerifiedTeamMemberState],
     hepks: &'a [foks_proto::Hepk],
 ) -> Result<&'a foks_proto::Hepk> {
-    if parcel.sender == receiver.verify_key {
+    let sender = parcel.sender.to_rolling_entity_id();
+    if sender == receiver.verify_key {
         return Ok(&receiver.hepk);
     }
-    let mut historical = user_history
-        .iter()
-        .filter(|key| key.verify_key == parcel.sender);
+    let mut historical = user_history.iter().filter(|key| key.verify_key == sender);
     if let Some(sender) = historical.next() {
         if historical.next().is_some() {
             return Err(Error::TeamBinding(
@@ -2992,9 +2993,13 @@ fn team_parcel_sender_hepk<'a>(
         }
         return Ok(&sender.hepk);
     }
-    let mut senders = members
-        .iter()
-        .filter(|member| member.verify_key == parcel.sender);
+    let mut senders = members.iter().filter(|member| {
+        member.verify_key == sender
+            && member
+                .scoped_host
+                .as_ref()
+                .is_none_or(|scope| scope == expected_host)
+    });
     let sender = senders.next().ok_or(Error::TeamBinding(
         "team PTK parcel sender is not in the verified roster",
     ))?;
@@ -3089,7 +3094,9 @@ mod membership_graph_tests {
 #[cfg(test)]
 mod parcel_sender_tests {
     use foks_crypto::{derive_shared_public, hepk_fingerprint};
-    use foks_proto::{EntityId, PukParcel, Role, SecretSeed, SharedKeyBoxSet, UserLink};
+    use foks_proto::{
+        EntityId, PukParcel, Role, SecretSeed, SharedKeyBoxSet, UserLink, ENTITY_HOST, ENTITY_USER,
+    };
     use foks_snowpack::{decode, Value};
     use foks_verify::{VerifiedSharedKey, VerifiedTeamMemberState};
 
@@ -3140,6 +3147,9 @@ mod parcel_sender_tests {
         let boxes =
             SharedKeyBoxSet::decode(&fixture(MUTATION_DIR, "add-member-ptk-boxes.snowp")).unwrap();
         let boxed = boxes.boxes.first().unwrap();
+        let mut persistent_sender = actor.verify_key.as_bytes().to_vec();
+        persistent_sender[0] = ENTITY_USER;
+        let persistent_sender = EntityId::from_bytes(persistent_sender).unwrap();
         let parcel = PukParcel {
             generation: boxed.generation,
             role: boxed.role,
@@ -3148,26 +3158,52 @@ mod parcel_sender_tests {
             target_host: None,
             target_role: boxed.target.role,
             target_generation: boxed.target.generation,
-            sender: actor.verify_key.clone(),
+            sender: persistent_sender,
             box_id: boxes.box_id,
             temp_dh_key: boxes.temp_dh_key,
             seed_chain: Vec::new(),
         };
+        let host = EntityId::from_bytes([vec![ENTITY_HOST], vec![0x44; 32]].concat()).unwrap();
+        let remote_host =
+            EntityId::from_bytes([vec![ENTITY_HOST], vec![0x55; 32]].concat()).unwrap();
+        let actor_receiver = VerifiedSharedKey {
+            role: Role::OWNER,
+            generation: member.generation,
+            verify_key: actor.verify_key.clone(),
+            hepk: actor.hepk.clone(),
+        };
+        assert_eq!(
+            team_parcel_sender_hepk(&parcel, &actor_receiver, &[], &host, &[], &[]).unwrap(),
+            &actor.hepk
+        );
         assert_eq!(
             team_parcel_sender_hepk(
                 &parcel,
                 &receiver,
                 &[],
+                &host,
                 std::slice::from_ref(&member),
                 std::slice::from_ref(&actor.hepk),
             )
             .unwrap(),
             &actor.hepk
         );
+        let mut remote_member = member.clone();
+        remote_member.scoped_host = Some(remote_host);
         assert!(team_parcel_sender_hepk(
             &parcel,
             &receiver,
             &[],
+            &host,
+            std::slice::from_ref(&remote_member),
+            std::slice::from_ref(&actor.hepk),
+        )
+        .is_err());
+        assert!(team_parcel_sender_hepk(
+            &parcel,
+            &receiver,
+            &[],
+            &host,
             std::slice::from_ref(&member),
             &[],
         )
@@ -3183,6 +3219,7 @@ mod parcel_sender_tests {
                 &parcel,
                 &receiver,
                 std::slice::from_ref(&historical),
+                &host,
                 &[],
                 &[],
             )
