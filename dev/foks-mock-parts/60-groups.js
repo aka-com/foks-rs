@@ -392,14 +392,14 @@
       if (store.kind === 'team' && store.active === false) {
         return UI.band({
           label: 'Setup incomplete.',
-          text: 'The roster and items are unavailable until the group is finished. ' +
+          text: 'Group members and items are unavailable until setup is finished. ' +
             '<button type="button" class="lnk" data-act="call" data-fn="gFinishSetup">Finish setup</button>',
         });
       }
       if (store.kind === 'team' && store.team_kind === 'adhoc' && tab !== 'settings') {
         return UI.band({
           severity: 'info', label: 'Ad-hoc group.',
-          text: 'Membership is fixed when it’s created; people can’t be added or removed here. Its items and roles read normally.',
+          text: 'Membership is fixed when it’s created; people can’t be added or removed here. Permissions and items function normally.',
         });
       }
       return '';
@@ -557,8 +557,8 @@
           }).join('') + '</div>'
         : '<p class="hint">No items in ' + esc(store.name) + ' yet.</p>';
       body += !active
-        ? '<p class="hint">This group’s admission is inactive, so its members read nothing here until it is re-run.</p>'
-        : (readable.length < items.length ? '<p class="hint">Greyed items need a higher role than ' + esc(here) + '.</p>' : '');
+        ? '<p class="hint">This group connection is inactive. Members cannot access items until the connection is renewed.</p>'
+        : (readable.length < items.length ? '<p class="hint">Items you don\'t have permission to view are dimmed.</p>' : '');
       body += '<div class="sec">Details</div><div class="meta">' +
         '<b>Role here</b><span>' + esc(here) + '</span>' +
         (party.party_kind !== 'user'
@@ -925,7 +925,7 @@
             }),
             { className: 'rows' }
           ) +
-          '<p class="hint">Copying this message does not change the server.</p>';
+          '<p class="hint">Send this message to the person you want to invite.</p>';
       } else if (kind === 'add') {
         var vis = visibility == null ? 0 : visibility;
         body += UI.inset(textField('Username', '_r_2_', 'v.username', username)) +
@@ -943,14 +943,14 @@
           }), { label: 'Role in ' + store.name })) +
           (role === 'Member'
             ? stepper('Visibility ' + vis, vis - 1, vis + 1, vis <= -32768, vis >= 32767) : '') +
-          '<p class="fn">They read every item at or below their role as soon as this applies. ' +
-          'No invitation is sent; they see ' + esc(store.name) + ' the next time their app checks.</p>';
+          '<p class="fn">They can access items allowed by their role immediately. ' +
+          'No invitation is sent; ' + esc(store.name) + ' will appear when their app checks the server.</p>';
       } else if (kind === 'demote') {
         var cards = [];
         if (currentRole && currentRole.kind === 'owner') {
           cards.push(UI.radioCard({
             selected: demoteRole === 'Admin', title: 'Admin',
-            detail: 'Below Owner. Keeps roster management and loses Owner-only reads.',
+            detail: 'Can manage members and access items allowed for Admins.',
             attrs: 'data-act="set" data-key="v.role" data-val="Admin"',
           }));
         }
@@ -960,7 +960,7 @@
           title: currentRole && currentRole.kind === 'member' ? 'Member · visibility ' + maxVis : 'Member',
           detail: currentRole && currentRole.kind === 'member'
             ? 'Same role, lower level; ' + maxVis + ' at most.'
-            : 'Loses roster management and opens only what its visibility level admits.',
+            : 'Cannot manage members; can only access items allowed by their member role.',
           attrs: 'data-act="set" data-key="v.role" data-val="Member"',
         }));
         cards.push(UI.radioCard({
@@ -979,7 +979,7 @@
         if (target && !canTarget(target)) {
           body += UI.notice({
             title: esc(D.partyName(target)) + ' cannot be removed here',
-            body: 'This party does not have a unique username managed by this account. Remove it from the account or server that manages it.',
+            body: 'This member cannot be removed here. They are managed by another server or account.',
           });
         }
       } else if (kind === 'admit') {
@@ -1003,7 +1003,7 @@
                 UI.btn('+', { size: 'sm', disabled: avis >= 32767, attrs: 'data-act="set" data-key="v.visibility" data-val="' + (avis + 1) + '"' }),
             })
           ) +
-          '<p class="fn">' + esc(store.name) + ' keeps following that group’s roster. This can’t be taken back from here yet.</p>';
+          '<p class="fn">' + esc(store.name) + ' automatically syncs members from that group. This connection cannot be removed from this screen.</p>';
       } else if (kind === 'create') {
         body += UI.inset(textField('Name', '_r_5_', 'v.name', name)) +
           '<p class="fn">Others find it as <code>' + esc(teamAlias || '…') + '</code> on the server.</p>' +
@@ -1110,7 +1110,7 @@
             UI.insetRow({ label: 'When they reply', value: 'Add their username to a group from that group’s settings.' }),
             { className: 'settings-inset' }
           )
-        : '<p class="fn">This account is no longer in the catalog. Close this dialog and choose another account.</p>';
+        : '<p class="fn">This account is no longer available. Close this dialog and choose another account.</p>';
       return sheetFrame({
         titleId: '_r_4_',
         glyph: '<span class="kico md invite">I</span>',

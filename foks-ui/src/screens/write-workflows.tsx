@@ -15,6 +15,7 @@ import {
   SectionLabel,
   Sheet,
   SheetDialog,
+  Toggle,
 } from '../components';
 import type { CardOption, FilterKind } from '../components';
 import {
@@ -23,6 +24,7 @@ import {
   kindLabel,
   kindOf,
   canCreateInStore,
+  defaultCreateStore,
   leaseLapsed,
   nameOf,
   partiesOf,
@@ -44,6 +46,8 @@ import type {
 } from '../model';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, KvRoleInput } from '../bridge';
+import type { MutationFailureHandler } from '../mutation-recovery';
+import { useToast } from '/kit/toasts';
 import { editableValue } from './edit-value';
 
 export type NewKind = Exclude<ItemKind, 'Folder'>;
@@ -148,6 +152,7 @@ interface NewSheetProps {
   setWorkflow: (workflow: WriteWorkflow) => void;
   onApplied: (message: string) => Promise<void>;
   onError: (error: unknown) => void;
+  onMutationError: MutationFailureHandler;
 }
 
 /**
@@ -285,20 +290,19 @@ function AccessBlock({
           {roleChoices(readRole, onReadRole, false)}
         </RadioGroup>
         {readRole.startsWith('Member:') ? (
-          <InsetRow label="Member visibility">
-            <input
-              type="number"
-              min={-32768}
-              max={32767}
-              aria-label="Read visibility"
-              value={readVisibility}
-              onChange={(event) => {
-                const next = Number(event.target.value);
-                if (Number.isInteger(next) && next >= -32768 && next <= 32767)
-                  onReadRole(`Member:${next}`);
-              }}
-            />
-          </InsetRow>
+          <Field
+            label="Member visibility"
+            type="number"
+            mono
+            min={-32768}
+            max={32767}
+            value={String(readVisibility)}
+            onChange={(val) => {
+              const next = Number(val);
+              if (Number.isInteger(next) && next >= -32768 && next <= 32767)
+                onReadRole(`Member:${next}`);
+            }}
+          />
         ) : null}
       </Inset>
       <p className="hint">
@@ -331,27 +335,24 @@ function AccessBlock({
           {roleChoices(writeRole, onWriteRole, true)}
         </RadioGroup>
         {writeRole.startsWith('Member:') ? (
-          <InsetRow label="Member visibility">
-            <input
-              type="number"
-              min={-32768}
-              max={32767}
-              aria-label="Write visibility"
-              value={Number(writeRole.slice('Member:'.length))}
-              onChange={(event) => {
-                const next = Number(event.target.value);
-                if (Number.isInteger(next) && next >= -32768 && next <= 32767)
-                  onWriteRole(`Member:${next}`);
-              }}
-            />
-          </InsetRow>
+          <Field
+            label="Member visibility"
+            type="number"
+            mono
+            min={-32768}
+            max={32767}
+            value={writeRole.slice('Member:'.length)}
+            onChange={(val) => {
+              const next = Number(val);
+              if (Number.isInteger(next) && next >= -32768 && next <= 32767)
+                onWriteRole(`Member:${next}`);
+            }}
+          />
         ) : null}
       </Inset>
       <p className="hint">
-        The read and write roles are independent and carried by this group item,
-        so someone allowed to change it might not be allowed to read it. They
-        are checked against the current authenticated roster, so the preview is
-        computed rather than typed.
+        Read and write permissions are set separately. A member with write
+        permission can update this item even if they cannot view its contents.
       </p>
     </>
   );
@@ -364,8 +365,17 @@ function NewSheet({
   setWorkflow,
   onApplied,
   onError,
+  onMutationError,
 }: NewSheetProps): ReactNode {
-  const [storeId, setStoreId] = useState(workflow.storeId);
+  // A workflow that names a store this Mac does not have — a deep link, or a
+  // store that left the catalog between the click and the sheet — would open
+  // the chooser on nothing at all. Fall back to the same first vault All Items
+  // starts on.
+  const [storeId, setStoreId] = useState(() =>
+    storeOf(world, workflow.storeId)
+      ? workflow.storeId
+      : (defaultCreateStore(world) ?? workflow.storeId),
+  );
   const [path, setPath] = useState(
     workflow.draft?.path ?? DRAFT_PATH[workflow.itemKind],
   );
@@ -512,6 +522,7 @@ function NewSheet({
             writeRole,
           },
         });
+        await onMutationError(error, { report: false });
       } else if (typed.code === 'inactive-group') {
         try {
           await onApplied(`${store.name} is inactive`);
@@ -519,7 +530,7 @@ function NewSheet({
         } catch (refreshError) {
           onError(refreshError);
         }
-      } else onError(error);
+      } else await onMutationError(error);
     } finally {
       setSaving(false);
     }
@@ -626,7 +637,6 @@ function NewSheet({
                 setWebsite,
                 'https://github.com/login',
               )}
-              {field('Path', path, setPath, DRAFT_PATH.Password)}
             </>
           ) : null}
           {itemKind === 'Resource' ? (
@@ -644,28 +654,21 @@ function NewSheet({
                 'e.g. ANTHROPIC_API_KEY',
               )}
               {field('Value', value, setValue, 'sk-ant-…', true)}
-              {field('Path', path, setPath, DRAFT_PATH.Resource)}
             </>
           ) : null}
-          {itemKind === 'Link' ? (
-            <>
-              {field('Points to', target, setTarget, '/ssh/id_ed25519', true)}
-              {field('Path', path, setPath, DRAFT_PATH.Link)}
-            </>
-          ) : null}
+          {itemKind === 'Link'
+            ? field('Points to', target, setTarget, '/ssh/id_ed25519', true)
+            : null}
           {itemKind === 'File' ? (
-            <>
-              <InsetRow label="File">
-                <span className={sourcePath ? 'mono' : 'dim'}>
-                  {sourcePath
-                    ? sourcePath.split(/[\\/]/).at(-1)
-                    : hovering
-                      ? 'Drop to use this file'
-                      : 'Drop a file here, or use the native picker'}
-                </span>
-              </InsetRow>
-              {field('Path', path, setPath, DRAFT_PATH.File)}
-            </>
+            <InsetRow label="File">
+              <span className={sourcePath ? 'mono' : 'dim'}>
+                {sourcePath
+                  ? sourcePath.split(/[\\/]/).at(-1)
+                  : hovering
+                    ? 'Drop to use this file'
+                    : 'Drop a file here, or use the native picker'}
+              </span>
+            </InsetRow>
           ) : null}
         </Inset>
         {fileError ? (
@@ -673,6 +676,15 @@ function NewSheet({
             {fileError}
           </p>
         ) : null}
+        <Toggle label="Advanced" className="sheet-advanced">
+          <Inset>{field('Path', path, setPath, DRAFT_PATH[itemKind])}</Inset>
+          <p className="hint">
+            Where this lands in the vault. Every kind fills it in from what you
+            typed above — the site, the name, the dropped file — and typing here
+            stops that only until the field it follows changes again. Any folder
+            in the path that does not exist yet is created with this item.
+          </p>
+        </Toggle>
       </>
     </Sheet>
   );
@@ -734,16 +746,13 @@ function ExistsSheet({
     >
       <>
         <p>
-          Nothing was created and nothing was overwritten. Creating carries
-          “must not exist”
+          Nothing was created and nothing was overwritten. An item already exists
+          at this path
           {version
-            ? `, and ${nameOf(workflow.path)} was listed at version ${version} in ${storeOf(world, workflow.storeId)?.name ?? ''}`
+            ? `, and ${nameOf(workflow.path)} is currently at version ${version} in ${storeOf(world, workflow.storeId)?.name ?? ''}`
             : ''}
-          .
-        </p>
-        <p className="fn">
-          Refresh and open what is there to review its exact version, or save
-          this one at another path. There is no “create anyway”.
+          . Open the existing item to review it, or choose a different name or
+          path.
         </p>
       </>
     </Sheet>
@@ -757,6 +766,7 @@ export function WriteOverlay({
   setWorkflow,
   onApplied,
   onError,
+  onMutationError,
   onRefreshConflict,
   onDiscardConflict,
   onOpenExisting,
@@ -767,6 +777,7 @@ export function WriteOverlay({
   setWorkflow: (workflow: WriteWorkflow) => void;
   onApplied: (message: string) => Promise<void>;
   onError: (error: unknown, item?: Item) => void;
+  onMutationError: MutationFailureHandler;
   onRefreshConflict: (item: Item, draft: string) => Promise<void>;
   onDiscardConflict: () => void;
   onOpenExisting: (
@@ -824,6 +835,7 @@ export function WriteOverlay({
           setWorkflow={setWorkflow}
           onApplied={onApplied}
           onError={(error) => onError(error)}
+          onMutationError={onMutationError}
         />
       </DismissibleDialog>
     );
@@ -859,7 +871,7 @@ export function WriteOverlay({
       bridge={bridge}
       setWorkflow={setWorkflow}
       onApplied={onApplied}
-      onError={onError}
+      onMutationError={onMutationError}
     />
   );
 }
@@ -915,7 +927,7 @@ function ConflictSheet({
               </Button>
               <Button
                 variant="primary"
-                className="danger"
+                danger
                 onClick={onDiscardConflict}
               >
                 Discard my edit
@@ -941,8 +953,8 @@ function ConflictSheet({
     >
       <Sheet
         glyph={<KindIcon kind={kindOf(workflow.item) as FilterKind} />}
-        title="Someone else changed this first"
-        subtitle={`${nameOf(workflow.item.path)} · save refused`}
+        title="Conflict: item was updated"
+        subtitle={`${nameOf(workflow.item.path)} · changes could not be saved`}
         footer={
           <>
             <Button onClick={() => setConfirmingDiscard(true)}>
@@ -964,14 +976,12 @@ function ConflictSheet({
       >
         <>
           <p>
-            You edited version {workflow.item.version}, but that exact version
-            is no longer current, so nothing was saved and nothing was
-            overwritten.
+            Another member saved a newer version while you were editing. Review
+            the latest version and reapply your changes.
           </p>
           <p className="fn">
             Refresh to see the current version beside your retained draft,
-            review it, and save again under the refreshed version. There is no
-            “save anyway” and Retry never replays this write.
+            review it, and save again under the refreshed version.
           </p>
         </>
       </Sheet>
@@ -993,14 +1003,15 @@ function RemoveSheet({
   bridge,
   setWorkflow,
   onApplied,
-  onError,
+  onMutationError,
 }: {
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'remove' }>;
   bridge: Bridge;
   setWorkflow: (workflow: WriteWorkflow) => void;
   onApplied: (message: string) => Promise<void>;
-  onError: (error: unknown, item?: Item) => void;
+  onMutationError: MutationFailureHandler;
 }): ReactNode {
+  const toasts = useToast();
   const [removing, setRemoving] = useState(false);
   return (
     <SheetDialog
@@ -1017,8 +1028,8 @@ function RemoveSheet({
         <>
           <Button onClick={() => setWorkflow(null)}>Cancel</Button>
           <Button
-            className="danger"
             variant="primary"
+            danger
             disabled={removing}
             onClick={() => {
               if (removing) return;
@@ -1033,7 +1044,17 @@ function RemoveSheet({
                   await onApplied(`Removed version ${workflow.item.version}`);
                   setWorkflow(null);
                 } catch (error) {
-                  onError(error, workflow.item);
+                  const typed = normalizeCommandError(error);
+                  if (typed.code === 'conflict') {
+                    setWorkflow(null);
+                    await onMutationError(error, { report: false });
+                    toasts.show(
+                      'The item was modified upstream. Review the updated item before removing.',
+                      { tone: 'warning' },
+                    );
+                  } else {
+                    await onMutationError(error, { item: workflow.item });
+                  }
                 } finally {
                   setRemoving(false);
                 }

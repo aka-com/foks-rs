@@ -27,7 +27,7 @@ use zeroize::Zeroizing;
 use crate::agent::{success_value, AgentError, AgentHandle};
 
 pub const MAIN: &str = "main";
-const MAXIMUM_TEXT_ITEM_BYTES: usize = 128 * 1024;
+const MAXIMUM_TEXT_ITEM_BYTES: usize = 2048 - 8;
 const MAXIMUM_CLIPBOARD_TEXT_BYTES: usize = 128 * 1024;
 const MAXIMUM_INVITE_BYTES: usize = 4 * 1024;
 const MAXIMUM_PASSPHRASE_BYTES: usize = 1024;
@@ -679,7 +679,7 @@ impl AppState {
         let Some(catalog) = catalog.as_ref() else {
             return Err(AgentError::new(
                 "catalog-required",
-                "Refresh the vault before changing it.",
+                "FOKS lost track of what is in this vault. Refresh to continue.",
                 true,
             ));
         };
@@ -3937,7 +3937,7 @@ fn take_text_value(value: String) -> Result<Vec<u8>, AgentError> {
     let mut value = Zeroizing::new(value);
     if value.len() > MAXIMUM_TEXT_ITEM_BYTES {
         return Err(invalid_request(
-            "Password and Resource values must be at most 128 KiB.",
+            "Password and Resource values must be at most 2,040 bytes.",
         ));
     }
     Ok(std::mem::take(&mut *value).into_bytes())

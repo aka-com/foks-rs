@@ -512,6 +512,9 @@ body {
   font-size: 13px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rt.items .prow {
@@ -610,7 +613,9 @@ body {
   margin-top: 6px;
 }
 
-.group-settings p.fn {
+.group-settings p.fn,
+.settings-main p.fn,
+.settings-main .fn {
   font-size: 12.5px;
   color: var(--muted);
   margin: 8px 2px 0;
@@ -1332,6 +1337,10 @@ body {
   background: var(--main-surface);
 }
 
+.account-recover-link {
+  margin-top: 12px;
+}
+
 .facts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1408,6 +1417,22 @@ body {
 }
 
 .first-run-main .crit b {
+  display: block;
+}
+
+.go-profile-connect .crit {
+  margin-top: 10px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-md);
+  background: var(--danger-wash);
+  color: var(--danger-text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.go-profile-connect .crit b {
   display: block;
 }
 
@@ -1582,6 +1607,11 @@ body {
    portaled `Listbox` in a `.menu-portal` wrap, matched to the trigger's
    width, and it borrows `.menu`'s panel chrome rather than inventing a
    second one. */
+.card-select {
+  position: relative;
+  width: 100%;
+}
+
 .card-select-trigger {
   display: flex;
   align-items: center;
@@ -1590,6 +1620,11 @@ body {
   padding: 7px 12px;
   text-align: left;
   cursor: pointer;
+}
+
+.card-select-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .card-select-trigger:hover {

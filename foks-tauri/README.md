@@ -262,10 +262,14 @@ it reuses a saved profile, while a newly published profile must still report
 inserted.
 
 `add_server` writes only a v0.1.9/Web-PKI profile record and does not contact
-the server. Removing that record with `forget_server` leaves the profile's
-durable directory, credentials, and checkpoint state on disk, so adding the
-same local name reconnects it. Forget requires the exact profile name and an
-exact `{ profile, removed: true }` response.
+the server. `forget_server` erases the profile's durable directory —
+credentials, hard and soft state, mutation journal — and its external
+checkpoint records before dropping the registry entry, so adding the same local
+name afterwards is a new profile that must be paired again. State is erased
+before the entry is dropped: an interrupted forget leaves a registered profile
+with no state, which is re-runnable, where the other order would strand key
+material under a name nothing can reach. Forget requires the exact profile name
+and an exact `{ profile, removed: true }` response.
 
 Device and backup reads resolve an opaque account-store id against the retained
 catalog, then reject unknown, duplicate, excessive, or malformed agent rows.

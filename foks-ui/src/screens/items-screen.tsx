@@ -32,6 +32,7 @@ import {
   KINDS,
   canChangeItem,
   catalog,
+  defaultCreateStore,
   fmtSize,
   kindOf,
   nameOf,
@@ -135,7 +136,7 @@ function ItemActions({
       {action(
         removeDisabled
           ? 'Your current access does not allow removing this item'
-          : `Remove version ${item.version} exactly`,
+          : 'Delete this item',
         'trash',
         onRemove,
         true,
@@ -394,6 +395,15 @@ export function ItemsScreen({
 
   const accessBands = storeAccessBands(world);
   const kindMeta = state.kind === 'All' ? null : KINDS[state.kind];
+  // A store page hands its own store to the sheet. All Items spans every
+  // store and names none, and this used to fall back to a hard-coded
+  // `acct:personal` — an id that is a fixture's, not this Mac's, so on a real
+  // vault the chooser opened on nothing. The first vault the sidebar lists is
+  // the honest default there.
+  const createStore =
+    store && storeReadable(world, store.id)
+      ? store.id
+      : (defaultCreateStore(world) ?? '');
   const requestOf = (item: Item): ItemRequest => ({
     storeId: item.store,
     path: item.path,
@@ -494,14 +504,7 @@ export function ItemsScreen({
     <>
       {head}
       <Toolbar
-        onNew={(itemKind) =>
-          onNew(
-            itemKind,
-            store && storeReadable(world, store.id)
-              ? store.id
-              : 'acct:personal',
-          )
-        }
+        onNew={(itemKind) => onNew(itemKind, createStore)}
         kind={state.kind}
         onKind={(kind) => {
           locations.setKind(kind);
@@ -561,14 +564,7 @@ export function ItemsScreen({
               </h2>
               <p>{(kindMeta ?? KINDS.Password).blurb}</p>
               <NewItemButton
-                onNew={(itemKind) =>
-                  onNew(
-                    itemKind,
-                    store && storeReadable(world, store.id)
-                      ? store.id
-                      : 'acct:personal',
-                  )
-                }
+                onNew={(itemKind) => onNew(itemKind, createStore)}
               />
             </div>
           )

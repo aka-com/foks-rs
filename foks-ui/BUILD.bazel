@@ -104,7 +104,6 @@ LINT_SRCS = FOKS_SRCS + ["vite.config.ts"] + glob([
 # repeatedly resolving the output-tree node_modules symlinks.
 VITE_BOOT_TESTS = [
     "tests/app-root.render.test.tsx",
-    "tests/vault-shell.render.test.tsx",
 ]
 
 # bridge.test.ts reads the exported Rust/Tauri wire golden through TEST_DATA,

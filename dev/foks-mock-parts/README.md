@@ -124,12 +124,14 @@ A view key is null until set; declare the default as the first value in `values`
   whole page (`"deck": true` aims at the deck on purpose), and `audit.mjs`'s `chipClash` is advisory.
   The sibling quick-chips still carry their page id (`Personal store-personal`) because that id is what
   a deep link needs.
-* **Walkthroughs are grouped.** `M.flow({group})` puts a flow under one of four headings — `First run`,
-  `Main app`, `Groups`, `Settings & servers` — rendered in first-declared order; no `group` means
-  `Other`. The steps are **numbered circles in a row and nothing else** — a dozen titles and page
+* **Walkthroughs are numbered.** Walkthrough buttons are numbered continuously `1`, `2`, `3`, …
+  for every flow in deck order, keeping the panel compact and clickable in sequence, with the full
+  group, title, and note on `title` / `aria-label`. The steps are
+  **numbered circles in a row and nothing else** — a dozen titles and page
   paths stacked vertically pushed the app frame off the screen. Each circle carries
   `<n> · <label> — <page path>` as its `title` and `aria-label`; the chosen step's `note` is printed
-  once, beside ‹ Previous / Next ›, and ← / → step the flow from anywhere outside a text field. A
+  once, under the circles; the ‹ › icon buttons after them and ← / → step the flow and ↑ / ↓ move to the previous or next
+  walkthrough in deck order (from its first step), from anywhere outside a text field. A
   step's `label` is therefore a tooltip and a screen-reader name, never a visible row: keep it short
   and put the sentence in `note`.
 * **The deck's panel titles are bare.** `App-wide state` and `View state` carry no subtitle; the only
@@ -327,7 +329,7 @@ same key and the same values, so the deck dedupes them into one group:
 | `applied` | `''` \| a token, comma-joinable | the mutation this pane's sheet performs has already run, replayed onto the fixture on every render. Tokens are the part's own: `created-password` / `saved-github` / `removed-github` (40-items), `add:eng:jules.park:Member:0` / `remove:eng:dana.okafor` (60-groups), `added` / `yes` (71-servers), `1` (70-settings) |
 | `typed` | `''` \| `1` (\| `wrong`) | the typed confirmation matches the expected string, so the danger button goes live |
 | `inspect` | `''` \| `1` | the "Inspect … response" disclosure is open |
-| `written` | `''` \| `1` | "I have written these down" is ticked |
+| `written` | `''` \| `1` \| `saved` | checkpoint.backupCommitted (first run: `1` just committed and still held, `saved` from an earlier visit); in Settings `1` = the phrase tick |
 | `advanced` | `''` \| `1` | the Advanced / Path disclosure is open |
 | `disclosure` | `''` \| `open` (\| `inspect`) | first run's `<details>` blocks (50-first-run keeps one name for all of them) |
 | `sheet` | `''` \| a sheet id | which overlay is up; `''` means "the page decides" |

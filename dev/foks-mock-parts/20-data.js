@@ -579,15 +579,15 @@
     var subject = unavailableSubject(store);
     switch (state) {
       case 'blocked':
-        return { title: 'Server access blocked', detail: 'A protocol safety check blocked ' + serverName + '. ' + subject + '.', action: 'Review server', actionKind: 'review-server' };
+        return { title: 'Server access blocked', detail: 'A security verification failed for ' + serverName + '. ' + subject + '.', action: 'Review server', actionKind: 'review-server' };
       case 'lease-unavailable':
-        return { title: 'Server status unavailable', detail: 'FOKS has no signed check-in for ' + serverName + '. ' + subject + '.', action: 'Review server', actionKind: 'review-server' };
+        return { title: 'Server status unavailable', detail: 'Cannot verify server status for ' + serverName + '. ' + subject + '.', action: 'Review server', actionKind: 'review-server' };
       case 'never-probed':
-        return { title: 'Server not checked yet', detail: serverName + ' has not been checked. ' + subject + ' until it is checked and its identity pinned.', action: 'Review server', actionKind: 'review-server' };
+        return { title: 'Server not checked yet', detail: serverName + ' has not been checked. ' + subject + ' until it is verified.', action: 'Review server', actionKind: 'review-server' };
       case 'catalog-unavailable':
-        return { title: 'Store connection failed', detail: store.name + ' remains known on this Mac, but its current server state could not be loaded. ' + subject + '.', action: 'Review server', actionKind: 'review-server' };
+        return { title: 'Store connection failed', detail: 'The server connection for ' + store.name + ' could not be established. ' + subject + '.', action: 'Review server', actionKind: 'review-server' };
       case 'lease-lapsed':
-        return { title: 'Check-in expired', detail: subject + ' until the agent renews the check-in for ' + serverName + '.', action: 'Open server', actionKind: 'open-server' };
+        return { title: 'Check-in expired', detail: subject + ' until FOKS reconnects to ' + serverName + '.', action: 'Open server', actionKind: 'open-server' };
       case 'inactive':
         return { title: 'Group setup incomplete', detail: 'Items and members are unavailable until setup is finished.', action: 'Finish setup', actionKind: 'finish-setup' };
       default:
@@ -677,10 +677,10 @@
       var verb = bucket.stores.length === 1 ? 'is' : 'are';
       var serverName = bucket.stores[0].serverName;
       var text =
-        bucket.state === 'blocked' ? joined + ' ' + verb + ' unavailable because a protocol safety check blocked ' + serverName + '.'
-        : bucket.state === 'lease-unavailable' ? joined + ' ' + verb + ' unavailable because FOKS has no signed check-in for ' + serverName + '.'
-        : bucket.state === 'lease-lapsed' ? joined + ' ' + verb + ' unavailable because the check-in for ' + serverName + ' expired.'
-        : bucket.state === 'catalog-unavailable' ? joined + ' ' + verb + ' unavailable because the current store inventory could not be loaded.'
+        bucket.state === 'blocked' ? joined + ' ' + verb + ' unavailable because security verification failed for ' + serverName + '.'
+        : bucket.state === 'lease-unavailable' ? joined + ' ' + verb + ' unavailable because server status could not be verified for ' + serverName + '.'
+        : bucket.state === 'lease-lapsed' ? joined + ' ' + verb + ' unavailable because the connection to ' + serverName + ' expired.'
+        : bucket.state === 'catalog-unavailable' ? joined + ' ' + verb + ' unavailable because the latest item list could not be loaded.'
         : joined + ' ' + verb + ' unavailable because ' + serverName + ' has not been checked.';
       /* StoreAccessBand is { key, text } and nothing more: items-screen.tsx:534
          renders `<Band>{band.text}</Band>` with no severity, so the class is
@@ -733,7 +733,7 @@
         return {
           id: 'catalog-store-' + i, severity: 'warn',
           title: 'Could not list one store on acme',
-          detail: (storeById[ref] ? storeById[ref].name : ref) + ' remains known on this Mac, but its current store inventory could not be loaded.',
+          detail: (storeById[ref] ? storeById[ref].name : ref) + ' could not be listed: the server connection could not be established.',
           action: 'Retry',
         };
       }));

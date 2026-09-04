@@ -8,10 +8,14 @@
  * work — so the controls are the same ones with less furniture around them.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
-import { enqueueProfileWork, sharedServerStatus } from '../bridge';
+import {
+  enqueueProfileWork,
+  normalizeCommandError,
+  sharedServerStatus,
+} from '../bridge';
 import type {
   Bridge,
   CheckedServer,
@@ -32,6 +36,7 @@ import {
 } from '../components';
 import type { Location } from '../location';
 import { hue, initials, plural, serverLeaseState, shortId } from '../model';
+import type { MutationFailureHandler } from '../mutation-recovery';
 import type { Server, TeamStore, World } from '../model';
 
 interface Props {
@@ -44,6 +49,7 @@ interface Props {
   onNavigate: (location: Location) => void;
   onRefresh: (message: string) => Promise<void>;
   onError: (error: unknown) => void;
+  onMutationError: MutationFailureHandler;
 }
 
 type Sheet = 'add' | 'reset' | 'forget' | null;
@@ -171,6 +177,7 @@ export function ServersSection({
   onNavigate,
   onRefresh,
   onError,
+  onMutationError,
 }: Props): ReactNode {
   const [enteredScene] = useState(scene);
   const [statuses, setStatuses] = useState<Map<string, ServerStatusSnapshot>>(
@@ -186,6 +193,8 @@ export function ServersSection({
         : null,
   );
   const [reset, setReset] = useState<ResetPreview | null>(null);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const toasts = useToast();
   const selected = serverFor(world, profile);
@@ -204,6 +213,7 @@ export function ServersSection({
     const conceal = (): void => {
       setSheet(null);
       setReset(null);
+      setResetError(null);
     };
     const concealWhenHidden = (): void => {
       if (document.hidden) conceal();
@@ -275,12 +285,13 @@ export function ServersSection({
           return next;
         });
       })
-      .catch(onError);
-  }, [bridge, enteredScene, onError, selected]);
+      .catch((error) => void onMutationError(error));
+  }, [bridge, enteredScene, onMutationError, selected]);
 
-  useEffect(() => {
-    if (sheet !== 'reset' || !selected) return;
-    let alive = true;
+  const loadResetPreview = useCallback(() => {
+    if (!selected) return;
+    setResetLoading(true);
+    setResetError(null);
     setReset(null);
     void enqueueProfileWork(bridge, selected.id, () =>
       bridge.describeReset(selected.id),
@@ -288,13 +299,19 @@ export function ServersSection({
       .then((preview) => {
         if (preview.profile !== selected.id)
           throw new Error('describe_reset returned a different profile.');
-        if (alive) setReset(preview);
+        setReset(preview);
       })
-      .catch(onError);
-    return () => {
-      alive = false;
-    };
-  }, [bridge, onError, selected, sheet]);
+      .catch((error) => {
+        setResetError(normalizeCommandError(error).message);
+        onError(error);
+      })
+      .finally(() => setResetLoading(false));
+  }, [bridge, onError, selected]);
+
+  useEffect(() => {
+    if (sheet !== 'reset' || !selected) return;
+    loadResetPreview();
+  }, [loadResetPreview, selected, sheet]);
 
   const check = async (server: Server): Promise<void> => {
     // Guarded here rather than at each caller, because ⌘R reached this with
@@ -302,12 +319,7 @@ export function ServersSection({
     // per repeat, and it would check a blocked or lapsed server the page
     // deliberately offers no Check for.
     if (busy) return;
-    const lease = serverLeaseState(statuses.get(server.id));
-    const lapsed =
-      server.state === 'lease-lapsed' ||
-      lease === 'lapsed' ||
-      (fixtureLapsed && server.id === 'acme');
-    if (lapsed || rollback || server.state === 'blocked') return;
+    if (rollback || server.state === 'blocked') return;
     setBusy(true);
     try {
       const report = await enqueueProfileWork(bridge, server.id, () =>
@@ -317,7 +329,7 @@ export function ServersSection({
         throw new Error('check_server returned a different profile.');
       setChecked((current) => new Map(current).set(server.id, report));
       toasts.show(
-        `Checked ${report.canonicalName} — ${acceptanceText(report.acceptance)}`,
+        `Checked ${report.canonicalName}, ${acceptanceText(report.acceptance)}`,
       );
       try {
         const passive = await enqueueProfileWork(bridge, server.id, () =>
@@ -338,10 +350,10 @@ export function ServersSection({
         );
       } catch (error) {
         setStatusFailures((current) => new Set(current).add(server.id));
-        onError(error);
+        await onMutationError(error);
       }
     } catch (error) {
-      onError(error);
+      await onMutationError(error);
     } finally {
       setBusy(false);
     }
@@ -383,16 +395,19 @@ export function ServersSection({
         onAdded={async (added) => {
           setSheet(null);
           await onRefresh(
-            'Server added — check it before trusting anything on it',
+            'Server added, check it before trusting anything on it',
           );
           onNavigate(servers(added));
         }}
-        onError={onError}
+        onError={(error) => void onMutationError(error)}
       />
     ) : sheet === 'reset' && selected ? (
       <ResetSheet
         server={selected}
         preview={reset}
+        resetLoading={resetLoading}
+        resetError={resetError}
+        onRetryPreview={loadResetPreview}
         bridge={bridge}
         onClose={() => {
           setSheet(null);
@@ -402,10 +417,10 @@ export function ServersSection({
           setSheet(null);
           setReset(null);
           await onRefresh(
-            `Reset ${selected.name} — check it again before using it`,
+            `Reset ${selected.name}, check it again before using it`,
           );
         }}
-        onError={onError}
+        onError={(error) => void onMutationError(error)}
       />
     ) : sheet === 'forget' && selected ? (
       <ForgetSheet
@@ -417,7 +432,7 @@ export function ServersSection({
           onNavigate(servers());
           await onRefresh(`Forgot ${selected.name} on this Mac`);
         }}
-        onError={onError}
+        onError={(error) => void onMutationError(error)}
       />
     ) : null;
 
@@ -727,15 +742,29 @@ function StatusBand({
           </Button>
         }
       >
-        The address is saved. Check the server to pin its identity on this Mac.
+        The address is saved. Check the server to verify its certificate and
+        connection.
       </Band>
     );
   if (state === 'lapsed')
-    // Check is not offered: the agent renews the check-in, not this button.
     return (
-      <Band severity="crit" label="Check-in expired.">
-        The server’s check-in expired {expires(expiry)}. Until the agent renews
-        it, this server is locked.
+      <Band
+        severity="crit"
+        label="Check-in expired."
+        action={
+          <Button
+            variant="plain"
+            size="sm"
+            icon="again"
+            disabled={busy}
+            onClick={onCheck}
+          >
+            Check now
+          </Button>
+        }
+      >
+        The server connection expired {expires(expiry)}. Check the server to
+        renew your check-in.
       </Band>
     );
   if (state === 'unavailable')
@@ -755,8 +784,8 @@ function StatusBand({
           </Button>
         }
       >
-        The agent has no signed check-in for this server. Until it gets one,
-        this server is locked.
+        Cannot verify the status of this server. This server is locked until
+        reconnected.
       </Band>
     );
   if (state === 'blocked')
@@ -770,7 +799,7 @@ function StatusBand({
           </Button>
         }
       >
-        The server’s history no longer matches what this Mac pinned. This server
+        The server’s history no longer matches the saved connection. This server
         is locked.
       </Band>
     );
@@ -1148,7 +1177,7 @@ function AddServerSheet({
     >
       <p>
         Adding a server saves its profile and address on this Mac. Check it next
-        to verify and pin its signed host identity.
+        to verify its identity and save the connection.
       </p>
       <Inset>
         <Field label="Profile" value={profile} onChange={setProfile} />
@@ -1161,6 +1190,9 @@ function AddServerSheet({
 function ResetSheet({
   server,
   preview,
+  resetLoading,
+  resetError,
+  onRetryPreview,
   bridge,
   onClose,
   onReset,
@@ -1168,6 +1200,9 @@ function ResetSheet({
 }: {
   server: Server;
   preview: ResetPreview | null;
+  resetLoading: boolean;
+  resetError: string | null;
+  onRetryPreview: () => void;
   bridge: Bridge;
   onClose: () => void;
   onReset: () => Promise<void>;
@@ -1184,12 +1219,17 @@ function ResetSheet({
   return (
     <SheetFrame
       title={`Reset ${server.name}?`}
-      subtitle="Discard only this Mac’s local state for the whole server"
-      onClose={onClose}
+      subtitle="Remove local data for this server from this Mac"
+      onClose={() => {
+        if (busy) return;
+        onClose();
+      }}
       danger
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
           <Button
             variant="danger"
             disabled={
@@ -1218,7 +1258,7 @@ function ResetSheet({
       </p>
       <Inset>
         <InsetRow label="Discarded">
-          Pinned Host ID, signed-history checkpoint and cached server artifacts.
+          Server certificate, connection history, and local cached data.
         </InsetRow>
         <InsetRow label="Lost">
           Local writes that were never accepted by the server cannot be
@@ -1247,9 +1287,7 @@ function ResetSheet({
                 </InsetRow>
               ))
             ) : (
-              <InsetRow label="None">
-                No resumable operation was reported.
-              </InsetRow>
+              <InsetRow label="None">No resumable operations found.</InsetRow>
             )}
           </Inset>
           <SectionLabel>Local artifacts discarded</SectionLabel>
@@ -1261,9 +1299,7 @@ function ResetSheet({
                 </InsetRow>
               ))
             ) : (
-              <InsetRow label="None">
-                No local artifacts were reported.
-              </InsetRow>
+              <InsetRow label="None">No local cached data to remove.</InsetRow>
             )}
           </Inset>
           <p className="hint">
@@ -1272,8 +1308,17 @@ function ResetSheet({
             {available ? '' : ' Preview again by closing and reopening Reset.'}
           </p>
         </>
+      ) : resetError ? (
+        <div style={{ margin: '16px 0' }}>
+          <p className="hint" style={{ color: 'var(--red, #e5484d)', marginBottom: '8px' }}>
+            Failed to load reset preview: {resetError}
+          </p>
+          <Button disabled={resetLoading} onClick={onRetryPreview}>
+            {resetLoading ? 'Retrying…' : 'Retry loading preview'}
+          </Button>
+        </div>
       ) : (
-        <p>Reading the exact reset preview…</p>
+        <p>Loading reset preview…</p>
       )}
       <Inset>
         <InsetRow label="Confirm">
@@ -1306,7 +1351,7 @@ function ForgetSheet({
   return (
     <SheetFrame
       title={`Forget ${server.name}?`}
-      subtitle="Removes the profile from this Mac"
+      subtitle="Erase this Mac’s keys and state for the whole server"
       onClose={onClose}
       danger
       footer={
@@ -1336,9 +1381,22 @@ function ForgetSheet({
       }
     >
       <p>
-        The server and its ciphertext are unchanged. Type the local profile name
-        to confirm.
+        Your data on the server will not be deleted. Type the server profile
+        name to confirm.
       </p>
+      <Inset>
+        <InsetRow label="Erased">
+          Every account credential this Mac holds for this server, its pinned
+          Host ID, signed-history checkpoint and cached artifacts.
+        </InsetRow>
+        <InsetRow label="Lost">
+          An account with no backup phrase and no other paired device cannot be
+          signed in to again.
+        </InsetRow>
+        <InsetRow label="Untouched">
+          Every other configured server and its local state.
+        </InsetRow>
+      </Inset>
       <Inset>
         <InsetRow label="Confirm">
           <input

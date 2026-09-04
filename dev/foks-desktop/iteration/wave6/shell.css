@@ -121,7 +121,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .menuwrap{position:relative}
 .menu{position:absolute;top:36px;left:0;min-width:210px;background:#fff;border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow-menu);padding:6px;z-index:5}
 .menu.right{left:auto;right:0}
-.menu button{display:flex;align-items:center;gap:9px;width:100%;padding:7px 9px;border-radius:7px;text-align:left}.menu button:hover{background:var(--hover)}
+.menu button{display:flex;align-items:center;gap:9px;width:100%;padding:6px 9px;border-radius:7px;text-align:left}.menu button:hover{background:var(--hover)}
+.menu button.kind-menu-item{padding-block:4px}
 .menu button .ic{font-size:16px;width:18px}.menu button kbd{margin-left:auto;font:11px var(--sans);color:var(--faint)}
 .menu button.on{background:var(--accent-wash);color:var(--accent-ink);font-weight:600}
 .menu .cap{font-size:11.5px;color:var(--muted);padding:6px 9px 4px}

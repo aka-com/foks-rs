@@ -472,11 +472,8 @@ impl KvWriteSession<'_> {
                 }
                 if matches!(error, Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) {
                     MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
-                        .submission_unknown(&operation.operation_id)?;
-                    return match self.reconcile_namespace_mutation(&operation, &dirents) {
-                        Ok(tree) => Ok((dirents, tree)),
-                        Err(_) => Err(error),
-                    };
+                        .rejected(&operation.operation_id)?;
+                    return Err(error);
                 }
                 MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
                     .submission_unknown(&operation.operation_id)?;

@@ -266,6 +266,15 @@
     applyStep();
   };
   M.stopFlow = function () { M.currentFlow = null; M.step = 0; M.render(); };
+  /* ↑ / ↓: the previous / next walkthrough in the deck's order, from its
+     first step. With none running, ↓ starts the first and ↑ the last. */
+  M.flowMove = function (delta) {
+    if (!M.flowOrder.length) return;
+    var at = M.currentFlow ? M.flowOrder.indexOf(M.currentFlow.id) : (delta > 0 ? -1 : M.flowOrder.length);
+    var next = at + delta;
+    if (next < 0 || next >= M.flowOrder.length) return;
+    M.startFlow(M.flowOrder[next], 0);
+  };
   M.flowStep = function (delta) {
     if (!M.currentFlow) return;
     var n = M.step + delta;
@@ -349,25 +358,21 @@
     dimBtn.setAttribute('aria-expanded', String(!!M.showDim));
     dimBtn.setAttribute('data-act', 'dim-toggle');
     document.getElementById('mcViewGroups').innerHTML = html;
-    /* Flows, under their `group` headings in first-declared order — 24 of
-       them are an unreadable wall otherwise. A flow with no group falls into
-       "Other" at the end. */
-    var order = [], byGroup = {};
-    M.flowOrder.forEach(function (id) {
+    /* Flows: 1 2 3 ... for each walkthrough in declaration order. */
+    document.getElementById('mcFlowList').innerHTML = M.flowOrder.map(function (id, i) {
       var f = M.flows.filter(function (x) { return x.id === id; })[0];
-      var g = f.group || 'Other';
-      if (!byGroup[g]) { byGroup[g] = []; order.push(g); }
-      byGroup[g].push(f);
-    });
-    document.getElementById('mcFlowList').innerHTML = order.map(function (g) {
-      return '<div class="mc-flowgroup"><span class="mc-label">' + esc(g) + '</span>' +
-        byGroup[g].map(function (f) {
-          return chip(f.title, M.currentFlow && M.currentFlow.id === f.id,
-            'data-act="flow" data-flow="' + esc(f.id) + '"' + (f.note ? ' title="' + esc(f.note) + '"' : ''));
-        }).join('') + '</div>';
+      var num = String(i + 1);
+      var tip = num + ' · ' + (f.group ? '[' + f.group + '] ' : '') + f.title + (f.note ? ' — ' + f.note : '');
+      return chip(num, M.currentFlow && M.currentFlow.id === f.id,
+        'data-act="flow" data-flow="' + esc(f.id) + '" title="' + esc(tip) + '" aria-label="' + esc(tip) + '"');
     }).join('');
     var stepsEl = document.getElementById('mcSteps');
     var nav = document.getElementById('mcStepNav');
+    /* The rule, the Selected row, the nav row and the note row show only
+       while a walkthrough is running. */
+    ['mcFlowRule', 'mcStepsRow', 'mcStepNoteRow'].forEach(function (id) {
+      var el = document.getElementById(id); if (el) el.hidden = !M.currentFlow;
+    });
     if (M.currentFlow) {
       /* Numbered circles, nothing else. The label and the page path are the
          circle's `title`/`aria-label`, and the chosen step's own sentence is
@@ -380,8 +385,12 @@
           (i === M.step ? ' aria-current="step"' : '') + '>' + (i + 1) + '</button>';
       }).join('');
       nav.hidden = false;
+      /* The ‹ › icons go dim at either end, as the keys stop there too. */
+      nav.querySelector('[data-act="flow-prev"]').disabled = M.step <= 0;
+      nav.querySelector('[data-act="flow-next"]').disabled = M.step >= M.currentFlow.steps.length - 1;
       document.getElementById('mcStepNote').textContent = (M.currentFlow.steps[M.step] && M.currentFlow.steps[M.step].note) || '';
-      document.getElementById('mcFlowSub').innerHTML = esc(M.currentFlow.title) + ' · step ' + (M.step + 1) + ' of ' + M.currentFlow.steps.length + ' <button class="mock-chip sub" data-act="flow-stop">leave</button>';
+      var flowIdx = M.flowOrder.indexOf(M.currentFlow.id) + 1;
+      document.getElementById('mcFlowSub').innerHTML = (flowIdx ? '#' + flowIdx + ' · ' : '') + esc(M.currentFlow.title) + ' · step ' + (M.step + 1) + ' of ' + M.currentFlow.steps.length + ' <button class="mock-chip sub" data-act="flow-stop">leave</button>';
     } else {
       stepsEl.innerHTML = '';
       nav.hidden = true;
@@ -665,11 +674,14 @@
     else if (act === 'flow-stop') M.stopFlow();
     if (t.closest('#mcTree')) { /* keep the tree open only for summaries */ }
   });
-  /* Keyboard: ← → step flows, Escape closes what a page marks closable. */
+  /* Keyboard: ← → step the running flow, ↑ ↓ move between flows, Escape
+     closes what a page marks closable. */
   document.addEventListener('keydown', function (ev) {
     if (ev.target && /INPUT|TEXTAREA|SELECT/.test(ev.target.tagName)) return;
     if (M.currentFlow && ev.key === 'ArrowRight') { M.flowStep(1); ev.preventDefault(); }
     else if (M.currentFlow && ev.key === 'ArrowLeft') { M.flowStep(-1); ev.preventDefault(); }
+    else if (ev.key === 'ArrowDown') { M.flowMove(1); ev.preventDefault(); }
+    else if (ev.key === 'ArrowUp') { M.flowMove(-1); ev.preventDefault(); }
     else if (ev.key === 'Escape' && M.fns.escape) M.fns.escape();
   });
   /* Text inputs inside the frame: data-bind="v.search" keeps the state. */

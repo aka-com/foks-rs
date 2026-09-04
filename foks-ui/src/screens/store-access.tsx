@@ -34,31 +34,31 @@ function accessCopy(
     case 'blocked':
       return {
         title: 'Server access blocked',
-        detail: `A protocol safety check blocked ${serverName}. ${subject}.`,
+        detail: `A security verification failed for ${serverName}. ${subject}.`,
         action: 'review-server',
       };
     case 'lease-unavailable':
       return {
         title: 'Server status unavailable',
-        detail: `FOKS has no signed check-in for ${serverName}. ${subject}.`,
+        detail: `Cannot verify server status for ${serverName}. ${subject}.`,
         action: 'review-server',
       };
     case 'never-probed':
       return {
         title: 'Server not checked yet',
-        detail: `${serverName} has not been checked. ${subject} until it is checked and its identity pinned.`,
+        detail: `${serverName} has not been checked. ${subject} until it is verified.`,
         action: 'review-server',
       };
     case 'catalog-unavailable':
       return {
         title: 'Store connection failed',
-        detail: `${store.name} remains known on this Mac, but its current server state could not be loaded. ${subject}.`,
+        detail: `The server connection for ${store.name} could not be established. ${subject}.`,
         action: 'review-server',
       };
     case 'lease-lapsed':
       return {
         title: 'Check-in expired',
-        detail: `${subject} until the agent renews the check-in for ${serverName}.`,
+        detail: `${subject} until FOKS reconnects to ${serverName}.`,
         action: 'open-server',
       };
     case 'inactive':
@@ -161,13 +161,13 @@ export function storeAccessBands(world: World): StoreAccessBand[] {
     const serverName = serverOf(world, stores[0].id)?.name ?? stores[0].server;
     const text =
       state === 'blocked'
-        ? `${names} ${verb} unavailable because a protocol safety check blocked ${serverName}.`
+        ? `${names} ${verb} unavailable because security verification failed for ${serverName}.`
         : state === 'lease-unavailable'
-          ? `${names} ${verb} unavailable because FOKS has no signed check-in for ${serverName}.`
+          ? `${names} ${verb} unavailable because server status could not be verified for ${serverName}.`
           : state === 'lease-lapsed'
-            ? `${names} ${verb} unavailable because the check-in for ${serverName} expired.`
+            ? `${names} ${verb} unavailable because the connection to ${serverName} expired.`
             : state === 'catalog-unavailable'
-              ? `${names} ${verb} unavailable because the current store inventory could not be loaded.`
+              ? `${names} ${verb} unavailable because the latest item list could not be loaded.`
               : `${names} ${verb} unavailable because ${serverName} has not been checked.`;
     return { key, text };
   });

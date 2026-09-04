@@ -146,6 +146,8 @@ test('the shell layout the design specifies survived the lift', async () => {
     /\.toolbar \.btn,\.toolbar \.seg\.txt button\{font-size:13px\}/,
   );
   assert.match(shell, /\.btn \.ic\.chevron\{font-size:14px\}/);
+  assert.match(shell, /\.menu button\{[^}]*padding:6px 9px;/);
+  assert.match(shell, /\.menu button\.kind-menu-item\{padding-block:4px\}/);
   // Disabled primary hover must not fall back to --btn-bg, or the blue
   // fill disappears against the card while the pointer is still over it.
   assert.match(

@@ -426,24 +426,24 @@
       if (v.state === 'unprobed')
         return UI.band({
           severity: 'info', label: 'Not checked yet.', action: check,
-          text: 'The address is saved. Check the server to pin its identity on this Mac.',
+          text: 'The address is saved. Check the server to verify its certificate and connection.',
         });
       if (v.state === 'lapsed')
         /* No Check: the agent renews the check-in, not this button. */
         return UI.band({
           severity: 'crit', label: 'Check-in expired.',
-          text: 'The server’s check-in expired ' + esc(expires(v.expiry)) + '. Until the agent renews it, this server is locked.',
+          text: 'The server connection expired ' + esc(expires(v.expiry)) + '. This server is locked until reconnected.',
         });
       if (v.state === 'unavailable')
         return UI.band({
           severity: 'crit', label: 'Check-in status unknown.', action: check,
-          text: 'The agent has no signed check-in for this server. Until it gets one, this server is locked.',
+          text: 'Cannot verify the status of this server. This server is locked until reconnected.',
         });
       if (v.state === 'blocked')
         return UI.band({
           severity: 'crit', label: 'History changed.',
           action: UI.btn('Reset…', { size: 'sm', variant: 'danger', attrs: 'data-act="call" data-fn="srvOpenReset"' }),
-          text: 'The server’s history no longer matches what this Mac pinned. This server is locked.',
+          text: 'The server’s history no longer matches the saved connection. This server is locked.',
         });
       return '';
     }
@@ -682,7 +682,7 @@
       return sheetFrame({
         title: 'Add a server',
         subtitle: 'Save its address, then check its identity',
-        body: '<p>Adding a server saves its profile and address on this Mac. Check it next to verify and pin its signed host identity.</p>' +
+        body: '<p>Adding a server saves its profile and address on this Mac. Check it next to verify its identity and save the connection.</p>' +
           UI.inset(
             labelledInput('Profile', profile, 'v.addid') +
             labelledInput('Address', probe, 'v.addaddr')
@@ -701,29 +701,29 @@
       var spent = s.v.preview === 'spent';
       var resumables = srv.id === 'personal' ? [{ kind: 'team-creation', alias: 'homelab' }] : [];
       var artifacts = [{ kind: 'catalog-cache', entries: 5, bytes: 8192 }];
-      var preview = loading ? '<p>Reading the exact reset preview…</p>' : h(
+      var preview = loading ? '<p>Loading reset preview…</p>' : h(
         UI.sectionLabel('Also discarded · resumable operations'),
         UI.inset(resumables.length
           ? resumables.map(function (r) {
               return UI.insetRow({ label: esc(r.kind), value: esc(r.alias) + (r.target ? ' · ' + esc(r.target) : '') });
             }).join('')
-          : UI.insetRow({ label: 'None', value: 'No resumable operation was reported.' })),
+          : UI.insetRow({ label: 'None', value: 'No resumable operations found.' })),
         UI.sectionLabel('Local artifacts discarded'),
         UI.inset(artifacts.length
           ? artifacts.map(function (r) {
               return UI.insetRow({ label: esc(r.kind), value: esc(r.entries) + ' entries · ' + esc(r.bytes.toLocaleString()) + ' bytes' });
             }).join('')
-          : UI.insetRow({ label: 'None', value: 'No local artifacts were reported.' })),
+          : UI.insetRow({ label: 'None', value: 'No local cached data to remove.' })),
         '<p class="hint">This preview token expires in 60 seconds and can be used once.' +
         (spent ? ' Preview again by closing and reopening Reset.' : '') + '</p>'
       );
       return sheetFrame({
         danger: true,
         title: 'Reset ' + srv.name + '?',
-        subtitle: 'Discard only this Mac’s local state for the whole server',
+        subtitle: 'Remove local data for this server from this Mac',
         body: '<p>This does not delete server data. Check again before using this server.</p>' +
           UI.inset(
-            UI.insetRow({ label: 'Discarded', value: 'Pinned Host ID, signed-history checkpoint and cached server artifacts.' }) +
+            UI.insetRow({ label: 'Discarded', value: 'Server certificate, connection history, and local cached data.' }) +
             UI.insetRow({ label: 'Lost', value: 'Local writes that were never accepted by the server cannot be recovered.' }) +
             UI.insetRow({ label: 'Kept', value: 'Your keys and account remain on this Mac, but this reset does not sign you in.' }) +
             UI.insetRow({ label: 'Untouched', value: 'Every other configured server and its local state.' })
@@ -742,7 +742,7 @@
         danger: true,
         title: 'Forget ' + srv.name + '?',
         subtitle: 'Erase this Mac’s keys and state for the whole server',
-        body: '<p>The server and its ciphertext are unchanged. Type the local profile name to confirm.</p>' +
+        body: '<p>Your data on the server will not be deleted. Type the server profile name to confirm.</p>' +
           UI.inset(
             UI.insetRow({ label: 'Erased', value: 'Every account credential this Mac holds for this server, its pinned Host ID, signed-history checkpoint and cached artifacts.' }) +
             UI.insetRow({ label: 'Lost', value: 'An account with no backup phrase and no other paired device cannot be signed in to again.' }) +
@@ -1123,7 +1123,7 @@
       title: 'Reset local state',
       path: ['Settings', 'Servers & devices', 'Reset local state sheet'],
       nav: 'settings',
-      note: 'ResetSheet (alertdialog): the preview arrives after "Reading the exact reset preview…" and carries a 60-second, one-use token.',
+      note: 'ResetSheet (alertdialog): the preview arrives after "Loading reset preview…" and carries a 60-second, one-use token.',
       controls: [
         PROFILE, TYPED,
         { key: 'preview', label: 'Reset preview', note: 'describe_reset is in flight while the sheet is open, and its one-use token is spent by the danger button.', values: [{ v: '', label: 'Preview ready' }, { v: 'loading', label: 'Preview loading' }, { v: 'spent', label: 'Token spent', hint: 'the hint gains " Preview again by closing and reopening Reset." and the danger button stays disabled — in the app, only after a resetServer that failed' }] },

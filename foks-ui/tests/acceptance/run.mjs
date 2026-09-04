@@ -543,7 +543,14 @@ async function firstRunWalk(context, origin) {
       .locator('.sheet')
       .getByRole('button', { name: 'Done', exact: true })
       .click();
-    await page.locator('.pane', { hasText: 'Written down' }).waitFor();
+    await page
+      .getByRole('button', { name: 'Show my phrase', exact: true })
+      .click();
+    await page.locator('.sheet .word').first().waitFor();
+    await page
+      .locator('.sheet')
+      .getByRole('button', { name: 'Not now', exact: true })
+      .click();
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await page.locator('.pane', { hasText: 'Waiting for sam.ortiz' }).waitFor();
     await reloadAt('Waiting for sam.ortiz');

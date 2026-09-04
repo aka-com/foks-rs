@@ -18,8 +18,8 @@
 
   Controls, left: walkthroughs — 29 of them, under four headings, one at a
   time. The chosen flow's steps are a row of numbered circles (the current one
-  filled); the step's own sentence sits beside ‹ Previous / Next ›, which the
-  ← / → keys also drive. Below that, a nested page picker: every group open,
+  filled) with ‹ › icon buttons after them; the step's own sentence sits under
+  the row, and the ← / → keys step as the icons do, and ↑ / ↓ move to the previous or next walkthrough. Below that, a nested page picker: every group open,
   the current page highlighted, with the id a deep link needs. Controls,
   right: app-wide state above view-specific state; the groups the current page
   does not read are dimmed, disabled and foldable away behind the toggle in
@@ -131,17 +131,18 @@
   }
   .mc-toggle:hover{ background:var(--hover); }
 
-  /* Flows: the walkthroughs under four headings; the chosen one shows its
-     steps below the list. */
-  .mc-flows{ display:flex; flex-direction:column; gap:6px; }
-  .mc-flowgroup{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+  /* Flows: walkthrough buttons 1 2 3 ...; the chosen one shows its steps below. */
+  .mc-flows{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; flex:1; min-width:0; }
+  .mc-flows .mock-chip{ min-width:1.7rem; text-align:center; padding:3px 6px; }
   /* The steps are numbered circles in a row, nothing else: a dozen titles and
      page paths stacked vertically pushed the app frame off the screen, and the
      step that matters is the one whose sentence is already printed beside
      ‹ Previous / Next ›. Each circle keeps its label as `title`/`aria-label`,
      so the text is a hover and a screen reader away, never a row of its own. */
-  .mc-steps{ display:flex; flex-flow:row wrap; align-items:center; gap:6px; }
-  .mc-steps:empty{ display:none; }
+  .mc-steps{ display:flex; flex-flow:row wrap; align-items:center; gap:6px; flex:1; min-width:0; }
+  .mc-circles{ display:contents; }
+  .mc-step.nav{ font-size:.9rem; font-weight:600; color:var(--ink); }
+  .mc-step.nav:disabled{ opacity:.35; cursor:default; }
   .mc-step{
     width:1.6rem; height:1.6rem; padding:0; border-radius:50%;
     display:grid; place-items:center; border:1px solid var(--line-mid);
@@ -151,7 +152,11 @@
   .mc-step:hover{ background:var(--hover); }
   .mc-step.on{ background:var(--accent); border-color:var(--accent); color:#fff; }
   .mc-step.on:hover{ background:var(--accent); }
-  .mc-stepnav{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  /* The ‹ › icons and the key hint sit in the circles' own flex row, so the
+     icons stay beside the last circle and only the hint wraps when it must. */
+  .mc-stepnav{ display:contents; }
+  .mc-step.nav:first-of-type{ margin-left:4px; }
+  #mcStepNoteRow .mc-note{ flex:1; min-width:0; }
   .mc-keys{ font-size:.6875rem; color:var(--mock-note); white-space:nowrap; }
   .mc-keys kbd{ font-family:inherit; border:1px solid var(--line-mid); border-radius:4px; padding:0 4px; background:var(--btn-bg); }
 
@@ -233,14 +238,17 @@
   <div class="mc-col">
     <div class="mc-panel" id="mcFlows">
       <div class="mc-title">Walkthroughs <span class="mc-sub" id="mcFlowSub"></span></div>
-      <div class="mc-flows" id="mcFlowList"></div>
-      <div class="mc-steps" id="mcSteps"></div>
-      <div class="mc-stepnav" id="mcStepNav" hidden>
-        <button class="mock-chip" data-act="flow-prev">‹ Previous</button>
-        <button class="mock-chip" data-act="flow-next">Next ›</button>
-        <span class="mc-keys" title="Arrow keys step the walkthrough from anywhere outside a text field."><kbd>←</kbd> <kbd>→</kbd></span>
-        <span class="mc-note" id="mcStepNote"></span>
+      <div class="mc-group"><span class="mc-label">Walkthrough</span><div class="mc-flows" id="mcFlowList"></div></div>
+      <hr class="mc-divider" id="mcFlowRule" hidden />
+      <div class="mc-group" id="mcStepsRow" hidden><span class="mc-label" aria-hidden="true"></span>
+        <div class="mc-steps"><span class="mc-circles" id="mcSteps"></span>
+        <span class="mc-stepnav" id="mcStepNav">
+          <button class="mc-step nav" data-act="flow-prev" title="Previous step" aria-label="Previous step">‹</button>
+          <button class="mc-step nav" data-act="flow-next" title="Next step" aria-label="Next step">›</button>
+          <span class="mc-keys" title="From anywhere outside a text field: ← → step this walkthrough, ↑ ↓ move to the previous or next one."><kbd>←</kbd> <kbd>→</kbd> steps · <kbd>↑</kbd> <kbd>↓</kbd> flows</span>
+        </span></div>
       </div>
+      <div class="mc-group" id="mcStepNoteRow" hidden><span class="mc-label" aria-hidden="true"></span><span class="mc-note" id="mcStepNote"></span></div>
     </div>
     <div class="mc-panel grow" id="mcPages">
       <div class="mc-title">Page <span class="mc-sub" id="mcPageSub"></span></div>

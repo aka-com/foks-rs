@@ -336,7 +336,7 @@
         : UI.insetRow({
             label: 'None',
             value: stopped ? 'Not listed while access is stopped'
-              : 'No devices were reported for this account.',
+              : 'No devices connected to this account.',
           });
 
       return h(
@@ -347,7 +347,7 @@
           { className: 'settings-inset' }),
         stopped ? UI.band({
           severity: 'crit', label: 'Account access is stopped',
-          text: 'A usable signed server check-in is unavailable. No account, recovery, pairing or security-key read or write is offered here.',
+          text: 'Cannot connect to the server. Account management and security keys are unavailable until reconnected.',
         }) : '',
         UI.sectionLabel('Your Macs'),
         UI.inset(deviceRows, { className: 'settings-inset' }),
@@ -434,11 +434,11 @@
         ? yubi.map(function (item) {
             return UI.insetRow({
               label: esc(item.alias),
-              value: 'Which connected serial belongs to this alias is not reported.',
+              value: 'Serial number unavailable',
               action: UI.chip(esc(item.state)),
             });
           }).join('')
-        : UI.insetRow({ label: 'None', value: 'No YubiKey enrollment was reported.' });
+        : UI.insetRow({ label: 'None', value: 'No YubiKeys enrolled.' });
       var connected = loading
         ? UI.insetRow({ value: 'Loading keys…' })
         : cards.length
@@ -457,8 +457,8 @@
         var title = available ? undefined
           : stopped ? 'Server access is stopped'
             : loading ? 'Reading this account…'
-              : id === 'resume-enrollment' ? 'No pending enrollment was reported'
-                : 'No complete enrollment was reported';
+              : id === 'resume-enrollment' ? 'No pending enrollment found'
+                : 'No complete enrollment found';
         return UI.insetRow({
           label: esc(label), value: esc(copy),
           action: UI.btn(esc(label.indexOf(' ') >= 0 ? 'Open…' : label), {
@@ -475,7 +475,7 @@
         UI.inset(connected, { className: 'settings-inset' }),
         stopped ? UI.band({
           severity: 'crit', label: 'Security-key access is stopped',
-          text: 'A usable signed server check-in is unavailable. Controls stay inert until it is available.',
+          text: 'Cannot reach the server. These settings are unavailable until the server is reconnected.',
         }) : '',
         UI.sectionLabel('Add'),
         UI.inset(
@@ -586,18 +586,18 @@
                   : st.stopped ? 'Not listed while access is stopped'
                     : esc(current
                       ? (current.name || (current.id.indexOf('08') === 0 ? 'Security key' : 'Device'))
-                      : 'No current device was reported')) +
+                      : 'Current device unknown')) +
                   '<small>This account’s current authenticated device. All devices are under Recovery devices.</small>',
               }) +
               UI.insetRow({
                 label: 'Passphrase',
                 value: '<span class="a">' + pass('set', 'Set…') + pass('change', 'Change…') + pass('verify', 'Verify') + '</span>' +
-                  '<small>Whether one is set is not reported. ' +
+                  '<small>Passphrase status is not stored on this Mac. ' +
                   (st.stopped
                     ? 'Nothing can be set, changed or verified until server access is available.'
                     : st.pending
-                      ? 'Waiting for a signed check-in before passphrase actions are offered.'
-                      : 'Verify runs the server public login challenge.') + '</small>',
+                      ? 'Waiting for server check-in before passphrase actions are available.'
+                      : 'Verify checks your passphrase against the server.') + '</small>',
               }),
               { className: 'settings-inset' }) + '</div>';
         }).join(''));
@@ -663,9 +663,9 @@
       var here = MINE[s.page] ? (s.page === 'set-unavailable' ? 'set-devices' : s.page) : 'set-devices';
       return UI.notice({
         severity: 'crit',
-        title: 'This account is no longer available in the current catalog',
-        body: '<p>The address names an account this Mac does not list. No other account has been selected in its place.</p>' +
-          (stores.length ? '' : '<p>This Mac has no available account at all. Add and check a server, then create or recover an account.</p>'),
+        title: 'Account no longer available',
+        body: '<p>This account is no longer associated with this Mac, and no other account has been selected in its place.</p>' +
+          (stores.length ? '' : '<p>This Mac has no active account. Add and verify a server, then create or recover an account.</p>'),
         actions: UI.btn('Refresh the catalog', {
           variant: 'primary', attrs: 'data-act="toast" data-text="Refreshed the catalog"',
         }) + stores.map(function (store) {
@@ -704,7 +704,7 @@
       var written = s.v.written === '1';
       return sheet({
         dismissible: false,
-        title: 'Write these 17 tokens down',
+        title: 'Write these 17 words down',
         subtitle: esc(x.account ? x.account.username : '') + ' on ' + esc(x.server ? x.server.name : ''),
         body: '<p>This phrase is shown once and cannot be copied. Write it down now. The agent stores only the public key.</p>' +
           '<div class="words">' + D.backupPhraseWords.map(function (word, i) {
@@ -776,13 +776,13 @@
       var device = val(s, 'dev', 'This Mac');
       var tokens = val(s, 'tokens', '');
       return sheet({
-        title: 'Recover on this Mac', subtitle: 'Use the 17-token backup phrase',
+        title: 'Recover on this Mac', subtitle: 'Use your 17-word backup phrase',
         body: '<p>Recovery adds this Mac as a new owner device. If interrupted, resume it from Alerts with the same phrase.</p>' +
           UI.inset(
             field({ key: 'alias', label: 'Local alias', value: alias }) +
             field({ key: 'dev', label: 'Device name', value: device }) +
             UI.insetRow({
-              label: '17 tokens', forId: 'sf-tokens',
+              label: '17 words', forId: 'sf-tokens',
               value: '<textarea id="sf-tokens" data-bind="v.tokens" data-live>' + esc(tokens) + '</textarea>',
             })),
         footer: closeBtn('Cancel') + UI.btn('Recover', {
@@ -807,8 +807,8 @@
         danger: true,
         title: 'Remove ' + esc(device.name || 'device') + '?',
         subtitle: esc(x.store.account) + ' · ' + esc(device.id),
-        body: '<p>This device loses future access to the account. Copies of values it already read cannot be recalled; rotate those secrets if the device is not under your control.</p>' +
-          '<p class="fn">This action is available only for a non-current software device. YubiKeys are revoked under Security keys.</p>' +
+        body: '<p>This device loses future access to the account. Any data previously downloaded to this device will remain until removed; change any sensitive secrets if the device is not under your control.</p>' +
+          '<p class="fn">You can only remove other devices here. YubiKeys are managed under Security keys.</p>' +
           UI.inset(inputRow({ key: 'confirm', label: 'Confirm', placeholder: 'type ' + expected, value: typed })),
         footer: closeBtn('Cancel') + UI.btn('Remove device', {
           variant: 'danger', disabled: typed !== expected,
@@ -930,8 +930,8 @@
       var typed = s.v.typed === '1' ? alias : val(s, 'confirm', '');
       return sheet({
         danger: true,
-        title: 'Revoke ' + esc(alias) + '?', subtitle: 'Rotates affected account keys',
-        body: '<p>The card will no longer open the account. Copies it already read cannot be recalled. The alias is used because the agent does not report which connected serial belongs to it.</p>' +
+        title: 'Revoke ' + esc(alias) + '?', subtitle: 'Disconnects this key and updates account security',
+        body: '<p>This YubiKey will immediately lose access to your account. Any data previously cached on devices using this key will remain until cleared. Enter the key alias to confirm revocation.</p>' +
           UI.inset(inputRow({ key: 'confirm', label: 'Confirm', placeholder: 'type ' + alias, value: typed })),
         footer: closeBtn('Cancel') + UI.btn('Revoke ' + esc(alias), {
           variant: 'danger', disabled: typed !== alias,
@@ -943,7 +943,7 @@
       var mode = val(s, 'seg', 'set');
       var pw = val(s, 'pw', ''), pw2 = val(s, 'pw2', '');
       return sheet({
-        title: 'Account passphrase', subtitle: 'Whether one is currently set is not reported',
+        title: 'Account passphrase', subtitle: 'Set, change, or verify your account passphrase',
         body: UI.segmented({
           label: 'Passphrase action', value: mode, key: 'v.seg',
           items: [{ id: 'set', label: 'Set' }, { id: 'change', label: 'Change' }, { id: 'verify', label: 'Verify' }],
@@ -1111,7 +1111,7 @@
       var mode = M.s.v.seg || 'set';
       clearSheet();
       M.render();
-      M.toast('Passphrase ' + mode + ' succeeded · generation ' + (mode === 'set' ? 1 : 2));
+      M.toast(mode === 'verify' ? 'Passphrase verified successfully.' : 'Passphrase updated successfully.');
     };
     M.fns.settingsConnectionRetry = function () {
       M.set('agent', 'ready');
@@ -1184,7 +1184,7 @@
       { v: 'pair-offer', label: 'Pair · offer' },
       { v: 'pair-accept', label: 'Pair · accept' },
       { v: 'phrase-prepare', label: 'Phrase · name it' },
-      { v: 'phrase', label: 'Phrase · 17 tokens' },
+      { v: 'phrase', label: 'Phrase · 17 words' },
       { v: 'recover', label: 'Recover sheet' },
       { v: 'remove-device', label: 'Remove a Mac' },
     ];
@@ -1233,7 +1233,7 @@
         { v: 'fixture', label: 'Fixture', hint: 'MacBook Pro (current) + Travel Mac (04… → Remove…).' },
         { v: 'plus08', label: '+ 08… key', hint: 'an unnamed 08… device: label "YubiKey", chip "managed under Security keys".' },
         { v: 'keycurrent', label: 'Current is a key', hint: 'the current device id starts 08 → chip "current security key".' },
-        { v: 'none', label: 'No devices', hint: 'InsetRow "None" / "No devices were reported for this account."' },
+        { v: 'none', label: 'No devices', hint: 'InsetRow "None" / "No devices connected to this account."' },
       ],
     };
     var YUBISTATE_CONTROL = {
@@ -1242,7 +1242,7 @@
       values: [
         { v: 'fixture', label: 'Fixture', hint: 'one complete enrollment, "primary key".' },
         { v: 'pending', label: '+ pending', hint: 'adds a pending enrollment, so Resume enrollment goes live.' },
-        { v: 'none', label: 'No enrollment', hint: 'no enrollment: all 13 rows and Revoke disabled, "No complete enrollment was reported".' },
+        { v: 'none', label: 'No enrollment', hint: 'no enrollment: all 13 rows and Revoke disabled, "No complete enrollment found".' },
       ],
     };
     /* The agent holds at most one pairing operation per account. The mock

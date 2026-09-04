@@ -7,6 +7,7 @@
  * uneditable. It outranks everything else on that server and touches no other.
  */
 
+import { storeNavigationOrder } from './order';
 import { admissionActive, partiesOf, peopleGroups, storeOf } from './readers';
 import { admits } from './roles';
 import type {
@@ -199,6 +200,23 @@ export function catalog(world: World): Item[] {
 /** The stores a person picks between, in the order the sidebar shows them. */
 export function listableStores(world: World): Store[] {
   return world.stores.filter((store) => storeReadable(world, store.id));
+}
+
+/**
+ * The vault "Save in" starts on when the list itself does not name one.
+ *
+ * All Items spans every store, so a new item there has no store to inherit.
+ * The answer is the first vault the chooser draws — navigation order, so it
+ * is the same first row the sidebar shows — preferring one that can actually
+ * take a new item, because starting on a store whose Create button is dead is
+ * a worse first impression than starting one row lower. When nothing here can
+ * be written to, the first store is still chosen: the sheet then says why in
+ * its own words rather than opening on an empty chooser.
+ */
+export function defaultCreateStore(world: World): StoreRef | undefined {
+  const order = storeNavigationOrder(world);
+  const writable = order.find((store) => canCreateInStore(world, store.id));
+  return (writable ?? order[0])?.id;
 }
 
 /**

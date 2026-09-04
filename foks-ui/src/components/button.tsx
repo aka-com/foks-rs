@@ -23,6 +23,7 @@ export type ButtonSize = 'md' | 'sm';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
+  danger?: boolean;
   size?: ButtonSize;
   /** A leading icon, rendered the way the mock's `ic()` places one. */
   icon?: FoksIconName;
@@ -49,6 +50,7 @@ const VARIANT_CLASS: Readonly<Record<ButtonVariant, string>> = {
 export function Button({
   variant = 'plain',
   size = 'md',
+  danger,
   icon,
   on,
   className,
@@ -56,9 +58,12 @@ export function Button({
   type = 'button',
   ...rest
 }: ButtonProps): ReactNode {
+  const isDanger = danger || variant === 'danger' || className?.includes('danger');
+  const variantClass = variant === 'danger' ? '' : VARIANT_CLASS[variant];
   const classes = [
     'btn',
-    VARIANT_CLASS[variant],
+    variantClass,
+    isDanger ? 'danger' : '',
     size === 'sm' ? 'cap' : '',
     on ? 'on' : '',
     className ?? '',

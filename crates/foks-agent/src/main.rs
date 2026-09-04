@@ -621,7 +621,9 @@ async fn handle_connection(
             write_response(&mut stream, &response, timeout).await?;
             continue;
         }
-        let mutation_permit = if request.operation.is_mutation() {
+        let mutation_permit = if request.operation.is_mutation()
+            && !request.operation.is_device_pairing_wait()
+        {
             match tokio::time::timeout(timeout, mutations.clone().acquire_owned()).await {
                 Ok(Ok(permit)) => Some(permit),
                 Ok(Err(_)) => return Err("agent mutation gate closed".into()),
@@ -2047,10 +2049,14 @@ fn dispatch_result(
                 )?,
             )?)
         }
-        Operation::RemoveProfile { name } => Ok(serde_json::json!({
-            "profile": name,
-            "removed": registry.remove(&name)?,
-        })),
+        Operation::RemoveProfile { name } => {
+            let credentials = ClientCredentials::open(state_dir)?;
+            let removed = credentials.remove_profile(&mut registry, &name)?;
+            Ok(serde_json::json!({
+                "profile": name,
+                "removed": removed,
+            }))
+        }
         Operation::DescribeResetHardState { profile } => {
             let credentials = ClientCredentials::open(state_dir)?;
             credentials.master_key()?;
@@ -3988,23 +3994,18 @@ fn now_microseconds() -> Result<u64, Box<dyn std::error::Error>> {
 fn bind_private_agent_socket(path: &Path) -> std::io::Result<tokio::net::UnixListener> {
     use std::os::unix::fs::PermissionsExt as _;
 
-    static NEXT_STAGING_SOCKET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let sequence = NEXT_STAGING_SOCKET.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let staging = path.with_extension(format!("binding-{}-{}", std::process::id(), sequence));
+    let staging = path.with_extension("bind");
     let _ = std::fs::remove_file(&staging);
     let listener = tokio::net::UnixListener::bind(&staging)?;
     if let Err(error) = std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o600)) {
         let _ = std::fs::remove_file(&staging);
         return Err(error);
     }
-    // hard_link publishes the already-private inode atomically and refuses
-    // to overwrite a path another server just established (EEXIST).
-    if let Err(error) = std::fs::hard_link(&staging, path) {
+    // rename publishes the already-private socket atomically into place,
+    // which works across all UNIX platforms including macOS/Darwin where
+    // hard linking domain sockets returns EPERM.
+    if let Err(error) = std::fs::rename(&staging, path) {
         let _ = std::fs::remove_file(&staging);
-        return Err(error);
-    }
-    if let Err(error) = std::fs::remove_file(&staging) {
-        let _ = std::fs::remove_file(path);
         return Err(error);
     }
     Ok(listener)
@@ -4173,6 +4174,33 @@ mod tests {
         );
         drop(first);
         AgentLock::acquire(directory.path()).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn private_socket_bind_accepts_maximum_length_path() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        #[cfg(target_os = "linux")]
+        const UNIX_SOCKET_PATH_MAX: usize = 107;
+        #[cfg(not(target_os = "linux"))]
+        const UNIX_SOCKET_PATH_MAX: usize = 103;
+
+        let directory = tempfile::Builder::new()
+            .prefix("fa")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let suffix = ".sock";
+        let stem_length =
+            UNIX_SOCKET_PATH_MAX - directory.path().as_os_str().as_bytes().len() - 1 - suffix.len();
+        let path = directory
+            .path()
+            .join(format!("{}{suffix}", "s".repeat(stem_length)));
+        assert_eq!(path.as_os_str().as_bytes().len(), UNIX_SOCKET_PATH_MAX);
+
+        let listener = bind_private_agent_socket(&path).unwrap();
+        assert!(path.exists());
+        drop(listener);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -4351,6 +4379,46 @@ mod tests {
             profiles.result,
             foks_agent_proto::ResponseResult::Success { .. }
         ));
+    }
+
+    #[test]
+    fn forgetting_a_profile_erases_its_local_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("state");
+        ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&state).unwrap();
+        registry
+            .add(Profile {
+                name: "local".to_owned(),
+                probe: "foks.app".to_owned(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+        let paths = registry.paths("local").unwrap();
+        std::fs::create_dir_all(&paths.credential_store).unwrap();
+        std::fs::write(paths.credential_store.join("account.personal"), b"key").unwrap();
+
+        let forgotten = dispatch(
+            &state,
+            Request::new(
+                1,
+                Operation::RemoveProfile {
+                    name: "local".to_owned(),
+                },
+            ),
+        );
+        assert!(matches!(
+            forgotten.result,
+            foks_agent_proto::ResponseResult::Success { value }
+                if value["profile"] == "local" && value["removed"] == true
+        ));
+        // Deregistering alone used to leave the device keys readable on disk.
+        assert!(!paths.directory.exists());
+        assert!(ProfileRegistry::open(&state)
+            .unwrap()
+            .profile("local")
+            .is_err());
     }
 
     #[test]

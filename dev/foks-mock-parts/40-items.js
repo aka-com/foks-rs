@@ -461,7 +461,7 @@
           : act('Open target', 'arrow', 'itemsOpenTarget');
       return '<span class="acts">' + head + act('Copy path', 'path', 'itemsCopyPath') +
         act(removeDisabled ? 'Your current access does not allow removing this item'
-          : 'Remove version ' + item.version + ' exactly', 'trash', 'itemsRemove', true, removeDisabled) +
+          : 'Delete this item', 'trash', 'itemsRemove', true, removeDisabled) +
         '</span>';
     }
     function tile(s, w, item) {
@@ -708,16 +708,16 @@
           UI.btn('Save version ' + (item.version + 1), { variant: 'primary', attrs: 'data-act="call" data-fn="itemsSave"' })
         : UI.btn('Edit', {
             icon: 'pencil', disabled: !change || kind === 'Link',
-            title: !change ? 'Your current role does not admit the ' + roleText(item.write) + ' write role'
-              : kind === 'Link' ? 'A link cannot be edited atomically; remove it and create the new target at the same path'
-                : 'Edit — Save uses ExactVersion(' + item.version + ')',
+            title: !change ? 'You need ' + roleText(item.write) + ' permissions to edit this item.'
+              : kind === 'Link' ? 'Links cannot be edited directly. Delete this link and create a new one.'
+                : 'Edit this item (version ' + item.version + ')',
             attrs: 'data-act="call" data-fn="itemsEdit"',
           }) +
           UI.btn('Copy path', { attrs: 'data-act="call" data-fn="itemsCopyPath"' }) +
           UI.btn('Remove', {
             variant: 'danger', icon: 'trash', disabled: !change,
-            title: change ? 'Removes version ' + item.version + ' exactly'
-              : 'Your current role does not admit the ' + roleText(item.write) + ' write role',
+            title: change ? 'Delete this item'
+              : 'You need ' + roleText(item.write) + ' permissions to delete this item.',
             attrs: 'data-act="call" data-fn="itemsRemove"',
           });
 
@@ -847,9 +847,7 @@
           ' is not counted when its role or group membership provides no access here.' : '') + '</p>' +
         UI.sectionLabel('Who can change <span class="pv">changeable by <b>' + changers.length + ' of ' + roster.length + '</b></span>') +
         UI.inset(UI.radioGroup(cards('write', writeWire, true), { label: 'Who can change' }) + visRow('write', writeWire)) +
-        '<p class="hint">The read and write roles are independent and carried by this group item, so someone ' +
-        'allowed to change it might not be allowed to read it. They are checked against the current ' +
-        'authenticated roster, so the preview is computed rather than typed.</p>';
+        '<p class="hint">Read and write permissions are set separately. A member with write permission can update this item even if they cannot view its contents.</p>';
     }
     function newSheet(s, w) {
       var kind = SHEET_KIND[s.v.sheet];
@@ -920,11 +918,9 @@
         glyph: clash ? UI.kindIcon(D.kindOf(clash)) : '',
         title: 'Something is already at ' + esc(path),
         subtitle: 'New ' + esc(D.kindLabel(kind).toLowerCase()) + ' · not created',
-        body: '<p>Nothing was created and nothing was overwritten. Creating carries “must not exist”' +
-          (clash ? ', and ' + esc(D.nameOf(path)) + ' was listed at version ' + clash.version +
-            ' in ' + esc(store ? store.name : '') : '') + '.</p>' +
-          '<p class="fn">Refresh and open what is there to review its exact version, or save this one at ' +
-          'another path. There is no “create anyway”.</p>',
+        body: '<p>Nothing was created and nothing was overwritten. An item already exists at this path' +
+          (clash ? ', and ' + esc(D.nameOf(path)) + ' is currently at version ' + clash.version +
+            ' in ' + esc(store ? store.name : '') : '') + '. Open the existing item to review it, or choose a different name or path.</p>',
         footer: UI.btn('Change the path', { attrs: 'data-act="call" data-fn="itemsChangePath"' }) +
           UI.btn(clash ? 'Open version ' + clash.version : 'Open existing item',
             { variant: 'primary', attrs: 'data-act="call" data-fn="itemsOpenExisting"' }),
@@ -939,12 +935,11 @@
       return labelledSheet({
         ariaLabel: 'Edit conflict',
         glyph: UI.kindIcon(D.kindOf(item)),
-        title: 'Someone else changed this first',
-        subtitle: esc(D.nameOf(item.path)) + ' · save refused',
-        body: '<p>You edited version ' + item.version + ', but that exact version is no longer current, ' +
-          'so nothing was saved and nothing was overwritten.</p>' +
+        title: 'Conflict: item was updated',
+        subtitle: esc(D.nameOf(item.path)) + ' · changes could not be saved',
+        body: '<p>Another member saved a newer version while you were editing. Review the latest version and reapply your changes.</p>' +
           '<p class="fn">Refresh to see the current version beside your retained draft, review it, and save ' +
-          'again under the refreshed version. There is no “save anyway” and Retry never replays this write.</p>',
+          'again under the refreshed version.</p>',
         footer: UI.btn('Discard my edit', { attrs: 'data-act="set" data-key="v.sheet" data-val="discard"' }) +
           UI.btn('Refresh and review', { variant: 'primary', attrs: 'data-act="call" data-fn="itemsRefreshConflict"' }),
       });

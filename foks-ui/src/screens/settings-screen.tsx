@@ -42,6 +42,7 @@ import {
 } from '../model';
 import type { AccountStore, StoreRef, TeamStore, World } from '../model';
 import { PageHeader } from '../shell/page-header';
+import type { MutationFailureHandler } from '../mutation-recovery';
 import { GroupSheet } from './groups-screen';
 import { GoProfileConnectSheet } from './go-profile-connect';
 import { ServersSection } from './servers-screen';
@@ -55,6 +56,7 @@ interface Props {
   onRefresh: (message: string) => Promise<void>;
   onRefreshWorld: () => Promise<World>;
   onError: (error: unknown) => void;
+  onMutationError: MutationFailureHandler;
 }
 
 type Sheet =
@@ -225,6 +227,7 @@ export function SettingsScreen({
   onRefresh,
   onRefreshWorld,
   onError,
+  onMutationError,
 }: Props): ReactNode {
   // The named fixture scene this screen was *entered* at, captured once.
   // `scene` is read live from the address bar, which the shell rewrites to the
@@ -776,6 +779,7 @@ export function SettingsScreen({
                 onNavigate={onNavigate}
                 onRefresh={onRefresh}
                 onError={onError}
+                onMutationError={onMutationError}
               />
             ) : null}
             {section === 'groups' ? (
@@ -808,7 +812,7 @@ export function SettingsScreen({
             await onRefreshWorld();
             toasts.show(`Connected ${alias} from the official FOKS client`);
           }}
-          onError={onError}
+          onError={(error) => void onMutationError(error)}
         />
       ) : null}
       {sheet === 'phrase' && selected && account && server ? (
@@ -829,7 +833,7 @@ export function SettingsScreen({
               'Backup phrase enrolled; the secret was cleared from this window',
             )
           }
-          onError={onError}
+          onError={(error) => void onMutationError(error)}
         />
       ) : null}
       {sheet === 'pair' && selected ? (
@@ -839,7 +843,7 @@ export function SettingsScreen({
           initialMode={pairMode}
           onClose={() => setSheet(null)}
           onDone={async (message) => applied(message)}
-          onError={onError}
+          onError={(error) => void onMutationError(error)}
         />
       ) : null}
       {sheet === 'recover' && selected ? (
@@ -852,7 +856,7 @@ export function SettingsScreen({
               'Recovery submitted; refresh and review the authenticated device list',
             )
           }
-          onError={onError}
+          onError={(error) => void onMutationError(error)}
         />
       ) : null}
       {sheet === 'enrol' && selected ? (
@@ -866,7 +870,7 @@ export function SettingsScreen({
               'YubiKey account created; refreshed authenticated key lists',
             )
           }
-          onError={onError}
+          onError={(error) => void onMutationError(error)}
         />
       ) : null}
       {sheet === 'provision' && selected ? (
@@ -878,7 +882,7 @@ export function SettingsScreen({
           onDone={async () =>
             applied('YubiKey device provisioned; refreshed authenticated lists')
           }
-          onError={onError}
+          onError={(error) => void onMutationError(error)}
         />
       ) : null}
       {sheet === 'yubi' && selected && pendingYubi ? (
@@ -902,7 +906,7 @@ export function SettingsScreen({
               'Security-key action completed; refreshed authenticated lists',
             );
           }}
-          onError={onError}
+          onError={(error) => void onMutationError(error)}
         />
       ) : null}
       {sheet === 'revoke' &&
@@ -916,7 +920,7 @@ export function SettingsScreen({
           onDone={async () =>
             applied('YubiKey revoked and affected account keys rotated')
           }
-          onError={onError}
+          onError={(error) => void onMutationError(error)}
         />
       ) : null}
       {sheet === 'passphrase' && passphraseStore ? (
@@ -931,9 +935,16 @@ export function SettingsScreen({
           onDone={(message) => {
             setSheet(null);
             setPassphraseStore(null);
-            toasts.show(message);
+            if (passphraseMode === 'verify') toasts.show(message);
+            else
+              void onRefresh(message).catch((error) =>
+                onMutationError(error),
+              );
           }}
-          onError={onError}
+          onError={(error) => {
+            if (passphraseMode === 'verify') onError(error);
+            else void onMutationError(error);
+          }}
         />
       ) : null}
       {sheet === 'remove-device' && selected && removeDevice ? (
@@ -950,7 +961,7 @@ export function SettingsScreen({
             setRemoveDevice(null);
             await applied(`Removed ${name} from this account`);
           }}
-          onError={onError}
+          onError={(error) => void onMutationError(error)}
         />
       ) : null}
       {groupCreate && createContext ? (
@@ -984,6 +995,7 @@ export function SettingsScreen({
               onNavigate({ kind: 'store', ref: createdStore.id });
           }}
           onError={onError}
+          onMutationError={onMutationError}
         />
       ) : null}
       {inviteStore ? (
@@ -1048,8 +1060,8 @@ export function SettingsScreen({
             </>
           ) : (
             <p className="fn">
-              This account is no longer in the catalog. Close this dialog and
-              choose another account.
+              This account is no longer available. Close this dialog and choose
+              another account.
             </p>
           )}
         </SheetDialog>
@@ -1081,7 +1093,7 @@ function UnavailableAccount({
   return (
     <Notice
       severity="crit"
-      title="This account is no longer available in the current catalog"
+      title="Account no longer available"
       actions={
         <>
           <Button variant="primary" onClick={onRefresh}>
@@ -1098,12 +1110,12 @@ function UnavailableAccount({
       }
     >
       <p>
-        The address names an account this Mac does not list. No other account
+        This account is no longer associated with this Mac, and no other account
         has been selected in its place.
       </p>
       {stores.length ? null : (
         <p>
-          This Mac has no available account at all. Add and check a server, then
+          This Mac has no active account. Add and verify a server, then
           create or recover an account.
         </p>
       )}
@@ -1182,8 +1194,8 @@ function MacsSection({
       </Inset>
       {stopped ? (
         <Band severity="crit" label="Account access is stopped">
-          A usable signed server check-in is unavailable. No account, recovery,
-          pairing or security-key read or write is offered here.
+          Cannot connect to the server. Account management and security keys are
+          unavailable until reconnected.
         </Band>
       ) : null}
       <SectionLabel>Your Macs</SectionLabel>
@@ -1229,7 +1241,7 @@ function MacsSection({
           <InsetRow label="None">
             {stopped
               ? 'Not listed while access is stopped'
-              : 'No devices were reported for this account.'}
+              : 'No devices connected to this account.'}
           </InsetRow>
         )}
       </Inset>
@@ -1377,11 +1389,11 @@ function KeysSection({
               label={item.alias}
               action={<Chip>{item.state}</Chip>}
             >
-              Which connected serial belongs to this alias is not reported.
+              Serial number unavailable
             </InsetRow>
           ))
         ) : (
-          <InsetRow label="None">No YubiKey enrollment was reported.</InsetRow>
+          <InsetRow label="None">No YubiKeys enrolled.</InsetRow>
         )}
       </Inset>
       <SectionLabel>Connected now</SectionLabel>
@@ -1400,8 +1412,8 @@ function KeysSection({
       </Inset>
       {stopped ? (
         <Band severity="crit" label="Security-key access is stopped">
-          A usable signed server check-in is unavailable. Controls stay inert
-          until it is available.
+          Cannot reach the server. These settings are unavailable until the
+          server is reconnected.
         </Band>
       ) : null}
       <SectionLabel>Add</SectionLabel>
@@ -1457,8 +1469,8 @@ function KeysSection({
                         : loading
                           ? 'Reading this account…'
                           : id === 'resume-enrollment'
-                            ? 'No pending enrollment was reported'
-                            : 'No complete enrollment was reported'
+                            ? 'No pending enrollment found'
+                            : 'No complete enrollment found'
                   }
                   onClick={() => onAction(id)}
                 >
@@ -1595,7 +1607,7 @@ function AccountSection({
                   : stopped
                     ? 'Not listed while access is stopped'
                     : (deviceNames.get(store.id) ??
-                      'No current device was reported')}
+                      'Current device unknown')}
                 <small>
                   This account’s current authenticated device. All devices are
                   under Recovery devices.
@@ -1626,12 +1638,12 @@ function AccountSection({
                   </Button>
                 </span>
                 <small>
-                  Whether one is set is not reported.{' '}
+                  Passphrase status is not stored on this Mac.{' '}
                   {stopped
                     ? 'Nothing can be set, changed or verified until server access is available.'
                     : pending
-                      ? 'Waiting for a signed check-in before passphrase actions are offered.'
-                      : 'Verify runs the server public login challenge.'}
+                      ? 'Waiting for server check-in before passphrase actions are available.'
+                      : 'Verify checks your passphrase against the server.'}
                 </small>
               </InsetRow>
             </Inset>
@@ -1825,7 +1837,7 @@ function PhraseSheet({
   const words = phrase?.split(/\s+/) ?? [];
   return (
     <SheetFrame
-      title={phrase ? 'Write these 17 tokens down' : 'Enroll a backup phrase'}
+      title={phrase ? 'Write these 17 words down' : 'Enroll a backup phrase'}
       subtitle={`${username} on ${server}`}
       onClose={() => {
         setPhrase(null);
@@ -1954,13 +1966,16 @@ function PairSheet({
       title="Set up another Mac"
       subtitle="Start or resume pairing a device"
       onClose={() => {
+        if (busy) return;
         setOffer(null);
         setPhrase('');
         onClose();
       }}
       footer={
         <>
-          <Button onClick={onClose}>Close</Button>
+          <Button disabled={busy} onClick={onClose}>
+            Close
+          </Button>
           <span className="spacer" />
           {mode === 'offer' ? (
             <>
@@ -2116,7 +2131,7 @@ function RecoverSheet({
   return (
     <SheetFrame
       title="Recover on this Mac"
-      subtitle="Use the 17-token backup phrase"
+      subtitle="Use your 17-word backup phrase"
       onClose={() => {
         setPhrase('');
         onClose();
@@ -2151,7 +2166,7 @@ function RecoverSheet({
       <Inset>
         <Field label="Local alias" value={target} onChange={setTarget} />
         <Field label="Device name" value={device} onChange={setDevice} />
-        <InsetRow label="17 tokens">
+        <InsetRow label="17 words">
           <textarea
             value={phrase}
             onChange={(event) => setPhrase(event.target.value)}
@@ -2693,7 +2708,7 @@ function RevokeSheet({
   return (
     <SheetFrame
       title={`Revoke ${alias}?`}
-      subtitle="Rotates affected account keys"
+      subtitle="Disconnects this key and updates account security"
       onClose={onClose}
       danger
       footer={
@@ -2724,9 +2739,9 @@ function RevokeSheet({
       }
     >
       <p>
-        The card will no longer open the account. Copies it already read cannot
-        be recalled. The alias is used because the agent does not report which
-        connected serial belongs to it.
+        This YubiKey will immediately lose access to your account. Any data
+        previously cached on devices using this key will remain until cleared.
+        Enter the key alias to confirm revocation.
       </p>
       <Inset>
         <InsetRow label="Confirm">
@@ -2792,13 +2807,13 @@ function RemoveDeviceSheet({
       }
     >
       <p>
-        This device loses future access to the account. Copies of values it
-        already read cannot be recalled; rotate those secrets if the device is
-        not under your control.
+        This device loses future access to the account. Any data previously
+        downloaded to this device will remain until removed; change any
+        sensitive secrets if the device is not under your control.
       </p>
       <p className="fn">
-        This action is available only for a non-current software device.
-        YubiKeys are revoked under Security keys.
+        You can only remove other devices here. YubiKeys are managed under
+        Security keys.
       </p>
       <Inset>
         <InsetRow label="Confirm">
@@ -2835,8 +2850,6 @@ function PassphraseSheet({
   const submit = (): void => {
     const secret = passphrase;
     const repeated = confirmation;
-    setPassphrase('');
-    setConfirmation('');
     setBusy(true);
     const task =
       mode === 'set'
@@ -2845,26 +2858,33 @@ function PassphraseSheet({
           ? bridge.changeAccountPassphrase(store.id, secret, repeated)
           : bridge.verifyAccountPassphrase(store.id, secret);
     void task
-      .then((report) =>
+      .then(() => {
+        setPassphrase('');
+        setConfirmation('');
         onDone(
-          `Passphrase ${mode} succeeded · generation ${report.generation}`,
-        ),
-      )
+          mode === 'verify'
+            ? 'Passphrase verified successfully.'
+            : 'Passphrase updated successfully.',
+        );
+      })
       .catch(onError)
       .finally(() => setBusy(false));
   };
   return (
     <SheetFrame
       title="Account passphrase"
-      subtitle="Whether one is currently set is not reported"
+      subtitle="Set, change, or verify your account passphrase"
       onClose={() => {
+        if (busy) return;
         setPassphrase('');
         setConfirmation('');
         onClose();
       }}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
           <Button
             variant="primary"
             disabled={

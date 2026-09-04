@@ -197,11 +197,11 @@
       o = o || {};
       var labels = o.local
         ? ['Local server', 'Create your account', 'Recovery']
-        : ['Preparing this Mac', 'How are you joining?', 'Select a server', 'Create your account',
+        : ['How are you joining?', 'Select a server', 'Create your account',
            'Save recovery phrase',
            o.path == null ? 'Group' : (o.path === 'invited' ? 'Wait to be added' : 'Create a group'),
            'You’re in'];
-      var pending = (!o.local && o.path == null) ? 5 : -1;
+      var pending = (!o.local && o.path == null) ? 4 : -1;
       var steps = labels.map(function (label, i) {
         var cls = 'setup-step' + (i === o.current ? ' on' : '') + (i < o.current ? ' done' : '') +
           (i === pending ? ' pending' : '');
@@ -278,72 +278,6 @@
     }
 
     /* ==================================================================== */
-    /* boot — Preparing this Mac                                            */
-    /* ==================================================================== */
-    M.page({
-      id: 'fr-boot',
-      title: 'Preparing this Mac',
-      path: ['First run', 'Your own account', '1 · Preparing this Mac'],
-      note: 'state=boot. The agent is still bootstrapping, so the titlebar pill reads Agent starting. Continue stays disabled until the client state is initialised — and the initialize event moves the step on by itself (to `who`, or to `local` when a managed profile is ready), so nobody ever clicks it. Step through with the walkthrough.',
-      controls: [
-        { key: 'path', label: 'Path', note: 'Which route the checkpoint holds — it only changes the sixth sidebar label here.', values: [{ v: 'own', label: 'Own' }, { v: 'invited', label: 'Invited' }] },
-        { key: 'disclosure', label: 'Disclosure', note: 'The <details class="dd"> under the checklist.', values: [{ v: '', label: 'Closed' }, { v: 'open', label: 'Details open' }] },
-        { key: 'result', label: 'Client state', note: 'checkpoint.initialized. The mock bridge is not native, so `initializeClientState` never runs and the web app is stuck at `Initialising` — but the same screen redraws its lead, its last two marks and its Continue once the initialize event lands (first-run-screen.tsx:1609-1650). A failure puts the agent’s own sentence in a `.crit` under the checklist and turns the footer button into `Try again` (:1598-1608, :1651).', values: [{ v: '', label: 'Initialising' }, { v: 'ready', label: 'Initialised' }, { v: 'error', label: 'Initialisation failed' }] },
-      ],
-      render: function (s) {
-        var t = M.globalTakeover(s);
-        if (t) return t;
-        rid = 0;
-        var open = s.v.disclosure === 'open';
-        var ready = s.v.result === 'ready';
-        /* fail() puts the normalized command error in `message`; the one
-           `initialize_client_state` raises when the agent comes back but is
-           not Ready is commands.rs:5023-5026. */
-        var failed = s.v.result === 'error';
-        var body = '<h1>Preparing this Mac</h1>' +
-          '<p class="lead">' + (ready
-            ? 'The local <b>foks-agent</b> and encrypted store for your keys are ready.'
-            : 'Starting a local <b>foks-agent</b> and initializing an encrypted store for your keys.') + '</p>' +
-          UI.inset(
-            checkRow('✓', 'Starting macOS private helper', 'Runs only on this Mac and bound to this window.') +
-            checkRow(ready ? '✓' : '◌', 'Creating encrypted vault', 'Your keys will be stored in an end-to-end encrypted vault.') +
-            checkRow(ready ? '✓' : '3', 'Ready', 'Continue to the next step.'),
-            { className: 'checklist' }) +
-          (failed ? '<p class="crit">The agent did not become ready after initialization.</p>' : '') +
-          dd({
-            open: open, summary: 'Details',
-            body: '<p>Agent status reports Bootstrap then Ready. Initialisation creates the native credential and rollback boundary once per Mac.</p>',
-          });
-        return {
-          /* app-root.tsx:330-344 rewrites the agent to Bootstrap while the
-             boot step is showing, whatever the world says. */
-          titlebar: M.renderTitlebar({ agent: 'starting', refreshing: s.refreshing }),
-          side: setupSide({ current: 0, path: s.v.path || 'own' }),
-          main: pane({
-            body: body,
-            /* `checkpoint.initialized` is false on this step, so the app draws
-               a disabled Continue (first-run-screen.tsx:1614-1617). The step
-               advances from the initialize event, not from this button — but
-               once it has landed the button is live and goes to `who`. */
-            foot: foot({
-              children: failed
-                /* `Try again` clears the message and re-runs
-                   initializeClientState (first-run-screen.tsx:1599-1607). */
-                ? UI.btn('Try again', {
-                    variant: 'primary',
-                    attrs: 'data-act="set" data-key="v.result" data-val=""',
-                  })
-                : UI.btn('Continue', {
-                    variant: 'primary', disabled: !ready,
-                    attrs: ready ? 'data-act="go" data-page="fr-who"' : '',
-                  }),
-            }),
-          }),
-        };
-      },
-    });
-
-    /* ==================================================================== */
     /* who — How are you joining?                                           */
     /* ==================================================================== */
     var JOINING = [
@@ -365,9 +299,11 @@
     M.page({
       id: 'fr-who',
       title: 'How are you joining?',
-      path: ['First run', 'Your own account', '2 · How are you joining?'],
-      note: 'state=who. Nothing is chosen until Continue, so step 6 stays neutral and pending until an option is picked.',
+      path: ['First run', 'Your own account', '1 · How are you joining?'],
+      note: 'state=who — now the first step (4b4eb44af). Nothing is chosen until Continue, so step 5 stays neutral and pending until an option is picked. The local client state initialises in the background meanwhile: Continue reads Initializing... until it lands, and a helper failure is reported here with its own Try again.',
       controls: [
+        { key: 'path', label: 'Seeded path', note: 'Only a boot-seeded entry (`?state=boot&path=…`) brings the checkpoint path into the fork; a plain `who` ignores it and reads the pick.', values: [{ v: '', label: 'None' }, { v: 'own', label: 'Own' }, { v: 'invited', label: 'Invited' }] },
+        { key: 'init', label: 'Local client state', note: 'checkpoint.initialized. `?state=boot` and a fresh native launch land here with it false: Continue is disabled and reads Initializing... while initializeClientState runs in the background, and the agent pill still says starting. A failure puts the agent’s sentence in a `.crit` alert above the options with a small Try again that re-runs it (first-run-screen.tsx, who pane).', values: [{ v: '', label: 'Ready' }, { v: 'initializing', label: 'Initializing' }, { v: 'error', label: 'Helper failed' }] },
         { key: 'choice', label: 'Picked', note: 'pendingPath — screen state, not the checkpoint. `who` is the one step that ignores checkpoint.path entirely: SetupSidebar reads the pick instead (first-run-screen.tsx:281-283), so this page declares no `path`.', values: [{ v: '', label: 'Nothing' }, { v: 'own', label: 'On my own' }, { v: 'invited', label: 'Invited' }] },
         { key: 'refusal', label: 'Go CLI scan', note: 'discoverGoProfiles() rejected, so the fork is drawn with the scan error above the options rather than the chooser (first-run-screen.tsx:1806-1810). Native only — the mock bridge answers {installed:false}, so no capture has it.', values: [{ v: '', label: 'No error' }, { v: 'scan', label: 'Scan failed' }] },
       ],
@@ -376,6 +312,8 @@
         if (t) return t;
         rid = 0;
         var picked = s.v.choice || null;
+        var initializing = s.v.init === 'initializing' || s.v.init === 'error';
+        var failed = s.v.init === 'error';
         var opts = JOINING.map(function (o, i) {
           var on = picked === o.path;
           return '<button type="button" role="radio" aria-checked="' + (on ? 'true' : 'false') + '" tabindex="' +
@@ -398,13 +336,19 @@
           (s.v.refusal === 'scan'
             ? '<p class="crit">Existing CLI profiles could not be inspected: discover_go_profiles returned duplicate candidates</p>'
             : '') +
+          /* {message ? <div className="crit" role="alert"> … Try again} — the
+             background initialisation's failure, with its own retry. */
+          (failed
+            ? '<div class="crit" role="alert"><p>Setup stopped before this Mac was ready: The agent did not become ready after initialization.</p>' +
+              UI.btn('Try again', { size: 'sm', attrs: 'data-act="set" data-key="v.init" data-val=""' }) + '</div>'
+            : '') +
           '<div class="opts" role="radiogroup" aria-label="How are you joining">' + opts + '</div>' + next +
           '<div class="actions">' +
-          UI.btn('Continue', {
-            variant: 'primary', disabled: !picked,
+          UI.btn(initializing ? 'Initializing...' : 'Continue', {
+            variant: 'primary', disabled: !picked || initializing,
             /* `choose` resets the checkpoint, so nothing the fork was holding
                — a Go candidate included — travels (first-run-state.ts:118). */
-            attrs: picked
+            attrs: (picked && !initializing)
               ? 'data-act="go" data-page="' + (picked === 'invited' ? 'fri-address' : 'fr-address') + '" data-set=\'{"v.path":"' + picked + '","v.choice":"","v.returning":"","v.card":"","v.refusal":"","v.made":"","v.recovery":"","v.phrase":""}\''
               : '',
           }) +
@@ -412,7 +356,14 @@
           '<button type="button" class="lnk" data-act="go" data-page="fr-address" data-set=\'{"v.path":"own","v.choice":"","v.returning":"yes","v.card":"","v.refusal":"","v.made":"","v.recovery":"","v.phrase":""}\'>Add this as a secondary device</button></span>' +
           '</div>';
         return {
-          side: setupSide({ current: 1, path: picked }),
+          /* app-root still reports Bootstrap while the client state is
+             initialising, so the pill reads Agent starting until it lands. */
+          titlebar: initializing ? M.renderTitlebar({ agent: 'starting', refreshing: s.refreshing }) : undefined,
+          /* A boot-seeded entry (`?state=boot&path=…`) already carries the
+             checkpoint path into the fork, so step 5 reads Create a group /
+             Wait to be added before anything is picked; a plain `who` reads
+             the pick alone. */
+          side: setupSide({ current: 0, path: picked || (initializing ? (s.v.path || null) : null) }),
           main: pane({ wide: true, body: body }),
         };
       },
@@ -469,7 +420,7 @@
             ? '<p class="hint">' + lnk('They sent nothing?', 'data-act="go" data-page="fri-no-address"') + '</p>'
             : '');
       return {
-        side: setupSide({ current: 2, path: path }),
+        side: setupSide({ current: 1, path: path }),
         main: pane({
           body: body,
           foot: foot({
@@ -539,7 +490,7 @@
     M.page({
       id: 'fr-address',
       title: 'Select a server',
-      path: ['First run', 'Your own account', '3 · Select a server'],
+      path: ['First run', 'Your own account', '2 · Select a server'],
       note: 'state=address, path=own. The address is prefilled from the fixture — or from the Go CLI candidate, which may have no server hint at all; Check the server pins the host ID.',
       /* A Go CLI candidate picked on `who` stays selected all the way to
          `existing`, where it retitles the pairing card. */
@@ -555,7 +506,7 @@
     M.page({
       id: 'fr-error',
       title: 'Server did not answer',
-      path: ['First run', 'Your own account', '3 · Server did not answer'],
+      path: ['First run', 'Your own account', '2 · Server did not answer'],
       note: 'state=error. The seeded address is the fixture typo; with no bridge message the fallback sentence has no full stop. `Check again` re-probes whatever the field holds — the typo fails again, the real address goes through.',
       /* `probe` is the address the check refused, carried in from `frCheck`
          so the field and the headline name what was actually typed. */
@@ -576,7 +527,7 @@
     M.page({
       id: 'fri-address',
       title: 'Select a server address',
-      path: ['First run', 'Invited to a group', '3 · Select a server address'],
+      path: ['First run', 'Invited to a group', '2 · Select a server address'],
       note: 'state=address, path=invited: the lead names the admin and a "They sent nothing?" link sits under the field.',
       controls: ADDRESS_CONTROLS,
       render: function (s) {
@@ -589,7 +540,7 @@
     M.page({
       id: 'fri-no-address',
       title: 'Ask them for the address',
-      path: ['First run', 'Invited to a group', '3 · Ask them for the address'],
+      path: ['First run', 'Invited to a group', '2 · Ask them for the address'],
       note: 'state=no-address, path=invited: the link is replaced by the "Ask sam this" card and its CopyBox.',
       controls: ADDRESS_CONTROLS,
       render: function (s) {
@@ -659,7 +610,7 @@
           '","v.recovery":"","v.phrase":"","v.refusal":""}\''
         : 'data-act="go" data-page="' + (path === 'invited' ? 'fri-account' : 'fr-account') + '"';
       return {
-        side: setupSide({ current: 2, path: path }),
+        side: setupSide({ current: 1, path: path }),
         main: pane({
           body: body,
           foot: foot({
@@ -677,7 +628,7 @@
     M.page({
       id: 'fr-checked',
       title: 'Server checked',
-      path: ['First run', 'Your own account', '3 · Server checked'],
+      path: ['First run', 'Your own account', '2 · Server checked'],
       note: 'state=checked (disclosure closed) / compare (open). Nothing about you has been sent yet.',
       /* `probe` is the address that answered, so the report on show is that
          server's; `choice` only rides through to `existing`. */
@@ -693,7 +644,7 @@
     M.page({
       id: 'fri-checked',
       title: 'Server checked',
-      path: ['First run', 'Invited to a group', '3 · Server checked'],
+      path: ['First run', 'Invited to a group', '2 · Server checked'],
       note: 'state=checked, path=invited — the same screen, the admin’s server.',
       keeps: ['probe'],
       controls: CHECKED_CONTROLS,
@@ -743,10 +694,10 @@
         (s.v.refusal === 'resume' ? '<p class="crit">That account setup is no longer pending.</p>' : '') +
         lnk('I already have an account on this server',
           'data-act="go" data-page="frx-existing" data-set=\'{"v.back":"account","v.path":"' + path +
-          '","v.recovery":"","v.phrase":"","v.refusal":""}\'');
+          '","v.recovery":"","v.phrase":"","v.refusal":""}\'', 'account-recover-link');
       var protectPage = path === 'invited' ? 'fri-protect' : 'fr-protect';
       return {
-        side: setupSide({ current: 3, path: path }),
+        side: setupSide({ current: 2, path: path }),
         main: pane({
           wide: true, body: body,
           foot: foot({
@@ -769,7 +720,7 @@
     M.page({
       id: 'fr-account',
       title: 'Create an account',
-      path: ['First run', 'Your own account', '4 · Create an account'],
+      path: ['First run', 'Your own account', '3 · Create an account'],
       note: 'state=account, path=own. Keys are made on this Mac; only their public halves are registered.',
       controls: ACCOUNT_CONTROLS,
       render: function (s) {
@@ -782,7 +733,7 @@
     M.page({
       id: 'fri-account',
       title: 'Create an account',
-      path: ['First run', 'Invited to a group', '4 · Create an account'],
+      path: ['First run', 'Invited to a group', '3 · Create an account'],
       note: 'state=account, path=invited — the username you send the admin afterwards.',
       controls: ACCOUNT_CONTROLS,
       render: function (s) {
@@ -800,7 +751,11 @@
       var f = FACTS[path];
       /* While the sheet is open, `written` is only the checkbox: the phrase
          is not committed until Done, so the card behind still reads Not yet. */
-      var written = !sheetOpen && (s.v.written === '1');
+      var written = !sheetOpen && (s.v.written === '1' || s.v.written === 'saved');
+      /* disabled={busy || (checkpoint.backupCommitted && !backupPhrase)}: the
+         phrase is kept in memory for repeated reveals until recovery is left,
+         so only a checkpoint committed on an earlier visit spends the button. */
+      var spent = !sheetOpen && s.v.written === 'saved';
       /* disabled={passphrase !== confirmation} (first-run-screen.tsx:2600) —
          both empty is the default, and equal, so Continue starts live. */
       var pass = rr(), conf = rr();
@@ -811,11 +766,11 @@
         '. Add at least one recovery method now. You can add more later under <b>Recovery devices</b> or <b>Security keys</b>.</p>' +
         '<div class="two">' +
         '<div class="pcard"><h3>Passphrase</h3>' +
-        '<p>Encrypts the keys this Mac keeps for you. It never leaves this Mac and the server never sees it.</p>' +
+        '<p>Encrypts the keys that are held on this Mac. Optional.</p>' +
         UI.inset(
           UI.insetRow({ label: 'Passphrase', forId: pass, value: input({ ariaLabel: 'Passphrase', placeholder: '••••••••••••', id: pass, type: 'password', value: passValue, bind: 'v.pass' }) }) +
           UI.insetRow({ label: 'Confirm', forId: conf, value: input({ ariaLabel: 'Confirm passphrase', placeholder: '••••••••••••', id: conf, type: 'password', value: confValue, bind: 'v.conf' }) })) +
-        '<p>Optional. Leave both empty to go without one.</p></div>' +
+        '</div>' +
         '<div class="pcard"><h3>YubiKey ' + UI.chip('Later') + '</h3>' +
         '<p>Enroll a hardware key later from <b>Settings › Security keys</b>.</p>' +
         dd({
@@ -828,12 +783,11 @@
         }) +
         UI.btn('Enroll a YubiKey…', { attrs: 'data-act="set" data-key="v.refusal" data-val="yubikey"' }) +
         '</div>' +
-        '<div class="pcard"><h3>Backup phrase ' +
-        (written ? UI.chip('Written down') : UI.chip('Not yet', { tone: 'warn' })) + '</h3>' +
-        '<p>Write down these 17 tokens to recover your account if every device is lost. FOKS shows them once.</p>' +
-        UI.btn(written ? 'Shown once — done' : 'Show my phrase', {
-          disabled: written,
-          attrs: written ? '' : 'data-act="go" data-page="fr-phrase" data-set=\'{"v.path":"' + path + '"}\'',
+        '<div class="pcard"><h3>Backup phrase</h3>' +
+        '<p>Write down these 17 words to recover your account if every device is lost.</p>' +
+        UI.btn('Show my phrase', {
+          disabled: spent,
+          attrs: spent ? '' : 'data-act="go" data-page="fr-phrase" data-set=\'{"v.path":"' + path + '","v.written":"' + (written ? '1' : '') + '"}\'',
         }) +
         '</div></div>' +
         /* `{message ? <p className="crit">{message}</p> : null}` under the
@@ -843,7 +797,7 @@
         (s.v.refusal === 'yubikey' ? '<p class="crit">A YubiKey is enrolled later from Settings › Security keys.</p>'
           : s.v.refusal === 'commit' ? '<p class="crit">The prepared backup phrase no longer matches.</p>' : '');
       return {
-        side: setupSide({ current: 4, path: path }),
+        side: setupSide({ current: 3, path: path }),
         main: pane({
           wide: true, body: body,
           foot: foot({
@@ -861,7 +815,7 @@
       };
     }
     var PROTECT_CONTROLS = [
-      { key: 'written', label: 'Backup phrase', note: 'checkpoint.backupCommitted: the chip reads `Written down` and the reveal button is spent.', values: [{ v: '', label: 'Not written' }, { v: '1', label: 'Committed' }] },
+      { key: 'written', label: 'Backup phrase', note: 'checkpoint.backupCommitted. `Committed` is the sheet’s Done just pressed: the phrase is still held in memory until this step is left, so Show my phrase stays live for another look (82fa1e4b7). `Committed earlier` is a stored checkpoint with nothing held: the button is disabled.', values: [{ v: '', label: 'Not written' }, { v: '1', label: 'Committed' }, { v: 'saved', label: 'Committed earlier' }] },
       { key: 'disclosure', label: 'Disclosure', note: 'The YubiKey card’s `What to know first`.', values: [{ v: '', label: 'Closed' }, { v: 'open', label: 'What to know' }] },
       { key: 'refusal', label: 'Message', note: '`Enroll a YubiKey…` sets a message rather than doing anything; the sheet’s `Done` can also land one here, when commitOwnerBackup refuses the phrase it was handed (mock-bridge.ts:774-779).', values: [{ v: '', label: 'None' }, { v: 'yubikey', label: 'YubiKey notice' }, { v: 'commit', label: 'Phrase no longer matches' }] },
       { key: 'pass', label: 'Passphrase', note: 'What is typed in the Passphrase field. Continue is disabled while it and Confirm disagree; both empty is the app\u2019s default and goes on without one.', values: [{ v: '', label: 'Empty' }, { v: 'hunter2', label: 'Typed' }] },
@@ -870,7 +824,7 @@
     M.page({
       id: 'fr-protect',
       title: 'Save recovery phrase',
-      path: ['First run', 'Your own account', '5 · Save recovery phrase'],
+      path: ['First run', 'Your own account', '4 · Save recovery phrase'],
       note: 'state=protect, path=own. Continue is refused only when the two passphrase fields disagree.',
       controls: PROTECT_CONTROLS,
       render: function (s) {
@@ -883,7 +837,7 @@
     M.page({
       id: 'fri-protect',
       title: 'Save recovery phrase',
-      path: ['First run', 'Invited to a group', '5 · Save recovery phrase'],
+      path: ['First run', 'Invited to a group', '4 · Save recovery phrase'],
       note: 'state=protect, path=invited — Continue leads to `waiting` rather than `create-group`.',
       controls: PROTECT_CONTROLS,
       render: function (s) {
@@ -894,14 +848,15 @@
       },
     });
 
-    /* ---------------------------------------- the one-time phrase sheet */
+    /* ------------------------------------------ the backup phrase sheet */
     M.page({
       id: 'fr-phrase',
-      title: 'Write these tokens down',
-      path: ['First run', 'Your own account', '5 · Write these tokens down'],
-      note: 'state=phrase: the wide sheet over the protect pane. The phrase is prepared once and never survives a reload.',
+      title: 'Write these 17 words down',
+      path: ['First run', 'Your own account', '4 · Write these 17 words down'],
+      note: 'state=phrase: the wide sheet over the protect pane. The phrase is prepared once and never survives a reload; once committed it stays in memory for another look until recovery is left (82fa1e4b7).',
+      keeps: ['written'],
       controls: [
-        { key: 'written', label: 'Backup phrase', note: 'phraseWritten — `Done` stays disabled until the box is ticked. Ticking it is not committing: the card behind still reads `Not yet` until Done runs.', values: [{ v: '', label: 'Not ticked' }, { v: '1', label: 'Written down' }] },
+        { key: 'ticked', label: 'Checkbox', note: 'phraseWritten — `Done` stays disabled until the box is ticked. Ticking is not committing: `written` (checkpoint.backupCommitted) only flips when Done runs, and the box opens clear every time.', values: [{ v: '', label: 'Not ticked' }, { v: '1', label: 'Written down' }] },
         { key: 'result', label: 'Prepared phrase', note: 'prepareOwnerBackup runs in an effect when the sheet opens; until it answers there are no tokens to show and `Done` is refused whatever the checkbox says (first-run-screen.tsx:2665-2674).', values: [{ v: '', label: 'Prepared' }, { v: 'preparing', label: 'Still preparing' }] },
         { key: 'path', label: 'Path', values: [{ v: 'own', label: 'Own' }, { v: 'invited', label: 'Invited' }] },
       ],
@@ -919,36 +874,38 @@
         if (s.agent === 'lost' || s.lock === 'locked' || (s.boot && s.boot !== 'ok')) return '';
         var path = s.v.path === 'invited' ? 'invited' : 'own';
         var back = path === 'invited' ? 'fri-protect' : 'fr-protect';
-        var ticked = s.v.written === '1';
+        var ticked = s.v.ticked === '1';
         /* `backupPhrase` is null until prepareOwnerBackup answers; the sheet
            says so in place of the grid, and `Done` stays refused. */
         var prepared = s.v.result !== 'preparing';
-        var close = 'data-act="go" data-page="' + back + '" data-set=\'{"v.written":""}\'';
+        /* Closing keeps whatever was committed: an uncommitted phrase is
+           discarded, a committed one is still held for another reveal. */
+        var close = 'data-act="go" data-page="' + back + '" data-set=\'{"v.ticked":"","v.written":"' + (s.v.written ? esc(s.v.written) : '') + '"}\'';
         var words = prepared
           ? '<div class="words">' + D.backupPhraseWords.map(function (w, i) {
               return '<div class="word"><i>' + (i + 1) + '</i>' + esc(w) + '</div>';
             }).join('') + '</div>'
-          : '<p>Preparing the one-time phrase…</p>';
+          : '<p>Preparing your phrase…</p>';
         return UI.sheet({
           width: 'wide',
           glyph: M.icon('key'),
-          title: 'Write these tokens down',
-          subtitle: 'Shown once and cannot be copied',
+          title: 'Write these 17 words down',
+          subtitle: 'Keep them somewhere other than this Mac',
           /* The sheet passes `onClose`, so it is a DismissibleDialog: a
              mousedown on the backdrop itself, or Escape, is `go('protect')`
              and the prepared phrase is discarded (sheet.tsx:92-118,
              kit/overlay-primitives.tsx:231-247). UI.sheet writes the
              backdrop's own aria-modal/tabindex. */
           backdropAttrs: close,
-          body: '<p>Anyone with these tokens can access your account. Store them somewhere other than this Mac.</p>' +
+          body: '<p>Anyone with these words can access your account. Store them somewhere other than this Mac.</p>' +
             words +
-            '<button type="button" aria-label="I have written these 17 tokens down" class="check' + (ticked ? ' on' : '') + '"' +
-            ' data-act="set" data-key="v.written" data-val="' + (ticked ? '' : '1') + '">' +
-            '<span class="bx">' + (ticked ? '✓' : '') + '</span>I have written these 17 tokens down</button>',
+            '<button type="button" aria-label="I have written these 17 words down" class="check' + (ticked ? ' on' : '') + '"' +
+            ' data-act="set" data-key="v.ticked" data-val="' + (ticked ? '' : '1') + '">' +
+            '<span class="bx">' + (ticked ? '✓' : '') + '</span>I have written these 17 words down</button>',
           footer: UI.btn('Not now', { attrs: close }) +
             UI.btn('Done', {
               variant: 'primary', disabled: !ticked || !prepared,
-              attrs: (ticked && prepared) ? 'data-act="go" data-page="' + back + '" data-set=\'{"v.written":"1"}\'' : '',
+              attrs: (ticked && prepared) ? 'data-act="go" data-page="' + back + '" data-set=\'{"v.written":"1","v.ticked":""}\'' : '',
             }),
         });
       },
@@ -957,7 +914,7 @@
            Off this page the shell's rule stands again. */
         M.fns.escape = function () {
           if (M.s.page !== 'fr-phrase') return shellEscape && shellEscape();
-          M.go(M.s.v.path === 'invited' ? 'fri-protect' : 'fr-protect', { 'v.written': null });
+          M.go(M.s.v.path === 'invited' ? 'fri-protect' : 'fr-protect', { 'v.ticked': null });
         };
       },
     });
@@ -968,7 +925,7 @@
     M.page({
       id: 'fri-waiting',
       title: 'Wait to be added',
-      path: ['First run', 'Invited to a group', '6 · Wait to be added'],
+      path: ['First run', 'Invited to a group', '5 · Wait to be added'],
       note: 'state=waiting. Nothing is pushed here: the group appears only when this Mac asks for it.',
       controls: [
         { key: 'disclosure', label: 'Disclosure', note: 'The `Details` block under the Check now card.', values: [{ v: '', label: 'Closed' }, { v: 'open', label: 'Details open' }] },
@@ -1018,8 +975,7 @@
           ' has already added you, confirm that they entered <code>' + esc(f.username) + '</code>.</p>' +
           dd({
             open: s.v.disclosure === 'open', summary: 'Details',
-            body: '<p>Re-reads ' + esc(f.username) + '’s own signed chain on ' + esc(f.report.canonicalName) +
-              ', then lists groups. A group appears only when that authenticated answer and the refreshed catalog agree.</p>',
+            body: '<p>Checks your account (' + esc(f.username) + ') on ' + esc(f.report.canonicalName) + ' and updates your group list.</p>',
           }) +
           '</div>' +
           '<div class="pcard"><h3>Use your Personal vault</h3>' +
@@ -1029,11 +985,11 @@
           UI.btn('Open Personal', { attrs: 'data-act="go" data-page="fri-checklist-invited" data-set=\'{"v.progress":"4"}\'' }) +
           '</div></div>';
         var body = '<h1>Waiting for ' + esc(adminOf(f)) + ' to add ' + esc(f.username) + '</h1>' +
-          '<p class="lead">Your account ' + esc(f.username) + ' on ' + esc(f.report.canonicalName) + ' exists. ' +
+          '<p class="lead">Your account (' + esc(f.username) + ') on ' + esc(f.report.canonicalName) + ' is ready. ' +
           esc(short) + ' must add you to <b>' + esc(f.groupName) + '</b>. Check again after they do.</p>' +
           '<div class="two">' + left + right + '</div>';
         return {
-          side: setupSide({ current: 5, path: 'invited' }),
+          side: setupSide({ current: 4, path: 'invited' }),
           main: pane({
             wide: true, body: body,
             foot: foot({
@@ -1070,10 +1026,9 @@
     M.page({
       id: 'fr-create-group',
       title: 'Create a group',
-      path: ['First run', 'Your own account', '6 · Create a group'],
+      path: ['First run', 'Your own account', '5 · Create a group'],
       note: 'state=create-group. Skipping is a first-class answer — Groups is always in the sidebar. The prefilled `Household` is already a group here, so pressing Create group refuses it: type another name.',
       controls: [
-        { key: 'choice', label: 'Group kind', note: 'Named groups can be looked up on the server and nested; ad-hoc ones are known only by id.', values: [{ v: 'named', label: 'Named group' }, { v: 'adhoc', label: 'Ad-hoc group' }] },
         { key: 'refusal', label: 'Refusal', note: 'The client refuses a name with no letters or numbers; the bridge refuses an alias `team:<alias>` already holds — which the prefilled `Household` is.', values: [{ v: '', label: 'None' }, { v: 'alias', label: 'Alias exists' }, { v: 'name', label: 'No letters or numbers' }] },
       ],
       render: function (s) {
@@ -1081,30 +1036,19 @@
         if (t) return t;
         rid = 0;
         var f = FACTS.own;
-        var kind = s.v.choice === 'adhoc' ? 'adhoc' : 'named';
         var nameId = rr();
         var body = '<h1>Create a group</h1>' +
           '<p class="lead">' + PERSONAL_FIXED + ' Start one now, or skip and do it later from <b>Groups</b>.</p>' +
           UI.sectionLabel('Your first group') +
           UI.inset(
-            UI.insetRow({ label: 'Group name', forId: nameId, value: input({ id: nameId, value: f.groupName }) }) +
-            UI.radioGroup([
-              UI.radioCard({
-                title: 'Named', selected: kind === 'named',
-                detail: 'Has a name others on ' + esc(f.report.canonicalName) + ' can look up, and can be added to other groups.',
-                attrs: 'data-act="set" data-key="v.choice" data-val="named"',
-              }),
-              UI.radioCard({
-                title: 'Ad-hoc', selected: kind === 'adhoc',
-                detail: 'Known only by its id — for a quick group that never needs to be found by name.',
-                attrs: 'data-act="set" data-key="v.choice" data-val="adhoc"',
-              }),
-            ], { label: 'Group kind' })) +
+            UI.insetRow({ label: 'Group name', forId: nameId, value: input({ id: nameId, value: f.groupName }) })) +
           (s.v.refusal === 'alias' ? '<p class="crit">That group alias already exists.</p>'
             : s.v.refusal === 'name' ? '<p class="crit">Enter a group name containing letters or numbers.</p>' : '') +
-          '<p class="hint">You can add people by username after creating a group.</p>';
+          /* First run makes named groups only (953b05785): the kind radio is
+             gone and the hint says what a name is for. */
+          '<p class="hint">Others on <b>' + esc(f.report.canonicalName) + '</b> can look up this group by name. You can add people by username after creating a group.</p>';
         return {
-          side: setupSide({ current: 5, path: 'own' }),
+          side: setupSide({ current: 4, path: 'own' }),
           main: pane({
             body: body,
             foot: foot({
@@ -1153,7 +1097,7 @@
          the store cannot be resolved: disabled. */
       var created = (!invited && s.v.group) ? String(s.v.group) : '';
       var groupName = created || f.groupName;
-      var kindWord = (created && s.v.choice === 'adhoc') ? 'ad-hoc' : 'named';
+      var kindWord = 'named'; /* first run creates named groups only */
       var storeId = created ? null : f.store;
       var found = (storeId && w.storeById) ? w.storeById[storeId] : null;
       /* addedStores also demands `store.active && storeReadable(world, id)`
@@ -1165,16 +1109,15 @@
       var openAttrs = store ? 'data-act="go" data-page="' + esc(M.storePages[storeId]) + '"' : '';
       var notice = UI.notice({
         eyebrow: esc(groupName) + ' · ' + esc(f.report.canonicalName),
-        title: invited ? 'You’re in ' + esc(groupName) : esc(groupName) + ' exists',
+        title: invited ? 'You’re in ' + esc(groupName) : 'Your group is ready',
         body: invited
           ? '<p>' + esc(adminOf(f)) + ' added <code>' + esc(f.username) + '</code> as a Member, and ' +
             esc(f.groupName) + ' is listed here now: its ' + items.length +
             ' items are listed, and what your role can read is open.</p>' +
             '<p class="fn">Groups appear after this Mac creates them or checks for groups it has joined.</p>'
-          : '<p>You are its Owner and nobody else is in it yet. Add people by username from the group’s settings — they need an account on ' +
-            esc(f.report.canonicalName) +
-            ' first: send them the address, ask for the username they picked, then add them as Member, Admin or Owner.</p>' +
-            '<p class="fn">Select Resume to continue interrupted group creation without repeating completed steps. Pairing is under <b>Settings › Recovery devices</b>, alongside your 17-token backup phrase.</p>',
+          : '<p>You are the group Owner. To invite others, share the server address (' + esc(f.report.canonicalName) +
+            ') so they can create an account. Once they choose a username, go to Group settings to add them as a Member, Admin, or Owner.</p>' +
+            '<p class="fn">Select Resume to continue interrupted group creation without repeating completed steps. Pairing is under <b>Settings › Recovery devices</b>, alongside your 17-word backup phrase.</p>',
         actions: UI.btn('Dismiss', { attrs: 'data-act="go" data-page="all"' }) +
           UI.btn('Open your vault', { variant: 'primary', disabled: !store, attrs: store ? openAttrs : '' }),
       });
@@ -1189,8 +1132,7 @@
           }).join('');
       } else {
         rest = '<div class="empty">' + M.icon('key') + '<h2>No items here</h2>' +
-          '<p>Anything saved in ' + esc(groupName) +
-          ' is read by everyone in it at their role. Nothing is listed until something is written.</p>' +
+          '<p>Members can view items allowed by their role. Start by adding your first item.</p>' +
           UI.btn('New', { attrs: 'data-act="go" data-page="all"' }) + '</div>';
       }
       return {
@@ -1228,7 +1170,7 @@
           variant: 'preview', label: 'Value', value: '— locked —', valueClass: 'mask',
           action: UI.btn('Show', { size: 'sm', disabled: true }),
         }), { variant: 'preview' }) +
-        '<p class="pfn">Your Member role determines whether this exact version can be opened.</p>' +
+        '<p class="pfn">Whether you can open this item depends on your role in the group.</p>' +
         UI.sectionLabel('Info') +
         '<div class="meta">' +
         '<b>Path</b><code>' + esc(item.path) + '</code>' +
@@ -1240,13 +1182,13 @@
         '</div>' +
         UI.sectionLabel('Sharing') +
         '<p>Everyone in ' + esc(where) +
-        ' at the item’s read role or above can read it. These facts were learned from the current roster.</p>' +
+        ' at the item’s read role or above can read it. Based on the current member list.</p>' +
         '</div></aside>';
     }
     M.page({
       id: 'fri-added',
       title: 'You’re in',
-      path: ['First run', 'Invited to a group', '7 · You’re in'],
+      path: ['First run', 'Invited to a group', '6 · You’re in'],
       note: 'state=added: the only first-run step with a details panel, and the only one that adds `with-details` to .app.',
       controls: [
         { key: 'discovered', label: 'Roster', note: 'Reached by pressing `Check now`, discovery has already made `sol` a Member of Engineering, so the roster is 6 people; a deep link to `?state=added` has not run it and shows 5.', values: [{ v: '', label: 'Deep link (5)' }, { v: 'yes', label: 'After Check now (6)' }] },
@@ -1262,11 +1204,10 @@
     M.page({
       id: 'fr-done',
       title: 'You’re in',
-      path: ['First run', 'Your own account', '7 · You’re in'],
+      path: ['First run', 'Your own account', '6 · You’re in'],
       note: 'state=done: the group exists and nobody else is in it yet. A deep link seeds the fixture group (Household, whose store the sidebar already lists); arriving from `Create group` names the group that was just made — Platform — which this world holds no store for, so `Open your vault` is disabled, the way the app draws it whenever `addedStore` cannot be resolved (a lapsed lease does the same to Household).',
       controls: [
         { key: 'group', label: 'Group', note: 'checkpoint.group.name: the fixture group on a deep link, or the name typed on `create-group` — `Platform`, the same group 60-groups’ create sheet makes.', values: [{ v: '', label: 'Household (fixture)' }, { v: 'Platform', label: 'Platform (created)' }] },
-        { key: 'choice', label: 'Group kind', note: 'checkpoint.group.kind — the page-header subtitle reads `named group on …` or `ad-hoc group on …`.', values: [{ v: 'named', label: 'Named group' }, { v: 'adhoc', label: 'Ad-hoc group' }] },
       ],
       status: function (s) { return statusSlot({ left: 5, checklist: 'fr-checklist-own' }); },
       render: function (s) {
@@ -1310,7 +1251,7 @@
             protectedNow
               ? 'Passphrase set · backup phrase written down · YubiKey later, from Settings'
               : esc('Skipped. This Mac holds the only key to ' + f.username +
-                  '; a passphrase, YubiKey or 17-token backup phrase gives you a second way in.'),
+                  '; a passphrase, YubiKey or 17-word backup phrase gives you a second way in.'),
             UI.btn(protectedNow ? 'Review' : 'Protect now', {
               size: 'sm', variant: protectedNow ? undefined : 'primary',
               attrs: 'data-act="go" data-page="' + protectPage + '"',
@@ -1330,7 +1271,7 @@
           '<div class="checklist-notice">' + UI.notice({
             eyebrow: 'Save recovery phrase · skipped',
             title: 'This Mac holds the only key to ' + esc(f.username),
-            body: 'Lose it and the account is gone — a passphrase, YubiKey or 17-token backup phrase is a second way in. Nothing else in the list is blocked by this.',
+            body: 'Lose it and the account is gone — a passphrase, YubiKey or 17-word backup phrase is a second way in. Nothing else in the list is blocked by this.',
           }) + '</div>');
       return {
         side: appSide(s, page, invited ? 1 : 0),
@@ -1346,7 +1287,7 @@
     M.page({
       id: 'fr-checklist-own',
       title: 'Get started',
-      path: ['First run', 'Your own account', '7 · Get started'],
+      path: ['First run', 'Your own account', '6 · Get started'],
       note: 'state=checklist-own, in app mode: the ordinary sidebar plus a `Get started` status row.',
       status: function (s) {
         return statusSlot({ left: s.v.progress === '4' ? 4 : 3, checklist: 'fr-checklist-own' });
@@ -1362,13 +1303,13 @@
     M.page({
       id: 'fri-checklist-invited',
       title: 'Get started',
-      path: ['First run', 'Invited to a group', '7 · Get started'],
+      path: ['First run', 'Invited to a group', '6 · Get started'],
       note: 'state=checklist-invited: the Alerts badge is forced to 1 and a side note says the group is not listed yet.',
       status: function (s) {
         return statusSlot({
           left: s.v.progress === '4' ? 4 : 3,
           checklist: 'fri-checklist-invited',
-          note: FACTS.invited.groupName + ' isn’t listed yet. A group appears under GROUPS when this Mac asks the server for it; nothing is pushed here.',
+          note: FACTS.invited.groupName + ' will appear under Groups once you’re added. FOKS checks for new groups when it opens and when you click Check now.',
         });
       },
       controls: CHECKLIST_CONTROLS,
@@ -1504,7 +1445,7 @@
       path: ['First run', 'Managed local server', '3 · Recovery'],
       note: 'state=protect/phrase with managedLocal: the phrase is revealed inline, not in a sheet.',
       controls: [
-        { key: 'disclosure', label: 'Phrase', note: 'state=protect (collapsed) vs state=phrase (the 17 tokens inline).', values: [{ v: '', label: 'Collapsed' }, { v: 'open', label: 'Shown' }] },
+        { key: 'disclosure', label: 'Phrase', note: 'state=protect (collapsed) vs state=phrase (the 17 words inline).', values: [{ v: '', label: 'Collapsed' }, { v: 'open', label: 'Shown' }] },
         { key: 'written', label: 'Backup phrase', note: 'phraseWritten while the phrase is on screen — `Start using FOKS` stays disabled until the box is ticked. `Already committed` is checkpoint.backupCommitted instead: the collapsed card’s button then reads `Recovery phrase saved` and is spent (first-run-screen.tsx:2455-2463). Collapsing does not commit, so that only comes back with a stored checkpoint.', values: [{ v: '', label: 'Not ticked' }, { v: '1', label: 'Written down' }, { v: 'saved', label: 'Already committed' }] },
         { key: 'result', label: 'Prepared phrase', note: 'prepareOwnerBackup runs in an effect when the phrase is revealed; until it answers the card says so instead of listing tokens.', values: [{ v: '', label: 'Prepared' }, { v: 'preparing', label: 'Still preparing' }] },
         { key: 'refusal', label: 'Refusal', note: 'The `.crit` under the cards: `Start using FOKS` commits the phrase, and the bridge refuses one it did not prepare (mock-bridge.ts:774-779).', values: [{ v: '', label: 'None' }, { v: 'commit', label: 'Phrase no longer matches' }] },
@@ -1523,10 +1464,10 @@
               ? '<div class="words">' + D.backupPhraseWords.map(function (w, i) {
                   return '<div class="word"><i>' + (i + 1) + '</i>' + esc(w) + '</div>';
                 }).join('') + '</div>'
-              : '<p>Preparing the one-time phrase…</p>') +
+              : '<p>Preparing your phrase…</p>') +
             '<label class="local-confirm"><input type="checkbox"' + (ticked ? ' checked=""' : '') +
             ' style="" data-act="set" data-key="v.written" data-val="' + (ticked ? '' : '1') + '">' +
-            '<span>I have written down all 17 tokens.</span></label>' +
+            '<span>I have written down all 17 words.</span></label>' +
             lnk('Hide recovery phrase', 'data-act="set" data-key="v.disclosure" data-val=""', 'local-quiet-link')
           /* Collapsed the button is the reveal — or, once the phrase has been
              committed, the spent label (first-run-screen.tsx:2455-2463). */
@@ -1538,7 +1479,7 @@
           '<p class="lead">Set up a backup phrase now so you can recover your account if this Mac is lost.</p>' +
           '<div class="local-recovery-card">' +
           '<div class="local-recovery-head"><h2>Backup phrase</h2>' + UI.chip('Recommended') + '</div>' +
-          '<p>Write down these 17 tokens and keep them somewhere other than this Mac. Anyone with them can recover your account.</p>' +
+          '<p>Write down these 17 words and keep them somewhere other than this Mac. Anyone with them can recover your account.</p>' +
           card + '</div>' +
           '<div class="local-other-protection">' +
           '<div class="local-quiet-card"><b>Passphrase</b><span>Add one later from Settings.</span></div>' +
@@ -1614,7 +1555,7 @@
     M.page({
       id: 'frx-existing',
       title: 'Add this Mac to your account',
-      path: ['First run', 'Recover or pair', '4 · Add this Mac'],
+      path: ['First run', 'Recover or pair', '3 · Add this Mac'],
       note: 'state=existing. Reached from `who` (Add this as a secondary device), from `account` (I already have an account on this server), or from `local` (Recover an existing account…). `Recover` and `Accept pairing` need their secret typed first, exactly as the app has them.',
       controls: [
         { key: 'card', label: 'Cards', note: 'The bridge behind the pane. Both cards are always drawn; only the recovery card’s `Account alias` row is native-only (first-run-screen.tsx:2222-2229), and a selected Go CLI candidate also retitles the pairing card — and adds the copy card, but only when that candidate is copyable, which the `Go CLI candidate` chips decide.', values: [{ v: '', label: 'Web bridge' }, { v: 'pair', label: 'Native bridge' }, { v: 'cli', label: 'Go CLI candidate' }] },
@@ -1666,11 +1607,11 @@
           recoverRows += UI.insetRow({ label: 'Account alias', forId: ra, value: input({ id: ra, value: alias }) });
         }
         var ph = rr(), dv = rr();
-        recoverRows += UI.insetRow({ label: 'Phrase', forId: ph, value: input({ ariaLabel: 'Backup phrase', placeholder: 'token token token …', id: ph, type: 'password', value: s.v.recovery || '', bind: 'v.recovery' }) });
+        recoverRows += UI.insetRow({ label: 'Phrase', forId: ph, value: input({ ariaLabel: 'Backup phrase', placeholder: 'word word word …', id: ph, type: 'password', value: s.v.recovery || '', bind: 'v.recovery' }) });
         recoverRows += UI.insetRow({ label: 'This Mac’s name', forId: dv, value: input({ id: dv, value: f.deviceName }) });
 
         var card1 = '<div class="pcard"><h3>Recover with your backup phrase</h3>' +
-          '<p>Enter all 17 tokens from your backup phrase to add this Mac as an owner device.</p>' +
+          '<p>Enter all 17 words from your backup phrase to add this Mac as an owner device.</p>' +
           UI.inset(recoverRows, { className: 'recovery-fields' }) +
           /* disabled={busy || !recoveryTargetAlias || !recoveryPhrase.trim() ||
              !deviceName.trim()} — the alias and the device name are prefilled,
@@ -1729,7 +1670,7 @@
              exists they go, exactly as they do on the managed account pane. */
           side: local
             ? setupSide({ local: true, current: 1, managedNoAccount: s.v.made !== 'yes', recoverEnabled: true })
-            : setupSide({ current: 3, path: path }),
+            : setupSide({ current: 2, path: path }),
           main: pane({
             wide: true, body: body,
             foot: foot({
@@ -1747,7 +1688,7 @@
     M.page({
       id: 'frg-scan',
       title: 'Looking for existing FOKS accounts',
-      path: ['First run', 'FOKS CLI import', '2 · Looking for accounts'],
+      path: ['First run', 'FOKS CLI import', '1 · Looking for accounts'],
       note: 'Native only: `who` while discoverGoProfiles() is in flight. The mock bridge is not native, so this is transcribed from first-run-screen.tsx:1746-1755.',
       render: function (s) {
         var t = M.globalTakeover(s);
@@ -1757,7 +1698,7 @@
           '<p class="lead">Checking the official FOKS client’s standard local profile store. Nothing is changed or unlocked.</p>' +
           UI.btn('Checking…', { disabled: true });
         return {
-          side: setupSide({ current: 1, path: null }),
+          side: setupSide({ current: 0, path: null }),
           main: pane({ body: body }),
         };
       },
@@ -1769,7 +1710,7 @@
     M.page({
       id: 'frg-chooser',
       title: 'FOKS is already set up on this Mac',
-      path: ['First run', 'FOKS CLI import', '2 · Choose an account'],
+      path: ['First run', 'FOKS CLI import', '1 · Choose an account'],
       note: 'Native only: `who` once discoverGoProfiles() returns pairable or copyable candidates (go-profile-chooser.tsx).',
       controls: [
         { key: 'choice', label: 'Candidate', note: 'The chosen candidateId; `Connect selected account` stays disabled until one is picked.', values: [{ v: '', label: 'Nothing' }, { v: 'rae', label: 'First candidate' }, { v: 'ops', label: 'Second candidate' }, { v: 'draft', label: 'Third (unusable)' }] },
@@ -1807,7 +1748,7 @@
           UI.btn('Set up another account', { attrs: 'data-act="go" data-page="fr-who" data-set=\'{"v.choice":""}\'' }) +
           '</div>';
         return {
-          side: setupSide({ current: 1, path: null }),
+          side: setupSide({ current: 0, path: null }),
           main: pane({ wide: true, body: body }),
         };
       },
