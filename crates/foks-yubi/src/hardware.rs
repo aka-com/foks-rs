@@ -18,9 +18,8 @@ use yubikey::{MgmKey, PinPolicy, Serial, TouchPolicy, YubiKey};
 use zeroize::Zeroizing;
 
 use crate::{
-    CardId, Error, ManagedYubiDevice, ManagementKey, Pin, PinRetries, PinRetryConfiguration,
-    PivPolicy, PreparedYubiDevice, Result, SlotId, YubiAdministrativeDevice, YubiDeviceLocator,
-    YubiProvider,
+    CardId, Error, ManagedYubiDevice, ManagementKey, Pin, PinRetries, PivPolicy,
+    PreparedYubiDevice, Result, SlotId, YubiAdministrativeDevice, YubiDeviceLocator, YubiProvider,
 };
 
 static HARDWARE_OPERATION_LOCK: Mutex<()> = Mutex::new(());
@@ -74,17 +73,14 @@ impl YubiProvider for HardwareYubiProvider {
         Ok(cards)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn prepare(
+    fn prepare_preflight(
         &self,
         card: &CardId,
         signing_slot: SlotId,
         pq_slot: SlotId,
         pin: &Pin,
-        retry_configuration: Option<&PinRetryConfiguration>,
-        pin_policy: PivPolicy,
-        touch_policy: PivPolicy,
-    ) -> Result<PreparedYubiDevice> {
+        all_slots_empty: bool,
+    ) -> Result<()> {
         if signing_slot == pq_slot {
             return Err(Error::Policy("signing and PQ slots must be distinct"));
         }
@@ -95,60 +91,98 @@ impl YubiProvider for HardwareYubiProvider {
         // Existing managed cards must be reset or enrolled through a future
         // import flow rather than having slots overwritten implicitly.
         yubikey.authenticate(MgmKey::default()).map_err(map_error)?;
-
-        let signing_slot_native = native_slot(signing_slot)?;
-        let pq_slot_native = native_slot(pq_slot)?;
-        if let Some(retry) = retry_configuration {
-            ensure_all_piv_slots_empty(&mut yubikey)?;
-            configure_pin_retries(
-                &mut yubikey,
-                &ManagementKey::default_piv(),
-                pin,
-                &retry.puk,
-                retry.pin_attempts,
-                retry.puk_attempts,
-            )?;
+        if all_slots_empty {
+            ensure_all_piv_slots_empty(&mut yubikey)
         } else {
-            ensure_slot_empty(&mut yubikey, signing_slot_native)?;
-            ensure_slot_empty(&mut yubikey, pq_slot_native)?;
+            ensure_slot_empty(&mut yubikey, native_slot(signing_slot)?)?;
+            ensure_slot_empty(&mut yubikey, native_slot(pq_slot)?)
         }
-        let signing_spki = piv::generate(
-            &mut yubikey,
-            signing_slot_native,
-            AlgorithmId::EccP256,
-            native_pin_policy(pin_policy),
-            native_touch_policy(touch_policy),
-        )
-        .map_err(map_error)?;
-        let pq_spki = piv::generate(
-            &mut yubikey,
-            pq_slot_native,
-            AlgorithmId::EccP256,
-            native_pin_policy(pin_policy),
-            native_touch_policy(touch_policy),
-        )
-        .map_err(map_error)?;
-        let signing_public_key = compressed_public(signing_spki.subject_public_key.raw_bytes())?;
-        let pq_public_key = compressed_public(pq_spki.subject_public_key.raw_bytes())?;
-        let locator = YubiDeviceLocator {
-            card: card.clone(),
-            signing_slot,
-            pq_slot,
-            signing_public_key,
-            pq_public_key,
-            pq_key_id: foks_crypto::yubi_pq_key_id(&pq_public_key)?,
-        };
+    }
+
+    fn prepare_reset_retries(
+        &self,
+        card: &CardId,
+        pin_attempts: u8,
+        puk_attempts: u8,
+    ) -> Result<()> {
+        let _guard = self.lock();
+        let mut yubikey = Self::open_card(card)?;
+        // Recovery deliberately reissues SET PIN RETRIES rather than guessing
+        // whether an earlier 3/3 result was the old or new policy. Refuse to
+        // do that canonical reset if any key appeared since preflight.
+        ensure_all_piv_slots_empty(&mut yubikey)?;
+        let management_key =
+            MgmKey::from_bytes(ManagementKey::default_piv().expose()).map_err(map_error)?;
+        yubikey.authenticate(management_key).map_err(map_error)?;
+        yubikey
+            .set_pin_retries(pin_attempts, puk_attempts)
+            .map_err(|_| Error::RetryUpdateUnknown)
+    }
+
+    fn prepare_restore_pin(&self, card: &CardId, pin: &Pin) -> Result<()> {
+        let _guard = self.lock();
+        let mut yubikey = Self::open_card(card)?;
+        yubikey
+            .change_pin(b"123456", pin.expose().as_bytes())
+            .map_err(|_| Error::RetryPinRestore)
+    }
+
+    fn prepare_restore_puk(&self, card: &CardId, puk: &Pin) -> Result<()> {
+        let _guard = self.lock();
+        let mut yubikey = Self::open_card(card)?;
+        yubikey
+            .change_puk(b"12345678", puk.expose().as_bytes())
+            .map_err(|_| Error::RetryPukRestore)
+    }
+
+    fn prepare_key(
+        &self,
+        card: &CardId,
+        slot: SlotId,
+        pin_policy: PivPolicy,
+        touch_policy: PivPolicy,
+    ) -> Result<[u8; 33]> {
+        let _guard = self.lock();
+        let mut yubikey = Self::open_card(card)?;
+        let native_slot = native_slot(slot)?;
+        match piv::metadata(&mut yubikey, native_slot) {
+            Ok(metadata) if metadata.public.is_some() => compressed_public(
+                metadata
+                    .public
+                    .expect("checked public key presence")
+                    .subject_public_key
+                    .raw_bytes(),
+            ),
+            Ok(_) | Err(yubikey::Error::NotFound) => {
+                yubikey.authenticate(MgmKey::default()).map_err(map_error)?;
+                let public = piv::generate(
+                    &mut yubikey,
+                    native_slot,
+                    AlgorithmId::EccP256,
+                    native_pin_policy(pin_policy),
+                    native_touch_policy(touch_policy),
+                )
+                .map_err(map_error)?;
+                compressed_public(public.subject_public_key.raw_bytes())
+            }
+            Err(error) => Err(map_error(error)),
+        }
+    }
+
+    fn finish_prepare(&self, locator: &YubiDeviceLocator, pin: &Pin) -> Result<PreparedYubiDevice> {
+        let _guard = self.lock();
+        let mut yubikey = Self::open_card(&locator.card)?;
+        verify_pin(&mut yubikey, pin)?;
+        verify_locator_slots(&mut yubikey, locator)?;
         let device = HardwareYubiDevice::from_open_key(
             &mut yubikey,
             locator.clone(),
             Some(Zeroizing::new(pin.expose().as_bytes().to_vec())),
         )?;
-        drop(yubikey);
-        drop(_guard);
         Ok(PreparedYubiDevice {
             entity_id: device.id.clone(),
             hepk: device.hepk.clone(),
-            locator,
+            locator: locator.clone(),
             device: Box::new(device),
         })
     }
@@ -263,11 +297,7 @@ impl HardwareYubiDevice {
         locator: YubiDeviceLocator,
         pin: Option<Zeroizing<Vec<u8>>>,
     ) -> Result<Self> {
-        prove_slot(
-            yubikey,
-            locator.signing_slot,
-            &locator.signing_public_key,
-        )?;
+        prove_slot(yubikey, locator.signing_slot, &locator.signing_public_key)?;
         prove_slot(yubikey, locator.pq_slot, &locator.pq_public_key)?;
         let pq_self_secret = ecdh(yubikey, locator.pq_slot, &locator.pq_public_key)?;
         let material = foks_crypto::derive_yubi_public_material(
@@ -432,28 +462,6 @@ fn verify_pin(yubikey: &mut YubiKey, pin: &Pin) -> Result<()> {
 
 fn verify_pin_bytes(yubikey: &mut YubiKey, pin: &[u8]) -> Result<()> {
     yubikey.verify_pin(pin).map_err(map_error)
-}
-
-fn configure_pin_retries(
-    yubikey: &mut YubiKey,
-    management_key: &ManagementKey,
-    pin: &Pin,
-    puk: &Pin,
-    pin_attempts: u8,
-    puk_attempts: u8,
-) -> Result<()> {
-    let management_key = MgmKey::from_bytes(management_key.expose()).map_err(map_error)?;
-    yubikey.authenticate(management_key).map_err(map_error)?;
-    verify_pin(yubikey, pin)?;
-    yubikey
-        .set_pin_retries(pin_attempts, puk_attempts)
-        .map_err(|_| Error::RetryUpdateUnknown)?;
-    yubikey
-        .change_pin(b"123456", pin.expose().as_bytes())
-        .map_err(|_| Error::RetryPinRestore)?;
-    yubikey
-        .change_puk(b"12345678", puk.expose().as_bytes())
-        .map_err(|_| Error::RetryPukRestore)
 }
 
 fn native_slot(slot: SlotId) -> Result<piv::SlotId> {
