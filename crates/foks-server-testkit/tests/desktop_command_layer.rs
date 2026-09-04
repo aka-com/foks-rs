@@ -448,6 +448,50 @@ fn sol_process_reentry_and_real_kv_conflict_against_testkit() {
     ]));
     assert_eq!(content(&after_conflict), b"current secret");
 
+    // The first item anyone writes lives under folders nobody has created:
+    // the desktop offers `/logins/github.com` before `/logins` exists. A FOKS
+    // write addresses an existing parent, so the create carries `mkdir_p` and
+    // the agent builds the path in the same write session. A second create
+    // under the same folder reuses it rather than failing on it.
+    let nested = backend.success(with_file(
+        words(&[
+            "kv-create-text",
+            "work",
+            "personal",
+            "/logins/github.com",
+            "--value-file",
+        ]),
+        &original_file,
+    ));
+    let nested_version = nested["version"].as_u64().expect("nested create version");
+    let nested_read = backend.success(words(&[
+        "kv-read",
+        "work",
+        "personal",
+        "/logins/github.com",
+        &nested_version.to_string(),
+    ]));
+    assert_eq!(content(&nested_read), b"initial secret");
+    let sibling = backend.success(with_file(
+        words(&[
+            "kv-create-text",
+            "work",
+            "personal",
+            "/logins/gitlab.com",
+            "--value-file",
+        ]),
+        &current_file,
+    ));
+    let sibling_version = sibling["version"].as_u64().expect("sibling create version");
+    let sibling_read = backend.success(words(&[
+        "kv-read",
+        "work",
+        "personal",
+        "/logins/gitlab.com",
+        &sibling_version.to_string(),
+    ]));
+    assert_eq!(content(&sibling_read), b"current secret");
+
     // Compose an authentic short-lived hosted lease through the same registry
     // API used by production refresh. The external agent reloads this durable
     // profile on every dispatch, so expiry is evaluated in the real process;

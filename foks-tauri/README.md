@@ -140,6 +140,14 @@ to override an account role fails closed. Edit and replacement commands accept
 no role arguments: they preserve the authenticated roles retained with the
 exact catalog version.
 
+Every create also carries the protocol's `mkdir_p`, because a FOKS write
+addresses a parent directory that already exists and the path a person types
+names the folders it lives in: `/logins/github.com` is the first thing written
+into an empty store. The agent creates the missing components inside the same
+write session, with the roles the new item carries, so a parent never hides the
+item it holds. Edits, replacements, and removes never carry it — they address a
+path the catalog already resolved.
+
 Native drops send path strings, never bytes. Rust authorizes one UTF-8 path only
 when the native event contains exactly one file; multi-drop paths are emitted
 so the UI can explain its refusal but none can be consumed by a direct invoke.

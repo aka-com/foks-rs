@@ -92,6 +92,7 @@ mod tests {
             read_role: KvRole::Owner,
             write_role: KvRole::Owner,
             precondition: KvPrecondition::Create,
+            mkdir_p: true,
         };
         operation.zeroize_plaintext();
         assert!(matches!(
@@ -293,6 +294,7 @@ mod tests {
                 read_role: KvRole::Member { visibility: 0 },
                 write_role: KvRole::Admin,
                 precondition: KvPrecondition::Create,
+                mkdir_p: true,
             },
             Operation::RemoveKv {
                 store: team,

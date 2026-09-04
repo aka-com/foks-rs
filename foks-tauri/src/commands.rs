@@ -10012,6 +10012,7 @@ mod tests {
                     read_role: KvRole::Member { visibility: 0 },
                     write_role: KvRole::Admin,
                     precondition: KvPrecondition::Create,
+                    mkdir_p: true,
                 },
                 Operation::PutKvSymlink {
                     store: KvStoreRef::Team(team.clone()),
@@ -10020,6 +10021,7 @@ mod tests {
                     read_role: KvRole::Member { visibility: 0 },
                     write_role: KvRole::Admin,
                     precondition: KvPrecondition::Create,
+                    mkdir_p: true,
                 },
                 Operation::MkdirKv {
                     store: KvStoreRef::Team(team.clone()),
@@ -10027,6 +10029,7 @@ mod tests {
                     read_role: KvRole::Member { visibility: 0 },
                     write_role: KvRole::Admin,
                     precondition: KvPrecondition::Create,
+                    mkdir_p: true,
                 },
                 Operation::PutKv {
                     store: KvStoreRef::Team(team.clone()),
@@ -10035,6 +10038,7 @@ mod tests {
                     read_role: KvRole::Member { visibility: -2 },
                     write_role: KvRole::Admin,
                     precondition: KvPrecondition::ExactVersion { version: 19 },
+                    mkdir_p: false,
                 },
                 Operation::RemoveKv {
                     store: KvStoreRef::Team(team.clone()),
