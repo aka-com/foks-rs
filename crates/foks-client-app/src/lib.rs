@@ -192,8 +192,8 @@ mod team;
 
 pub use account::{
     derive_mutation_key, derive_vault_key, AccountVault, BackupEnrollmentReport,
-    BackupEnrollmentSummary, DeviceProvisionReport, DeviceRevocationReport, DeviceSummary,
-    KexAcceptanceInput, KexOfferReport, LoadedAccount, PassphraseReport, SyncReport,
+    BackupEnrollmentSummary, BackupRevocationReport, DeviceProvisionReport, DeviceRevocationReport,
+    DeviceSummary, KexAcceptanceInput, KexOfferReport, LoadedAccount, PassphraseReport, SyncReport,
 };
 use checkpoint::RollbackHostCheckpoint;
 #[cfg(test)]

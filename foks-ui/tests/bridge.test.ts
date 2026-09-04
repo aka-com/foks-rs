@@ -16,6 +16,7 @@ import {
   decodeCheckedServer,
   decodeAccountDevices,
   decodeBackupEnrollments,
+  decodeBackupRevocation,
   decodePairingOffer,
   decodeDeviceProvision,
   decodeDeviceRemoval,
@@ -395,6 +396,10 @@ test('the TypeScript decoders accept the Rust-serialized wire golden', async () 
     'paper',
   );
   assert.equal(
+    decodeBackupRevocation(fixture.backupRevocation).userChainSequence,
+    16,
+  );
+  assert.equal(
     decodePairingOffer(fixture.pairingOffer).accountAlias,
     'personal',
   );
@@ -603,6 +608,36 @@ test('Phase 6 decoders reject invented status, replayable reset, and loose ident
         alreadyAbsent: false,
       }),
     /canonical 04 entity id/,
+  );
+  assert.deepEqual(
+    decodeBackupRevocation({
+      backupAlias: 'paper',
+      accountAlias: 'personal',
+      backupId: `10${'4'.repeat(64)}`,
+      userChainSequence: 2,
+      alreadyAbsent: false,
+      removedLocalEnrollment: true,
+    }),
+    {
+      backupAlias: 'paper',
+      accountAlias: 'personal',
+      backupId: `10${'4'.repeat(64)}`,
+      userChainSequence: 2,
+      alreadyAbsent: false,
+      removedLocalEnrollment: true,
+    },
+  );
+  assert.throws(
+    () =>
+      decodeBackupRevocation({
+        backupAlias: 'paper',
+        accountAlias: 'personal',
+        backupId: `10${'4'.repeat(64)}`,
+        userChainSequence: 2,
+        alreadyAbsent: false,
+        removedLocalEnrollment: false,
+      }),
+    /removedLocalEnrollment must be true/,
   );
   assert.throws(
     () => decodeYubiAccounts([{ alias: 'key', state: 'unknown' }]),
@@ -1656,6 +1691,48 @@ test('loadWorld still rejects cross-store group detail payloads', async () => {
     },
   };
   await assert.rejects(loadWorld(bridge), /roster for a different store/);
+});
+
+test('mock backup revocation binds identity, confirms, removes, and retries absent', async () => {
+  const bridge = mockBridge(FIXTURE);
+  const store = FIXTURE.stores.find(
+    (candidate) =>
+      candidate.kind === 'account' && candidate.account === 'personal',
+  );
+  assert.ok(store);
+  const [backup] = await bridge.listBackupEnrollments(store.id);
+  assert.ok(backup);
+
+  await assert.rejects(
+    bridge.revokeOwnerBackup(store.id, backup, 'wrong'),
+    (error: unknown) => normalizeCommandError(error).code === 'invalid-request',
+  );
+  await assert.rejects(
+    bridge.revokeOwnerBackup(
+      store.id,
+      { ...backup, backupId: `10${'5'.repeat(64)}` },
+      backup.backupAlias,
+    ),
+    (error: unknown) => normalizeCommandError(error).code === 'invalid-request',
+  );
+  assert.equal((await bridge.listBackupEnrollments(store.id)).length, 1);
+
+  const revoked = await bridge.revokeOwnerBackup(
+    store.id,
+    backup,
+    backup.backupAlias,
+  );
+  assert.equal(revoked.backupId, backup.backupId);
+  assert.equal(revoked.alreadyAbsent, false);
+  assert.equal((await bridge.listBackupEnrollments(store.id)).length, 0);
+
+  const repeated = await bridge.revokeOwnerBackup(
+    store.id,
+    backup,
+    backup.backupAlias,
+  );
+  assert.equal(repeated.alreadyAbsent, true);
+  assert.equal(repeated.removedLocalEnrollment, true);
 });
 
 test('mock create is visible in the catalog and supports an exact-version read', async () => {

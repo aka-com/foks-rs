@@ -1725,71 +1725,12 @@ impl CheckedProfileSession<'_> {
                 removed_local_credential: true,
             });
         };
-        if authenticated
-            .verified
-            .devices()
-            .iter()
-            .any(|device| device.id != target && device.id.entity_type() == foks_proto::ENTITY_YUBI)
-        {
-            return Err(Error::InvalidAccount(
-                "revoke this YubiKey before provisioning a replacement Yubi recipient",
-            ));
-        }
-        let mut rotations = Vec::new();
-        for public in authenticated
-            .verified
-            .shared_keys()
-            .iter()
-            .filter(|key| key.role <= target_role)
-        {
-            let previous = self
-                .client
-                .load_puks_for_role(
-                    &host,
-                    &software.credential,
-                    &authenticated.verified,
-                    public.role,
-                )?
-                .into_iter()
-                .find(|puk| puk.role == public.role && puk.generation == public.generation)
-                .ok_or(Error::InvalidAccount(
-                    "current PUK required for Yubi revocation is unavailable",
-                ))?;
-            rotations.push(foks_client::UserPukRotation {
-                role: public.role,
-                previous_generation: public.generation,
-                previous_seed: previous.seed,
-                new_seed: SecretSeed::new(random_array()?),
-            });
-        }
-        let no_passphrase = if rotations
-            .iter()
-            .any(|rotation| rotation.role == Role::OWNER)
-        {
-            self.profile.require(Capability::Passphrases)?;
-            match self.client.authenticated_passphrase_settings(
-                &host,
-                &software.credential,
-                &authenticated,
-            )? {
-                Some(_) => None,
-                None => {
-                    if !HardStateStore::open(&self.paths.hard_database)?
-                        .user_has_no_passphrase_attestation(
-                            host.host_id().as_bytes(),
-                            software.credential.uid.as_bytes(),
-                        )?
-                    {
-                        return Err(Error::InvalidAccount(
-                            "legacy unlinked passphrase state must be verified before owner rotation",
-                        ));
-                    }
-                    Some(foks_client::NoPassphraseConfigured)
-                }
-            }
-        } else {
-            None
-        };
+        let (rotations, no_passphrase) = self.software_revocation_material(
+            &host,
+            &software.credential,
+            &authenticated,
+            target_role,
+        )?;
         let mut mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),

@@ -48,7 +48,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 5,
+                "version": 6,
                 "id": 8,
                 "operation": { "operation": "discover-go-profiles" }
             })
@@ -173,7 +173,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 5,
+                "version": 6,
                 "id": 9,
                 "operation": {
                     "operation": "sync-team",
@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Response::error(9, ErrorCode::Busy, "locked")).unwrap(),
             serde_json::json!({
-                "version": 5,
+                "version": 6,
                 "id": 9,
                 "status": "error",
                 "code": "busy",
@@ -218,7 +218,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&admission).unwrap(),
             serde_json::json!({
-                "version": 5,
+                "version": 6,
                 "id": 13,
                 "operation": {
                     "operation": "admit-federated-team",
@@ -481,7 +481,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 5,
+                "version": 6,
                 "id": 25,
                 "operation": {
                     "operation": "demote-team-member",
@@ -504,7 +504,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 5,
+                "version": 6,
                 "id": 26,
                 "operation": {
                     "operation": "remove-team-member",

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -484,6 +484,12 @@ pub enum Operation {
         account_alias: String,
         backup_alias: String,
         phrase: SecretString,
+    },
+    RevokeOwnerBackup {
+        profile: String,
+        account_alias: String,
+        backup_alias: String,
+        backup_id: String,
     },
     RecoverOwnerAccount {
         profile: String,
@@ -1064,6 +1070,18 @@ impl std::fmt::Debug for Operation {
                 .field("account_alias", account_alias)
                 .field("backup_alias", backup_alias)
                 .field("phrase", &"<redacted>")
+                .finish(),
+            Self::RevokeOwnerBackup {
+                profile,
+                account_alias,
+                backup_alias,
+                backup_id,
+            } => formatter
+                .debug_struct("RevokeOwnerBackup")
+                .field("profile", profile)
+                .field("account_alias", account_alias)
+                .field("backup_alias", backup_alias)
+                .field("backup_id", backup_id)
                 .finish(),
             Self::RecoverOwnerAccount {
                 profile,
@@ -1910,6 +1928,24 @@ mod tests {
         );
         assert!(commit.is_mutation());
         assert!(!format!("{commit:?}").contains("never print this phrase"));
+
+        let revoke = Operation::RevokeOwnerBackup {
+            profile: "work".to_owned(),
+            account_alias: "personal".to_owned(),
+            backup_alias: "paper".to_owned(),
+            backup_id: format!("10{}", "44".repeat(32)),
+        };
+        assert_eq!(
+            serde_json::to_value(&revoke).unwrap(),
+            serde_json::json!({
+                "operation": "revoke-owner-backup",
+                "profile": "work",
+                "account_alias": "personal",
+                "backup_alias": "paper",
+                "backup_id": format!("10{}", "44".repeat(32))
+            })
+        );
+        assert!(revoke.is_mutation());
 
         let response = Response::success(
             17,

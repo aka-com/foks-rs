@@ -934,6 +934,32 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     },
     listBackupEnrollments: async (accountStoreId) =>
       (backupRows.get(accountStoreId) ?? []).map((entry) => ({ ...entry })),
+    revokeOwnerBackup: async (accountStoreId, backup, confirmation) => {
+      if (confirmation !== backup.backupAlias)
+        throw failure(
+          'invalid-request',
+          'Type the exact backup alias to revoke it.',
+        );
+      const store = accountStore(accountStoreId);
+      if (!store || store.account !== backup.accountAlias)
+        throw failure('store-not-found', 'That account is not available.');
+      const rows = backupRows.get(accountStoreId) ?? [];
+      const index = rows.findIndex(
+        (entry) => entry.backupAlias === backup.backupAlias,
+      );
+      if (index >= 0 && rows[index]?.backupId !== backup.backupId)
+        throw failure(
+          'invalid-request',
+          'The backup enrollment binding changed.',
+        );
+      if (index >= 0) rows.splice(index, 1);
+      return {
+        ...backup,
+        userChainSequence: 15,
+        alreadyAbsent: index < 0,
+        removedLocalEnrollment: true as const,
+      };
+    },
     startDevicePairing: async (accountStoreId) => {
       const store = accountStore(accountStoreId);
       if (!store)

@@ -222,6 +222,14 @@
     "accountAlias": "personal",
     "backupId": "101010101010101010101010101010101010101010101010101010101010101010"
   },
+  "backupRevocation": {
+    "backupAlias": "paper",
+    "accountAlias": "personal",
+    "backupId": "101010101010101010101010101010101010101010101010101010101010101010",
+    "userChainSequence": 16,
+    "alreadyAbsent": false,
+    "removedLocalEnrollment": true
+  },
   "yubiCard": {
     "serial": 424242
   },

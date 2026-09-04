@@ -3,6 +3,9 @@ use super::*;
 #[cfg(test)]
 static TEST_FAIL_AFTER_BACKUP_ENROLLMENT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static TEST_FAIL_AFTER_BACKUP_REVOCATION: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 impl CheckedProfileSession<'_> {
     #[allow(clippy::too_many_arguments)]
@@ -165,61 +168,12 @@ impl CheckedProfileSession<'_> {
                 already_absent: true,
             });
         };
-        let mut rotations = Vec::new();
-        for public in authenticated
-            .verified
-            .shared_keys()
-            .iter()
-            .filter(|key| key.role <= target_role)
-        {
-            let previous = self
-                .client
-                .load_puks_for_role(
-                    &host,
-                    &signer.credential,
-                    &authenticated.verified,
-                    public.role,
-                )?
-                .into_iter()
-                .find(|puk| puk.role == public.role && puk.generation == public.generation)
-                .ok_or(Error::InvalidAccount(
-                    "current PUK required for device removal is unavailable",
-                ))?;
-            rotations.push(foks_client::UserPukRotation {
-                role: public.role,
-                previous_generation: public.generation,
-                previous_seed: previous.seed,
-                new_seed: SecretSeed::new(random_array()?),
-            });
-        }
-        let no_passphrase = if rotations
-            .iter()
-            .any(|rotation| rotation.role == Role::OWNER)
-        {
-            self.profile.require(Capability::Passphrases)?;
-            match self.client.authenticated_passphrase_settings(
-                &host,
-                &signer.credential,
-                &authenticated,
-            )? {
-                Some(_) => None,
-                None => {
-                    if !HardStateStore::open(&self.paths.hard_database)?
-                        .user_has_no_passphrase_attestation(
-                            host.host_id().as_bytes(),
-                            signer.credential.uid.as_bytes(),
-                        )?
-                    {
-                        return Err(Error::InvalidAccount(
-                            "legacy unlinked passphrase state must be verified before owner rotation",
-                        ));
-                    }
-                    Some(foks_client::NoPassphraseConfigured)
-                }
-            }
-        } else {
-            None
-        };
+        let (rotations, no_passphrase) = self.software_revocation_material(
+            &host,
+            &signer.credential,
+            &authenticated,
+            target_role,
+        )?;
         let mut mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
@@ -237,6 +191,68 @@ impl CheckedProfileSession<'_> {
             user_chain_sequence: revoked.verified.chain_seqno(),
             already_absent: false,
         })
+    }
+
+    pub(super) fn software_revocation_material(
+        &self,
+        host: &foks_client::PinnedHost,
+        signer: &DeviceCredential,
+        authenticated: &AuthenticatedUserOutcome,
+        target_role: Role,
+    ) -> Result<(
+        Vec<foks_client::UserPukRotation>,
+        Option<foks_client::NoPassphraseConfigured>,
+    )> {
+        let mut rotations = Vec::new();
+        for public in authenticated
+            .verified
+            .shared_keys()
+            .iter()
+            .filter(|key| key.role <= target_role)
+        {
+            let previous = self
+                .client
+                .load_puks_for_role(host, signer, &authenticated.verified, public.role)?
+                .into_iter()
+                .find(|puk| puk.role == public.role && puk.generation == public.generation)
+                .ok_or(Error::InvalidAccount(
+                    "current PUK required for credential revocation is unavailable",
+                ))?;
+            rotations.push(foks_client::UserPukRotation {
+                role: public.role,
+                previous_generation: public.generation,
+                previous_seed: previous.seed,
+                new_seed: SecretSeed::new(random_array()?),
+            });
+        }
+        let no_passphrase = if rotations
+            .iter()
+            .any(|rotation| rotation.role == Role::OWNER)
+        {
+            self.profile.require(Capability::Passphrases)?;
+            match self
+                .client
+                .authenticated_passphrase_settings(host, signer, authenticated)?
+            {
+                Some(_) => None,
+                None => {
+                    if !HardStateStore::open(&self.paths.hard_database)?
+                        .user_has_no_passphrase_attestation(
+                            host.host_id().as_bytes(),
+                            signer.uid.as_bytes(),
+                        )?
+                    {
+                        return Err(Error::InvalidAccount(
+                            "legacy unlinked passphrase state must be verified before owner rotation",
+                        ));
+                    }
+                    Some(foks_client::NoPassphraseConfigured)
+                }
+            }
+        } else {
+            None
+        };
+        Ok((rotations, no_passphrase))
     }
 
     pub fn provision_owner_device(
@@ -734,6 +750,92 @@ impl CheckedProfileSession<'_> {
         })
     }
 
+    /// Revokes exactly the locally recorded backup credential. The local
+    /// enrollment fact is retained until authenticated state proves the remote
+    /// credential absent, making an ambiguous remote completion safe to retry.
+    pub fn revoke_owner_backup(
+        &self,
+        account_alias: &str,
+        backup_alias: &str,
+        backup_id_hex: &str,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<BackupRevocationReport> {
+        self.profile.require(Capability::Recovery)?;
+        self.profile.require(Capability::DeviceAdministration)?;
+        validate_name(backup_alias)?;
+        let signer = vault.account(account_alias)?;
+        let target = entity_id_from_hex(backup_id_hex)?;
+        target.clone().require_type(foks_proto::ENTITY_BACKUP_KEY)?;
+        let stored = vault.backup(backup_alias)?;
+        if let Some(stored) = stored.as_ref() {
+            if stored.account_alias != account_alias || stored.backup_id != target.as_bytes() {
+                return Err(Error::InvalidAccount(
+                    "backup revocation does not match the local enrollment binding",
+                ));
+            }
+        }
+
+        let host = self.pinned_host()?;
+        let authenticated = self
+            .client
+            .authenticate_and_pin(&host, &signer.credential)?;
+        let target_role = authenticated
+            .verified
+            .devices()
+            .iter()
+            .find(|device| device.id == target)
+            .map(|device| device.role);
+        let already_absent = target_role.is_none();
+        if stored.is_none() && !already_absent {
+            return Err(Error::InvalidAccount(
+                "backup credential is not bound to a local enrollment",
+            ));
+        }
+        let user_chain_sequence = if let Some(target_role) = target_role {
+            let (rotations, no_passphrase) = self.software_revocation_material(
+                &host,
+                &signer.credential,
+                &authenticated,
+                target_role,
+            )?;
+            let mut mutations = EncryptedFileMutationStore::open(
+                &self.paths.protected_mutations,
+                derive_mutation_key(master_key),
+            )?;
+            self.client
+                .revoke_user_credential_with_software_device(
+                    &host,
+                    &signer.credential,
+                    &target,
+                    &rotations,
+                    no_passphrase,
+                    &mut mutations,
+                )?
+                .verified
+                .chain_seqno()
+        } else {
+            authenticated.verified.chain_seqno()
+        };
+
+        #[cfg(test)]
+        if TEST_FAIL_AFTER_BACKUP_REVOCATION.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::InvalidAccount(
+                "test interrupted backup revocation before local completion",
+            ));
+        }
+
+        let _ = vault.store.remove(&backup_key(backup_alias))?;
+        Ok(BackupRevocationReport {
+            backup_alias: backup_alias.to_owned(),
+            account_alias: account_alias.to_owned(),
+            backup_id_hex: hex(target.as_bytes()),
+            user_chain_sequence,
+            already_absent,
+            removed_local_enrollment: true,
+        })
+    }
+
     pub fn recover_owner_account(
         &self,
         target_alias: &str,
@@ -954,6 +1056,16 @@ pub struct BackupEnrollmentReport {
     pub account_alias: String,
     pub backup_id_hex: String,
     pub user_chain_sequence: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BackupRevocationReport {
+    pub backup_alias: String,
+    pub account_alias: String,
+    pub backup_id_hex: String,
+    pub user_chain_sequence: u64,
+    pub already_absent: bool,
+    pub removed_local_enrollment: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1829,6 +1941,49 @@ mod tests {
                     )
                     .is_err());
                 assert_eq!(session.list_devices("personal", &mut vault)?.len(), 2);
+
+                let other_id = format!("10{}", "55".repeat(32));
+                assert!(session
+                    .revoke_owner_backup("personal", "paper", &other_id, &mut vault, &master,)
+                    .is_err());
+                assert!(vault.backup("paper")?.is_some());
+                assert_eq!(session.list_devices("personal", &mut vault)?.len(), 2);
+
+                TEST_FAIL_AFTER_BACKUP_REVOCATION.store(true, std::sync::atomic::Ordering::SeqCst);
+                session
+                    .revoke_owner_backup(
+                        "personal",
+                        "paper",
+                        &completed.backup_id_hex,
+                        &mut vault,
+                        &master,
+                    )
+                    .expect_err("the failpoint interrupts before local cleanup");
+                assert!(vault.backup("paper")?.is_some());
+                assert_eq!(session.list_devices("personal", &mut vault)?.len(), 1);
+
+                let reconciled = session.revoke_owner_backup(
+                    "personal",
+                    "paper",
+                    &completed.backup_id_hex,
+                    &mut vault,
+                    &master,
+                )?;
+                assert!(reconciled.already_absent);
+                assert!(reconciled.removed_local_enrollment);
+                assert!(vault.backup("paper")?.is_none());
+                assert!(vault.backup_enrollments("personal")?.is_empty());
+
+                let repeated = session.revoke_owner_backup(
+                    "personal",
+                    "paper",
+                    &completed.backup_id_hex,
+                    &mut vault,
+                    &master,
+                )?;
+                assert!(repeated.already_absent);
+                assert!(repeated.removed_local_enrollment);
+                assert_eq!(repeated.user_chain_sequence, reconciled.user_chain_sequence);
                 Ok::<_, Error>(())
             })
             .unwrap();
