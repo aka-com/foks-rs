@@ -852,6 +852,13 @@ fn zeroize_kv_read_payload(read: &mut KvReadResult) {
     }
 }
 
+/// Builds the create mutation for one text item.
+///
+/// A create carries `mkdir_p` because the path a person types names the
+/// folders it lives in — `/logins/github.com` is the first thing anyone writes
+/// into an empty store — and FOKS writes address a parent directory that
+/// already exists. Edits and replacements never carry it: they address a path
+/// the catalog already resolved.
 pub fn create_kv_file_mutation(
     store: &CatalogStoreRef,
     path: &str,
@@ -864,6 +871,7 @@ pub fn create_kv_file_mutation(
         KvRole::Owner,
         KvRole::Owner,
         KvPrecondition::Create,
+        true,
     )
 }
 
@@ -883,6 +891,7 @@ pub fn edit_kv_file_mutation(
         KvPrecondition::ExactVersion {
             version: item.metadata.version,
         },
+        false,
     )
 }
 
@@ -901,6 +910,7 @@ pub fn create_kv_file_upload(
         KvRole::Owner,
         KvRole::Owner,
         KvPrecondition::Create,
+        true,
     )
 }
 
@@ -922,6 +932,7 @@ pub fn edit_kv_file_upload(
         KvPrecondition::ExactVersion {
             version: item.metadata.version,
         },
+        false,
     )
 }
 
@@ -937,6 +948,7 @@ pub fn create_kv_symlink_operation(
         read_role: KvRole::Owner,
         write_role: KvRole::Owner,
         precondition: KvPrecondition::Create,
+        mkdir_p: true,
     })
 }
 
@@ -960,6 +972,7 @@ pub fn create_kv_directory_operation(
         read_role: KvRole::Owner,
         write_role: KvRole::Owner,
         precondition: KvPrecondition::Create,
+        mkdir_p: true,
     })
 }
 
@@ -974,6 +987,7 @@ pub fn remove_kv_operation(item: &CatalogItem, recursive: bool) -> Result<Operat
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn file_mutation(
     store: KvStoreRef,
     path: String,
@@ -981,6 +995,7 @@ fn file_mutation(
     read_role: KvRole,
     write_role: KvRole,
     precondition: KvPrecondition,
+    mkdir_p: bool,
 ) -> Result<KvAccountMutation, &'static str> {
     if content.len() <= MAXIMUM_INLINE_KV_BYTES {
         Ok(KvAccountMutation::Inline(Operation::PutKv {
@@ -990,6 +1005,7 @@ fn file_mutation(
             read_role,
             write_role,
             precondition,
+            mkdir_p,
         }))
     } else {
         let total_length = u64::try_from(content.len()).map_err(|_| "item content is too large")?;
@@ -1001,6 +1017,7 @@ fn file_mutation(
                 read_role,
                 write_role,
                 precondition,
+                mkdir_p,
             },
             content: Zeroizing::new(content),
         })
@@ -1014,6 +1031,7 @@ fn file_upload_header(
     read_role: KvRole,
     write_role: KvRole,
     precondition: KvPrecondition,
+    mkdir_p: bool,
 ) -> Result<KvUploadHeader, &'static str> {
     Ok(KvUploadHeader {
         store,
@@ -1022,6 +1040,7 @@ fn file_upload_header(
         read_role,
         write_role,
         precondition,
+        mkdir_p,
     })
 }
 
@@ -2867,6 +2886,7 @@ mod tests {
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
                 precondition: KvPrecondition::Create,
+                mkdir_p: true,
                 ..
             })
         ));
@@ -2876,6 +2896,7 @@ mod tests {
                 read_role: KvRole::Member { visibility: -1 },
                 write_role: KvRole::Admin,
                 precondition: KvPrecondition::ExactVersion { version: 7 },
+                mkdir_p: false,
                 ..
             })
         ));
@@ -2905,6 +2926,7 @@ mod tests {
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
                 precondition: KvPrecondition::Create,
+                mkdir_p: true,
                 ..
             }
         ));
@@ -2917,6 +2939,7 @@ mod tests {
                 read_role: KvRole::Member { visibility: -1 },
                 write_role: KvRole::Admin,
                 precondition: KvPrecondition::ExactVersion { version: 7 },
+                mkdir_p: false,
                 ..
             }
         ));
@@ -2939,6 +2962,7 @@ mod tests {
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
                 precondition: KvPrecondition::Create,
+                mkdir_p: true,
             }
         );
         let mut symlink = item.clone();
@@ -2959,6 +2983,7 @@ mod tests {
             KvAccountMutation::Inline(Operation::PutKv {
                 store: KvStoreRef::Team(_),
                 precondition: KvPrecondition::Create,
+                mkdir_p: true,
                 ..
             })
         ));

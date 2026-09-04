@@ -32,7 +32,8 @@ The implemented application slice covers:
 - probe/pin, software signup with optional standard or multi-use invites and
   an optional PPE passphrase, resume, and user refresh;
 - authenticated passphrase set/change and public-challenge verification;
-- personal KV list/read/write/mkdir/remove with streamed file I/O;
+- personal KV list/read/write/mkdir/remove with streamed file I/O, where a
+  write may create the parent directories its path names (`--mkdir-p`);
 - durable refresh jobs and bounded retry state;
 - owner software-device provisioning and resume, including interactive
   13-token KEX pairing with protected offer/acceptance recovery state, and

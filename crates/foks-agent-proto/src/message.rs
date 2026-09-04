@@ -318,6 +318,10 @@ pub struct KvUploadHeader {
     pub read_role: KvRole,
     pub write_role: KvRole,
     pub precondition: KvPrecondition,
+    /// Creates the parent directories the path names but the store does not
+    /// have yet, the way upstream `foks kv put --mkdir-p` does.
+    #[serde(default)]
+    pub mkdir_p: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -696,6 +700,8 @@ pub enum Operation {
         read_role: KvRole,
         write_role: KvRole,
         precondition: KvPrecondition,
+        #[serde(default)]
+        mkdir_p: bool,
     },
     PutKvStream {
         header: KvUploadHeader,
@@ -707,6 +713,8 @@ pub enum Operation {
         read_role: KvRole,
         write_role: KvRole,
         precondition: KvPrecondition,
+        #[serde(default)]
+        mkdir_p: bool,
     },
     MkdirKv {
         store: KvStoreRef,
@@ -714,6 +722,8 @@ pub enum Operation {
         read_role: KvRole,
         write_role: KvRole,
         precondition: KvPrecondition,
+        #[serde(default)]
+        mkdir_p: bool,
     },
     RemoveKv {
         store: KvStoreRef,
@@ -1446,6 +1456,7 @@ impl std::fmt::Debug for Operation {
                 read_role,
                 write_role,
                 precondition,
+                mkdir_p,
             } => formatter
                 .debug_struct("PutKv")
                 .field("store", store)
@@ -1454,6 +1465,7 @@ impl std::fmt::Debug for Operation {
                 .field("read_role", read_role)
                 .field("write_role", write_role)
                 .field("precondition", precondition)
+                .field("mkdir_p", mkdir_p)
                 .finish(),
             Self::PutKvStream { header } => formatter
                 .debug_struct("PutKvStream")
@@ -1466,6 +1478,7 @@ impl std::fmt::Debug for Operation {
                 read_role,
                 write_role,
                 precondition,
+                mkdir_p,
             } => formatter
                 .debug_struct("PutKvSymlink")
                 .field("store", store)
@@ -1474,6 +1487,7 @@ impl std::fmt::Debug for Operation {
                 .field("read_role", read_role)
                 .field("write_role", write_role)
                 .field("precondition", precondition)
+                .field("mkdir_p", mkdir_p)
                 .finish(),
             Self::MkdirKv {
                 store,
@@ -1481,6 +1495,7 @@ impl std::fmt::Debug for Operation {
                 read_role,
                 write_role,
                 precondition,
+                mkdir_p,
             } => formatter
                 .debug_struct("MkdirKv")
                 .field("store", store)
@@ -1488,6 +1503,7 @@ impl std::fmt::Debug for Operation {
                 .field("read_role", read_role)
                 .field("write_role", write_role)
                 .field("precondition", precondition)
+                .field("mkdir_p", mkdir_p)
                 .finish(),
             Self::RemoveKv {
                 store,

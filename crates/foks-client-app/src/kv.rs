@@ -216,6 +216,7 @@ impl CheckedProfileSession<'_> {
         precondition: KvMutationPrecondition,
         read_role: KvRoleSummary,
         write_role: KvRoleSummary,
+        mkdir_p: bool,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
@@ -225,6 +226,7 @@ impl CheckedProfileSession<'_> {
             precondition,
             read_role,
             write_role,
+            mkdir_p,
             vault,
             master_key,
             |session, parent, name, options| session.put_file(parent, name, reader, options),
@@ -242,6 +244,7 @@ impl CheckedProfileSession<'_> {
         precondition: KvMutationPrecondition,
         read_role: KvRoleSummary,
         write_role: KvRoleSummary,
+        mkdir_p: bool,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
@@ -253,6 +256,7 @@ impl CheckedProfileSession<'_> {
             precondition,
             read_role,
             write_role,
+            mkdir_p,
             vault,
             master_key,
             |session, parent, name, options| session.put_file(parent, name, reader, options),
@@ -268,6 +272,7 @@ impl CheckedProfileSession<'_> {
         precondition: KvMutationPrecondition,
         read_role: KvRoleSummary,
         write_role: KvRoleSummary,
+        mkdir_p: bool,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
@@ -277,6 +282,7 @@ impl CheckedProfileSession<'_> {
             precondition,
             read_role,
             write_role,
+            mkdir_p,
             vault,
             master_key,
             |session, parent, name, options| session.put_symlink(parent, name, target, options),
@@ -294,6 +300,7 @@ impl CheckedProfileSession<'_> {
         precondition: KvMutationPrecondition,
         read_role: KvRoleSummary,
         write_role: KvRoleSummary,
+        mkdir_p: bool,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
@@ -305,6 +312,7 @@ impl CheckedProfileSession<'_> {
             precondition,
             read_role,
             write_role,
+            mkdir_p,
             vault,
             master_key,
             |session, parent, name, options| session.put_symlink(parent, name, target, options),
@@ -319,6 +327,7 @@ impl CheckedProfileSession<'_> {
         precondition: KvMutationPrecondition,
         read_role: KvRoleSummary,
         write_role: KvRoleSummary,
+        mkdir_p: bool,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
         put: impl FnOnce(
@@ -348,7 +357,14 @@ impl CheckedProfileSession<'_> {
             &mut mutations,
         )?;
         let tree = session.sync()?;
-        let parent = resolve_directory(&tree, &parent_path)?;
+        let (parent, tree) = resolve_write_parent(
+            &mut session,
+            tree,
+            &parent_path,
+            mkdir_p,
+            read_role,
+            write_role,
+        )?;
         verify_precondition(&tree, path, precondition)?;
         let result = put(
             &mut session,
@@ -379,6 +395,7 @@ impl CheckedProfileSession<'_> {
         precondition: KvMutationPrecondition,
         read_role: KvRoleSummary,
         write_role: KvRoleSummary,
+        mkdir_p: bool,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
         put: impl FnOnce(
@@ -397,7 +414,14 @@ impl CheckedProfileSession<'_> {
             master_key,
             |session| {
                 let tree = session.sync()?;
-                let parent = resolve_directory(&tree, &parent_path)?;
+                let (parent, tree) = resolve_write_parent(
+                    session,
+                    tree,
+                    &parent_path,
+                    mkdir_p,
+                    read_role,
+                    write_role,
+                )?;
                 verify_precondition(&tree, path, precondition)?;
                 let result = put(
                     session,
@@ -528,12 +552,14 @@ impl CheckedProfileSession<'_> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn put_kv_file<R: Read>(
         &self,
         alias: &str,
         path: &str,
         reader: &mut R,
         overwrite: bool,
+        mkdir_p: bool,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
@@ -557,7 +583,14 @@ impl CheckedProfileSession<'_> {
             &mut mutations,
         )?;
         let tree = session.sync()?;
-        let parent = resolve_directory(&tree, &parent_path)?;
+        let (parent, _tree) = resolve_write_parent(
+            &mut session,
+            tree,
+            &parent_path,
+            mkdir_p,
+            KvRoleSummary::Owner,
+            KvRoleSummary::Owner,
+        )?;
         let result = session.put_file(
             parent,
             &name,
@@ -580,6 +613,7 @@ impl CheckedProfileSession<'_> {
         &self,
         alias: &str,
         path: &str,
+        mkdir_p: bool,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
@@ -603,7 +637,14 @@ impl CheckedProfileSession<'_> {
             &mut mutations,
         )?;
         let tree = session.sync()?;
-        let parent = resolve_directory(&tree, &parent_path)?;
+        let (parent, _tree) = resolve_write_parent(
+            &mut session,
+            tree,
+            &parent_path,
+            mkdir_p,
+            KvRoleSummary::Owner,
+            KvRoleSummary::Owner,
+        )?;
         let result = session.mkdir(
             parent,
             &name,
@@ -629,6 +670,7 @@ impl CheckedProfileSession<'_> {
         precondition: KvMutationPrecondition,
         read_role: KvRoleSummary,
         write_role: KvRoleSummary,
+        mkdir_p: bool,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
@@ -643,6 +685,7 @@ impl CheckedProfileSession<'_> {
             precondition,
             read_role,
             write_role,
+            mkdir_p,
             vault,
             master_key,
             |session, parent, name, options| session.mkdir(parent, name, options),
@@ -659,6 +702,7 @@ impl CheckedProfileSession<'_> {
         precondition: KvMutationPrecondition,
         read_role: KvRoleSummary,
         write_role: KvRoleSummary,
+        mkdir_p: bool,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
@@ -675,6 +719,7 @@ impl CheckedProfileSession<'_> {
             precondition,
             read_role,
             write_role,
+            mkdir_p,
             vault,
             master_key,
             |session, parent, name, options| session.mkdir(parent, name, options),
@@ -1148,30 +1193,98 @@ pub(super) fn split_parent(path: &str) -> Result<(String, String)> {
 
 fn resolve_directory(tree: &[KvDirectoryProjection], path: &str) -> Result<[u8; 16]> {
     let components = path_components(path)?;
-    let root = tree
-        .first()
-        .ok_or(Error::InvalidKvPath("KV projection has no root"))?
-        .root_directory_id;
-    let mut current = root;
+    let mut current = root_directory(tree)?;
     for component in components {
-        let directory = tree
-            .iter()
-            .find(|directory| directory.directory_id == current)
-            .ok_or(Error::InvalidKvPath(
-                "parent directory is absent from the projection",
-            ))?;
-        let entry = directory
-            .entries
-            .iter()
-            .find(|entry| entry.name == component)
+        current = directory_child(tree, current, &component)?
             .ok_or(Error::InvalidKvPath("directory component does not exist"))?;
-        let node = KvNodeId(entry.node_id);
-        if node.node_type()? != KvNodeType::Directory {
-            return Err(Error::InvalidKvPath("path component is not a directory"));
-        }
-        current = node.object_id();
     }
     Ok(current)
+}
+
+/// Resolves the parent directory a write addresses, creating the components
+/// the store does not have yet when `mkdir_p` asks for it.
+///
+/// A FOKS write addresses an existing parent directory, so the first item ever
+/// written under a path fails with "directory component does not exist" unless
+/// something creates that path first. Upstream answers this with
+/// `foks kv put --mkdir-p`; this is the same walk, run inside the caller's
+/// write session so the created directories and the item they hold commit
+/// against one synchronized tree. Directories that already exist are left
+/// alone, and each `mkdir` returns the tree the walk continues from. The new
+/// directories carry the roles the item carries: a parent readable by fewer
+/// parties than its contents would hide those contents from the very members
+/// the item admits.
+fn resolve_write_parent(
+    session: &mut foks_client::KvWriteSession<'_>,
+    tree: Vec<KvDirectoryProjection>,
+    path: &str,
+    mkdir_p: bool,
+    read_role: KvRoleSummary,
+    write_role: KvRoleSummary,
+) -> Result<([u8; 16], Vec<KvDirectoryProjection>)> {
+    if !mkdir_p {
+        let parent = resolve_directory(&tree, path)?;
+        return Ok((parent, tree));
+    }
+    let components = path_components(path)?;
+    let mut tree = tree;
+    let mut current = root_directory(&tree)?;
+    for component in components {
+        if let Some(child) = directory_child(&tree, current, &component)? {
+            current = child;
+            continue;
+        }
+        let name = String::from_utf8(component).map_err(|_| {
+            Error::InvalidKvPath("a missing parent directory name is not UTF-8 and cannot be created through this API")
+        })?;
+        let result = session.mkdir(
+            current,
+            &name,
+            KvWriteOptions {
+                read_role: read_role.to_role(),
+                write_role: write_role.to_role(),
+                overwrite: false,
+                expected_version: None,
+            },
+        )?;
+        tree = result.tree;
+        current = directory_child(&tree, current, name.as_bytes())?.ok_or(Error::InvalidKvPath(
+            "the created parent directory is absent from the projection",
+        ))?;
+    }
+    Ok((current, tree))
+}
+
+fn root_directory(tree: &[KvDirectoryProjection]) -> Result<[u8; 16]> {
+    Ok(tree
+        .first()
+        .ok_or(Error::InvalidKvPath("KV projection has no root"))?
+        .root_directory_id)
+}
+
+fn directory_child(
+    tree: &[KvDirectoryProjection],
+    parent: [u8; 16],
+    component: &[u8],
+) -> Result<Option<[u8; 16]>> {
+    let directory = tree
+        .iter()
+        .find(|directory| directory.directory_id == parent)
+        .ok_or(Error::InvalidKvPath(
+            "parent directory is absent from the projection",
+        ))?;
+    let Some(entry) = directory
+        .entries
+        .iter()
+        .find(|entry| entry.name == component)
+    else {
+        return Ok(None);
+    };
+    let node = KvNodeId(entry.node_id);
+    if node.node_type()? != KvNodeType::Directory {
+        return Err(Error::InvalidKvPath("path component is not a directory"));
+    }
+    Ok(Some(node.object_id()))
 }
 
 fn resolve_entry<'a>(

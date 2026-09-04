@@ -272,6 +272,7 @@ fn text_link_and_remove_transcripts_name_create_and_exact_version_guards() {
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
                 precondition: KvPrecondition::Create,
+                mkdir_p: true,
             },
             ..
         }] if path == "/password" && content == b"correct horse battery staple"
@@ -300,6 +301,7 @@ fn text_link_and_remove_transcripts_name_create_and_exact_version_guards() {
                 read_role: KvRole::Member { visibility: -1 },
                 write_role: KvRole::Admin,
                 precondition: KvPrecondition::ExactVersion { version: 7 },
+                mkdir_p: false,
                 ..
             },
             ..
@@ -323,6 +325,7 @@ fn text_link_and_remove_transcripts_name_create_and_exact_version_guards() {
             operation: Operation::PutKvSymlink {
                 target,
                 precondition: KvPrecondition::Create,
+                mkdir_p: true,
                 ..
             },
             ..
@@ -373,6 +376,7 @@ fn forced_conflict_is_one_attempt_and_never_overwrites() {
         requests[0].operation,
         Operation::PutKv {
             precondition: KvPrecondition::ExactVersion { version: 7 },
+            mkdir_p: false,
             ..
         }
     ));
@@ -458,6 +462,7 @@ fn eighty_four_megabyte_file_uses_bounded_stream_frames_without_inline_content()
             header: foks_agent_proto::KvUploadHeader {
                 total_length: 88_080_384,
                 precondition: KvPrecondition::Create,
+                mkdir_p: true,
                 ..
             }
         }
@@ -496,6 +501,7 @@ fn replacement_file_stream_is_bound_to_the_inspected_version_and_roles() {
                 read_role: KvRole::Member { visibility: -16384 },
                 write_role: KvRole::Admin,
                 precondition: KvPrecondition::ExactVersion { version: 11 },
+                mkdir_p: false,
                 ..
             }
         }

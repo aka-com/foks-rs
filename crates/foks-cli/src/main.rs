@@ -157,11 +157,19 @@ enum KvCommand {
         input: PathBuf,
         #[arg(long)]
         overwrite: bool,
+        /// Create the parent directories the path names but the store does
+        /// not have yet.
+        #[arg(long = "mkdir-p", short = 'p')]
+        mkdir_p: bool,
     },
     Mkdir {
         profile: String,
         alias: String,
         path: String,
+        /// Create the parent directories the path names but the store does
+        /// not have yet.
+        #[arg(long = "mkdir-p", short = 'p')]
+        mkdir_p: bool,
     },
     Remove {
         profile: String,
@@ -938,12 +946,13 @@ fn kv_command(
             path,
             input,
             overwrite,
+            mkdir_p,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
                 let mut file = File::open(input)?;
-                let report =
-                    session.put_kv_file(&alias, &path, &mut file, overwrite, vault, master)?;
+                let report = session
+                    .put_kv_file(&alias, &path, &mut file, overwrite, mkdir_p, vault, master)?;
                 output(json, &report, "KV file committed and synchronized")
             })
         }
@@ -951,10 +960,11 @@ fn kv_command(
             profile,
             alias,
             path,
+            mkdir_p,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
-                let report = session.mkdir_kv(&alias, &path, vault, master)?;
+                let report = session.mkdir_kv(&alias, &path, mkdir_p, vault, master)?;
                 output(json, &report, "KV directory committed and synchronized")
             })
         }

@@ -840,6 +840,7 @@ async fn handle_streaming_upload(
             worker_header.precondition,
             worker_header.read_role,
             worker_header.write_role,
+            worker_header.mkdir_p,
         );
         let response = match result {
             Ok(value) => Response::success(request_id, value),
@@ -1672,6 +1673,7 @@ fn put_kv_reader<R: std::io::Read>(
     precondition: KvPrecondition,
     read_role: KvRole,
     write_role: KvRole,
+    mkdir_p: bool,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let session = ProfileSession::open_with_control(
         registry,
@@ -1690,6 +1692,7 @@ fn put_kv_reader<R: std::io::Read>(
                 wire_precondition(precondition),
                 wire_role_to_app(read_role),
                 wire_role_to_app(write_role),
+                mkdir_p,
                 vault,
                 &master,
             )?,
@@ -1702,6 +1705,7 @@ fn put_kv_reader<R: std::io::Read>(
                 wire_precondition(precondition),
                 wire_role_to_app(read_role),
                 wire_role_to_app(write_role),
+                mkdir_p,
                 vault,
                 &master,
             )?,
@@ -3101,6 +3105,7 @@ fn dispatch_result(
             read_role,
             write_role,
             precondition,
+            mkdir_p,
         } => {
             if content.len() > MAXIMUM_INLINE_KV_BYTES {
                 return Err(Box::new(AgentRequestError(
@@ -3119,6 +3124,7 @@ fn dispatch_result(
                 precondition,
                 read_role,
                 write_role,
+                mkdir_p,
             )
         }
         Operation::PutKvStream { .. } => Err(Box::new(AgentRequestError(
@@ -3131,6 +3137,7 @@ fn dispatch_result(
             read_role,
             write_role,
             precondition,
+            mkdir_p,
         } => {
             let target = Zeroizing::new(target);
             let session = ProfileSession::open_with_control(
@@ -3150,6 +3157,7 @@ fn dispatch_result(
                         wire_precondition(precondition),
                         wire_role_to_app(read_role),
                         wire_role_to_app(write_role),
+                        mkdir_p,
                         vault,
                         &master,
                     )?,
@@ -3162,6 +3170,7 @@ fn dispatch_result(
                         wire_precondition(precondition),
                         wire_role_to_app(read_role),
                         wire_role_to_app(write_role),
+                        mkdir_p,
                         vault,
                         &master,
                     )?,
@@ -3175,6 +3184,7 @@ fn dispatch_result(
             read_role,
             write_role,
             precondition,
+            mkdir_p,
         } => {
             let session = ProfileSession::open_with_control(
                 &registry,
@@ -3192,6 +3202,7 @@ fn dispatch_result(
                         wire_precondition(precondition),
                         wire_role_to_app(read_role),
                         wire_role_to_app(write_role),
+                        mkdir_p,
                         vault,
                         &master,
                     )?,
@@ -3203,6 +3214,7 @@ fn dispatch_result(
                         wire_precondition(precondition),
                         wire_role_to_app(read_role),
                         wire_role_to_app(write_role),
+                        mkdir_p,
                         vault,
                         &master,
                     )?,

@@ -386,6 +386,7 @@ mod tests {
             read_role: KvRole::Owner,
             write_role: KvRole::Owner,
             precondition: KvPrecondition::Create,
+            mkdir_p: false,
         };
         let error = AgentClient::new(&socket)
             .put_kv_stream(header, &mut std::io::empty())
@@ -428,6 +429,7 @@ mod tests {
             read_role: KvRole::Owner,
             write_role: KvRole::Owner,
             precondition: KvPrecondition::Create,
+            mkdir_p: false,
         };
         let response = AgentClient::new(&socket)
             .put_kv_stream(header, &mut std::io::repeat(7).take(length))
