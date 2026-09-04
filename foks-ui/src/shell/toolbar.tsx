@@ -60,6 +60,7 @@ export function NewItemButton({
               key={name}
               type="button"
               role="menuitem"
+              className="kind-menu-item"
               onClick={() => {
                 close();
                 onNew(name);
@@ -104,7 +105,11 @@ export function Toolbar({
         ]}
       />
       <span className="spacer" />
-      <MenuButton label="Sort" menuLabel="Sort the list by" align="end">
+      <MenuButton
+        label={SORT_LABELS[sort]}
+        menuLabel="Sort the list by"
+        align="end"
+      >
         {(close) => (
           <>
             {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (

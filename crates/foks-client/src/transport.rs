@@ -469,10 +469,32 @@ impl FoksClient {
         target: &ProbeTarget,
         control: &OperationControl,
     ) -> Result<ControlledTcpStream> {
-        let socket_addresses = (target.hostname.as_str(), target.port)
-            .to_socket_addrs()
-            .map_err(map_connect_error)?
-            .collect::<Vec<_>>();
+        let remaining = control.remaining().map_err(map_io_error)?;
+        let socket_addresses = if let Ok(ip) = target.hostname.parse::<std::net::IpAddr>() {
+            vec![std::net::SocketAddr::new(ip, target.port)]
+        } else {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let host = target.hostname.clone();
+            let port = target.port;
+            std::thread::Builder::new()
+                .name("foks-dns-resolve".into())
+                .spawn(move || {
+                    let addrs = (host.as_str(), port)
+                        .to_socket_addrs()
+                        .map(|iter| iter.collect::<Vec<_>>());
+                    let _ = sender.send(addrs);
+                })
+                .map_err(|_| Error::Transport("failed to spawn DNS resolver thread"))?;
+            match receiver.recv_timeout(remaining) {
+                Ok(result) => result.map_err(map_connect_error)?,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(Error::DeadlineExceeded);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(Error::Transport("DNS resolver thread exited unexpectedly"));
+                }
+            }
+        };
         control.remaining().map_err(map_io_error)?;
         if socket_addresses.is_empty() {
             return Err(Error::NoAddress(target.address()));

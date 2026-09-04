@@ -52,10 +52,10 @@ import type {
   StoreRef,
   World,
 } from '../model';
-import { normalizeCommandError } from '../bridge';
 import type { Bridge } from '../bridge';
 import type { RoleDto } from '../bridge';
 import type { GroupSettingsTab, Location } from '../location';
+import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
 import { StoreAccessTakeover } from './store-access';
 import { useToast } from '/kit/toasts';
@@ -85,7 +85,15 @@ function readsOf(world: World, party: Party): Item[] {
 }
 
 function canTarget(world: World, party: Party): boolean {
-  return actionableGroupMember(world, party);
+  if (!actionableGroupMember(world, party)) return false;
+  const parties = partiesOf(world, party.store);
+  const mine = parties.find((candidate) => candidate.label === 'you');
+  if (!mine) return false;
+  const myRank = roleRank(mine.destination_role);
+  const targetRank = roleRank(party.destination_role);
+  if (myRank < 2) return false;
+  if (targetRank >= 3 && myRank < 3) return false;
+  return true;
 }
 
 function demotionFor(party: Party): RoleDto | null {
@@ -377,8 +385,8 @@ function SituationBand({
 }): ReactNode {
   if (store.kind === 'team' && store.active === false) {
     return (
-      <Band label="Setup didn’t finish.">
-        The roster and items are unavailable until the group is finished.
+      <Band label="Setup incomplete.">
+        Group members and items are unavailable until setup is finished.{' '}
         <button type="button" className="lnk" onClick={onFinish}>
           Finish setup
         </button>
@@ -393,7 +401,7 @@ function SituationBand({
     return (
       <Band severity="info" label="Ad-hoc group">
         Membership is fixed when it’s created; people can’t be added or removed
-        here. Its items and roles read normally.
+        here. Permissions and items function normally.
       </Band>
     );
   }
@@ -442,12 +450,7 @@ function PeopleTab({
         >
           <p>{failure.message}</p>
         </Notice>
-      ) : inactive ? (
-        <p className="rfoot">
-          The roster, federation and items of {store.name} are read from the
-          server once setup finishes. Until then there is nothing to show here.
-        </p>
-      ) : (
+      ) : inactive ? null : (
         <>
           <div className="rhead">
             <h2>People &amp; groups</h2>
@@ -585,7 +588,7 @@ function PartyPanel({
       <div className="scroll">
         <SectionLabel
           action={
-            <span className="n">
+            <span className="pv">
               · {readable.size} of {items.length}
             </span>
           }
@@ -613,11 +616,11 @@ function PartyPanel({
         )}
         {!active ? (
           <p className="hint">
-            This group’s admission is inactive, so its members read nothing here
-            until it is re-run.
+            This group connection is inactive. Members cannot access items until
+            the connection is renewed.
           </p>
         ) : readable.size < items.length ? (
-          <p className="hint">Greyed items need a higher role than {here}.</p>
+          <p className="hint">Items you don't have permission to view are dimmed.</p>
         ) : null}
         <SectionLabel>Details</SectionLabel>
         <div className="meta">
@@ -791,7 +794,7 @@ function FederationSection({
                           : 'members read nothing here'}
                       </small>
                     </span>
-                    <span className="ver">{entry.operation_id_hex}</span>
+                    <span className="vern">{entry.operation_id_hex}</span>
                     <span className="cellact">
                       {!entry.active && entry.operation_id_hex ? (
                         <Button
@@ -1082,6 +1085,7 @@ export function GroupSheet({
   onSwitch,
   onApplied,
   onError,
+  onMutationError,
 }: {
   world: World;
   bridge: Bridge;
@@ -1095,12 +1099,20 @@ export function GroupSheet({
     created?: { accountStoreId: StoreRef; teamAlias: string },
   ) => Promise<void>;
   onError: (error: unknown) => void;
+  onMutationError: MutationFailureHandler;
 }): ReactNode {
   const copy = useCopyText(bridge, onError);
   const toasts = useToast();
   const [username, setUsername] = useState('jules.park');
   const [visibility, setVisibility] = useState(0);
-  const [role, setRole] = useState<RoleDto>({ role: 'Member', visibility: 0 });
+  const callerParty = partiesOf(world, store.id).find(
+    (candidate) => candidate.label === 'you',
+  );
+  const callerRank = callerParty ? roleRank(callerParty.destination_role) : 0;
+  const [role, setRole] = useState<RoleDto>({
+    role: 'Member',
+    visibility: 0,
+  });
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState('Platform');
   const [createKind, setCreateKind] = useState<'named' | 'adhoc'>('named');
@@ -1260,17 +1272,8 @@ export function GroupSheet({
       if (sheet !== 'invite') await onApplied(`${title} completed`);
       onClose();
     } catch (error) {
-      onError(error);
-      const typed = normalizeCommandError(error);
-      if (typed.code !== 'agent-lost') {
-        try {
-          await onApplied(
-            `${typed.message} Roster refreshed — review the retained draft`,
-          );
-        } catch (refreshError) {
-          onError(refreshError);
-        }
-      }
+      if (sheet === 'invite') onError(error);
+      else await onMutationError(error);
     } finally {
       setBusy(false);
     }
@@ -1303,7 +1306,7 @@ export function GroupSheet({
           {sheet === 'remove' ? (
             <Button
               variant="primary"
-              className="danger"
+              danger
               disabled={
                 busy ||
                 Boolean(requiredFailure) ||
@@ -1402,7 +1405,7 @@ export function GroupSheet({
               </InsetRow>
             </Inset>
             <p className="hint">
-              Copying this message does not change the server.
+              Send this message to the person you want to invite.
             </p>
           </>
         ) : null}
@@ -1414,7 +1417,10 @@ export function GroupSheet({
             <SectionLabel>Role in {store.name}</SectionLabel>
             <Inset>
               <RadioGroup label={`Role in ${store.name}`}>
-                {(['Member', 'Admin', 'Owner'] as const).map((next) => (
+                {(callerRank >= 3
+                  ? (['Member', 'Admin', 'Owner'] as const)
+                  : (['Member', 'Admin'] as const)
+                ).map((next) => (
                   <RadioCard
                     key={next}
                     selected={role.role === next}
@@ -1457,9 +1463,9 @@ export function GroupSheet({
               </div>
             ) : null}
             <p className="fn">
-              They read every item at or below their role as soon as this
-              applies. No invitation is sent; they see {store.name} the next
-              time their app checks.
+              They can access items allowed by their role immediately. No
+              invitation is sent; {store.name} will appear when their app
+              checks the server.
             </p>
           </>
         ) : null}
@@ -1476,7 +1482,7 @@ export function GroupSheet({
                     selected={demotion?.role === 'Admin'}
                     onSelect={() => setDemotion({ role: 'Admin' })}
                     title="Admin"
-                    detail="Below Owner. Keeps roster management and loses Owner-only reads."
+                    detail="Can manage members and access items allowed for Admins."
                   />
                 ) : null}
                 <RadioCard
@@ -1496,7 +1502,7 @@ export function GroupSheet({
                   detail={
                     currentRole?.kind === 'member'
                       ? `Same role, lower level; ${maxMemberVisibility} at most.`
-                      : 'Loses roster management and opens only what its visibility level admits.'
+                      : 'Cannot manage members; can only access items allowed by their member role.'
                   }
                 />
                 <RadioCard
@@ -1551,8 +1557,8 @@ export function GroupSheet({
             </p>
             {target && !canTarget(world, target) ? (
               <Notice title={`${partyName(target)} cannot be removed here`}>
-                This party does not have a unique username managed by this
-                account. Remove it from the account or server that manages it.
+                This member cannot be removed here. They are managed by another
+                server or account.
               </Notice>
             ) : null}
           </>
@@ -1613,8 +1619,8 @@ export function GroupSheet({
               </InsetRow>
             </Inset>
             <p className="fn">
-              {store.name} keeps following that group’s roster. This can’t be
-              taken back from here yet.
+              {store.name} automatically syncs members from that group. This
+              connection cannot be removed from this screen.
             </p>
           </>
         ) : null}
@@ -1678,6 +1684,7 @@ export function GroupSettingsScreen({
   onNavigate,
   onApplied,
   onError,
+  onMutationError,
 }: {
   world: World;
   bridge: Bridge;
@@ -1685,6 +1692,7 @@ export function GroupSettingsScreen({
   onNavigate: (location: Location) => void;
   onApplied: (message: string) => Promise<void>;
   onError: (error: unknown) => void;
+  onMutationError: MutationFailureHandler;
 }): ReactNode {
   const copy = useCopyText(bridge, onError);
   const initial = stateName();
@@ -1788,23 +1796,6 @@ export function GroupSettingsScreen({
     }
     seenStore.current = storeId;
   }, [storeId]);
-  /**
-   * What every failed write on this screen does: report it, then re-read the
-   * catalog, because a write that failed part-way may still have landed some
-   * of its effect. A lost agent is the exception — its own workflow owns the
-   * recovery, and there is nothing to read from.
-   */
-  const reconcileFailure = async (error: unknown): Promise<void> => {
-    onError(error);
-    if (normalizeCommandError(error).code === 'agent-lost') return;
-    try {
-      // `onError` has already reported the failure; this says only what else
-      // happened, so the two toasts do not restate each other.
-      await onApplied('State refreshed — review before retrying');
-    } catch (refreshError) {
-      onError(refreshError);
-    }
-  };
   const mutate = async (
     action: () => Promise<unknown>,
     message: string,
@@ -1813,7 +1804,7 @@ export function GroupSettingsScreen({
       await action();
       await onApplied(message);
     } catch (error) {
-      await reconcileFailure(error);
+      await onMutationError(error);
     }
   };
 
@@ -1832,7 +1823,15 @@ export function GroupSettingsScreen({
   const access = storeDescriptionState(world, store);
   const unavailable = access !== 'normal' && access !== 'inactive';
   const inactive = store.active === false;
-  const manageable = store.team_kind === 'named' && !inactive && !unavailable;
+  const callerParty = partiesOf(world, store.id).find(
+    (candidate) => candidate.label === 'you',
+  );
+  const callerRank = callerParty ? roleRank(callerParty.destination_role) : 0;
+  const manageable =
+    store.team_kind === 'named' &&
+    !inactive &&
+    !unavailable &&
+    callerRank >= 2;
   const rosterManageable = manageable && !rosterFailure;
   const federationManageable = manageable && !federationFailure;
   const finishSetup = (): void => {
@@ -1873,11 +1872,6 @@ export function GroupSettingsScreen({
               }
             >
               {access === 'lease-lapsed' ? 'Open server' : 'Review server'}
-            </Button>
-          ) : null}
-          {inactive ? (
-            <Button variant="primary" icon="again" onClick={finishSetup}>
-              Finish setup
             </Button>
           ) : null}
           {inactive ? null : (
@@ -2034,6 +2028,7 @@ export function GroupSettingsScreen({
               onSwitch={openSheet}
               onApplied={onApplied}
               onError={onError}
+              onMutationError={onMutationError}
             />
           ) : null}
         </>

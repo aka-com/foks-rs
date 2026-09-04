@@ -25,6 +25,12 @@ use crate::{
 
 static HARDWARE_OPERATION_LOCK: Mutex<()> = Mutex::new(());
 
+fn hardware_lock() -> MutexGuard<'static, ()> {
+    HARDWARE_OPERATION_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[derive(Clone, Copy, Default)]
 pub struct HardwareYubiProvider;
 
@@ -33,10 +39,8 @@ impl HardwareYubiProvider {
         Self
     }
 
-    fn lock(&self) -> Result<MutexGuard<'static, ()>> {
-        HARDWARE_OPERATION_LOCK
-            .lock()
-            .map_err(|_| Error::Provider("hardware operation lock poisoned".into()))
+    fn lock(&self) -> MutexGuard<'static, ()> {
+        hardware_lock()
     }
 
     fn open_card(card: &CardId) -> Result<YubiKey> {
@@ -50,7 +54,7 @@ impl HardwareYubiProvider {
 
 impl YubiProvider for HardwareYubiProvider {
     fn cards(&self) -> Result<Vec<CardId>> {
-        let _guard = self.lock()?;
+        let _guard = self.lock();
         let mut context = yubikey::reader::Context::open().map_err(map_error)?;
         let mut seen = BTreeSet::new();
         let mut cards = Vec::new();
@@ -84,7 +88,7 @@ impl YubiProvider for HardwareYubiProvider {
         if signing_slot == pq_slot {
             return Err(Error::Policy("signing and PQ slots must be distinct"));
         }
-        let _guard = self.lock()?;
+        let _guard = self.lock();
         let mut yubikey = Self::open_card(card)?;
         verify_pin(&mut yubikey, pin)?;
         // Provisioning intentionally requires a factory/default management key.
@@ -134,12 +138,13 @@ impl YubiProvider for HardwareYubiProvider {
             pq_public_key,
             pq_key_id: foks_crypto::yubi_pq_key_id(&pq_public_key)?,
         };
-        drop(yubikey);
-        drop(_guard);
-        let device = HardwareYubiDevice::open(
+        let device = HardwareYubiDevice::from_open_key(
+            &mut yubikey,
             locator.clone(),
             Some(Zeroizing::new(pin.expose().as_bytes().to_vec())),
         )?;
+        drop(yubikey);
+        drop(_guard);
         Ok(PreparedYubiDevice {
             entity_id: device.id.clone(),
             hepk: device.hepk.clone(),
@@ -165,7 +170,7 @@ impl YubiProvider for HardwareYubiProvider {
         {
             return Err(Error::LocatorMismatch);
         }
-        let _guard = self.lock()?;
+        let _guard = self.lock();
         let mut card = Self::open_card(&locator.card)?;
         verify_locator_slots(&mut card, locator)?;
         Ok(Box::new(HardwareYubiAdminDevice {
@@ -180,9 +185,7 @@ struct HardwareYubiAdminDevice {
 
 impl HardwareYubiAdminDevice {
     fn with_card<T>(&self, operation: impl FnOnce(&mut YubiKey) -> Result<T>) -> Result<T> {
-        let _guard = HARDWARE_OPERATION_LOCK
-            .lock()
-            .map_err(|_| Error::Provider("hardware operation lock poisoned".into()))?;
+        let _guard = hardware_lock();
         let mut yubikey = HardwareYubiProvider::open_card(&self.locator.card)?;
         verify_locator_slots(&mut yubikey, &self.locator)?;
         operation(&mut yubikey)
@@ -255,33 +258,23 @@ struct HardwareYubiDevice {
 }
 
 impl HardwareYubiDevice {
-    fn open(locator: YubiDeviceLocator, pin: Option<Zeroizing<Vec<u8>>>) -> Result<Self> {
-        if locator.signing_slot == locator.pq_slot
-            || foks_crypto::yubi_pq_key_id(&locator.pq_public_key)? != locator.pq_key_id
-        {
-            return Err(Error::LocatorMismatch);
-        }
-        let guard = HARDWARE_OPERATION_LOCK
-            .lock()
-            .map_err(|_| Error::Provider("hardware operation lock poisoned".into()))?;
-        let mut yubikey = HardwareYubiProvider::open_card(&locator.card)?;
-        if let Some(pin) = pin.as_deref() {
-            verify_pin_bytes(&mut yubikey, pin)?;
-        }
+    fn from_open_key(
+        yubikey: &mut YubiKey,
+        locator: YubiDeviceLocator,
+        pin: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<Self> {
         prove_slot(
-            &mut yubikey,
+            yubikey,
             locator.signing_slot,
             &locator.signing_public_key,
         )?;
-        prove_slot(&mut yubikey, locator.pq_slot, &locator.pq_public_key)?;
-        let pq_self_secret = ecdh(&mut yubikey, locator.pq_slot, &locator.pq_public_key)?;
+        prove_slot(yubikey, locator.pq_slot, &locator.pq_public_key)?;
+        let pq_self_secret = ecdh(yubikey, locator.pq_slot, &locator.pq_public_key)?;
         let material = foks_crypto::derive_yubi_public_material(
             locator.signing_public_key,
             locator.pq_public_key,
             pq_self_secret,
         )?;
-        drop(yubikey);
-        drop(guard);
         Ok(Self {
             locator,
             id: material.device.id,
@@ -290,10 +283,25 @@ impl HardwareYubiDevice {
         })
     }
 
+    fn open(locator: YubiDeviceLocator, pin: Option<Zeroizing<Vec<u8>>>) -> Result<Self> {
+        if locator.signing_slot == locator.pq_slot
+            || foks_crypto::yubi_pq_key_id(&locator.pq_public_key)? != locator.pq_key_id
+        {
+            return Err(Error::LocatorMismatch);
+        }
+        let guard = hardware_lock();
+        let mut yubikey = HardwareYubiProvider::open_card(&locator.card)?;
+        if let Some(pin) = pin.as_deref() {
+            verify_pin_bytes(&mut yubikey, pin)?;
+        }
+        let device = Self::from_open_key(&mut yubikey, locator, pin)?;
+        drop(yubikey);
+        drop(guard);
+        Ok(device)
+    }
+
     fn with_card<T>(&self, operation: impl FnOnce(&mut YubiKey) -> Result<T>) -> Result<T> {
-        let _guard = HARDWARE_OPERATION_LOCK
-            .lock()
-            .map_err(|_| Error::Provider("hardware operation lock poisoned".into()))?;
+        let _guard = hardware_lock();
         let mut yubikey = HardwareYubiProvider::open_card(&self.locator.card)?;
         verify_locator_slots(&mut yubikey, &self.locator)?;
         if let Some(pin) = self.pin.as_deref() {

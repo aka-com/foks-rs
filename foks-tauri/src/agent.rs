@@ -531,10 +531,20 @@ fn launch_agent(binary: &Path, state_dir: &Path, socket: &Path) -> Result<(), Ag
                 true,
             )
         })?;
+    let pid = child.id();
+    *MANAGED_AGENT_PID
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(pid);
     std::thread::Builder::new()
         .name("foks-agent-reaper".to_owned())
         .spawn(move || {
             let _ = child.wait();
+            let mut guard = MANAGED_AGENT_PID
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *guard == Some(pid) {
+                *guard = None;
+            }
         })
         .map_err(|error| {
             AgentError::new(
@@ -544,6 +554,21 @@ fn launch_agent(binary: &Path, state_dir: &Path, socket: &Path) -> Result<(), Ag
             )
         })?;
     Ok(())
+}
+
+static MANAGED_AGENT_PID: Mutex<Option<u32>> = Mutex::new(None);
+
+pub fn terminate_managed_agent() {
+    if let Some(pid) = MANAGED_AGENT_PID
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+    {
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+    }
 }
 
 pub fn success_value(response: Response) -> Result<Value, AgentError> {

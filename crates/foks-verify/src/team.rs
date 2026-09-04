@@ -1053,6 +1053,9 @@ fn replay_team_transition(
         }
         members.insert(key, verified);
     }
+    if !members.values().any(|member| member.role.kind() == RoleType::Owner) {
+        return Err(Error::TeamRoster);
+    }
     Ok(())
 }
 

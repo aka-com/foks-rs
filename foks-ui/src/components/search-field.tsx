@@ -5,8 +5,7 @@
  * reassigns the whole header's `innerHTML` on every keystroke and then puts
  * the caret back by hand (`01-vault.html`'s `input` handler); React keeps the
  * same DOM node across the re-render, so focus, selection and scroll survive
- * without anyone restoring them. `tests/vault-shell.render.test.tsx` holds
- * that line.
+ * without anyone restoring them.
  *
  * ⌘K (Ctrl+K off macOS) focuses it from anywhere in the window, which is what
  * the `<kbd>` promises.
@@ -21,6 +20,11 @@ export interface SearchFieldProps {
   onChange: (value: string) => void;
   /** Input placeholder describing the current search scope. */
   placeholder: string;
+}
+
+function isMac(): boolean {
+  if (typeof navigator === 'undefined') return true;
+  return /Mac|iPhone|iPad/i.test(`${navigator.platform} ${navigator.userAgent}`);
 }
 
 export function SearchField({
@@ -63,7 +67,7 @@ export function SearchField({
           }
         }}
       />
-      <kbd aria-hidden="true">⌘K</kbd>
+      <kbd aria-hidden="true">{isMac() ? '⌘K' : 'Ctrl K'}</kbd>
     </label>
   );
 }

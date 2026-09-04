@@ -41,6 +41,8 @@ import {
   storeReadable,
 } from './model';
 import type { Item, World } from './model';
+import { reconcileMutationFailure } from './mutation-recovery';
+import type { MutationFailureHandler } from './mutation-recovery';
 import { Sidebar } from './shell/sidebar';
 import { AlertsScreen } from './screens/alerts-screen';
 import { DetailsPanel } from './screens/details-panel';
@@ -82,7 +84,7 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
   const [loaded, setLoaded] = useState<World | null>(() => world ?? null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [firstRunStart, setFirstRunStart] = useState<
-    'boot' | 'who' | 'local' | null
+    'who' | 'local' | null
   >(null);
   const [managedProfile, setManagedProfile] = useState<string | null>(null);
   const [lockState, setLockState] = useState<AppLockState | null>(null);
@@ -127,7 +129,7 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
         let next: World;
         if (status.phase !== 'Ready') {
           next = emptyWorld(status);
-          if (alive) setFirstRunStart('boot');
+          if (alive) setFirstRunStart('who');
         } else {
           try {
             next = await loadWorld(selected);
@@ -267,7 +269,7 @@ interface VaultShellProps {
   world: World;
   bridge: Bridge;
   store?: LocationStore;
-  firstRunStart?: 'boot' | 'who' | 'local' | null;
+  firstRunStart?: 'who' | 'local' | null;
   managedProfile?: string | null;
 }
 
@@ -372,15 +374,18 @@ function VaultShell({
     };
   }, [bridge]);
 
-  // Catalog loads cancel the previous generation. Callers that need a fresh
-  // world — Settings recovery, Groups, first run, conflict review — must
-  // share one in-flight load rather than stacking `list_catalog`.
+  // Catalog loads cancel the previous generation. Ordinary callers share one
+  // in-flight load; a mutation passes `force` because it invalidated any load
+  // that was already running against the old catalog.
   const refreshWorldInFlight = useRef<Promise<World> | null>(null);
-  const refreshWorld = useCallback((): Promise<World> => {
+  const refreshWorldGeneration = useRef(0);
+  const refreshWorld = useCallback((force = false): Promise<World> => {
+    if (force) refreshWorldInFlight.current = null;
     if (!refreshWorldInFlight.current) {
+      const generation = ++refreshWorldGeneration.current;
       const pending = loadWorld(bridge)
         .then((next) => {
-          setLatest(next);
+          if (generation === refreshWorldGeneration.current) setLatest(next);
           return next;
         })
         .finally(() => {
@@ -392,10 +397,13 @@ function VaultShell({
     return refreshWorldInFlight.current;
   }, [bridge]);
 
-  const refresh = async (message: string): Promise<void> => {
-    await refreshWorld();
-    toasts.show(message);
-  };
+  const refresh = useCallback(
+    async (message: string): Promise<void> => {
+      await refreshWorld(true);
+      toasts.show(message);
+    },
+    [refreshWorld, toasts],
+  );
 
   const commandError = useCallback(
     (error: unknown, item?: Item, draft = ''): void => {
@@ -417,6 +425,25 @@ function VaultShell({
       );
     },
     [toasts],
+  );
+
+  const mutationError = useCallback<MutationFailureHandler>(
+    async (error, options = {}) => {
+      const typed = normalizeCommandError(error);
+      if (options.report !== false || typed.code === 'agent-lost')
+        commandError(error, options.item, options.draft);
+      await reconcileMutationFailure(
+        error,
+        () =>
+          refresh(
+            options.report === false
+              ? 'Vault refreshed'
+              : 'Vault refreshed, you can try again',
+          ),
+        commandError,
+      );
+    },
+    [commandError, refresh],
   );
 
   const refreshAll = (): void => {
@@ -525,14 +552,7 @@ function VaultShell({
           await bridge.resumeGroupCreation(storeId);
           await refresh('Group creation resumed');
         } catch (error) {
-          commandError(error);
-          if (normalizeCommandError(error).code !== 'agent-lost') {
-            try {
-              await refresh('State refreshed — review before retrying');
-            } catch (refreshError) {
-              commandError(refreshError);
-            }
-          }
+          await mutationError(error);
         }
       }}
       onRemove={(item) => setWorkflow({ kind: 'remove', item })}
@@ -554,6 +574,7 @@ function VaultShell({
       onNavigate={(location) => locations.navigate(location)}
       onApplied={refresh}
       onError={commandError}
+      onMutationError={mutationError}
     />
   ) : here.kind === 'alerts' ? (
     <AlertsScreen
@@ -572,6 +593,7 @@ function VaultShell({
       onRefresh={refresh}
       onRefreshWorld={refreshWorld}
       onError={commandError}
+      onMutationError={mutationError}
     />
   ) : (
     <PlaceholderScreen location={here} />
@@ -674,6 +696,7 @@ function VaultShell({
             }
             onApplied={refresh}
             onCommandError={commandError}
+            onMutationError={mutationError}
             concealSignal={concealSignal}
             resumeDraft={resumeDraft}
           />
@@ -686,6 +709,7 @@ function VaultShell({
         setWorkflow={setWorkflow}
         onApplied={refresh}
         onError={commandError}
+        onMutationError={mutationError}
         onRefreshConflict={async (item, draft) => {
           await refreshWorld();
           setResumeDraft({
@@ -694,7 +718,7 @@ function VaultShell({
             value: draft,
             epoch: Date.now(),
           });
-          toasts.show('Refreshed the catalog — review your retained draft');
+          toasts.show('Refreshed the catalog, review your retained draft');
         }}
         onDiscardConflict={() => {
           setWorkflow(null);

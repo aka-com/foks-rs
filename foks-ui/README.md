@@ -258,12 +258,6 @@ The unit and render-test layers live in `tests/`:
 - `app-root.render.test.tsx` — jsdom plus Vite `ssrLoadModule`, the same boot
   as `ui/tests/app-root.render.test.tsx`: the app mounts itself into `#root`
   from `app.tsx`, exactly as it does in the browser.
-- `vault-shell.render.test.tsx` — one render per deep link in the table below,
-  plus the search field keeping its caret across a re-render and the New menu
-  opening over the kit's `Popover`. Every count and caption it asserts is
-  computed from the fixture in the test and compared with what the screen
-  drew; where the plan names a golden ("3 people", "5 people · 1 group") the
-  derivation is checked against that word as well.
 
 Layer 3 is `tests/acceptance/run.mjs`: `pnpm run acceptance:foks-ui` builds
 with `VITE_FOKS_MOCK=1`, serves `dist/` over a local HTTP server on a random

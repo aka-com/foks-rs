@@ -9,7 +9,7 @@
 
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button } from '../components';
+import { Button, Icon } from '../components';
 import { PageHeader } from '../shell/page-header';
 import { notesNow } from '../model';
 import type { Notification, World } from '../model';
@@ -62,22 +62,30 @@ export function AlertsScreen({
                   <h3>{note.title}</h3>
                   <p>{note.detail}</p>
                 </div>
-                <Button
-                  disabled={!canRetry(note) || busy.has(note.id)}
-                  title={
-                    canRetry(note)
-                      ? 'Try the catalog load again'
-                      : ACTIONS_ARE_LATER
-                  }
-                  onClick={() => retry(note)}
-                >
-                  {note.action}
-                </Button>
+                {canRetry(note) ? (
+                  <Button
+                    disabled={busy.has(note.id)}
+                    title="Try the catalog load again"
+                    onClick={() => retry(note)}
+                  >
+                    {note.action}
+                  </Button>
+                ) : note.action ? (
+                  <span className="chip" title={ACTIONS_ARE_LATER}>
+                    {note.action}
+                  </span>
+                ) : null}
               </div>
             ))}
           </div>
         ) : (
-          <p className="hint">Nothing needs attention on this Mac.</p>
+          <div className="empty">
+            <span className="big">
+              <Icon name="bell" />
+            </span>
+            <h2>No alerts to review</h2>
+            <p>Nothing needs attention on this Mac.</p>
+          </div>
         )}
       </div>
     </>

@@ -218,7 +218,14 @@ fn authenticate(reason: &str) -> Result<bool, String> {
             &handler,
         );
     }
-    receiver.recv().unwrap_or(Ok(false))
+    const AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+    match receiver.recv_timeout(AUTH_TIMEOUT) {
+        Ok(result) => result,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            Err("Authentication prompt timed out.".to_owned())
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Ok(false),
+    }
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]

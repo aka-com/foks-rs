@@ -812,6 +812,22 @@ impl ClientCredentials {
         session: &ProfileSession,
         expected_digest: [u8; 32],
     ) -> Result<()> {
+        self.erase_profile_state(session, Some(expected_digest))
+    }
+
+    /// Erases the same artifacts a reset does, without binding the work to a
+    /// preview. Only profile removal uses this: a forget's endpoint does not
+    /// depend on what the state was, so a change since it was described is not
+    /// a conflict worth reporting back.
+    pub(super) fn erase_profile_state_for_removal(&self, session: &ProfileSession) -> Result<()> {
+        self.erase_profile_state(session, None)
+    }
+
+    fn erase_profile_state(
+        &self,
+        session: &ProfileSession,
+        expected_digest: Option<[u8; 32]>,
+    ) -> Result<()> {
         self.ensure_session_root(session)?;
         if registry::profile_publication_is_pending(session)? {
             return Err(Error::InvalidConfig(
@@ -826,9 +842,11 @@ impl ClientCredentials {
             database_locks.push(runtime::DatabaseLock::acquire(&self.root, database_id)?);
         }
         let result = (|| {
-            let preview = self.reset_state_preview_locked(session)?;
-            if preview.state_digest != expected_digest {
-                return Err(Error::ResetPreviewChanged);
+            if let Some(expected_digest) = expected_digest {
+                let preview = self.reset_state_preview_locked(session)?;
+                if preview.state_digest != expected_digest {
+                    return Err(Error::ResetPreviewChanged);
+                }
             }
             self.reset_profile_state_locked(session, &database_ids)
         })();
@@ -1225,6 +1243,19 @@ fn remove_reset_artifact(path: &Path) -> Result<()> {
     } else {
         return Err(Error::InvalidConfig("reset artifact path is not a file"));
     }
+    Ok(())
+}
+
+/// Removes a profile's own directory once its artifacts are gone. Every level
+/// refuses a symlink, so a link planted inside the profile root cannot
+/// redirect the removal outside it. Callers must have released the operation
+/// and scheduler locks first: both lock files live in this directory.
+pub(super) fn remove_profile_directory(directory: &Path) -> Result<()> {
+    let parent = directory
+        .parent()
+        .ok_or(Error::InvalidConfig("profile directory has no parent"))?;
+    remove_reset_artifact(directory)?;
+    File::open(parent)?.sync_all()?;
     Ok(())
 }
 

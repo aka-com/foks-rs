@@ -448,14 +448,7 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
     ) -> Result<KexOfferReport> {
         self.profile.require(Capability::DeviceAdministration)?;
-        if vault
-            .store
-            .keys()?
-            .iter()
-            .any(|key| key == &kex_offer_key(account_alias))
-        {
-            return Err(Error::AccountExists);
-        }
+        let _ = vault.remove_kex_offer(account_alias);
         let account = vault.account(account_alias)?;
         let offer = foks_client::KexProvisionOffer::generate(Role::OWNER)?;
         let phrase = offer.phrase().expose_joined();
@@ -547,9 +540,10 @@ impl CheckedProfileSession<'_> {
     ) -> Result<DeviceProvisionReport> {
         self.profile.require(Capability::DeviceAdministration)?;
         validate_name(&input.target_alias)?;
-        if vault.contains(&input.target_alias)? {
+        if vault.account_record_exists(&input.target_alias)? {
             return Err(Error::AccountExists);
         }
+        let _ = vault.remove_pending_kex(&input.target_alias);
         foks_crypto::KexSecret::from_phrase(&input.phrase)?;
         if source_candidate_id.is_some_and(|id| {
             id.len() != 64

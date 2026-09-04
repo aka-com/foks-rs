@@ -423,7 +423,7 @@ export function decodeLocation(search: string): Location | null {
     const path = params.get('path');
     return {
       kind: 'first-run',
-      step: params.get('step') ?? 'boot',
+      step: params.get('step') ?? 'who',
       ...(path === 'invited' || path === 'own' ? { path } : {}),
     };
   }

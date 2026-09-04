@@ -70,7 +70,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .nav .t{min-width:0;flex:1}.nav .t small{display:block;font-size:11.5px;font-weight:400;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .nav.off{opacity:.55}.nav[disabled]{opacity:.45;cursor:default}
 .nav .dot{width:7px;height:7px;border-radius:50%;background:var(--warning-dot);flex:none}
-.nav .badge{font-size:11px;font-weight:600;color:var(--amber-ink);background:var(--amber-wash);padding:0 7px;border-radius:var(--radius-pill);line-height:18px}
+.badge,.nav .badge{font-size:11px;font-weight:600;color:var(--amber-ink);background:var(--amber-wash);padding:0 7px;border-radius:var(--radius-pill);line-height:18px;display:inline-block}
 .nav .stack{margin-left:auto}
 .nav .stack .av:nth-child(1){left:auto;right:10px}
 .nav .stack .av:nth-child(2){left:auto;right:0}
@@ -85,12 +85,12 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 
 /* avatars and stacks */
 .stack{display:inline-flex;position:relative;width:28px;height:20px;flex:none}
-.av{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:8.5px;font-weight:700;color:#fff;border:2px solid var(--surface);position:absolute;top:0}
+.av{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:8.5px;font-weight:700;color:#fff;border:2px solid var(--surface);position:absolute;top:0;overflow:hidden;letter-spacing:-.04em}
 .av .ic{font-size:11px;color:#fff;width:auto}
 .stack .av:nth-child(1){left:0;z-index:2}.stack .av:nth-child(2){left:10px;z-index:1}
 .stack.lg{width:44px;height:30px}.stack.lg .av{width:30px;height:30px;font-size:11px;border-color:#fff}.stack.lg .av:nth-child(2){left:16px}
 .stack.lg .av .ic{font-size:15px}
-.stack.xs{width:24px;height:16px}.stack.xs .av{width:16px;height:16px;font-size:7px;border-width:1.5px;border-color:#fff}.stack.xs .av:nth-child(2){left:8px}
+.stack.xs{width:24px;height:16px}.stack.xs .av{width:16px;height:16px;font-size:7px;border-width:1.5px;border-color:#fff;letter-spacing:-.05em;overflow:hidden}
 .stack.xs .av .ic{font-size:9px}
 .av.team{border-radius:6px;font-size:11px;border:0}
 
@@ -119,6 +119,9 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--line-mid);border-radius:var(--radius-md);background:var(--btn-bg);font-weight:500;box-shadow:var(--shadow-xs);white-space:nowrap}
 .btn:hover{background:var(--btn-hover)}.btn.primary{background:var(--accent);border-color:color-mix(in srgb,var(--accent) 58%,#fff);color:#fff;font-weight:600}
 .btn.primary:hover{background:var(--accent-ink);border-color:color-mix(in srgb,var(--accent-ink) 70%,#fff)}.btn.danger{color:var(--danger-ink)}.btn.danger:hover{background:var(--danger-wash)}
+.btn.primary.danger{background:var(--danger-ink);border-color:color-mix(in srgb,var(--danger-ink) 58%,#fff);color:#fff}
+.btn.primary.danger:hover{background:var(--danger-text);border-color:color-mix(in srgb,var(--danger-text) 70%,#fff);color:#fff}
+.btn.primary.danger[disabled]:hover{background:var(--danger-ink);border-color:color-mix(in srgb,var(--danger-ink) 58%,#fff);color:#fff}
 .btn[disabled]{opacity:.5;cursor:default;box-shadow:none}.btn[disabled]:hover{background:var(--btn-bg)}.btn.primary[disabled]:hover{background:var(--accent)}
 .btn .ic{font-size:16px}
 .btn .ic.chevron{font-size:14px}
@@ -138,7 +141,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .menuwrap{position:relative}
 .menu{position:absolute;top:36px;left:0;min-width:210px;background:#fff;border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow-menu);padding:6px;z-index:5}
 .menu.right{left:auto;right:0}
-.menu button{display:flex;align-items:center;gap:9px;width:100%;padding:7px 9px;border-radius:var(--radius-sm);text-align:left}.menu button:hover{background:var(--hover)}
+.menu button{display:flex;align-items:center;gap:9px;width:100%;padding:6px 9px;border-radius:var(--radius-sm);text-align:left}.menu button:hover{background:var(--hover)}
+.menu button.kind-menu-item{padding-block:4px}
 .menu button .ic{font-size:16px;width:18px}.menu button kbd{margin-left:auto;font:11px var(--sans);color:var(--faint)}
 .menu button .kic{width:24px;height:24px;font-size:14px}
 .menu button.on{background:var(--accent-wash);color:var(--accent-ink);font-weight:600}
@@ -159,12 +163,13 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .row .server{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pchip{display:inline-block;flex:none;font:11px var(--mono);color:var(--muted);background:var(--chip-bg);padding:1px 6px;border-radius:5px;line-height:16px}
 .kic{width:26px;height:26px;border-radius:var(--radius-sm);display:grid;place-items:center;font-size:16px;flex:none}
+.kic.big{width:48px;height:48px;border-radius:var(--radius-lg);font-size:23px}.kic.big .ic{font-size:26px}
+.kic.md{width:30px;height:30px;border-radius:8px;font-size:15px}.kic.md .ic{font-size:17px}
 .kic.Password{background:rgba(59,130,246,.12);color:var(--c-password)}
 .kic.File{background:rgba(100,116,139,.13);color:var(--c-file)}
 .kic.Resource{background:rgba(217,119,6,.13);color:var(--c-resource)}
 .kic.Link{background:rgba(124,58,237,.12);color:var(--c-link)}
 .acts{display:flex;justify-content:flex-end;gap:2px;opacity:0;transition:opacity .12s}
-.row:hover .acts,.row.sel .acts{opacity:1}
 .acts button{width:28px;height:28px;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--ink-3);font-size:16px}
 .acts button:hover{background:rgba(0,0,0,.08)}.acts button.danger:hover{background:var(--danger-wash);color:var(--danger-ink)}
 .acts button[disabled]{opacity:.35;cursor:default}
@@ -195,11 +200,13 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
    details panel and a status list stacks facts. The box is stated once. */
 .tile,.inset,.prev{border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden}
 .tile,.inset,.prev{background:var(--main-surface)}
+.inset.off,.prev.off{opacity:.5;pointer-events:none;user-select:none}
 .tile{cursor:default}
 .tile:hover{background:var(--surface)}.tile.sel{border-color:var(--accent-border);background:var(--accent-wash)}
 .tile .glyph{position:relative;height:96px;display:grid;place-items:center;background:var(--surface)}
 .tile.sel .glyph{background:transparent}
-.tile .stack{position:absolute;top:8px;right:8px}
+.tile .stack{position:absolute;top:8px;right:8px;transition:opacity .12s}
+.tile:hover .stack,.tile.sel .stack{opacity:0;pointer-events:none}
 .tile .qa{position:absolute;right:8px;top:8px;display:flex;gap:4px;opacity:0;transition:opacity .12s}
 .tile:hover .qa,.tile.sel .qa{opacity:1}
 .tile:hover .qa .acts,.tile.sel .qa .acts{opacity:1}
@@ -241,7 +248,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .body>.band{margin:4px 0 10px}
 .cards{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:10px;padding-top:6px}
 .card{border:1px solid var(--line);border-radius:var(--radius-lg);padding:14px 16px;display:grid;grid-template-columns:14px 1fr auto;gap:12px;align-items:start}
-.card .sev{width:9px;height:9px;border-radius:50%;margin-top:6px;background:var(--warning-dot)}.card .sev.crit{background:var(--danger)}
+.card .sev{width:9px;height:9px;border-radius:50%;margin-top:6px;background:var(--warning-dot)}.card .sev.crit{background:var(--danger)}.card .sev.info{background:var(--accent)}.card .sev.ok{background:var(--ok-solid)}
 .card h3{font-size:14px;font-weight:650;margin-bottom:3px}.card p{font-size:13px;color:var(--muted)}
 .plain{max-width:560px;margin:0 auto;padding-top:6px}.plain h2{font-size:17px;font-weight:650;margin:8px 0 6px}
 .plain p{color:var(--muted);margin-bottom:12px}
@@ -323,6 +330,9 @@ details.dd li b{color:var(--ink-2)}
 .toggle-chevron{flex:none;transform:rotate(-90deg);transform-origin:center;transition:transform .15s ease}
 .toggle-trigger[aria-expanded="true"] .toggle-chevron{transform:none}
 .toggle-body pre{font:11.5px/1.5 var(--mono);background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:6px;white-space:pre-wrap}
+/* Advanced sheet disclosure */
+.sheet-advanced .toggle-trigger{font-size:11.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.sheet-advanced .toggle-body>.inset{margin-top:6px}
 .deferred{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.5}
 
 /* ---------- sheets, fields, flash ---------- */

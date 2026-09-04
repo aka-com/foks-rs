@@ -116,7 +116,11 @@ export function transitionFirstRun(
         path: event.managedLocal ? 'own' : state.path,
         initialized: true,
         managedLocal: event.managedLocal ?? false,
-        state: event.managedLocal ? 'local' : 'who',
+        state: event.managedLocal
+          ? 'local'
+          : state.state === 'boot'
+            ? 'who'
+            : state.state,
       };
     case 'choose':
       return {

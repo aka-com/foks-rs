@@ -907,6 +907,31 @@ impl ClientCredentials {
         self.with_checked_session(&session, |_| Ok::<_, Error>(()))?;
         Ok(report)
     }
+
+    /// Forgets a profile and erases the local state it accumulated, including
+    /// the credential store holding this device's keys. Deregistering alone
+    /// would only hide that state.
+    ///
+    /// The state goes first and the registry entry last, so an interrupted
+    /// removal leaves a registered profile whose state is already gone — the
+    /// shape of a freshly added profile, and safe to re-run. The other order
+    /// would strand secrets under a name nothing can reach.
+    pub fn remove_profile(&self, registry: &mut ProfileRegistry, name: &str) -> Result<bool> {
+        if self.root != registry.root {
+            return Err(Error::InvalidConfig(
+                "profile registry belongs to a different client state",
+            ));
+        }
+        match registry.profile(name) {
+            Ok(_) => {}
+            Err(Error::ProfileMissing) => return Ok(false),
+            Err(error) => return Err(error),
+        }
+        let session = ProfileSession::open(registry, name)?;
+        self.erase_profile_state_for_removal(&session)?;
+        super::checkpoint::remove_profile_directory(&session.paths.directory)?;
+        registry.remove(name)
+    }
 }
 
 fn remove_profile_publication_directory(path: &Path) -> Result<()> {
@@ -1745,5 +1770,92 @@ mod tests {
         ));
         assert_eq!(registry.profile("lease-race").unwrap(), &lease_profile);
         assert!(profile_publication_marker_exists(&state, "lease-race").unwrap());
+    }
+
+    #[test]
+    fn forgetting_a_profile_erases_its_local_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let credentials =
+            ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(Profile {
+                name: "local".to_owned(),
+                probe: "foks.example.test".to_owned(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+
+        // The artifacts a used profile leaves behind. The credential store is
+        // the one that matters: it holds this Mac's device keys. The rollback
+        // checkpoint has to be real rather than a stub file, or the removal
+        // silently skips the database locks and the claim record it owns.
+        let session = ProfileSession::open(&registry, "local").unwrap();
+        let paths = session.paths().clone();
+        session.rollback_checkpoint().unwrap();
+        drop(session);
+        assert!(paths.hard_database.is_file());
+        fs::create_dir_all(&paths.credential_store).unwrap();
+        fs::write(paths.credential_store.join("account.personal"), b"key").unwrap();
+        fs::create_dir_all(&paths.protected_mutations).unwrap();
+        fs::write(&paths.soft_database, b"soft").unwrap();
+
+        assert!(credentials.remove_profile(&mut registry, "local").unwrap());
+        assert!(matches!(
+            registry.profile("local"),
+            Err(Error::ProfileMissing)
+        ));
+        assert!(!paths.directory.exists());
+
+        // A second remove is idempotent: it returns false when the profile is already
+        // gone, so a removal interrupted before the registry write can be retried.
+        assert!(!credentials.remove_profile(&mut registry, "local").unwrap());
+    }
+
+    #[test]
+    fn forgetting_a_profile_refuses_a_pending_publication() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let credentials =
+            ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(Profile {
+                name: "local".to_owned(),
+                probe: "foks.example.test".to_owned(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+        let session = ProfileSession::open(&registry, "local").unwrap();
+        let paths = session.paths().clone();
+        fs::create_dir_all(&paths.credential_store).unwrap();
+        fs::write(paths.credential_store.join("account.personal"), b"key").unwrap();
+        write_profile_publication_marker(
+            &paths.directory.join(PROFILE_PUBLICATION_MARKER),
+            session.profile(),
+            &ProbeReport {
+                acceptance: ProbeAcceptance::Inserted,
+                lookup_name: "foks.example.test".to_owned(),
+                canonical_name: "foks.example.test".to_owned(),
+                host_id_hex: "02".repeat(33),
+                host_chain_sequence: 1,
+                merkle_epoch: 1,
+            },
+            &session.rollback_checkpoint().unwrap(),
+            [7; 32],
+        )
+        .unwrap();
+
+        assert!(matches!(
+            credentials.remove_profile(&mut registry, "local"),
+            Err(Error::InvalidConfig(
+                "profile publication checkpoint is still pending"
+            ))
+        ));
+        assert!(registry.profile("local").is_ok());
+        assert!(paths.credential_store.join("account.personal").is_file());
     }
 }

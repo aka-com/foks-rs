@@ -53,6 +53,7 @@ import type { Item, Party, RoleWire, World } from '../model';
 import type { Selection } from '../location';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, ItemRequest, ReadItemResponse } from '../bridge';
+import type { MutationFailureHandler } from '../mutation-recovery';
 import { editableValue } from './edit-value';
 
 const FIELD_LABELS: Readonly<Record<string, string>> = {
@@ -210,6 +211,7 @@ export interface DetailsPanelProps {
   onConflict: (item: Item, draft: string) => void;
   onApplied: (message: string) => Promise<void>;
   onCommandError: (error: unknown, item?: Item) => void;
+  onMutationError: MutationFailureHandler;
   /** Increments when the agent is lost so every renderer-held value is dropped. */
   concealSignal?: number;
   resumeDraft?: {
@@ -232,6 +234,7 @@ export function DetailsPanel({
   onConflict,
   onApplied,
   onCommandError,
+  onMutationError,
   concealSignal = 0,
   resumeDraft = null,
 }: DetailsPanelProps): ReactNode {
@@ -331,11 +334,6 @@ export function DetailsPanel({
     const conceal = (): void => {
       concealEpoch.current += 1;
       setRead(null);
-      // An open editor holds the plaintext too. Dropping only `read` left the
-      // secret rendered in the textarea through the very signal this comment
-      // calls the strongest bound.
-      setEditValue('');
-      setEditing(false);
     };
     window.addEventListener('blur', conceal);
     return () => window.removeEventListener('blur', conceal);
@@ -429,7 +427,13 @@ export function DetailsPanel({
           </button>
         </div>
         <div className="scroll">
-          <p className="hint">Select an item to view its details.</p>
+          <div className="empty" style={{ paddingTop: '60px' }}>
+            <span className="big">
+              <Icon name="search" />
+            </span>
+            <h2>No selection</h2>
+            <p>Select an item to view its details.</p>
+          </div>
         </div>
       </aside>
     );
@@ -522,8 +526,12 @@ export function DetailsPanel({
       await onApplied(`Saved version ${item.version + 1}`);
     } catch (error) {
       const typed = normalizeCommandError(error);
-      if (typed.code === 'conflict') onConflict(item, editValue);
-      else onCommandError(error, item);
+      if (typed.code === 'conflict') {
+        onConflict(item, editValue);
+        await onMutationError(error, { report: false });
+      } else {
+        await onMutationError(error, { item });
+      }
     } finally {
       setSaving(false);
     }
@@ -886,10 +894,10 @@ export function DetailsPanel({
               disabled={!canChange || kind === 'Link' || saving}
               title={
                 !canChange
-                  ? `Your current role does not admit the ${roleText(item.write)} write role`
+                  ? `You need ${roleText(item.write)} permissions to edit this item.`
                   : kind === 'Link'
-                    ? 'A link cannot be edited atomically; remove it and create the new target at the same path'
-                    : `Edit — Save uses ExactVersion(${item.version})`
+                    ? 'Links cannot be edited directly. Delete this link and create a new one.'
+                    : `Edit this item (version ${item.version})`
               }
               onClick={() => void beginEdit()}
             >
@@ -919,8 +927,8 @@ export function DetailsPanel({
               disabled={!canChange}
               title={
                 canChange
-                  ? `Removes version ${item.version} exactly`
-                  : `Your current role does not admit the ${roleText(item.write)} write role`
+                  ? 'Delete this item'
+                  : `You need ${roleText(item.write)} permissions to delete this item.`
               }
               onClick={() => onRemove(item)}
             >

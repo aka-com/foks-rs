@@ -200,6 +200,7 @@ pub fn run() {
         .expect("the FOKS desktop application could not start")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                agent::terminate_managed_agent();
                 clipboard::defer_exit_cleanup(app, code, &api);
             }
         });

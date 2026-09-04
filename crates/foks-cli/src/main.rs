@@ -83,8 +83,11 @@ enum ProfileCommand {
     },
     Add(ProfileAdd),
     Verify(ProfileAdd),
+    /// Destructively forgets a profile and erases every local artifact it owns.
     Remove {
         name: String,
+        #[arg(long)]
+        confirm_delete: bool,
     },
     Probe {
         name: String,
@@ -697,13 +700,23 @@ fn profile_command(
             }
             output(json, configured, "profile verified")
         }
-        ProfileCommand::Remove { name } => {
-            let removed = registry.remove(&name)?;
+        ProfileCommand::Remove {
+            name,
+            confirm_delete,
+        } => {
+            if !confirm_delete {
+                return Err(
+                    "profile remove requires --confirm-delete because it erases this profile's account credentials, rollback checkpoint, pins, mutation journals, and scheduled jobs"
+                        .into(),
+                );
+            }
+            let credentials = ClientCredentials::open(state_dir)?;
+            let removed = credentials.remove_profile(&mut registry, &name)?;
             output(
                 json,
                 &serde_json::json!({ "profile": name, "removed": removed }),
                 if removed {
-                    "profile removed; durable profile data was retained"
+                    "profile removed and its local state erased"
                 } else {
                     "profile was not present"
                 },
