@@ -620,7 +620,9 @@ function PartyPanel({
             the connection is renewed.
           </p>
         ) : readable.size < items.length ? (
-          <p className="hint">Items you don't have permission to view are dimmed.</p>
+          <p className="hint">
+            Items you don't have permission to view are dimmed.
+          </p>
         ) : null}
         <SectionLabel>Details</SectionLabel>
         <div className="meta">
@@ -1464,8 +1466,8 @@ export function GroupSheet({
             ) : null}
             <p className="fn">
               They can access items allowed by their role immediately. No
-              invitation is sent; {store.name} will appear when their app
-              checks the server.
+              invitation is sent; {store.name} will appear when their app checks
+              the server.
             </p>
           </>
         ) : null}
@@ -1828,10 +1830,7 @@ export function GroupSettingsScreen({
   );
   const callerRank = callerParty ? roleRank(callerParty.destination_role) : 0;
   const manageable =
-    store.team_kind === 'named' &&
-    !inactive &&
-    !unavailable &&
-    callerRank >= 2;
+    store.team_kind === 'named' && !inactive && !unavailable && callerRank >= 2;
   const rosterManageable = manageable && !rosterFailure;
   const federationManageable = manageable && !federationFailure;
   const finishSetup = (): void => {

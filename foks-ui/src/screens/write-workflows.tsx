@@ -748,8 +748,8 @@ function ExistsSheet({
     >
       <>
         <p>
-          Nothing was created and nothing was overwritten. An item already exists
-          at this path
+          Nothing was created and nothing was overwritten. An item already
+          exists at this path
           {version
             ? `, and ${nameOf(workflow.path)} is currently at version ${version} in ${storeOf(world, workflow.storeId)?.name ?? ''}`
             : ''}
@@ -927,11 +927,7 @@ function ConflictSheet({
               <Button onClick={() => setConfirmingDiscard(false)}>
                 Keep editing
               </Button>
-              <Button
-                variant="primary"
-                danger
-                onClick={onDiscardConflict}
-              >
+              <Button variant="primary" danger onClick={onDiscardConflict}>
                 Discard my edit
               </Button>
             </>

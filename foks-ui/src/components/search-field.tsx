@@ -24,7 +24,9 @@ export interface SearchFieldProps {
 
 function isMac(): boolean {
   if (typeof navigator === 'undefined') return true;
-  return /Mac|iPhone|iPad/i.test(`${navigator.platform} ${navigator.userAgent}`);
+  return /Mac|iPhone|iPad/i.test(
+    `${navigator.platform} ${navigator.userAgent}`,
+  );
 }
 
 export function SearchField({
