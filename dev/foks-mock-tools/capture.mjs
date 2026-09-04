@@ -48,13 +48,20 @@ const CHROME =
 const steps = stepsFile ? JSON.parse(await readFile(stepsFile, 'utf8')) : [];
 /* The mockup page pads the body 20px each side, so a 1320px viewport gives
    its #frame the app's exact 1280×860; the app itself is shot at 1280. */
-const width = Number(process.env.WIDTH ?? (url.includes('app-foks') ? 1320 : 1280));
+const width = Number(
+  process.env.WIDTH ?? (url.includes('app-foks') ? 1320 : 1280),
+);
 const height = Number(process.env.HEIGHT ?? 860);
 
-const browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox'] });
+const browser = await chromium.launch({
+  executablePath: CHROME,
+  args: ['--no-sandbox'],
+});
 const page = await browser.newPage({ viewport: { width, height } });
 const errors = [];
-page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
+page.on('console', (m) => {
+  if (m.type() === 'error') errors.push('console: ' + m.text());
+});
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
 await page.goto(url, { waitUntil: 'load' });
 await page.waitForTimeout(400);
@@ -71,19 +78,30 @@ async function byText(step) {
     const inFrame = page.locator('#frame').getByText(step.clickText, want);
     if (await inFrame.count()) return inFrame.first();
   }
-  if (hasFrame && step.deck) return page.locator('.mock-controls').getByText(step.clickText, want).first();
+  if (hasFrame && step.deck)
+    return page
+      .locator('.mock-controls')
+      .getByText(step.clickText, want)
+      .first();
   return page.getByText(step.clickText, want).first();
 }
 for (const step of steps) {
   if (step.click) await page.locator(step.click).first().click();
   else if (step.clickText) await (await byText(step)).click();
-  else if (step.fill) await page.locator(step.fill).first().fill(step.value ?? '');
+  else if (step.fill)
+    await page
+      .locator(step.fill)
+      .first()
+      .fill(step.value ?? '');
   else if (step.press) await page.keyboard.press(step.press);
   else if (step.hover) await page.locator(step.hover).first().hover();
   else if (step.wait) await page.waitForTimeout(step.wait);
   else if (step.waitFor) await page.waitForSelector(step.waitFor);
   else if (step.eval) await page.evaluate(step.eval);
-  else if (step.hash) await page.evaluate((h) => { location.hash = h; }, step.hash);
+  else if (step.hash)
+    await page.evaluate((h) => {
+      location.hash = h;
+    }, step.hash);
   else if (step.goto) await page.goto(step.goto, { waitUntil: 'load' });
   await page.waitForTimeout(step.settle ?? 150);
 }
@@ -96,15 +114,23 @@ else await page.screenshot({ path: out + '.png' });
    would answer in DOCUMENT order, which is always the outermost match. */
 const rootSel = process.env.ROOT ?? '#root, .frame, body';
 const html = await page.evaluate((sel) => {
-  const el = sel.split(',').map((s) => document.querySelector(s.trim())).find(Boolean) ?? document.body;
+  const el =
+    sel
+      .split(',')
+      .map((s) => document.querySelector(s.trim()))
+      .find(Boolean) ?? document.body;
   const overlays = document.querySelector('#overlays');
   /* …appended only when the dumped element does not already contain it (it
      does when ROOT is `.frame`, the mockup page's default). */
-  const extra = overlays && overlays.childElementCount && !el.contains(overlays)
-    ? '\n<!-- #overlays -->\n' + overlays.outerHTML : '';
+  const extra =
+    overlays && overlays.childElementCount && !el.contains(overlays)
+      ? '\n<!-- #overlays -->\n' + overlays.outerHTML
+      : '';
   return el.outerHTML + extra;
 }, rootSel);
 await writeFile(out + '.html', html);
 if (errors.length) console.error(errors.join('\n'));
-console.log(`wrote ${out}.png and ${out}.html (${html.length} chars)${errors.length ? ` with ${errors.length} error(s)` : ''}`);
+console.log(
+  `wrote ${out}.png and ${out}.html (${html.length} chars)${errors.length ? ` with ${errors.length} error(s)` : ''}`,
+);
 await browser.close();

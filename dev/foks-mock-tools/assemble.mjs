@@ -16,7 +16,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const PARTS = resolve(here, '../foks-mock-parts');
 const OUT = resolve(here, '../app-foks.html');
 
-const names = (await readdir(PARTS)).filter((n) => /\.(html|js)$/.test(n)).sort();
+const names = (await readdir(PARTS))
+  .filter((n) => /\.(html|js)$/.test(n))
+  .sort();
 let out = '';
 for (const name of names) {
   const text = await readFile(resolve(PARTS, name), 'utf8');
@@ -28,4 +30,6 @@ for (const name of names) {
   }
 }
 await writeFile(OUT, out);
-console.log(`assembled ${names.length} parts into ${OUT} (${out.split('\n').length} lines)`);
+console.log(
+  `assembled ${names.length} parts into ${OUT} (${out.split('\n').length} lines)`,
+);

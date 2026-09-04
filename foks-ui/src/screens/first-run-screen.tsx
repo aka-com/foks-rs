@@ -960,7 +960,9 @@ export function FirstRunExperience({
         return matches[0];
       }
       if (attempt < 4) {
-        await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+        await new Promise((resolve) =>
+          setTimeout(resolve, 200 * (attempt + 1)),
+        );
       }
     }
     throw new Error(
@@ -2134,9 +2136,7 @@ export function FirstRunExperience({
         foot={
           <Foot back={() => go(checkpoint.account ? 'protect' : existingBack)}>
             {checkpoint.account ? (
-              <Button onClick={() => go('protect')}>
-                Resume protection
-              </Button>
+              <Button onClick={() => go('protect')}>Resume protection</Button>
             ) : (
               <Button onClick={() => go('account')}>
                 I don’t have an account yet
@@ -2911,9 +2911,9 @@ export function FirstRunExperience({
               eyebrow="Save recovery phrase · skipped"
               title={`This Mac holds the only key to ${checkpoint.account?.username}`}
             >
-              Lose it and the account is gone — a passphrase, YubiKey or
-              17-word backup phrase is a second way in. Nothing else in the
-              list is blocked by this.
+              Lose it and the account is gone — a passphrase, YubiKey or 17-word
+              backup phrase is a second way in. Nothing else in the list is
+              blocked by this.
             </Notice>
           </div>
         ) : null}
@@ -2931,9 +2931,7 @@ export function FirstRunExperience({
         <Notice
           eyebrow={`${state === 'added' ? group : checkpoint.group?.name} · ${profile?.canonicalName}`}
           title={
-            state === 'added'
-              ? `You’re in ${group}`
-              : 'Your group is ready'
+            state === 'added' ? `You’re in ${group}` : 'Your group is ready'
           }
           actions={
             <>
@@ -2969,8 +2967,8 @@ export function FirstRunExperience({
                 ) : (
                   <>
                     You have been added to this group as{' '}
-                    <code>{checkpoint.account?.username}</code>. The items
-                    below are what this Mac can read now.
+                    <code>{checkpoint.account?.username}</code>. The items below
+                    are what this Mac can read now.
                   </>
                 )}
               </p>
@@ -3001,7 +2999,8 @@ export function FirstRunExperience({
             <Icon name="key" />
             <h2>No items here</h2>
             <p>
-              Members can view items allowed by their role. Start by adding your first item.
+              Members can view items allowed by their role. Start by adding your
+              first item.
             </p>
             <Button onClick={() => onNavigate({ kind: 'all' })}>New</Button>
           </div>

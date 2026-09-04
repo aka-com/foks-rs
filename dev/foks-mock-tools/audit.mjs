@@ -22,7 +22,10 @@ const base = process.argv[2] ?? 'http://localhost:8133/dev/app-foks.html';
 const CHROME =
   process.env.FOKS_CHROMIUM ??
   '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
-const browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox'] });
+const browser = await chromium.launch({
+  executablePath: CHROME,
+  args: ['--no-sandbox'],
+});
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 const errors = [];
 /* The page links ui/kit/tokens.css, which is not in this repo, and the browser
@@ -41,9 +44,19 @@ await page.waitForTimeout(300);
 
 const report = await page.evaluate(() => {
   const M = window.FOKS_MOCK;
-  const out = { flows: [], steps: 0, badPage: [], undeclared: [], unlit: [], pages: [], chipClash: [] };
+  const out = {
+    flows: [],
+    steps: 0,
+    badPage: [],
+    undeclared: [],
+    unlit: [],
+    pages: [],
+    chipClash: [],
+  };
   const appKeys = new Set(M.appGroups.map((g) => g.key));
-  const appValues = new Map(M.appGroups.map((g) => [g.key, new Set(g.values.map((v) => String(v.v)))]));
+  const appValues = new Map(
+    M.appGroups.map((g) => [g.key, new Set(g.values.map((v) => String(v.v)))]),
+  );
   for (const id of M.flowOrder) {
     const flow = M.flows.find((f) => f.id === id);
     out.flows.push({ id, group: flow.group ?? null, steps: flow.steps.length });
@@ -51,19 +64,35 @@ const report = await page.evaluate(() => {
       out.steps += 1;
       M.startFlow(id, i);
       const where = `${id}#${i + 1} ${st.label}`;
-      if (M.s.page !== st.page) out.badPage.push(`${where}: wanted ${st.page}, got ${M.s.page}`);
-      const declared = new Set((M.pages[M.s.page]?.controls ?? []).map((g) => g.key));
+      if (M.s.page !== st.page)
+        out.badPage.push(`${where}: wanted ${st.page}, got ${M.s.page}`);
+      const declared = new Set(
+        (M.pages[M.s.page]?.controls ?? []).map((g) => g.key),
+      );
       (M.pages[M.s.page]?.keeps ?? []).forEach((k) => declared.add(k));
-      const groups = new Map((M.pages[M.s.page]?.controls ?? []).map((g) => [g.key, g]));
+      const groups = new Map(
+        (M.pages[M.s.page]?.controls ?? []).map((g) => [g.key, g]),
+      );
       for (const key of Object.keys(st.set ?? {})) {
         const val = String(st.set[key]);
         if (appKeys.has(key)) {
-          if (!appValues.get(key).has(val)) out.unlit.push(`${where}: ${key}=${val} is not a declared app value`);
+          if (!appValues.get(key).has(val))
+            out.unlit.push(
+              `${where}: ${key}=${val} is not a declared app value`,
+            );
           continue;
         }
-        if (!key.startsWith('v.')) { out.undeclared.push(`${where}: ${key} is not an app key`); continue; }
+        if (!key.startsWith('v.')) {
+          out.undeclared.push(`${where}: ${key} is not an app key`);
+          continue;
+        }
         const bare = key.slice(2);
-        if (!declared.has(bare)) { out.undeclared.push(`${where}: v.${bare} not in ${M.s.page}.controls`); continue; }
+        if (!declared.has(bare)) {
+          out.undeclared.push(
+            `${where}: v.${bare} not in ${M.s.page}.controls`,
+          );
+          continue;
+        }
         /* A value no chip in the group carries: the deck shows it as a
            `custom` chip, which is right for free text (a draft, a name being
            typed) and wrong for anything the group means to enumerate. */
@@ -71,27 +100,42 @@ const report = await page.evaluate(() => {
         /* `applied` is comma-joinable (README, "the shared vocabulary"), so a
            step may set two tokens the group only declares one at a time. */
         const parts = bare === 'applied' ? val.split(',') : [val];
-        if (g && val !== '' && !g.freeText && !parts.every((v) => g.values.some((o) => String(o.v) === v))) {
-          out.unlit.push(`${where}: v.${bare}=${val} lights no chip in ${M.s.page}.${bare}`);
+        if (
+          g &&
+          val !== '' &&
+          !g.freeText &&
+          !parts.every((v) => g.values.some((o) => String(o.v) === v))
+        ) {
+          out.unlit.push(
+            `${where}: v.${bare}=${val} lights no chip in ${M.s.page}.${bare}`,
+          );
         }
       }
     });
   }
   M.stopFlow();
   for (const id of M.pageOrder) {
-    try { M.go(id); out.pages.push(id); } catch (e) { out.pages.push(`${id}: THREW ${e.message}`); }
+    try {
+      M.go(id);
+      out.pages.push(id);
+    } catch (e) {
+      out.pages.push(`${id}: THREW ${e.message}`);
+    }
   }
   /* Deck chip labels vs in-frame BUTTON text — capture.mjs clickText hits the first
      DOM match, and the deck is above the frame. Step buttons are excluded: they
      are numbered circles now, so their only text is an integer. */
   M.go(M.pageOrder[0]);
   const deck = new Set(
-    [...document.querySelectorAll('.mock-controls .mock-chip')]
-      .map((el) => el.textContent.trim()),
+    [...document.querySelectorAll('.mock-controls .mock-chip')].map((el) =>
+      el.textContent.trim(),
+    ),
   );
   for (const id of M.pageOrder) {
     M.go(id);
-    for (const el of document.querySelectorAll('#win button, #overlays button, #win a')) {
+    for (const el of document.querySelectorAll(
+      '#win button, #overlays button, #win a',
+    )) {
       const t = el.textContent.trim();
       if (t && deck.has(t)) out.chipClash.push(`${id}: “${t}”`);
     }

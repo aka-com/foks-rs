@@ -58,7 +58,8 @@ export function Button({
   type = 'button',
   ...rest
 }: ButtonProps): ReactNode {
-  const isDanger = danger || variant === 'danger' || className?.includes('danger');
+  const isDanger =
+    danger || variant === 'danger' || className?.includes('danger');
   const variantClass = variant === 'danger' ? '' : VARIANT_CLASS[variant];
   const classes = [
     'btn',

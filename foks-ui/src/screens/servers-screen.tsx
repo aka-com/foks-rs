@@ -1310,7 +1310,10 @@ function ResetSheet({
         </>
       ) : resetError ? (
         <div style={{ margin: '16px 0' }}>
-          <p className="hint" style={{ color: 'var(--red, #e5484d)', marginBottom: '8px' }}>
+          <p
+            className="hint"
+            style={{ color: 'var(--red, #e5484d)', marginBottom: '8px' }}
+          >
             Failed to load reset preview: {resetError}
           </p>
           <Button disabled={resetLoading} onClick={onRetryPreview}>

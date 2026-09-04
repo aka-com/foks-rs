@@ -83,9 +83,9 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
   );
   const [loaded, setLoaded] = useState<World | null>(() => world ?? null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [firstRunStart, setFirstRunStart] = useState<
-    'who' | 'local' | null
-  >(null);
+  const [firstRunStart, setFirstRunStart] = useState<'who' | 'local' | null>(
+    null,
+  );
   const [managedProfile, setManagedProfile] = useState<string | null>(null);
   const [lockState, setLockState] = useState<AppLockState | null>(null);
   const [lockError, setLockError] = useState<string | null>(null);
@@ -379,23 +379,26 @@ function VaultShell({
   // that was already running against the old catalog.
   const refreshWorldInFlight = useRef<Promise<World> | null>(null);
   const refreshWorldGeneration = useRef(0);
-  const refreshWorld = useCallback((force = false): Promise<World> => {
-    if (force) refreshWorldInFlight.current = null;
-    if (!refreshWorldInFlight.current) {
-      const generation = ++refreshWorldGeneration.current;
-      const pending = loadWorld(bridge)
-        .then((next) => {
-          if (generation === refreshWorldGeneration.current) setLatest(next);
-          return next;
-        })
-        .finally(() => {
-          if (refreshWorldInFlight.current === pending)
-            refreshWorldInFlight.current = null;
-        });
-      refreshWorldInFlight.current = pending;
-    }
-    return refreshWorldInFlight.current;
-  }, [bridge]);
+  const refreshWorld = useCallback(
+    (force = false): Promise<World> => {
+      if (force) refreshWorldInFlight.current = null;
+      if (!refreshWorldInFlight.current) {
+        const generation = ++refreshWorldGeneration.current;
+        const pending = loadWorld(bridge)
+          .then((next) => {
+            if (generation === refreshWorldGeneration.current) setLatest(next);
+            return next;
+          })
+          .finally(() => {
+            if (refreshWorldInFlight.current === pending)
+              refreshWorldInFlight.current = null;
+          });
+        refreshWorldInFlight.current = pending;
+      }
+      return refreshWorldInFlight.current;
+    },
+    [bridge],
+  );
 
   const refresh = useCallback(
     async (message: string): Promise<void> => {
