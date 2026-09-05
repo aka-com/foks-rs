@@ -356,7 +356,10 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
             &mut mutations,
         )?;
-        let tree = session.sync()?;
+        let tree = match precondition {
+            KvMutationPrecondition::Create => session.ensure_root(Role::OWNER, Role::OWNER)?,
+            KvMutationPrecondition::ExactVersion(_) => session.sync()?,
+        };
         let (parent, tree) = resolve_write_parent(
             &mut session,
             tree,
@@ -582,7 +585,7 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
             &mut mutations,
         )?;
-        let tree = session.sync()?;
+        let tree = session.ensure_root(Role::OWNER, Role::OWNER)?;
         let (parent, _tree) = resolve_write_parent(
             &mut session,
             tree,
@@ -636,7 +639,7 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
             &mut mutations,
         )?;
-        let tree = session.sync()?;
+        let tree = session.ensure_root(Role::OWNER, Role::OWNER)?;
         let (parent, _tree) = resolve_write_parent(
             &mut session,
             tree,
@@ -1001,10 +1004,8 @@ pub struct KvCatalogReport {
 
 impl KvCatalogReport {
     pub(super) fn from_tree(tree: &[KvDirectoryProjection]) -> Result<Self> {
-        let snapshot_version = tree
-            .first()
-            .ok_or(Error::InvalidKvPath("KV projection has no root"))?
-            .root_version;
+        // Zero denotes the not-yet-created namespace; real roots start at one.
+        let snapshot_version = tree.first().map_or(0, |root| root.root_version);
         Ok(Self {
             snapshot_version,
             entries: flatten_catalog_tree(tree)?,
@@ -1334,6 +1335,9 @@ fn optional_entry<'a>(
 fn flatten_tree(tree: &[KvDirectoryProjection]) -> Result<Vec<KvEntrySummary>> {
     use std::collections::{BTreeSet, VecDeque};
 
+    if tree.is_empty() {
+        return Ok(Vec::new());
+    }
     let root = tree
         .first()
         .ok_or(Error::InvalidKvPath("KV projection has no root"))?
@@ -1389,6 +1393,9 @@ fn flatten_tree(tree: &[KvDirectoryProjection]) -> Result<Vec<KvEntrySummary>> {
 fn flatten_catalog_tree(tree: &[KvDirectoryProjection]) -> Result<Vec<KvCatalogEntry>> {
     use std::collections::{BTreeSet, VecDeque};
 
+    if tree.is_empty() {
+        return Ok(Vec::new());
+    }
     let root = tree
         .first()
         .ok_or(Error::InvalidKvPath("KV projection has no root"))?

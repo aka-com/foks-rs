@@ -2,13 +2,26 @@ use std::path::{Path, PathBuf};
 
 use foks_client_app::{
     derive_vault_key, AccountVault, ClientCredentials, CredentialBackend, KexAcceptanceInput,
-    Passphrase, Profile, ProfileRegistry, ProfileSession, ProtocolPolicy, TrustRoot,
+    KvMutationPrecondition, KvRoleSummary, Passphrase, Profile, ProfileRegistry, ProfileSession,
+    ProtocolPolicy, TrustRoot,
 };
 use foks_keystore::{EncryptedFileSecretStore, SecretStore as _};
 use foks_server_testkit::TestEnvironment;
 
 #[test]
 fn protected_product_workflow_pairs_two_machine_state_roots() {
+    paired_workflow(None);
+}
+
+#[test]
+fn paired_account_without_a_kv_root_lists_empty_and_initializes_on_first_write() {
+    // Check the desktop's versioned write, CLI upload, and mkdir entry points.
+    for first_write in 0..3 {
+        paired_workflow(Some(first_write));
+    }
+}
+
+fn paired_workflow(first_write: Option<u8>) {
     let environment = TestEnvironment::new().unwrap();
     let _server = environment.start_server().unwrap();
     let temporary = tempfile::tempdir().unwrap();
@@ -38,6 +51,12 @@ fn protected_product_workflow_pairs_two_machine_state_roots() {
                 &mut vault,
                 &master,
             )?;
+            if first_write.is_some() {
+                // Simulate the Go signup state before its first KV write. This
+                // database belongs exclusively to this disposable test server.
+                let db = rusqlite::Connection::open(environment.database_path()).unwrap();
+                assert_eq!(db.execute("DELETE FROM kv_roots", []).unwrap(), 1);
+            }
             session.start_owner_device_pairing("owner", &mut vault)
         })
         .unwrap();
@@ -113,6 +132,95 @@ fn protected_product_workflow_pairs_two_machine_state_roots() {
                     .user_chain_sequence,
                 2
             );
+            if let Some(first_write) = first_write {
+                let db = rusqlite::Connection::open(environment.database_path()).unwrap();
+                let root_count = || {
+                    db.query_row("SELECT count(*) FROM kv_roots", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap()
+                };
+                assert!(session.list_kv("owner", &mut vault)?.entries.is_empty());
+                let catalog = session.list_kv_metadata("owner", &mut vault)?;
+                assert!(catalog.entries.is_empty());
+                assert_eq!(catalog.snapshot_version, 0);
+                assert_eq!(root_count(), 0, "reads must not create a root");
+                assert!(session
+                    .put_kv_file_checked(
+                        "owner",
+                        "/missing",
+                        &mut &b"no overwrite"[..],
+                        KvMutationPrecondition::ExactVersion(1),
+                        KvRoleSummary::Owner,
+                        KvRoleSummary::Owner,
+                        false,
+                        &mut vault,
+                        &master,
+                    )
+                    .is_err());
+                assert_eq!(
+                    root_count(),
+                    0,
+                    "failed versioned update must not create a root"
+                );
+                match first_write {
+                    0 => {
+                        session.put_kv_file_checked(
+                            "owner",
+                            "/first",
+                            &mut &b"first value"[..],
+                            KvMutationPrecondition::Create,
+                            KvRoleSummary::Owner,
+                            KvRoleSummary::Owner,
+                            false,
+                            &mut vault,
+                            &master,
+                        )?;
+                    }
+                    1 => {
+                        session.put_kv_file(
+                            "owner",
+                            "/first",
+                            &mut &b"first value"[..],
+                            false,
+                            false,
+                            &mut vault,
+                            &master,
+                        )?;
+                    }
+                    _ => {
+                        session.mkdir_kv("owner", "/first", false, &mut vault, &master)?;
+                    }
+                }
+                assert_eq!(root_count(), 1);
+                assert_eq!(session.list_kv("owner", &mut vault)?.entries.len(), 1);
+                assert_eq!(
+                    session.list_kv_metadata("owner", &mut vault)?.entries.len(),
+                    1
+                );
+                if first_write < 2 {
+                    assert_eq!(
+                        session.read_kv_file("owner", "/first", &mut vault)?,
+                        b"first value"
+                    );
+                }
+                // A namespace already observed by this client cannot silently
+                // turn into a new, empty namespace after server-side data loss.
+                assert_eq!(db.execute("DELETE FROM kv_roots", []).unwrap(), 1);
+                assert!(session.sync_account("owner", &mut vault).is_err());
+                assert!(session
+                    .put_kv_file(
+                        "owner",
+                        "/replacement",
+                        &mut &b"no"[..],
+                        false,
+                        false,
+                        &mut vault,
+                        &master
+                    )
+                    .is_err());
+                assert_eq!(root_count(), 0);
+            }
             assert_eq!(
                 session
                     .verify_passphrase(

@@ -5086,6 +5086,19 @@ mod tests {
                 account_alias: "personal".to_owned(),
             },
         };
+        let empty = paginate_catalog(
+            &foks_client_app::KvCatalogReport {
+                snapshot_version: 0,
+                entries: Vec::new(),
+            },
+            store.clone(),
+            None,
+            2,
+        )
+        .unwrap();
+        assert_eq!(empty.snapshot_version, 0);
+        assert!(empty.entries.is_empty());
+        assert!(empty.next_cursor.is_none());
         let report = foks_client_app::KvCatalogReport {
             snapshot_version: 7,
             entries: (0..3)

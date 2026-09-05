@@ -610,7 +610,20 @@ impl FoksClient {
                 // cannot prove that a peer did not add an uncited entry. A
                 // complete namespace projection therefore requires a fresh
                 // traversal; the final cache check below still closes races.
-                let root_bytes = fetch(auth, &KvRequest::Root)?;
+                let root_bytes = match fetch(auth, &KvRequest::Root) {
+                    Ok(bytes) => bytes,
+                    Err(error @ Error::Rpc(foks_rpc::Error::RemoteStatus { code: 8016, .. })) => {
+                        // Go accounts may not have written their first item yet.
+                        // Only absence of the root itself means an empty store;
+                        // missing descendants and disappearance of a known root
+                        // remain errors. Reads never create a namespace.
+                        if store.has_kv_root(party.host.as_bytes(), party.party.as_bytes())? {
+                            return Err(error);
+                        }
+                        return Ok(Vec::new());
+                    }
+                    Err(error) => return Err(error),
+                };
                 let root = KvRoot::decode(&root_bytes)?;
                 let mut queue = VecDeque::from([root.root]);
                 if root.version == 0 {

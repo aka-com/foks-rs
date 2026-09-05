@@ -846,6 +846,16 @@ impl SoftStateStore {
         Ok(())
     }
 
+    /// Whether this cache has ever accepted a root for the party, including
+    /// roots whose directory projection has since been invalidated.
+    pub fn has_kv_root(&self, host_id: &[u8], party_id: &[u8]) -> Result<bool> {
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM kv_parties WHERE host_id = ?1 AND party_id = ?2)",
+            params![host_id, party_id],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Reconstructs the exact cache precondition from durable projected
     /// versions. Returning `None` means this party has no complete cache.
     pub fn version_vector(
@@ -1473,6 +1483,35 @@ mod tests {
             directory_bytes: vec![6],
             entries: vec![entry(1, b"a"), entry(2, b"b")],
         }
+    }
+
+    #[test]
+    fn observed_root_survives_directory_cache_invalidation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut store = SoftStateStore::open(&temporary.path().join("soft.sqlite3")).unwrap();
+        let projection = snapshot();
+        assert!(!store
+            .has_kv_root(&projection.host_id, &projection.party_id)
+            .unwrap());
+        store.project_directory(&projection).unwrap();
+        store
+            .invalidate_directories(
+                &projection.host_id,
+                &projection.party_id,
+                &[projection.directory_id],
+            )
+            .unwrap();
+        assert!(store
+            .tree(&projection.host_id, &projection.party_id)
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .version_vector(&projection.host_id, &projection.party_id)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .has_kv_root(&projection.host_id, &projection.party_id)
+            .unwrap());
     }
 
     #[test]

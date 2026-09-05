@@ -27,6 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/foks-client/test_hosted_canary.py
+          cargo test --locked -p foks-client-app --test kex_lifecycle
           cargo test --locked -p foks-cli --test onboarding_canary
           cargo build --locked --release -p foks-cli -p foks-compat-artifact
           root="$RUNNER_TEMP/foks-canary-tools"
