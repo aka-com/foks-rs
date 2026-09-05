@@ -468,6 +468,104 @@ mod tests {
     }
 
     #[test]
+    fn only_a_missing_root_is_an_empty_namespace() {
+        let fixture = |name: &str| {
+            std::fs::read(format!(
+                "../foks-snowpack/tests/fixtures/foks-v0.1.9/user/{name}"
+            ))
+            .unwrap()
+        };
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let hard_path = temporary.path().join("hard.sqlite3");
+        HardStateStore::open(&hard_path)
+            .unwrap()
+            .accept_verified_host(&public.snapshot)
+            .unwrap();
+        let client = FoksClient::webpki();
+        let host = client.pinned_host("foks.app", &hard_path).unwrap();
+        let Value::Binary(team) = decode(&fixture("team-id.snowp")).unwrap() else {
+            panic!("invalid team fixture");
+        };
+        let party = KvParty {
+            party: EntityId::from_bytes(team).unwrap(),
+            host: host.host_id.clone(),
+        };
+        let seed = SecretSeed::new(fixture("team-ptk-member-min-seed.bin").try_into().unwrap());
+        let keys = [KvPrivateKeyRef {
+            role: Role::member(-16_384),
+            generation: 1,
+            seed: &seed,
+        }];
+        let remote = |status: foks_rpc::RpcStatus| {
+            let frame = foks_rpc::encode_status_response_at(&status, 1).unwrap();
+            Error::Rpc(
+                foks_rpc::read_response(
+                    &mut std::io::Cursor::new(frame),
+                    foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
+                    1,
+                )
+                .unwrap_err(),
+            )
+        };
+        for metadata in [false, true] {
+            for (name, code, missing_child) in [
+                ("missing", 8016, false),
+                ("denied", 8011, false),
+                ("child", 8016, true),
+            ] {
+                let path = temporary.path().join(format!("{metadata}-{name}.sqlite3"));
+                let mut calls = 0;
+                let fetch = |_: KvAuth<'_>, request: &KvRequest| {
+                    calls += 1;
+                    if missing_child && matches!(request, KvRequest::Root) {
+                        Ok(fixture("kv-root.snowp"))
+                    } else if code == 8016 {
+                        Err(remote(foks_rpc::RpcStatus::KvNoEnt))
+                    } else {
+                        Err(remote(foks_rpc::RpcStatus::KvPermission {
+                            operation: 1,
+                            resource: 1,
+                        }))
+                    }
+                };
+                let result = if metadata {
+                    client.list_kv_metadata_with_fetch(
+                        &host,
+                        party.clone(),
+                        KvAuth::User,
+                        &keys,
+                        &path,
+                        fetch,
+                    )
+                } else {
+                    client.sync_kv_with_fetch(
+                        &host,
+                        party.clone(),
+                        KvAuth::User,
+                        &keys,
+                        &path,
+                        fetch,
+                    )
+                };
+                if code == 8016 && !missing_child {
+                    assert!(result.unwrap().is_empty());
+                    assert_eq!(calls, 1);
+                } else {
+                    assert!(
+                        matches!(result, Err(Error::Rpc(foks_rpc::Error::RemoteStatus { code: actual, .. })) if actual == code)
+                    );
+                    assert_eq!(calls, if missing_child { 2 } else { 1 });
+                }
+                assert!(!SoftStateStore::open(&path)
+                    .unwrap()
+                    .has_kv_root(party.host.as_bytes(), party.party.as_bytes())
+                    .unwrap());
+            }
+        }
+    }
+
+    #[test]
     fn official_kv_transcript_projects_without_network_or_interactivity() {
         let fixture = |name: &str| {
             std::fs::read(format!(

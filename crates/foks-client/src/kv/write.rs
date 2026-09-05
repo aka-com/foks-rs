@@ -75,19 +75,17 @@ impl KvWriteSession<'_> {
         self.put_root_journaled(KvRoot::new(id, 1, key, binding_mac)?)
     }
 
-    /// Returns the existing namespace or creates it when `kvGetRoot` reports
-    /// the exact v0.1.9 `KV_NOENT_ERROR`. Other failures are never converted
-    /// into writes.
+    /// Returns the existing namespace or initializes the empty projection
+    /// produced by an absent, never-observed root. Sync errors (including a
+    /// missing descendant or disappearance of a known root) never cause writes.
     pub fn ensure_root(
         &mut self,
         read_role: Role,
         write_role: Role,
     ) -> Result<Vec<KvDirectoryProjection>> {
         match self.sync() {
+            Ok(projection) if projection.is_empty() => self.initialize_root(read_role, write_role),
             Ok(projection) => Ok(projection),
-            Err(Error::Rpc(foks_rpc::Error::RemoteStatus { code: 8016, .. })) => {
-                self.initialize_root(read_role, write_role)
-            }
             Err(error) => Err(error),
         }
     }

@@ -107,7 +107,25 @@ pub(crate) fn kv_large_success() {
     session
         .put_file(root, "large.bin", &mut Cursor::new(&content), options)
         .unwrap();
-    let tree = session.sync().unwrap();
+    let metadata = session.sync().unwrap();
+    let entry = metadata[0]
+        .entries
+        .iter()
+        .find(|entry| entry.name == b"large.bin")
+        .unwrap();
+    assert!(entry.large_file_size.is_none());
+    drop(session);
+    let tree = fixture
+        .client
+        .foks()
+        .sync_user_kv(
+            fixture.host(),
+            &created.credential,
+            &created.authenticated.verified,
+            &created.authenticated.puks,
+            fixture.client.soft_state_path(),
+        )
+        .unwrap();
     let entry = tree[0]
         .entries
         .iter()
@@ -115,7 +133,6 @@ pub(crate) fn kv_large_success() {
         .unwrap();
     assert_eq!(entry.large_file_size, Some(content.len() as u64));
     let node_id = entry.node_id;
-    drop(session);
 
     let store = SoftStateStore::open(fixture.client.soft_state_path()).unwrap();
     let mut read_back = Vec::new();
@@ -173,8 +190,23 @@ fn large_file_cutoff_and_chunk_boundaries_stream_exactly() {
             .put_file(root, name, &mut PatternReader::new(size, seed), options)
             .unwrap();
     }
-    let tree = session.sync().unwrap();
+    let metadata = session.sync().unwrap();
+    assert!(metadata[0]
+        .entries
+        .iter()
+        .all(|entry| entry.large_file_size.is_none()));
     drop(session);
+    let tree = fixture
+        .client
+        .foks()
+        .sync_user_kv(
+            fixture.host(),
+            &created.credential,
+            &created.authenticated.verified,
+            &created.authenticated.puks,
+            fixture.client.soft_state_path(),
+        )
+        .unwrap();
     let store = SoftStateStore::open(fixture.client.soft_state_path()).unwrap();
     for (name, size, seed) in cases {
         let entry = tree[0]
@@ -293,11 +325,22 @@ fn interrupted_upload_is_hidden_across_restart_and_a_fresh_retry_succeeds() {
             options,
         )
         .unwrap();
-    let tree = retry.sync().unwrap();
-    assert_eq!(tree[0].entries.len(), 1);
+    let metadata = retry.sync().unwrap();
+    assert_eq!(metadata[0].entries.len(), 1);
+    assert!(metadata[0].entries[0].large_file_size.is_none());
+    drop(retry);
+    let tree = reconstructed
+        .foks()
+        .sync_user_kv(
+            &probe.pinned,
+            &created.credential,
+            &authenticated.verified,
+            &authenticated.puks,
+            reconstructed.soft_state_path(),
+        )
+        .unwrap();
     assert_eq!(tree[0].entries[0].large_file_size, Some(retry_size as u64));
     let retry_node = tree[0].entries[0].node_id;
-    drop(retry);
     let store = SoftStateStore::open(reconstructed.soft_state_path()).unwrap();
     let mut digest = DigestWriter::default();
     assert_eq!(

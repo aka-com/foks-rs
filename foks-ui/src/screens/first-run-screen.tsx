@@ -728,7 +728,6 @@ export function FirstRunExperience({
   );
   const [goChooserDismissed, setGoChooserDismissed] = useState(false);
   const [goScanError, setGoScanError] = useState<string | null>(null);
-  const goScanStarted = useRef(false);
   const [recoveryAlias, setRecoveryAlias] = useState(
     () => checkpoint.account?.alias ?? facts?.accountAlias ?? '',
   );
@@ -786,14 +785,8 @@ export function FirstRunExperience({
   }, [bridge, checkpoint.account?.deviceName, facts?.deviceName]);
 
   useEffect(() => {
-    if (
-      checkpoint.state !== 'who' ||
-      !bridge.native ||
-      goChooserDismissed ||
-      goScanStarted.current
-    )
+    if (checkpoint.state !== 'who' || !bridge.native || goChooserDismissed)
       return;
-    goScanStarted.current = true;
     let alive = true;
     setGoScanError(null);
     void bridge
@@ -1146,6 +1139,10 @@ export function FirstRunExperience({
             address.trim(),
           )
         : await bridge.checkAndAddProfile(profileName, address.trim());
+      if (goCandidate && report.hostId !== goCandidate.hostId)
+        throw new Error(
+          'The checked server does not match the selected CLI profile.',
+        );
       send({
         type: 'profile-checked',
         address: address.trim(),
@@ -1809,7 +1806,7 @@ export function FirstRunExperience({
               <input
                 aria-label="Server address"
                 value={address}
-                placeholder="e.g. foks.example.net, localhost, etc."
+                placeholder="e.g. foks.app:4430"
                 onChange={(event) => {
                   setAddress(event.target.value);
                   if (addressInvalid) setAddressInvalid(false);
@@ -1818,6 +1815,15 @@ export function FirstRunExperience({
             </span>
           </label>
         </Inset>
+        <Button
+          disabled={busy}
+          onClick={() => {
+            setAddress('foks.app:4430');
+            setAddressInvalid(false);
+          }}
+        >
+          Use official FOKS server
+        </Button>
         {checkpoint.returning ? (
           <p className="hint">
             <b>You already have an account on this server.</b> Nothing new is
@@ -1903,7 +1909,7 @@ export function FirstRunExperience({
           >
             <input
               value={address}
-              placeholder="e.g. foks.example.net, localhost, etc."
+              placeholder="e.g. foks.app:4430"
               spellCheck={false}
               onChange={(event) => setAddress(event.target.value)}
             />
@@ -2227,7 +2233,9 @@ export function FirstRunExperience({
                 </CopyBox>
                 <p>
                   Confirm the account, paste its key-exchange code below, and
-                  leave the command running until this Mac connects.
+                  leave the command running until this Mac connects. If the CLI
+                  asks for this Mac’s code after it connects, submit an empty
+                  response to let the pairing wait finish.
                 </p>
               </>
             ) : (
@@ -3057,22 +3065,26 @@ export function FirstRunExperience({
           checkpoint={checkpoint}
           pendingPath={pendingPath}
           onAnotherServer={
-            checkpoint.managedLocal && !checkpoint.account
+            !busy && checkpoint.managedLocal && !checkpoint.account
               ? () => send({ type: 'choose', path: 'own' })
               : undefined
           }
           onRecoverAccount={
-            checkpoint.managedLocal && !checkpoint.account
+            !busy && checkpoint.managedLocal && !checkpoint.account
               ? () => selectManagedProfile(true)
               : undefined
           }
           recoverEnabled={Boolean(managedReport)}
           onCancel={
-            canCancelSetup ? () => onNavigate({ kind: 'all' }) : undefined
+            !busy && canCancelSetup
+              ? () => onNavigate({ kind: 'all' })
+              : undefined
           }
         />
       )}
-      <main className="main first-run-main">{content}</main>
+      <main className="main first-run-main" inert={busy} aria-busy={busy}>
+        {content}
+      </main>
       {state === 'added' ? (
         <AddedDetails world={world} storeId={addedStore} />
       ) : null}

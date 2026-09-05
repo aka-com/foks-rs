@@ -29,14 +29,14 @@ impl CheckedProfileSession<'_> {
             return Err(Error::AccountExists);
         }
         let invite_code = InviteCode::from_user_input(invite, true)?;
-        let pending = PendingSignup::random(alias, username)?;
-        vault.put_pending(&pending)?;
         let host = self.pinned_host()?;
+        let pending = PendingSignup::random(alias, username)?;
         let mut mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
         )?;
-        let created = self.client.create_software_account(
+        vault.put_pending(&pending)?;
+        let result = self.client.create_software_account(
             &host,
             SoftwareAccountRequest {
                 username_utf8: username.to_owned(),
@@ -48,7 +48,22 @@ impl CheckedProfileSession<'_> {
             pending.secrets()?,
             &self.paths.soft_database,
             &mut mutations,
-        )?;
+        );
+        let created = match result {
+            Ok(created) => created,
+            Err(error) => {
+                // Only discard an alias when the durable journal proves that
+                // signup never reached submission. An ambiguous server result
+                // must retain its original keys and exact retry material.
+                if pending
+                    .journal_operation(&host, &self.paths.hard_database)?
+                    .is_none()
+                {
+                    vault.remove_pending_signup(alias)?;
+                }
+                return Err(error.into());
+            }
+        };
         vault.commit_created(alias, username, &created.credential)?;
         self.register_default_refresh_jobs_for(&created.credential.uid, now_microseconds()?)?;
         MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
@@ -64,7 +79,7 @@ impl CheckedProfileSession<'_> {
         master_key: &[u8; 32],
     ) -> Result<SyncReport> {
         self.profile.require(Capability::Signup)?;
-        if vault.contains(alias)? {
+        if vault.account_record_exists(alias)? {
             let loaded = vault.account(alias)?;
             let device = derive_device_public(&loaded.credential.seed)?;
             if let Some(operation) = HardStateStore::open(&self.paths.hard_database)?
@@ -87,20 +102,21 @@ impl CheckedProfileSession<'_> {
         }
         let pending = vault.pending(alias)?;
         let host = self.pinned_host()?;
-        let mut uid =
-            derive_shared_verify_key(&SecretSeed::new(pending.puk_seed), ENTITY_PUK_VERIFY)?
-                .into_bytes();
-        uid[0] = ENTITY_USER;
-        let uid = EntityId::from_bytes(uid)?;
-        let device = derive_device_public(&SecretSeed::new(pending.device_seed))?;
+        let Some(operation) = pending.journal_operation(&host, &self.paths.hard_database)? else {
+            // A crash during preflight can leave only the protected seeds.
+            // No journal means signup could not have been sent to the server.
+            vault.remove_pending_signup(alias)?;
+            return Err(Error::InvalidAccount(
+                "signup stopped before submission; create the account again with this alias",
+            ));
+        };
         let mut mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
         )?;
-        let created = self.client.resume_software_account_for_credential(
+        let created = self.client.resume_software_account(
             &host,
-            &uid,
-            &device.id,
+            operation.operation_id,
             &self.paths.soft_database,
             &mut mutations,
         )?;
@@ -270,14 +286,14 @@ impl CheckedProfileSession<'_> {
             return Err(Error::AccountExists);
         }
         let source = vault.account(source_alias)?;
-        let pending = PendingDevice::random(source_alias, target_alias, &source.username, serial)?;
-        vault.put_pending_device(&pending)?;
         let host = self.pinned_host()?;
+        let pending = PendingDevice::random(source_alias, target_alias, &source.username, serial)?;
         let mut mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
         )?;
-        let provisioned = self.client.provision_software_device(
+        vault.put_pending_device(&pending)?;
+        let result = self.client.provision_software_device(
             &host,
             &source.credential,
             SoftwareDeviceProvisionRequest {
@@ -287,7 +303,25 @@ impl CheckedProfileSession<'_> {
             },
             pending.secrets(),
             &mut mutations,
-        )?;
+        );
+        let provisioned = match result {
+            Ok(provisioned) => provisioned,
+            Err(error) => {
+                let device = derive_device_public(&SecretSeed::new(pending.device_seed))?;
+                if HardStateStore::open(&self.paths.hard_database)?
+                    .latest_mutation_for_binding(
+                        host.host_id().as_bytes(),
+                        MutationKind::DeviceProvision,
+                        source.credential.uid.as_bytes(),
+                        device.id.as_bytes(),
+                    )?
+                    .is_none()
+                {
+                    vault.remove_pending_device(target_alias)?;
+                }
+                return Err(error.into());
+            }
+        };
         vault.commit_created(target_alias, &source.username, &provisioned.credential)?;
         self.register_default_refresh_jobs_for(&provisioned.credential.uid, now_microseconds()?)?;
         if let Some(operation_id) = provisioned.operation_id {
@@ -311,7 +345,7 @@ impl CheckedProfileSession<'_> {
         master_key: &[u8; 32],
     ) -> Result<DeviceProvisionReport> {
         self.profile.require(Capability::DeviceAdministration)?;
-        if vault.contains(target_alias)? {
+        if vault.account_record_exists(target_alias)? {
             let target = vault.account(target_alias)?;
             let host = self.pinned_host()?;
             let device = derive_device_public(&target.credential.seed)?;
@@ -346,17 +380,19 @@ impl CheckedProfileSession<'_> {
         let host = self.pinned_host()?;
         let device_seed = SecretSeed::new(pending.device_seed);
         let device = derive_device_public(&device_seed)?;
-        let operation = HardStateStore::open(&self.paths.hard_database)?
-            .pending_mutations(host.host_id().as_bytes())?
-            .into_iter()
-            .find(|operation| {
-                operation.kind == MutationKind::DeviceProvision
-                    && operation.scope_id == source.credential.uid.as_bytes()
-                    && operation.subject_id == device.id.as_bytes()
-            })
-            .ok_or(Error::InvalidAccount(
-                "pending device provision has no matching journal operation",
-            ))?;
+        let Some(operation) = HardStateStore::open(&self.paths.hard_database)?
+            .latest_mutation_for_binding(
+                host.host_id().as_bytes(),
+                MutationKind::DeviceProvision,
+                source.credential.uid.as_bytes(),
+                device.id.as_bytes(),
+            )?
+        else {
+            vault.remove_pending_device(target_alias)?;
+            return Err(Error::InvalidAccount(
+                "device provisioning stopped before submission; provision again with this alias",
+            ));
+        };
         let mut mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
@@ -1233,6 +1269,23 @@ struct StoredBackup {
     backup_id: Vec<u8>,
 }
 impl PendingSignup {
+    fn journal_operation(
+        &self,
+        host: &foks_client::PinnedHost,
+        database: &Path,
+    ) -> Result<Option<foks_client_db::MutationOperation>> {
+        let mut uid = derive_shared_verify_key(&SecretSeed::new(self.puk_seed), ENTITY_PUK_VERIFY)?
+            .into_bytes();
+        uid[0] = ENTITY_USER;
+        let device = derive_device_public(&SecretSeed::new(self.device_seed))?;
+        Ok(HardStateStore::open(database)?.latest_mutation_for_binding(
+            host.host_id().as_bytes(),
+            MutationKind::Signup,
+            device.id.as_bytes(),
+            &uid,
+        )?)
+    }
+
     pub(super) fn random(alias: &str, username: &str) -> Result<Self> {
         let mut device_seed = [0u8; 32];
         let mut puk_seed = [0u8; 32];
@@ -1810,6 +1863,204 @@ mod tests {
     use super::*;
     use foks_keystore::EncryptedFileSecretStore;
     use foks_server_testkit::TestEnvironment;
+
+    struct InterruptAccountCommit {
+        inner: EncryptedFileSecretStore,
+        interrupt: bool,
+    }
+
+    impl SecretStore for InterruptAccountCommit {
+        fn put(&mut self, key: &str, value: &[u8]) -> foks_keystore::Result<()> {
+            if key.starts_with("account.") && std::mem::take(&mut self.interrupt) {
+                return Err(std::io::Error::other("interrupted credential commit").into());
+            }
+            self.inner.put(key, value)
+        }
+
+        fn get(&mut self, key: &str) -> foks_keystore::Result<Zeroizing<Vec<u8>>> {
+            self.inner.get(key)
+        }
+
+        fn remove(&mut self, key: &str) -> foks_keystore::Result<bool> {
+            self.inner.remove(key)
+        }
+
+        fn keys(&mut self) -> foks_keystore::Result<Vec<String>> {
+            self.inner.keys()
+        }
+    }
+
+    #[test]
+    fn onboarding_resumes_committed_signup_and_device_without_replacing_keys() {
+        let environment = TestEnvironment::new().unwrap();
+        let _server = environment.start_server().unwrap();
+        let state = environment
+            .client_path("onboarding-resume", "state")
+            .unwrap();
+        let root = environment
+            .client_path("onboarding-resume", "probe.der")
+            .unwrap();
+        environment.write_probe_root(&root).unwrap();
+        let credentials =
+            ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
+        let master = credentials.master_key().unwrap();
+        let mut registry = ProfileRegistry::open(&state).unwrap();
+        registry
+            .add(Profile {
+                name: "local".to_owned(),
+                probe: format!(
+                    "localhost:{}",
+                    environment.addresses().unwrap().probe.port()
+                ),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::CertificateDer { path: root },
+            })
+            .unwrap();
+        let session = ProfileSession::open(&registry, "local").unwrap();
+
+        credentials
+            .with_checked_session(&session, |session| {
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+                // A missing probe must not reserve an alias at all.
+                assert!(session
+                    .create_account(
+                        "owner",
+                        "resumeowner",
+                        "laptop",
+                        "",
+                        "",
+                        None,
+                        &mut vault,
+                        &master
+                    )
+                    .is_err());
+                assert!(!vault.contains("owner")?);
+                session.probe_and_pin()?;
+                // A failed server preflight must also leave the alias reusable.
+                assert!(session
+                    .create_account("owner", "!", "laptop", "", "", None, &mut vault, &master)
+                    .is_err());
+                assert!(!vault.contains("owner")?);
+                // Simulate a process exit between storing seeds and journaling.
+                vault.put_pending(&PendingSignup::random("owner", "resumeowner")?)?;
+                let error = session
+                    .resume_account("owner", &mut vault, &master)
+                    .unwrap_err();
+                assert!(error.to_string().contains("create the account again"));
+                assert!(!vault.contains("owner")?);
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+
+        let pending_device_id = credentials
+            .with_checked_session(&session, |session| {
+                let mut store = InterruptAccountCommit {
+                    inner: EncryptedFileSecretStore::open(
+                        &session.paths().credential_store,
+                        derive_vault_key(&master),
+                    )?,
+                    interrupt: true,
+                };
+                let mut vault = AccountVault::new(&mut store);
+                let error = session
+                    .create_account(
+                        "owner",
+                        "resumeowner",
+                        "laptop",
+                        "",
+                        "",
+                        None,
+                        &mut vault,
+                        &master,
+                    )
+                    .unwrap_err();
+                assert!(error.to_string().contains("interrupted credential commit"));
+                assert!(vault.contains("owner")?);
+                assert!(!vault.account_record_exists("owner")?);
+                let pending = vault.pending("owner")?;
+                Ok::<_, Error>(derive_device_public(&SecretSeed::new(pending.device_seed))?.id)
+            })
+            .unwrap();
+
+        // Reopen protected storage to simulate process restart.
+        credentials
+            .with_checked_session(&session, |session| {
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+                session.resume_account("owner", &mut vault, &master)?;
+                assert_eq!(
+                    derive_device_public(&vault.account("owner")?.credential.seed)?.id,
+                    pending_device_id
+                );
+                assert!(matches!(vault.pending("owner"), Err(Error::AccountMissing)));
+                session.resume_account("owner", &mut vault, &master)?;
+                assert_eq!(session.list_devices("owner", &mut vault)?.len(), 1);
+                let pending = PendingDevice::random("owner", "second", "resumeowner", 2)?;
+                vault.put_pending_device(&pending)?;
+                let error = session
+                    .resume_owner_device_provision("second", &mut vault, &master)
+                    .unwrap_err();
+                assert!(error.to_string().contains("provision again"));
+                assert!(!vault.contains("second")?);
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+
+        let second_id = credentials
+            .with_checked_session(&session, |session| {
+                let mut store = InterruptAccountCommit {
+                    inner: EncryptedFileSecretStore::open(
+                        &session.paths().credential_store,
+                        derive_vault_key(&master),
+                    )?,
+                    interrupt: true,
+                };
+                let mut vault = AccountVault::new(&mut store);
+                let error = session
+                    .provision_owner_device(
+                        "owner",
+                        "second",
+                        "second laptop",
+                        2,
+                        &mut vault,
+                        &master,
+                    )
+                    .unwrap_err();
+                assert!(error.to_string().contains("interrupted credential commit"));
+                let pending = vault.pending_device("second")?;
+                Ok::<_, Error>(derive_device_public(&SecretSeed::new(pending.device_seed))?.id)
+            })
+            .unwrap();
+
+        credentials
+            .with_checked_session(&session, |session| {
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+                session.resume_owner_device_provision("second", &mut vault, &master)?;
+                assert_eq!(
+                    derive_device_public(&vault.account("second")?.credential.seed)?.id,
+                    second_id
+                );
+                assert!(matches!(
+                    vault.pending_device("second"),
+                    Err(Error::AccountMissing)
+                ));
+                session.resume_owner_device_provision("second", &mut vault, &master)?;
+                assert_eq!(session.list_devices("owner", &mut vault)?.len(), 2);
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+    }
 
     #[test]
     fn backup_prepare_is_ephemeral_and_commit_reconciles_after_interruption() {

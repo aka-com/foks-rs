@@ -36,6 +36,8 @@ export function GoProfileChooser({
             action={
               <Button
                 size="sm"
+                aria-label={`Select ${candidate.username ?? shortId(candidate.userId)}, device ${shortId(candidate.deviceId)}`}
+                aria-pressed={selected === candidate.candidateId}
                 variant={
                   selected === candidate.candidateId ? 'primary' : undefined
                 }

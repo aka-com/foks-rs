@@ -1,8 +1,8 @@
 use foks_client::{
-    AdHocTeamSecrets, AddLocalTeamMemberRequest, KvWriteOptions, NamedTeamSecrets,
+    AdHocTeamSecrets, AddLocalTeamMemberRequest, KvFetchedNode, KvWriteOptions, NamedTeamSecrets,
     RemoveTeamMemberRequest, TeamPtkRotationSeed,
 };
-use foks_proto::{Role, SecretSeed};
+use foks_proto::{KvNodeId, Role, SecretSeed};
 use foks_server_testkit::{TestAccountSpec, TestClient};
 use foks_snowpack::{encode, Value};
 
@@ -264,10 +264,38 @@ pub(crate) fn public_client_creates_and_loads_named_and_adhoc_teams() {
         )
         .unwrap();
     let before = rotated_kv.sync().unwrap();
-    assert!(before
+    let member_entry = before
         .iter()
         .flat_map(|directory| &directory.entries)
-        .any(|entry| entry.content.as_deref() == Some(b"member team content".as_slice())));
+        .find(|entry| entry.name == b"member.txt")
+        .unwrap();
+    assert!(member_entry.content.is_none());
+    let member_node = KvNodeId(member_entry.node_id);
+    drop(rotated_kv);
+    assert_eq!(
+        fixture
+            .client
+            .foks()
+            .read_team_kv_node(
+                fixture.host(),
+                &account.credential,
+                &removed.authenticated,
+                member_node,
+            )
+            .unwrap(),
+        KvFetchedNode::SmallFile(b"member team content".to_vec())
+    );
+    let mut rotated_kv = fixture
+        .client
+        .foks()
+        .team_kv_write_session(
+            fixture.host(),
+            &account.credential,
+            &removed.authenticated,
+            fixture.client.soft_state_path(),
+            &mut rotated_protected,
+        )
+        .unwrap();
     rotated_kv
         .put_file(
             member_root,

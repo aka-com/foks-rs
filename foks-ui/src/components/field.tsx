@@ -24,6 +24,7 @@ export interface FieldProps {
   /** `password` for a secret, `number` for a bounded count. */
   type?: 'text' | 'password' | 'number';
   placeholder?: string;
+  disabled?: boolean;
   /** A hex id, a slot number, a path — anything read character by character. */
   mono?: boolean;
   min?: number;
@@ -40,6 +41,7 @@ export function Field({
   onChange,
   type = 'text',
   placeholder,
+  disabled = false,
   mono = false,
   min,
   max,
@@ -54,6 +56,7 @@ export function Field({
     >
       <input
         type={type}
+        disabled={disabled}
         aria-label={label}
         className={mono ? 'mono' : undefined}
         placeholder={placeholder}

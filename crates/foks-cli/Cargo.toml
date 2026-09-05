@@ -22,6 +22,7 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+foks-server-testkit = { workspace = true }
 
 [lints]
 workspace = true
