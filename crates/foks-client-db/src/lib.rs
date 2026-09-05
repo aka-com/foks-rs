@@ -141,6 +141,7 @@ pub struct StoredTeamSnapshot {
     pub team_name: Vec<u8>,
     pub team_name_utf8: Vec<u8>,
     pub team_name_sequence: u64,
+    pub index_range: foks_proto::RationalRange,
     pub merkle_epoch: u64,
     pub merkle_root_hash: [u8; 32],
     pub merkle_root_bytes: Vec<u8>,
@@ -199,6 +200,7 @@ impl StoredTeamSnapshot {
             team_name: &self.team_name,
             team_name_utf8: &self.team_name_utf8,
             team_name_sequence: self.team_name_sequence,
+            index_range: &self.index_range,
             merkle_epoch: self.merkle_epoch,
             merkle_root_hash: self.merkle_root_hash,
             merkle_root_bytes: &self.merkle_root_bytes,
@@ -382,6 +384,7 @@ pub enum TeamMutationKind {
     NamedCreation = 1,
     MembershipChange = 2,
     PtkRotation = 3,
+    MetadataChange = 4,
 }
 
 impl TeamMutationKind {
@@ -390,6 +393,7 @@ impl TeamMutationKind {
             1 => Ok(Self::NamedCreation),
             2 => Ok(Self::MembershipChange),
             3 => Ok(Self::PtkRotation),
+            4 => Ok(Self::MetadataChange),
             _ => Err(Error::InvalidTeamMutation("unknown operation kind")),
         }
     }
@@ -959,6 +963,25 @@ fn validate_user_snapshot(snapshot: VerifiedUserSnapshotParts<'_>) -> Result<()>
 }
 
 fn validate_team_snapshot(snapshot: VerifiedTeamSnapshotParts<'_>) -> Result<()> {
+    foks_verify::validate_rational_range(snapshot.index_range)
+        .map_err(|_| Error::InvalidTeam("team index range is malformed"))?;
+    for member in snapshot.members {
+        if let Some(range) = &member.index_range {
+            foks_verify::validate_rational_range(range)
+                .map_err(|_| Error::InvalidTeam("member index range is malformed"))?;
+        }
+        let is_team = member.party_id.first().is_some_and(|kind| {
+            matches!(
+                *kind,
+                foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+            )
+        });
+        if is_team != member.index_range.is_some() {
+            return Err(Error::InvalidTeam(
+                "member index range binding is malformed",
+            ));
+        }
+    }
     if snapshot.host_id.is_empty()
         || snapshot.team_id.len() != 33
         || snapshot.chain_seqno == 0
@@ -1169,8 +1192,10 @@ fn load_team_snapshot(
     let row = connection
         .query_row(
             "SELECT chain_seqno, chain_tail_hash, chain_bytes, evidence_bytes, team_name, \
-             team_name_utf8, team_name_sequence, merkle_epoch, merkle_root_hash, \
-             merkle_root_bytes FROM teams WHERE host_id = ?1 AND team_id = ?2",
+             team_name_utf8, team_name_sequence, index_low_infinity, index_low_base, \
+             index_low_exponent, index_high_infinity, index_high_base, index_high_exponent, \
+             merkle_epoch, merkle_root_hash, merkle_root_bytes \
+             FROM teams WHERE host_id = ?1 AND team_id = ?2",
             params![host_id, team_id],
             |row| {
                 Ok((
@@ -1181,9 +1206,15 @@ fn load_team_snapshot(
                     row.get::<_, Vec<u8>>(4)?,
                     row.get::<_, Vec<u8>>(5)?,
                     row.get::<_, i64>(6)?,
-                    row.get::<_, i64>(7)?,
+                    row.get::<_, bool>(7)?,
                     row.get::<_, Vec<u8>>(8)?,
-                    row.get::<_, Vec<u8>>(9)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, bool>(10)?,
+                    row.get::<_, Vec<u8>>(11)?,
+                    row.get::<_, i64>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, Vec<u8>>(14)?,
+                    row.get::<_, Vec<u8>>(15)?,
                 ))
             },
         )
@@ -1196,6 +1227,12 @@ fn load_team_snapshot(
         team_name,
         team_name_utf8,
         team_name_sequence,
+        index_low_infinity,
+        index_low_base,
+        index_low_exponent,
+        index_high_infinity,
+        index_high_base,
+        index_high_exponent,
         merkle_epoch,
         root_hash,
         root_bytes,
@@ -1213,6 +1250,18 @@ fn load_team_snapshot(
         team_name,
         team_name_utf8,
         team_name_sequence: stored_unsigned("team-name sequence", team_name_sequence)?,
+        index_range: foks_proto::RationalRange {
+            low: foks_proto::Rational {
+                infinity: index_low_infinity,
+                base: index_low_base,
+                exponent: index_low_exponent,
+            },
+            high: foks_proto::Rational {
+                infinity: index_high_infinity,
+                base: index_high_base,
+                exponent: index_high_exponent,
+            },
+        },
         merkle_epoch: stored_unsigned("team Merkle epoch", merkle_epoch)?,
         merkle_root_hash: fixed_hash(root_hash, "stored team Merkle hash has an invalid length")?,
         merkle_root_bytes: root_bytes,
@@ -1228,8 +1277,9 @@ fn load_team_members(
 ) -> Result<Vec<VerifiedTeamMember>> {
     let mut statement = connection.prepare(
         "SELECT party_id, scoped_host_id, source_role_type, source_role_visibility, role_type, \
-         role_visibility, generation, verify_key, hepk_fingerprint, \
-         removal_key_commitment FROM team_members \
+         role_visibility, generation, verify_key, hepk_fingerprint, removal_key_commitment, \
+         index_range_present, index_low_infinity, index_low_base, index_low_exponent, \
+         index_high_infinity, index_high_base, index_high_exponent FROM team_members \
          WHERE host_id = ?1 AND team_id = ?2 ORDER BY party_id, scoped_host_id, \
          source_role_type, source_role_visibility",
     )?;
@@ -1245,6 +1295,13 @@ fn load_team_members(
             row.get::<_, Vec<u8>>(7)?,
             row.get::<_, Vec<u8>>(8)?,
             row.get::<_, Vec<u8>>(9)?,
+            row.get::<_, bool>(10)?,
+            row.get::<_, bool>(11)?,
+            row.get::<_, Vec<u8>>(12)?,
+            row.get::<_, i64>(13)?,
+            row.get::<_, bool>(14)?,
+            row.get::<_, Vec<u8>>(15)?,
+            row.get::<_, i64>(16)?,
         ))
     })?;
     rows.map(|row| {
@@ -1259,6 +1316,13 @@ fn load_team_members(
             verify_key,
             fingerprint,
             removal_key_commitment,
+            index_range_present,
+            index_low_infinity,
+            index_low_base,
+            index_low_exponent,
+            index_high_infinity,
+            index_high_base,
+            index_high_exponent,
         ) = row?;
         Ok(VerifiedTeamMember {
             party_id: party,
@@ -1285,6 +1349,18 @@ fn load_team_members(
                     "stored team removal-key commitment has an invalid length",
                 )?)
             },
+            index_range: index_range_present.then_some(foks_proto::RationalRange {
+                low: foks_proto::Rational {
+                    infinity: index_low_infinity,
+                    base: index_low_base,
+                    exponent: index_low_exponent,
+                },
+                high: foks_proto::Rational {
+                    infinity: index_high_infinity,
+                    base: index_high_base,
+                    exponent: index_high_exponent,
+                },
+            }),
         })
     })
     .collect()
@@ -1956,6 +2032,7 @@ mod tests {
         team_name: Vec<u8>,
         team_name_utf8: Vec<u8>,
         team_name_sequence: u64,
+        index_range: foks_proto::RationalRange,
         merkle_epoch: u64,
         merkle_root_hash: [u8; 32],
         merkle_root_bytes: Vec<u8>,
@@ -1975,6 +2052,7 @@ mod tests {
                 team_name: &self.team_name,
                 team_name_utf8: &self.team_name_utf8,
                 team_name_sequence: self.team_name_sequence,
+                index_range: &self.index_range,
                 merkle_epoch: self.merkle_epoch,
                 merkle_root_hash: self.merkle_root_hash,
                 merkle_root_bytes: &self.merkle_root_bytes,
@@ -2914,19 +2992,56 @@ mod tests {
             team_name: b"fixtureteam".to_vec(),
             team_name_utf8: b"FixtureTeam".to_vec(),
             team_name_sequence: 1,
+            index_range: foks_proto::RationalRange {
+                low: foks_proto::Rational {
+                    infinity: false,
+                    base: vec![1],
+                    exponent: 0,
+                },
+                high: foks_proto::Rational {
+                    infinity: true,
+                    base: Vec::new(),
+                    exponent: 0,
+                },
+            },
             merkle_epoch: 11,
             merkle_root_hash: [7; 32],
             merkle_root_bytes: vec![9; 80],
-            members: vec![VerifiedTeamMember {
-                party_id: vec![1; 33],
-                scoped_host_id: None,
-                source_role: foks_proto::Role::OWNER,
-                role: foks_proto::Role::OWNER,
-                generation: 2,
-                verify_key: vec![14; 33],
-                hepk_fingerprint: [33; 32],
-                removal_key_commitment: Some([36; 32]),
-            }],
+            members: vec![
+                VerifiedTeamMember {
+                    party_id: vec![1; 33],
+                    scoped_host_id: None,
+                    source_role: foks_proto::Role::OWNER,
+                    role: foks_proto::Role::OWNER,
+                    generation: 2,
+                    verify_key: vec![14; 33],
+                    hepk_fingerprint: [33; 32],
+                    removal_key_commitment: Some([36; 32]),
+                    index_range: None,
+                },
+                VerifiedTeamMember {
+                    party_id: vec![3; 33],
+                    scoped_host_id: Some(vec![2; 33]),
+                    source_role: foks_proto::Role::ADMIN,
+                    role: foks_proto::Role::member(0),
+                    generation: 1,
+                    verify_key: vec![14; 33],
+                    hepk_fingerprint: [37; 32],
+                    removal_key_commitment: Some([38; 32]),
+                    index_range: Some(foks_proto::RationalRange {
+                        low: foks_proto::Rational {
+                            infinity: false,
+                            base: vec![0x20],
+                            exponent: 0,
+                        },
+                        high: foks_proto::Rational {
+                            infinity: false,
+                            base: vec![0x30],
+                            exponent: 0,
+                        },
+                    }),
+                },
+            ],
             shared_keys: vec![foks_verify::VerifiedUserSharedKey {
                 role: foks_proto::Role::OWNER,
                 generation: 1,
@@ -3364,8 +3479,21 @@ mod tests {
             .unwrap();
         assert_eq!(loaded.chain_bytes, team.chain_bytes);
         assert_eq!(loaded.evidence_bytes, team.evidence_bytes);
+        assert_eq!(loaded.index_range, team.index_range);
         assert_eq!(loaded.members, team.members);
         assert_eq!(loaded.shared_keys, team.shared_keys);
+        assert!(store
+            .connection
+            .execute("UPDATE teams SET index_low_base = ?1", [vec![1; 33]])
+            .is_err());
+        assert!(store
+            .connection
+            .execute("UPDATE teams SET index_low_exponent = 4097", [])
+            .is_err());
+        assert!(store
+            .connection
+            .execute("UPDATE team_members SET index_high_exponent = -4097", [])
+            .is_err());
 
         let mut alternate_evidence = team.clone();
         alternate_evidence.evidence_bytes = vec![0xa5; 96];

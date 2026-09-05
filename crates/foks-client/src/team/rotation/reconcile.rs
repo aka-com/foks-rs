@@ -31,6 +31,7 @@ impl FoksClient {
         expected_seqno: u64,
         expected_operation_id: &[u8; 16],
         request: &ChangeTeamMemberRequest<'_>,
+        retained_removal_key: Option<&SecretSeed>,
         protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<RotatedTeamPtks> {
         let recorded = HardStateStore::open(&host.database_path)?
@@ -80,7 +81,7 @@ impl FoksClient {
                 request.target,
                 request.destination_role,
                 request.replacement,
-                None,
+                retained_removal_key,
                 request.rotations,
                 request.remaining_parties,
                 protected_store,

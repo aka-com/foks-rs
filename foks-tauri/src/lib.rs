@@ -178,6 +178,7 @@ pub fn run() {
             commands::resume_group_member_edit,
             commands::admit_group,
             commands::rerun_group_admission,
+            commands::expel_federated_group,
             commands::take_agent_connection_loss,
             applock::app_lock_state,
             applock::lock_app,

@@ -2001,6 +2001,29 @@ test('mock Resume marks the inactive group active for the refreshed catalog', as
   assert.equal(store.active, true);
 });
 
+test('mock expelFederatedGroup requires both host ID and team ID to match', async () => {
+  const active = { ...FIXTURE.federation[0], active: true };
+  const bridge = mockBridge({ ...FIXTURE, federation: [active] });
+  await assert.rejects(
+    bridge.expelFederatedGroup({
+      storeId: active.store,
+      remoteHostIdHex: `02${'ff'.repeat(32)}`,
+      remoteTeamIdHex: active.remote_team_id_hex,
+    }),
+    (error: unknown) => normalizeCommandError(error).code === 'invalid-request',
+  );
+  assert.equal((await bridge.listFederation(active.store)).length, 1);
+  assert.deepEqual(
+    await bridge.expelFederatedGroup({
+      storeId: active.store,
+      remoteHostIdHex: active.remote_host_id_hex,
+      remoteTeamIdHex: active.remote_team_id_hex,
+    }),
+    { applied: true },
+  );
+  assert.equal((await bridge.listFederation(active.store)).length, 0);
+});
+
 test('the mock rejects roster and federation mutations for an active ad-hoc group', async () => {
   const world = {
     ...FIXTURE,

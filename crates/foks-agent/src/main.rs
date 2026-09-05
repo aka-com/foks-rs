@@ -1832,6 +1832,9 @@ fn wire_pending_operation(
             foks_client_app::PendingOperationKind::TeamMemberEdit => {
                 WirePendingOperationKind::TeamMemberEdit
             }
+            foks_client_app::PendingOperationKind::FederationExpulsion => {
+                WirePendingOperationKind::FederationExpulsion
+            }
             foks_client_app::PendingOperationKind::TeamRekey => WirePendingOperationKind::TeamRekey,
         },
         alias: operation.alias,
@@ -3578,6 +3581,27 @@ fn dispatch_result(
                 Ok(serde_json::to_value(
                     session.list_federated_memberships(&team_alias, vault)?,
                 )?)
+            })
+        }
+        Operation::ExpelFederatedTeam {
+            profile,
+            team_alias,
+            remote_host_id_hex,
+            remote_team_id_hex,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                let credentials = ClientCredentials::open(state_dir)?;
+                Ok(serde_json::to_value(session.expel_federated_team(
+                    &team_alias,
+                    &remote_host_id_hex,
+                    &remote_team_id_hex,
+                    vault,
+                    &registry,
+                    &credentials,
+                    master,
+                )?)?)
             })
         }
         Operation::RefreshFederatedSecurity {

@@ -48,7 +48,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 6,
+                "version": 7,
                 "id": 8,
                 "operation": { "operation": "discover-go-profiles" }
             })
@@ -173,7 +173,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 6,
+                "version": 7,
                 "id": 9,
                 "operation": {
                     "operation": "sync-team",
@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Response::error(9, ErrorCode::Busy, "locked")).unwrap(),
             serde_json::json!({
-                "version": 6,
+                "version": 7,
                 "id": 9,
                 "status": "error",
                 "code": "busy",
@@ -218,7 +218,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&admission).unwrap(),
             serde_json::json!({
-                "version": 6,
+                "version": 7,
                 "id": 13,
                 "operation": {
                     "operation": "admit-federated-team",
@@ -244,6 +244,35 @@ mod tests {
             },
         );
         assert_eq!(decode_request(&encode(&listing).unwrap()).unwrap(), listing);
+
+        let expulsion = Request::new(
+            15,
+            Operation::ExpelFederatedTeam {
+                profile: "local".to_owned(),
+                team_alias: "engineering".to_owned(),
+                remote_host_id_hex: format!("02{}", "22".repeat(32)),
+                remote_team_id_hex: format!("03{}", "33".repeat(32)),
+            },
+        );
+        assert_eq!(
+            serde_json::to_value(&expulsion).unwrap(),
+            serde_json::json!({
+                "version": 7,
+                "id": 15,
+                "operation": {
+                    "operation": "expel-federated-team",
+                    "profile": "local",
+                    "team_alias": "engineering",
+                    "remote_host_id_hex": format!("02{}", "22".repeat(32)),
+                    "remote_team_id_hex": format!("03{}", "33".repeat(32))
+                }
+            })
+        );
+        assert!(expulsion.operation.is_mutation());
+        assert_eq!(
+            decode_request(&encode(&expulsion).unwrap()).unwrap(),
+            expulsion
+        );
     }
 
     #[test]
@@ -481,7 +510,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 6,
+                "version": 7,
                 "id": 25,
                 "operation": {
                     "operation": "demote-team-member",
@@ -504,7 +533,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 6,
+                "version": 7,
                 "id": 26,
                 "operation": {
                     "operation": "remove-team-member",

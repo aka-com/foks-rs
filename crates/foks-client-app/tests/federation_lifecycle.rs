@@ -209,9 +209,39 @@ fn protected_product_workflow_admits_and_reconciles_a_remote_team() {
             assert_eq!(memberships.len(), 1);
             assert!(!memberships[0].active);
             assert!(memberships[0].operation_id_hex.is_none());
+            assert!(local
+                .list_team_members("local-team", &mut vault)?
+                .iter()
+                .all(|member| member.scoped_host_id_hex.is_none()));
             Ok::<_, foks_client_app::Error>(())
         })
         .unwrap();
+
+    // The failed permission response happened after both signed metadata
+    // transitions. Their authenticated hard-state projections persist, while
+    // no scoped roster row was created before the ranges became disjoint.
+    let local_database = rusqlite::Connection::open(&local.paths().hard_database).unwrap();
+    let (local_seqno, local_low, local_high_infinity): (i64, Vec<u8>, bool) = local_database
+        .query_row(
+            "SELECT chain_seqno, index_low_base, index_high_infinity FROM teams",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(local_seqno, 3);
+    assert_eq!(local_low, [0x80]);
+    assert!(local_high_infinity);
+    let remote_database = rusqlite::Connection::open(&remote.paths().hard_database).unwrap();
+    let (remote_seqno, remote_low, remote_high): (i64, Vec<u8>, Vec<u8>) = remote_database
+        .query_row(
+            "SELECT chain_seqno, index_low_base, index_high_base FROM teams",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(remote_seqno, 3);
+    assert_eq!(remote_low, [1]);
+    assert_eq!(remote_high, [0x20]);
 
     let local_fault_hits =
         local_environment.arm_fault(TestFault::FederationTeamEditAfterCommitBeforeResponse);
@@ -444,6 +474,106 @@ fn protected_product_workflow_admits_and_reconciles_a_remote_team() {
         .as_deref()
         .unwrap()
         .contains("untrusted public scope"));
+
+    // Expulsion uses the admission-time removal key retained only in the
+    // encrypted vault. The real Rust server validates the removal proof and
+    // rotated PTKs; no fake range or roster override participates.
+    _remote_server.shutdown().unwrap();
+    // Neither revocation nor recovery may depend on the expelled host. Fail
+    // the local binding cleanup after the chain commits, leaving the intent
+    // and stale active binding exactly as a crash would.
+    let interrupted = credentials
+        .with_checked_session(&local, |local| {
+            let store = EncryptedFileSecretStore::open(
+                &local.paths().credential_store,
+                derive_vault_key(&master),
+            )?;
+            let mut store = FailExpulsionCleanup(store);
+            let mut vault = AccountVault::new(&mut store);
+            let binding = local
+                .list_federated_memberships("local-team", &mut vault)?
+                .into_iter()
+                .next()
+                .unwrap();
+            local.expel_federated_team(
+                "local-team",
+                &binding.remote_host_id_hex,
+                &binding.remote_team_id_hex,
+                &mut vault,
+                &registry,
+                &credentials,
+                &master,
+            )
+        })
+        .unwrap_err();
+    assert!(matches!(interrupted, foks_client_app::Error::Keystore(
+        foks_keystore::Error::Io(ref error)
+    ) if error.to_string() == "injected expulsion cleanup failure"));
+    let expelled = credentials
+        .with_checked_session(&local, |local| {
+            let mut store = EncryptedFileSecretStore::open(
+                &local.paths().credential_store,
+                derive_vault_key(&master),
+            )?;
+            let mut vault = AccountVault::new(&mut store);
+            let binding = local
+                .list_federated_memberships("local-team", &mut vault)?
+                .into_iter()
+                .next()
+                .ok_or(foks_client_app::Error::InvalidAccount(
+                    "federated membership disappeared before retained-key expulsion",
+                ))?;
+            local.expel_federated_team(
+                "local-team",
+                &binding.remote_host_id_hex,
+                &binding.remote_team_id_hex,
+                &mut vault,
+                &registry,
+                &credentials,
+                &master,
+            )
+        })
+        .unwrap();
+    assert!(!expelled.active);
+    let scheduled_job_id: [u8; 16] = decode_hex(&first.scheduled_job_id_hex)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert!(HardStateStore::open(&local.paths().hard_database)
+        .unwrap()
+        .scheduled_job(&scheduled_job_id)
+        .unwrap()
+        .is_none());
+    // Local expulsion has no post-commit dependency on the remote profile and
+    // does not reinterpret the protocol's grant RPC as an explicit revocation.
+    // The remote grant therefore keeps its normal state; exact viewer removal
+    // is invalidated atomically only when it occurs in the granting team edit.
+    let remote_database = rusqlite::Connection::open(remote_environment.database_path()).unwrap();
+    let permission_state: i64 = remote_database
+        .query_row(
+            "SELECT state FROM federation_team_view_permissions",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(permission_state, 1);
+    credentials
+        .with_checked_session(&local, |local| {
+            let mut store = EncryptedFileSecretStore::open(
+                &local.paths().credential_store,
+                derive_vault_key(&master),
+            )?;
+            let mut vault = AccountVault::new(&mut store);
+            assert!(local
+                .list_federated_memberships("local-team", &mut vault)?
+                .is_empty());
+            assert!(local
+                .list_team_members("local-team", &mut vault)?
+                .iter()
+                .all(|member| member.scoped_host_id_hex.is_none()));
+            Ok::<_, foks_client_app::Error>(())
+        })
+        .unwrap();
 }
 
 /// A federation graph can be deeper than one hop: A federates a team to B,
@@ -740,6 +870,33 @@ fn decode_hex(value: &str) -> foks_client_app::Result<Vec<u8>> {
             Ok(((high << 4) | low) as u8)
         })
         .collect()
+}
+
+struct FailExpulsionCleanup(EncryptedFileSecretStore);
+
+impl foks_keystore::SecretStore for FailExpulsionCleanup {
+    fn put(&mut self, key: &str, value: &[u8]) -> foks_keystore::Result<()> {
+        if key == "team.local-team"
+            && serde_json::from_slice::<serde_json::Value>(value).unwrap()["federated_members"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+        {
+            return Err(std::io::Error::other("injected expulsion cleanup failure").into());
+        }
+        self.0.put(key, value)
+    }
+
+    fn get(&mut self, key: &str) -> foks_keystore::Result<zeroize::Zeroizing<Vec<u8>>> {
+        self.0.get(key)
+    }
+
+    fn remove(&mut self, key: &str) -> foks_keystore::Result<bool> {
+        self.0.remove(key)
+    }
+
+    fn keys(&mut self) -> foks_keystore::Result<Vec<String>> {
+        self.0.keys()
+    }
 }
 
 fn add_profile(

@@ -64,6 +64,13 @@
     "operation_id_hex": "07070707070707070707070707070707",
     "active": false
   },
+  "federationExpulsionOperation": {
+    "operation": "expel-federated-team",
+    "profile": "foks.example",
+    "team_alias": "engineering",
+    "remote_host_id_hex": "020202020202020202020202020202020202020202020202020202020202020202",
+    "remote_team_id_hex": "030303030303030303030303030303030303030303030303030303030303030303"
+  },
   "commandAck": {
     "ok": true
   },

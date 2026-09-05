@@ -1255,6 +1255,7 @@ mod tests {
             verify_key: material.verify_key.clone(),
             hepk_fingerprint: foks_crypto::hepk_fingerprint(&material.hepk).unwrap(),
             removal_key_commitment: Some([8; 32]),
+            index_range: None,
         };
         let (role_type, visibility) = crate::auth::team::role_parts(Role::OWNER);
         let authority = foks_server_db::UserAuthoritySnapshot {
@@ -1497,6 +1498,7 @@ mod stale_handoff_tests {
             verify_key: new.verify_key.clone(),
             hepk_fingerprint: foks_crypto::hepk_fingerprint(&new.hepk).unwrap(),
             removal_key_commitment: Some(removal),
+            index_range: None,
         }];
         let introduced = vec![foks_verify::VerifiedSharedKey {
             role: foks_proto::Role::OWNER,

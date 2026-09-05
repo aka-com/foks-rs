@@ -163,6 +163,7 @@ pub enum PendingOperationKind {
     TeamCreation,
     TeamMemberAddition,
     TeamMemberEdit,
+    FederationExpulsion,
     TeamRekey,
 }
 
@@ -175,7 +176,7 @@ pub struct PendingOperationSummary {
 
 pub use federation::{
     FederatedMembershipSummary, FederationAdmissionReport, FederationDestinationRole,
-    FederationRefreshReport, UnlockedYubiActor,
+    FederationExpulsionReport, FederationRefreshReport, UnlockedYubiActor,
 };
 pub use runtime::{JobRun, JobRunReport};
 pub use yubi::{
@@ -260,6 +261,10 @@ fn team_rekey_key(alias: &str) -> String {
 
 fn team_member_edit_key(alias: &str) -> String {
     format!("team-member-edit.{alias}")
+}
+
+fn federation_expulsion_key(alias: &str) -> String {
+    format!("federation-expulsion.{alias}")
 }
 
 fn validate_name(name: &str) -> Result<()> {

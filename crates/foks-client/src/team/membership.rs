@@ -512,6 +512,14 @@ impl FoksClient {
                 "destination role has no existing PTK; addition would require rotation",
             ));
         }
+        if !foks_verify::rational_range_strictly_before(
+            request.remote_team.verified.index_range(),
+            authenticated_team.verified.index_range(),
+        )? {
+            return Err(Error::TeamRequest(
+                "remote team index range must end below the local team's lower bound",
+            ));
+        }
         let member_floor_public = authenticated_team
             .verified
             .shared_key(Role::member(0))
@@ -552,6 +560,7 @@ impl FoksClient {
                 member_destination_role: request.destination_role,
                 member_generation: target.generation,
                 member_public: &target_public,
+                member_index_range: Some(request.remote_team.verified.index_range()),
             },
             &actor_puk.seed,
             request.removal_key,

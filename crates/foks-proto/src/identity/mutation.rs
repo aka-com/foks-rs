@@ -895,6 +895,13 @@ pub struct AddTeamMemberArgument<'a> {
     pub local_permissions_for: &'a [EntityId],
 }
 
+/// A TeamAdmin edit carrying only signed team-chain metadata. The off-chain
+/// box data and local permission lists are encoded as their v0.1.9 zero values.
+pub struct TeamMetadataEditArgument<'a> {
+    pub link: &'a UserLink,
+    pub next_tree_location: [u8; 32],
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecodedTeamEditArgument {
     pub link: UserLink,
@@ -1381,6 +1388,28 @@ impl NamedTeamCreateArgument<'_> {
             self.reservation.to_value(),
             edit,
             membership,
+        ]))?)
+    }
+}
+
+impl TeamMetadataEditArgument<'_> {
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        let ptk_boxes = SharedKeyBoxSet::new([0; 16], Vec::new(), None)?;
+        let offchain = Value::Array(vec![
+            decode(&ptk_boxes.encoded())?,
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            Value::Array(vec![Value::Null]),
+            Value::Null,
+        ]);
+        Ok(encode(&Value::Array(vec![
+            decode(&self.link.encoded()?)?,
+            Value::Binary(self.next_tree_location.to_vec()),
+            offchain,
+            Value::Null,
+            Value::Null,
         ]))?)
     }
 }

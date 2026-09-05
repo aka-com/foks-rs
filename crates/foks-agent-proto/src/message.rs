@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -175,6 +175,7 @@ pub enum PendingOperationKind {
     TeamCreation,
     TeamMemberAddition,
     TeamMemberEdit,
+    FederationExpulsion,
     TeamRekey,
 }
 
@@ -806,6 +807,12 @@ pub enum Operation {
     ListFederatedTeams {
         profile: String,
         team_alias: String,
+    },
+    ExpelFederatedTeam {
+        profile: String,
+        team_alias: String,
+        remote_host_id_hex: String,
+        remote_team_id_hex: String,
     },
     /// Runs the federated security responder for one local team. Either side
     /// may supply an already-enrolled Yubi alias plus its PIN; supplying both
@@ -1672,6 +1679,18 @@ impl std::fmt::Debug for Operation {
                 .debug_struct("ListFederatedTeams")
                 .field("profile", profile)
                 .field("team_alias", team_alias)
+                .finish(),
+            Self::ExpelFederatedTeam {
+                profile,
+                team_alias,
+                remote_host_id_hex,
+                remote_team_id_hex,
+            } => formatter
+                .debug_struct("ExpelFederatedTeam")
+                .field("profile", profile)
+                .field("team_alias", team_alias)
+                .field("remote_host_id_hex", remote_host_id_hex)
+                .field("remote_team_id_hex", remote_team_id_hex)
                 .finish(),
             Self::RefreshFederatedSecurity {
                 profile,

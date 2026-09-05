@@ -376,6 +376,47 @@ impl Database {
         }
         inject(failure, TeamMutationFailurePoint::Chain)?;
 
+        // A chain-view grant scoped to a remote roster party must not survive
+        // that exact party+host disappearing. Revoke inside the same team-edit
+        // transaction so readers can never observe the expelled roster with a
+        // still-current matching bearer.
+        let granted_scopes = {
+            let mut statement = transaction.prepare(
+                "SELECT p.viewer_party_id, p.viewer_host_id
+                 FROM federation_team_view_permissions p
+                 JOIN team_members m ON m.team_id = p.target_team_id
+                   AND m.party_id = p.viewer_party_id
+                   AND m.scoped_host_id = p.viewer_host_id
+                 WHERE p.target_team_id = ?1 AND p.state = 1",
+            )?;
+            let scopes = statement
+                .query_map([mutation.team_id], |row| {
+                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            scopes
+        };
+        for (viewer_party, viewer_host) in granted_scopes {
+            let retained = mutation.members.iter().any(|member| {
+                member.party_id == viewer_party
+                    && member.scoped_host_id == Some(viewer_host.as_slice())
+            });
+            if !retained {
+                transaction.execute(
+                    "UPDATE federation_team_view_permissions
+                     SET state = 0, updated_at = ?4, revoked_at = ?4
+                     WHERE target_team_id = ?1 AND viewer_party_id = ?2
+                       AND viewer_host_id = ?3 AND state = 1",
+                    params![
+                        mutation.team_id,
+                        viewer_party,
+                        viewer_host,
+                        sql_integer(mutation.now)?
+                    ],
+                )?;
+            }
+        }
+
         transaction.execute(
             "DELETE FROM team_members WHERE team_id = ?1",
             [mutation.team_id],

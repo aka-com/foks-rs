@@ -792,6 +792,40 @@ impl HardStateStore {
             .transpose()
             .map(Option::flatten)
     }
+
+    /// Returns the newest non-rejected operation of one kind for a team. This
+    /// lets a caller recover protected exact request material without needing
+    /// an operation ID that might not have been returned before a crash.
+    pub fn latest_team_mutation(
+        &self,
+        host_id: &[u8],
+        team_id: &[u8],
+        kind: TeamMutationKind,
+    ) -> Result<Option<TeamMutationOperation>> {
+        let operation_id = self
+            .connection
+            .query_row(
+                "SELECT operation_id FROM team_mutation_operations
+                 WHERE host_id = ?1 AND team_id = ?2 AND operation_kind = ?3
+                   AND state IN (1, 2, 3, 4, 5)
+                 ORDER BY expected_seqno DESC, updated_at DESC, operation_id DESC
+                 LIMIT 1",
+                rusqlite::params![host_id, team_id, kind as u8],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()?
+            .map(|bytes| {
+                bytes.try_into().map_err(|_| {
+                    Error::InvalidTeamMutation("stored operation ID has the wrong length")
+                })
+            })
+            .transpose()?;
+        operation_id
+            .as_ref()
+            .map(|operation_id| self.team_mutation(operation_id))
+            .transpose()
+            .map(Option::flatten)
+    }
 }
 
 /// Clamps a local journal timestamp so it never moves backward: a backward

@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 23;
+pub(crate) const VERSION: u32 = 25;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -163,9 +163,17 @@ CREATE TABLE teams (
     team_name BLOB NOT NULL CHECK (length(team_name) > 0),
     team_name_utf8 BLOB NOT NULL CHECK (length(team_name_utf8) > 0),
     team_name_sequence INTEGER NOT NULL CHECK (team_name_sequence >= 0),
+    index_low_infinity INTEGER NOT NULL CHECK (index_low_infinity IN (0, 1)),
+    index_low_base BLOB NOT NULL CHECK (length(index_low_base) <= 32),
+    index_low_exponent INTEGER NOT NULL CHECK (index_low_exponent BETWEEN -4096 AND 4096),
+    index_high_infinity INTEGER NOT NULL CHECK (index_high_infinity IN (0, 1)),
+    index_high_base BLOB NOT NULL CHECK (length(index_high_base) <= 32),
+    index_high_exponent INTEGER NOT NULL CHECK (index_high_exponent BETWEEN -4096 AND 4096),
     merkle_epoch INTEGER NOT NULL CHECK (merkle_epoch >= 0),
     merkle_root_hash BLOB NOT NULL CHECK (length(merkle_root_hash) = 32),
     merkle_root_bytes BLOB NOT NULL CHECK (length(merkle_root_bytes) > 0),
+    CHECK (index_low_infinity = 0 OR (length(index_low_base) = 0 AND index_low_exponent = 0)),
+    CHECK (index_high_infinity = 0 OR (length(index_high_base) = 0 AND index_high_exponent = 0)),
     PRIMARY KEY (host_id, team_id),
     FOREIGN KEY (host_id, merkle_epoch) REFERENCES merkle_roots(host_id, epoch)
 ) STRICT, WITHOUT ROWID;
@@ -189,6 +197,21 @@ CREATE TABLE team_members (
     verify_key BLOB NOT NULL CHECK (length(verify_key) = 33),
     hepk_fingerprint BLOB NOT NULL CHECK (length(hepk_fingerprint) = 32),
     removal_key_commitment BLOB NOT NULL CHECK (length(removal_key_commitment) IN (0, 32)),
+    index_range_present INTEGER NOT NULL CHECK (index_range_present IN (0, 1)),
+    index_low_infinity INTEGER NOT NULL CHECK (index_low_infinity IN (0, 1)),
+    index_low_base BLOB NOT NULL CHECK (length(index_low_base) <= 32),
+    index_low_exponent INTEGER NOT NULL CHECK (index_low_exponent BETWEEN -4096 AND 4096),
+    index_high_infinity INTEGER NOT NULL CHECK (index_high_infinity IN (0, 1)),
+    index_high_base BLOB NOT NULL CHECK (length(index_high_base) <= 32),
+    index_high_exponent INTEGER NOT NULL CHECK (index_high_exponent BETWEEN -4096 AND 4096),
+    CHECK (index_low_infinity = 0 OR (length(index_low_base) = 0 AND index_low_exponent = 0)),
+    CHECK (index_high_infinity = 0 OR (length(index_high_base) = 0 AND index_high_exponent = 0)),
+    CHECK (
+        index_range_present = 1 OR (
+            index_low_infinity = 0 AND length(index_low_base) = 0 AND index_low_exponent = 0 AND
+            index_high_infinity = 0 AND length(index_high_base) = 0 AND index_high_exponent = 0
+        )
+    ),
     PRIMARY KEY (
         host_id, team_id, party_id, scoped_host_id,
         source_role_type, source_role_visibility
@@ -245,7 +268,7 @@ CREATE TABLE adhoc_team_operations (
 -- remain exclusively in the caller's encrypted store.
 CREATE TABLE team_mutation_operations (
     operation_id BLOB PRIMARY KEY CHECK (length(operation_id) = 16),
-    operation_kind INTEGER NOT NULL CHECK (operation_kind BETWEEN 1 AND 3),
+    operation_kind INTEGER NOT NULL CHECK (operation_kind BETWEEN 1 AND 4),
     host_id BLOB NOT NULL REFERENCES hosts(host_id) ON DELETE RESTRICT,
     actor_id BLOB NOT NULL CHECK (length(actor_id) = 33),
     device_id BLOB NOT NULL CHECK (length(device_id) IN (33, 34)),

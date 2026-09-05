@@ -159,3 +159,48 @@ func TestCheckedFederationRPCFixtures(t *testing.T) {
 		}
 	}
 }
+
+func TestTeamIndexRangeOrderingUsedByFederation(t *testing.T) {
+	current := core.NewDefaultRange()
+	child := core.NewRationalRange(proto.RationalRange{
+		Low: current.Low, High: proto.Rational{Base: []byte{0x20}},
+	})
+	parent := core.NewRationalRange(proto.RationalRange{
+		Low: proto.Rational{Base: []byte{0x80}}, High: current.High,
+	})
+	if !current.Includes(child) || !current.Includes(parent) {
+		t.Fatal("v0.1.9 default allocations must narrow the authenticated default range")
+	}
+	if !child.LessThan(parent) {
+		t.Fatal("v0.1.9 must order the child high below the parent low")
+	}
+	if parent.LessThan(child) || parent.Includes(child) {
+		t.Fatal("the separated federation ranges must not be reversed or nested")
+	}
+	nextChild, err := child.Rsh()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextParent, err := parent.Lsh()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantChild, _ := core.ParseRationalRange("01-10")
+	wantParent, _ := core.ParseRationalRange("0100-")
+	if !nextChild.Eq(*wantChild) || !nextParent.Eq(*wantParent) {
+		t.Fatal("subsequent allocations must use v0.1.9 rational shifts")
+	}
+	exported := child.Export()
+	member := proto.TeamMemberKeys{Tir: &exported}
+	encoded, err := core.EncodeToBytes(&member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded proto.TeamMemberKeys
+	if err := core.DecodeFromBytes(&decoded, encoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Tir == nil || !core.NewRationalRange(*decoded.Tir).Eq(child) {
+		t.Fatal("team-member keys did not preserve the authenticated child range")
+	}
+}

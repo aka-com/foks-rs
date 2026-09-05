@@ -1,6 +1,9 @@
 //! Entity identifiers and exact signed wire blobs.
 
-use crate::{decode, encode, signed_blob, Error, Result, Value};
+use crate::{
+    decode, encode, signed_blob, Error, Result, Value, ENTITY_AD_HOC_TEAM, ENTITY_NAMED_TEAM,
+    ENTITY_PTK_VERIFY, ENTITY_PUK_VERIFY, ENTITY_USER,
+};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct EntityId(Vec<u8>);
@@ -41,6 +44,16 @@ impl EntityId {
 
     pub fn entity_type(&self) -> u8 {
         self.0[0]
+    }
+
+    pub fn to_rolling_entity_id(&self) -> Self {
+        let mut bytes = self.0.clone();
+        bytes[0] = match self.entity_type() {
+            ENTITY_USER => ENTITY_PUK_VERIFY,
+            ENTITY_NAMED_TEAM | ENTITY_AD_HOC_TEAM => ENTITY_PTK_VERIFY,
+            other => other,
+        };
+        Self(bytes)
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -128,5 +141,36 @@ impl SignedBlob {
             Value::Binary(self.inner.clone()),
             self.signature.to_value(),
         ]))?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entity(kind: u8) -> EntityId {
+        EntityId::from_bytes([vec![kind], vec![0x42; 32]].concat()).unwrap()
+    }
+
+    #[test]
+    fn persistent_user_and_team_ids_normalize_to_rolling_verify_ids() {
+        for (persistent, rolling) in [
+            (ENTITY_USER, ENTITY_PUK_VERIFY),
+            (ENTITY_NAMED_TEAM, ENTITY_PTK_VERIFY),
+            (ENTITY_AD_HOC_TEAM, ENTITY_PTK_VERIFY),
+        ] {
+            let persistent = entity(persistent);
+            let normalized = persistent.to_rolling_entity_id();
+            assert_eq!(normalized.entity_type(), rolling);
+            assert_eq!(&normalized.as_bytes()[1..], &persistent.as_bytes()[1..]);
+        }
+    }
+
+    #[test]
+    fn rolling_and_unrelated_ids_are_unchanged() {
+        for kind in [ENTITY_PUK_VERIFY, ENTITY_PTK_VERIFY, crate::ENTITY_HOST] {
+            let id = entity(kind);
+            assert_eq!(id.to_rolling_entity_id(), id);
+        }
     }
 }

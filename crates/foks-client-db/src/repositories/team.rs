@@ -93,6 +93,7 @@ impl HardStateStore {
                 if stored.team_name != snapshot.team_name
                     || stored.team_name_utf8 != snapshot.team_name_utf8
                     || stored.team_name_sequence != snapshot.team_name_sequence
+                    || stored.index_range != *snapshot.index_range
                     || stored.members != members
                     || stored.shared_keys != shared_keys
                 {
@@ -138,14 +139,21 @@ impl HardStateStore {
         if acceptance != Acceptance::Unchanged {
             transaction.execute(
                 "INSERT INTO teams (host_id, team_id, chain_seqno, chain_tail_hash, chain_bytes, \
-                 evidence_bytes, team_name, team_name_utf8, team_name_sequence, merkle_epoch, \
-                 merkle_root_hash, merkle_root_bytes) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
-                 ON CONFLICT(host_id, team_id) DO UPDATE SET chain_seqno = excluded.chain_seqno, \
-                 chain_tail_hash = excluded.chain_tail_hash, chain_bytes = excluded.chain_bytes, \
-                 evidence_bytes = excluded.evidence_bytes, team_name = excluded.team_name, \
-                 team_name_utf8 = excluded.team_name_utf8, \
+                 evidence_bytes, team_name, team_name_utf8, team_name_sequence, index_low_infinity, \
+                 index_low_base, index_low_exponent, index_high_infinity, index_high_base, \
+                 index_high_exponent, merkle_epoch, merkle_root_hash, merkle_root_bytes) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
+                 ?16, ?17, ?18) ON CONFLICT(host_id, team_id) DO UPDATE SET \
+                 chain_seqno = excluded.chain_seqno, chain_tail_hash = excluded.chain_tail_hash, \
+                 chain_bytes = excluded.chain_bytes, evidence_bytes = excluded.evidence_bytes, \
+                 team_name = excluded.team_name, team_name_utf8 = excluded.team_name_utf8, \
                  team_name_sequence = excluded.team_name_sequence, \
+                 index_low_infinity = excluded.index_low_infinity, \
+                 index_low_base = excluded.index_low_base, \
+                 index_low_exponent = excluded.index_low_exponent, \
+                 index_high_infinity = excluded.index_high_infinity, \
+                 index_high_base = excluded.index_high_base, \
+                 index_high_exponent = excluded.index_high_exponent, \
                  merkle_epoch = excluded.merkle_epoch, merkle_root_hash = excluded.merkle_root_hash, \
                  merkle_root_bytes = excluded.merkle_root_bytes",
                 params![
@@ -158,6 +166,12 @@ impl HardStateStore {
                     snapshot.team_name,
                     snapshot.team_name_utf8,
                     sqlite_integer("team-name sequence", snapshot.team_name_sequence)?,
+                    snapshot.index_range.low.infinity,
+                    snapshot.index_range.low.base.as_slice(),
+                    snapshot.index_range.low.exponent,
+                    snapshot.index_range.high.infinity,
+                    snapshot.index_range.high.base.as_slice(),
+                    snapshot.index_range.high.exponent,
                     merkle_epoch,
                     snapshot.merkle_root_hash.as_slice(),
                     snapshot.merkle_root_bytes,
@@ -172,11 +186,34 @@ impl HardStateStore {
                 params![snapshot.host_id, snapshot.team_id],
             )?;
             for member in &members {
+                let (
+                    range_present,
+                    low_infinity,
+                    low_base,
+                    low_exponent,
+                    high_infinity,
+                    high_base,
+                    high_exponent,
+                ) = match &member.index_range {
+                    Some(range) => (
+                        true,
+                        range.low.infinity,
+                        range.low.base.as_slice(),
+                        range.low.exponent,
+                        range.high.infinity,
+                        range.high.base.as_slice(),
+                        range.high.exponent,
+                    ),
+                    None => (false, false, &[][..], 0, false, &[][..], 0),
+                };
                 transaction.execute(
                     "INSERT INTO team_members (host_id, team_id, party_id, scoped_host_id, \
                      source_role_type, source_role_visibility, role_type, role_visibility, \
-                     generation, verify_key, hepk_fingerprint, removal_key_commitment) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                     generation, verify_key, hepk_fingerprint, removal_key_commitment, \
+                     index_range_present, index_low_infinity, index_low_base, index_low_exponent, \
+                     index_high_infinity, index_high_base, index_high_exponent) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, \
+                     ?15, ?16, ?17, ?18, ?19)",
                     params![
                         snapshot.host_id,
                         snapshot.team_id,
@@ -196,6 +233,13 @@ impl HardStateStore {
                             .removal_key_commitment
                             .as_ref()
                             .map_or(&[][..], |commitment| commitment.as_slice()),
+                        range_present,
+                        low_infinity,
+                        low_base,
+                        low_exponent,
+                        high_infinity,
+                        high_base,
+                        high_exponent,
                     ],
                 )?;
             }

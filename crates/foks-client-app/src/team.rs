@@ -921,7 +921,7 @@ impl CheckedProfileSession<'_> {
         ))
     }
 
-    fn load_local_team_context(
+    pub(super) fn load_local_team_context(
         &self,
         team_alias: &str,
         vault: &mut AccountVault<'_>,
@@ -1009,13 +1009,13 @@ impl CheckedProfileSession<'_> {
     }
 }
 
-struct LocalTeamContext {
-    host: foks_client::PinnedHost,
-    account: LoadedAccount,
-    actor: AuthenticatedUserOutcome,
-    team_id: EntityId,
-    team: AuthenticatedTeamOutcome,
-    users: std::collections::BTreeMap<Vec<u8>, foks_verify::VerifiedUserState>,
+pub(super) struct LocalTeamContext {
+    pub(super) host: foks_client::PinnedHost,
+    pub(super) account: LoadedAccount,
+    pub(super) actor: AuthenticatedUserOutcome,
+    pub(super) team_id: EntityId,
+    pub(super) team: AuthenticatedTeamOutcome,
+    pub(super) users: std::collections::BTreeMap<Vec<u8>, foks_verify::VerifiedUserState>,
 }
 
 fn discovery_alias(vault: &mut AccountVault<'_>, identity: &StoredTeam) -> Result<String> {
@@ -1458,6 +1458,37 @@ impl Drop for StoredTeamMemberEdit {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub(super) struct StoredFederatedExpulsion {
+    pub(super) version: u32,
+    pub(super) local_team_alias: String,
+    pub(super) local_team_id: Vec<u8>,
+    pub(super) local_host_id: Vec<u8>,
+    pub(super) remote_profile: String,
+    pub(super) remote_team_alias: String,
+    pub(super) remote_team_id: Vec<u8>,
+    pub(super) remote_host_id: Vec<u8>,
+    pub(super) source_role: StoredTeamRole,
+    pub(super) destination_role: StoredTeamRole,
+    pub(super) removal_key_commitment: [u8; 32],
+    pub(super) actor_uid: Vec<u8>,
+    pub(super) actor_device_id: Vec<u8>,
+    pub(super) actor_source_role: StoredTeamRole,
+    pub(super) actor_generation: u64,
+    pub(super) expected_seqno: u64,
+    pub(super) operation_id: [u8; 16],
+    pub(super) scheduler_job_id: [u8; 16],
+    pub(super) rotations: Vec<StoredTeamPtkRotation>,
+}
+
+impl Drop for StoredFederatedExpulsion {
+    fn drop(&mut self) {
+        for rotation in &mut self.rotations {
+            rotation.seed.zeroize();
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub(super) struct StoredFederatedMembership {
     pub(super) remote_profile: String,
     pub(super) remote_team_alias: String,
@@ -1831,6 +1862,99 @@ impl AccountVault<'_> {
         self.store.remove(&team_member_edit_key(alias))?;
         Ok(())
     }
+
+    pub(super) fn federation_expulsion(
+        &mut self,
+        alias: &str,
+    ) -> Result<Option<StoredFederatedExpulsion>> {
+        validate_name(alias)?;
+        let bytes = match self.store.get(&federation_expulsion_key(alias)) {
+            Ok(bytes) => bytes,
+            Err(foks_keystore::Error::Missing) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let intent: StoredFederatedExpulsion = serde_json::from_slice(&bytes)?;
+        validate_stored_federated_expulsion(&intent, alias)?;
+        Ok(Some(intent))
+    }
+
+    pub(super) fn put_federation_expulsion(
+        &mut self,
+        intent: &StoredFederatedExpulsion,
+    ) -> Result<()> {
+        validate_stored_federated_expulsion(intent, &intent.local_team_alias)?;
+        let encoded = Zeroizing::new(serde_json::to_vec(intent)?);
+        self.store.put(
+            &federation_expulsion_key(&intent.local_team_alias),
+            &encoded,
+        )?;
+        Ok(())
+    }
+
+    pub(super) fn remove_federation_expulsion(&mut self, alias: &str) -> Result<()> {
+        validate_name(alias)?;
+        self.store.remove(&federation_expulsion_key(alias))?;
+        Ok(())
+    }
+}
+
+fn validate_stored_federated_expulsion(
+    intent: &StoredFederatedExpulsion,
+    expected_alias: &str,
+) -> Result<()> {
+    if intent.version != CREDENTIAL_VERSION
+        || intent.local_team_alias != expected_alias
+        || intent.expected_seqno < 2
+        || intent.rotations.is_empty()
+        || intent.rotations.len() > 64
+    {
+        return Err(Error::InvalidAccount(
+            "pending federation expulsion header is invalid",
+        ));
+    }
+    validate_name(&intent.local_team_alias)?;
+    validate_name(&intent.remote_profile)?;
+    validate_name(&intent.remote_team_alias)?;
+    EntityId::from_bytes(intent.local_team_id.clone())?
+        .require_type(foks_proto::ENTITY_NAMED_TEAM)?;
+    EntityId::from_bytes(intent.local_host_id.clone())?.require_type(foks_proto::ENTITY_HOST)?;
+    let remote = EntityId::from_bytes(intent.remote_team_id.clone())?;
+    if !matches!(
+        remote.entity_type(),
+        foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+    ) {
+        return Err(Error::InvalidAccount(
+            "pending federation expulsion target is invalid",
+        ));
+    }
+    EntityId::from_bytes(intent.remote_host_id.clone())?.require_type(foks_proto::ENTITY_HOST)?;
+    EntityId::from_bytes(intent.actor_uid.clone())?.require_type(foks_proto::ENTITY_USER)?;
+    EntityId::from_bytes(intent.actor_device_id.clone())?
+        .require_type(foks_proto::ENTITY_DEVICE)?;
+    if intent.actor_source_role.role()? == Role::NONE
+        || intent.actor_generation == 0
+        || intent.source_role.role()? == Role::NONE
+        || !matches!(
+            intent.destination_role.role()?.kind(),
+            foks_proto::RoleType::Member
+        )
+    {
+        return Err(Error::InvalidAccount(
+            "pending federation expulsion role binding is invalid",
+        ));
+    }
+    let mut prior = None;
+    let mut seeds = std::collections::BTreeSet::new();
+    for rotation in &intent.rotations {
+        let role = rotation.role.role()?;
+        if prior.is_some_and(|old| old >= role) || !seeds.insert(rotation.seed) {
+            return Err(Error::InvalidAccount(
+                "pending federation expulsion PTKs are invalid",
+            ));
+        }
+        prior = Some(role);
+    }
+    Ok(())
 }
 
 fn validate_stored_team_member_edit(

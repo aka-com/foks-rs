@@ -671,6 +671,77 @@ impl AppState {
         Ok((team, entry))
     }
 
+    fn selected_active_federation_target(
+        &self,
+        store_id: &str,
+        remote_host_id_hex: &str,
+        remote_team_id_hex: &str,
+    ) -> Result<(foks_agent_proto::TeamStoreRef, FederationEntryDto), AgentError> {
+        let team = self.selected_active_team_for_mutation(store_id)?;
+        if !valid_typed_entity_id_hex(remote_host_id_hex, HOST_ID_PREFIX)
+            || !(valid_typed_entity_id_hex(remote_team_id_hex, NAMED_TEAM_ID_PREFIX)
+                || valid_typed_entity_id_hex(remote_team_id_hex, AD_HOC_TEAM_ID_PREFIX))
+        {
+            return Err(invalid_request(
+                "Choose an exact active federated group from the refreshed list.",
+            ));
+        }
+        let federations = self
+            .federations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entries = federations.get(store_id).ok_or_else(|| {
+            AgentError::new(
+                "federation-required",
+                "Re-read this group's federation before expelling a group.",
+                true,
+            )
+        })?;
+        let matching = entries
+            .iter()
+            .filter(|entry| {
+                entry.active
+                    && entry.operation_id_hex.is_some()
+                    && entry.remote_host_id_hex == remote_host_id_hex
+                    && entry.remote_team_id_hex == remote_team_id_hex
+            })
+            .collect::<Vec<_>>();
+        let [entry] = matching.as_slice() else {
+            return Err(invalid_request(
+                "The exact active federation target is missing or ambiguous.",
+            ));
+        };
+        let entry = (*entry).clone();
+        drop(federations);
+        let rosters = self
+            .rosters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let roster = rosters.get(store_id).ok_or_else(|| {
+            AgentError::new(
+                "roster-required",
+                "Re-read this group's roster before expelling a federated group.",
+                true,
+            )
+        })?;
+        let matching = roster
+            .iter()
+            .filter(|party| {
+                party.party_id_hex == remote_team_id_hex
+                    && party.scoped_host_id_hex.as_deref() == Some(remote_host_id_hex)
+                    && !party.locally_manageable
+                    && matches!(party.party_kind.as_str(), "named-team" | "ad-hoc-team")
+                    && party.destination_role == entry.destination
+            })
+            .count();
+        if matching != 1 {
+            return Err(invalid_request(
+                "The federation target does not match the refreshed authenticated roster.",
+            ));
+        }
+        Ok((team, entry))
+    }
+
     fn selected_store(&self, id: &str) -> Result<(CatalogStoreRef, Option<bool>), AgentError> {
         let catalog = self
             .catalog
@@ -1296,6 +1367,7 @@ impl TryFrom<PendingOperationSummary> for PendingOperationDto {
             PendingOperationKind::TeamCreation => "team-creation",
             PendingOperationKind::TeamMemberAddition => "team-member-addition",
             PendingOperationKind::TeamMemberEdit => "team-member-edit",
+            PendingOperationKind::FederationExpulsion => "federation-expulsion",
             PendingOperationKind::TeamRekey => "team-rekey",
         };
         Ok(Self {
@@ -3606,6 +3678,7 @@ fn federation_dtos(
                     .operation_id_hex
                     .as_ref()
                     .is_some_and(|operation| !valid_operation_id_hex(operation))
+                || (membership.active && membership.operation_id_hex.is_none())
                 || !matches!(membership.destination, MemberRole::Member { .. })
                 || !remote_aliases.insert((
                     membership.remote_profile.clone(),
@@ -7563,6 +7636,43 @@ pub async fn rerun_group_admission(
 }
 
 #[tauri::command]
+pub async fn expel_federated_group(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    store_id: String,
+    remote_host_id_hex: String,
+    remote_team_id_hex: String,
+) -> Result<MutationDto, AgentError> {
+    crate::applock::require_unlocked(&app)?;
+    require_main_window(&webview)?;
+    let _permit = state.begin_mutation()?;
+    let (team, entry) = state.selected_active_federation_target(
+        &store_id,
+        &remote_host_id_hex,
+        &remote_team_id_hex,
+    )?;
+    if entry.remote_host_id_hex != remote_host_id_hex
+        || entry.remote_team_id_hex != remote_team_id_hex
+    {
+        return Err(invalid_request(
+            "The exact cached federation target changed before expulsion.",
+        ));
+    }
+    apply_operation(
+        &state,
+        Operation::ExpelFederatedTeam {
+            profile: team.profile,
+            team_alias: team.team_alias,
+            remote_host_id_hex,
+            remote_team_id_hex,
+        },
+        MutationKind::Guarded,
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn resume_group_creation(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -7851,6 +7961,16 @@ mod tests {
         assert_eq!(
             serde_json::to_value(federation).unwrap(),
             fixture["federationEntry"]
+        );
+        assert_eq!(
+            serde_json::to_value(Operation::ExpelFederatedTeam {
+                profile: "foks.example".to_owned(),
+                team_alias: "engineering".to_owned(),
+                remote_host_id_hex: "02".repeat(33),
+                remote_team_id_hex: "03".repeat(33),
+            })
+            .unwrap(),
+            fixture["federationExpulsionOperation"]
         );
         assert_eq!(
             serde_json::to_value(CommandAck { ok: true }).unwrap(),
@@ -11214,7 +11334,7 @@ mod tests {
             remote_host_id_hex: "02".repeat(33),
             remote_team_id_hex: "14".repeat(33),
             destination: MemberRole::Member { visibility: -2 },
-            operation_id_hex: None,
+            operation_id_hex: Some("0b".repeat(16)),
             active: true,
         };
         assert_eq!(
@@ -11657,6 +11777,66 @@ mod tests {
                 .unwrap_err()
                 .code,
             "admission-not-resumable"
+        );
+    }
+
+    #[test]
+    fn federation_expulsion_requires_exact_active_cached_federation_and_roster_rows() {
+        let state = phase_four_state(Vec::new());
+        let local_id = store_id(&CatalogStoreRef::Team(team_ref(
+            "work.example",
+            "personal",
+            "engineering",
+        )));
+        let host = "02".repeat(33);
+        let team = "03".repeat(33);
+        let destination: RoleDto = KvRole::Member { visibility: -2 }.into();
+        state.federations.lock().unwrap().insert(
+            local_id.clone(),
+            vec![FederationEntryDto {
+                store: local_id.clone(),
+                remote_profile: "home.example".to_owned(),
+                remote_team_alias: "homelab".to_owned(),
+                remote_host_id_hex: host.clone(),
+                remote_team_id_hex: team.clone(),
+                destination: destination.clone(),
+                operation_id_hex: Some("07".repeat(16)),
+                active: true,
+            }],
+        );
+        state.rosters.lock().unwrap().insert(
+            local_id.clone(),
+            vec![PartyDto {
+                store: local_id.clone(),
+                username: None,
+                party_kind: "named-team".to_owned(),
+                generation: 1,
+                locally_manageable: false,
+                party_id_hex: team.clone(),
+                scoped_host_id_hex: Some(host.clone()),
+                source_role: KvRole::Admin.into(),
+                destination_role: destination,
+            }],
+        );
+        let (local, target) = state
+            .selected_active_federation_target(&local_id, &host, &team)
+            .unwrap();
+        assert_eq!(local.profile, "work.example");
+        assert_eq!(target.remote_team_id_hex, team);
+        assert_eq!(
+            state
+                .selected_active_federation_target(&local_id, &"02".repeat(32), &team)
+                .unwrap_err()
+                .code,
+            "invalid-request"
+        );
+        state.rosters.lock().unwrap().clear();
+        assert_eq!(
+            state
+                .selected_active_federation_target(&local_id, &host, &team)
+                .unwrap_err()
+                .code,
+            "roster-required"
         );
     }
 
