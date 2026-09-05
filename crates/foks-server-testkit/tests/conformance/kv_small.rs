@@ -1,8 +1,8 @@
 use std::io::Cursor;
 use std::time::Duration;
 
-use foks_client::KvWriteOptions;
-use foks_proto::Role;
+use foks_client::{KvFetchedNode, KvWriteOptions};
+use foks_proto::{KvNodeId, Role};
 use foks_server_testkit::TestAccountSpec;
 
 use crate::support::Fixture;
@@ -77,33 +77,70 @@ pub(crate) fn kv_small_success() {
         .find(|directory| directory.directory_id == root)
         .unwrap();
     assert_eq!(root_projection.entries.len(), 3);
-    assert_eq!(
-        root_projection
-            .entries
-            .iter()
-            .find(|entry| entry.name == b"hello.txt")
-            .unwrap()
-            .content
-            .as_deref(),
-        Some(b"hello from sqlite".as_slice())
-    );
-    assert_eq!(
-        root_projection
-            .entries
-            .iter()
-            .find(|entry| entry.name == b"hello-link")
-            .unwrap()
-            .symlink
-            .as_deref(),
-        Some(b"hello.txt".as_slice())
-    );
+    let hello = root_projection
+        .entries
+        .iter()
+        .find(|entry| entry.name == b"hello.txt")
+        .unwrap();
+    let hello_node = KvNodeId(hello.node_id);
+    assert!(hello.content.is_none());
+    let link = root_projection
+        .entries
+        .iter()
+        .find(|entry| entry.name == b"hello-link")
+        .unwrap();
+    let link_node = KvNodeId(link.node_id);
+    assert!(link.symlink.is_none());
     let child_projection = tree
         .iter()
         .find(|directory| directory.directory_id == child)
         .unwrap();
+    let nested = &child_projection.entries[0];
+    let nested_node = KvNodeId(nested.node_id);
+    assert!(nested.content.is_none());
+    drop(session);
+
     assert_eq!(
-        child_projection.entries[0].content.as_deref(),
-        Some(b"nested content".as_slice())
+        fixture
+            .client
+            .foks()
+            .read_user_kv_node(
+                fixture.host(),
+                &created.credential,
+                &created.authenticated.verified,
+                &created.authenticated.puks,
+                hello_node,
+            )
+            .unwrap(),
+        KvFetchedNode::SmallFile(b"hello from sqlite".to_vec())
+    );
+    assert_eq!(
+        fixture
+            .client
+            .foks()
+            .read_user_kv_node(
+                fixture.host(),
+                &created.credential,
+                &created.authenticated.verified,
+                &created.authenticated.puks,
+                link_node,
+            )
+            .unwrap(),
+        KvFetchedNode::Symlink(b"hello.txt".to_vec())
+    );
+    assert_eq!(
+        fixture
+            .client
+            .foks()
+            .read_user_kv_node(
+                fixture.host(),
+                &created.credential,
+                &created.authenticated.verified,
+                &created.authenticated.puks,
+                nested_node,
+            )
+            .unwrap(),
+        KvFetchedNode::SmallFile(b"nested content".to_vec())
     );
 }
 
@@ -194,16 +231,44 @@ fn small_file_boundaries_duplicates_and_stale_versions_are_atomic() {
         .iter()
         .find(|entry| entry.name == b"replace-me")
         .unwrap();
-    assert_eq!(replaced.content.as_deref(), Some(b"second".as_slice()));
+    let replaced_node = KvNodeId(replaced.node_id);
+    assert!(replaced.content.is_none());
+    let maximum = tree[0]
+        .entries
+        .iter()
+        .find(|entry| entry.name == b"maximum-small")
+        .unwrap();
+    let maximum_node = KvNodeId(maximum.node_id);
+    assert!(maximum.content.is_none());
+    drop(session);
+
     assert_eq!(
-        tree[0]
-            .entries
-            .iter()
-            .find(|entry| entry.name == b"maximum-small")
-            .unwrap()
-            .content
-            .as_deref(),
-        Some(vec![0x5a; 2040].as_slice())
+        fixture
+            .client
+            .foks()
+            .read_user_kv_node(
+                fixture.host(),
+                &created.credential,
+                &created.authenticated.verified,
+                &created.authenticated.puks,
+                replaced_node,
+            )
+            .unwrap(),
+        KvFetchedNode::SmallFile(b"second".to_vec())
+    );
+    assert_eq!(
+        fixture
+            .client
+            .foks()
+            .read_user_kv_node(
+                fixture.host(),
+                &created.credential,
+                &created.authenticated.verified,
+                &created.authenticated.puks,
+                maximum_node,
+            )
+            .unwrap(),
+        KvFetchedNode::SmallFile(vec![0x5a; 2040])
     );
 }
 

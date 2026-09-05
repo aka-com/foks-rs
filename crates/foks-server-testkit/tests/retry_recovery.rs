@@ -246,9 +246,9 @@ fn disconnect_between_large_file_chunks_is_invisible_and_retryable() {
     retry
         .put_file(root, "chunked.bin", &mut Cursor::new(&bytes), options)
         .unwrap();
-    let tree = retry.sync().unwrap();
-    assert_eq!(tree[0].entries.len(), 1);
-    assert_eq!(tree[0].entries[0].large_file_size, Some(bytes.len() as u64));
+    let metadata = retry.sync().unwrap();
+    assert_eq!(metadata[0].entries.len(), 1);
+    assert!(metadata[0].entries[0].large_file_size.is_none());
     drop(retry);
     environment.advance_clock(24 * 60 * 60 * 1_000_000 + 1);
     let (maintenance, _) = server.run_maintenance().unwrap();
