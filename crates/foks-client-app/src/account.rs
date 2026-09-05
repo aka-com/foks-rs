@@ -1366,7 +1366,7 @@ impl<'a> AccountVault<'a> {
     /// protected material. Reading each record authenticates it before a UI
     /// is allowed to advertise a Resume action.
     pub fn pending_operations(&mut self) -> Result<Vec<PendingOperationSummary>> {
-        const PREFIXES: [(&str, PendingOperationKind); 8] = [
+        const PREFIXES: [(&str, PendingOperationKind); 9] = [
             ("pending.", PendingOperationKind::AccountSignup),
             ("pending-device.", PendingOperationKind::DeviceProvision),
             ("kex-offer.", PendingOperationKind::PairingOffer),
@@ -1374,6 +1374,10 @@ impl<'a> AccountVault<'a> {
             ("pending-recovery.", PendingOperationKind::AccountRecovery),
             ("pending-yubi.", PendingOperationKind::YubiEnrollment),
             ("team-member-edit.", PendingOperationKind::TeamMemberEdit),
+            (
+                "federation-expulsion.",
+                PendingOperationKind::FederationExpulsion,
+            ),
             ("team-rekey.", PendingOperationKind::TeamRekey),
         ];
         let mut operations = Vec::new();
@@ -1397,6 +1401,12 @@ impl<'a> AccountVault<'a> {
                     self.team_member_edit(alias)?.ok_or(Error::InvalidAccount(
                         "pending team member edit disappeared during enumeration",
                     ))?;
+                }
+                PendingOperationKind::FederationExpulsion => {
+                    self.federation_expulsion(alias)?
+                        .ok_or(Error::InvalidAccount(
+                            "pending federation expulsion disappeared during enumeration",
+                        ))?;
                 }
                 PendingOperationKind::TeamRekey => {
                     self.team_rekey(alias)?.ok_or(Error::InvalidAccount(

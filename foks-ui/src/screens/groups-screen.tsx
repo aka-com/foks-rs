@@ -44,6 +44,7 @@ import {
 import type {
   Account,
   AccountStore,
+  FederationEntry,
   GroupDetailFailure,
   Item,
   Party,
@@ -688,6 +689,7 @@ function FederationSection({
   store,
   onSheet,
   onRerun,
+  onExpel,
   manageable,
   failure,
   onRetry,
@@ -696,6 +698,7 @@ function FederationSection({
   store: Store;
   onSheet: (sheet: Sheet) => void;
   onRerun: (operationId: string) => void;
+  onExpel: (entry: FederationEntry) => void;
   manageable: boolean;
   failure?: GroupDetailFailure;
   onRetry: () => void;
@@ -807,6 +810,15 @@ function FederationSection({
                         >
                           Restore access
                         </Button>
+                      ) : entry.active ? (
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          disabled={!manageable}
+                          onClick={() => onExpel(entry)}
+                        >
+                          Remove…
+                        </Button>
                       ) : null}
                     </span>
                   </div>
@@ -835,6 +847,93 @@ function FederationSection({
         </>
       )}
     </div>
+  );
+}
+
+function FederationExpulsionSheet({
+  bridge,
+  store,
+  entry,
+  onClose,
+  onApplied,
+  onMutationError,
+}: {
+  bridge: Bridge;
+  store: Extract<Store, { kind: 'team' }>;
+  entry: FederationEntry;
+  onClose: () => void;
+  onApplied: (message: string) => Promise<void>;
+  onMutationError: MutationFailureHandler;
+}): ReactNode {
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const expel = async (): Promise<void> => {
+    if (!confirmed || busy || !entry.active) return;
+    setBusy(true);
+    try {
+      await bridge.expelFederatedGroup({
+        storeId: store.id,
+        remoteHostIdHex: entry.remote_host_id_hex,
+        remoteTeamIdHex: entry.remote_team_id_hex,
+      });
+      await onApplied(
+        `${entry.remote_team_alias} removed and group keys rotated`,
+      );
+      onClose();
+    } catch (error) {
+      await onMutationError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <SheetDialog
+      danger
+      dismissible={false}
+      onClose={onClose}
+      glyph={<GroupMark store={store} />}
+      title={`Expel ${entry.remote_team_alias} from ${store.name}?`}
+      subtitle="This targets the exact remote group and server shown below"
+      footer={
+        <>
+          <Button disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            danger
+            disabled={busy || !confirmed || !entry.active}
+            onClick={() => void expel()}
+          >
+            Expel and rekey
+          </Button>
+        </>
+      }
+    >
+      <p>
+        Every member of <b>{entry.remote_team_alias}</b> will lose future access
+        to this group. All PTKs they could read will rotate before the local
+        admission key is deleted.
+      </p>
+      <Inset>
+        <InsetRow label="Remote host">
+          <code>{entry.remote_host_id_hex}</code>
+        </InsetRow>
+        <InsetRow label="Remote group">
+          <code>{entry.remote_team_id_hex}</code>
+        </InsetRow>
+      </Inset>
+      <label className="checkline">
+        <input
+          type="checkbox"
+          checked={confirmed}
+          disabled={busy}
+          onChange={(event) => setConfirmed(event.target.checked)}
+        />
+        I understand this expels every member of the remote group and rotates
+        affected keys.
+      </label>
+    </SheetDialog>
   );
 }
 
@@ -1729,6 +1828,8 @@ export function GroupSettingsScreen({
       ? (parties.find((party) => party.username === 'deploy-bot') ?? null)
       : null,
   );
+  const [expulsionTarget, setExpulsionTarget] =
+    useState<FederationEntry | null>(null);
   const [target, setTarget] = useState<Party | null>(() => {
     if (initial === 'demote')
       return parties.find((party) => party.username === 'priya.n') ?? null;
@@ -1765,6 +1866,15 @@ export function GroupSettingsScreen({
         }
       : target
     : null;
+  const expulsionEntry = expulsionTarget
+    ? (world.federation.find(
+        (entry) =>
+          entry.store === expulsionTarget.store &&
+          entry.active &&
+          entry.remote_host_id_hex === expulsionTarget.remote_host_id_hex &&
+          entry.remote_team_id_hex === expulsionTarget.remote_team_id_hex,
+      ) ?? null)
+    : null;
   const openSheet = (next: Sheet, party?: Party): void => {
     setTarget(party ?? null);
     setSheet(next);
@@ -1787,6 +1897,7 @@ export function GroupSettingsScreen({
       setSelected(null);
       setSheet(null);
       setTarget(null);
+      setExpulsionTarget(null);
       setRekeyArmed(false);
     }
     if (seenStore.current && !storeId) {
@@ -1794,6 +1905,7 @@ export function GroupSettingsScreen({
       setSelected(null);
       setSheet(null);
       setTarget(null);
+      setExpulsionTarget(null);
       setRekeyArmed(false);
     }
     seenStore.current = storeId;
@@ -1977,6 +2089,7 @@ export function GroupSettingsScreen({
                         'Group access restored',
                       )
                     }
+                    onExpel={setExpulsionTarget}
                     manageable={federationManageable}
                     failure={federationFailure}
                     onRetry={() => void onApplied('Group federation refreshed')}
@@ -2014,6 +2127,16 @@ export function GroupSettingsScreen({
               onClose={() => setSelected(null)}
               onSheet={openSheet}
               manageable={rosterManageable}
+            />
+          ) : null}
+          {expulsionEntry ? (
+            <FederationExpulsionSheet
+              bridge={bridge}
+              store={store}
+              entry={expulsionEntry}
+              onClose={() => setExpulsionTarget(null)}
+              onApplied={onApplied}
+              onMutationError={onMutationError}
             />
           ) : null}
           {sheet ? (

@@ -56,7 +56,7 @@ pub(crate) fn validate(
     let team_id = EntityId::from_bytes(team.team_id.clone())?;
     let host = EntityId::from_bytes(team.host_id.clone())?;
     let change = argument.link.decode_team_group_change()?;
-    let current_members = team
+    let mut current_members = team
         .members
         .iter()
         .map(stored_member)
@@ -87,6 +87,13 @@ pub(crate) fn validate(
         foks_proto::LINK_OUTER_TYPE_ID,
         &expected_tail.exact_link,
     )?;
+    let persisted_links = team
+        .links
+        .iter()
+        .map(|link| foks_proto::UserLink::decode(&link.exact_link))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let current_index_range = foks_verify::persisted_team_index_range(&persisted_links)?;
+    restore_member_index_ranges(&mut current_members, &persisted_links)?;
     let verified = foks_verify::verify_team_transition(
         &argument.link,
         &argument.hepks,
@@ -99,6 +106,7 @@ pub(crate) fn validate(
             hash: root.root_hash,
         },
         argument.next_tree_location,
+        &current_index_range,
         &current_members,
         &current_keys.into_values().collect::<Vec<_>>(),
     )?;
@@ -484,6 +492,57 @@ fn validate_remote_member_view_tokens(
     Ok(tokens.to_vec())
 }
 
+// The SQL roster does not project index ranges. Recover them from the same
+// persisted signed history used for the parent range, so incremental server
+// validation enforces the same narrowing rule as full client replay.
+fn restore_member_index_ranges(
+    members: &mut [foks_verify::VerifiedTeamMemberState],
+    links: &[foks_proto::UserLink],
+) -> Result<()> {
+    let mut ranges = BTreeMap::new();
+    for link in links {
+        for change in link.decode_team_group_change()?.changes {
+            let key = (
+                change.party.as_bytes().to_vec(),
+                change
+                    .scoped_host
+                    .as_ref()
+                    .map(|host| host.as_bytes().to_vec()),
+                change.source_role,
+            );
+            if change.role == Role::NONE {
+                ranges.remove(&key);
+            } else {
+                ranges.insert(key, change.keys.and_then(|keys| keys.index_range));
+            }
+        }
+    }
+    for member in members {
+        member.index_range = ranges
+            .remove(&(
+                member.party.as_bytes().to_vec(),
+                member
+                    .scoped_host
+                    .as_ref()
+                    .map(|host| host.as_bytes().to_vec()),
+                member.source_role,
+            ))
+            .ok_or(Error::Signup(
+                "stored team member is missing from signed history",
+            ))?;
+        if matches!(
+            member.party.entity_type(),
+            foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+        ) && member.index_range.is_none()
+        {
+            return Err(Error::Signup(
+                "stored member team has no signed index range",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn stored_member(
     member: &foks_server_db::TeamMemberSnapshot,
 ) -> Result<foks_verify::VerifiedTeamMemberState> {
@@ -500,6 +559,8 @@ fn stored_member(
         verify_key: EntityId::from_bytes(member.verify_key.clone())?,
         hepk_fingerprint: member.hepk_fingerprint,
         removal_key_commitment: member.removal_key_commitment,
+        // Filled from persisted signed history before transition validation.
+        index_range: None,
     })
 }
 
@@ -535,6 +596,158 @@ mod tests {
         let mut bytes = vec![tag; 33];
         bytes[0] = ENTITY_PUK_VERIFY;
         EntityId::from_bytes(bytes).unwrap()
+    }
+
+    #[test]
+    fn persisted_member_range_rejects_widening_during_a_role_change() {
+        use foks_crypto::{
+            derive_shared_public, make_add_remote_team_member_link, make_change_team_member_link,
+            AddRemoteTeamMemberInput, ChangeTeamMemberInput,
+        };
+        use foks_proto::{
+            Rational, RationalRange, SecretSeed, ENTITY_HOST, ENTITY_NAMED_TEAM, ENTITY_PTK_VERIFY,
+            ENTITY_USER,
+        };
+        let entity =
+            |kind, tag| EntityId::from_bytes([vec![kind], vec![tag; 32]].concat()).unwrap();
+        let actor = entity(ENTITY_USER, 1);
+        let team = entity(ENTITY_NAMED_TEAM, 2);
+        let host = entity(ENTITY_HOST, 3);
+        let child = entity(ENTITY_NAMED_TEAM, 4);
+        let remote_host = entity(ENTITY_HOST, 5);
+        let actor_seed = SecretSeed::new([6; 32]);
+        let actor_key = derive_shared_public(&actor_seed, ENTITY_PUK_VERIFY).unwrap();
+        let child_key = derive_shared_public(&SecretSeed::new([7; 32]), ENTITY_PTK_VERIFY).unwrap();
+        let root = foks_proto::TreeRoot {
+            epoch: 1,
+            hash: [8; 32],
+        };
+        let finite = |byte| Rational {
+            infinity: false,
+            base: vec![byte],
+            exponent: 0,
+        };
+        let child_range = RationalRange {
+            low: finite(1),
+            high: finite(32),
+        };
+        let parent_range = RationalRange {
+            low: finite(128),
+            high: Rational {
+                infinity: true,
+                base: Vec::new(),
+                exponent: 0,
+            },
+        };
+        let admission = make_add_remote_team_member_link(
+            &AddRemoteTeamMemberInput {
+                actor: &actor,
+                actor_source_role: Role::OWNER,
+                team: &team,
+                host: &host,
+                sequence: 3,
+                previous: [9; 32],
+                root: &root,
+                time: 1,
+                next_tree_location: [10; 32],
+                member: &child,
+                member_host: &remote_host,
+                member_source_role: Role::member(0),
+                member_destination_role: Role::member(-0x4000),
+                member_generation: 1,
+                member_public: &child_key,
+                member_index_range: Some(&child_range),
+            },
+            &actor_seed,
+            &SecretSeed::new([11; 32]),
+        )
+        .unwrap();
+        let stored = foks_server_db::TeamMemberSnapshot {
+            party_id: child.as_bytes().to_vec(),
+            scoped_host_id: Some(remote_host.as_bytes().to_vec()),
+            source_role_type: 1,
+            source_visibility: 0,
+            role_type: 1,
+            visibility: -0x4000,
+            generation: 1,
+            verify_key: child_key.verify_key.as_bytes().to_vec(),
+            hepk_fingerprint: foks_crypto::hepk_fingerprint(&child_key.hepk).unwrap(),
+            removal_key_commitment: Some(admission.removal_key_commitment),
+        };
+        let mut restored = vec![super::stored_member(&stored).unwrap()];
+        super::restore_member_index_ranges(&mut restored, &[admission.link]).unwrap();
+        assert_eq!(restored[0].index_range.as_ref(), Some(&child_range));
+        let owner = foks_verify::VerifiedTeamMemberState {
+            party: actor.clone(),
+            scoped_host: None,
+            source_role: Role::OWNER,
+            role: Role::OWNER,
+            generation: 1,
+            verify_key: actor_key.verify_key,
+            hepk_fingerprint: foks_crypto::hepk_fingerprint(&actor_key.hepk).unwrap(),
+            removal_key_commitment: Some([12; 32]),
+            index_range: None,
+        };
+        let shared_keys = vec![foks_verify::VerifiedSharedKey {
+            role: Role::member(0),
+            generation: 1,
+            verify_key: child_key.verify_key.clone(),
+            hepk: child_key.hepk.clone(),
+        }];
+        // Promotion without a generation change needs no PTK rotation. Only
+        // the retained range distinguishes this valid edit from a widening.
+        for (high, accepted) in [(16, true), (32, true), (64, false)] {
+            let next = RationalRange {
+                low: finite(1),
+                high: finite(high),
+            };
+            let material = make_change_team_member_link(
+                &ChangeTeamMemberInput {
+                    actor: &actor,
+                    actor_source_role: Role::OWNER,
+                    team: &team,
+                    host: &host,
+                    sequence: 4,
+                    previous: [13; 32],
+                    root: &root,
+                    time: 2,
+                    next_tree_location: [14; 32],
+                    member: &child,
+                    member_host: Some(&remote_host),
+                    member_source_role: Role::member(0),
+                    destination_role: Role::member(0),
+                    member_generation: Some(1),
+                    member_public: Some(&child_key),
+                    member_index_range: Some(&next),
+                },
+                &actor_seed,
+                &[],
+            )
+            .unwrap();
+            let verify = |member| {
+                foks_verify::verify_team_transition(
+                    &material.link,
+                    &[],
+                    &team,
+                    &host,
+                    4,
+                    [13; 32],
+                    root.clone(),
+                    [14; 32],
+                    &parent_range,
+                    &[owner.clone(), member],
+                    &shared_keys,
+                )
+            };
+            let result = verify(restored[0].clone());
+            if accepted {
+                result.unwrap();
+            } else {
+                assert!(matches!(result, Err(foks_verify::Error::TeamRoster)));
+                // The discarded SQL projection was the verification bypass.
+                assert!(verify(super::stored_member(&stored).unwrap()).is_ok());
+            }
+        }
     }
 
     #[test]
@@ -577,6 +790,7 @@ mod tests {
             verify_key: old.clone(),
             hepk_fingerprint: [4; 32],
             removal_key_commitment: Some([5; 32]),
+            index_range: None,
         };
         let replacement = TeamMemberKeys {
             verify_key: new.clone(),

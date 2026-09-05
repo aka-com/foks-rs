@@ -16,8 +16,9 @@ use foks_proto::{
     PassphraseUpdateArgument, PermissionToken, ProvisionDeviceArgument, RegistrationChallenge,
     RemoteViewPermissionPayload, RemoveTeamMemberArgument, RevokeDeviceArgument, Role,
     RoleAndGeneration, Signature, SoftwareSignupArgument, TeamBearerToken,
-    TeamBearerTokenChallenge, TeamEditResult, TeamNameReservation, TeamRemovalKeyBox,
-    TeamViewChallenge, TeamViewRequest, YubiEncryptedManagementKey, YubiSignupArgument,
+    TeamBearerTokenChallenge, TeamEditResult, TeamMetadataEditArgument, TeamNameReservation,
+    TeamRemovalKeyBox, TeamViewChallenge, TeamViewRequest, YubiEncryptedManagementKey,
+    YubiSignupArgument,
 };
 use foks_snowpack::{decode, encode, Value};
 use thiserror::Error;
@@ -991,6 +992,17 @@ pub fn encode_create_named_team_request(argument: &NamedTeamCreateArgument<'_>) 
 }
 
 pub fn encode_add_team_member_request(argument: &AddTeamMemberArgument<'_>) -> Result<Vec<u8>> {
+    encode_call(
+        TEAM_ADMIN_PROTOCOL_ID,
+        TEAM_EDIT_METHOD_POSITION,
+        &argument.encoded()?,
+        0,
+    )
+}
+
+pub fn encode_team_metadata_edit_request(
+    argument: &TeamMetadataEditArgument<'_>,
+) -> Result<Vec<u8>> {
     encode_call(
         TEAM_ADMIN_PROTOCOL_ID,
         TEAM_EDIT_METHOD_POSITION,

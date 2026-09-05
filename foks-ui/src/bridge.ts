@@ -220,6 +220,12 @@ export interface AdmitGroupRequest {
   visibility: number;
 }
 
+export interface ExpelFederatedGroupRequest {
+  storeId: StoreRef;
+  remoteHostIdHex: string;
+  remoteTeamIdHex: string;
+}
+
 export interface CheckedProfileResponse {
   profile: string;
   /** A new profile inserts its pin; a reused profile can advance or retain it. */
@@ -241,6 +247,7 @@ export type PendingOperationKind =
   | 'team-creation'
   | 'team-member-addition'
   | 'team-member-edit'
+  | 'federation-expulsion'
   | 'team-rekey';
 
 export interface PendingOperation {
@@ -574,6 +581,9 @@ export interface Bridge {
   removeGroupMember(request: GroupMemberRequest): Promise<MutationResponse>;
   resumeGroupMemberEdit(storeId: StoreRef): Promise<MutationResponse>;
   admitGroup(request: AdmitGroupRequest): Promise<MutationResponse>;
+  expelFederatedGroup(
+    request: ExpelFederatedGroupRequest,
+  ): Promise<MutationResponse>;
   rerunGroupAdmission(
     storeId: StoreRef,
     operationId: string,
@@ -1170,6 +1180,7 @@ const PENDING_KINDS: readonly PendingOperationKind[] = [
   'team-creation',
   'team-member-addition',
   'team-member-edit',
+  'federation-expulsion',
   'team-rekey',
 ];
 
@@ -1948,6 +1959,12 @@ export const tauriBridge: Bridge = {
     checked(
       'admit_group',
       { storeId, remoteStoreId, visibility },
+      decodeMutation,
+    ),
+  expelFederatedGroup: ({ storeId, remoteHostIdHex, remoteTeamIdHex }) =>
+    checked(
+      'expel_federated_group',
+      { storeId, remoteHostIdHex, remoteTeamIdHex },
       decodeMutation,
     ),
   rerunGroupAdmission: (storeId, operationId) =>

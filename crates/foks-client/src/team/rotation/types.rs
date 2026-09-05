@@ -31,6 +31,16 @@ pub struct RemoveTeamMemberRequest<'a> {
     pub remaining_users: &'a [&'a VerifiedUserState],
 }
 
+/// Exact federated-member expulsion using the admission-time removal key
+/// retained by the local encrypted vault. The host is mandatory in `target`;
+/// callers cannot collapse a fully-qualified federation row to a bare TeamID.
+pub struct RetainedTeamMemberRemovalRequest<'a> {
+    pub target: TeamMemberSelector<'a>,
+    pub removal_key: &'a SecretSeed,
+    pub rotations: &'a [TeamPtkRotationSeed<'a>],
+    pub remaining_parties: &'a [VerifiedMemberParty<'a>],
+}
+
 #[derive(Clone, Copy)]
 pub struct TeamMemberSelector<'a> {
     pub party: &'a EntityId,
@@ -273,6 +283,13 @@ impl<'a> VerifiedMemberParty<'a> {
             Self::User(user) => user.shared_key(role),
             Self::RemoteUser(user) => user.user.shared_key(role),
             Self::Team(team) => team.team.shared_key(role),
+        }
+    }
+
+    pub(super) fn index_range(self) -> Option<&'a foks_proto::RationalRange> {
+        match self {
+            Self::Team(team) => Some(team.team.index_range()),
+            Self::User(_) | Self::RemoteUser(_) => None,
         }
     }
 

@@ -38,7 +38,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
   const accounts = world.accounts.map((account) => ({ ...account }));
   let items = world.items.map((item) => ({ ...item }));
   let parties = world.parties.map((party) => ({ ...party }));
-  const federation = world.federation.map((entry) => ({ ...entry }));
+  let federation = world.federation.map((entry) => ({ ...entry }));
   const contents = new Map(
     items.map((item) => [
       itemKey(item),
@@ -704,6 +704,35 @@ export function mockBridge(world: World = FIXTURE): Bridge {
         source_role: { role: 'Owner' },
         destination_role: { role: 'Member', visibility },
       });
+      return { applied: true };
+    },
+    expelFederatedGroup: async ({
+      storeId,
+      remoteHostIdHex,
+      remoteTeamIdHex,
+    }) => {
+      assertNamedGroup(storeId);
+      const matches = federation.filter(
+        (candidate) =>
+          candidate.store === storeId &&
+          candidate.active &&
+          candidate.remote_host_id_hex === remoteHostIdHex &&
+          candidate.remote_team_id_hex === remoteTeamIdHex,
+      );
+      if (matches.length !== 1)
+        throw failure(
+          'invalid-request',
+          'Choose one exact active federated group.',
+        );
+      federation = federation.filter((candidate) => candidate !== matches[0]);
+      parties = parties.filter(
+        (candidate) =>
+          !(
+            candidate.store === storeId &&
+            candidate.party_id_hex === remoteTeamIdHex &&
+            candidate.scoped_host_id_hex === remoteHostIdHex
+          ),
+      );
       return { applied: true };
     },
     rerunGroupAdmission: async (storeId, operationId) => {

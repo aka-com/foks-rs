@@ -97,6 +97,11 @@ pub struct FederatedTeamAdmissionOutcome {
     pub added: AddedRemoteTeamMember,
 }
 
+pub struct FederatedTeamIndexRangeAllocation {
+    pub child: foks_proto::RationalRange,
+    pub parent: foks_proto::RationalRange,
+}
+
 /// Durable identities needed to refresh an already-admitted remote team's
 /// view capability without re-entering the admission saga. Either side may be
 /// software- or hardware-backed; the four combinations share one code path.
@@ -155,6 +160,88 @@ impl FederatedTeamRefreshRequest<'_, '_> {
 }
 
 impl FoksClient {
+    /// Allocates disjoint authenticated ranges for a federated child and its
+    /// parent. If both sides need a transition, the child is durably narrowed
+    /// first. A retry recognizes a completed child narrowing from authenticated
+    /// state and advances only the parent rather than narrowing the child twice.
+    pub fn allocate_federated_team_index_ranges(
+        &self,
+        request: &FederatedTeamAdmissionRequest<'_>,
+        child_store: &mut dyn ProtectedMutationStore,
+        parent_store: &mut dyn ProtectedMutationStore,
+    ) -> Result<FederatedTeamIndexRangeAllocation> {
+        validate_admission_request(request)?;
+        let child = self.authenticated_team_for_index_range(
+            request.remote_host,
+            request.remote_credential,
+            request.remote_team,
+        )?;
+        let parent = self.authenticated_team_for_index_range(
+            request.local_host,
+            request.local_credential,
+            request.local_team,
+        )?;
+        let child_range = child.verified.index_range().clone();
+        let parent_range = parent.verified.index_range().clone();
+        if foks_verify::rational_range_strictly_before(&child_range, &parent_range)? {
+            return Ok(FederatedTeamIndexRangeAllocation {
+                child: child_range,
+                parent: parent_range,
+            });
+        }
+
+        let (child_steps, parent_steps) = federation_index_range_plan(
+            &child_range,
+            request.remote_team.entity_type() == foks_proto::ENTITY_NAMED_TEAM,
+            &parent_range,
+        )?;
+        // Every child transition commits before the first parent transition.
+        // Re-running after any crash computes the remaining suffix from the
+        // newly authenticated heads, rather than replaying a hardcoded range.
+        for _ in 0..child_steps {
+            self.lower_team_index_range_durable(
+                request.remote_host,
+                request.remote_credential,
+                request.remote_team,
+                child_store,
+            )?;
+        }
+        for _ in 0..parent_steps {
+            self.raise_team_index_range_durable(
+                request.local_host,
+                request.local_credential,
+                request.local_team,
+                parent_store,
+            )?;
+        }
+
+        // Cross-host writes are not atomic. Authenticate both current heads
+        // again and fail closed unless the allocation that actually committed
+        // is disjoint; the scoped membership is created only after this check.
+        let child = self.authenticated_team_for_index_range(
+            request.remote_host,
+            request.remote_credential,
+            request.remote_team,
+        )?;
+        let parent = self.authenticated_team_for_index_range(
+            request.local_host,
+            request.local_credential,
+            request.local_team,
+        )?;
+        if !foks_verify::rational_range_strictly_before(
+            child.verified.index_range(),
+            parent.verified.index_range(),
+        )? {
+            return Err(Error::TeamRequest(
+                "federated index ranges are not disjoint after allocation",
+            ));
+        }
+        Ok(FederatedTeamIndexRangeAllocation {
+            child: child.verified.index_range().clone(),
+            parent: parent.verified.index_range().clone(),
+        })
+    }
+
     /// Renews the existing remote-view bearer and proves that the local team
     /// still stores that same capability. This never creates or resumes a
     /// federation admission saga and never edits the local team chain.
@@ -843,6 +930,53 @@ impl FoksClient {
     }
 }
 
+fn federation_index_range_plan(
+    child: &foks_proto::RationalRange,
+    child_mutable: bool,
+    parent: &foks_proto::RationalRange,
+) -> Result<(usize, usize)> {
+    const MAX_TRANSITIONS_PER_SIDE: usize = 256;
+
+    let mut children = vec![child.clone()];
+    if child_mutable {
+        for _ in 0..MAX_TRANSITIONS_PER_SIDE {
+            let Some(current) = children.last() else {
+                break;
+            };
+            match crate::lower_index_range(current) {
+                Ok(next) => children.push(next),
+                Err(_) => break,
+            }
+        }
+    }
+    let mut parents = vec![parent.clone()];
+    for _ in 0..MAX_TRANSITIONS_PER_SIDE {
+        let Some(current) = parents.last() else {
+            break;
+        };
+        match crate::raise_index_range(current) {
+            Ok(next) => parents.push(next),
+            Err(_) => break,
+        }
+    }
+    for total in 1..=MAX_TRANSITIONS_PER_SIDE * 2 {
+        for child_steps in 0..=total {
+            let parent_steps = total - child_steps;
+            let (Some(child), Some(parent)) =
+                (children.get(child_steps), parents.get(parent_steps))
+            else {
+                continue;
+            };
+            if foks_verify::rational_range_strictly_before(child, parent)? {
+                return Ok((child_steps, parent_steps));
+            }
+        }
+    }
+    Err(Error::TeamRequest(
+        "no disjoint federated index-range allocation is available",
+    ))
+}
+
 fn validate_admission_request(request: &FederatedTeamAdmissionRequest<'_>) -> Result<()> {
     if request.remote_host.host_id() == request.local_host.host_id()
         || request.destination_role == Role::NONE
@@ -857,12 +991,15 @@ fn validate_admission_request(request: &FederatedTeamAdmissionRequest<'_>) -> Re
         .local_team
         .clone()
         .require_type(foks_proto::ENTITY_NAMED_TEAM)?;
-    if !matches!(
-        request.remote_team.entity_type(),
-        foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
-    ) {
-        return Err(Error::TeamRequest("remote federation party is not a team"));
+    if request.remote_team.entity_type() == foks_proto::ENTITY_AD_HOC_TEAM {
+        return Err(Error::TeamRequest(
+            "immutable ad-hoc team cannot narrow its default federation index range",
+        ));
     }
+    request
+        .remote_team
+        .clone()
+        .require_type(foks_proto::ENTITY_NAMED_TEAM)?;
     Ok(())
 }
 

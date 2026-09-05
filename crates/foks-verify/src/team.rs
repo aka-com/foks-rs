@@ -2,6 +2,9 @@
 
 use std::collections::BTreeSet;
 
+pub const MAX_RATIONAL_BASE_LENGTH: usize = 32;
+pub const MAX_RATIONAL_EXPONENT_MAGNITUDE: i64 = 4_096;
+
 use crate::{
     append_authenticated_user_chain_bytes, authenticated_user_chain_bytes,
     authenticated_user_chain_link_at, chain_merkle_key, commitment, encode, find_hepk,
@@ -24,6 +27,7 @@ pub struct VerifiedTeamMember {
     pub verify_key: Vec<u8>,
     pub hepk_fingerprint: [u8; 32],
     pub removal_key_commitment: Option<[u8; 32]>,
+    pub index_range: Option<foks_proto::RationalRange>,
 }
 
 /// Extracts the Merkle epochs referenced by an untrusted team-chain response.
@@ -50,6 +54,7 @@ pub struct VerifiedTeamSnapshot {
     pub(crate) team_name: Vec<u8>,
     pub(crate) team_name_utf8: Vec<u8>,
     pub(crate) team_name_sequence: u64,
+    pub(crate) index_range: foks_proto::RationalRange,
     pub(crate) merkle_epoch: u64,
     pub(crate) merkle_root_hash: [u8; 32],
     pub(crate) merkle_root_bytes: Vec<u8>,
@@ -69,6 +74,7 @@ impl VerifiedTeamSnapshot {
             team_name: &self.team_name,
             team_name_utf8: &self.team_name_utf8,
             team_name_sequence: self.team_name_sequence,
+            index_range: &self.index_range,
             merkle_epoch: self.merkle_epoch,
             merkle_root_hash: self.merkle_root_hash,
             merkle_root_bytes: &self.merkle_root_bytes,
@@ -89,6 +95,7 @@ pub struct VerifiedTeamSnapshotParts<'a> {
     pub team_name: &'a [u8],
     pub team_name_utf8: &'a [u8],
     pub team_name_sequence: u64,
+    pub index_range: &'a foks_proto::RationalRange,
     pub merkle_epoch: u64,
     pub merkle_root_hash: [u8; 32],
     pub merkle_root_bytes: &'a [u8],
@@ -112,6 +119,7 @@ pub struct VerifiedTeamState {
     team_name_utf8: Vec<u8>,
     team_name_sequence: u64,
     member_load_floor: Role,
+    index_range: foks_proto::RationalRange,
     members: Vec<VerifiedTeamMemberState>,
     shared_keys: Vec<VerifiedSharedKey>,
 }
@@ -126,6 +134,7 @@ pub struct VerifiedTeamMemberState {
     pub verify_key: EntityId,
     pub hepk_fingerprint: [u8; 32],
     pub removal_key_commitment: Option<[u8; 32]>,
+    pub index_range: Option<foks_proto::RationalRange>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -154,6 +163,7 @@ pub fn verify_team_transition(
     expected_previous: [u8; 32],
     expected_root: foks_proto::TreeRoot,
     next_tree_location: [u8; 32],
+    current_index_range: &foks_proto::RationalRange,
     current_members: &[VerifiedTeamMemberState],
     current_shared_keys: &[VerifiedSharedKey],
 ) -> Result<VerifiedTeamTransition> {
@@ -197,8 +207,15 @@ pub fn verify_team_transition(
         return Err(Error::TeamKeySchedule);
     }
     let introduced = validate_team_shared_keys(&change, hepks, &current, false)?;
+    let parent_index_range = transition_index_range(&change, current_index_range)?;
     validate_team_rotation_schedule(&change, &members, &current, &introduced)?;
-    replay_team_transition(link, &change, &introduced, &mut members)?;
+    replay_team_transition(
+        link,
+        &change,
+        &introduced,
+        &parent_index_range,
+        &mut members,
+    )?;
     let mut keys = current;
     for key in &introduced {
         keys.insert(key.role, key.clone());
@@ -273,6 +290,9 @@ impl VerifiedTeamState {
     }
     pub fn member_load_floor(&self) -> Role {
         self.member_load_floor
+    }
+    pub fn index_range(&self) -> &foks_proto::RationalRange {
+        &self.index_range
     }
     pub fn members(&self) -> &[VerifiedTeamMemberState] {
         &self.members
@@ -397,6 +417,7 @@ impl VerifiedTeamState {
                     verify_key: member.verify_key.as_bytes().to_vec(),
                     hepk_fingerprint: member.hepk_fingerprint,
                     removal_key_commitment: member.removal_key_commitment,
+                    index_range: member.index_range.clone(),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -424,6 +445,7 @@ impl VerifiedTeamState {
             team_name: self.team_name.clone(),
             team_name_utf8: self.team_name_utf8.clone(),
             team_name_sequence: self.team_name_sequence,
+            index_range: self.index_range.clone(),
             merkle_epoch: self.merkle_epoch,
             merkle_root_hash: self.merkle_root_hash,
             merkle_root_bytes: self.merkle_root_bytes.clone(),
@@ -500,6 +522,7 @@ fn verify_team_chain_at_root(
     let mut shared_keys = BTreeMap::<Role, VerifiedSharedKey>::new();
     let mut previous_hash = None;
     let mut member_load_floor = Role::member(0);
+    let mut index_range = None;
 
     for (index, ((link, location), path)) in chain
         .links
@@ -542,9 +565,20 @@ fn verify_team_chain_at_root(
         if index == 0 {
             member_load_floor =
                 verify_team_eldest(link, &change, expected_team, &introduced, &mut members)?;
+            index_range = Some(team_eldest_index_range(&change)?);
         } else {
+            index_range = Some(transition_index_range(
+                &change,
+                index_range.as_ref().ok_or(Error::TeamBinding)?,
+            )?);
             validate_team_rotation_schedule(&change, &members, &shared_keys, &introduced)?;
-            replay_team_transition(link, &change, &introduced, &mut members)?;
+            replay_team_transition(
+                link,
+                &change,
+                &introduced,
+                index_range.as_ref().ok_or(Error::TeamBinding)?,
+                &mut members,
+            )?;
         }
         for key in introduced {
             shared_keys.insert(key.role, key);
@@ -586,6 +620,7 @@ fn verify_team_chain_at_root(
         team_name_utf8,
         team_name_sequence,
         member_load_floor,
+        index_range: index_range.ok_or(Error::TeamBinding)?,
         members: members.into_values().collect(),
         shared_keys: shared_keys.into_values().collect(),
     })
@@ -671,6 +706,7 @@ fn verify_team_chain_increment_at_root(
         .map(|key| (key.role, key))
         .collect::<BTreeMap<_, _>>();
     let mut previous_hash = prior.chain_tail_hash;
+    let mut index_range = prior.index_range.clone();
     let start_sequence = prior
         .chain_seqno
         .checked_add(1)
@@ -710,8 +746,9 @@ fn verify_team_chain_increment_at_root(
         )
         .map_err(|_| Error::TeamChainContinuity)?;
         let introduced = validate_team_shared_keys(&change, &chain.hepks, &shared_keys, false)?;
+        index_range = transition_index_range(&change, &index_range)?;
         validate_team_rotation_schedule(&change, &members, &shared_keys, &introduced)?;
-        replay_team_transition(link, &change, &introduced, &mut members)?;
+        replay_team_transition(link, &change, &introduced, &index_range, &mut members)?;
         for key in introduced {
             shared_keys.insert(key.role, key);
         }
@@ -766,6 +803,7 @@ fn verify_team_chain_increment_at_root(
         team_name_utf8,
         team_name_sequence,
         member_load_floor: prior.member_load_floor,
+        index_range,
         members: members.into_values().collect(),
         shared_keys: shared_keys.into_values().collect(),
     })
@@ -830,6 +868,129 @@ pub(crate) fn team_member_key(
     key
 }
 
+/// Compares two v0.1.9 base-256 rationals without converting their untrusted
+/// exponents to machine-sized offsets. Finite encodings are compared by value;
+/// leading and trailing zero bytes are therefore accepted exactly as Go does.
+pub fn compare_rationals(
+    left: &foks_proto::Rational,
+    right: &foks_proto::Rational,
+) -> Result<std::cmp::Ordering> {
+    fn validate(value: &foks_proto::Rational) -> Result<()> {
+        if value.base.len() > MAX_RATIONAL_BASE_LENGTH
+            || !(-MAX_RATIONAL_EXPONENT_MAGNITUDE..=MAX_RATIONAL_EXPONENT_MAGNITUDE)
+                .contains(&value.exponent)
+            || (value.infinity && (!value.base.is_empty() || value.exponent != 0))
+        {
+            return Err(Error::TeamBinding);
+        }
+        Ok(())
+    }
+    fn significant(value: &foks_proto::Rational) -> (&[u8], i128) {
+        let first = value.base.iter().position(|byte| *byte != 0);
+        let Some(first) = first else {
+            return (&[], 0);
+        };
+        let last = value
+            .base
+            .iter()
+            .rposition(|byte| *byte != 0)
+            .expect("a first significant byte implies a last one");
+        let trailing = value.base.len() - last - 1;
+        (
+            &value.base[first..=last],
+            i128::from(value.exponent) + trailing as i128,
+        )
+    }
+
+    validate(left)?;
+    validate(right)?;
+    match (left.infinity, right.infinity) {
+        (true, true) => return Ok(std::cmp::Ordering::Equal),
+        (true, false) => return Ok(std::cmp::Ordering::Greater),
+        (false, true) => return Ok(std::cmp::Ordering::Less),
+        (false, false) => {}
+    }
+    let (left_base, left_low) = significant(left);
+    let (right_base, right_low) = significant(right);
+    match (left_base.is_empty(), right_base.is_empty()) {
+        (true, true) => return Ok(std::cmp::Ordering::Equal),
+        (true, false) => return Ok(std::cmp::Ordering::Less),
+        (false, true) => return Ok(std::cmp::Ordering::Greater),
+        (false, false) => {}
+    }
+    let left_high = left_low + left_base.len() as i128;
+    let right_high = right_low + right_base.len() as i128;
+    match left_high.cmp(&right_high) {
+        std::cmp::Ordering::Equal => {}
+        order => return Ok(order),
+    }
+    let width = left_base.len().max(right_base.len());
+    for index in 0..width {
+        let left_byte = left_base.get(index).copied().unwrap_or(0);
+        let right_byte = right_base.get(index).copied().unwrap_or(0);
+        match left_byte.cmp(&right_byte) {
+            std::cmp::Ordering::Equal => {}
+            order => return Ok(order),
+        }
+    }
+    Ok(std::cmp::Ordering::Equal)
+}
+
+pub fn validate_rational_range(range: &foks_proto::RationalRange) -> Result<()> {
+    if compare_rationals(&range.low, &range.high)? == std::cmp::Ordering::Greater {
+        return Err(Error::TeamBinding);
+    }
+    Ok(())
+}
+
+pub fn canonical_default_team_index_range() -> foks_proto::RationalRange {
+    foks_proto::RationalRange {
+        low: foks_proto::Rational {
+            infinity: false,
+            base: vec![1],
+            exponent: 0,
+        },
+        high: foks_proto::Rational {
+            infinity: true,
+            base: Vec::new(),
+            exponent: 0,
+        },
+    }
+}
+
+fn rational_ranges_equal(
+    left: &foks_proto::RationalRange,
+    right: &foks_proto::RationalRange,
+) -> Result<bool> {
+    validate_rational_range(left)?;
+    validate_rational_range(right)?;
+    Ok(
+        compare_rationals(&left.low, &right.low)? == std::cmp::Ordering::Equal
+            && compare_rationals(&left.high, &right.high)? == std::cmp::Ordering::Equal,
+    )
+}
+
+pub fn rational_range_includes(
+    outer: &foks_proto::RationalRange,
+    inner: &foks_proto::RationalRange,
+) -> Result<bool> {
+    validate_rational_range(outer)?;
+    validate_rational_range(inner)?;
+    Ok(
+        compare_rationals(&outer.low, &inner.low)? != std::cmp::Ordering::Greater
+            && compare_rationals(&outer.high, &inner.high)? != std::cmp::Ordering::Less,
+    )
+}
+
+pub fn rational_range_strictly_before(
+    left: &foks_proto::RationalRange,
+    right: &foks_proto::RationalRange,
+) -> Result<bool> {
+    validate_rational_range(left)?;
+    validate_rational_range(right)?;
+    Ok(compare_rationals(&left.high, &right.low)? == std::cmp::Ordering::Less)
+}
+
 pub(crate) fn verified_team_member(
     change: &foks_proto::TeamMemberChange,
 ) -> Result<VerifiedTeamMemberState> {
@@ -857,6 +1018,11 @@ pub(crate) fn verified_team_member(
     if !source_matches_key {
         return Err(Error::TeamRoster);
     }
+    match (change.party.entity_type(), keys.index_range.as_ref()) {
+        (ENTITY_NAMED_TEAM | ENTITY_AD_HOC_TEAM, Some(range)) => validate_rational_range(range)?,
+        (ENTITY_USER, None) => {}
+        _ => return Err(Error::TeamRoster),
+    }
     Ok(VerifiedTeamMemberState {
         party: change.party.clone(),
         scoped_host: change.scoped_host.clone(),
@@ -866,6 +1032,7 @@ pub(crate) fn verified_team_member(
         verify_key: keys.verify_key.clone(),
         hepk_fingerprint: keys.hepk_fingerprint,
         removal_key_commitment: keys.removal_key_commitment,
+        index_range: keys.index_range.clone(),
     })
 }
 
@@ -960,10 +1127,64 @@ fn team_eldest_member_load_floor(
     }
 }
 
+fn team_eldest_index_range(
+    change: &foks_proto::TeamGroupChange,
+) -> Result<foks_proto::RationalRange> {
+    let range = change
+        .metadata
+        .iter()
+        .find_map(|metadata| match metadata {
+            ChangeMetadata::TeamIndexRange(range) => Some(range.clone()),
+            _ => None,
+        })
+        .ok_or(Error::TeamBinding)?;
+    validate_rational_range(&range)?;
+    if range != canonical_default_team_index_range() {
+        return Err(Error::TeamBinding);
+    }
+    Ok(range)
+}
+
+fn transition_index_range(
+    change: &foks_proto::TeamGroupChange,
+    previous: &foks_proto::RationalRange,
+) -> Result<foks_proto::RationalRange> {
+    let next = change.metadata.iter().find_map(|metadata| match metadata {
+        ChangeMetadata::TeamIndexRange(range) => Some(range),
+        _ => None,
+    });
+    let Some(next) = next else {
+        return Ok(previous.clone());
+    };
+    validate_rational_range(next)?;
+    if rational_ranges_equal(next, previous)? || !rational_range_includes(previous, next)? {
+        return Err(Error::TeamBinding);
+    }
+    Ok(next.clone())
+}
+
+/// Recovers the authenticated range from already-verified, persisted team
+/// links. This is used by the server's transition verifier because range bytes
+/// intentionally are not projected into server-side SQL state.
+pub fn persisted_team_index_range<'a>(
+    links: impl IntoIterator<Item = &'a foks_proto::UserLink>,
+) -> Result<foks_proto::RationalRange> {
+    let mut current = None;
+    for link in links {
+        let change = link.decode_team_group_change()?;
+        current = Some(match current.as_ref() {
+            None => team_eldest_index_range(&change)?,
+            Some(previous) => transition_index_range(&change, previous)?,
+        });
+    }
+    current.ok_or(Error::TeamBinding)
+}
+
 fn replay_team_transition(
     link: &foks_proto::UserLink,
     change: &foks_proto::TeamGroupChange,
     introduced: &[VerifiedSharedKey],
+    parent_index_range: &foks_proto::RationalRange,
     members: &mut BTreeMap<Vec<u8>, VerifiedTeamMemberState>,
 ) -> Result<()> {
     if change.team.entity_type() == ENTITY_AD_HOC_TEAM {
@@ -1031,13 +1252,30 @@ fn replay_team_transition(
         if prior.is_none() && verified.removal_key_commitment.is_none() {
             return Err(Error::TeamRoster);
         }
-        if let Some(old) = prior {
-            if verified
-                .removal_key_commitment
-                .is_some_and(|commitment| Some(commitment) != old.removal_key_commitment)
-            {
-                return Err(Error::TeamRoster);
+        let range_is_valid = match (
+            prior.and_then(|old| old.index_range.as_ref()),
+            &verified.index_range,
+        ) {
+            (None, Some(next)) => rational_range_strictly_before(next, parent_index_range)?,
+            (None, None) => true,
+            (Some(_), None) => false,
+            (Some(previous), Some(next)) if previous == next => true,
+            (Some(previous), Some(next)) => {
+                !rational_ranges_equal(previous, next)?
+                    && rational_range_includes(previous, next)?
+                    && rational_range_strictly_before(next, parent_index_range)?
             }
+        };
+        if !range_is_valid
+            || prior.is_some_and(|old| {
+                verified
+                    .removal_key_commitment
+                    .is_some_and(|commitment| Some(commitment) != old.removal_key_commitment)
+            })
+        {
+            return Err(Error::TeamRoster);
+        }
+        if let Some(old) = prior {
             verified.removal_key_commitment = old.removal_key_commitment;
         }
         if signer.role < verified.role
@@ -1420,6 +1658,7 @@ pub fn restore_verified_team(
         || reproduced.team_name != persisted.team_name
         || reproduced.team_name_utf8 != persisted.team_name_utf8
         || reproduced.team_name_sequence != persisted.team_name_sequence
+        || reproduced.index_range != persisted.index_range
         || reproduced.merkle_epoch != persisted.merkle_epoch
         || reproduced.merkle_root_hash != persisted.merkle_root_hash
         || reproduced.merkle_root_bytes != persisted.merkle_root_bytes
@@ -1434,7 +1673,9 @@ pub fn restore_verified_team(
 #[cfg(test)]
 mod transition_tests {
     use super::{
-        replay_team_transition, team_eldest_member_load_floor, team_member_key,
+        canonical_default_team_index_range, compare_rationals, rational_range_includes,
+        rational_range_strictly_before, replay_team_transition, team_eldest_index_range,
+        team_eldest_member_load_floor, team_member_key, validate_rational_range,
         validate_team_rotation_schedule, verified_team_member, BTreeMap, EntityId, Error, Role,
         VerifiedSharedKey,
     };
@@ -1480,6 +1721,20 @@ mod transition_tests {
             team_eldest_member_load_floor(&historical, &historical.team),
             Err(Error::TeamBinding)
         ));
+
+        assert_eq!(
+            team_eldest_index_range(&change).unwrap(),
+            canonical_default_team_index_range()
+        );
+        let mut noncanonical = change;
+        let ChangeMetadata::TeamIndexRange(range) = &mut noncanonical.metadata[2] else {
+            panic!("fixture has the canonical range metadata position")
+        };
+        range.low.base.insert(0, 0);
+        assert!(matches!(
+            team_eldest_index_range(&noncanonical),
+            Err(Error::TeamBinding)
+        ));
     }
 
     #[test]
@@ -1496,6 +1751,7 @@ mod transition_tests {
             &addition,
             &addition_change,
             &Vec::<VerifiedSharedKey>::new(),
+            &canonical_default_team_index_range(),
             &mut members,
         )
         .unwrap();
@@ -1519,6 +1775,7 @@ mod transition_tests {
                 &addition,
                 &change,
                 &Vec::<VerifiedSharedKey>::new(),
+                &canonical_default_team_index_range(),
                 &mut BTreeMap::new(),
             ),
             Err(Error::TeamRoster)
@@ -1539,6 +1796,7 @@ mod transition_tests {
             &addition,
             &addition_change,
             &Vec::<VerifiedSharedKey>::new(),
+            &canonical_default_team_index_range(),
             &mut members,
         )
         .unwrap();
@@ -1589,7 +1847,14 @@ mod transition_tests {
             validate_team_rotation_schedule(&rotation_change, &members, &current, &introduced[..1],),
             Err(Error::TeamKeySchedule)
         ));
-        replay_team_transition(&rotation, &rotation_change, &introduced, &mut members).unwrap();
+        replay_team_transition(
+            &rotation,
+            &rotation_change,
+            &introduced,
+            &canonical_default_team_index_range(),
+            &mut members,
+        )
+        .unwrap();
         assert_eq!(members.len(), 1);
     }
 
@@ -1607,6 +1872,7 @@ mod transition_tests {
             &addition,
             &addition_change,
             &Vec::<VerifiedSharedKey>::new(),
+            &canonical_default_team_index_range(),
             &mut members,
         )
         .unwrap();
@@ -1652,10 +1918,83 @@ mod transition_tests {
             .as_ref()
             .unwrap()
             .removal_key_commitment;
-        replay_team_transition(&demotion, &change, &introduced, &mut members).unwrap();
+        replay_team_transition(
+            &demotion,
+            &change,
+            &introduced,
+            &canonical_default_team_index_range(),
+            &mut members,
+        )
+        .unwrap();
         let changed = &change.changes[0];
         let key = team_member_key(&changed.party, None, changed.source_role);
         assert_eq!(members[&key].role, Role::member(-0x4000));
         assert_eq!(members[&key].removal_key_commitment, commitment);
+    }
+
+    #[test]
+    fn v019_rational_ranges_compare_by_value_and_reject_malformed_infinity() {
+        let rational = |base: &[u8], exponent| foks_proto::Rational {
+            infinity: false,
+            base: base.to_vec(),
+            exponent,
+        };
+        let range = |low, high| foks_proto::RationalRange { low, high };
+        assert_eq!(
+            compare_rationals(&rational(&[0, 0x20, 0], -1), &rational(&[0x20], 0)).unwrap(),
+            std::cmp::Ordering::Equal
+        );
+        let child = range(rational(&[0x20], 0), rational(&[0x30], 0));
+        let parent = range(
+            rational(&[0x40], 0),
+            foks_proto::Rational {
+                infinity: true,
+                base: Vec::new(),
+                exponent: 0,
+            },
+        );
+        assert!(rational_range_strictly_before(&child, &parent).unwrap());
+        assert!(rational_range_includes(&parent, &parent).unwrap());
+        assert!(
+            validate_rational_range(&range(rational(&[0x40], 0), rational(&[0x30], 0))).is_err()
+        );
+        assert!(validate_rational_range(&range(
+            rational(&[1], 0),
+            foks_proto::Rational {
+                infinity: true,
+                base: vec![1],
+                exponent: 0,
+            }
+        ))
+        .is_err());
+
+        let boundary = rational(
+            &vec![1; super::MAX_RATIONAL_BASE_LENGTH],
+            super::MAX_RATIONAL_EXPONENT_MAGNITUDE,
+        );
+        assert!(validate_rational_range(&range(boundary.clone(), boundary)).is_ok());
+        assert!(validate_rational_range(&range(
+            rational(&vec![1; super::MAX_RATIONAL_BASE_LENGTH + 1], 0),
+            foks_proto::Rational {
+                infinity: true,
+                base: Vec::new(),
+                exponent: 0,
+            }
+        ))
+        .is_err());
+        for exponent in [
+            super::MAX_RATIONAL_EXPONENT_MAGNITUDE + 1,
+            -super::MAX_RATIONAL_EXPONENT_MAGNITUDE - 1,
+        ] {
+            assert!(validate_rational_range(&range(
+                rational(&[1], exponent),
+                foks_proto::Rational {
+                    infinity: true,
+                    base: Vec::new(),
+                    exponent: 0,
+                }
+            ))
+            .is_err());
+        }
     }
 }

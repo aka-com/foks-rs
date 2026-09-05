@@ -1359,13 +1359,13 @@ pub enum ChangeMetadata {
     MemberLoadFloor(Role),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct RationalRange {
     pub low: Rational,
     pub high: Rational,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Rational {
     pub infinity: bool,
     pub base: Vec<u8>,

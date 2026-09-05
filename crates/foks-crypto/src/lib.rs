@@ -852,11 +852,30 @@ pub struct AddRemoteTeamMemberInput<'a> {
     pub member_destination_role: Role,
     pub member_generation: u64,
     pub member_public: &'a SharedPublicMaterial,
+    pub member_index_range: Option<&'a foks_proto::RationalRange>,
 }
 
 pub struct AddLocalTeamMemberMaterial {
     pub link: UserLink,
     pub removal_key_commitment: [u8; 32],
+    pub next_tree_location: [u8; 32],
+}
+
+pub struct TeamMetadataInput<'a> {
+    pub actor: &'a EntityId,
+    pub actor_source_role: Role,
+    pub team: &'a EntityId,
+    pub host: &'a EntityId,
+    pub sequence: u64,
+    pub previous: [u8; 32],
+    pub root: &'a TreeRoot,
+    pub time: u64,
+    pub next_tree_location: [u8; 32],
+    pub index_range: &'a foks_proto::RationalRange,
+}
+
+pub struct TeamMetadataMaterial {
+    pub link: UserLink,
     pub next_tree_location: [u8; 32],
 }
 
@@ -896,6 +915,7 @@ pub struct ChangeTeamMemberInput<'a> {
     pub destination_role: Role,
     pub member_generation: Option<u64>,
     pub member_public: Option<&'a SharedPublicMaterial>,
+    pub member_index_range: Option<&'a foks_proto::RationalRange>,
 }
 
 pub struct ChangeTeamMemberEntryInput<'a> {
@@ -905,6 +925,7 @@ pub struct ChangeTeamMemberEntryInput<'a> {
     pub destination_role: Role,
     pub member_generation: Option<u64>,
     pub member_public: Option<&'a SharedPublicMaterial>,
+    pub member_index_range: Option<&'a foks_proto::RationalRange>,
 }
 
 pub struct ChangeTeamMembersInput<'a> {
@@ -1424,6 +1445,10 @@ pub fn make_add_remote_team_member_link(
         || input.member_generation == 0
         || input.member_host == input.host
         || input.actor == input.member
+        || matches!(
+            input.member.entity_type(),
+            foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+        ) != input.member_index_range.is_some()
     {
         return Err(Error::NamedTeamMaterial);
     }
@@ -1452,7 +1477,7 @@ pub fn make_add_remote_team_member_link(
                 hepk_fingerprint: hepk_fingerprint(&input.member_public.hepk)?,
                 generation: input.member_generation,
                 removal_key_commitment: Some(removal_key_commitment),
-                index_range: None,
+                index_range: input.member_index_range.cloned(),
             }),
         }],
         shared_keys: Vec::new(),
@@ -1467,6 +1492,52 @@ pub fn make_add_remote_team_member_link(
     Ok(AddLocalTeamMemberMaterial {
         link: unsigned.finish(vec![signature])?,
         removal_key_commitment,
+        next_tree_location: input.next_tree_location,
+    })
+}
+
+/// Constructs one signed, metadata-only named-team transition. The caller must
+/// derive `index_range` from the authenticated current team state; chain replay
+/// enforces that the new range is a strict narrowing.
+pub fn make_team_index_range_link(
+    input: &TeamMetadataInput<'_>,
+    actor_puk_seed: &SecretSeed,
+) -> Result<TeamMetadataMaterial> {
+    input.actor.clone().require_type(foks_proto::ENTITY_USER)?;
+    input
+        .team
+        .clone()
+        .require_type(foks_proto::ENTITY_NAMED_TEAM)?;
+    input.host.clone().require_type(foks_proto::ENTITY_HOST)?;
+    if input.sequence < 2 || input.actor_source_role == Role::NONE {
+        return Err(Error::NamedTeamMaterial);
+    }
+    let actor_public = derive_shared_public(actor_puk_seed, foks_proto::ENTITY_PUK_VERIFY)?;
+    let change = TeamGroupChange {
+        seqno: input.sequence,
+        previous: Some(input.previous),
+        root: input.root.clone(),
+        time: input.time,
+        next_location_commitment: tree_location_commitment(&input.next_tree_location)?,
+        team: input.team.clone(),
+        host: input.host.clone(),
+        signer: actor_public.verify_key,
+        signer_owner: TeamKeyOwner {
+            party: input.actor.clone(),
+            source_role: input.actor_source_role,
+        },
+        changes: Vec::new(),
+        shared_keys: Vec::new(),
+        metadata: vec![ChangeMetadata::TeamIndexRange(input.index_range.clone())],
+    };
+    let unsigned = UnsignedUserLink::team_group_change(&change)?;
+    let signature = sign_seed_typed(
+        actor_puk_seed,
+        LINK_OUTER_V1_TYPE_ID,
+        &unsigned.signing_bytes(&[])?,
+    )?;
+    Ok(TeamMetadataMaterial {
+        link: unsigned.finish(vec![signature])?,
         next_tree_location: input.next_tree_location,
     })
 }
@@ -1496,6 +1567,7 @@ pub fn make_remove_local_team_member_link(
             destination_role: Role::NONE,
             member_generation: None,
             member_public: None,
+            member_index_range: None,
         },
         actor_puk_seed,
         rotations,
@@ -1527,6 +1599,7 @@ pub fn make_change_team_member_link(
                 destination_role: input.destination_role,
                 member_generation: input.member_generation,
                 member_public: input.member_public,
+                member_index_range: input.member_index_range,
             }],
         },
         actor_puk_seed,
@@ -1565,7 +1638,14 @@ pub fn make_change_team_members_link(
                 | foks_proto::ENTITY_AD_HOC_TEAM
         ) || member.member_source_role == Role::NONE
             || (member.destination_role == Role::NONE)
-                != (member.member_generation.is_none() && member.member_public.is_none())
+                != (member.member_generation.is_none()
+                    && member.member_public.is_none()
+                    && member.member_index_range.is_none())
+            || (member.destination_role != Role::NONE
+                && matches!(
+                    member.member.entity_type(),
+                    foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+                ) != member.member_index_range.is_some())
             || member
                 .member_host
                 .is_some_and(|host| host.entity_type() != foks_proto::ENTITY_HOST)
@@ -1632,7 +1712,7 @@ pub fn make_change_team_members_link(
                                 hepk_fingerprint: hepk_fingerprint(&public.hepk)?,
                                 generation,
                                 removal_key_commitment: None,
-                                index_range: None,
+                                index_range: member.member_index_range.cloned(),
                             })
                         }
                         (None, None) => None,
@@ -5507,6 +5587,7 @@ mod tests {
                 destination_role: member.role,
                 member_generation: Some(member.keys.as_ref().unwrap().generation),
                 member_public: Some(&target),
+                member_index_range: None,
             },
             &actor_seed,
             &rotations,
@@ -5551,6 +5632,7 @@ mod tests {
                 destination_role: Role::OWNER,
                 member_generation: Some(member.keys.as_ref().unwrap().generation),
                 member_public: Some(&target),
+                member_index_range: None,
             },
             &actor_seed,
             &[],

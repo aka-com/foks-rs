@@ -115,6 +115,67 @@ struct FederationCascade {
     yubi_refreshed: std::collections::BTreeSet<(String, String)>,
 }
 
+fn federated_expulsion_parties<'a>(
+    context: &'a super::team::LocalTeamContext,
+    target_team: &EntityId,
+    target_host: &EntityId,
+    supplied: &'a std::collections::BTreeMap<TeamRefreshPartyKey, TeamRefreshParty>,
+) -> Result<(
+    &'a foks_verify::VerifiedTeamMemberState,
+    Vec<foks_client::VerifiedMemberParty<'a>>,
+)> {
+    let mut targets = context.team.verified.members().iter().filter(|member| {
+        member.party == *target_team && member.scoped_host.as_ref() == Some(target_host)
+    });
+    let target = targets.next().ok_or(foks_client::Error::TeamRequest(
+        "exact federated team is not in the authenticated roster",
+    ))?;
+    if targets.next().is_some() {
+        return Err(
+            foks_client::Error::TeamBinding("exact federated team selector is ambiguous").into(),
+        );
+    }
+    let mut remaining = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for member in context.team.verified.members() {
+        if (member.party == context.account.credential.uid && member.scoped_host.is_none())
+            || (member.party == *target_team && member.scoped_host.as_ref() == Some(target_host))
+        {
+            continue;
+        }
+        let key = (
+            member.party.as_bytes().to_vec(),
+            member
+                .scoped_host
+                .as_ref()
+                .map(|host| host.as_bytes().to_vec()),
+        );
+        if !seen.insert((key.clone(), member.source_role)) {
+            return Err(foks_client::Error::TeamBinding(
+                "authenticated remaining roster party is ambiguous",
+            )
+            .into());
+        }
+        if member.scoped_host.is_none() && member.party.entity_type() == foks_proto::ENTITY_USER {
+            remaining.push(foks_client::VerifiedMemberParty::User(
+                context.users.get(member.party.as_bytes()).ok_or(
+                    foks_client::Error::TeamBinding("remaining local user state is unavailable"),
+                )?,
+            ));
+        } else {
+            remaining.push(
+                supplied
+                    .get(&key)
+                    .ok_or(foks_client::Error::TeamBinding(
+                        "remaining federated roster party lacks an authenticated recipient",
+                    ))?
+                    .verified(),
+            );
+        }
+    }
+    Ok((target, remaining))
+}
+
 fn federated_roster_matches(
     team: &foks_verify::VerifiedTeamState,
     parties: &std::collections::BTreeMap<TeamRefreshPartyKey, TeamRefreshParty>,
@@ -233,6 +294,19 @@ pub struct FederatedMembershipSummary {
     pub active: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct FederationExpulsionReport {
+    pub local_profile: String,
+    pub local_team_alias: String,
+    pub remote_profile: String,
+    pub remote_team_alias: String,
+    pub remote_host_id_hex: String,
+    pub remote_team_id_hex: String,
+    pub operation_id_hex: String,
+    pub team_chain_sequence: u64,
+    pub active: bool,
+}
+
 impl CheckedProfileSession<'_> {
     #[allow(clippy::too_many_arguments)]
     pub fn admit_federated_team(
@@ -325,24 +399,36 @@ impl CheckedProfileSession<'_> {
             &remote_team_id,
             &removal_key,
         )?;
-        let mut mutations = EncryptedFileMutationStore::open(
+        let mut local_mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
         )?;
-        let removal_key = SecretSeed::new(removal_key);
-        let outcome = self.client.admit_remote_team_to_named_team(
-            &foks_client::FederatedTeamAdmissionRequest {
-                remote_host: &remote_host,
-                remote_credential: &remote_account.credential,
-                remote_team: &remote_team_id,
-                local_host: &local_host,
-                local_credential: &local_account.credential,
-                local_team: &local_team_id,
-                destination_role: destination.role(),
-                removal_key: &removal_key,
-            },
-            &mut mutations,
+        let mut remote_mutations = EncryptedFileMutationStore::open(
+            &remote.paths.protected_mutations,
+            derive_mutation_key(master_key),
         )?;
+        let removal_key = SecretSeed::new(removal_key);
+        let request = foks_client::FederatedTeamAdmissionRequest {
+            remote_host: &remote_host,
+            remote_credential: &remote_account.credential,
+            remote_team: &remote_team_id,
+            local_host: &local_host,
+            local_credential: &local_account.credential,
+            local_team: &local_team_id,
+            destination_role: destination.role(),
+            removal_key: &removal_key,
+        };
+        // Index ranges are authenticated chain state, not application hints.
+        // Narrow the child before raising the parent, and do not grant/create
+        // the scoped membership until both current heads prove disjoint.
+        self.client.allocate_federated_team_index_ranges(
+            &request,
+            &mut remote_mutations,
+            &mut local_mutations,
+        )?;
+        let outcome = self
+            .client
+            .admit_remote_team_to_named_team(&request, &mut local_mutations)?;
 
         let stored = local_team
             .federated_members
@@ -410,6 +496,427 @@ impl CheckedProfileSession<'_> {
                 active: member.active,
             })
             .collect())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn expel_federated_team(
+        &self,
+        local_team_alias: &str,
+        remote_host_id_hex: &str,
+        remote_team_id_hex: &str,
+        local_vault: &mut AccountVault<'_>,
+        registry: &ProfileRegistry,
+        credentials: &ClientCredentials,
+        master_key: &[u8; 32],
+    ) -> Result<FederationExpulsionReport> {
+        self.profile.require(Capability::Teams)?;
+        self.profile.require(Capability::Federation)?;
+        let _scheduler_lock = super::runtime::ProfileLock::scheduler(&self.paths)?;
+        let requested_host =
+            entity_id_from_hex(remote_host_id_hex)?.require_type(foks_proto::ENTITY_HOST)?;
+        let requested_team = entity_id_from_hex(remote_team_id_hex)?;
+        if !matches!(
+            requested_team.entity_type(),
+            foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+        ) {
+            return Err(Error::InvalidAccount(
+                "federation expulsion target is not a team",
+            ));
+        }
+        let stored_team = local_vault.team(local_team_alias)?;
+        if stored_team.kind != super::team::StoredTeamKind::Named || !stored_team.active {
+            return Err(Error::InvalidAccount(
+                "federation expulsion requires an active named local team",
+            ));
+        }
+        if local_vault.team_member_edit(local_team_alias)?.is_some()
+            || local_vault.team_rekey(local_team_alias)?.is_some()
+        {
+            return Err(Error::InvalidAccount(
+                "team has another pending membership mutation; resume it first",
+            ));
+        }
+        let existing_intent = local_vault.federation_expulsion(local_team_alias)?;
+        if existing_intent.as_ref().is_some_and(|intent| {
+            intent.remote_host_id != requested_host.as_bytes()
+                || intent.remote_team_id != requested_team.as_bytes()
+        }) {
+            return Err(Error::InvalidAccount(
+                "another exact federation expulsion is already pending for this team",
+            ));
+        }
+        let mut context = self.load_local_team_context(local_team_alias, local_vault)?;
+        // A committed expulsion is reconciled entirely from local evidence.
+        // Before submission, only survivors need authenticated recipient keys:
+        // the expelled host must never be able to veto its own removal.
+        let parties = if existing_intent
+            .as_ref()
+            .is_some_and(|intent| context.team.verified.chain_seqno() >= intent.expected_seqno)
+        {
+            std::collections::BTreeMap::new()
+        } else {
+            let bindings = stored_team
+                .federated_members
+                .iter()
+                .filter(|member| {
+                    member.active
+                        && (member.remote_host_id != requested_host.as_bytes()
+                            || member.remote_team_id != requested_team.as_bytes())
+                })
+                .map(|member| ScheduledFederationBinding {
+                    local_team_alias: local_team_alias.to_owned(),
+                    remote_profile: member.remote_profile.clone(),
+                    remote_team_alias: member.remote_team_alias.clone(),
+                    destination: member.destination,
+                })
+                .collect::<Vec<_>>();
+            if bindings.is_empty() {
+                std::collections::BTreeMap::new()
+            } else {
+                let actor =
+                    self.select_local_federated_admin(local_team_alias, &[], local_vault)?;
+                let parties = self.load_federated_team_recipients(
+                    &bindings,
+                    &actor,
+                    &[],
+                    local_vault,
+                    registry,
+                    credentials,
+                    master_key,
+                    &mut FederationCascade {
+                        visited: std::collections::BTreeSet::from([(
+                            self.profile.name.clone(),
+                            local_team_alias.to_owned(),
+                        )]),
+                        ..FederationCascade::default()
+                    },
+                )?;
+                context = self.load_local_team_context(local_team_alias, local_vault)?;
+                parties
+            }
+        };
+        if context.team_id.as_bytes() != stored_team.team_id
+            || context.host.host_id() == &requested_host
+        {
+            return Err(foks_client::Error::TeamBinding(
+                "federation expulsion local team or remote host binding changed",
+            )
+            .into());
+        }
+        let actor_members = context
+            .team
+            .verified
+            .members()
+            .iter()
+            .filter(|member| {
+                member.party == context.account.credential.uid
+                    && member.scoped_host.is_none()
+                    && matches!(
+                        member.role.kind(),
+                        foks_proto::RoleType::Admin | foks_proto::RoleType::Owner
+                    )
+            })
+            .collect::<Vec<_>>();
+        let [actor_member] = actor_members.as_slice() else {
+            return Err(foks_client::Error::TeamRequest(
+                "federated teams can be expelled only by one exact authenticated admin or owner",
+            )
+            .into());
+        };
+
+        let mut protected = EncryptedFileMutationStore::open(
+            &self.paths.protected_mutations,
+            derive_mutation_key(master_key),
+        )?;
+        let pending = match existing_intent {
+            Some(pending) => pending,
+            None => {
+                let (target, remaining) = federated_expulsion_parties(
+                    &context,
+                    &requested_team,
+                    &requested_host,
+                    &parties,
+                )?;
+                let binding = stored_team
+                    .federated_members
+                    .iter()
+                    .filter(|member| {
+                        member.active
+                            && member.remote_host_id == requested_host.as_bytes()
+                            && member.remote_team_id == requested_team.as_bytes()
+                    })
+                    .collect::<Vec<_>>();
+                let [binding] = binding.as_slice() else {
+                    return Err(Error::InvalidAccount(
+                        "exact active federation binding is missing or ambiguous",
+                    ));
+                };
+                if binding.destination.role() != target.role {
+                    return Err(foks_client::Error::TeamBinding(
+                        "protected federation role differs from the authenticated roster",
+                    )
+                    .into());
+                }
+                let removal_key = SecretSeed::new(binding.removal_key);
+                let selector = foks_client::TeamMemberSelector {
+                    party: &requested_team,
+                    host: Some(&requested_host),
+                    source_role: target.source_role,
+                };
+                let roles = self.client.team_member_rotation_roles(
+                    &context.team,
+                    selector,
+                    Role::NONE,
+                    None,
+                )?;
+                let seeds = roles
+                    .iter()
+                    .map(|_| random_array().map(SecretSeed::new))
+                    .collect::<Result<Vec<_>>>()?;
+                let rotations = roles
+                    .iter()
+                    .zip(&seeds)
+                    .map(|(role, seed)| foks_client::TeamPtkRotationSeed { role: *role, seed })
+                    .collect::<Vec<_>>();
+                let request = foks_client::RetainedTeamMemberRemovalRequest {
+                    target: selector,
+                    removal_key: &removal_key,
+                    rotations: &rotations,
+                    remaining_parties: &remaining,
+                };
+                let operation_id = self.client.retained_team_member_removal_operation_id(
+                    &context.account.credential.uid,
+                    &context.team_id,
+                    &context.team,
+                    &request,
+                )?;
+                let pending = super::team::StoredFederatedExpulsion {
+                    version: CREDENTIAL_VERSION,
+                    local_team_alias: local_team_alias.to_owned(),
+                    local_team_id: context.team_id.as_bytes().to_vec(),
+                    local_host_id: context.host.host_id().as_bytes().to_vec(),
+                    remote_profile: binding.remote_profile.clone(),
+                    remote_team_alias: binding.remote_team_alias.clone(),
+                    remote_team_id: requested_team.as_bytes().to_vec(),
+                    remote_host_id: requested_host.as_bytes().to_vec(),
+                    source_role: super::team::StoredTeamRole::from_role(target.source_role),
+                    destination_role: super::team::StoredTeamRole::from_role(target.role),
+                    removal_key_commitment: foks_crypto::team_removal_key_commitment(&removal_key)?,
+                    actor_uid: context.account.credential.uid.as_bytes().to_vec(),
+                    actor_device_id: foks_crypto::derive_device_public(
+                        &context.account.credential.seed,
+                    )?
+                    .id
+                    .as_bytes()
+                    .to_vec(),
+                    actor_source_role: super::team::StoredTeamRole::from_role(
+                        actor_member.source_role,
+                    ),
+                    actor_generation: actor_member.generation,
+                    expected_seqno: context
+                        .team
+                        .verified
+                        .chain_seqno()
+                        .checked_add(1)
+                        .ok_or(foks_client::Error::TeamRequest("team sequence overflow"))?,
+                    operation_id,
+                    scheduler_job_id: federation_job_id(
+                        context.host.host_id(),
+                        &context.team_id,
+                        &requested_host,
+                        &requested_team,
+                        &binding.removal_key,
+                    )?,
+                    rotations: roles
+                        .iter()
+                        .zip(&seeds)
+                        .map(|(role, seed)| super::team::StoredTeamPtkRotation {
+                            role: super::team::StoredTeamRole::from_role(*role),
+                            seed: *seed.as_bytes(),
+                        })
+                        .collect(),
+                };
+                local_vault.put_federation_expulsion(&pending)?;
+                pending
+            }
+        };
+        if pending.local_team_id != context.team_id.as_bytes()
+            || pending.local_host_id != context.host.host_id().as_bytes()
+            || pending.actor_uid != context.account.credential.uid.as_bytes()
+            || pending.actor_device_id
+                != foks_crypto::derive_device_public(&context.account.credential.seed)?
+                    .id
+                    .as_bytes()
+            || pending.actor_source_role.role()? != actor_member.source_role
+            || pending.actor_generation != actor_member.generation
+            || pending.remote_team_id != requested_team.as_bytes()
+            || pending.remote_host_id != requested_host.as_bytes()
+        {
+            return Err(foks_client::Error::OperationBinding(
+                "pending federation expulsion identity changed",
+            )
+            .into());
+        }
+        let seeds = pending
+            .rotations
+            .iter()
+            .map(|rotation| SecretSeed::new(rotation.seed))
+            .collect::<Vec<_>>();
+        let rotations = pending
+            .rotations
+            .iter()
+            .zip(&seeds)
+            .map(|(rotation, seed)| {
+                Ok(foks_client::TeamPtkRotationSeed {
+                    role: rotation.role.role()?,
+                    seed,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let hard_recorded = HardStateStore::open(&self.paths.hard_database)?
+            .team_mutation(&pending.operation_id)?
+            .is_some();
+        if context.team.verified.chain_seqno() >= pending.expected_seqno && !hard_recorded {
+            local_vault.remove_federation_expulsion(local_team_alias)?;
+            return Err(foks_client::Error::OperationBinding(
+                "another transition consumed the pending federation expulsion sequence",
+            )
+            .into());
+        }
+        let reserved_sequence_is_observable =
+            context.team.verified.chain_seqno() >= pending.expected_seqno;
+        let attempt = if reserved_sequence_is_observable {
+            self.client.finish_recorded_team_member_change(
+                &context.host,
+                &context.account.credential,
+                &context.team_id,
+                pending.expected_seqno,
+                &pending.operation_id,
+                pending.removal_key_commitment,
+                &rotations,
+                &mut protected,
+            )
+        } else {
+            let (target, remaining) =
+                federated_expulsion_parties(&context, &requested_team, &requested_host, &parties)?;
+            if target.source_role != pending.source_role.role()?
+                || target.role != pending.destination_role.role()?
+                || target.removal_key_commitment != Some(pending.removal_key_commitment)
+            {
+                return Err(foks_client::Error::OperationBinding(
+                    "pending federation expulsion no longer matches the authenticated roster",
+                )
+                .into());
+            }
+            let binding = stored_team
+                .federated_members
+                .iter()
+                .find(|member| {
+                    member.active
+                        && member.remote_host_id == requested_host.as_bytes()
+                        && member.remote_team_id == requested_team.as_bytes()
+                        && member.remote_profile == pending.remote_profile
+                        && member.remote_team_alias == pending.remote_team_alias
+                })
+                .ok_or(Error::InvalidAccount(
+                    "pending federation expulsion lost its protected admission key",
+                ))?;
+            let removal_key = SecretSeed::new(binding.removal_key);
+            if foks_crypto::team_removal_key_commitment(&removal_key)?
+                != pending.removal_key_commitment
+            {
+                return Err(foks_client::Error::OperationBinding(
+                    "pending federation expulsion removal key changed",
+                )
+                .into());
+            }
+            let request = foks_client::RetainedTeamMemberRemovalRequest {
+                target: foks_client::TeamMemberSelector {
+                    party: &requested_team,
+                    host: Some(&requested_host),
+                    source_role: target.source_role,
+                },
+                removal_key: &removal_key,
+                rotations: &rotations,
+                remaining_parties: &remaining,
+            };
+            if hard_recorded {
+                self.client.resume_retained_team_member_removal(
+                    &context.host,
+                    &context.account.credential,
+                    &context.team_id,
+                    pending.expected_seqno,
+                    &pending.operation_id,
+                    &request,
+                    &mut protected,
+                )
+            } else {
+                self.client.remove_retained_team_member_and_rotate_ptks(
+                    &context.host,
+                    &context.account.credential,
+                    &context.team_id,
+                    &request,
+                    &mut protected,
+                )
+            }
+        };
+        let result = match attempt {
+            Ok(result) => result,
+            Err(error @ foks_client::Error::OperationBinding(_))
+                if reserved_sequence_is_observable =>
+            {
+                self.client.supersede_recorded_team_member_change(
+                    &context.host,
+                    &context.account.credential,
+                    &context.team_id,
+                    pending.expected_seqno,
+                    &pending.operation_id,
+                    &mut protected,
+                )?;
+                local_vault.remove_federation_expulsion(local_team_alias)?;
+                return Err(error.into());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if result
+            .authenticated
+            .verified
+            .members()
+            .iter()
+            .any(|member| {
+                member.party == requested_team
+                    && member.scoped_host.as_ref() == Some(&requested_host)
+            })
+        {
+            return Err(foks_client::Error::OperationBinding(
+                "authenticated expulsion left the exact federated target in the roster",
+            )
+            .into());
+        }
+        // The durable intent owns the scheduler identity after the chain edit.
+        // Unregister first: if protected binding cleanup then fails, a retry can
+        // idempotently unregister the same persisted ID instead of orphaning a
+        // refresh job after the removal key has disappeared.
+        FoksScheduler::new(&self.paths.hard_database, SchedulerConfig::default())?
+            .unregister(&pending.scheduler_job_id)?;
+        let mut finished_team = local_vault.team(local_team_alias)?;
+        finished_team.federated_members.retain(|member| {
+            member.remote_host_id != requested_host.as_bytes()
+                || member.remote_team_id != requested_team.as_bytes()
+        });
+        local_vault.put_team(&finished_team)?;
+        local_vault.remove_federation_expulsion(local_team_alias)?;
+        Ok(FederationExpulsionReport {
+            local_profile: self.profile.name.clone(),
+            local_team_alias: local_team_alias.to_owned(),
+            remote_profile: pending.remote_profile.clone(),
+            remote_team_alias: pending.remote_team_alias.clone(),
+            remote_host_id_hex: hex(requested_host.as_bytes()),
+            remote_team_id_hex: hex(requested_team.as_bytes()),
+            operation_id_hex: hex(&pending.operation_id),
+            team_chain_sequence: result.authenticated.verified.chain_seqno(),
+            active: false,
+        })
     }
 
     fn refresh_federated_team(

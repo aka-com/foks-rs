@@ -4,8 +4,8 @@ use std::sync::Arc;
 use foks_client::{
     AddLocalTeamMemberRequest, ChangeTeamMemberRequest, FederatedTeamAdmissionRequest,
     FederatedTeamRefreshRequest, FederationCredential, NamedTeamSecrets, NewYubiDeviceSecrets,
-    TeamMemberSelector, TeamPtkRotationSeed, VerifiedMemberParty, YubiCredential,
-    YubiDeviceProvisionRequest,
+    RetainedTeamMemberRemovalRequest, TeamMemberSelector, TeamPtkRotationSeed, VerifiedMemberParty,
+    YubiCredential, YubiDeviceProvisionRequest,
 };
 use foks_proto::{
     EntityId, FqParty, PermissionToken, Role, SecretSeed, YubiSlotAndPqKeyId, ENTITY_HOST,
@@ -163,12 +163,51 @@ pub(crate) fn remote_team_membership_and_ptk_tokens() {
         removal_key: &removal_key,
     };
     let mut protected = local.client.open_protected_store().unwrap();
+    let mut remote_protected = remote.client.open_protected_store().unwrap();
+    let remote_metadata_fault = remote
+        .environment
+        .arm_fault(foks_server_testkit::TestFault::FederationTeamEditAfterCommitBeforeResponse);
+    let allocated = local
+        .client
+        .foks()
+        .allocate_federated_team_index_ranges(
+            &admission_request,
+            &mut remote_protected,
+            &mut protected,
+        )
+        .unwrap();
+    assert_eq!(remote.environment.fault_hits(), remote_metadata_fault + 1);
+    assert_eq!(allocated.child.high.base, [0x20]);
+    assert_eq!(allocated.parent.low.base, [0x80]);
     let admitted = local
         .client
         .foks()
         .admit_remote_team_to_named_team(&admission_request, &mut protected)
         .unwrap();
     assert_eq!(admitted.remote.verified.team_name(), b"remotealpha");
+    assert_eq!(admitted.remote.verified.chain_seqno(), 2);
+    assert_eq!(admitted.added.authenticated.verified.chain_seqno(), 3);
+    assert!(matches!(
+        admitted
+            .remote
+            .verified
+            .group_change_at(2)
+            .unwrap()
+            .metadata
+            .as_slice(),
+        [foks_proto::ChangeMetadata::TeamIndexRange(_)]
+    ));
+    assert!(matches!(
+        admitted
+            .added
+            .authenticated
+            .verified
+            .group_change_at(2)
+            .unwrap()
+            .metadata
+            .as_slice(),
+        [foks_proto::ChangeMetadata::TeamIndexRange(_)]
+    ));
     let repeated = local
         .client
         .foks()
@@ -263,7 +302,7 @@ pub(crate) fn remote_team_membership_and_ptk_tokens() {
     let remote_recipient = admitted.remote.verified_recipient(&remote_direct).unwrap();
     let remaining = [VerifiedMemberParty::Team(&remote_recipient)];
     let mut protected = local.client.open_protected_store().unwrap();
-    local
+    let after_rotation = local
         .client
         .foks()
         .change_team_member_and_rotate_ptks(
@@ -332,6 +371,159 @@ pub(crate) fn remote_team_membership_and_ptk_tokens() {
     assert!(!exact_box
         .windows(permission.expose().len())
         .any(|window| window == permission.expose()));
+
+    // Expel the exact host-scoped team with its admission-time removal key.
+    // Exercise exact-selector, retained-key, and actor failures before the
+    // successful edit, then prove that the edit transaction itself invalidates
+    // a bearer granted to the removed exact party+host.
+    let target = after_rotation
+        .authenticated
+        .verified
+        .members()
+        .iter()
+        .find(|member| {
+            member.party == remote_team.team
+                && member.scoped_host.as_ref() == Some(remote.host().host_id())
+        })
+        .unwrap();
+    let selector = TeamMemberSelector {
+        party: &remote_team.team,
+        host: Some(remote.host().host_id()),
+        source_role: target.source_role,
+    };
+    let roles = local
+        .client
+        .foks()
+        .team_member_rotation_roles(&after_rotation.authenticated, selector, Role::NONE, None)
+        .unwrap();
+    let rotation_seeds = roles
+        .iter()
+        .enumerate()
+        .map(|(index, _)| SecretSeed::new([0x90 + index as u8; 32]))
+        .collect::<Vec<_>>();
+    let expulsion_rotations = roles
+        .iter()
+        .zip(&rotation_seeds)
+        .map(|(role, seed)| TeamPtkRotationSeed { role: *role, seed })
+        .collect::<Vec<_>>();
+    let remaining = [];
+    for wrong_target in [
+        TeamMemberSelector {
+            party: &remote_team.team,
+            host: Some(&entity(ENTITY_HOST, 0x91)),
+            source_role: target.source_role,
+        },
+        TeamMemberSelector {
+            party: &entity(foks_proto::ENTITY_NAMED_TEAM, 0x92),
+            host: Some(remote.host().host_id()),
+            source_role: target.source_role,
+        },
+    ] {
+        let error = local
+            .client
+            .foks()
+            .retained_team_member_removal_operation_id(
+                &local_account.credential.uid,
+                &local_team.team,
+                &after_rotation.authenticated,
+                &RetainedTeamMemberRemovalRequest {
+                    target: wrong_target,
+                    removal_key: &removal_key,
+                    rotations: &expulsion_rotations,
+                    remaining_parties: &remaining,
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, foks_client::Error::TeamRequest(_)));
+    }
+    let wrong_removal_key = SecretSeed::new([0x93; 32]);
+    let error = local
+        .client
+        .foks()
+        .retained_team_member_removal_operation_id(
+            &local_account.credential.uid,
+            &local_team.team,
+            &after_rotation.authenticated,
+            &RetainedTeamMemberRemovalRequest {
+                target: selector,
+                removal_key: &wrong_removal_key,
+                rotations: &expulsion_rotations,
+                remaining_parties: &remaining,
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(error, foks_client::Error::KeyBinding(_)));
+
+    let mut unauthorized_protected = local.client.open_protected_store().unwrap();
+    let error = match local
+        .client
+        .foks()
+        .remove_retained_team_member_and_rotate_ptks(
+            local.host(),
+            &departing.credential,
+            &local_team.team,
+            &RetainedTeamMemberRemovalRequest {
+                target: selector,
+                removal_key: &removal_key,
+                rotations: &expulsion_rotations,
+                remaining_parties: &remaining,
+            },
+            &mut unauthorized_protected,
+        ) {
+        Ok(_) => panic!("removed member unexpectedly authorized a federated expulsion"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1013, .. })
+            | foks_client::Error::KeyBinding(_)
+            | foks_client::Error::TeamBinding(_)
+    ));
+
+    let expelled_viewer =
+        FqParty::new(remote_team.team.clone(), remote.host().host_id().clone()).unwrap();
+    let expelled_bearer = local
+        .client
+        .foks()
+        .grant_remote_team_view(
+            local.host(),
+            &local_account.credential,
+            &local_team.team,
+            expelled_viewer,
+        )
+        .unwrap();
+    let local_reader = TestClient::new(&local.environment, "expelled-team-public-reader").unwrap();
+    let local_reader_host = local_reader.probe_and_pin().unwrap().pinned;
+    local_reader
+        .foks()
+        .load_remote_team_and_pin(&local_reader_host, &local_team.team, &expelled_bearer)
+        .unwrap();
+
+    let mut protected = local.client.open_protected_store().unwrap();
+    local
+        .client
+        .foks()
+        .remove_retained_team_member_and_rotate_ptks(
+            local.host(),
+            &local_account.credential,
+            &local_team.team,
+            &RetainedTeamMemberRemovalRequest {
+                target: selector,
+                removal_key: &removal_key,
+                rotations: &expulsion_rotations,
+                remaining_parties: &remaining,
+            },
+            &mut protected,
+        )
+        .unwrap();
+    let old_bearer = local_reader
+        .foks()
+        .load_remote_team_and_pin(&local_reader_host, &local_team.team, &expelled_bearer)
+        .unwrap_err();
+    assert!(matches!(
+        old_bearer,
+        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1013, .. })
+    ));
 }
 
 #[test]
@@ -595,22 +787,26 @@ fn federated_yubi_pair(tag: &str, fill: u8) -> FederatedYubiPair {
 
     let removal_key = SecretSeed::new([fill ^ 0x27; 32]);
     let mut protected = local.client.open_protected_store().unwrap();
+    let mut remote_protected = remote.client.open_protected_store().unwrap();
+    let admission = FederatedTeamAdmissionRequest {
+        remote_host: remote.host(),
+        remote_credential: &remote_account.credential,
+        remote_team: &remote_team,
+        local_host: local.host(),
+        local_credential: &local_account.credential,
+        local_team: &local_team,
+        destination_role: Role::member(0),
+        removal_key: &removal_key,
+    };
     local
         .client
         .foks()
-        .admit_remote_team_to_named_team(
-            &FederatedTeamAdmissionRequest {
-                remote_host: remote.host(),
-                remote_credential: &remote_account.credential,
-                remote_team: &remote_team,
-                local_host: local.host(),
-                local_credential: &local_account.credential,
-                local_team: &local_team,
-                destination_role: Role::member(0),
-                removal_key: &removal_key,
-            },
-            &mut protected,
-        )
+        .allocate_federated_team_index_ranges(&admission, &mut remote_protected, &mut protected)
+        .unwrap();
+    local
+        .client
+        .foks()
+        .admit_remote_team_to_named_team(&admission, &mut protected)
         .unwrap();
     drop(protected);
 

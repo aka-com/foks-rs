@@ -199,6 +199,23 @@ fn team_actor_puk<'a>(
     Ok(signer)
 }
 
+fn require_federated_removal_target(selector: TeamMemberSelector<'_>) -> Result<()> {
+    let host = selector.host.ok_or(Error::TeamRequest(
+        "retained-key expulsion requires the exact remote host",
+    ))?;
+    host.clone().require_type(foks_proto::ENTITY_HOST)?;
+    if !matches!(
+        selector.party.entity_type(),
+        foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+    ) || selector.source_role == Role::NONE
+    {
+        return Err(Error::TeamRequest(
+            "retained-key expulsion requires an exact remote team selector",
+        ));
+    }
+    Ok(())
+}
+
 fn prepared_rotation_operation_id(
     actor: &EntityId,
     team: &EntityId,
@@ -408,6 +425,34 @@ impl FoksClient {
         )
     }
 
+    /// Preflight identity for an exact fully-qualified federated-team
+    /// expulsion using the admission-time retained removal key.
+    pub fn retained_team_member_removal_operation_id(
+        &self,
+        actor: &EntityId,
+        team: &EntityId,
+        authenticated_team: &AuthenticatedTeamOutcome,
+        request: &RetainedTeamMemberRemovalRequest<'_>,
+    ) -> Result<[u8; 16]> {
+        require_federated_removal_target(request.target)?;
+        let target = unique_target(&authenticated_team.verified, request.target)?;
+        if target.removal_key_commitment != Some(team_removal_key_commitment(request.removal_key)?)
+        {
+            return Err(Error::KeyBinding(
+                "retained removal key does not match the exact federated member commitment",
+            ));
+        }
+        prepared_rotation_operation_id(
+            actor,
+            team,
+            authenticated_team,
+            request.target,
+            Role::NONE,
+            None,
+            request.rotations,
+        )
+    }
+
     /// Removes one local user from a named team and rotates every PTK the
     /// removed member could read, following FOKS v0.1.9's exact gameplan.
     pub fn remove_local_user_and_rotate_ptks(
@@ -603,6 +648,48 @@ impl FoksClient {
             None,
             request.rotations,
             &remaining,
+            protected_store,
+        )
+    }
+
+    /// Expels one exact federated team with its retained admission key. All
+    /// parties except that fully-qualified row receive every affected rotated
+    /// PTK; the old admission remains usable until the resulting chain head is
+    /// authenticated by `change_with_material`.
+    pub fn remove_retained_team_member_and_rotate_ptks(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team: &EntityId,
+        request: &RetainedTeamMemberRemovalRequest<'_>,
+        protected_store: &mut dyn ProtectedMutationStore,
+    ) -> Result<RotatedTeamPtks> {
+        require_federated_removal_target(request.target)?;
+        let authenticated_user = self.authenticate_and_pin(host, credential)?;
+        let authenticated_team = self.load_and_pin_team(
+            host,
+            credential,
+            &authenticated_user.verified,
+            &authenticated_user.puks,
+            team,
+        )?;
+        let owner = team_actor_puk(&authenticated_user, &authenticated_team)?;
+        let device_id = derive_device_public(&credential.seed)?.id;
+        self.change_with_material(
+            host,
+            &credential.uid,
+            &device_id,
+            &credential.seed,
+            &credential.certificate_chain,
+            &authenticated_user,
+            owner,
+            team,
+            request.target,
+            Role::NONE,
+            None,
+            Some(request.removal_key),
+            request.rotations,
+            request.remaining_parties,
             protected_store,
         )
     }
@@ -1021,6 +1108,9 @@ impl FoksClient {
                 destination_role: change.destination_role,
                 member_generation: Some(change.replacement_generation),
                 member_public: Some(public),
+                member_index_range: change
+                    .replacement
+                    .and_then(VerifiedMemberParty::index_range),
             })
             .collect::<Vec<_>>();
         let crypto_rotations = rotation_keys
@@ -2117,6 +2207,54 @@ impl FoksClient {
             expected_seqno,
             expected_operation_id,
             request,
+            None,
+            protected_store,
+        )
+    }
+
+    /// Reconciles or exactly replays a crash-interrupted retained-key
+    /// federated expulsion.
+    pub fn resume_retained_team_member_removal(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team: &EntityId,
+        expected_seqno: u64,
+        expected_operation_id: &[u8; 16],
+        request: &RetainedTeamMemberRemovalRequest<'_>,
+        protected_store: &mut dyn ProtectedMutationStore,
+    ) -> Result<RotatedTeamPtks> {
+        require_federated_removal_target(request.target)?;
+        let authenticated_user = self.authenticate_and_pin(host, credential)?;
+        let authenticated_team = self.load_and_pin_team(
+            host,
+            credential,
+            &authenticated_user.verified,
+            &authenticated_user.puks,
+            team,
+        )?;
+        let actor_puk = team_actor_puk(&authenticated_user, &authenticated_team)?;
+        let device_id = derive_device_public(&credential.seed)?.id;
+        let change = ChangeTeamMemberRequest {
+            target: request.target,
+            destination_role: Role::NONE,
+            replacement: None,
+            rotations: request.rotations,
+            remaining_parties: request.remaining_parties,
+        };
+        self.resume_change_with_material(
+            host,
+            &credential.uid,
+            &device_id,
+            &credential.seed,
+            &credential.certificate_chain,
+            &authenticated_user,
+            &actor_puk.seed,
+            team,
+            expected_seqno,
+            expected_operation_id,
+            &change,
+            Some(request.removal_key),
             protected_store,
         )
     }
@@ -2297,6 +2435,7 @@ impl FoksClient {
             expected_seqno,
             expected_operation_id,
             request,
+            None,
             protected_store,
         )
     }
@@ -2536,6 +2675,11 @@ impl FoksClient {
                 destination_role,
                 member_generation: replacement_key.map(|(_, key)| key.generation),
                 member_public: replacement_public.as_ref(),
+                member_index_range: if destination_role == Role::NONE {
+                    None
+                } else {
+                    replacement.and_then(VerifiedMemberParty::index_range)
+                },
             },
             &actor_puk.seed,
             &crypto_rotations,

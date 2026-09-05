@@ -2,10 +2,12 @@
 
 mod bearer;
 mod membership;
+mod metadata;
 mod named;
 mod rotation;
 
 pub use membership::*;
+pub use metadata::*;
 pub use named::*;
 pub use rotation::*;
 
@@ -3137,6 +3139,7 @@ mod parcel_sender_tests {
             verify_key: actor.verify_key.clone(),
             hepk_fingerprint: hepk_fingerprint(&actor.hepk).unwrap(),
             removal_key_commitment: owner_change.keys.as_ref().unwrap().removal_key_commitment,
+            index_range: owner_change.keys.as_ref().unwrap().index_range.clone(),
         };
         let receiver = VerifiedSharedKey {
             role: Role::OWNER,
