@@ -64,7 +64,7 @@ fi
 generation=$("$signer" "$@")
 
 set +e
-"$client" --state-dir "$FOKS_CANARY_STATE_DIR" profile probe "$FOKS_CANARY_PROFILE" \
+"$client" --state-dir "$FOKS_CANARY_STATE_DIR" --json profile probe "$FOKS_CANARY_PROFILE" >"$temporary/probe" \
     && "$client" --state-dir "$FOKS_CANARY_STATE_DIR" account sync \
         "$FOKS_CANARY_PROFILE" "$FOKS_CANARY_ACCOUNT" \
     && "$client" --state-dir "$FOKS_CANARY_STATE_DIR" kv put \
@@ -96,6 +96,24 @@ if ! "$client" --state-dir "$FOKS_CANARY_STATE_DIR" kv remove \
     fi
 fi
 
+# Every additional grant is backed by the complete onboarding lifecycle. Missing
+# operator authorization or an unsupported server requirement revokes the lease.
+if [ "$outcome" = compatible ]; then
+    if python3 "$root/tools/foks-client/onboarding-canary.py" \
+        --client "$client" --target "$target" \
+        --expected-host "$(jq -er '.host_id_hex | select(type == "string" and length == 66)' "$temporary/probe")" \
+        >"$temporary/capabilities"; then
+        # Bind the signed evidence to the exercised capability matrix as well as KV.
+        mutation_digest=$(cat "$input" "$temporary/capabilities" | shasum -a 256 | awk '{print $1}')
+        read_digest=$(cat "$output" "$temporary/capabilities" | shasum -a 256 | awk '{print $1}')
+    else
+        outcome=drift
+        reason="onboarding lifecycle or its operational prerequisites failed"
+        mutation_digest=$zero_digest
+        read_digest=$zero_digest
+    fi
+fi
+
 protocol_digest=$(shasum -a 256 "$metadata" | awk '{print $1}')
 set -- sign \
     --generation "$generation" \
@@ -111,6 +129,12 @@ set -- sign \
     --output "$candidate"
 if [ "$outcome" = compatible ]; then
     set -- "$@" --capability user-sync --capability kv
+    while IFS= read -r capability; do
+        case "$capability" in
+            signup|device-administration|recovery|passphrases) set -- "$@" --capability "$capability" ;;
+            *) echo "unexpected onboarding capability" >&2; exit 1 ;;
+        esac
+    done <"$temporary/capabilities"
 else
     set -- "$@" --drift-reason "$reason"
 fi

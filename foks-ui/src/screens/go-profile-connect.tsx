@@ -200,11 +200,14 @@ export function GoProfileConnectSheet({
   return (
     <SheetDialog
       onClose={onClose}
+      dismissible={!busy}
       title="Connect from FOKS CLI"
       subtitle="Use an account already configured by the official client"
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
           {selected && !checked ? (
             <Button
               variant="primary"
@@ -270,13 +273,24 @@ export function GoProfileConnectSheet({
         <>
           <SectionLabel>Destination server</SectionLabel>
           <Inset>
-            <Field label="Server address" value={server} onChange={setServer} />
             <Field
+              disabled={busy}
+              label="Server address"
+              value={server}
+              onChange={setServer}
+              placeholder="foks.app:4430"
+            />
+            <Button disabled={busy} onClick={() => setServer('foks.app:4430')}>
+              Use official FOKS server
+            </Button>
+            <Field
+              disabled={busy}
               label="Server name on this Mac"
               value={profileName}
               onChange={setProfileName}
             />
             <Button
+              disabled={busy}
               onClick={() => {
                 setSelected(null);
                 setChecked(null);
@@ -292,6 +306,7 @@ export function GoProfileConnectSheet({
           <SectionLabel>Connection method</SectionLabel>
           <Inset>
             <Button
+              disabled={busy}
               variant={method === 'pair' ? 'primary' : undefined}
               onClick={() => setMethod('pair')}
             >
@@ -300,7 +315,7 @@ export function GoProfileConnectSheet({
             <p>Recommended. This desktop gets its own revocable device key.</p>
             <Button
               variant={method === 'copy' ? 'primary' : undefined}
-              disabled={!selected.copyable}
+              disabled={busy || !selected.copyable}
               onClick={() => setMethod('copy')}
             >
               Copy this Mac’s CLI device
@@ -322,16 +337,19 @@ export function GoProfileConnectSheet({
               </CopyBox>
               <Inset>
                 <Field
+                  disabled={busy}
                   label="Account alias"
                   value={alias}
                   onChange={setAlias}
                 />
                 <Field
+                  disabled={busy}
                   label="This Mac’s name"
                   value={deviceName}
                   onChange={setDeviceName}
                 />
                 <Field
+                  disabled={busy}
                   label="Key-exchange code"
                   value={phrase}
                   onChange={setPhrase}
@@ -349,6 +367,7 @@ export function GoProfileConnectSheet({
               <SectionLabel>Copy the existing device</SectionLabel>
               <Inset>
                 <Field
+                  disabled={busy}
                   label="Account alias"
                   value={alias}
                   onChange={setAlias}

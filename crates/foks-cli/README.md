@@ -48,7 +48,7 @@ Current hosted profiles require an Ed25519 canary public key and the stable
 HTTPS URL polled by the agent:
 
 ```text
-foks-rs --state-dir /private/client profile add hosted foks.pub:443 \
+foks-rs --state-dir /private/client profile add hosted foks.app:4430 \
   --generation current-probe-only \
   --canary-public-key <64-lowercase-hex-characters> \
   --canary-url https://github.com/OWNER/REPOSITORY/releases/download/foks-hosted-compat-current/foks-hosted-capabilities.json
@@ -59,3 +59,66 @@ paths verify and persist the complete signed, expiring artifact. Grants require
 the exact embedded protocol-metadata digest and a monotonic generation; drift,
 metadata mismatch, and unknown capability artifacts revoke every non-probe
 capability, while expiry is the fetch-failure fallback.
+
+The official hosted RPC endpoint is `foks.app:4430`. `foks.pub:443` is a website
+and does not speak the FOKS framed RPC protocol. In the desktop's first-run
+chooser, select the existing official CLI account, choose **Use official FOKS
+server**, and check the server. The host must match the discovered account.
+Choose **Add as a new device**, switch the official CLI to that account with
+`foks key switch`, and run `foks --simple-ui key assist`. Paste its code into the
+desktop and leave both running until pairing completes. The same handoff is
+available under Settings → Connect from FOKS CLI. Keep **Copy this Mac's CLI
+device** for deliberate shared-key use; pairing produces a separately revocable
+device. Discovery is read-only and does not unlock the Go key store.
+
+The hosted workflow grants `user-sync`, `kv`, `signup`, `device-administration`,
+`recovery`, and `passphrases` only after authenticated KV write/read/delete and a
+fresh signup, passphrase set/change/verification, pairing between independent
+state roots, backup enrollment/recovery, and backup/device revocation all pass.
+It also checks account identity, rejected old passphrases, and revoked devices.
+`teams` and `federation` are deliberately ungranted: this suite does not exercise
+group administration or a second independent host. A grant is compatibility
+evidence, not a subscription, invitation, or server-side permission.
+
+Operators must provision these workflow requirements before enabling it:
+
+- `FOKS_CANARY_STATE_TAR_B64`: a private tar.gz of a dedicated initialized
+  `--key-backend private-file` state directory, containing a subscribed account
+  aliased `canary` under profile `hosted-canary`. Both `hosted-canary` and
+  `hosted` must target `foks.app:4430`. The former uses `--generation v019` to
+  test through an expired lease; the latter uses `current-probe-only` with the
+  signing public key and public stable artifact URL. Probe both and verify the
+  server identity before archiving. Do not use a personal production account.
+- `FOKS_CANARY_SIGNING_SEED_B64`: the base64-encoded private 32-byte Ed25519
+  signing seed matching that public key. Keep it separate from client state.
+- Repository variable `FOKS_CANARY_ALLOW_DISPOSABLE_SIGNUP=1`: explicit operator
+  consent to create one empty `canary…` server account per successful signup
+  attempt. Accounts cannot currently be deleted by this CLI. Their temporary
+  credentials are destroyed when the suite exits; server operators must allow
+  this traffic and arrange account retention/purging. Failed runs may leave
+  additional devices or backup keys on these disposable accounts.
+- `FOKS_CANARY_SIGNUP_EMAIL` (variable) and `FOKS_CANARY_SIGNUP_INVITE` (secret),
+  if the server requires them. The invite is restored as a private file; it
+  must permit repeated signups or be replenished. Email verification, account
+  approval, billing, rate limits, and device quotas must permit the exercised
+  lifecycle without interactive prompts. Missing requirements produce drift,
+  not an unsupported grant. No subscription or billing authorization is
+  created automatically by this workflow.
+- `FOKS_CANARY_PUBLISH_REPOSITORY` (variable, defaults to this repository) must
+  identify a public repository, with the workflow's configured release
+  publication credentials. Clients need the matching public stable URL and
+  trusted signer. If an old stable artifact was signed for the incorrect
+  `foks.pub:443` target, retire that asset before bootstrapping the corrected
+  target; generation allocation intentionally rejects cross-target history.
+
+The runner needs Python 3, jq, and the workflow's ordinary shell/hash tools.
+Missing consent or a failed onboarding check publishes a signed drift artifact
+that removes every non-probe grant; a stopped workflow lets the 48-hour lease
+expire. Merely changing this repository does not configure secrets, publish a
+lease, or enable capabilities in an installed desktop.
+
+To exercise the lifecycle on a disposable local test server, run
+`cargo test -p foks-cli --test onboarding_canary`. The canary's cleanup uses
+`device revoke PROFILE ALIAS DEVICE_ID` and
+`recovery revoke PROFILE ACCOUNT_ALIAS BACKUP_ALIAS BACKUP_ID`; backup enrollment
+JSON includes `backup_id_hex` so cleanup never guesses a credential identity.

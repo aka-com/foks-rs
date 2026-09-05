@@ -198,6 +198,12 @@ enum JobCommand {
 
 #[derive(clap::Subcommand)]
 enum DeviceCommand {
+    /// Revoke exactly one software device and rotate account keys.
+    Revoke {
+        profile: String,
+        alias: String,
+        device_id: String,
+    },
     List {
         profile: String,
         alias: String,
@@ -245,6 +251,13 @@ enum DeviceCommand {
 
 #[derive(clap::Subcommand)]
 enum RecoveryCommand {
+    /// Revoke exactly one locally recorded backup credential.
+    Revoke {
+        profile: String,
+        account_alias: String,
+        backup_alias: String,
+        backup_id: String,
+    },
     Enroll {
         profile: String,
         account_alias: String,
@@ -1071,6 +1084,17 @@ fn device_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let registry = ProfileRegistry::open(state_dir)?;
     match command {
+        DeviceCommand::Revoke {
+            profile,
+            alias,
+            device_id,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report = session.remove_software_device(&alias, &device_id, vault, master)?;
+                output(json, &report, "software device revoked")
+            })
+        }
         DeviceCommand::List { profile, alias } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, _| {
@@ -1185,6 +1209,24 @@ fn recovery_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let registry = ProfileRegistry::open(state_dir)?;
     match command {
+        RecoveryCommand::Revoke {
+            profile,
+            account_alias,
+            backup_alias,
+            backup_id,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report = session.revoke_owner_backup(
+                    &account_alias,
+                    &backup_alias,
+                    &backup_id,
+                    vault,
+                    master,
+                )?;
+                output(json, &report, "backup credential revoked")
+            })
+        }
         RecoveryCommand::Enroll {
             profile,
             account_alias,
@@ -1197,7 +1239,7 @@ fn recovery_command(
                     .prepare_owner_backup(&account_alias, &backup_alias, vault)?
                     .expose_joined();
                 write_new_private(&destination, phrase.as_bytes())?;
-                session.commit_owner_backup(
+                let report = session.commit_owner_backup(
                     &account_alias,
                     &backup_alias,
                     Zeroizing::new(phrase.as_str().to_owned()),
@@ -1207,6 +1249,7 @@ fn recovery_command(
                     json,
                     &serde_json::json!({
                         "backup_alias": backup_alias,
+                        "backup_id_hex": report.backup_id_hex,
                         "output": destination,
                         "tokens": 17,
                     }),

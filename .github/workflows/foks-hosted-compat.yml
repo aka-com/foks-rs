@@ -26,6 +26,8 @@ jobs:
       - name: Build and stage the client and signer
         run: |
           set -euo pipefail
+          python3 tools/foks-client/test_hosted_canary.py
+          cargo test --locked -p foks-cli --test onboarding_canary
           cargo build --locked --release -p foks-cli -p foks-compat-artifact
           root="$RUNNER_TEMP/foks-canary-tools"
           mkdir -p "$root/target/release" \
@@ -33,13 +35,14 @@ jobs:
             "$root/crates/foks-server/protocol"
           cp target/release/foks-rs target/release/foks-compat-artifact \
             "$root/target/release/"
-          cp tools/foks-client/hosted-canary.sh "$root/tools/foks-client/"
+          cp tools/foks-client/hosted-canary.sh tools/foks-client/onboarding-canary.py "$root/tools/foks-client/"
           cp crates/foks-server/protocol/upstream-v0.1.9.json \
             "$root/crates/foks-server/protocol/"
           cd "$root"
           sha256sum target/release/foks-rs \
             target/release/foks-compat-artifact \
             tools/foks-client/hosted-canary.sh \
+            tools/foks-client/onboarding-canary.py \
             crates/foks-server/protocol/upstream-v0.1.9.json \
             > SHA256SUMS
       - name: Transfer public canary tools
@@ -131,6 +134,7 @@ jobs:
         env:
           FOKS_CANARY_STATE_TAR_B64: ${{ secrets.FOKS_CANARY_STATE_TAR_B64 }}
           FOKS_CANARY_SIGNING_SEED_B64: ${{ secrets.FOKS_CANARY_SIGNING_SEED_B64 }}
+          FOKS_CANARY_SIGNUP_INVITE: ${{ secrets.FOKS_CANARY_SIGNUP_INVITE }}
         run: |
           set -euo pipefail
           umask 077
@@ -138,7 +142,10 @@ jobs:
           printf '%s' "$FOKS_CANARY_STATE_TAR_B64" | base64 -d | tar -xz -C "$RUNNER_TEMP/foks-canary-state"
           printf '%s' "$FOKS_CANARY_SIGNING_SEED_B64" | base64 -d > "$RUNNER_TEMP/foks-canary-signing.seed"
           test "$(wc -c < "$RUNNER_TEMP/foks-canary-signing.seed")" -eq 32
-      - name: Run authenticated mutation/read canary
+          if [ -n "$FOKS_CANARY_SIGNUP_INVITE" ]; then
+            printf '%s' "$FOKS_CANARY_SIGNUP_INVITE" > "$RUNNER_TEMP/foks-canary-state/signup-invite"
+          fi
+      - name: Run authenticated KV and onboarding lifecycle canary
         id: canary
         env:
           FOKS_CANARY_STATE_DIR: ${{ runner.temp }}/foks-canary-state
@@ -148,7 +155,10 @@ jobs:
           FOKS_CANARY_PROFILE: hosted-canary
           FOKS_CAPABILITY_PROFILE: hosted
           FOKS_CANARY_ACCOUNT: canary
-          FOKS_CANARY_EXPECTED_TARGET: foks.pub:443
+          FOKS_CANARY_EXPECTED_TARGET: foks.app:4430
+          # Explicit operator consent: every run creates a disposable server account.
+          FOKS_CANARY_ALLOW_DISPOSABLE_SIGNUP: ${{ vars.FOKS_CANARY_ALLOW_DISPOSABLE_SIGNUP }}
+          FOKS_CANARY_SIGNUP_EMAIL: ${{ vars.FOKS_CANARY_SIGNUP_EMAIL }}
           FOKS_CANARY_PREVIOUS_ARTIFACT: ${{ steps.previous.outputs.artifact }}
           FOKS_CANARY_RUN_NUMBER: ${{ github.run_number }}
           FOKS_CANARY_RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -156,6 +166,9 @@ jobs:
           FOKS_CANARY_OUTPUT: ${{ runner.temp }}/foks-hosted-capabilities.json
         run: |
           set -uo pipefail
+          if [ -f "$FOKS_CANARY_STATE_DIR/signup-invite" ]; then
+            export FOKS_CANARY_INVITE_FILE="$FOKS_CANARY_STATE_DIR/signup-invite"
+          fi
           set +e
           "$FOKS_CANARY_ROOT/tools/foks-client/hosted-canary.sh"
           status=$?
