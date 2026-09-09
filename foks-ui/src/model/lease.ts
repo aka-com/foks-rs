@@ -1,10 +1,8 @@
 /**
- * The lease world and what it makes listable — ported from
- * `wave6/shell.js:96-101, 243-249`.
+ * Server lease evaluation and catalog visibility rules.
  *
- * A lapsed compatibility lease stops **reads as well as writes** on that whole
- * server, so its items are not listed rather than merely
- * uneditable. It outranks everything else on that server and touches no other.
+ * A lapsed compatibility session lease blocks access to all items and stores
+ * hosted on that server.
  */
 
 import { storeNavigationOrder } from './order';
@@ -22,7 +20,7 @@ import type {
   World,
 } from './types';
 
-/** The fixture's leased server — the one `shell.js`'s `setLease` switches. */
+/** Identifier for the sample server subject to session lease requirements. */
 export const LEASED_SERVER_ID = 'acme';
 
 export type SignedLeaseState = 'fresh' | 'lapsed' | 'unavailable';
@@ -95,10 +93,7 @@ export function storeDescriptionState(
   if (serverBlocked(world, store.id)) return 'blocked';
   if (serverLeaseUnavailable(world, store.id)) return 'lease-unavailable';
   if (leaseLapsed(world, store.id)) return 'lease-lapsed';
-  // `loadWorld` drops an unchecked server's items and accounts exactly as it
-  // drops a lapsed one's, but this said `normal` for it — so the sidebar row
-  // rendered undimmed and the page showed an ordinary empty list with no
-  // explanation anywhere.
+  // Unprobed servers must not report normal status while catalog reads are pending.
   if (serverNeverProbed(world, store.id)) return 'never-probed';
   if (world.unavailableStores.includes(store.id)) return 'catalog-unavailable';
   if (store.kind === 'team' && !store.active) return 'inactive';
@@ -131,13 +126,8 @@ export function storeDescription(world: World, store: Store): string {
 }
 
 /**
- * The description a page heading may show.
- *
- * A heading names a place. When something has gone wrong the page under it
- * already says so — the access takeover's notice, the roster's own warning —
- * so repeating "Setup incomplete" beside the title says it twice, and says
- * it in the one spot with no room to explain it or act on it. Every failing
- * reading is dropped here; the ordinary one is kept.
+ * Returns subtitle text for a store page header. Suppresses status error text
+ * when errors are already surfaced by full-page notices in the body.
  */
 export function storeHeadingDescription(world: World, store: Store): string {
   if (storeDescriptionState(world, store) !== 'normal') return '';
@@ -147,8 +137,8 @@ export function storeHeadingDescription(world: World, store: Store): string {
 }
 
 /**
- * Whether a store lists at all: its server's lease must be fresh, and a team
- * whose summary reports inactive lists nothing.
+ * Returns whether a store is readable: its server lease must be valid,
+ * and team stores must report an active status.
  */
 export function storeReadable(world: World, ref: StoreRef): boolean {
   const store = storeOf(world, ref);
@@ -160,7 +150,7 @@ export function storeReadable(world: World, ref: StoreRef): boolean {
   );
 }
 
-/** Whether the renderer has one authenticated local author for this store. */
+/** Returns whether the current user has permission to create items in this store. */
 export function canCreateInStore(world: World, ref: StoreRef): boolean {
   const store = storeOf(world, ref);
   if (!store || !storeReadable(world, store.id)) return false;
@@ -175,7 +165,7 @@ export function canCreateInStore(world: World, ref: StoreRef): boolean {
   return own.length === 1;
 }
 
-/** Whether this Mac's authenticated party admits this exact item's write role. */
+/** Returns whether the local authenticated user has permission to edit the specified item. */
 export function canChangeItem(world: World, item: Item): boolean {
   const store = storeOf(world, item.store);
   if (!store || !canCreateInStore(world, store.id)) return false;
@@ -190,28 +180,22 @@ export function canChangeItem(world: World, item: Item): boolean {
   return own.length === 1 && admits(own[0].destination_role, item.write);
 }
 
-/** Every listable item. Folders are not items — they are path chips. */
+/** Returns all accessible items from readable stores, excluding directory entries. */
 export function catalog(world: World): Item[] {
   return world.items.filter(
     (item) => item.kind !== 'Folder' && storeReadable(world, item.store),
   );
 }
 
-/** The stores a person picks between, in the order the sidebar shows them. */
+/** Returns all readable stores in navigation display order. */
 export function listableStores(world: World): Store[] {
   return world.stores.filter((store) => storeReadable(world, store.id));
 }
 
 /**
- * The vault "Save in" starts on when the list itself does not name one.
- *
- * All Items spans every store, so a new item there has no store to inherit.
- * The answer is the first vault the chooser draws — navigation order, so it
- * is the same first row the sidebar shows — preferring one that can actually
- * take a new item, because starting on a store whose Create button is dead is
- * a worse first impression than starting one row lower. When nothing here can
- * be written to, the first store is still chosen: the sheet then says why in
- * its own words rather than opening on an empty chooser.
+ * Determines the default store selection for new item creation when no store
+ * context is active. Selects the first writable store in navigation order, or
+ * falls back to the first available store if all are read-only.
  */
 export function defaultCreateStore(world: World): StoreRef | undefined {
   const order = storeNavigationOrder(world);
@@ -220,10 +204,7 @@ export function defaultCreateStore(world: World): StoreRef | undefined {
 }
 
 /**
- * The issue entries that apply to the world as it stands.
- *
- * The lapsed-lease entry is a consequence of the lease world, not a standing
- * fact, so it appears only while that world is lapsed.
+ * Filters active system notifications based on current server lease state.
  */
 export function notesNow(world: World): Notification[] {
   return world.notifications.filter(
@@ -234,9 +215,7 @@ export function notesNow(world: World): Notification[] {
 /**
  * Put a server's compatibility lease into `state`, returning a new world.
  *
- * `shell.js` mutates a module global (`setLease`); this returns a fresh world
- * so the shell's lease switch is a state transition like any other and two
- * worlds can be held side by side in a test.
+ * Returns a cloned World state with the updated lease state and server records.
  */
 export function applyLease(
   world: World,

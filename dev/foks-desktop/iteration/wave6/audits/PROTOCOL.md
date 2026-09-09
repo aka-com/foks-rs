@@ -8,8 +8,8 @@ reference. Each auditor is a separate Opus session, in character.
 ## Material every auditor receives
 
 - `../SPEC.md` — what the combination is and where each piece came from
-- `../01-vault.html`, `../02-first-run.html` — the thing under audit
-- `../../BRIEF.md` §2 and `../../WAVE4-BRIEF.md` §1 — what is true of the wire
+- `../01-vault.html`, `../02-first-run.html` — primary prototype interfaces under evaluation
+- `../../BRIEF.md` §2 and `../../WAVE4-BRIEF.md` §1 — underlying protocol specifications and constraints
 - Their own round-one report under `../../wave3/audits/` — so the round-two
   report can say what changed
 - `../../wave5/` — the coherent design, for anything the combination does

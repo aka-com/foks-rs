@@ -1,21 +1,18 @@
 /**
- * Alerts shows current warnings and blocked operations.
+ * Displays active warnings and blocked operations.
  *
- * `notesNow` decides what is on it: the lapsed-lease entry is a consequence
- * of the lease world, not a standing fact, so it appears only while that
- * world is lapsed. Catalog failures are retryable directly from here because
- * there is no single other screen that owns the catalog load.
+ * Catalog failures can be retried directly from this screen.
  */
 
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, Icon } from '../components';
+import { Button, Chip, Icon } from '../components';
 import { PageHeader } from '../shell/page-header';
 import { notesNow } from '../model';
 import type { Notification, World } from '../model';
 
-const ACTIONS_ARE_LATER =
-  'Open the screen that owns this action: Servers or Groups.';
+const ACTION_UNAVAILABLE =
+  'Resolve this alert in Server Settings or Group Settings.';
 
 export interface AlertsScreenProps {
   world: World;
@@ -51,7 +48,7 @@ export function AlertsScreen({
 
   return (
     <>
-      <PageHeader title="Alerts" subtitle="" />
+      <PageHeader title="Alerts" subtitle="System alerts and pending actions" />
       <div className="body">
         {notes.length ? (
           <div className="cards">
@@ -65,15 +62,15 @@ export function AlertsScreen({
                 {canRetry(note) ? (
                   <Button
                     disabled={busy.has(note.id)}
-                    title="Try the catalog load again"
+                    title="Retry loading catalog"
                     onClick={() => retry(note)}
                   >
                     {note.action}
                   </Button>
                 ) : note.action ? (
-                  <span className="chip" title={ACTIONS_ARE_LATER}>
-                    {note.action}
-                  </span>
+                  <Chip tone="warn" title={ACTION_UNAVAILABLE}>
+                    Action required
+                  </Chip>
                 ) : null}
               </div>
             ))}
@@ -84,7 +81,7 @@ export function AlertsScreen({
               <Icon name="bell" />
             </span>
             <h2>No alerts to review</h2>
-            <p>Nothing needs attention on this Mac.</p>
+            <p>All accounts and connections are operating normally.</p>
           </div>
         )}
       </div>

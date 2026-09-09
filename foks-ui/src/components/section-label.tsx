@@ -1,12 +1,4 @@
-/**
- * The eyebrow above a group of things.
- *
- * Two places, two classes, one meaning: the sidebar writes it as a real
- * `<h6>` (`shell.css`'s `.side h6`), and a panel writes it as `.sec`, which
- * can carry a trailing link. Both are uppercase, letterspaced and quiet; the
- * heading level is the part that matters to a screen reader, so the sidebar's
- * stays a heading rather than becoming a styled div.
- */
+/** Header label for content sections with an optional trailing action. */
 
 import type { ReactNode } from 'react';
 

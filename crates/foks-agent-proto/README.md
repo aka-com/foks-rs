@@ -22,7 +22,7 @@ recovery/resume, and YubiKey passphrase operations use the same v2 boundary.
 Device summaries carry an optional display name only when the authenticated
 user-chain response disclosed the commitment opening. Team demotion and removal
 select the exact authenticated local-user roster row by party ID; username
-remains only the lookup input for adding somebody.
+is used only when adding a new member.
 Recovery phrases and hardware PINs use redacted, zeroizing request fields; the
 newly generated backup phrase is the sole secret response and is returned once
 so the frontend can place it in offline storage.
@@ -37,9 +37,9 @@ carry only a role/visibility selection. They never carry bearer permissions,
 PTKs, removal keys, or checkpoint material. Responses remain ordinary JSON
 values rather than a second DTO hierarchy.
 
-Store creates carry a
-`Create` precondition and edits/removals carry `ExactVersion`; the agent does
-not infer overwrite intent. Inline values and stream chunks are limited to 128
+Store entry creation requires a
+`Create` precondition, and updates or removals require `ExactVersion`; the agent
+does not infer overwrite intent. Inline values and stream chunks are limited to 128
 KiB so their JSON representation stays below the 1 MiB frame ceiling. A stream
 holds mutation single-flight from its header through commit, rejects gaps and
 rebinding, and treats a missing post-commit response as an ambiguous outcome.

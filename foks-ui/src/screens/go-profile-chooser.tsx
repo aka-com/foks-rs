@@ -25,18 +25,21 @@ export function GoProfileChooser({
           : candidate.hidden
             ? 'Hidden'
             : candidate.copyable
-              ? 'Pair or copy'
+              ? 'Pair or import'
               : candidate.pairable
                 ? 'Pair'
                 : 'Unavailable';
         return (
           <InsetRow
             key={candidate.candidateId}
-            label={candidate.username ?? `Account ${shortId(candidate.userId)}`}
+            label={
+              candidate.username ??
+              `Unnamed account (${shortId(candidate.userId)})`
+            }
             action={
               <Button
                 size="sm"
-                aria-label={`Select ${candidate.username ?? shortId(candidate.userId)}, device ${shortId(candidate.deviceId)}`}
+                aria-label={`Select account ${candidate.username ?? shortId(candidate.userId)} on device ${shortId(candidate.deviceId)}`}
                 aria-pressed={selected === candidate.candidateId}
                 variant={
                   selected === candidate.candidateId ? 'primary' : undefined
@@ -49,12 +52,17 @@ export function GoProfileChooser({
             }
           >
             <span>
-              {candidate.serverHint ?? `Server ${shortId(candidate.hostId)}`}{' '}
+              {candidate.serverHint ?? `Server (${shortId(candidate.hostId)})`}{' '}
               <Chip>{status}</Chip>
             </span>
             <small>
-              {candidate.role} · {candidate.storageKind} · device{' '}
-              {shortId(candidate.deviceId)}
+              {candidate.role.toLowerCase() === 'owner'
+                ? 'Account owner'
+                : 'Member'}{' '}
+              ·{' '}
+              {candidate.storageKind.includes('keychain')
+                ? 'Keychain storage'
+                : 'Local storage'}
             </small>
           </InsetRow>
         );

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "FOKS's minimal renderer capability: listen, unlisten, start-dragging. Nothing else.",
+  "description": "Minimal renderer capability granting event subscriptions and window dragging for the main window.",
   "windows": ["main"],
   "permissions": [
     "core:event:allow-listen",

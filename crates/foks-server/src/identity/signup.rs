@@ -207,7 +207,8 @@ pub(crate) fn validate_signup(
             .as_ref()
             .map(|hint| -> Result<(u8, [u8; 32])> {
                 Ok((
-                    u8::try_from(hint.slot).map_err(|_| Error::Signup("Yubi PQ slot range"))?,
+                    u8::try_from(hint.slot)
+                        .map_err(|_| Error::Signup("Yubi PQ slot out of range"))?,
                     hint.id,
                 ))
             })

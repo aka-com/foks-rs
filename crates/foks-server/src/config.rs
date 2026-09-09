@@ -69,7 +69,9 @@ impl Default for SessionLimits {
 impl SessionLimits {
     pub(crate) fn validate(self) -> crate::Result<()> {
         let Some(maximum_frame_memory) = self.maximum_frame_bytes.checked_mul(2) else {
-            return Err(crate::Error::Config("invalid session limit"));
+            return Err(crate::Error::Config(
+                "maximum frame memory calculation overflow",
+            ));
         };
         let maximum_reservable = usize::try_from(u32::MAX)
             .unwrap_or(usize::MAX)

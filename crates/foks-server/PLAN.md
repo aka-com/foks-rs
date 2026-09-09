@@ -96,11 +96,8 @@ on an `aka-*` package, every `foks-*` package must be defined under
 must resolve there too. `tools/foks-server/check.sh` enforces all three, under
 the default feature set and under `--all-features`.
 
-This is deliberately not a whole-branch changed-path allowlist. One workspace
-builds both products, so a branch carrying FOKS work also carries AKA and
-shared-UI (`ui/kit`) work; rejecting those changes said nothing about whether
-FOKS still stands alone, and blocked the integrated branch from being tested at
-all.
+This is deliberately not a whole-branch changed-path allowlist. Because the workspace contains both products, dependency isolation is enforced
+by checking the Cargo crate graph rather than changed file paths.
 
 ## 3. Architectural rules
 

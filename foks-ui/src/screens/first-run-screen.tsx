@@ -60,7 +60,7 @@ import { readableBy } from './scope';
 import { useToast } from '/kit/toasts';
 
 const PERSONAL_FIXED =
-  'Your Personal vault belongs only to your account and has no members. Put items in a group to share them.';
+  'Your Personal vault is private to your account. To share items with others, use a group.';
 
 const stepOf = (state: FirstRunStateName): number => {
   if (state === 'boot') return 0;
@@ -81,7 +81,7 @@ const localStepOf = (state: FirstRunStateName): number => {
   return 3;
 };
 
-/** Apple's Computer Name is "{Owner}'s MacBook Pro". Without that string, use the product family. */
+/** Suggest a fallback device name based on platform user agent. */
 function suggestedDeviceName(): string {
   if (typeof navigator === 'undefined') return 'Mac';
   const source = `${navigator.platform} ${navigator.userAgent}`;
@@ -188,9 +188,7 @@ function initialCheckpoint(
   if (bridge.firstRunFixture && namedReviewState)
     return fixtureSeed(bridge, path, location.step as FirstRunStateName);
   if (automaticEntry && saved) return saved;
-  // A phrase URL can remain in browser history, but the prepared phrase
-  // itself never survives reload. Resume at Protect and require a fresh
-  // explicit reveal.
+  // Phrase state is not persisted across reloads; resume at 'protect'.
   const state =
     location.step === 'phrase'
       ? 'protect'
@@ -223,11 +221,7 @@ function SetupSidebar({
   recoverEnabled = false,
 }: {
   checkpoint: FirstRunCheckpoint;
-  /**
-   * What the reader has picked on the `who` screen but not yet confirmed.
-   * The checkpoint's path defaults to `invited` before anyone chooses, so
-   * without this the sidebar would assert a path the reader has not taken.
-   */
+  /** Path selected on the 'who' screen before confirmation. */
   pendingPath?: FirstRunPath | null;
   onCancel?: () => void;
   onAnotherServer?: () => void;
@@ -236,9 +230,9 @@ function SetupSidebar({
 }): ReactNode {
   if (checkpoint.managedLocal) {
     const current = localStepOf(checkpoint.state);
-    const labels = ['Local server', 'Create your account', 'Recovery'];
+    const labels = ['Local server', 'Create account', 'Account recovery'];
     return (
-      <nav className="side setup-side" aria-label="Setting up">
+      <nav className="side setup-side" aria-label="Setup steps">
         <div className="setup-steps">
           {labels.map((label, index) => (
             <div
@@ -246,7 +240,7 @@ function SetupSidebar({
               className={`setup-step${index === current ? ' on' : ''}${index < current ? ' done' : ''}`}
               aria-current={index === current ? 'step' : undefined}
             >
-              <span className="setup-mark">
+              <span className="setup-mark" aria-hidden="true">
                 {index < current ? '✓' : index + 1}
               </span>
               <span className="t">{label}</span>
@@ -258,7 +252,7 @@ function SetupSidebar({
             {onAnotherServer ? (
               <button type="button" className="nav" onClick={onAnotherServer}>
                 <Icon name="server" />
-                <span className="t">Use another server</span>
+                <span className="t">Connect to another server</span>
               </button>
             ) : null}
             {onRecoverAccount ? (
@@ -284,27 +278,24 @@ function SetupSidebar({
     );
   }
   const current = stepOf(checkpoint.state);
-  // On the `who` screen the path is whatever the reader has selected, which
-  // may be nothing yet. Step 5 is the one that reads differently per path;
-  // until there is a path it says the neutral thing and is drawn pending,
-  // rather than naming a route nobody has chosen.
+  // Display neutral step labels until the user selects a path.
   const choosing = checkpoint.state === 'who';
   const path = choosing ? (pendingPath ?? null) : checkpoint.path;
   const labels = [
-    'How are you joining?',
+    'Get started',
     'Select a server',
-    'Create your account',
-    'Save recovery phrase',
+    'Create account',
+    'Protect account',
     path === null
       ? 'Group'
       : path === 'invited'
-        ? 'Wait to be added'
+        ? 'Join a group'
         : 'Create a group',
-    'You’re in',
+    'Complete',
   ];
   const pendingSteps = path === null ? new Set([4]) : new Set<number>();
   return (
-    <nav className="side setup-side" aria-label="Setting up">
+    <nav className="side setup-side" aria-label="Setup steps">
       <div className="setup-steps">
         {labels.map((label, index) => (
           <div
@@ -347,10 +338,7 @@ function FirstRunAppSidebar({
   onReenter: () => void;
 }): ReactNode {
   const left = completedFirstRunSteps(checkpoint);
-  // The vault and the group are real by the time this sidebar is on screen,
-  // so the shared sidebar lists them from the world rather than from a
-  // preview that could disagree with it. What first run adds is its own
-  // progress, which is what the `status` slot is for.
+  // Render setup progress in the sidebar status slot.
   const status = (
     <>
       <SectionLabel as="side">Status</SectionLabel>
@@ -358,7 +346,7 @@ function FirstRunAppSidebar({
         <NavRow
           active
           glyph={<Icon name="flag" />}
-          name="Get started"
+          name="Setup checklist"
           tail={<span className="badge">{left} of 5</span>}
           onSelect={() =>
             onNavigate({
@@ -374,8 +362,8 @@ function FirstRunAppSidebar({
       ) : null}
       {checkpoint.path === 'invited' && !checkpoint.added ? (
         <p className="side-note">
-          {groupName} will appear under Groups once you’re added. FOKS checks
-          for new groups when it opens and when you click Check now.
+          {groupName} will appear under Groups once your access is approved.
+          FOKS automatically checks when launched, or you can click Check now.
         </p>
       ) : null}
     </>
@@ -410,6 +398,7 @@ function AddedDetails({
         <div className="dh">
           <span className="t">
             <h2>Details</h2>
+            <small>Select an item to view details</small>
           </span>
         </div>
       </aside>
@@ -423,7 +412,8 @@ function AddedDetails({
         <span className="t">
           <h2>{name}</h2>
           <small>
-            {kind} in {store?.name ?? 'this group'}
+            {kind.charAt(0).toUpperCase() + kind.slice(1)} in{' '}
+            {store?.name ?? 'this group'}
           </small>
         </span>
       </div>
@@ -439,31 +429,31 @@ function AddedDetails({
               </Button>
             }
           >
-            — locked —
+            Locked
           </InsetRow>
         </Inset>
         <p className="pfn">
-          Whether you can open this item depends on your role in the group.
+          Access to this item depends on your role in the group.
         </p>
         <SectionLabel>Info</SectionLabel>
         <div className="meta">
-          <b>Path</b>
+          <b>Location</b>
           <code>{item.path}</code>
           <b>Kind</b>
           <span>{kind}</span>
           <b>Version</b>
           <span>{item.version}</span>
           <b>Size</b>
-          <span>{item.size} bytes</span>
-          <b>Read role</b>
+          <span>{plural(item.size, 'byte')}</span>
+          <b>Read permission</b>
           <Chip>{roleText(item.read)}</Chip>
-          <b>Write role</b>
+          <b>Write permission</b>
           <Chip>{roleText(item.write)}</Chip>
         </div>
         <SectionLabel>Sharing</SectionLabel>
         <p>
-          Everyone in {store?.name ?? 'this group'} at the item’s read role or
-          above can read it. Based on the current member list.
+          Members of {store?.name ?? 'this group'} with the required role or
+          higher can view this item based on the current member list.
         </p>
       </div>
     </aside>
@@ -489,7 +479,7 @@ function Foot({
     <div className="pfoot">
       {back ? (
         <Button className="lnk" onClick={back}>
-          ‹ Back
+          Back
         </Button>
       ) : null}
       {note ? <span className="note">{note}</span> : null}
@@ -509,7 +499,7 @@ function Pane({
   foot,
 }: {
   title: string;
-  /** Only drawn when `header` is true. */
+  /** Only rendered when `header` is true. */
   subtitle?: string;
   scope?: string;
   header?: boolean;
@@ -534,16 +524,7 @@ function Pane({
   );
 }
 
-/**
- * The `who` screen's fork: setting up alone, or being added to someone's
- * group. Two options rather than three — "I already use FOKS on another device"
- * is a returning user with no account to create, so it competed with the real
- * choice and now sits beside Continue as a link.
- *
- * Each option carries exactly one fact — what you need before you start —
- * because that is the only thing that distinguishes them at this point. The
- * rest is deferred to `WhatHappensNext`, which fills in for the chosen path.
- */
+/** Setup options for the initial screen: creating a new vault or joining an existing group. */
 const JOINING_OPTIONS: readonly {
   path: FirstRunPath;
   icon: FoksIconName;
@@ -554,16 +535,16 @@ const JOINING_OPTIONS: readonly {
   {
     path: 'own',
     icon: 'person',
-    title: 'I’m starting on my own',
-    detail: 'For yourself, or to start a group that others will join.',
+    title: 'Start on my own',
+    detail: 'Set up for yourself, or create a group for others to join.',
     need: 'You’ll need a server address',
   },
   {
     path: 'invited',
     icon: 'people',
-    title: 'Someone invited me to their group',
-    detail: 'They said something like “install this and I’ll add you”.',
-    need: 'You’ll need their server address',
+    title: 'Join an existing group',
+    detail: 'Accept an invitation to join someone else’s group.',
+    need: 'You’ll need the server address',
   },
 ];
 
@@ -575,8 +556,7 @@ function JoiningChoice({
   onChange: (path: FirstRunPath) => void;
 }): ReactNode {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
-  // A radiogroup is one tab stop; the arrows move within it. Nothing is
-  // checked at first, so the group is entered at the first option.
+  // Radio group keyboard navigation.
   const move = (from: number, step: number): void => {
     const next =
       (from + step + JOINING_OPTIONS.length) % JOINING_OPTIONS.length;
@@ -584,7 +564,7 @@ function JoiningChoice({
     refs.current[next]?.focus();
   };
   return (
-    <div className="opts" role="radiogroup" aria-label="How are you joining">
+    <div className="opts" role="radiogroup" aria-label="Setup method">
       {JOINING_OPTIONS.map((option, index) => {
         const on = value === option.path;
         return (
@@ -626,29 +606,29 @@ function JoiningChoice({
   );
 }
 
-/** The three steps the chosen path actually leads through. */
+/** Step summaries displayed for each setup path. */
 const NEXT_STEPS: Readonly<Record<FirstRunPath, readonly ReactNode[]>> = {
   invited: [
     <>
-      Enter <b>their server address</b> and check it is the right one.
+      Enter the <b>server address</b> and verify the connection.
     </>,
     <>
-      Pick a <b>username</b> and save your recovery phrase.
+      Choose a <b>username</b> and save your recovery phrase.
     </>,
     <>
-      <b>Wait to be added.</b> Joining a server requires admin approval.
+      <b>Await approval.</b> An administrator will confirm your group access.
     </>,
   ],
   own: [
     <>
-      Enter a <b>server address</b>: yours, or one you were given.
+      Enter your <b>server address</b> and verify the connection.
     </>,
     <>
-      Pick a <b>username</b> and save your recovery phrase.
+      Choose a <b>username</b> and save your recovery phrase.
     </>,
     <>
-      <b>Create a group</b> for others to join, or skip it and keep things
-      personal.
+      <b>Create a group</b> to share items, or skip this step to keep your vault
+      private.
     </>,
   ],
 };
@@ -733,8 +713,7 @@ export function FirstRunExperience({
   );
   const [backupPhrase, setBackupPhrase] = useState<string | null>(null);
   const [phraseWritten, setPhraseWritten] = useState(false);
-  // The `who` screen's selection, before Continue commits it. It is screen
-  // state, not checkpoint state: nothing has been chosen until Continue.
+  // Pending path selection before confirmation.
   const [pendingPath, setPendingPath] = useState<FirstRunPath | null>(null);
   const [groupName, setGroupName] = useState(
     () => checkpoint.group?.name ?? facts?.groupName ?? 'Household',
@@ -813,9 +792,11 @@ export function FirstRunExperience({
     goDiscovery?.candidates.filter(
       (candidate) => candidate.pairable || candidate.copyable,
     ) ?? [];
-  const admin = facts?.admin ?? 'the group admin';
-  const adminShort = admin.split('.')[0];
-  const group = checkpoint.group?.name ?? facts?.groupName ?? 'the group';
+  const admin = facts?.admin ?? 'group administrator';
+  const adminShort = facts?.admin
+    ? facts.admin.split('.')[0]
+    : 'the group administrator';
+  const group = checkpoint.group?.name ?? facts?.groupName ?? 'your group';
   const addedStores = checkpoint.group
     ? world.stores.filter(
         (store) =>
@@ -856,7 +837,9 @@ export function FirstRunExperience({
         (server) => server.id === managedProfile && server.state === 'ok',
       )
     ) {
-      setManagedStatusError('The managed local server is not ready.');
+      setManagedStatusError(
+        'The local server is not responding. Make sure the background service is running and try again.',
+      );
       return;
     }
     void sharedServerStatus(bridge, managedProfile).then(
@@ -868,7 +851,7 @@ export function FirstRunExperience({
           status.leaseRequired ||
           !status.host
         ) {
-          setManagedStatusError('The managed local server is not ready.');
+          setManagedStatusError('The local server is not ready.');
           return;
         }
         setManagedStatus(status);
@@ -942,7 +925,9 @@ export function FirstRunExperience({
 
   const refreshAccountIdentity = async (alias: string) => {
     if (!profile)
-      throw new Error('Check the server before loading an account.');
+      throw new Error(
+        'A server profile must be selected before loading an account.',
+      );
     for (let attempt = 0; attempt < 5; attempt++) {
       const refreshed = await onRefreshWorld();
       const matches = refreshed.accounts.filter(
@@ -959,7 +944,7 @@ export function FirstRunExperience({
       }
     }
     throw new Error(
-      'The account operation finished, but its authenticated identity is not available after refresh. Reopen FOKS before continuing.',
+      'Account setup completed, but the account details could not be loaded. Please restart FOKS to continue.',
     );
   };
 
@@ -1141,7 +1126,7 @@ export function FirstRunExperience({
         : await bridge.checkAndAddProfile(profileName, address.trim());
       if (goCandidate && report.hostId !== goCandidate.hostId)
         throw new Error(
-          'The checked server does not match the selected CLI profile.',
+          'The server response does not match the selected profile.',
         );
       send({
         type: 'profile-checked',
@@ -1205,7 +1190,7 @@ export function FirstRunExperience({
         recoveryTargetAlias,
       );
       if (copied.alias !== recoveryTargetAlias)
-        throw new Error('Device copy returned a different account.');
+        throw new Error('The imported profile belongs to a different account.');
       const identity = await refreshAccountIdentity(recoveryTargetAlias);
       send({
         type: 'account-complete',
@@ -1300,7 +1285,9 @@ export function FirstRunExperience({
               phrase,
             );
       if (provision.alias !== recoveryTargetAlias) {
-        throw new Error('Device pairing returned a different account.');
+        throw new Error(
+          'The paired device credentials belong to a different account.',
+        );
       }
       const identity = await refreshAccountIdentity(recoveryTargetAlias);
       send({
@@ -1425,7 +1412,7 @@ export function FirstRunExperience({
       );
       if (result.accountAlias !== checkpoint.account.alias) {
         throw new Error(
-          'The authenticated discovery response belongs to a different account. Reopen FOKS before continuing.',
+          'Group discovery returned data for a different account. Please restart FOKS to continue.',
         );
       }
       const match = result.groups.filter(
@@ -1435,7 +1422,9 @@ export function FirstRunExperience({
       );
       if (match.length !== 1) {
         setMessage(
-          `Checked just now — ${facts?.groupName ?? 'a single active group'} is not listed unambiguously yet.`,
+          facts?.groupName
+            ? `Checked just now — group "${facts.groupName}" is not available yet.`
+            : 'Checked just now — no matching active group was found.',
         );
         return;
       }
@@ -1455,7 +1444,7 @@ export function FirstRunExperience({
       );
       if (stores.length !== 1) {
         setMessage(
-          'The authenticated group was found, but its refreshed store is not available yet. Check again.',
+          'The group was found, but its storage is not ready yet. Please check again in a moment.',
         );
         return;
       }
@@ -1480,8 +1469,7 @@ export function FirstRunExperience({
     setBusy(true);
     setMessage(null);
     try {
-      // list_accounts is bound to the catalog generation retained by Rust.
-      // Establish that generation first; racing these calls can fail closed.
+      // Load catalog before accounts to ensure consistent catalog state.
       const catalog = await bridge.listCatalog();
       const accounts = await bridge.listAccounts();
       const identity = accounts.find(
@@ -1496,7 +1484,7 @@ export function FirstRunExperience({
         );
       if (!accountStore)
         throw new Error(
-          'Your authenticated account store is not available yet. Reopen this step after account setup finishes.',
+          'Account storage is not ready yet. Please wait a moment and try again.',
         );
       const alias = groupName
         .trim()
@@ -1504,7 +1492,7 @@ export function FirstRunExperience({
         .replace(/[^a-z0-9_-]+/g, '-')
         .replace(/^-+|-+$/g, '');
       if (!alias)
-        throw new Error('Enter a group name containing letters or numbers.');
+        throw new Error('Group name must contain letters or numbers.');
       await bridge.createGroup({
         accountStoreId: accountStore.id,
         teamAlias: alias,
@@ -1526,7 +1514,7 @@ export function FirstRunExperience({
       );
       if (matches.length !== 1 || !matches[0]?.team_id_hex) {
         throw new Error(
-          'The group operation finished, but its authenticated active store is not available after refresh. Reopen FOKS before continuing.',
+          'The group was created, but its vault could not be loaded. Please restart FOKS to continue.',
         );
       }
       const created = matches[0];
@@ -1633,7 +1621,7 @@ export function FirstRunExperience({
           </div>
         ) : null}
         <div className="local-alternates">
-          <SectionLabel>Other ways to begin</SectionLabel>
+          <SectionLabel>Other options</SectionLabel>
           <div className="btns">
             <Button onClick={() => send({ type: 'choose', path: 'own' })}>
               Connect to another server…
@@ -1659,8 +1647,8 @@ export function FirstRunExperience({
       <Pane title="Checking this Mac" header={false}>
         <h1>Looking for existing FOKS accounts</h1>
         <p className="lead">
-          Checking the official FOKS client’s standard local profile store.
-          Nothing is changed or unlocked.
+          Checking for existing accounts from the official FOKS CLI. No changes
+          will be made to your data.
         </p>
         <Button disabled>Checking…</Button>
       </Pane>
@@ -1670,9 +1658,9 @@ export function FirstRunExperience({
       <Pane title="FOKS is already set up" header={false} wide>
         <h1>FOKS is already set up on this Mac</h1>
         <p className="lead">
-          Choose an account from the official FOKS command-line client. The next
-          step adds this desktop as a separate device or copies the existing
-          device with your approval.
+          Choose an account from the official FOKS CLI. In the next step, you
+          can connect this app as a new device or copy your existing device
+          credentials.
         </p>
         <GoProfileChooser
           candidates={goCandidates}
@@ -1712,17 +1700,17 @@ export function FirstRunExperience({
       <Pane title="How are you joining?" header={false} wide>
         <h1>How are you joining?</h1>
         <p className="lead">
-          Pick the one that fits. Everything else is figured out in the next few
-          steps.
+          Choose an option to get started. You will set up your account and
+          server in the next steps.
         </p>
         {goScanError ? (
           <p className="crit">
-            Existing CLI profiles could not be inspected: {goScanError}
+            Could not check existing CLI profiles: {goScanError}
           </p>
         ) : null}
         {message ? (
           <div className="crit" role="alert">
-            <p>Setup stopped before this Mac was ready: {message}</p>
+            <p>Setup could not be completed: {message}</p>
             <Button
               size="sm"
               onClick={() => {
@@ -1748,7 +1736,7 @@ export function FirstRunExperience({
             {!checkpoint.initialized ? 'Initializing...' : 'Continue'}
           </Button>
           <span className="alt">
-            Already use FOKS on another device?{' '}
+            Already using FOKS on another device?{' '}
             <button
               type="button"
               className="lnk"
@@ -1765,11 +1753,11 @@ export function FirstRunExperience({
   else if (['address', 'no-address', 'error'].includes(state))
     content = (
       <Pane
-        title={checkpoint.path === 'invited' ? 'Their server' : 'A server'}
+        title={checkpoint.path === 'invited' ? 'Group Server' : 'Server Setup'}
         header={false}
         scope={
           state === 'no-address' && checkpoint.path === 'invited'
-            ? 'Where the address comes from'
+            ? 'Finding your server address'
             : undefined
         }
         foot={
@@ -1790,10 +1778,9 @@ export function FirstRunExperience({
             : 'Select a server'}
         </h1>
         <p className="lead">
-          Everything in FOKS lives on a server — a machine someone runs, where
-          your account, your groups and their encrypted stores are kept.{' '}
+          FOKS stores your account, groups, and encrypted vaults on a server.{' '}
           {checkpoint.path === 'invited'
-            ? `Enter the server address from ${adminShort}.`
+            ? `Enter the server address provided by ${adminShort}.`
             : null}
         </p>
         <SectionLabel>Server</SectionLabel>
@@ -1822,20 +1809,21 @@ export function FirstRunExperience({
             setAddressInvalid(false);
           }}
         >
-          Use official FOKS server
+          Use the official FOKS server
         </Button>
         {checkpoint.returning ? (
           <p className="hint">
-            <b>You already have an account on this server.</b> Nothing new is
-            registered: after the check, this Mac is added to the account you
-            already have.
+            <b>You already have an account on this server.</b> This Mac will be
+            added to your existing account without creating a new one.
           </p>
         ) : null}
         {state === 'error' && !addressInvalid ? (
           <div className="crit">
             <b>
               {message ??
-                `${address || 'The empty address'} did not answer, so nothing was saved`}
+                (address
+                  ? `Could not connect to ${address}`
+                  : 'No server address provided')}
             </b>
             FOKS could not connect to this address. Check the address and your
             network connection, then try again. No changes were saved.
@@ -1843,31 +1831,30 @@ export function FirstRunExperience({
         ) : null}
         {checkpoint.path === 'invited' && state === 'no-address' ? (
           <div className="pcard">
-            <h3>{`Ask ${adminShort} this`}</h3>
+            <h3>{`Ask ${adminShort} for the server address`}</h3>
             <p>
-              Any way you normally talk to them. It is the only thing you need
-              from them right now.
+              Contact them through your usual communication channel. This is the
+              only detail needed right now.
             </p>
             <CopyBox
               text="What’s the address of the FOKS server our group is on?"
               onCopy={(value) =>
                 void bridge
                   .copyText(value)
-                  .then(() => toasts.show('Sentence copied.'))
+                  .then(() => toasts.show('Copied to clipboard.'))
               }
             >
               “What’s the address of the FOKS server our group is on?”
             </CopyBox>
             <p>
-              Your username is next — you choose it here and send it to them
-              after. They add you from their side; you never need a code or a
-              link.
+              In the next step, you will choose a username and share it with
+              them so they can add you to the group.
             </p>
           </div>
         ) : checkpoint.path === 'invited' ? (
           <p className="hint">
             <button className="lnk" onClick={() => go('no-address')}>
-              They sent nothing?
+              Don’t have a server address?
             </button>
           </p>
         ) : null}
@@ -1876,9 +1863,11 @@ export function FirstRunExperience({
   else if (state === 'checked' || state === 'compare')
     content = (
       <Pane
-        title={checkpoint.path === 'invited' ? 'Their server' : 'A server'}
+        title={
+          checkpoint.path === 'invited' ? 'Group server' : 'Server details'
+        }
         header={false}
-        scope="Checked and pinned — nothing about you sent yet"
+        scope="Server verified and pinned. No user data sent."
         foot={
           <Foot back={() => go('address')}>
             <Button
@@ -1895,8 +1884,8 @@ export function FirstRunExperience({
       >
         <h1>Select a server</h1>
         <p className="lead">
-          Everything in FOKS lives on a server — a machine someone runs, where
-          your account, your groups and their encrypted stores are kept.
+          FOKS synchronizes your account, groups, and encrypted vaults through a
+          server.
         </p>
         <Inset className="checked-address">
           <InsetRow
@@ -1917,7 +1906,7 @@ export function FirstRunExperience({
         </Inset>
         <div className="pcard">
           <h3>
-            <Icon name="server" /> {profile?.canonicalName} answered{' '}
+            <Icon name="server" /> {profile?.canonicalName} verified{' '}
             <Chip>Pinned on this Mac</Chip>
           </h3>
           <p>
@@ -1937,21 +1926,21 @@ export function FirstRunExperience({
                   <code>{profile?.canonicalName}</code>
                 </div>
                 <div>
-                  <span className="k">Chain sequence</span>
+                  <span className="k">Server version</span>
                   <span>{profile?.chain}</span>
                 </div>
                 <div>
-                  <span className="k">Merkle epoch</span>
-                  <span>{profile?.epoch.toLocaleString()}</span>
-                </div>
-                <div className="wide">
-                  <span className="k">Host ID</span>
-                  <code>{profile?.hostId.match(/.{1,4}/g)?.join(' ')}</code>
+                  <span className="k">Verified</span>
+                  <span>
+                    {profile
+                      ? new Date(profile.epoch * 1000).toLocaleDateString()
+                      : '—'}
+                  </span>
                 </div>
               </div>
               <p className="hint">
-                These values came from this check. The certificate established
-                the first connection; future checks use the pinned host ID.
+                The server certificate was verified on first connection, and its
+                host ID is now pinned for future connections.
               </p>
               <Toggle label="Inspect response">
                 <pre>{JSON.stringify(profile, null, 1)}</pre>
@@ -1994,7 +1983,7 @@ export function FirstRunExperience({
       >
         <h1>Create your account</h1>
         <p className="lead">
-          Choose how you appear on this server and name this Mac.
+          Choose a username for this server and a name for this device.
         </p>
         <div className="local-field-card">
           <label className="local-field-row">
@@ -2007,7 +1996,7 @@ export function FirstRunExperience({
             />
           </label>
           <label className="local-field-row">
-            <span>This Mac’s name</span>
+            <span>Device name</span>
             <input
               value={deviceName}
               disabled={Boolean(checkpoint.account)}
@@ -2027,7 +2016,7 @@ export function FirstRunExperience({
             />
           </label>
           <label className="local-field-row">
-            <span>Invite (optional)</span>
+            <span>Invite code (optional)</span>
             <input
               value={invite}
               disabled={Boolean(checkpoint.account)}
@@ -2049,7 +2038,7 @@ export function FirstRunExperience({
       <Pane
         title="Your account"
         header={false}
-        scope="Your keys are made on this Mac; only their public halves are registered"
+        scope="Keys are generated securely on your device."
         wide
         foot={
           <Foot back={() => go(checkpoint.managedLocal ? 'local' : 'checked')}>
@@ -2060,10 +2049,7 @@ export function FirstRunExperience({
                 (!checkpoint.account &&
                   (!username.trim() || !deviceName.trim()))
               }
-              // Back from Protect lands here with the account already made.
-              // The managed-local pane already continues in that case; this
-              // one re-ran creation, which the agent refuses, stranding the
-              // reader on a screen whose only button fails.
+              // If the account was already created when returning from Protect, proceed to protection.
               onClick={() =>
                 checkpoint.account ? go('protect') : void createAccount()
               }
@@ -2128,7 +2114,7 @@ export function FirstRunExperience({
           className="lnk account-recover-link"
           onClick={() => openExisting('account')}
         >
-          I already have an account on this server
+          Sign in to an existing account
         </button>
       </Pane>
     );
@@ -2137,7 +2123,7 @@ export function FirstRunExperience({
       <Pane
         title="Your account"
         header={false}
-        scope="This Mac needs a key of its own"
+        scope="Device authorization required"
         wide
         foot={
           <Foot back={() => go(checkpoint.account ? 'protect' : existingBack)}>
@@ -2145,7 +2131,7 @@ export function FirstRunExperience({
               <Button onClick={() => go('protect')}>Resume protection</Button>
             ) : (
               <Button onClick={() => go('account')}>
-                I don’t have an account yet
+                Create a new account
               </Button>
             )}
           </Foot>
@@ -2160,8 +2146,8 @@ export function FirstRunExperience({
           <div className="pcard">
             <h3>Recover with your backup phrase</h3>
             <p>
-              Enter all 17 words from your backup phrase to add this Mac as an
-              owner device.
+              Enter all 17 words from your backup phrase to restore full access
+              on this Mac.
             </p>
             <Inset className="recovery-fields">
               {bridge.native ? (
@@ -2213,7 +2199,7 @@ export function FirstRunExperience({
             <h3>
               {goCandidate
                 ? 'Pair from the official FOKS CLI'
-                : 'Pair from a Mac you already use'}
+                : 'Pair from an existing device'}
             </h3>
             {goCandidate ? (
               <>
@@ -2232,10 +2218,8 @@ export function FirstRunExperience({
                   <code>foks --simple-ui key assist</code>
                 </CopyBox>
                 <p>
-                  Confirm the account, paste its key-exchange code below, and
-                  leave the command running until this Mac connects. If the CLI
-                  asks for this Mac’s code after it connects, submit an empty
-                  response to let the pairing wait finish.
+                  Select the account in the CLI, enter the pairing code below,
+                  and follow the terminal prompts to complete pairing.
                 </p>
               </>
             ) : (
@@ -2263,7 +2247,7 @@ export function FirstRunExperience({
                 <input
                   type="password"
                   aria-label="Pairing phrase"
-                  placeholder="short phrase from the other Mac"
+                  placeholder="Enter pairing phrase"
                   value={pairingPhrase}
                   onChange={(event) => setPairingPhrase(event.target.value)}
                 />
@@ -2285,7 +2269,7 @@ export function FirstRunExperience({
                 disabled={busy || !recoveryTargetAlias || !deviceName.trim()}
                 onClick={() => void acceptPairing(true)}
               >
-                Resume acceptance
+                Resume pairing
               </Button>
             </div>
           </div>
@@ -2293,9 +2277,10 @@ export function FirstRunExperience({
             <div className="pcard">
               <h3>Copy this Mac’s CLI device</h3>
               <p>
-                Advanced: both apps will use the same FOKS device. macOS may
-                request Keychain access. Revoking it disables both, and CLI
-                passphrase changes will not alter this desktop copy.
+                Advanced: both apps will share the same device credentials.
+                macOS may request Keychain access. Revoking the device in either
+                client will disable both, and changing your CLI passphrase will
+                not update this desktop copy.
               </p>
               <Inset className="recovery-fields">
                 <InsetRow label="Account alias">
@@ -2317,9 +2302,9 @@ export function FirstRunExperience({
         </div>
         {message ? <p className="crit">{message}</p> : null}
         <p className="hint">
-          This Mac will become a device for{' '}
-          <code>{checkpoint.account?.username ?? username}</code>. You can also
-          use an enrolled YubiKey.
+          This Mac will be added to your account (
+          {checkpoint.account?.username ?? username}). You can also use an
+          enrolled YubiKey.
         </p>
       </Pane>
     );
@@ -2356,7 +2341,7 @@ export function FirstRunExperience({
           </Foot>
         }
       >
-        <h1>Keep access to your account</h1>
+        <h1>Set up account recovery</h1>
         <p className="lead">
           Set up a backup phrase now so you can recover your account if this Mac
           is lost.
@@ -2475,7 +2460,7 @@ export function FirstRunExperience({
       <Pane
         title="Save recovery phrase"
         header={false}
-        scope="Set at least one now — the rest later, from Settings"
+        scope="Configure account recovery"
         wide
         foot={
           <Foot back={() => go('account')}>
@@ -2491,7 +2476,7 @@ export function FirstRunExperience({
       >
         <h1>Save recovery phrase</h1>
         <p className="lead">
-          Right now this Mac holds the only key to{' '}
+          This Mac currently holds the only key to{' '}
           {checkpoint.account?.username}. Add at least one recovery method now.
           You can add more later under <b>Recovery devices</b> or{' '}
           <b>Security keys</b>.
@@ -2499,7 +2484,9 @@ export function FirstRunExperience({
         <div className="two">
           <div className="pcard">
             <h3>Passphrase</h3>
-            <p>Encrypts the keys that are held on this Mac. Optional.</p>
+            <p>
+              Protects the keys stored on this Mac with a password. Optional.
+            </p>
             <Inset>
               <InsetRow label="Passphrase">
                 <input
@@ -2533,17 +2520,18 @@ export function FirstRunExperience({
               <div className="dbody">
                 <ol>
                   <li>
-                    <b>Preparing the card cannot be split or resumed.</b> If it
-                    stops part way, recovery requires resetting its PIV applet,
-                    which erases everything on it.
+                    <b>Setup must be completed in one session.</b> If
+                    interrupted, the security key must be reset, which erases
+                    all data on it.
                   </li>
                   <li>
-                    <b>It must still hold its factory management key.</b> A card
-                    that has already been managed will refuse.
+                    <b>The key must use default factory settings.</b> Keys
+                    previously configured with custom management keys cannot be
+                    used.
                   </li>
                   <li>
-                    <b>The unlock code is yours to choose and keep.</b> Nothing
-                    generates one for you or shows it later.
+                    <b>You must remember your unlock PIN.</b> FOKS cannot
+                    generate or recover your PIN if lost.
                   </li>
                 </ol>
               </div>
@@ -2551,7 +2539,7 @@ export function FirstRunExperience({
             <Button
               onClick={() =>
                 setMessage(
-                  'A YubiKey is enrolled later from Settings › Security keys.',
+                  'You can enroll a YubiKey later in Settings › Security keys.',
                 )
               }
             >
@@ -2633,7 +2621,7 @@ export function FirstRunExperience({
         foot={
           <Foot>
             <Button onClick={() => go('checklist-invited')}>
-              I’ll come back later
+              Finish later
             </Button>
           </Foot>
         }
@@ -2644,48 +2632,49 @@ export function FirstRunExperience({
         <p className="lead">
           Your account ({checkpoint.account?.username}) on{' '}
           {profile?.canonicalName} is ready. {adminShort} must add you to{' '}
-          <b>{group}</b>. Check again after they do.
+          <b>{group}</b>. Once they have added you, select Check now to finish
+          joining.
         </p>
         <div className="two">
           <div className="col">
             <div className="pcard">
-              <h3>Send {adminShort} this</h3>
+              <h3>Message for {adminShort}</h3>
               <CopyBox
                 text={`Add ${checkpoint.account?.username} on ${profile?.canonicalName} to ${group}`}
                 onCopy={(value) =>
                   void bridge
                     .copyText(value)
-                    .then(() => toasts.show('Sentence copied.'))
+                    .then(() => toasts.show('Copied to clipboard.'))
                 }
               >
                 “Add {checkpoint.account?.username} on {profile?.canonicalName}{' '}
                 to {group}”
               </CopyBox>
               <p>
-                {adminShort} needs your username exactly as written. Nothing
-                else — no code, no link.
+                Send this message to {adminShort} so they have your exact
+                username and server.
               </p>
             </div>
             <Inset className="checklist">
               <InsetRow label={<Icon name="people" />}>
                 <b>{group} will appear under GROUPS</b>
                 <span className="hint">
-                  FOKS lists groups after it checks the server.
+                  Groups appear once membership is confirmed by the server.
                 </span>
               </InsetRow>
               <InsetRow label={<Icon name="eye" />}>
-                <b>You’ll see what your role lets you read</b>
+                <b>Access depends on your group role</b>
                 <span className="hint">
-                  Roles are <b>Member</b>, <b>Admin</b>, and <b>Owner</b>.
-                  Members also have a visibility level. Items above your role or
-                  visibility level remain locked.
+                  Roles include <b>Member</b>, <b>Admin</b>, and <b>Owner</b>.
+                  You can only access items permitted by your assigned role and
+                  visibility level.
                 </span>
               </InsetRow>
               <InsetRow label={<Icon name="door" />}>
-                <b>Quitting is fine</b>
+                <b>You can close FOKS anytime</b>
                 <span className="hint">
-                  Your account and pinned server remain on this Mac. Reopen FOKS
-                  and continue from Get started.
+                  Your account and server settings are saved on this Mac. When
+                  you reopen FOKS, you can continue setup.
                 </span>
               </InsetRow>
             </Inset>
@@ -2705,16 +2694,18 @@ export function FirstRunExperience({
                   <Chip>
                     {message ? 'Checked just now' : 'Not checked yet'}
                   </Chip>
-                  {message ? <>Not yet — only Personal is listed.</> : null}
+                  {message ? (
+                    <>Group not found yet. Only Personal is available.</>
+                  ) : null}
                 </span>
               </div>
               <p>
-                FOKS checks for the group when it opens and when you select{' '}
-                <b>Check now</b>. Checks stop when FOKS is closed.
+                Select <b>Check now</b> to look for pending group invitations.
+                FOKS will also check automatically each time you open the app.
               </p>
-              <Band label="Group discovery">
-                <b>Check now</b> searches for groups using your authenticated
-                account. FOKS also checks when it opens.
+              <Band label="Group updates">
+                <b>Check now</b> checks the server for group memberships linked
+                to your account. FOKS also checks when it opens.
               </Band>
               {message ? <div className="res">{message}</div> : null}
               <p className="note">
@@ -2733,8 +2724,8 @@ export function FirstRunExperience({
             <div className="pcard">
               <h3>Use your Personal vault</h3>
               <p>
-                {PERSONAL_FIXED} Put your own logins in <b>Personal</b> now;
-                nothing in it is visible to {group}.
+                {PERSONAL_FIXED} You can store private items in <b>Personal</b>{' '}
+                right away; items in Personal are never shared with {group}.
               </p>
               <Button onClick={() => go('checklist-invited')}>
                 Open Personal
@@ -2748,7 +2739,7 @@ export function FirstRunExperience({
     content = (
       <Pane
         title="Create a group"
-        scope="Or skip — Groups is always in the sidebar"
+        scope="Optional — you can also create groups later"
         header={false}
         foot={
           <Foot back={() => go('protect')}>
@@ -2784,8 +2775,9 @@ export function FirstRunExperience({
         </Inset>
         {message ? <p className="crit">{message}</p> : null}
         <p className="hint">
-          Others on <b>{profile?.canonicalName ?? address}</b> can look up this
-          group by name. You can add people by username after creating a group.
+          Users on <b>{profile?.canonicalName ?? address}</b> can find this
+          group by name. You can invite members by username after the group is
+          created.
         </p>
       </Pane>
     );
@@ -2793,20 +2785,18 @@ export function FirstRunExperience({
     content = (
       <Pane
         title="Get started"
-        subtitle={`${completedFirstRunSteps(checkpoint)} of 5 done`}
+        subtitle={`${completedFirstRunSteps(checkpoint)} of 5 steps completed`}
         wide
       >
         <p className="lead">
-          {checkpoint.path === 'invited'
-            ? 'You closed FOKS while waiting.'
-            : 'You stopped part way last time.'}{' '}
-          Completed steps are saved. Continue with the remaining steps below.
+          Setup was paused. Completed steps are saved, and you can continue with
+          the remaining steps below.
         </p>
         <Inset className="checklist">
           <InsetRow label="✓">
             <b>Prepare this Mac</b>
             <span className="hint">
-              Agent ready. Encrypted client state initialised.
+              Device prepared and local storage encrypted.
             </span>
           </InsetRow>
           <InsetRow label="✓">
@@ -2821,7 +2811,7 @@ export function FirstRunExperience({
             <b>Your account</b>
             <span className="hint">
               <code>{checkpoint.account?.username}</code> on{' '}
-              {profile?.canonicalName} · this Mac is{' '}
+              {profile?.canonicalName} · Device name:{' '}
               <b>{checkpoint.account?.deviceName}</b>.
             </span>
           </InsetRow>
@@ -2850,8 +2840,8 @@ export function FirstRunExperience({
             <b>Save recovery phrase</b>
             <span className="hint">
               {!(checkpoint.passphraseSet || checkpoint.backupCommitted)
-                ? `Skipped. This Mac holds the only key to ${checkpoint.account?.username}; a passphrase, YubiKey or 17-word backup phrase gives you a second way in.`
-                : 'Passphrase set · backup phrase written down · YubiKey later, from Settings'}
+                ? `Skipped. If this Mac is lost, you will need a backup phrase, passphrase, or security key to recover your account.`
+                : 'Passphrase set · backup phrase saved · security keys can be configured in Settings'}
             </span>
           </InsetRow>
           <InsetRow
@@ -2873,10 +2863,10 @@ export function FirstRunExperience({
                         .copyText(
                           `Add ${checkpoint.account?.username} on ${profile?.canonicalName} to ${group}`,
                         )
-                        .then(() => toasts.show('Sentence copied.'))
+                        .then(() => toasts.show('Message copied.'))
                     }
                   >
-                    Copy the sentence
+                    Copy message
                   </Button>
                 ) : null}
                 <Button
@@ -2903,8 +2893,8 @@ export function FirstRunExperience({
             </b>
             <span className="hint">
               {checkpoint.path === 'invited'
-                ? `${group} isn’t listed yet. Check again after ${adminShort} adds you, or send them the sentence above.`
-                : `${PERSONAL_FIXED} You become its Owner and add people by username from the group’s settings.`}
+                ? `${group} isn’t listed yet. Check again after ${adminShort} adds you, or send them the message above.`
+                : `${PERSONAL_FIXED} You will be the group Owner and can invite members from the group settings.`}
             </span>
             {checkpoint.path === 'invited' ? (
               <Band label="Group discovery">
@@ -2919,9 +2909,8 @@ export function FirstRunExperience({
               eyebrow="Save recovery phrase · skipped"
               title={`This Mac holds the only key to ${checkpoint.account?.username}`}
             >
-              Lose it and the account is gone — a passphrase, YubiKey or 17-word
-              backup phrase is a second way in. Nothing else in the list is
-              blocked by this.
+              Without a backup method, your account cannot be recovered if this
+              Mac is lost. You can set up recovery now or continue with setup.
             </Notice>
           </div>
         ) : null}
@@ -2933,14 +2922,12 @@ export function FirstRunExperience({
         title={
           state === 'added' ? group : (checkpoint.group?.name ?? groupName)
         }
-        subtitle={`${checkpoint.group?.kind === 'adhoc' ? 'ad-hoc' : 'named'} group on ${profile?.canonicalName}`}
+        subtitle={`Group on ${profile?.canonicalName}`}
         wide
       >
         <Notice
           eyebrow={`${state === 'added' ? group : checkpoint.group?.name} · ${profile?.canonicalName}`}
-          title={
-            state === 'added' ? `You’re in ${group}` : 'Your group is ready'
-          }
+          title={state === 'added' ? `Joined ${group}` : 'Your group is ready'}
           actions={
             <>
               <Button onClick={() => onNavigate({ kind: 'all' })}>
@@ -2954,7 +2941,7 @@ export function FirstRunExperience({
                     onNavigate({ kind: 'store', ref: addedStore });
                 }}
               >
-                Open your vault
+                Open group
               </Button>
             </>
           }
@@ -2965,24 +2952,24 @@ export function FirstRunExperience({
                 {facts?.admin ? (
                   <>
                     {admin} added <code>{checkpoint.account?.username}</code> as
-                    a Member, and {group} is listed here now: its{' '}
+                    a Member. {group} is now ready, with{' '}
                     {
                       world.items.filter((item) => item.store === addedStore)
                         .length
                     }{' '}
-                    items are listed, and what your role can read is open.
+                    items available to your role.
                   </>
                 ) : (
                   <>
                     You have been added to this group as{' '}
-                    <code>{checkpoint.account?.username}</code>. The items below
-                    are what this Mac can read now.
+                    <code>{checkpoint.account?.username}</code>. You can now
+                    access the items listed below.
                   </>
                 )}
               </p>
               <p className="fn">
-                Groups appear after this Mac creates them or checks for groups
-                it has joined.
+                Groups appear here after they are created or when membership is
+                confirmed.
               </p>
             </>
           ) : (
@@ -2994,10 +2981,8 @@ export function FirstRunExperience({
                 add them as a Member, Admin, or Owner.
               </p>
               <p className="fn">
-                Select Resume to continue interrupted group creation without
-                repeating completed steps. Pairing is under{' '}
-                <b>Settings › Recovery devices</b>, alongside your 17-word
-                backup phrase.
+                You can manage members and device pairing anytime in{' '}
+                <b>Settings</b>.
               </p>
             </>
           )}
@@ -3007,17 +2992,19 @@ export function FirstRunExperience({
             <Icon name="key" />
             <h2>No items here</h2>
             <p>
-              Members can view items allowed by their role. Start by adding your
-              first item.
+              Items added to this group are shared with members based on their
+              permissions. Start by adding your first item.
             </p>
-            <Button onClick={() => onNavigate({ kind: 'all' })}>New</Button>
+            <Button onClick={() => onNavigate({ kind: 'all' })}>
+              New item
+            </Button>
           </div>
         ) : (
           <>
             <div className="hdr">
               <span />
               <span>Name</span>
-              <span>Readable by</span>
+              <span>Access</span>
               <span>Version</span>
               <span />
             </div>

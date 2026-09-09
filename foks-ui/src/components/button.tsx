@@ -1,17 +1,6 @@
 /**
- * The design's button, in the four treatments `shell.css` draws.
- *
- * Every class here is one the design already styles — `.btn`, `.btn.primary`,
- * `.btn.danger`, `.btn.cap`, `.btn.icon`. Nothing invents a class name; if a
- * treatment is wanted that the sheet does not draw, the sheet is where it is
- * added.
- *
- *   variant  primary  `.btn.primary`  the one affirmative action on a surface
- *            plain    `.btn`          everything else
- *            danger   `.btn.danger`   destructive, red ink on hover wash
- *            quiet    `.btn.icon`     the square icon toggle in the toolbar,
- *                                     which carries an `on` state
- *   size     sm       `.btn.cap`      the 24px pill used by row affordances
+ * Button component supporting standard variants (primary, plain, danger, quiet)
+ * and sizes (md, sm).
  */
 
 import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
@@ -25,18 +14,13 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   danger?: boolean;
   size?: ButtonSize;
-  /** A leading icon, rendered the way the mock's `ic()` places one. */
+  /** A leading icon rendered before the button label. */
   icon?: FoksIconName;
   /**
-   * A toggle's pressed state. Present means the button is a toggle: it gets
-   * `.on` and `aria-pressed`, so a screen reader reads the state the colour
-   * shows.
+   * Toggle pressed state. When defined, applies `.on` and `aria-pressed`.
    */
   on?: boolean;
-  /**
-   * The element itself, for a menu that anchors to it. React 19 passes a ref
-   * through as an ordinary prop, so there is no `forwardRef` here.
-   */
+  /** Optional ref passed to the underlying button element. */
   ref?: Ref<HTMLButtonElement>;
 }
 

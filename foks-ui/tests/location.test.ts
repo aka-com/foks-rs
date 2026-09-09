@@ -1,9 +1,5 @@
 /**
- * The navigation model: pure transitions and the `?state=` round trip.
- *
- * The URL codec is the acceptance layer's entry point — the Playwright walk
- * loads each state by address — so a change here that breaks a deep link
- * breaks the gate every later phase leans on.
+ * Tests for location transitions, URL encoding, decoding, and store subscriptions.
  */
 
 import assert from 'node:assert/strict';
@@ -32,7 +28,7 @@ const at = (location: Location): LocationState => ({
 
 /* ------------------------------------------------------------ transitions -- */
 
-test('navigating somewhere else drops the selection', () => {
+test('navigating to a different location clears selection', () => {
   const selected: LocationState = {
     ...INITIAL_STATE,
     location: { kind: 'store', ref: 'team:eng' },
@@ -45,12 +41,11 @@ test('navigating somewhere else drops the selection', () => {
   });
   assert.deepEqual(next.location, { kind: 'all' });
   assert.equal(next.selection, null);
-  // The search box is not cleared: the person is still looking for the same
-  // thing.
+  // Search query is preserved across location transitions.
   assert.equal(next.query, 'token');
 });
 
-test('navigating to where you already are keeps the selection', () => {
+test('navigating to the current location preserves selection', () => {
   const selected: LocationState = {
     ...INITIAL_STATE,
     location: { kind: 'store', ref: 'team:eng' },
@@ -70,7 +65,7 @@ test('a no-op action returns the same state object', () => {
   assert.notEqual(transition(state, { type: 'search', query: 'wifi' }), state);
 });
 
-test('selecting and searching leave the location alone', () => {
+test('select and search actions preserve the current location', () => {
   const state = at({ kind: 'store', ref: 'acct:personal' });
   const selected = transition(state, {
     type: 'select',
@@ -87,7 +82,7 @@ test('selecting and searching leave the location alone', () => {
   );
 });
 
-test('sameLocation compares the payload, not just the kind', () => {
+test('sameLocation compares full location properties', () => {
   assert.equal(
     sameLocation({ kind: 'store', ref: 'a' }, { kind: 'store', ref: 'a' }),
     true,
@@ -127,7 +122,7 @@ const ROUND_TRIP: Location[] = [
   { kind: 'first-run', step: 'who' },
 ];
 
-test('every location round-trips through the address bar', () => {
+test('all supported locations round-trip through URL query serialization', () => {
   for (const location of ROUND_TRIP) {
     const href = locationHref('http://localhost/', location);
     const decoded = decodeLocation(new URL(href).search);
@@ -135,7 +130,7 @@ test('every location round-trips through the address bar', () => {
   }
 });
 
-test('encoding clears the parameters the previous location left behind', () => {
+test('encoding clears query parameters from previous location', () => {
   const href = locationHref(
     'http://localhost/?state=store&store=team:eng&section=agent&step=who',
     { kind: 'all' },
@@ -147,7 +142,7 @@ test('encoding clears the parameters the previous location left behind', () => {
   assert.equal(url.searchParams.get('step'), null);
 });
 
-test('Phase 6 aliases do not collide with Groups or first-run states', () => {
+test('legacy state aliases do not collide with group or first-run routes', () => {
   assert.deepEqual(decodeLocation('?state=servers-add'), {
     kind: 'settings',
     section: 'servers',
@@ -174,24 +169,17 @@ test('Phase 6 aliases do not collide with Groups or first-run states', () => {
 
 /* ------------------------------------------------- Settings by StoreRef -- */
 
-/**
- * The identity a native account store is written with. `store_id` in
- * `foks-tauri/src/commands.rs` serialises a JSON object, so a real StoreRef
- * carries braces, quotes, colons and commas through the address bar; the two
- * below differ only in their profile, which is exactly the collision an alias
- * cannot express.
- */
+/** Sample JSON StoreRef strings representing native account stores across profiles. */
 const PERSONAL_ON_A =
   '{"kind":"account","profile":"personal","accountAlias":"personal"}';
 const PERSONAL_ON_B =
   '{"kind":"account","profile":"acme","accountAlias":"personal"}';
 
-test('Settings round-trips a native StoreRef through the address bar', () => {
+test('settings location round-trips JSON StoreRef query parameters', () => {
   for (const store of [
     PERSONAL_ON_A,
     PERSONAL_ON_B,
-    // Percent-sign-like text, a quote inside a value, and a Unicode profile
-    // and alias. `URLSearchParams` does the encoding; nothing pre-encodes.
+    // Verify query encoding with special characters, quotes, and Unicode strings.
     '{"kind":"account","profile":"100%","accountAlias":"a b"}',
     '{"kind":"account","profile":"say \\"hi\\"","accountAlias":"q"}',
     '{"kind":"account","profile":"Ünïcøde","accountAlias":"個人"}',
@@ -204,7 +192,7 @@ test('Settings round-trips a native StoreRef through the address bar', () => {
   }
 });
 
-test('Settings without a store round-trips as Settings without a store', () => {
+test('settings location without store parameter round-trips correctly', () => {
   for (const location of [
     { kind: 'settings' } as const,
     { kind: 'settings', section: 'keys' } as const,
@@ -215,7 +203,7 @@ test('Settings without a store round-trips as Settings without a store', () => {
   }
 });
 
-test('sameLocation tells two accounts with the same alias apart', () => {
+test('sameLocation distinguishes accounts with identical aliases across profiles', () => {
   assert.equal(
     sameLocation(
       { kind: 'settings', section: 'macs', store: PERSONAL_ON_A },
@@ -230,7 +218,7 @@ test('sameLocation tells two accounts with the same alias apart', () => {
     ),
     true,
   );
-  // A Settings page with no account chosen is not the page for one.
+  // A settings location without a store must not match one with a store.
   assert.equal(
     sameLocation(
       { kind: 'settings', section: 'macs' },
@@ -240,7 +228,7 @@ test('sameLocation tells two accounts with the same alias apart', () => {
   );
 });
 
-test('the retired account parameter is ignored rather than resolved', () => {
+test('deprecated account query parameter is ignored', () => {
   assert.deepEqual(
     decodeLocation('?state=settings&section=macs&account=work'),
     {
@@ -248,14 +236,14 @@ test('the retired account parameter is ignored rather than resolved', () => {
       section: 'macs',
     },
   );
-  // An address carrying both reads only the exact one.
+  // When both store and legacy account parameters are present, store takes precedence.
   assert.deepEqual(
     decodeLocation(
       '?state=settings&section=macs&account=work&store=acct:personal',
     ),
     { kind: 'settings', section: 'macs', store: 'acct:personal' },
   );
-  // And encoding a Settings location clears the obsolete parameter.
+  // Encoding a settings location strips legacy account parameters.
   const href = locationHref('http://localhost/?state=settings&account=work', {
     kind: 'settings',
     section: 'macs',
@@ -264,7 +252,7 @@ test('the retired account parameter is ignored rather than resolved', () => {
   assert.equal(new URL(href).searchParams.get('account'), null);
 });
 
-test('leaving Settings clears the account it was on', () => {
+test('navigating away from settings removes store and account parameters', () => {
   const from =
     'http://localhost/?state=settings&section=macs&store=acct%3Awork&account=work';
   for (const location of [
@@ -276,13 +264,13 @@ test('leaving Settings clears the account it was on', () => {
     assert.equal(url.searchParams.get('section'), null, location.kind);
     assert.equal(url.searchParams.get('store'), null, location.kind);
   }
-  // And a store location's own ref replaces it rather than joining it.
+  // Store navigation replaces existing store and account parameters.
   const store = new URL(locationHref(from, { kind: 'store', ref: 'team:eng' }));
   assert.equal(store.searchParams.get('store'), 'team:eng');
   assert.equal(store.searchParams.get('account'), null);
 });
 
-test('a location clears the parameters every other location owns', () => {
+test('encoding a new location strips unrelated query parameters', () => {
   const busy =
     'http://localhost/?state=first-run&store=team:eng&section=macs&profile=acme&step=who&path=own&account=work';
   const url = new URL(locationHref(busy, { kind: 'all' }));
@@ -298,18 +286,18 @@ test('a location clears the parameters every other location owns', () => {
   }
 });
 
-test('the named Settings scenes name an exact account store', () => {
+test('settings scene aliases map to specific account stores', () => {
   assert.deepEqual(decodeLocation('?state=settings-macs-work'), {
     kind: 'settings',
     section: 'macs',
     store: 'acct:work',
   });
-  // An explicit store in the address beats the scene's default.
+  // An explicit store parameter overrides the scene default.
   assert.deepEqual(
     decodeLocation('?state=settings-macs-work&store=acct:personal'),
     { kind: 'settings', section: 'macs', store: 'acct:personal' },
   );
-  // The scenes that name no account still name none.
+  // Scenes without default account mappings omit the store parameter.
   assert.deepEqual(decodeLocation('?state=settings-keys'), {
     kind: 'settings',
     section: 'keys',
@@ -324,7 +312,7 @@ test('the named Settings scenes name an exact account store', () => {
   });
 });
 
-test('Phase 7 group-create scenes retain Engineering as their vault context', () => {
+test('group creation scenes default to engineering vault context', () => {
   for (const state of ['group-new-text', 'group-new-link', 'group-new-file']) {
     assert.deepEqual(
       decodeScene(`?state=${state}`).location,
@@ -385,14 +373,14 @@ test('path-specific first-run review states keep the path the mock defines', () 
   });
 });
 
-test('a state that is not a location decodes to nothing, not to a guess', () => {
-  // These are sheets over a location in the mock, not places of their own.
+test('unrecognized state parameter values decode to null', () => {
+  // Overlay states (e.g. modals, dialogs) do not represent standalone navigation locations.
   for (const state of ['new', 'manage', 'conflict', 'exists', 'show', 'grid']) {
     assert.equal(decodeLocation(`?state=${state}`), null, state);
   }
   assert.equal(decodeLocation(''), null);
   assert.equal(decodeLocation('?other=1'), null);
-  // A store state with no store names nothing.
+  // A store state missing a store parameter is invalid and returns null.
   assert.equal(decodeLocation('?state=store'), null);
   // An unknown settings section falls back to the pane itself, not to null.
   assert.deepEqual(decodeLocation('?state=settings&section=nope'), {
@@ -427,9 +415,7 @@ test('encodeLocation names the state the address carries', () => {
 /* ----------------------------------------------------------------- scenes -- */
 
 test('the mock s state names carry what is not a location', () => {
-  // `grid` is a view preference, `lease` is a world and `show` is a
-  // selection. `decodeLocation` refuses all three; the scene says what they
-  // mean.
+  // View mode, lease status, and selection are decoded at the scene layer rather than as standalone locations.
   assert.deepEqual(decodeScene('?state=grid'), {
     ...INITIAL_SCENE,
     view: 'grid',
@@ -455,7 +441,7 @@ test('the mock s state names carry what is not a location', () => {
   });
 });
 
-test('nothing a scene holds is dropped by a reload', () => {
+test('full scene state round-trips through URL serialization', () => {
   const scenes = [
     INITIAL_SCENE,
     { ...INITIAL_SCENE, view: 'grid' as const },
@@ -479,14 +465,14 @@ test('nothing a scene holds is dropped by a reload', () => {
   }
 });
 
-test('a scene at its defaults writes nothing but its state name', () => {
+test('default scene serializes to state query parameter without extra parameters', () => {
   assert.equal(
     sceneHref('http://localhost/', INITIAL_SCENE),
     'http://localhost/?state=all',
   );
-  // An explicit parameter beats the alias it disagrees with.
+  // Explicit query parameter overrides conflicting scene alias.
   assert.equal(decodeScene('?state=grid&view=list').view, 'list');
-  // Nonsense is ignored rather than guessed at.
+  // Unrecognized parameter values fall back to scene defaults.
   assert.equal(
     decodeScene('?state=all&sort=sideways').sort,
     INITIAL_SCENE.sort,
@@ -496,7 +482,7 @@ test('a scene at its defaults writes nothing but its state name', () => {
 
 /* ------------------------------------------------------------------ store -- */
 
-test('the store publishes only when the state actually moved', () => {
+test('LocationStore notifies subscribers only when state changes', () => {
   const store = new LocationStore();
   let notifications = 0;
   const unsubscribe = store.subscribe(() => {
@@ -508,8 +494,7 @@ test('the store publishes only when the state actually moved', () => {
   assert.equal(notifications, 1);
   assert.deepEqual(store.getSnapshot().location, { kind: 'alerts' });
 
-  // The same place again: `transition` returns the state unchanged, so no
-  // listener runs and React does not re-render.
+  // Redundant navigation returns identical state reference, skipping subscriber notification.
   store.navigate({ kind: 'alerts' });
   assert.equal(notifications, 1);
 

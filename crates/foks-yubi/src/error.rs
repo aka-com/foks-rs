@@ -20,17 +20,11 @@ pub enum Error {
     HardwareUnavailable,
     #[error("YubiKey management policy rejected the operation: {0}")]
     Policy(&'static str),
-    #[error(
-        "YubiKey retry-count update outcome is unknown; PIN and PUK may be at their factory defaults and no FOKS keys were generated"
-    )]
+    #[error("failed to determine YubiKey retry-count update outcome")]
     RetryUpdateUnknown,
-    #[error(
-        "YubiKey retry counts changed but PIN restoration could not be confirmed; PIN and PUK may remain at their factory defaults and no FOKS keys were generated"
-    )]
+    #[error("failed to confirm PIN restoration after updating YubiKey retry counts")]
     RetryPinRestore,
-    #[error(
-        "YubiKey retry counts and PIN changed but PUK restoration could not be confirmed; the PUK may remain at its factory default and no FOKS keys were generated"
-    )]
+    #[error("failed to confirm PUK restoration after updating YubiKey retry counts")]
     RetryPukRestore,
     #[error("YubiKey provider failed: {0}")]
     Provider(String),

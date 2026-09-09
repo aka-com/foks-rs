@@ -987,14 +987,9 @@ impl CheckedProfileSession<'_> {
     /// Loads one recipient projection per binding, bringing each remote
     /// profile's own security state current first.
     ///
-    /// `visited` is the chain of `(profile, team alias)` hops already being
-    /// resolved on this thread. A federation graph can be deeper than one
-    /// hop -- A exports to B, which exports its own team to C -- and B's
-    /// projection is only usable once C's is, so a hop whose roster carries a
-    /// third-host member resolves that member through its own binding rather
-    /// than refusing it. A binding that points back at a hop already on the
-    /// path is a real cycle: B's recipient would depend on itself, and no
-    /// amount of refreshing resolves that.
+    /// `visited` tracks `(profile, team alias)` ancestor hops during recursive
+    /// federation resolution. A binding that points back to an ancestor hop
+    /// indicates a dependency cycle that cannot be resolved.
     #[allow(clippy::too_many_arguments)]
     fn load_federated_team_recipients(
         &self,

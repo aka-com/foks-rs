@@ -1,4 +1,4 @@
-//! Typed Tauri command boundary over `foks-desktop`'s free functions.
+//! Tauri command handlers exposing `foks-desktop` functionality to the frontend.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -27,6 +27,7 @@ use zeroize::Zeroizing;
 use crate::agent::{success_value, AgentError, AgentHandle};
 
 pub const MAIN: &str = "main";
+/// Maximum text payload size (2048 bytes minus 8-byte framing header).
 const MAXIMUM_TEXT_ITEM_BYTES: usize = 2048 - 8;
 const MAXIMUM_CLIPBOARD_TEXT_BYTES: usize = 128 * 1024;
 const MAXIMUM_INVITE_BYTES: usize = 4 * 1024;
@@ -266,7 +267,7 @@ impl AppState {
         if self.mutation_in_flight.load(Ordering::Acquire) {
             return Err(AgentError::new(
                 "mutation-in-flight",
-                "Wait for the current change to finish before refreshing the vault.",
+                "Please wait for the current operation to finish before refreshing.",
                 false,
             ));
         }
@@ -297,14 +298,14 @@ impl AppState {
         match item {
             Some(item) if catalog.store_blocked(&item.store) => Err(AgentError::new(
                 "capability-unavailable",
-                "This server is not currently granting the capabilities needed to read this item.",
+                "The server does not permit reading this item.",
                 false,
             )),
             Some(item) if item.metadata.version == version => Ok(item.clone()),
             Some(_) => {
                 let mut error = AgentError::new(
                     "version-mismatch",
-                    "This item changed. Refresh and review it before reading.",
+                    "This item changed. Refresh the vault before reading it.",
                     false,
                 );
                 error.fatal = true;
@@ -312,7 +313,7 @@ impl AppState {
             }
             None => Err(AgentError::new(
                 "item-not-found",
-                "This item is no longer in the current catalog.",
+                "This item is no longer in the vault.",
                 false,
             )),
         }
@@ -326,7 +327,7 @@ impl AppState {
         let Some(catalog) = catalog.as_ref() else {
             return Err(AgentError::new(
                 "catalog-required",
-                "Refresh the vault before reading group details.",
+                "Please refresh the vault to view group details.",
                 true,
             ));
         };
@@ -344,7 +345,7 @@ impl AppState {
             .ok_or_else(|| {
                 AgentError::new(
                     "store-not-found",
-                    "This group is no longer in the current catalog.",
+                    "This group is no longer in the vault.",
                     false,
                 )
             })?;
@@ -360,7 +361,7 @@ impl AppState {
         let Some(catalog) = catalog.as_ref() else {
             return Err(AgentError::new(
                 "catalog-required",
-                "Refresh the vault before using this account.",
+                "Please refresh the vault to access this account.",
                 true,
             ));
         };
@@ -375,7 +376,7 @@ impl AppState {
         let Some(account) = account else {
             return Err(AgentError::new(
                 "store-not-found",
-                "This account is no longer in the current catalog.",
+                "This account is no longer in the vault.",
                 false,
             ));
         };
@@ -392,13 +393,13 @@ impl AppState {
         let selected = accounts.get(id).ok_or_else(|| {
             AgentError::new(
                 "accounts-required",
-                "Refresh account identities before using this account.",
+                "Refresh accounts before using this account.",
                 true,
             )
         })?;
         if selected.profile != account.profile || selected.alias != account.account_alias {
             return Err(invalid_response(
-                "The retained account identity does not match the current catalog.",
+                "The cached account identity does not match the current vault.",
             ));
         }
         Ok(selected.clone())
@@ -411,7 +412,7 @@ impl AppState {
     ) -> Result<foks_agent_proto::AccountStoreRef, AgentError> {
         let account = self.selected_account(account_store_id)?;
         if !valid_device_member_id_hex(device_id) {
-            return Err(invalid_request("Choose a valid device id."));
+            return Err(invalid_request("Select a valid device ID."));
         }
         let devices = self
             .devices
@@ -420,7 +421,7 @@ impl AppState {
         let Some(retained) = devices.get(account_store_id) else {
             return Err(AgentError::new(
                 "devices-required",
-                "Refresh this account's device list before removing a device.",
+                "Please refresh the device list before removing a device.",
                 true,
             ));
         };
@@ -428,26 +429,26 @@ impl AppState {
         let Some(device) = matches.next() else {
             return Err(AgentError::new(
                 "device-not-found",
-                "This device is no longer in the current device list.",
+                "This device was not found in the current device list.",
                 false,
             ));
         };
         if matches.next().is_some() {
             return Err(invalid_response(
-                "The retained device list contains a duplicate device id.",
+                "The device list contains a duplicate device id.",
             ));
         }
         if device.current {
             return Err(AgentError::new(
                 "current-device",
-                "This Mac cannot remove its own current device credential.",
+                "You cannot remove the current device.",
                 false,
             ));
         }
         if !valid_typed_entity_id_hex(device_id, DEVICE_ID_PREFIX) {
             return Err(AgentError::new(
                 "device-not-removable",
-                "This retained device is not a removable software-device identity.",
+                "This device is not a removable software device.",
                 false,
             ));
         }
@@ -463,7 +464,7 @@ impl AppState {
             catalog.as_ref().ok_or_else(|| {
                 AgentError::new(
                     "catalog-required",
-                    "Refresh the vault before making this change.",
+                    "Please refresh the vault before making changes.",
                     true,
                 )
             })?,
@@ -482,7 +483,7 @@ impl AppState {
         let Some(catalog) = catalog.as_ref() else {
             return Err(AgentError::new(
                 "catalog-required",
-                "Refresh the vault before changing a group.",
+                "Please refresh the vault before modifying this group.",
                 true,
             ));
         };
@@ -500,7 +501,7 @@ impl AppState {
         let Some((team, kind, active)) = team else {
             return Err(AgentError::new(
                 "store-not-found",
-                "This group is no longer in the current catalog.",
+                "This group is no longer in the vault.",
                 false,
             ));
         };
@@ -508,14 +509,14 @@ impl AppState {
         if !active {
             return Err(AgentError::new(
                 "inactive-group",
-                "This group reports inactive. Resume its creation before changing it.",
+                "This group is inactive. Complete its setup before modifying it.",
                 false,
             ));
         }
         if kind != "named" {
             return Err(AgentError::new(
                 "group-management-unavailable",
-                "Member and federation changes are available only for named groups.",
+                "Member and federation settings are only available for named groups.",
                 false,
             ));
         }
@@ -534,7 +535,7 @@ impl AppState {
         let Some(catalog) = catalog.as_ref() else {
             return Err(AgentError::new(
                 "catalog-required",
-                "Refresh the vault before admitting a group.",
+                "Please refresh the vault before federating this group.",
                 true,
             ));
         };
@@ -552,14 +553,14 @@ impl AppState {
         let Some((remote, kind, active)) = remote else {
             return Err(AgentError::new(
                 "store-not-found",
-                "The group to admit is no longer in the current catalog.",
+                "The group to admit is no longer in the vault.",
                 false,
             ));
         };
         require_profile_available(catalog, &remote.profile)?;
         if remote.profile == local_profile || kind != "named" || !active {
             return Err(invalid_request(
-                "Choose an active named group from a different server.",
+                "Select an active group from an external server.",
             ));
         }
         Ok(remote)
@@ -571,7 +572,7 @@ impl AppState {
         username: &str,
     ) -> Result<(foks_agent_proto::TeamStoreRef, String, MemberRole), AgentError> {
         let team = self.selected_active_team_for_mutation(selected_store_id)?;
-        let username = required_field(username, "Enter the member username.")?;
+        let username = required_field(username, "Username is required.")?;
         let rosters = self
             .rosters
             .lock()
@@ -579,7 +580,7 @@ impl AppState {
         let Some(roster) = rosters.get(selected_store_id) else {
             return Err(AgentError::new(
                 "roster-required",
-                "Re-read this group's roster before changing a member.",
+                "Refresh this group's member list before changing a member.",
                 true,
             ));
         };
@@ -608,7 +609,7 @@ impl AppState {
         let Some(account) = accounts.get(&account_id) else {
             return Err(AgentError::new(
                 "accounts-required",
-                "Refresh account identities before changing a group member.",
+                "Refresh accounts before changing a group member.",
                 true,
             ));
         };
@@ -626,7 +627,7 @@ impl AppState {
         let team = self.selected_active_team_for_mutation(store_id)?;
         if !valid_operation_id_hex(operation_id) {
             return Err(invalid_request(
-                "Choose a valid journaled admission to re-run.",
+                "Choose a valid pending admission to re-run.",
             ));
         }
         let federations = self
@@ -636,7 +637,7 @@ impl AppState {
         let Some(entries) = federations.get(store_id) else {
             return Err(AgentError::new(
                 "federation-required",
-                "Re-read this group's federation before re-running an admission.",
+                "Refresh this group's federation list before re-running an admission.",
                 true,
             ));
         };
@@ -683,7 +684,7 @@ impl AppState {
                 || valid_typed_entity_id_hex(remote_team_id_hex, AD_HOC_TEAM_ID_PREFIX))
         {
             return Err(invalid_request(
-                "Choose an exact active federated group from the refreshed list.",
+                "Choose an active federated group from the refreshed list.",
             ));
         }
         let federations = self
@@ -693,7 +694,7 @@ impl AppState {
         let entries = federations.get(store_id).ok_or_else(|| {
             AgentError::new(
                 "federation-required",
-                "Re-read this group's federation before expelling a group.",
+                "Refresh this group's federation list before removing a federated group.",
                 true,
             )
         })?;
@@ -708,7 +709,7 @@ impl AppState {
             .collect::<Vec<_>>();
         let [entry] = matching.as_slice() else {
             return Err(invalid_request(
-                "The exact active federation target is missing or ambiguous.",
+                "The federated group target is missing or ambiguous.",
             ));
         };
         let entry = (*entry).clone();
@@ -720,7 +721,7 @@ impl AppState {
         let roster = rosters.get(store_id).ok_or_else(|| {
             AgentError::new(
                 "roster-required",
-                "Re-read this group's roster before expelling a federated group.",
+                "Refresh this group's member list before removing a federated group.",
                 true,
             )
         })?;
@@ -736,7 +737,7 @@ impl AppState {
             .count();
         if matching != 1 {
             return Err(invalid_request(
-                "The federation target does not match the refreshed authenticated roster.",
+                "The federated group does not match the refreshed member list.",
             ));
         }
         Ok((team, entry))
@@ -750,7 +751,7 @@ impl AppState {
         let Some(catalog) = catalog.as_ref() else {
             return Err(AgentError::new(
                 "catalog-required",
-                "FOKS lost track of what is in this vault. Refresh to continue.",
+                "The vault catalog is not loaded. Refresh to continue.",
                 true,
             ));
         };
@@ -773,7 +774,7 @@ impl AppState {
             .ok_or_else(|| {
                 AgentError::new(
                     "store-not-found",
-                    "This vault is no longer in the current catalog.",
+                    "This vault is no longer available.",
                     false,
                 )
             })?;
@@ -790,7 +791,7 @@ impl AppState {
         match active {
             Some(false) => Err(AgentError::new(
                 "inactive-group",
-                "This group reports inactive. Resume its creation before changing it.",
+                "This group is inactive. Complete its setup before modifying it.",
                 false,
             )),
             Some(true) | None => Ok(store),
@@ -807,7 +808,7 @@ impl AppState {
             Ok(item) => match self.selected_store(store)?.1 {
                 Some(false) => Err(AgentError::new(
                     "inactive-group",
-                    "This group reports inactive. Resume its creation before changing it.",
+                    "This group is inactive. Complete its setup before modifying it.",
                     false,
                 )),
                 Some(true) | None => Ok(item),
@@ -815,7 +816,7 @@ impl AppState {
             Err(error) if error.code == "version-mismatch" || error.code == "item-not-found" => {
                 Err(AgentError::new(
                     "conflict",
-                    "This item changed or was removed. Refresh and review it before changing it.",
+                    "This item changed or was removed. Refresh the vault before modifying it.",
                     false,
                 ))
             }
@@ -833,9 +834,8 @@ impl AppState {
             .iter()
             .filter_map(|path| path.to_str().map(ToOwned::to_owned))
             .collect();
-        // The product accepts one file at a time. Emit every representable
-        // path so it can explain a multi-drop, but authorize nothing unless
-        // the native event itself contained exactly one UTF-8 path.
+        // Accept only a single UTF-8 file path for drops. Record multi-drop
+        // paths for UI reporting without authorizing them.
         if paths.len() == 1 && wire_paths.len() == 1 {
             pending.insert(wire_paths[0].clone(), paths[0].clone());
         }
@@ -857,20 +857,19 @@ impl AppState {
             .ok_or_else(|| {
                 AgentError::new(
                     "drop-not-authorized",
-                    "Drop this file onto FOKS again before importing it.",
+                    "Drop the file again to import it.",
                     false,
                 )
             })
     }
 
-    /// Phase 3 commands acquire this guard before any mutation. Refusal is
-    /// immediate: a second write is never queued behind an outcome it has not
-    /// reconciled.
+    /// Acquire this guard before any mutation. Refusal is immediate:
+    /// a second write cannot proceed until the prior operation reconciles.
     pub fn begin_mutation(&self) -> Result<MutationGuard, AgentError> {
         if self.mutation_requires_refresh.load(Ordering::Acquire) {
             let mut error = AgentError::new(
                 "ambiguous",
-                "Refresh the vault to reconcile the previous change before making another one.",
+                "Refresh the vault to verify the previous change before making another one.",
                 false,
             );
             error.ambiguous = true;
@@ -881,7 +880,7 @@ impl AppState {
             .map_err(|_| {
                 AgentError::new(
                     "mutation-in-flight",
-                    "Another change is still in progress. Wait for its result before trying again.",
+                    "Another change is currently in progress. Please wait for it to complete before trying again.",
                     false,
                 )
             })?;
@@ -902,7 +901,7 @@ fn require_profile_available(catalog: &CatalogSnapshot, profile: &str) -> Result
     if catalog.profile_blocked(profile) {
         Err(AgentError::new(
             "capability-unavailable",
-            "This server is blocked by the current catalog result. Refresh its status before continuing.",
+            "This server is currently blocked. Refresh its status before continuing.",
             false,
         ))
     } else {
@@ -980,10 +979,10 @@ fn require_response_row_cap(value: &serde_json::Value, noun: &str) -> Result<(),
     match value.as_array() {
         Some(rows) if rows.len() <= MAXIMUM_FIRST_RUN_ROWS => Ok(()),
         Some(_) => Err(invalid_response(format!(
-            "The agent returned too many {noun}."
+            "Response contained too many {noun}."
         ))),
         None => Err(invalid_response(format!(
-            "The agent returned a non-list {noun} response."
+            "Background service returned an invalid list of {noun}."
         ))),
     }
 }
@@ -996,7 +995,7 @@ fn require_nested_response_row_cap(
     match value.get(field).and_then(serde_json::Value::as_array) {
         Some(rows) if rows.len() <= MAXIMUM_FIRST_RUN_ROWS => Ok(()),
         Some(_) => Err(invalid_response(format!(
-            "The agent returned too many {noun}."
+            "Response exceeded maximum allowed {noun}."
         ))),
         None => Err(invalid_response(format!(
             "The agent returned an invalid {noun} response."
@@ -1036,16 +1035,14 @@ fn confirmed_passphrase(
     let passphrase = Zeroizing::new(passphrase);
     let confirmation = Zeroizing::new(confirmation);
     if passphrase.as_str() != confirmation.as_str() {
-        return Err(invalid_request(
-            "The passphrase confirmation does not match.",
-        ));
+        return Err(invalid_request("Passphrase confirmation does not match."));
     }
     if passphrase.is_empty()
         || passphrase.len() > MAXIMUM_PASSPHRASE_BYTES
         || passphrase.contains(['\0', '\r', '\n'])
     {
         return Err(invalid_request(
-            "Use one nonempty passphrase of at most 1,024 bytes.",
+            "A passphrase is required and cannot exceed 1,024 characters.",
         ));
     }
     Ok(SecretString::new(passphrase.as_str()))
@@ -1061,7 +1058,7 @@ fn optional_confirmed_passphrase(
             confirmed_passphrase(passphrase, confirmation).map(Some)
         }
         _ => Err(invalid_request(
-            "Enter both the passphrase and its confirmation, or leave both empty.",
+            "Please provide both the passphrase and confirmation, or leave both blank.",
         )),
     }
 }
@@ -1083,7 +1080,7 @@ fn yubi_slots(signing_slot: u8, pq_slot: u8) -> Result<(u8, u8), AgentError> {
     let retired = |slot: u8| (0x82..=0x95).contains(&slot);
     if signing_slot == pq_slot || !retired(signing_slot) || !retired(pq_slot) {
         Err(invalid_request(
-            "Choose two different retired PIV slots from 0x82 through 0x95.",
+            "Please select two distinct retired key slots between 0x82 and 0x95.",
         ))
     } else {
         Ok((signing_slot, pq_slot))
@@ -1097,14 +1094,14 @@ fn yubi_retry_configuration(
 ) -> Result<YubiRetryConfiguration, AgentError> {
     if pin_attempts == 0 || puk_attempts == 0 {
         return Err(invalid_request(
-            "PIN and unlock-code retry counts must be positive.",
+            "PIN and unlock-code retry counts must be greater than zero.",
         ));
     }
     Ok(YubiRetryConfiguration {
         puk: bounded_secret(
             puk,
             128,
-            "Use one nonempty unlock code of at most 128 bytes.",
+            "Unlock code cannot be empty and must be at most 128 bytes.",
         )?,
         pin_attempts,
         puk_attempts,
@@ -1116,9 +1113,7 @@ fn pairing_phrase(value: String) -> Result<SecretString, AgentError> {
     if value.len() > MAXIMUM_RECOVERY_PHRASE_BYTES
         || foks_crypto::KexSecret::from_phrase(value.as_str()).is_err()
     {
-        return Err(invalid_request(
-            "Enter the complete valid device-pairing phrase.",
-        ));
+        return Err(invalid_request("Enter a valid device-pairing phrase."));
     }
     Ok(SecretString::new(value.as_str()))
 }
@@ -1132,7 +1127,7 @@ fn exact_profile_confirmation(
         Ok(())
     } else {
         Err(invalid_request(format!(
-            "Type the exact server profile name to {action} it."
+            "Please enter the exact server profile name to {action} it."
         )))
     }
 }
@@ -1145,7 +1140,7 @@ fn positive_recovery_serial_with(
         fill(&mut bytes).map_err(|()| {
             AgentError::new(
                 "randomness-unavailable",
-                "The operating system could not create a device serial.",
+                "Failed to generate a secure random device serial number.",
                 true,
             )
         })?;
@@ -1156,7 +1151,7 @@ fn positive_recovery_serial_with(
     }
     Err(AgentError::new(
         "randomness-unavailable",
-        "The operating system did not produce a valid device serial.",
+        "Failed to produce a valid random device serial number.",
         true,
     ))
 }
@@ -1168,7 +1163,7 @@ fn positive_recovery_serial() -> Result<u64, AgentError> {
 fn member_not_actionable() -> AgentError {
     AgentError::new(
         "member-not-actionable",
-        "This roster entry cannot be changed from this account.",
+        "This member cannot be modified from this account.",
         false,
     )
 }
@@ -1178,14 +1173,14 @@ fn member_role_from_dto(role: &RoleDto) -> Result<MemberRole, AgentError> {
         ("Member", Some(visibility)) => Ok(MemberRole::Member { visibility }),
         ("Admin", None) => Ok(MemberRole::Admin),
         ("Owner", None) => Ok(MemberRole::Owner),
-        _ => Err(invalid_response("The retained group role is invalid.")),
+        _ => Err(invalid_response("The group member role is invalid.")),
     }
 }
 
 fn admission_not_resumable() -> AgentError {
     AgentError::new(
         "admission-not-resumable",
-        "This inactive admission does not have a unique resumable operation.",
+        "This inactive admission cannot be resumed.",
         false,
     )
 }
@@ -1193,7 +1188,7 @@ fn admission_not_resumable() -> AgentError {
 fn catalog_changed_during_group_read() -> AgentError {
     AgentError::new(
         "catalog-required",
-        "The vault changed while these group facts were loading. Refresh and try again.",
+        "The vault changed while group details were loading. Refresh and try again.",
         true,
     )
 }
@@ -1204,7 +1199,7 @@ pub fn require_main_window(webview: &tauri::Webview) -> Result<(), AgentError> {
     } else {
         Err(AgentError::new(
             "window-not-allowed",
-            "This request did not come from the FOKS window.",
+            "This request did not come from the main application window.",
             false,
         ))
     }
@@ -1294,7 +1289,7 @@ impl CheckedProfileDto {
             || !valid_typed_entity_id_hex(&probe.host_id_hex, HOST_ID_PREFIX)
         {
             return Err(invalid_response(
-                "The agent returned an invalid checked-server report.",
+                "The agent returned an invalid server verification response.",
             ));
         }
         Ok(Self {
@@ -1319,7 +1314,7 @@ impl CheckedProfileDto {
                 != Some(checked.lookup_name.as_str())
         {
             return Err(invalid_response(
-                "The agent returned a checked-server report for a different address.",
+                "The agent returned server verification details for a different address.",
             ));
         }
         Ok(Self {
@@ -1354,7 +1349,7 @@ impl TryFrom<PendingOperationSummary> for PendingOperationDto {
                 .is_some_and(|target| !valid_response_text(target, 256))
         {
             return Err(invalid_response(
-                "The agent returned an invalid pending-operation identity.",
+                "The agent returned an invalid pending operation.",
             ));
         }
         let kind = match summary.kind {
@@ -1462,7 +1457,7 @@ fn backup_phrase_response(
         || foks_crypto::BackupKey::from_phrase(response.phrase.as_str()).is_err()
     {
         return Err(invalid_response(
-            "The agent returned an invalid owner-backup phrase.",
+            "The agent returned an invalid recovery phrase.",
         ));
     }
     Ok(BackupPhraseDto {
@@ -1474,16 +1469,15 @@ fn backup_phrase_response(
 fn account_sync_response(value: serde_json::Value) -> Result<MutationDto, AgentError> {
     let report: AccountSyncResponse =
         serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
-    // FOKS normalizes the account lookup name before signing it, so the
-    // authenticated display username is not required to byte-match the user's
-    // input. It must still be a bounded single-line fact.
+    // Account lookup names are normalized before signing, so the authenticated
+    // display username does not need to match input bytes exactly.
     if !valid_response_text(&report.username, 256)
         || report.directories > MAXIMUM_SYNC_FACTS
         || report.entries > MAXIMUM_SYNC_FACTS
         || (report.directories == 0 && report.entries != 0)
     {
         return Err(invalid_response(
-            "The agent returned an invalid account synchronization report.",
+            "The agent returned an invalid account synchronization response.",
         ));
     }
     let _sequence = report.user_chain_sequence;
@@ -1497,11 +1491,10 @@ fn passphrase_response(value: serde_json::Value) -> Result<MutationDto, AgentErr
 fn passphrase_report_response(value: serde_json::Value) -> Result<PassphraseReportDto, AgentError> {
     let report: PassphraseResponse =
         serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
-    // First-run publishes only v0.1.9 profiles. The client rejects the
-    // test-only stretch before returning this production report.
+    // Reject test-only key derivation stretches in production reports.
     if report.generation == 0 || report.stretch_version != "v1" || !report.verified {
         return Err(invalid_response(
-            "The agent returned an invalid passphrase-verification report.",
+            "The agent returned an invalid passphrase verification response.",
         ));
     }
     Ok(PassphraseReportDto {
@@ -1525,7 +1518,7 @@ fn checked_server_response(
         || !valid_typed_entity_id_hex(&report.host_id_hex, HOST_ID_PREFIX)
     {
         return Err(invalid_response(
-            "The agent returned an invalid server-check report.",
+            "The agent returned an invalid server verification response.",
         ));
     }
     Ok(CheckedServerDto {
@@ -1556,7 +1549,7 @@ fn added_server_response(
         || profile.trust != ProfileTrustSummary::WebPki
     {
         return Err(invalid_response(
-            "The agent returned an invalid added-server record.",
+            "The agent returned an invalid server profile record.",
         ));
     }
     Ok(AddedServerDto {
@@ -1573,7 +1566,7 @@ fn forgotten_server_response(
         serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
     if response.profile != expected_profile || !response.removed {
         return Err(invalid_response(
-            "The agent did not confirm removal of the selected server profile.",
+            "Failed to confirm removal of the selected server profile.",
         ));
     }
     Ok(ForgottenServerDto {
@@ -1597,11 +1590,11 @@ fn server_status_response(
         || !valid_probe_target(&report.configured_probe)
     {
         return Err(invalid_response(
-            "The agent returned an invalid server-status identity.",
+            "The agent returned an invalid server status response.",
         ));
     }
     let expected_lookup = normalized_probe_hostname(expected_probe)
-        .ok_or_else(|| invalid_response("The retained server probe is invalid."))?;
+        .ok_or_else(|| invalid_response("The configured server address is invalid."))?;
     let host = report
         .host
         .map(|host| {
@@ -1610,7 +1603,7 @@ fn server_status_response(
                 || !valid_typed_entity_id_hex(&host.host_id_hex, HOST_ID_PREFIX)
             {
                 return Err(invalid_response(
-                    "The agent returned invalid retained host facts.",
+                    "The agent returned invalid host information.",
                 ));
             }
             Ok(StoredHostDto {
@@ -1648,7 +1641,7 @@ fn device_dtos(value: serde_json::Value) -> Result<Vec<DeviceDto>, AgentError> {
                     .is_some_and(|name| !valid_response_text(name, 256))
             {
                 return Err(invalid_response(
-                    "The agent returned an invalid or duplicate device.",
+                    "The agent response contains an invalid or duplicate device.",
                 ));
             }
             let role = match row.role.as_str() {
@@ -1672,7 +1665,7 @@ fn device_dtos(value: serde_json::Value) -> Result<Vec<DeviceDto>, AgentError> {
         .collect::<Result<Vec<_>, _>>()?;
     if current_count != 1 {
         return Err(invalid_response(
-            "The agent did not return exactly one current device.",
+            "The agent returned an invalid current device state.",
         ));
     }
     Ok(devices)
@@ -1697,7 +1690,7 @@ fn backup_enrollment_dtos(
                 || !ids.insert(row.backup_id_hex.clone())
             {
                 return Err(invalid_response(
-                    "The agent returned an invalid or duplicate backup enrollment.",
+                    "The agent response contains an invalid or duplicate backup key.",
                 ));
             }
             Ok(BackupEnrollmentDto {
@@ -1721,7 +1714,7 @@ fn yubi_card_dtos(value: serde_json::Value) -> Result<Vec<YubiCardDto>, AgentErr
                 || !serials.insert(row.serial)
             {
                 return Err(invalid_response(
-                    "The agent returned an invalid or duplicate connected security key.",
+                    "The agent response contains an invalid or duplicate security key.",
                 ));
             }
             Ok(YubiCardDto { serial: row.serial })
@@ -1741,13 +1734,13 @@ fn yubi_enrollment_dtos(value: serde_json::Value) -> Result<Vec<YubiEnrollmentDt
                 "complete" => "complete",
                 _ => {
                     return Err(invalid_response(
-                        "The agent returned an unknown security-key enrollment state.",
+                        "The agent returned an unrecognized security-key enrollment state.",
                     ))
                 }
             };
             if !valid_local_name(&row.alias) || !enrollments.insert((row.alias.clone(), state)) {
                 return Err(invalid_response(
-                    "The agent returned an invalid or duplicate security-key enrollment.",
+                    "The agent response contains an invalid or duplicate security key enrollment.",
                 ));
             }
             Ok(YubiEnrollmentDto {
@@ -1772,7 +1765,7 @@ fn require_yubi_enrollment(
     if !has_pending && !has_complete {
         return Err(AgentError::new(
             "security-key-not-found",
-            "Refresh Security keys before using this enrollment.",
+            "Please refresh security keys before using this enrollment.",
             false,
         ));
     }
@@ -1780,17 +1773,17 @@ fn require_yubi_enrollment(
         "pending" if has_pending => Ok(()),
         "pending" => Err(AgentError::new(
             "security-key-state-changed",
-            "Refresh Security keys: this setup is already complete.",
+            "This security key setup is already complete. Refresh the security keys list.",
             false,
         )),
         "complete" if has_complete && !has_pending => Ok(()),
         "complete" => Err(AgentError::new(
             "security-key-state-changed",
-            "Resume the pending security-key setup, then refresh Security keys before continuing.",
+            "Resume the pending security key setup, then refresh security keys before continuing.",
             false,
         )),
         _ => Err(invalid_response(
-            "The desktop requested an unsupported security-key enrollment state.",
+            "Unsupported security key enrollment state requested.",
         )),
     }
 }
@@ -1800,11 +1793,11 @@ fn require_software_revocation_signer(devices: &[DeviceDto]) -> Result<(), Agent
         Some(device) if device.id.starts_with(DEVICE_ID_PREFIX) => Ok(()),
         Some(_) => Err(AgentError::new(
             "security-key-current",
-            "A security key cannot sign its own revocation. Choose a software account on this Mac.",
+            "A security key cannot sign its own revocation. Switch to a software credential on this device.",
             false,
         )),
         None => Err(invalid_response(
-            "The agent did not identify the current signing device.",
+            "The current signing device could not be identified.",
         )),
     }
 }
@@ -1824,7 +1817,7 @@ fn yubi_account_response(
         || !response.management_enrolled
     {
         return Err(invalid_response(
-            "The agent returned an invalid security-key account report.",
+            "The agent returned invalid security key account details.",
         ));
     }
     Ok(YubiAccountDto {
@@ -1877,7 +1870,7 @@ fn yubi_sync_response(
                     || entry.refreshed == entry.deferred.is_some()
                 {
                     return Err(invalid_response(
-                        "The agent returned an invalid federation refresh report.",
+                        "The agent returned an invalid federation refresh response.",
                     ));
                 }
                 Ok(YubiFederationRefreshDto {
@@ -1896,7 +1889,7 @@ fn yubi_sync_response(
     };
     if !valid_sync_report(&sync) {
         return Err(invalid_response(
-            "The agent returned an invalid security-key synchronization report.",
+            "The agent returned an invalid security-key synchronization response.",
         ));
     }
     Ok(YubiSyncDto {
@@ -1913,7 +1906,7 @@ fn yubi_pin_status_response(value: serde_json::Value) -> Result<YubiPinStatusDto
         serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
     if response.blocked != (response.remaining == 0) {
         return Err(invalid_response(
-            "The agent returned inconsistent security-key PIN retry facts.",
+            "The agent returned inconsistent security-key PIN retry data.",
         ));
     }
     Ok(YubiPinStatusDto {
@@ -1935,7 +1928,7 @@ fn yubi_lifecycle_response(
             .is_none_or(|generation| generation == 0)
     {
         return Err(invalid_response(
-            "The agent returned an invalid security-key management report.",
+            "The agent returned an invalid security-key management response.",
         ));
     }
     Ok(YubiLifecycleDto {
@@ -1956,7 +1949,7 @@ fn yubi_subkey_recovery_response(
         || response.certificate_count > MAXIMUM_FIRST_RUN_ROWS
     {
         return Err(invalid_response(
-            "The agent returned an invalid security-key subkey recovery report.",
+            "The agent returned an invalid security-key subkey recovery response.",
         ));
     }
     Ok(YubiSubkeyRecoveryDto {
@@ -1974,7 +1967,7 @@ fn yubi_revocation_response(
         serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
     if response.alias != expected_alias || !response.removed_local_credential {
         return Err(invalid_response(
-            "The agent did not confirm removal of the selected security-key credential.",
+            "Removal of the selected security-key credential could not be confirmed.",
         ));
     }
     Ok(YubiRevocationDto {
@@ -1992,7 +1985,7 @@ fn yubi_changed_response(
         serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
     if response.alias != expected_alias || !response.changed {
         return Err(invalid_response(
-            "The agent did not confirm the selected security-key change.",
+            "Security-key update could not be confirmed.",
         ));
     }
     Ok(YubiChangedDto {
@@ -2012,7 +2005,7 @@ fn pairing_offer_response(
         || foks_crypto::KexSecret::from_phrase(response.phrase.as_str()).is_err()
     {
         return Err(invalid_response(
-            "The agent returned an invalid device-pairing phrase.",
+            "The received device-pairing phrase is invalid.",
         ));
     }
     Ok(PairingOfferDto {
@@ -2031,7 +2024,7 @@ fn device_provision_response(
         || !valid_typed_entity_id_hex(&response.device_id_hex, DEVICE_ID_PREFIX)
     {
         return Err(invalid_response(
-            "The agent returned an invalid paired-device report.",
+            "The agent returned an invalid paired-device response.",
         ));
     }
     Ok(DeviceProvisionDto {
@@ -2049,7 +2042,7 @@ fn device_removal_response(
         serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
     if response.device_id_hex != expected_device {
         return Err(invalid_response(
-            "The agent returned a different removed-device identity.",
+            "The agent confirmed removal for a different device identifier.",
         ));
     }
     Ok(DeviceRemovalDto {
@@ -2075,9 +2068,7 @@ fn reset_preview_response(
         || response.expires_in_seconds == 0
         || response.expires_in_seconds > 24 * 60 * 60
     {
-        return Err(invalid_response(
-            "The agent returned an invalid reset preview.",
-        ));
+        return Err(invalid_response("The server reset preview is invalid."));
     }
     let pending = response
         .resumables
@@ -2108,7 +2099,7 @@ fn reset_preview_response(
                     .entries
                     .checked_add(artifact.entries)
                     .ok_or_else(|| {
-                        invalid_response("The agent returned overflowing reset artifact totals.")
+                        invalid_response("Reset artifact totals exceeded maximum supported values.")
                     })?;
             aggregate.bytes = aggregate.bytes.checked_add(artifact.bytes).ok_or_else(|| {
                 invalid_response("The agent returned overflowing reset artifact totals.")
@@ -2138,7 +2129,7 @@ fn reset_result_response(
         serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
     if response.profile != expected_profile || !response.hard_state_reset {
         return Err(invalid_response(
-            "The agent did not bind reset completion to the selected server.",
+            "The agent did not confirm reset completion for the selected server.",
         ));
     }
     Ok(MutationDto { applied: true })
@@ -2156,7 +2147,7 @@ fn backup_commit_response(
         || !valid_typed_entity_id_hex(&report.backup_id_hex, BACKUP_ID_PREFIX)
     {
         return Err(invalid_response(
-            "The agent returned an invalid owner-backup completion report.",
+            "The agent returned an invalid backup confirmation response.",
         ));
     }
     let _sequence = report.user_chain_sequence;
@@ -2178,7 +2169,7 @@ fn backup_revocation_response(
         || !report.removed_local_enrollment
     {
         return Err(invalid_response(
-            "The agent did not confirm revocation of the selected backup enrollment.",
+            "The agent did not confirm revocation of the selected backup key.",
         ));
     }
     Ok(BackupRevocationDto {
@@ -2201,7 +2192,7 @@ fn recovery_response(
         || !valid_typed_entity_id_hex(&report.device_id_hex, DEVICE_ID_PREFIX)
     {
         return Err(invalid_response(
-            "The agent returned an invalid owner-recovery completion report.",
+            "The agent returned an invalid account recovery response.",
         ));
     }
     let _sequence = report.user_chain_sequence;
@@ -2255,7 +2246,7 @@ impl GroupDiscoveryDto {
             || response.teams.len() > MAXIMUM_FIRST_RUN_ROWS
         {
             return Err(invalid_response(
-                "The agent returned discovery results for a different account.",
+                "Discovered group results do not match the selected account.",
             ));
         }
         let mut aliases = std::collections::HashSet::new();
@@ -2268,9 +2259,7 @@ impl GroupDiscoveryDto {
                     "named" => "named",
                     "ad-hoc" => "adhoc",
                     _ => {
-                        return Err(invalid_response(
-                            "The agent returned an unsupported discovered group kind.",
-                        ));
+                        return Err(invalid_response("The returned group type is unsupported."));
                     }
                 };
                 let team_id_is_valid = match kind {
@@ -2290,9 +2279,7 @@ impl GroupDiscoveryDto {
                     || !aliases.insert(team.alias.clone())
                     || !team_ids.insert(team.team_id_hex.clone())
                 {
-                    return Err(invalid_response(
-                        "The agent returned an invalid discovered group.",
-                    ));
+                    return Err(invalid_response("Discovered group details are invalid."));
                 }
                 Ok(DiscoveredGroupDto {
                     alias: team.alias,
@@ -2380,7 +2367,7 @@ fn go_profile_discovery_response(
         || (!response.installed && !response.candidates.is_empty())
     {
         return Err(invalid_response(
-            "The agent returned an inconsistent Go FOKS installation.",
+            "The agent returned an inconsistent legacy installation status.",
         ));
     }
     let mut ids = std::collections::BTreeSet::new();
@@ -2426,7 +2413,7 @@ fn go_profile_discovery_response(
                         || candidate.storage_kind != "macos-keychain"))
             {
                 return Err(invalid_response(
-                    "The agent returned an invalid Go FOKS profile candidate.",
+                    "The agent returned an invalid legacy profile candidate.",
                 ));
             }
             Ok(GoProfileCandidateDto {
@@ -2656,7 +2643,7 @@ fn store_dto(store: &CatalogStoreSummary) -> Result<StoreDto, AgentError> {
                 other => {
                     return Err(AgentError::new(
                         "invalid-response",
-                        format!("The agent returned unsupported group kind {other:?}."),
+                        format!("Unsupported group kind: {other}"),
                         false,
                     ));
                 }
@@ -2683,7 +2670,7 @@ fn item_dto(item: &CatalogItem) -> Result<ItemDto, AgentError> {
         _ => {
             return Err(AgentError::new(
                 "invalid-response",
-                "The agent omitted a catalog item size.",
+                "The agent response is missing the item size.",
                 false,
             ));
         }
@@ -2699,7 +2686,7 @@ fn item_dto(item: &CatalogItem) -> Result<ItemDto, AgentError> {
             other => {
                 return Err(AgentError::new(
                     "invalid-response",
-                    format!("The agent returned unsupported catalog node type {other:?}."),
+                    format!("Unsupported vault item type: {other}"),
                     false,
                 ));
             }
@@ -3313,7 +3300,7 @@ impl<'de> Deserialize<'de> for RoleInput {
             (RoleName::Owner, None) => Ok(Self::Owner),
             (RoleName::Member, None) => Err(serde::de::Error::missing_field("visibility")),
             (RoleName::Admin | RoleName::Owner, Some(_)) => Err(serde::de::Error::custom(
-                "visibility is valid only for a Member role",
+                "Visibility can only be specified for the member role.",
             )),
         }
     }
@@ -3460,33 +3447,25 @@ fn load_accounts(
     let mut expected = HashMap::new();
     for summary in &catalog.stores {
         if let CatalogStoreSummary::Account { store } = summary {
-            // A failed rollback/lease catalog can retain the store summary so
-            // the shell can explain which server is blocked. Do not turn that
-            // display fact into an account read, and do not fail identities
-            // from still-available profiles beside it.
+            // Retain store summaries from failed catalogs so the UI can show
+            // which server is blocked without attempting to read accounts from it.
             if catalog.profile_blocked(&store.profile) {
                 continue;
             }
             if !valid_response_text(&store.profile, 64) || !valid_local_name(&store.account_alias) {
-                return Err(invalid_response(
-                    "The catalog returned an invalid account identity.",
-                ));
+                return Err(invalid_response("The vault returned an invalid account."));
             }
             let identity = (store.profile.clone(), store.account_alias.clone());
             if expected
                 .insert(identity, store_id(&CatalogStoreRef::Account(store.clone())))
                 .is_some()
             {
-                return Err(invalid_response(
-                    "The catalog returned a duplicate account identity.",
-                ));
+                return Err(invalid_response("The vault returned a duplicate account."));
             }
         }
     }
     if expected.len() > MAXIMUM_FIRST_RUN_ROWS {
-        return Err(invalid_response(
-            "The catalog returned too many account identities.",
-        ));
+        return Err(invalid_response("The vault returned too many accounts."));
     }
     let mut profiles = expected
         .keys()
@@ -3510,13 +3489,13 @@ fn load_accounts(
                 || !valid_response_text(&row.username, 256)
             {
                 return Err(invalid_response(
-                    "The agent returned an invalid account identity.",
+                    "The agent returned invalid account details.",
                 ));
             }
             let identity = (row.profile.clone(), row.alias.clone());
             let Some(store) = expected.remove(&identity) else {
                 return Err(invalid_response(
-                    "The agent returned an account outside the current catalog.",
+                    "The agent returned an account not present in the vault.",
                 ));
             };
             accounts.push(AccountDto {
@@ -3529,7 +3508,7 @@ fn load_accounts(
     }
     if !expected.is_empty() {
         return Err(invalid_response(
-            "The agent omitted an account from the current catalog.",
+            "An account is missing from the vault response.",
         ));
     }
     accounts
@@ -3590,7 +3569,7 @@ fn group_detail_result<T>(
 fn party_dtos(store: &str, members: Vec<MemberResponse>) -> Result<Vec<PartyDto>, AgentError> {
     if members.len() > MAXIMUM_FIRST_RUN_ROWS {
         return Err(invalid_response(
-            "The agent returned too many group roster entries.",
+            "The agent returned too many group members.",
         ));
     }
     let mut ids = std::collections::HashSet::new();
@@ -3626,7 +3605,7 @@ fn party_dtos(store: &str, members: Vec<MemberResponse>) -> Result<Vec<PartyDto>
                 || !ids.insert(member.party_id_hex.clone())
             {
                 return Err(invalid_response(
-                    "The agent returned an unsupported or inconsistent roster entry.",
+                    "The agent returned an unsupported or inconsistent group member.",
                 ));
             }
             Ok(PartyDto {
@@ -3652,7 +3631,7 @@ fn federation_dtos(
 ) -> Result<Vec<FederationEntryDto>, AgentError> {
     if memberships.len() > MAXIMUM_FIRST_RUN_ROWS {
         return Err(invalid_response(
-            "The agent returned too many federation entries.",
+            "The response contains too many federation entries.",
         ));
     }
     let mut remote_aliases = std::collections::HashSet::new();
@@ -3694,7 +3673,7 @@ fn federation_dtos(
                     .is_some_and(|operation| !operation_ids.insert(operation.clone()))
             {
                 return Err(invalid_response(
-                    "The agent returned an unsupported or inconsistent federation entry.",
+                    "The returned federation entry is unsupported or inconsistent.",
                 ));
             }
             Ok(FederationEntryDto {
@@ -3736,7 +3715,7 @@ fn read_text(
             .map_err(|_| {
                 AgentError::new(
                     "not-text",
-                    "This file is not UTF-8 text. Download it instead.",
+                    "This file is binary or non-UTF-8. Please download the file to view it.",
                     false,
                 )
             })?,
@@ -3744,7 +3723,7 @@ fn read_text(
         KvItemValue::Directory => {
             return Err(AgentError::new(
                 "not-readable",
-                "A folder has no value to show.",
+                "Folders do not have readable content.",
                 false,
             ))
         }
@@ -3797,21 +3776,21 @@ fn download_to_path(
         }
         return Err(AgentError::new(
             "response-binding",
-            "The agent returned a value for a different catalog selection.",
+            "The agent returned data for a different item.",
             true,
         ));
     }
     let parent = destination.parent().ok_or_else(|| {
         AgentError::new(
             "download-path",
-            "The chosen destination has no parent folder.",
+            "The chosen destination path has no parent folder.",
             false,
         )
     })?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
         AgentError::new(
             "download-write",
-            format!("could not create the download: {error}"),
+            format!("Could not create temporary download file: {error}"),
             true,
         )
     })?;
@@ -3821,25 +3800,29 @@ fn download_to_path(
                 zeroize_read_payload(&mut read);
                 return Err(AgentError::new(
                     "invalid-response",
-                    "The agent mixed a link target into a file response.",
+                    "The agent returned an unexpected link target in a file response.",
                     false,
                 ));
             }
             let mut content = read.content.take().ok_or_else(|| {
-                AgentError::new("invalid-response", "The agent omitted file content.", false)
+                AgentError::new(
+                    "invalid-response",
+                    "The agent response is missing file content.",
+                    false,
+                )
             })?;
             if Some(content.len() as u64) != read.size {
                 zeroize::Zeroize::zeroize(&mut content);
                 return Err(AgentError::new(
                     "invalid-response",
-                    "The inline file length did not match its catalog size.",
+                    "The received file length does not match its catalog size.",
                     false,
                 ));
             }
             temporary.write_all(&content).map_err(|error| {
                 AgentError::new(
                     "download-write",
-                    format!("could not save the file: {error}"),
+                    format!("Could not save the file: {error}"),
                     true,
                 )
             })?;
@@ -3850,14 +3833,14 @@ fn download_to_path(
                 zeroize_read_payload(&mut read);
                 return Err(AgentError::new(
                     "invalid-response",
-                    "The agent mixed inline data into a chunked file response.",
+                    "The agent returned unexpected inline data in a chunked response.",
                     false,
                 ));
             }
             let total = read.size.ok_or_else(|| {
                 AgentError::new(
                     "invalid-response",
-                    "The agent omitted the file size.",
+                    "The agent response is missing the file size.",
                     false,
                 )
             })?;
@@ -3880,7 +3863,11 @@ fn download_to_path(
                 let next = offset
                     .checked_add(chunk.content.len() as u64)
                     .ok_or_else(|| {
-                        AgentError::new("invalid-response", "The file offset overflowed.", false)
+                        AgentError::new(
+                            "invalid-response",
+                            "File download chunk offset calculation overflowed.",
+                            false,
+                        )
                     })?;
                 let valid = chunk.store == store
                     && chunk.path == item.metadata.path
@@ -3894,7 +3881,7 @@ fn download_to_path(
                     zeroize::Zeroize::zeroize(&mut chunk.content);
                     return Err(AgentError::new(
                         "response-binding",
-                        "The agent returned an invalid or unbound file chunk.",
+                        "The agent returned an invalid file chunk.",
                         true,
                     ));
                 }
@@ -3903,7 +3890,7 @@ fn download_to_path(
                 write.map_err(|error| {
                     AgentError::new(
                         "download-write",
-                        format!("could not save the file: {error}"),
+                        format!("Could not save the file: {error}"),
                         true,
                     )
                 })?;
@@ -3914,7 +3901,7 @@ fn download_to_path(
             zeroize_read_payload(&mut read);
             return Err(AgentError::new(
                 "not-file",
-                "Only files can be downloaded.",
+                "Only File items can be downloaded.",
                 false,
             ));
         }
@@ -3922,14 +3909,17 @@ fn download_to_path(
     temporary.as_file().sync_all().map_err(|error| {
         AgentError::new(
             "download-write",
-            format!("could not finish saving the file: {error}"),
+            format!("Could not finish saving the file: {error}"),
             true,
         )
     })?;
     temporary.persist(destination).map_err(|error| {
         AgentError::new(
             "download-write",
-            format!("could not place the downloaded file: {}", error.error),
+            format!(
+                "Could not save the downloaded file to destination: {}",
+                error.error
+            ),
             true,
         )
     })?;
@@ -3956,17 +3946,17 @@ fn parse_item_role(value: &str) -> Result<KvRole, AgentError> {
         value => {
             let Some(visibility) = value.strip_prefix("Member:") else {
                 return Err(invalid_request(
-                    "Use Owner, Admin, or Member:<signed visibility> for an item role.",
+                    "Role must be 'Owner', 'Admin', or 'Member:<visibility>'.",
                 ));
             };
             let parsed = visibility.parse::<i16>().map_err(|_| {
                 invalid_request(
-                    "A Member item role needs a signed 16-bit visibility after Member:.",
+                    "Member role visibility must be a valid 16-bit signed integer (e.g. Member:10).",
                 )
             })?;
             if parsed.to_string() != visibility {
                 return Err(invalid_request(
-                    "Use the canonical signed integer form after Member:.",
+                    "Member visibility must be a valid signed integer without leading zeros or spaces.",
                 ));
             }
             Ok(KvRole::Member { visibility: parsed })
@@ -3983,7 +3973,7 @@ fn create_item_roles(
         CatalogStoreRef::Account(_) => match (read_role, write_role) {
             (None, None) => Ok((KvRole::Owner, KvRole::Owner)),
             _ => Err(invalid_request(
-                "Account item roles are fixed to Owner; omit readRole and writeRole.",
+                "Account item roles are fixed to Owner; omit read and write roles.",
             )),
         },
         CatalogStoreRef::Team(_) => match (read_role, write_role) {
@@ -3991,7 +3981,7 @@ fn create_item_roles(
                 Ok((parse_item_role(read_role)?, parse_item_role(write_role)?))
             }
             _ => Err(invalid_request(
-                "Group item creation requires both readRole and writeRole.",
+                "Group item creation requires both read and write roles.",
             )),
         },
     }
@@ -4033,7 +4023,7 @@ fn set_create_operation_roles_in_place(
         }
         _ => Err(AgentError::new(
             "invalid-builder",
-            "The desktop create builder returned an unsupported operation shape.",
+            "Failed to create item: unsupported operation.",
             false,
         )),
     }
@@ -4060,7 +4050,7 @@ fn take_text_value(value: String) -> Result<Vec<u8>, AgentError> {
     let mut value = Zeroizing::new(value);
     if value.len() > MAXIMUM_TEXT_ITEM_BYTES {
         return Err(invalid_request(
-            "Password and Resource values must be at most 2,040 bytes.",
+            "Secret values must be at most 2,040 bytes.",
         ));
     }
     Ok(std::mem::take(&mut *value).into_bytes())
@@ -4071,7 +4061,7 @@ fn require_file_item(item: &CatalogItem) -> Result<(), AgentError> {
         Ok(())
     } else {
         Err(invalid_request(
-            "Only a File can be replaced from a native file source.",
+            "Only files can be replaced from a local file.",
         ))
     }
 }
@@ -4080,18 +4070,15 @@ fn require_text_item(item: &CatalogItem) -> Result<(), AgentError> {
     if item.metadata.node_type == "small-file" {
         Ok(())
     } else {
-        Err(invalid_request(
-            "Only a Password or Resource can be edited as text.",
-        ))
+        Err(invalid_request("Only secrets can be edited as text."))
     }
 }
 
 fn remove_item_operation(item: &CatalogItem) -> Result<Operation, AgentError> {
-    // This product release has no folder-deletion surface. Keep recursive
-    // deletion out of the untrusted-renderer contract entirely.
+    // Folder deletion is not supported.
     if item.metadata.node_type == "directory" {
         return Err(invalid_request(
-            "Folder removal is not available in this desktop yet.",
+            "Folder removal is not currently supported.",
         ));
     }
     foks_desktop::remove_kv_operation(item, false).map_err(invalid_request)
@@ -4103,10 +4090,10 @@ fn create_group_operation(
     name: &str,
     kind: GroupKindInput,
 ) -> Result<Operation, AgentError> {
-    let team_alias = required_field(team_alias, "Enter a local alias for the group.")?;
+    let team_alias = required_field(team_alias, "Group alias is required.")?;
     let (name, kind) = match kind {
         GroupKindInput::Named => (
-            required_field(name, "Enter the group's FOKS name.")?,
+            required_field(name, "Group name is required.")?,
             TeamKind::Named,
         ),
         // An ad-hoc group's user-facing local name is represented by the
@@ -4127,7 +4114,7 @@ fn add_group_member_operation(
     username: &str,
     destination: RoleInput,
 ) -> Result<Operation, AgentError> {
-    let username = required_field(username, "Enter the member username.")?;
+    let username = required_field(username, "Username is required.")?;
     let (role, visibility) = destination.parts();
     Ok(Operation::AddTeamMember {
         profile: team.profile,
@@ -4148,12 +4135,12 @@ fn demote_group_member_operation(
     if !destination_role.is_strictly_lower_than(current) {
         return Err(AgentError::new(
             "not-a-demotion",
-            "Choose a role strictly below the member's current role.",
+            "Select a role lower than the member's current role.",
             false,
         ));
     }
     if !valid_typed_entity_id_hex(party_id_hex, USER_ID_PREFIX) {
-        return Err(invalid_request("Choose an authenticated user identity."));
+        return Err(invalid_request("Please select a valid user."));
     }
     let party_id_hex = party_id_hex.to_owned();
     let (role, visibility) = destination.parts();
@@ -4171,7 +4158,7 @@ fn remove_group_member_operation(
     party_id_hex: &str,
 ) -> Result<Operation, AgentError> {
     if !valid_typed_entity_id_hex(party_id_hex, USER_ID_PREFIX) {
-        return Err(invalid_request("Choose an authenticated user identity."));
+        return Err(invalid_request("Please select a valid user."));
     }
     Ok(Operation::RemoveTeamMember {
         profile: team.profile,
@@ -4203,7 +4190,7 @@ fn rerun_group_admission_operation(
         ("Member", Some(visibility)) => visibility,
         _ => {
             return Err(invalid_response(
-                "The retained federation destination is unsupported.",
+                "The federation destination role is unsupported.",
             ));
         }
     };
@@ -4245,12 +4232,11 @@ fn map_mutation_error(error: foks_desktop::AgentError, kind: MutationKind) -> Ag
             .and_then(|details| details.capability.as_deref())
             == Some("kv")
     {
-        // The authenticated response proves that KV is unavailable, but the
-        // current protocol does not say whether a lease lapsed or the profile
-        // never granted this capability. Do not manufacture the former fact.
+        // The protocol indicates KV is unavailable without distinguishing
+        // between an expired lease or an ungranted capability.
         error.code = "capability-unavailable".to_owned();
         error.message =
-            "This server is not granting KV access. Check its compatibility status before reading or writing."
+            "This server is not granting vault access. Check its compatibility status before reading or writing."
                 .to_owned();
         error.retryable = false;
         return error;
@@ -4304,7 +4290,7 @@ async fn apply_kv_mutation(
     .map_err(|error| {
         ambiguous_worker_failure(
             state,
-            format!("The change worker stopped before reporting its outcome: {error}"),
+            format!("The background operation stopped before reporting its outcome: {error}"),
         )
     })?;
     match result {
@@ -4346,7 +4332,7 @@ async fn apply_operation_value(
     .map_err(|error| {
         ambiguous_worker_failure(
             state,
-            format!("The change worker stopped before reporting its outcome: {error}"),
+            format!("The background operation stopped before reporting its outcome: {error}"),
         )
     })?;
     match result {
@@ -4383,7 +4369,7 @@ fn transport_profile(
         .ok_or_else(|| {
             AgentError::new(
                 "profile-not-found",
-                "Refresh the server list and choose an available server.",
+                "The requested server profile was not found. Please refresh the server list.",
                 false,
             )
         })
@@ -4568,7 +4554,7 @@ fn profile_summaries(value: serde_json::Value) -> Result<Vec<ProfileSummary>, Ag
         .any(|profile| !valid_local_name(&profile.name) || !names.insert(profile.name.clone()))
     {
         return Err(invalid_response(
-            "The agent returned duplicate or invalid server identities.",
+            "The agent returned duplicate or invalid server profiles.",
         ));
     }
     Ok(profiles)
@@ -4601,7 +4587,7 @@ fn check_existing_or_add_profile(
     if matching.next().is_some() {
         return Err(AgentError::new(
             "profile-conflict",
-            "More than one saved server profile uses this address. Remove the duplicate before continuing setup.",
+            "Multiple saved server profiles use this address. Please remove the duplicate before continuing setup.",
             false,
         ));
     }
@@ -4618,7 +4604,7 @@ fn check_existing_or_add_profile(
             .is_some_and(|(_, host)| checked.host_id != *host)
         {
             return Err(invalid_response(
-                "The saved server does not match the selected Go FOKS profile.",
+                "The saved server does not match the imported profile.",
             ));
         }
         return Ok(checked);
@@ -4645,7 +4631,7 @@ fn check_existing_or_add_profile(
         .call(operation)
         .map_err(|error| map_mutation_error(error, MutationKind::Create))?;
     let response: CheckedProfileResponse = serde_json::from_value(value).map_err(|error| {
-        checked_profile_response_error(format!("invalid checked-server response: {error}"))
+        checked_profile_response_error(format!("Invalid checked-server response: {error}"))
     })?;
     CheckedProfileDto::from_response(&expected_profile, &expected_probe, response)
         .map_err(|error| checked_profile_response_error(error.message))
@@ -4689,7 +4675,7 @@ fn validated_pending_dtos(
         ))
     }) {
         return Err(invalid_response(
-            "The agent returned a duplicate pending-operation identity.",
+            "The agent returned duplicate pending operations.",
         ));
     }
     Ok(projected)
@@ -4714,7 +4700,7 @@ fn require_one_pending_operation(
     } else if matches == 0 {
         Err(AgentError::new(
             "pending-operation-not-found",
-            "Refresh first-run progress before resuming this operation.",
+            "Please refresh the setup status before resuming this operation.",
             false,
         ))
     } else {
@@ -4764,7 +4750,7 @@ async fn apply_pending_operation_value(
     .map_err(|error| {
         ambiguous_worker_failure(
             state,
-            format!("The first-run resume worker stopped before reporting its outcome: {error}"),
+            format!("The resume operation stopped before reporting its outcome: {error}"),
         )
     })?;
     match result {
@@ -4790,7 +4776,7 @@ async fn read_profile_operation_value(
         execute_read_profile_operation(transport.as_ref(), &profile, operation)
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("the first-run read did not finish: {error}")))?
+    .map_err(|error| AgentError::unknown(format!("Failed to read setup details: {error}")))??
 }
 
 fn execute_read_profile_operation(
@@ -4817,7 +4803,7 @@ async fn apply_profile_operation_value(
     .map_err(|error| {
         ambiguous_worker_failure(
             state,
-            format!("The first-run worker stopped before reporting its outcome: {error}"),
+            format!("The setup operation stopped before reporting its outcome: {error}"),
         )
     })?;
     match result {
@@ -4852,7 +4838,7 @@ async fn apply_profile_operation_with_profile(
     .map_err(|error| {
         ambiguous_worker_failure(
             state,
-            format!("The server-check worker stopped before reporting its outcome: {error}"),
+            format!("The server check stopped before reporting its outcome: {error}"),
         )
     })?;
     match result {
@@ -4910,14 +4896,14 @@ fn open_regular_file(path: &Path) -> Result<(File, u64), AgentError> {
     let file = options.open(path).map_err(|error| {
         AgentError::new(
             "upload-source",
-            format!("FOKS could not open the selected file: {error}"),
+            format!("Could not open the selected file: {error}"),
             false,
         )
     })?;
     let metadata = file.metadata().map_err(|error| {
         AgentError::new(
             "upload-source",
-            format!("FOKS could not inspect the selected file: {error}"),
+            format!("Could not inspect the selected file: {error}"),
             false,
         )
     })?;
@@ -4969,11 +4955,8 @@ fn upload_file(
         ));
     }
     if matches!(result, Err(foks_desktop::AgentError::Transport(_))) {
-        // A lost socket can stop the transport before it asks the reader for
-        // the remaining bytes, so `bytes_read != total_length` is not evidence
-        // that the source changed. Only metadata from this same opened handle
-        // can establish a length change; otherwise preserve the transport
-        // classification so the full-window agent-loss stop appears.
+        // If the transport failed, verify whether the file size actually changed
+        // before treating it as a source modification.
         if reader
             .file
             .metadata()
@@ -4981,7 +4964,7 @@ fn upload_file(
         {
             return Err(AgentError::new(
                 "upload-source-changed",
-                "The selected file changed while FOKS was reading it. Drop or choose it again.",
+                "The selected file changed while being read. Drop or choose it again.",
                 false,
             ));
         }
@@ -5006,7 +4989,7 @@ async fn apply_file_upload(
     .map_err(|error| {
         ambiguous_worker_failure(
             state,
-            format!("The file-import worker stopped before reporting its outcome: {error}"),
+            format!("The file import stopped before reporting its outcome: {error}"),
         )
     })?;
     if result.as_ref().is_err_and(|error| error.ambiguous) {
@@ -5029,7 +5012,7 @@ async fn load_catalog(state: &AppState, include_items: bool) -> Result<CatalogDt
         .map_err(AgentError::from_desktop)
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("the catalog load did not finish: {error}")))??;
+    .map_err(|error| AgentError::unknown(format!("Failed to load vault catalog: {error}")))??;
     let dto = CatalogDto::from_snapshot(&snapshot)?;
     if include_items {
         state.accept_catalog(generation, snapshot);
@@ -5051,7 +5034,11 @@ pub async fn agent_status(
     )?;
     serde_json::from_value::<foks_agent_proto::AgentStatus>(value)
         .map(AgentStatusDto::from)
-        .map_err(|error| AgentError::unknown(format!("the agent status did not parse: {error}")))
+        .map_err(|error| {
+            AgentError::unknown(format!(
+                "Could not parse background service status: {error}"
+            ))
+        })
 }
 
 #[tauri::command]
@@ -5064,13 +5051,17 @@ pub async fn retry_agent_connection(
     let response = tauri::async_runtime::spawn_blocking(move || agent.ensure_started_blocking())
         .await
         .map_err(|error| {
-            AgentError::unknown(format!("the agent restart did not finish: {error}"))
+            AgentError::unknown(format!("Failed to restart background service: {error}"))
         })??;
     let value = success_value(response)?;
     state.invalidate_catalog();
     serde_json::from_value::<foks_agent_proto::AgentStatus>(value)
         .map(AgentStatusDto::from)
-        .map_err(|error| AgentError::unknown(format!("the agent status did not parse: {error}")))
+        .map_err(|error| {
+            AgentError::unknown(format!(
+                "Failed to parse background service status: {error}"
+            ))
+        })
 }
 
 #[tauri::command]
@@ -5096,7 +5087,7 @@ pub async fn initialize_client_state(
     if response.backend != CredentialBackend::Native {
         return Err(ambiguous_mutation_response(
             &state,
-            "The agent initialized a different credential backend.",
+            "The background service initialized an unexpected credential backend.",
         ));
     }
     let value = success_value(state.agent.call(Operation::AgentStatus).await?)?;
@@ -5106,7 +5097,7 @@ pub async fn initialize_client_state(
     if status != foks_agent_proto::AgentStatus::Ready {
         return Err(ambiguous_mutation_response(
             &state,
-            "The agent did not become ready after initialization.",
+            "The background service did not become ready after initialization.",
         ));
     }
     Ok(status.into())
@@ -5137,12 +5128,12 @@ pub async fn check_and_add_profile(
     let _mutation = state.begin_mutation()?;
     let profile_name = bounded_local_name(
         &profile_name,
-        "Use 1–64 letters, numbers, hyphens, or underscores for the server profile.",
+        "Server profile name must be 1 to 64 letters, numbers, hyphens, or underscores.",
     )?;
     let probe = bounded_field(
         &probe,
         2 * 1024,
-        "Enter a server address of at most 2,048 bytes.",
+        "Server address must be 2,048 bytes or fewer.",
     )?;
     if !valid_probe_target(&probe) {
         return Err(invalid_request(
@@ -5158,7 +5149,7 @@ pub async fn check_and_add_profile(
     .map_err(|error| {
         ambiguous_worker_failure(
             &state,
-            format!("The server-check worker stopped before reporting its outcome: {error}"),
+            format!("Server verification was interrupted before completion: {error}"),
         )
     })?;
     match result {
@@ -5189,16 +5180,16 @@ pub async fn check_and_add_go_profile(
     let _mutation = state.begin_mutation()?;
     if !valid_go_candidate_id(&candidate_id) || !valid_typed_entity_id_hex(&host_id, HOST_ID_PREFIX)
     {
-        return Err(invalid_request("Choose a valid Go FOKS profile."));
+        return Err(invalid_request("Select a valid legacy profile."));
     }
     let profile_name = bounded_local_name(
         &profile_name,
-        "Use 1–64 letters, numbers, hyphens, or underscores for the server profile.",
+        "Server profile name must be 1 to 64 letters, numbers, hyphens, or underscores.",
     )?;
     let probe = bounded_field(
         &probe,
         2 * 1024,
-        "Enter a server address of at most 2,048 bytes.",
+        "Server address must be 2,048 bytes or fewer.",
     )?;
     if !valid_probe_target(&probe) {
         return Err(invalid_request(
@@ -5219,7 +5210,7 @@ pub async fn check_and_add_go_profile(
     .map_err(|error| {
         ambiguous_worker_failure(
             &state,
-            format!("The server-check worker stopped before reporting its outcome: {error}"),
+            format!("Server verification was interrupted before completion: {error}"),
         )
     })?;
     match result {
@@ -5248,12 +5239,12 @@ pub async fn add_server(
     let _mutation = state.begin_mutation()?;
     let profile_name = bounded_local_name(
         &profile_name,
-        "Use 1–64 letters, numbers, hyphens, or underscores for the server profile.",
+        "Server profile name must be 1 to 64 letters, numbers, hyphens, or underscores.",
     )?;
     let probe = bounded_field(
         &probe,
         2 * 1024,
-        "Enter a server address of at most 2,048 bytes.",
+        "Server address must be 2,048 bytes or fewer.",
     )?;
     if !valid_probe_target(&probe) {
         return Err(invalid_request(
@@ -5288,7 +5279,7 @@ pub async fn forget_server(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     exact_profile_confirmation(&profile, &confirmation, "forget")?;
     state.ensure_profile_available(&profile)?;
     let expected = profile.clone();
@@ -5310,7 +5301,7 @@ pub async fn describe_server_status(
     profile: String,
 ) -> Result<ServerStatusSnapshotDto, AgentError> {
     require_main_window(&webview)?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let expected = profile.clone();
     let transport = state.agent.transport();
     tauri::async_runtime::spawn_blocking(move || {
@@ -5324,9 +5315,7 @@ pub async fn describe_server_status(
         server_status_response(value, &expected, &configured.probe, lease_required)
     })
     .await
-    .map_err(|error| {
-        AgentError::unknown(format!("the server status load did not finish: {error}"))
-    })?
+    .map_err(|error| AgentError::unknown(format!("Failed to load server status: {error}")))?
 }
 
 #[tauri::command]
@@ -5339,7 +5328,7 @@ pub async fn check_server(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let expected = profile.clone();
     let (value, configured) = apply_profile_operation_with_profile(
         &state,
@@ -5351,12 +5340,15 @@ pub async fn check_server(
     let checked = checked_server_response(value, &expected)
         .map_err(|error| ambiguous_mutation_response(&state, error.message))?;
     let expected_lookup = normalized_probe_hostname(&configured.probe).ok_or_else(|| {
-        ambiguous_mutation_response(&state, "The selected server profile has an invalid probe.")
+        ambiguous_mutation_response(
+            &state,
+            "The selected server profile has an invalid server address.",
+        )
     })?;
     if checked.lookup_name != expected_lookup {
         return Err(ambiguous_mutation_response(
             &state,
-            "The server check returned facts for a different lookup name.",
+            "The server check returned results for a different lookup name.",
         ));
     }
     Ok(checked)
@@ -5376,7 +5368,7 @@ pub async fn list_account_devices(
         load_account_devices(transport.as_ref(), &account)
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("the device load did not finish: {error}")))??;
+    .map_err(|error| AgentError::unknown(format!("Failed to load account devices: {error}")))??;
     state.retain_devices(generation, account_store_id, &devices)?;
     Ok(devices)
 }
@@ -5394,11 +5386,7 @@ pub async fn list_backup_enrollments(
         load_backup_enrollments(transport.as_ref(), &account)
     })
     .await
-    .map_err(|error| {
-        AgentError::unknown(format!(
-            "the backup enrollment load did not finish: {error}"
-        ))
-    })?
+    .map_err(|error| AgentError::unknown(format!("Failed to load backup enrollments: {error}")))?
 }
 
 #[tauri::command]
@@ -5415,12 +5403,12 @@ pub async fn revoke_owner_backup(
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
     let account = state.selected_account(&account_store_id)?;
-    let backup_alias = bounded_local_name(&backup_alias, "Choose a valid backup alias.")?;
+    let backup_alias = bounded_local_name(&backup_alias, "Please provide a valid backup alias.")?;
     if confirmation != backup_alias {
-        return Err(invalid_request("Type the exact backup alias to revoke it."));
+        return Err(invalid_request("Backup alias confirmation does not match."));
     }
     if !valid_typed_entity_id_hex(&backup_id, BACKUP_ID_PREFIX) {
-        return Err(invalid_request("Choose a valid backup enrollment."));
+        return Err(invalid_request("Select a valid backup."));
     }
     let expected_account = account.account_alias.clone();
     let expected_backup = backup_alias.clone();
@@ -5473,7 +5461,7 @@ pub async fn list_yubi_cards(
 ) -> Result<Vec<YubiCardDto>, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let value = read_profile_operation_value(
         &state,
         profile.clone(),
@@ -5492,7 +5480,7 @@ pub async fn list_yubi_accounts(
 ) -> Result<Vec<YubiEnrollmentDto>, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     yubi_enrollments_for_profile(&state, profile).await
 }
 
@@ -5521,20 +5509,20 @@ pub async fn create_yubi_account(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Enter a valid local security-key alias.")?;
-    let username = bounded_field(&username, 256, "Enter a username of at most 256 bytes.")?;
+    let username = bounded_field(&username, 256, "Enter a username.")?;
     let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
-    let email = optional_bounded_field(&email, 320, "Enter an email of at most 320 bytes.")?;
+    let email = optional_bounded_field(&email, 320, "Enter a valid email address.")?;
     let invite = Zeroizing::new(invite);
     let invite = Zeroizing::new(optional_bounded_field(
         invite.as_str(),
         MAXIMUM_INVITE_BYTES,
-        "The invite must be one line of at most 4,096 bytes.",
+        "Invitation code must be a single line of at most 4,096 bytes.",
     )?);
     let passphrase = optional_confirmed_passphrase(passphrase, passphrase_confirmation)?;
     let (signing_slot, pq_slot) = yubi_slots(signing_slot, pq_slot)?;
-    let pin = bounded_secret(pin, 128, "Use one nonempty PIN of at most 128 bytes.")?;
+    let pin = bounded_secret(pin, 128, "PIN is required and must be at most 128 bytes.")?;
     let retry_configuration = yubi_retry_configuration(puk, pin_attempts, puk_attempts)?;
     let enrollments = yubi_enrollments_for_profile(&state, profile.clone()).await?;
     if enrollments.iter().any(|entry| entry.alias == alias) {
@@ -5558,7 +5546,7 @@ pub async fn create_yubi_account(
     {
         return Err(AgentError::new(
             "security-key-not-connected",
-            "Refresh connected keys and choose one that is still plugged in.",
+            "The selected security key is not connected. Refresh connected keys and try again.",
             false,
         ));
     }
@@ -5599,9 +5587,9 @@ pub async fn resume_yubi_account(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid pending security-key alias.")?;
-    let pin = bounded_secret(pin, 128, "Use one nonempty PIN of at most 128 bytes.")?;
+    let pin = bounded_secret(pin, 128, "PIN is required and must be at most 128 bytes.")?;
     let enrollments = yubi_enrollments_for_profile(&state, profile.clone()).await?;
     require_yubi_enrollment(&enrollments, &alias, "pending")?;
     let expected = alias.clone();
@@ -5651,7 +5639,7 @@ pub async fn provision_yubi_device(
         bounded_local_name(&target_alias, "Enter a valid local security-key alias.")?;
     let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
     let (signing_slot, pq_slot) = yubi_slots(signing_slot, pq_slot)?;
-    let pin = bounded_secret(pin, 128, "Use one nonempty PIN of at most 128 bytes.")?;
+    let pin = bounded_secret(pin, 128, "PIN is required and must be at most 128 bytes.")?;
     let retry_configuration = yubi_retry_configuration(puk, pin_attempts, puk_attempts)?;
     let enrollments = yubi_enrollments_for_profile(&state, account.profile.clone()).await?;
     if enrollments.iter().any(|entry| entry.alias == target_alias) {
@@ -5675,7 +5663,7 @@ pub async fn provision_yubi_device(
     {
         return Err(AgentError::new(
             "security-key-not-connected",
-            "Refresh connected keys and choose one that is still plugged in.",
+            "The selected security key is not connected. Refresh connected keys and try again.",
             false,
         ));
     }
@@ -5716,9 +5704,9 @@ pub async fn sync_yubi_account(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
-    let pin = bounded_secret(pin, 128, "Use one nonempty PIN of at most 128 bytes.")?;
+    let pin = bounded_secret(pin, 128, "PIN is required and must be at most 128 bytes.")?;
     require_complete_yubi(&state, profile.clone(), &alias).await?;
     let expected_profile = profile.clone();
     let value = apply_profile_operation_value(
@@ -5747,7 +5735,7 @@ pub async fn yubi_pin_status(
 ) -> Result<YubiPinStatusDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
     require_complete_yubi(&state, profile.clone(), &alias).await?;
     let value = read_profile_operation_value(
@@ -5772,13 +5760,13 @@ pub async fn change_yubi_pin(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
-    let old_pin = bounded_secret(old_pin, 128, "Use one nonempty current PIN.")?;
+    let old_pin = bounded_secret(old_pin, 128, "Current PIN is required.")?;
     let new_pin = bounded_secret(
         new_pin,
         128,
-        "Use one nonempty new PIN of at most 128 bytes.",
+        "New PIN is required and must be at most 128 bytes.",
     )?;
     require_complete_yubi(&state, profile.clone(), &alias).await?;
     let value = apply_profile_operation_value(
@@ -5825,7 +5813,11 @@ async fn yubi_passphrase_operation(
             pin,
             passphrase,
         },
-        _ => return Err(invalid_request("Unknown security-key passphrase action.")),
+        _ => {
+            return Err(invalid_request(
+                "Invalid security-key passphrase operation.",
+            ))
+        }
     };
     let value =
         apply_profile_operation_value(state, profile, operation, MutationKind::Guarded).await?;
@@ -5848,9 +5840,9 @@ pub async fn set_yubi_passphrase(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
-    let pin = bounded_secret(pin, 128, "Use one nonempty PIN of at most 128 bytes.")?;
+    let pin = bounded_secret(pin, 128, "PIN is required and must be at most 128 bytes.")?;
     let passphrase = confirmed_passphrase(passphrase, confirmation)?;
     yubi_passphrase_operation(&state, profile, alias, pin, passphrase, "set").await
 }
@@ -5870,9 +5862,9 @@ pub async fn change_yubi_passphrase(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
-    let pin = bounded_secret(pin, 128, "Use one nonempty PIN of at most 128 bytes.")?;
+    let pin = bounded_secret(pin, 128, "PIN is required and must be at most 128 bytes.")?;
     let passphrase = confirmed_passphrase(passphrase, confirmation)?;
     yubi_passphrase_operation(&state, profile, alias, pin, passphrase, "change").await
 }
@@ -5890,13 +5882,13 @@ pub async fn verify_yubi_passphrase(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
-    let pin = bounded_secret(pin, 128, "Use one nonempty PIN of at most 128 bytes.")?;
+    let pin = bounded_secret(pin, 128, "PIN is required and must be at most 128 bytes.")?;
     let passphrase = bounded_secret(
         passphrase,
         MAXIMUM_PASSPHRASE_BYTES,
-        "Use one nonempty passphrase of at most 1,024 bytes.",
+        "Passphrase is required and must be at most 1,024 bytes.",
     )?;
     yubi_passphrase_operation(&state, profile, alias, pin, passphrase, "verify").await
 }
@@ -5914,13 +5906,13 @@ pub async fn change_yubi_puk(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
-    let old_puk = bounded_secret(old_puk, 128, "Use one nonempty current unlock code.")?;
+    let old_puk = bounded_secret(old_puk, 128, "Current unlock code (PUK) is required.")?;
     let new_puk = bounded_secret(
         new_puk,
         128,
-        "Use one nonempty new unlock code of at most 128 bytes.",
+        "New unlock code (PUK) is required and must be at most 128 bytes.",
     )?;
     require_complete_yubi(&state, profile.clone(), &alias).await?;
     let expected = alias.clone();
@@ -5953,13 +5945,13 @@ pub async fn unblock_yubi_pin(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
-    let puk = bounded_secret(puk, 128, "Use one nonempty unlock code.")?;
+    let puk = bounded_secret(puk, 128, "Current unlock code (PUK) is required.")?;
     let new_pin = bounded_secret(
         new_pin,
         128,
-        "Use one nonempty new PIN of at most 128 bytes.",
+        "New PIN is required and must be at most 128 bytes.",
     )?;
     require_complete_yubi(&state, profile.clone(), &alias).await?;
     let value = apply_profile_operation_value(
@@ -6003,9 +5995,9 @@ pub async fn rotate_yubi_management_key(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
-    let pin = bounded_secret(pin, 128, "Use one nonempty PIN of at most 128 bytes.")?;
+    let pin = bounded_secret(pin, 128, "PIN is required and must be at most 128 bytes.")?;
     yubi_lifecycle_operation(
         &state,
         profile.clone(),
@@ -6032,7 +6024,7 @@ pub async fn resume_yubi_management_key(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
     let pin = pin
         .map(|pin| bounded_secret(pin, 128, "Use one nonempty PIN of at most 128 bytes."))
@@ -6085,9 +6077,9 @@ pub async fn recover_yubi_subkey(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
-    let pin = bounded_secret(pin, 128, "Use one nonempty PIN of at most 128 bytes.")?;
+    let pin = bounded_secret(pin, 128, "PIN is required and must be at most 128 bytes.")?;
     require_complete_yubi(&state, profile.clone(), &alias).await?;
     let expected = alias.clone();
     let value = apply_profile_operation_value(
@@ -6133,7 +6125,7 @@ pub async fn revoke_yubi_device(
     .await
     .map_err(|error| {
         AgentError::unknown(format!(
-            "the security-key revocation preflight did not finish: {error}"
+            "failed to run security-key revocation preflight: {error}"
         ))
     })??;
     require_software_revocation_signer(&devices)?;
@@ -6189,18 +6181,14 @@ pub async fn list_pending_operations(
     profile: String,
 ) -> Result<Vec<PendingOperationDto>, AgentError> {
     require_main_window(&webview)?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile name.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let transport = state.agent.transport();
     tauri::async_runtime::spawn_blocking(move || {
         let pending = pending_operations(transport.as_ref(), &profile)?;
         validated_pending_dtos(&pending)
     })
     .await
-    .map_err(|error| {
-        AgentError::unknown(format!(
-            "the pending-operation load did not finish: {error}"
-        ))
-    })?
+    .map_err(|error| AgentError::unknown(format!("failed to load pending operations: {error}")))?
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6221,16 +6209,16 @@ pub async fn create_first_run_account(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Enter a valid local account alias.")?;
-    let username = bounded_field(&username, 256, "Enter a FOKS username.")?;
+    let username = bounded_field(&username, 256, "Enter a username.")?;
     let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
-    let email = optional_bounded_field(&email, 320, "Enter a valid email value.")?;
+    let email = optional_bounded_field(&email, 320, "Enter a valid email address.")?;
     let invite = Zeroizing::new(invite);
     let invite = Zeroizing::new(optional_bounded_field(
         invite.as_str(),
         MAXIMUM_INVITE_BYTES,
-        "The invite must be one line of at most 4,096 bytes.",
+        "Invitation code must be a single line of at most 4,096 bytes.",
     )?);
     let passphrase = optional_confirmed_passphrase(passphrase, passphrase_confirmation)?;
     let operation = Operation::CreateAccount {
@@ -6258,7 +6246,7 @@ pub async fn resume_first_run_account(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid pending account alias.")?;
     let operation = Operation::ResumeAccount {
         profile: profile.clone(),
@@ -6289,7 +6277,7 @@ pub async fn set_first_run_passphrase(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid account alias.")?;
     let passphrase = confirmed_passphrase(passphrase, confirmation)?;
     let operation = Operation::SetPassphrase {
@@ -6314,7 +6302,7 @@ pub async fn prepare_owner_backup(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let account_alias = bounded_local_name(&account_alias, "Choose a valid account alias.")?;
     let backup_alias = bounded_local_name(&backup_alias, "Enter a valid backup alias.")?;
     let expected = backup_alias.clone();
@@ -6340,15 +6328,15 @@ pub async fn commit_owner_backup(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let account_alias = bounded_local_name(&account_alias, "Choose a valid account alias.")?;
-    let backup_alias = bounded_local_name(&backup_alias, "Choose a valid backup alias.")?;
+    let backup_alias = bounded_local_name(&backup_alias, "Please provide a valid backup alias.")?;
     let expected_account = account_alias.clone();
     let expected_backup = backup_alias.clone();
     let phrase = bounded_secret(
         phrase,
         MAXIMUM_RECOVERY_PHRASE_BYTES,
-        "The backup phrase must be one line of at most 4,096 bytes.",
+        "Backup phrase must be a single line of at most 4,096 bytes.",
     )?;
     let operation = Operation::CommitOwnerBackup {
         profile: profile.clone(),
@@ -6375,14 +6363,14 @@ pub async fn recover_owner_account(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let target_alias = bounded_local_name(&target_alias, "Enter a valid local account alias.")?;
     let expected_alias = target_alias.clone();
     let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
     let phrase = bounded_secret(
         phrase,
         MAXIMUM_RECOVERY_PHRASE_BYTES,
-        "The recovery phrase must be one line of at most 4,096 bytes.",
+        "Recovery phrase must be a single line of at most 4,096 bytes.",
     )?;
     let serial = positive_recovery_serial()?;
     let operation = Operation::RecoverOwnerAccount {
@@ -6411,14 +6399,14 @@ pub async fn resume_owner_recovery(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let target_alias = bounded_local_name(&target_alias, "Choose a valid pending recovery alias.")?;
     let expected_alias = target_alias.clone();
     let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
     let phrase = bounded_secret(
         phrase,
         MAXIMUM_RECOVERY_PHRASE_BYTES,
-        "The recovery phrase must be one line of at most 4,096 bytes.",
+        "Recovery phrase must be a single line of at most 4,096 bytes.",
     )?;
     let operation = Operation::ResumeOwnerRecovery {
         profile: profile.clone(),
@@ -6544,7 +6532,7 @@ pub async fn accept_device_pairing(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let target_alias = bounded_local_name(&target_alias, "Enter a valid local account alias.")?;
     let expected = target_alias.clone();
     let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
@@ -6581,9 +6569,9 @@ pub async fn accept_go_profile_pairing(
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
     if !valid_go_candidate_id(&candidate_id) {
-        return Err(invalid_request("Choose a valid Go FOKS profile."));
+        return Err(invalid_request("Please select a valid profile to import."));
     }
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let target_alias = bounded_local_name(&target_alias, "Enter a valid local account alias.")?;
     let expected = target_alias.clone();
     let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
@@ -6614,7 +6602,7 @@ pub async fn resume_device_pairing_acceptance(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let target_alias = bounded_local_name(
         &target_alias,
         "Choose a valid pending device-pairing alias.",
@@ -6650,9 +6638,9 @@ pub async fn resume_go_profile_pairing(
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
     if !valid_go_candidate_id(&candidate_id) {
-        return Err(invalid_request("Choose a valid Go FOKS profile."));
+        return Err(invalid_request("Please select a valid profile to import."));
     }
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let target_alias = bounded_local_name(
         &target_alias,
         "Choose a valid pending device-pairing alias.",
@@ -6689,9 +6677,9 @@ pub async fn copy_go_profile_device(
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
     if !valid_go_candidate_id(&candidate_id) {
-        return Err(invalid_request("Choose a valid Go FOKS profile."));
+        return Err(invalid_request("Please select a valid profile to import."));
     }
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let target_alias = bounded_local_name(&target_alias, "Enter a valid local account alias.")?;
     let expected = target_alias.clone();
     let value = apply_profile_operation_value(
@@ -6783,7 +6771,7 @@ pub async fn verify_account_passphrase(
     let passphrase = bounded_secret(
         passphrase,
         MAXIMUM_PASSPHRASE_BYTES,
-        "Use one nonempty passphrase of at most 1,024 bytes.",
+        "Passphrase is required and must be at most 1,024 bytes.",
     )?;
     let operation = Operation::VerifyPassphrase {
         profile: account.profile.clone(),
@@ -6803,11 +6791,10 @@ pub async fn describe_reset(
 ) -> Result<ResetPreviewDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
-    // Serializes preview issuance with changes so its one-use token describes
-    // one stable state. Losing an unused token is harmless and does not force
-    // catalog reconciliation.
+    // Serialize preview issuance with mutations so the one-use token
+    // describes a stable state.
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let expected = profile.clone();
     let value = read_profile_operation_value(
         &state,
@@ -6830,12 +6817,12 @@ pub async fn reset_server(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     exact_profile_confirmation(&profile, &confirmation, "reset")?;
     let token = bounded_secret(
         token,
         1024,
-        "The reset preview authorization is missing or invalid. Preview the reset again.",
+        "The reset preview confirmation token is missing or invalid. Preview the reset again.",
     )?;
     let expected = profile.clone();
     let value = apply_profile_operation_value(
@@ -6860,7 +6847,7 @@ pub async fn discover_groups(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Choose a valid server profile.")?;
+    let profile = bounded_local_name(&profile, "Please provide a valid server profile name.")?;
     let account_alias = bounded_local_name(&account_alias, "Choose a valid account alias.")?;
     let expected = account_alias.clone();
     let operation = Operation::DiscoverTeams {
@@ -6872,7 +6859,7 @@ pub async fn discover_groups(
     require_nested_response_row_cap(&value, "teams", "discovered groups")
         .map_err(|error| ambiguous_mutation_response(&state, error.message))?;
     let response: GroupDiscoveryResponse = serde_json::from_value(value).map_err(|error| {
-        ambiguous_mutation_response(&state, format!("invalid discovery response: {error}"))
+        ambiguous_mutation_response(&state, format!("Invalid group discovery response: {error}"))
     })?;
     GroupDiscoveryDto::from_response(&expected, response)
         .map_err(|error| ambiguous_mutation_response(&state, error.message))
@@ -6995,7 +6982,7 @@ pub async fn list_servers(
             .collect())
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("the server load did not finish: {error}")))?
+    .map_err(|error| AgentError::unknown(format!("failed to load servers: {error}")))?
 }
 
 #[tauri::command]
@@ -7021,9 +7008,7 @@ pub async fn list_accounts(
     let accounts =
         tauri::async_runtime::spawn_blocking(move || load_accounts(transport.as_ref(), &catalog))
             .await
-            .map_err(|error| {
-                AgentError::unknown(format!("the account load did not finish: {error}"))
-            })??;
+            .map_err(|error| AgentError::unknown(format!("failed to load accounts: {error}")))??;
     state.retain_accounts(generation, &accounts)?;
     Ok(accounts)
 }
@@ -7073,7 +7058,7 @@ pub async fn list_group_details(
         })
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("the group details did not finish: {error}")))??;
+    .map_err(|error| AgentError::unknown(format!("failed to load group details: {error}")))??;
     let parties = match &details.parties {
         GroupDetailResultDto::Success { value } => Some(value.as_slice()),
         GroupDetailResultDto::Error { .. } => None,
@@ -7110,7 +7095,7 @@ pub async fn list_parties(
         party_dtos(&store_id, members)
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("the group roster did not finish: {error}")))??;
+    .map_err(|error| AgentError::unknown(format!("failed to load group roster: {error}")))??;
     state.retain_roster(generation, cache_key, &parties)?;
     Ok(parties)
 }
@@ -7147,7 +7132,7 @@ pub async fn list_federation(
     })
     .await
     .map_err(|error| {
-        AgentError::unknown(format!("the federation load did not finish: {error}"))
+        AgentError::unknown(format!("failed to load federation entries: {error}"))
     })??;
     state.retain_federation(generation, cache_key, &entries)?;
     Ok(entries)
@@ -7168,7 +7153,7 @@ pub async fn read_item(
     let transport = state.agent.transport();
     tauri::async_runtime::spawn_blocking(move || read_text(transport.as_ref(), &item))
         .await
-        .map_err(|error| AgentError::unknown(format!("the item read did not finish: {error}")))?
+        .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))?
 }
 
 #[tauri::command]
@@ -7188,7 +7173,7 @@ pub async fn copy_item_value(
         read_text(transport.as_ref(), &item).map(|read| read.value)
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("the item read did not finish: {error}")))??;
+    .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))??;
     crate::clipboard::copy_with_hygiene(&app, value)
         .map_err(|error| AgentError::new("clipboard", error, true))?;
     Ok(CommandAck { ok: true })
@@ -7219,7 +7204,9 @@ pub fn copy_text(
 ) -> Result<CommandAck, AgentError> {
     require_main_window(&webview)?;
     if text.len() > MAXIMUM_CLIPBOARD_TEXT_BYTES {
-        return Err(invalid_request("The text is too large to copy."));
+        return Err(invalid_request(
+            "Text exceeds maximum allowable clipboard size of 1 MB.",
+        ));
     }
     crate::clipboard::copy_with_hygiene(&app, Zeroizing::new(text))
         .map_err(|error| AgentError::new("clipboard", error, true))?;
@@ -7254,7 +7241,7 @@ pub async fn download_file(
             .blocking_save_file()
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("the save dialog did not finish: {error}")))?;
+    .map_err(|error| AgentError::unknown(format!("Save dialog failed: {error}")))?;
     let Some(destination) = destination else {
         return Ok(DownloadResult { saved: false });
     };
@@ -7266,7 +7253,7 @@ pub async fn download_file(
         download_to_path(transport.as_ref(), &item, &destination)
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("the download did not finish: {error}")))??;
+    .map_err(|error| AgentError::unknown(format!("download failed: {error}")))??;
     Ok(DownloadResult { saved: true })
 }
 
@@ -7394,8 +7381,7 @@ pub async fn import_dropped_file(
     require_main_window(&webview)?;
     let _permit = state.begin_mutation()?;
     let store = state.selected_create_store(&store_id)?;
-    // Validate the destination through the desktop builder before consuming
-    // the one-use native drop authorization.
+    // Validate the destination file header before consuming the staged drop path.
     let header = file_create_header(
         &store,
         &path,
@@ -7434,7 +7420,7 @@ pub async fn pick_and_import_file(
         picker_app.dialog().file().blocking_pick_file()
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("the file picker did not finish: {error}")))?;
+    .map_err(|error| AgentError::unknown(format!("file picker failed: {error}")))?;
     let Some(source) = source else {
         return Ok(MutationDto { applied: false });
     };
@@ -7485,7 +7471,7 @@ pub async fn pick_and_replace_file(
         picker_app.dialog().file().blocking_pick_file()
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("the file picker did not finish: {error}")))?;
+    .map_err(|error| AgentError::unknown(format!("file picker failed: {error}")))?;
     let Some(source) = source else {
         return Ok(MutationDto { applied: false });
     };
@@ -7545,7 +7531,7 @@ pub async fn resume_group_member_addition(
     let operation = Operation::ResumeTeamMemberAddition {
         profile: team.profile,
         team_alias: team.team_alias,
-        username: required_field(&username, "Enter the pending member username.")?,
+        username: required_field(&username, "Enter a member username.")?,
     };
     apply_operation(&state, operation, MutationKind::Resume).await
 }
@@ -7656,7 +7642,7 @@ pub async fn expel_federated_group(
         || entry.remote_team_id_hex != remote_team_id_hex
     {
         return Err(invalid_request(
-            "The exact cached federation target changed before expulsion.",
+            "The federated group changed before removal. Refresh and try again.",
         ));
     }
     apply_operation(
@@ -7684,11 +7670,11 @@ pub async fn resume_group_creation(
     let _permit = state.begin_mutation()?;
     let (store, active) = state.selected_store(&store_id)?;
     let CatalogStoreRef::Team(store) = store else {
-        return Err(invalid_request("Only a group creation can be resumed."));
+        return Err(invalid_request("Only pending group stores can be resumed."));
     };
     if active != Some(false) {
         return Err(invalid_request(
-            "This group does not report an incomplete creation.",
+            "This group has no incomplete creation to resume.",
         ));
     }
     state.ensure_profile_available(&store.profile)?;
@@ -7733,7 +7719,7 @@ mod tests {
                     symlink_target: None,
                 })
                 .map_err(|error| foks_desktop::AgentError::Transport(error.to_string())),
-                other => panic!("unexpected reveal operation {other:?}"),
+                other => panic!("unexpected read operation {other:?}"),
             }
         }
     }
@@ -7848,7 +7834,7 @@ mod tests {
     }
 
     #[test]
-    fn show_issues_exactly_one_version_bound_read() {
+    fn read_text_issues_exactly_one_version_bound_read() {
         let item = CatalogItem {
             store: CatalogStoreRef::Account(foks_agent_proto::AccountStoreRef {
                 profile: "foks.example".to_owned(),
@@ -8687,7 +8673,7 @@ mod tests {
                         .profiles
                         .iter()
                         .find(|candidate| candidate.name == profile)
-                        .expect("the setup probe must select a listed profile");
+                        .expect("target profile should exist in mock transport");
                     Ok(serde_json::json!({
                         "acceptance":"unchanged",
                         "lookup_name":normalized_probe_hostname(&configured.probe).unwrap(),
@@ -8817,7 +8803,7 @@ mod tests {
             path: PathBuf::from("/private/foks-dev-ca.der"),
         };
         let failed = SetupProfileTransport {
-            probe_error: Some("saved profile rejected its certificate".to_owned()),
+            probe_error: Some("certificate validation failed for saved profile".to_owned()),
             ..SetupProfileTransport::new(vec![local])
         };
         let error = check_existing_or_add_profile(
@@ -9593,7 +9579,7 @@ mod tests {
                     "account_alias":"personal",
                     "backup_id_hex":"10".repeat(33)
                 }])),
-                other => panic!("unexpected Phase 6 read operation {other:?}"),
+                other => panic!("unexpected account read operation {other:?}"),
             }
         }
     }
@@ -10890,17 +10876,8 @@ mod tests {
         }
     }
 
-    /// Two profiles, one alias — the collision the UI navigates by StoreRef to
-    /// avoid.
-    ///
-    /// An account alias is profile-local, so this Mac may hold `personal` on
-    /// two servers at once. `store_id` must give those two accounts different
-    /// identities, `selected_account` must resolve each to its own profile
-    /// without either shadowing the other, and neither must be reachable by the
-    /// alias alone. The catalog order must not enter into it: the shell's
-    /// Settings and Join screens carry these strings in their address bar, and
-    /// a refresh that reorders the catalog cannot be allowed to change which
-    /// account an address means.
+    /// Verify that accounts sharing an alias across different profiles produce
+    /// distinct store IDs and resolve deterministically regardless of catalog order.
     #[test]
     fn two_profiles_sharing_an_account_alias_get_distinct_store_refs() {
         let home = account_ref("home.example", "personal");
@@ -10908,8 +10885,7 @@ mod tests {
         let home_id = store_id(&CatalogStoreRef::Account(home.clone()));
         let work_id = store_id(&CatalogStoreRef::Account(work.clone()));
         assert_ne!(home_id, work_id);
-        // Deterministic: the same account produces the same id every time, so
-        // an address survives a catalog refresh.
+        // Store IDs are deterministic for a given account across catalog refreshes.
         assert_eq!(
             home_id,
             store_id(&CatalogStoreRef::Account(account_ref(
@@ -10942,13 +10918,13 @@ mod tests {
         assert_eq!(resolved.profile, "work.example");
         assert_eq!(resolved.account_alias, "personal");
 
-        // The alias on its own names nothing.
+        // An unqualified account alias cannot resolve a store.
         assert_eq!(
             state.selected_account("personal").unwrap_err().code,
             "store-not-found"
         );
 
-        // The other catalog order answers identically.
+        // Store resolution remains deterministic regardless of catalog order.
         *state.catalog.lock().unwrap() = Some(catalog(vec![
             CatalogStoreSummary::Account {
                 store: work.clone(),
@@ -10966,8 +10942,8 @@ mod tests {
             "work.example"
         );
 
-        // And an account that has left the catalog is reported gone rather than
-        // resolved to the one that still shares its alias.
+        // An account removed from the catalog reports gone rather than
+        // resolving to an account that shares its alias.
         *state.catalog.lock().unwrap() = Some(catalog(vec![CatalogStoreSummary::Account {
             store: home.clone(),
         }]));

@@ -76,7 +76,7 @@ impl HardStateStore {
             ],
         )?;
         let stored = team_mutation_from_connection(&transaction, &operation.operation_id)?.ok_or(
-            Error::InvalidFederationSaga("prepared local mutation disappeared"),
+            Error::InvalidFederationSaga("prepared local mutation record was not found"),
         )?;
         if stored.kind != operation.kind
             || stored.host_id != operation.host_id
@@ -173,10 +173,12 @@ impl HardStateStore {
             ],
         )?;
         let stored = federation_saga_from_connection(&transaction, &operation.operation_id)?
-            .ok_or(Error::InvalidFederationSaga("recorded saga disappeared"))?;
+            .ok_or(Error::InvalidFederationSaga(
+                "recorded saga record was not found",
+            ))?;
         if !same_federation_binding(&stored, operation) {
             return Err(Error::InvalidFederationSaga(
-                "operation ID was reused for another saga",
+                "operation ID was reused for a different saga",
             ));
         }
         transaction.commit()?;

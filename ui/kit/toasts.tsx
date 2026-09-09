@@ -89,9 +89,7 @@ function ToastItem({
 
   useEffect(() => {
     const animationFrame = window.requestAnimationFrame(() => setVisible(true));
-    // An action must remain reachable by keyboard and assistive technology.
-    // Callers may opt into a deadline, but actionable toasts are persistent
-    // by default and always retain their explicit dismiss control.
+    // Actionable toasts remain open indefinitely by default until dismissed or timed out by the caller.
     if (entry.action && entry.durationMs === undefined) {
       return () => window.cancelAnimationFrame(animationFrame);
     }

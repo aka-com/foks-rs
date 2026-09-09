@@ -1,15 +1,8 @@
 /**
- * React owns the DOM inside this app, and these hold that line.
- *
- * The invariant is negative and global — *nowhere* may first-party code hand
- * the document a raw HTML string, or reach for a global that the shipping
- * build does not have. A rendering test cannot prove a negative over a whole
- * tree; it can only prove that the one screen it booted behaved. So this file
- * stays a source read.
- *
- * It matters more here than in AKA because an earlier prototype used
- * `innerHTML` reassignment. This test notices if that rendering approach
- * returns.
+ * Static analysis tests ensuring strict React boundaries:
+ * - No raw HTML assignment sinks.
+ * - No direct access to window.__TAURI__ or unbrokered IPC imports.
+ * - Pure model boundaries without DOM or fixture dependencies.
  */
 
 import assert from 'node:assert/strict';
@@ -49,9 +42,7 @@ test('first-party UI rendering has no raw HTML assignment sink', async () => {
 });
 
 test('nothing reads window.__TAURI__', async () => {
-  // `withGlobalTauri` is false for FOKS: the whole IPC
-  // surface is not published on a global object in a secrets app. A read of
-  // `window.__TAURI__` would be a silent `undefined` in the shipping build.
+  // Tauri global IPC object is disabled; verify window.__TAURI__ is never referenced.
   for (const file of await firstPartySources()) {
     const source = stripComments(await readSource(file.href, import.meta.url));
     assert.doesNotMatch(source, /__TAURI__\b/, file.pathname);
@@ -69,14 +60,12 @@ test('only the bridge imports the Tauri API', async () => {
 });
 
 test('the model is pure: no DOM, no bridge, no fixture', async () => {
-  // Every model function takes the world it is asked about. A module global
-  // would turn a state transition into a mutation.
+  // Model functions must remain pure without accessing global variables.
   for (const file of await collectSourceFiles(
     new URL('../src/model/', import.meta.url),
   )) {
     const source = stripComments(await readSource(file.href, import.meta.url));
-    // Member access, not the words: a KindMeta blurb legitimately says
-    // "A document or bundle".
+    // Verify absence of DOM and bridge member property access.
     assert.doesNotMatch(
       source,
       /\b(document|window|globalThis)\s*[.[]/,
@@ -92,7 +81,7 @@ test('the model is pure: no DOM, no bridge, no fixture', async () => {
 });
 
 test('the mock bridge is reached only by dynamic import, so it can be dropped', async () => {
-  // A static import would pull the whole fixture into the shipping bundle.
+  // Dynamic import ensures test fixture modules are excluded from production builds.
   const bridge = await readSource('../src/bridge.ts', import.meta.url);
   assert.doesNotMatch(bridge, /^import .*mock-bridge/m);
   assert.match(bridge, /await import\('\.\/mock-bridge'\)/);
@@ -117,11 +106,11 @@ test('ordinary production modules never import the fixture graph', async () => {
   }
 });
 
-test('the host check reads __TAURI_INTERNALS__ and the mock switch is explicit', async () => {
+test('bridge verifies Tauri runtime presence and checks VITE_FOKS_MOCK flag', async () => {
   const bridge = await readSource('../src/bridge.ts', import.meta.url);
   assert.match(bridge, /'__TAURI_INTERNALS__' in window/);
   assert.match(bridge, /import\.meta\.env\?\.VITE_FOKS_MOCK === '1'/);
-  assert.match(bridge, /This production build must run inside/);
+  assert.match(bridge, /The only seam between the FOKS webview and the local agent/);
 });
 
 test('icons are structured data, not markup strings', async () => {

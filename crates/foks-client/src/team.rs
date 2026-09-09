@@ -2299,7 +2299,7 @@ impl FoksClient {
             hard_store
                 .adhoc_team_operation(&operation_id)?
                 .ok_or(Error::OperationBinding(
-                    "ad-hoc team operation disappeared after submission",
+                    "ad-hoc team operation record was not found after submission",
                 ))?;
         if persisted.state == AdHocTeamOperationState::Prepared {
             hard_store.advance_adhoc_team_operation(

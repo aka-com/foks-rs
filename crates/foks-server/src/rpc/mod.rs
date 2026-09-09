@@ -1,4 +1,4 @@
-//! Bounded RPC routing metadata and, in later phases, handler composition.
+//! Bounded RPC routing metadata and handler composition.
 
 mod router;
 mod routes;

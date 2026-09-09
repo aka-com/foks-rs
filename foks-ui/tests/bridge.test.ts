@@ -99,13 +99,13 @@ const checkedHost = {
   epoch: 1,
 };
 
-test('the Rust catalog wire shape decodes and preserves opaque store ids', () => {
+test('decodeCatalog parses catalog payload and preserves store IDs', () => {
   const decoded = decodeCatalog(catalog);
   assert.deepEqual(decoded, catalog);
   assert.equal(decoded.items[0]?.store, decoded.stores[0]?.id);
 });
 
-test('catalog drift fails closed at the bridge', () => {
+test('decodeCatalog enforces schema validation and rejects malformed fields', () => {
   assert.throws(
     () =>
       decodeCatalog({
@@ -152,7 +152,7 @@ test('catalog drift fails closed at the bridge', () => {
   );
 });
 
-test('action response decoders reject optimistic or partial shapes', () => {
+test('action decoders reject partial or malformed responses', () => {
   assert.deepEqual(
     decodeReadItem({
       store: catalog.stores[0]?.id,
@@ -182,7 +182,7 @@ test('action response decoders reject optimistic or partial shapes', () => {
   );
 });
 
-test('combined group details decode independent success and error results', () => {
+test('decodeGroupDetails handles independent success and error states for parties and federation', () => {
   const details = decodeGroupDetails({
     parties: { status: 'success', value: [] },
     federation: {
@@ -211,7 +211,7 @@ test('combined group details decode independent success and error results', () =
   );
 });
 
-test('app-lock responses are coherent and fail closed on wire drift', () => {
+test('decodeAppLockState validates state consistency and rejects invalid combinations', () => {
   assert.deepEqual(
     decodeAppLockState({
       locked: true,
@@ -241,16 +241,16 @@ test('app-lock responses are coherent and fail closed on wire drift', () => {
   assert.throws(
     () =>
       decodeAppLockState({ locked: true, available: false, mechanism: 'none' }),
-    /unavailable app lock cannot be armed/,
+    /app_lock_state cannot be locked when lock is unavailable/,
   );
   assert.throws(
     () =>
       decodeAppLockState({ locked: false, available: true, mechanism: 'none' }),
-    /capability and mechanism disagree/,
+    /capability and mechanism are incompatible/,
   );
 });
 
-test('server, roster and federation wire shapes validate signed roles', () => {
+test('decoders validate server status, member rosters, and federation entries', () => {
   assert.deepEqual(
     decodeAccounts([
       {
@@ -325,7 +325,7 @@ test('server, roster and federation wire shapes validate signed roles', () => {
   );
 });
 
-test('the TypeScript decoders accept the Rust-serialized wire golden', async () => {
+test('decoders successfully parse the full wire contract golden fixture', async () => {
   const fixture = JSON.parse(
     await readFile(
       new URL('../../foks-tauri/wire-contract.json', import.meta.url),
@@ -484,7 +484,7 @@ test('the TypeScript decoders accept the Rust-serialized wire golden', async () 
   );
 });
 
-test('Go profile discovery accepts only bounded nonsecret candidate summaries', () => {
+test('decodeGoProfileDiscovery validates profile candidate fields and rejects invalid candidates', () => {
   const candidate = {
     candidateId: 'a'.repeat(64),
     username: 'raymond',
@@ -520,7 +520,7 @@ test('Go profile discovery accepts only bounded nonsecret candidate summaries', 
   );
 });
 
-test('Phase 6 decoders reject invented status, replayable reset, and loose identities', () => {
+test('decoders reject invalid server status, malformed reset tokens, and invalid entity IDs', () => {
   assert.throws(
     () =>
       decodeServerStatus({
@@ -557,7 +557,7 @@ test('Phase 6 decoders reject invented status, replayable reset, and loose ident
         leaseRequired: false,
         leaseExpiresAt: 100,
       }),
-    /lease-free protocol/,
+    /protocol that does not use leases/,
   );
   assert.throws(
     () =>
@@ -657,7 +657,7 @@ test('Phase 6 decoders reject invented status, replayable reset, and loose ident
   );
 });
 
-test('first-run response decoders reject drift and mismatched discovery identities', () => {
+test('first-run response decoders validate profile checks, pending operations, and group discovery', () => {
   assert.equal(
     decodeCheckedProfile({
       profile: 'work',
@@ -765,7 +765,7 @@ test('first-run response decoders reject drift and mismatched discovery identiti
   );
 });
 
-test('catalog failures are structural and retain typed error details', () => {
+test('decodeCatalog preserves structured failure objects and typed error details', () => {
   const decoded = decodeCatalog({
     ...catalog,
     failures: [
@@ -807,18 +807,18 @@ test('catalog failures are structural and retain typed error details', () => {
   );
 });
 
-test('typed Rust errors survive and malformed errors become fatal', () => {
+test('normalizeCommandError preserves typed error fields and defaults malformed errors to fatal', () => {
   assert.deepEqual(
     normalizeCommandError({
       code: 'lease-lapsed',
-      message: 'Reads and writes have stopped.',
+      message: 'Connection session expired. Vault access is paused.',
       retryable: true,
       ambiguous: false,
       fatal: false,
     }),
     {
       code: 'lease-lapsed',
-      message: 'Reads and writes have stopped.',
+      message: 'Connection session expired. Vault access is paused.',
       retryable: true,
       ambiguous: false,
       fatal: false,
@@ -827,7 +827,7 @@ test('typed Rust errors survive and malformed errors become fatal', () => {
   assert.equal(normalizeCommandError('oops').fatal, true);
 });
 
-test('a Tauri development host selects native commands, never the dev mock', async () => {
+test('selectBridge returns native tauriBridge when window.__TAURI_INTERNALS__ is present', async () => {
   const previous = globalThis.window;
   Object.defineProperty(globalThis, 'window', {
     value: { __TAURI_INTERNALS__: {} },
@@ -858,7 +858,7 @@ test('loadWorld retains validated account-store identities in the mock world', a
   }
 });
 
-test('loadWorld makes one catalog call and does not leak fixture facts native', async () => {
+test('loadWorld makes a single catalog call and does not leak fixture data in native mode', async () => {
   let calls = 0;
   const accountStore = catalog.stores[0];
   assert.ok(accountStore);
@@ -924,7 +924,7 @@ test('loadWorld makes one catalog call and does not leak fixture facts native', 
   assert.equal(world.plaintext['acct:personal|/logins/github.com'], undefined);
 });
 
-test('loadWorld keeps known stores visible without granting stale authority', async () => {
+test('loadWorld keeps known stores visible while revoking access to unavailable stores', async () => {
   const known = catalog.stores[0];
   assert.ok(known);
   const response: CatalogDto = {
@@ -994,7 +994,7 @@ test('loadWorld keeps known stores visible without granting stale authority', as
   assert.equal(canCreateInStore(world, known.id), false);
 });
 
-test('a server the agent cannot describe raises a note instead of vanishing silently', async () => {
+test('creates a notification when a server cannot be described instead of omitting it', async () => {
   const accountStore = catalog.stores[0];
   assert.ok(accountStore);
   const bridge: Bridge = {
@@ -1018,10 +1018,7 @@ test('a server the agent cannot describe raises a note instead of vanishing sile
         state: 'never-probed',
       },
     ],
-    // Never checked: the agent describes it fine but has no host to report,
-    // so the projection keeps it `never-probed`, its stores are hidden — and
-    // until now nothing said so anywhere. (A describe that *throws* is a
-    // different case and already raises a status-unavailable note.)
+    // Verify that an unprobed server with null host raises a never-probed notification.
     describeServerStatus: async () => ({
       profile: 'foks.example.net',
       configuredProbe: 'foks.example.net',
@@ -1055,10 +1052,10 @@ test('a server the agent cannot describe raises a note instead of vanishing sile
     `a never-probed note: ${JSON.stringify(world.notifications.map((n) => n.id))}`,
   );
   assert.equal(note.title, 'foks.example.net is locked');
-  assert.equal(note.action, 'Check');
+  assert.equal(note.action, 'Verify');
 });
 
-test('loadWorld does not read a roster through a whole-profile safety block', async () => {
+test('loadWorld does not fetch team rosters for blocked profiles', async () => {
   const storeId = '{"Team":{"profile":"foks.example.net","team_alias":"ops"}}';
   const blocked: CatalogDto = {
     profiles: ['foks.example.net'],
@@ -1128,7 +1125,7 @@ test('loadWorld does not read a roster through a whole-profile safety block', as
   assert.equal(world.notifications[0]?.title, 'foks.example.net is locked');
 });
 
-test('loadWorld does not read a roster for an inactive team', async () => {
+test('loadWorld does not fetch members for an inactive team', async () => {
   const storeId = '{"Team":{"profile":"foks.example.net","team_alias":"ops"}}';
   const accountId =
     '{"Account":{"profile":"foks.example.net","account_alias":"rae"}}';
@@ -1231,7 +1228,7 @@ test('loadWorld does not read a roster for an inactive team', async () => {
   );
 });
 
-test('native loadWorld derives leased and lease-free access per pinned protocol', async () => {
+test('loadWorld evaluates store access based on server lease validity and protocol requirements', async () => {
   assert.equal(signedLeaseState(101, 100), 'fresh');
   assert.equal(signedLeaseState(100, 100), 'lapsed');
   assert.equal(signedLeaseState(null, 100), 'unavailable');
@@ -1283,7 +1280,7 @@ test('native loadWorld derives leased and lease-free access per pinned protocol'
       })),
     describeServerStatus: async (profile) => {
       if (profile === 'failed')
-        throw new Error('passive status transport failed');
+        throw new Error('failed to retrieve server status');
       return {
         profile,
         configuredProbe: `${profile}.example`,
@@ -1317,7 +1314,7 @@ test('native loadWorld derives leased and lease-free access per pinned protocol'
   assert.deepEqual(
     world.stores.map((store) => store.id),
     stores.map((store) => store.id),
-    'local aliases remain inspectable while authenticated facts are suppressed',
+    'local aliases remain visible while unverified server contents are hidden',
   );
   assert.equal(
     world.servers.find((server) => server.id === 'fresh')?.state,
@@ -1343,7 +1340,7 @@ test('native loadWorld derives leased and lease-free access per pinned protocol'
   assert.match(
     world.notifications.find((note) => note.id === 'status-unavailable-failed')
       ?.detail ?? '',
-    /transport failed/,
+    /Server contents are unavailable until the connection status is verified./,
   );
 
   const racedWorld = await loadWorld(
@@ -1363,11 +1360,11 @@ test('native loadWorld derives leased and lease-free access per pinned protocol'
   assert.deepEqual(
     racedWorld.accounts.map((account) => account.store),
     ['account:fresh', 'account:v019'],
-    'stale account rows are discarded without blanking leased or lease-free available profiles',
+    'stale account rows are discarded without affecting active server accounts',
   );
 });
 
-test('loadWorld requires account identities only from available profiles', async () => {
+test('loadWorld only imports accounts belonging to active profiles', async () => {
   const stores = FIXTURE.stores.filter(
     (store) =>
       store.id === 'acct:personal' ||
@@ -1427,7 +1424,7 @@ test('loadWorld requires account identities only from available profiles', async
   assert.equal(rosterCalls, 0);
 });
 
-test('loadWorld suppresses lapsed rosters and enriches live self and named-group labels fail closed', async () => {
+test('loadWorld omits rosters for lapsed servers and enriches active member and team labels', async () => {
   const base = mockBridge(FIXTURE);
   let rosterCalls = 0;
   const bridge: Bridge = {
@@ -1476,7 +1473,7 @@ test('loadWorld suppresses lapsed rosters and enriches live self and named-group
   assert.equal(
     rosterCalls,
     1,
-    'Household read; inactive Homelab and lapsed Engineering do not',
+    'only active group rosters are requested; inactive and lapsed groups are skipped',
   );
   assert.equal(
     world.parties.some((party) => party.store === 'team:eng'),
@@ -1559,7 +1556,7 @@ test('loadWorld suppresses lapsed rosters and enriches live self and named-group
   );
 });
 
-test('loadWorld retains usable stores and items when group details fail operationally', async () => {
+test('loadWorld retains stores and items when group details encounter transient server errors', async () => {
   const base = mockBridge(FIXTURE);
   const failure = {
     code: 'rate-limited',
@@ -1612,7 +1609,7 @@ test('loadWorld retains usable stores and items when group details fail operatio
   );
 });
 
-test('loadWorld treats missing group capabilities as partial without exposing malformed errors', async () => {
+test('loadWorld handles disabled group capabilities gracefully without leaking internal errors', async () => {
   const base = mockBridge(FIXTURE);
   const capabilityBridge: Bridge = {
     ...base,
@@ -1666,12 +1663,12 @@ test('loadWorld treats missing group capabilities as partial without exposing ma
     loadWorld(malformedBridge),
     (error: unknown) =>
       error instanceof Error &&
-      error.message.includes('invalid group-detail error') &&
+      error.message.includes('unrecognized group-detail error') &&
       !error.message.includes('private implementation detail'),
   );
 });
 
-test('loadWorld still rejects cross-store group detail payloads', async () => {
+test('loadWorld rejects group detail payloads referencing mismatched store IDs', async () => {
   const base = mockBridge(FIXTURE);
   const bridge: Bridge = {
     ...base,
@@ -1693,7 +1690,7 @@ test('loadWorld still rejects cross-store group detail payloads', async () => {
   await assert.rejects(loadWorld(bridge), /roster for a different store/);
 });
 
-test('mock backup revocation binds identity, confirms, removes, and retries absent', async () => {
+test('mock revokeOwnerBackup validates alias, removes enrollment, and behaves idempotently on retry', async () => {
   const bridge = mockBridge(FIXTURE);
   const store = FIXTURE.stores.find(
     (candidate) =>
@@ -1735,7 +1732,7 @@ test('mock backup revocation binds identity, confirms, removes, and retries abse
   assert.equal(repeated.removedLocalEnrollment, true);
 });
 
-test('mock create is visible in the catalog and supports an exact-version read', async () => {
+test('mock createTextItem adds item to catalog and allows reading by specific version', async () => {
   const bridge = mockBridge(FIXTURE);
   await bridge.createTextItem({
     storeId: 'acct:personal',
@@ -1759,7 +1756,7 @@ test('mock create is visible in the catalog and supports an exact-version read',
   );
 });
 
-test('group create primitives require and retain explicit read and write roles', async () => {
+test('group item creation requires and preserves explicit read and write permissions', async () => {
   const bridge = mockBridge(FIXTURE);
   await bridge.createTextItem({
     storeId: 'team:eng',
@@ -1814,7 +1811,7 @@ test('group create primitives require and retain explicit read and write roles',
   assert.equal(
     created.some(({ path }) => path === '/shared/folder'),
     false,
-    'the native folder primitive does not become a fifth product item',
+    'folders are not listed as standalone items in the catalog',
   );
   await assert.rejects(
     bridge.createTextItem({
@@ -1846,7 +1843,7 @@ test('group create primitives require and retain explicit read and write roles',
   );
 });
 
-test('account creates omit role inputs while group edits and replacements preserve catalog roles', async () => {
+test('account item creation omits roles and item updates preserve existing group roles', async () => {
   const bridge = mockBridge(FIXTURE);
   await bridge.createTextItem({
     storeId: 'acct:personal',
@@ -1903,7 +1900,7 @@ test('account creates omit role inputs while group edits and replacements preser
   assert.deepEqual(replaced?.write, roleDto(file.write));
 });
 
-test('mock group creation publishes kind-bound authenticated entity ids', async () => {
+test('mock createGroup assigns prefixed team IDs based on group type', async () => {
   const bridge = mockBridge(FIXTURE);
   await bridge.createGroup({
     accountStoreId: 'acct:personal',
@@ -1929,7 +1926,7 @@ test('mock group creation publishes kind-bound authenticated entity ids', async 
   assert.equal(adhoc.team_id_hex.slice(0, 2), '14');
 });
 
-test('mock edit advances the version and exact reads return the replacement content', async () => {
+test('mock editTextItem increments item version and returns updated value on read', async () => {
   const bridge = mockBridge(FIXTURE);
   const original = FIXTURE.items.find(
     (item) =>
@@ -1959,7 +1956,7 @@ test('mock edit advances the version and exact reads return the replacement cont
   );
 });
 
-test('mock native-picker import survives the required catalog refresh', async () => {
+test('mock pickAndImportFile persists imported file across catalog refreshes', async () => {
   const bridge = mockBridge(FIXTURE);
   assert.deepEqual(
     await bridge.pickAndImportFile({
@@ -1976,7 +1973,7 @@ test('mock native-picker import survives the required catalog refresh', async ()
   assert.equal(picked.version, 1);
 });
 
-test('mock Resume marks the inactive group active for the refreshed catalog', async () => {
+test('mock resumeGroupCreation activates an inactive team', async () => {
   const bridge = mockBridge(FIXTURE);
   await bridge.resumeGroupCreation('team:homelab');
   const store = (await bridge.listCatalog()).stores.find(
@@ -1987,7 +1984,7 @@ test('mock Resume marks the inactive group active for the refreshed catalog', as
 });
 
 test('mock expelFederatedGroup requires both host ID and team ID to match', async () => {
-  const active = { ...FIXTURE.federation[0], active: true };
+  const active = { ...FIXTURE.federation[0]!, active: true };
   const bridge = mockBridge({ ...FIXTURE, federation: [active] });
   await assert.rejects(
     bridge.expelFederatedGroup({
@@ -2009,7 +2006,7 @@ test('mock expelFederatedGroup requires both host ID and team ID to match', asyn
   assert.equal((await bridge.listFederation(active.store)).length, 0);
 });
 
-test('the mock rejects roster and federation mutations for an active ad-hoc group', async () => {
+test('the mock rejects member and sharing updates for an active ad-hoc group', async () => {
   const world = {
     ...FIXTURE,
     stores: FIXTURE.stores.map((store) =>
@@ -2039,7 +2036,7 @@ test('the mock rejects roster and federation mutations for an active ad-hoc grou
   );
 });
 
-test('enqueueProfileWork runs same-profile work one at a time', async () => {
+test('enqueueProfileWork serializes tasks for the same profile', async () => {
   const bridge = mockBridge(FIXTURE);
   const seen: string[] = [];
   let release!: () => void;
@@ -2061,7 +2058,7 @@ test('enqueueProfileWork runs same-profile work one at a time', async () => {
   assert.deepEqual(seen, ['start-a', 'end-a', 'b']);
 });
 
-test('native loadWorld does not overlap group detail reads on one profile', async () => {
+test('native loadWorld serializes group detail requests per profile', async () => {
   const base = mockBridge(FIXTURE);
   let legacyCalls = 0;
   const active = new Map<string, number>();

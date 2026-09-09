@@ -170,9 +170,7 @@ impl FoksClient {
             Error::AccountRequest("device name is not valid after normalization"),
         )?;
         if merkle.root().hostchain.seqno == 0 {
-            return Err(Error::AccountRequest(
-                "Merkle root has no host-chain binding",
-            ));
+            return Err(Error::HostBinding("Merkle root has no host-chain binding"));
         }
         let operation_id = random_bytes()?;
         let username_commitment_key = random_bytes()?;
@@ -509,7 +507,7 @@ fn signup_passphrase_from_request(request: &[u8]) -> Result<Option<PassphraseUpd
         || call.method_position() != foks_rpc::REG_SIGNUP_METHOD_POSITION
     {
         return Err(Error::OperationBinding(
-            "persisted signup request targets another route",
+            "persisted signup request targets a different route",
         ));
     }
     Ok(DecodedSignupArgument::decode(call.argument())?.passphrase)

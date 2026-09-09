@@ -1,9 +1,8 @@
 /**
- * Who can read an item — ported from `wave6/shell.js:217-241`.
+ * Computes readable access for vault items based on member roles and rosters.
  *
- * "Readable by N" is always this computation (read role × roster), never
- * prose. An account store has no roster and nobody else in it, so it answers
- * `null` rather than a count: sharing anything means putting it in a team.
+ * Account stores return `null` as they are private to the account holder and
+ * do not have member rosters.
  */
 
 import { admits, parseRole, roleRank, visibilityOf } from './roles';
@@ -14,12 +13,12 @@ export function storeOf(world: World, ref: StoreRef): Store | undefined {
   return world.stores.find((store) => store.id === ref);
 }
 
-/** Every party on a store, in fixture order. */
+/** Returns all member parties belonging to the specified store. */
 export function partiesOf(world: World, ref: StoreRef): Party[] {
   return world.parties.filter((party) => party.store === ref);
 }
 
-/** A roster row the desktop can name safely in a member mutation. */
+/** Returns whether a member party can be modified or removed by the current user. */
 export function actionableGroupMember(world: World, party: Party): boolean {
   return Boolean(
     party.username &&
@@ -33,9 +32,8 @@ export function actionableGroupMember(world: World, party: Party): boolean {
 }
 
 /**
- * The least-authoritative actionable member, preserving roster order on ties.
- * Member visibility is live authority too: a lower band is safer than a
- * higher band before considering the next roster row.
+ * Selects the least-privileged actionable member in a group, prioritizing
+ * lower role rank and lower visibility bands, while preserving roster order on ties.
  */
 export function safestRemovalTarget(
   world: World,
@@ -63,11 +61,9 @@ export function safestRemovalTarget(
 }
 
 /**
- * Whether an admitted group's admission reports active.
- *
- * A party that is a user is always itself. A party that is a team reads
- * through an admission, and an admission that reports inactive reads nothing
- * here — so it is not a reader, however good its role looks.
+ * Determines whether a party has an active admission in the specified store.
+ * User parties are always active. Federated team parties require an active
+ * federation admission record.
  */
 export function admissionActive(
   world: World,
@@ -75,10 +71,7 @@ export function admissionActive(
   ref: StoreRef,
 ): boolean {
   if (party.party_kind === 'user') return true;
-  // The same admission `loadWorld` selects for this party: when the party is
-  // scoped to a host, the admission must be from that host. Matching on team
-  // id alone counted an admission from a different host as this party's,
-  // and listed the group as a live reader while its name stayed unresolved.
+  // When a party is host-scoped, the admission must match the specific remote host ID.
   const entries = world.federation.filter(
     (f) =>
       f.store === ref &&
@@ -117,10 +110,8 @@ export function peopleLabel(count: number): string {
 }
 
 /**
- * "5 people · 1 group" — a party that is a team is not a person.
- *
- * The groups half is dropped when there are none, so an all-user roster reads
- * "2 people" rather than "2 people · 0 groups".
+ * Formats a summary string of member users and federated groups
+ * (e.g., "5 people · 1 group" or "2 people").
  */
 export function peopleGroups(parties: readonly Party[]): string {
   const groups = parties.filter((p) => p.party_kind !== 'user').length;

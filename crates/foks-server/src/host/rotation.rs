@@ -53,7 +53,7 @@ pub fn stage_host_key_rotation(
             let entity = host_entity(&key)?;
             let mut operation_id = [0; 16];
             getrandom::fill(&mut operation_id)
-                .map_err(|_| Error::Key("operating-system entropy"))?;
+                .map_err(|_| Error::Key("failed to acquire operating-system entropy"))?;
             if let Err(error) = database.stage_host_key_rotation(
                 operation_id,
                 generation,
@@ -72,7 +72,7 @@ pub fn stage_host_key_rotation(
             }
             database
                 .active_host_rotation()?
-                .ok_or(Error::Config("staged host rotation disappeared"))?
+                .ok_or(Error::Config("staged host rotation record not found"))?
         }
     };
     validate_host_key_generations(database, provider)?;
@@ -274,13 +274,15 @@ fn construct_publication(
     }
     let protocol_time = now / 1_000;
     if protocol_time < current_wire_root.time {
-        return Err(Error::Config("host rotation time moved backwards"));
+        return Err(Error::Config(
+            "host rotation timestamp cannot precede current Merkle root timestamp",
+        ));
     }
     let host = EntityId::from_bytes(stored.host_id)?;
     let signer = host_entity(
         signers
             .get(signer_index)
-            .ok_or(Error::Config("hostchain signer index"))?,
+            .ok_or(Error::Config("hostchain signer index out of bounds"))?,
     )?;
     let hostchain_seqno = current_wire_root
         .hostchain
@@ -465,12 +467,12 @@ fn rotation_state(
             .public_entity_id
             .as_slice()
             .try_into()
-            .map_err(|_| Error::Config("stored old host public entity"))?,
+            .map_err(|_| Error::Config("invalid stored old host public entity ID"))?,
         new_public_entity_id: new
             .public_entity_id
             .as_slice()
             .try_into()
-            .map_err(|_| Error::Config("stored new host public entity"))?,
+            .map_err(|_| Error::Config("invalid stored new host public entity ID"))?,
         observation_not_before,
     })
 }

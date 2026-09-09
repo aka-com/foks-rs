@@ -29,7 +29,7 @@ code,.mono{font-family:var(--mono);font-size:.93em}
 .ellipsis{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 [hidden]{display:none!important}
 
-/* ---------- review scaffolding (outside the window) ---------- */
+/* ---------- Review Scaffolding ---------- */
 .review{width:min(1180px,96vw);border:1px dashed #a9b0bf;border-radius:10px;background:rgba(255,255,255,.55);padding:8px 12px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11.5px;color:#4d5563}
 .review b{font-size:10px;letter-spacing:.08em;text-transform:uppercase;margin-right:4px}
 .review .chip{border:1px solid #b9c0cc;background:#fff;border-radius:999px;padding:3px 9px;font-size:11px}
@@ -69,7 +69,7 @@ code,.mono{font-family:var(--mono);font-size:.93em}
 .section-label{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);font-weight:700;margin:14px 0 6px}
 .back{display:inline-flex;align-items:center;gap:4px;color:var(--accent-ink);font-size:12.5px;margin-bottom:8px}
 
-/* ---------- secondary sidebar (Items stores, Settings sections) ---------- */
+/* ---------- Secondary Sidebar ---------- */
 .side{width:224px;flex:0 0 224px;border-right:1px solid var(--line);background:var(--sidebar);overflow:auto;padding:10px}
 .side .group{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);font-weight:700;padding:10px 8px 4px}
 .side .server{font-size:11px;color:var(--muted);padding:6px 8px 2px;display:flex;align-items:center;gap:6px}

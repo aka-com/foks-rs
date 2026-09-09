@@ -1,12 +1,8 @@
 /**
- * The item page's toolbar — `01-vault.html`'s `toolbar` string, as controls.
+ * Toolbar displayed above the item list.
  *
- * New (one primary button over the kind menu) · the kind filter · Sort · list or
- * cards · the details toggle. The filter, the sort, the view and the panel
- * are navigation state, so each one is a deep link and survives a reload.
- *
- * New offers the four product kinds. The sheet binds an account create to its
- * fixed Owner roles or asks for both group roles explicitly.
+ * Provides controls for filtering by kind, sorting items, and toggling between
+ * list and grid views.
  */
 
 import type { ReactNode } from 'react';
@@ -50,7 +46,7 @@ export function NewItemButton({
     <MenuButton
       label="New"
       variant="primary"
-      menuLabel="What to create"
+      menuLabel="Create item"
       align="start"
     >
       {(close) => (
@@ -92,7 +88,7 @@ export function Toolbar({
     <div className="toolbar">
       <NewItemButton onNew={onNew} />
       <SegmentedControl<KindFilter>
-        label="Which kinds to list"
+        label="Filter items by kind"
         value={kind}
         onChange={onKind}
         items={[
@@ -105,9 +101,10 @@ export function Toolbar({
         ]}
       />
       <span className="spacer" />
+      {/* Sort selection menu trigger. */}
       <MenuButton
         label={SORT_LABELS[sort]}
-        menuLabel="Sort the list by"
+        menuLabel={`Sort by: ${SORT_LABELS[sort]}`}
         align="end"
       >
         {(close) => (
@@ -132,7 +129,7 @@ export function Toolbar({
         )}
       </MenuButton>
       <SegmentedControl<ViewMode>
-        label="How to show the items"
+        label="View display mode"
         variant="icon"
         value={view}
         onChange={onView}

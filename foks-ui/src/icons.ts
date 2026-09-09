@@ -1,22 +1,9 @@
 /**
- * The wave 6 mock's shared icon set, plus first-run's local door icon, ported from
- * `dev/foks-desktop/iteration/wave6/shell.js:112-144`.
- *
- * The mock stores each icon as a fragment of SVG markup and injects it with
- * `innerHTML` (`shell.js`'s `ic()`). React owns the DOM here and
- * `foks-ui/tests/react-boundary.test.ts` forbids that sink, so the same
- * geometry is stored **structurally** instead: one entry per SVG child
- * element, as `[tag, attributes]` — the shape `lucide` uses and
- * `ui/kit/icon.tsx` already renders. The path data is copied verbatim; only
- * the container changed.
- *
- * The wrapper `<svg>` (`viewBox`, `fill: none`, `stroke: currentColor`,
- * `stroke-width: 1.7`, round caps and joins) is supplied by
- * `./components/icon.tsx`, which mirrors what `shell.css`'s bare `svg` rule
- * gives every icon in the mock.
+ * Shared SVG icon definitions for the FOKS shell.
+ * Stored as structural element tuples ([tag, attributes]) rendered by Icon components.
  */
 
-/** One SVG child element: its tag and its attributes, as the mock wrote them. */
+/** Represents a single SVG child element definition as a tag and attribute record tuple. */
 export type IconElement = readonly [
   tag: 'path' | 'circle' | 'rect',
   attrs: Readonly<Record<string, string | number>>,

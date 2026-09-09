@@ -31,7 +31,7 @@ body {
   min-height: 0;
 }
 
-/* The window is the OS window now: no card, no rounding, no drop shadow. */
+/* Reset mockup borders, border-radius, and shadows for native window */
 #root > .window {
   width: 100%;
   height: 100%;
@@ -40,7 +40,7 @@ body {
   box-shadow: none;
 }
 
-/* The native macOS traffic lights float over an Overlay title bar. */
+/* Titlebar inset for native window controls */
 #root > .native-window > .titlebar {
   padding-left: 5.5rem;
 }
@@ -111,7 +111,7 @@ body {
   flex: 1 1 60%;
 }
 
-/* Group settings header. */
+/* Group hero header */
 .ghero {
   display: flex;
   align-items: center;
@@ -181,7 +181,7 @@ body {
   width: 30px;
 }
 
-/* Tabs: underline, quiet counts, a faint zero. */
+/* Navigation tabs and badge counters */
 .tabs {
   display: flex;
   align-items: flex-end;
@@ -244,7 +244,7 @@ body {
   color: var(--faint);
 }
 
-/* Roster, federation, and items tables. */
+/* Data and roster tables */
 .roster {
   max-width: 880px;
 }
@@ -720,7 +720,7 @@ body {
   margin-top: 8px;
 }
 
-/* First run: layout-only additions to the shared wave 6 shell. */
+/* Onboarding flow layout overrides */
 .first-run-main .body.pb {
   padding-bottom: 24px;
 }
@@ -1123,7 +1123,7 @@ body {
   border-width: 5.5px;
 }
 
-/* The one fact that distinguishes the two options. */
+/* Requirement badge for setup options */
 .need {
   display: inline-flex;
   align-items: center;
@@ -1151,7 +1151,7 @@ body {
   color: var(--accent-ink);
 }
 
-/* What the chosen path leads through — deferred until there is a choice. */
+/* Selected option summary container */
 .next {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -1229,7 +1229,7 @@ body {
   color: var(--muted);
 }
 
-/* A step whose name depends on a choice nobody has made yet. */
+/* Pending setup step indicator */
 .setup-step.pending {
   color: var(--muted);
 }
@@ -1389,7 +1389,7 @@ body {
   color: var(--ok-ink);
 }
 
-/* A prefix that matches so far: encouraging, but not yet a verification. */
+/* Partial match state during validation */
 .res.part {
   border-color: var(--amber-border);
   color: var(--amber-ink);
@@ -1530,7 +1530,7 @@ body {
   margin-top: 1px;
 }
 
-/* Until React mounts. Matches the shell's ground so there is no flash. */
+/* Placeholder container before React application mounts */
 .app-loading {
   flex: 1;
   display: grid;
@@ -1578,7 +1578,7 @@ body {
   color: var(--danger-ink);
 }
 
-/* ---------------------------------------------------------------- menus --
+/* Popover menus */
    The mock draws `.menu` absolutely inside its `.menuwrap`, which works
    because nothing in that page scrolls under it. Here the kit's `Popover`
    portals a menu to `#overlays` so a scrolling body or the details panel
@@ -1599,7 +1599,7 @@ body {
   right: auto;
 }
 
-/* ---------------------------------------------------------- card select --
+/* Card select dropdown */
    The dropdown form of the design's `.radio` card. `shell.css` has no
    collapsed variant of that row, so the trigger and the list are drawn here —
    but only with the card's own geometry and tokens, so an option in the list
@@ -1697,7 +1697,7 @@ body {
   color: var(--accent);
 }
 
-/* The card's own text block, in both the trigger and the list. */
+/* Typography for card select trigger and options */
 .card-select-trigger .t,
 .card-select-option .t {
   flex: 1;

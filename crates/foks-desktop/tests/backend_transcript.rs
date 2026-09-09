@@ -17,24 +17,12 @@ use foks_agent_proto::{
 
 const TEAM_ID: &str = "140000000000000000000000000000000000000000000000000000000000000000";
 
-/// A hang detector, not a throughput gate.
-///
-/// Every transcript here is a single `foks-desktop-backend` run against a
-/// socket this test owns, so the only failure the deadline can usefully catch
-/// is a backend that never exits. It must not double as a performance
-/// assertion: the largest transcript streams 84 MiB through
-/// `foks-agent-proto`'s JSON framing, and both sides of that framing are built
-/// unoptimized under `cargo test`. Profiling that case showed ~20 s of wall
-/// clock with ~19 s of it inside this harness's own `decode_upload_frame`
-/// calls and the backend blocked on socket backpressure behind them — the
-/// backend was never the slow half. A 15 s budget therefore measured how fast
-/// a debug-build JSON decoder drains a Unix socket on the runner of the day,
-/// and failed on a loaded machine while the protocol behaved correctly.
+/// Process deadline for backend transcript runs, generous enough to accommodate
+/// unoptimized debug-build stream decoding under test execution.
 const BACKEND_DEADLINE: Duration = Duration::from_secs(180);
 
-/// Per-frame socket budget. Unlike the whole-process deadline this one is
-/// bounded by a single message, so it stays tight enough to fail a wedged
-/// peer promptly.
+/// Per-frame socket timeout applied to individual frame transfers to detect
+/// unresponsive peer connections quickly.
 const FRAME_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn backend() -> PathBuf {
@@ -62,10 +50,8 @@ fn run_backend(socket: &Path, arguments: &[OsString]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    // Both pipes are drained while the child runs. Waiting for exit first
-    // would wedge any backend that writes more than one pipe buffer, and the
-    // deadline below would then report that self-inflicted stall as if the
-    // backend had hung.
+    // Drain stdout and stderr concurrently with child execution to prevent
+    // pipe buffer exhaustion stalls before the deadline expires.
     let mut child_stdout = child.stdout.take().unwrap();
     let mut child_stderr = child.stderr.take().unwrap();
     let drain_stdout = std::thread::spawn(move || {

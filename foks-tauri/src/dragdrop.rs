@@ -1,14 +1,8 @@
-//! The file-drop path, which is native rather than web-native.
+//! Native file-drop handling.
 //!
-//! `dragDropEnabled: true` in `tauri.conf.json` makes the *runtime* intercept
-//! the OS drag and hand Rust the dropped **paths**; in exchange HTML5 drag and
-//! drop is suppressed inside the window, so the drop zone's hover state has to
-//! come from here too. That fork is deliberate: with it `false` the webview
-//! would receive a pathless `File`, and the only way to upload would be to read
-//! the bytes into the renderer — which the secret-handling policy forbids.
-//!
-//! Only paths cross this boundary. Phase 3 opens each file in Rust and streams
-//! it through `AgentClient::put_kv_stream`; the renderer never sees the bytes.
+//! When `dragDropEnabled` is active, the runtime intercepts OS drag events and passes
+//! file paths directly to Rust. This allows file uploads via `AgentClient::put_kv_stream`
+//! without exposing file contents to the webview renderer.
 
 use serde::Serialize;
 use tauri::{DragDropEvent, Emitter as _, Manager as _, WindowEvent};
@@ -26,8 +20,7 @@ struct DropHover {
 
 /// Registers the drag-drop forwarder on the app's own window.
 ///
-/// Emission is scoped to that window rather than broadcast: `emit_to` names the
-/// label, so a future second window cannot start receiving drops by existing.
+/// Emission is scoped to the target window using `emit_to`.
 pub fn observe(window: &tauri::WebviewWindow) {
     let handle = window.app_handle().clone();
     let label = window.label().to_owned();
@@ -45,15 +38,12 @@ pub fn observe(window: &tauri::WebviewWindow) {
                 DropHover { hovering: false },
             ),
             DragDropEvent::Drop { paths, .. } => {
-                // The renderer can ask to import only one of these exact
-                // native paths, once. This prevents an injected script from
-                // turning the path-taking command into an arbitrary local
-                // file reader. Non-UTF-8 paths cannot cross the JSON boundary
-                // losslessly and are therefore omitted rather than mangled.
+                // Restrict imports to explicitly dropped native paths consumed once.
+                // Non-UTF-8 paths are omitted to preserve lossless path encoding.
                 let state = handle.state::<crate::commands::AppState>();
                 let paths = state.record_drop_paths(paths);
-                // The hover state is cleared first so a failed upload cannot
-                // leave the drop zone lit.
+                // Clear hover state before emitting drop paths to ensure the UI
+                // drop zone resets even if processing fails.
                 let cleared = handle.emit_to(
                     label.as_str(),
                     EVT_DROP_HOVER,
@@ -65,12 +55,11 @@ pub fn observe(window: &tauri::WebviewWindow) {
                 }
                 cleared.and(dropped)
             }
-            // wry's event is non-exhaustive; an unknown drag phase is not an
-            // error and must not be reported as one.
+            // Ignore unrecognized drag events from wry without logging an error.
             _ => Ok(()),
         };
         if let Err(error) = emitted {
-            tracing::warn!(%error, "a drag-drop event could not reach the FOKS window");
+            tracing::warn!(%error, "Failed to emit drag-drop event to window");
         }
     });
 }

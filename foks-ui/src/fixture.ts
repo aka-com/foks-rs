@@ -1,27 +1,12 @@
 /**
- * The desktop fixture, retained from the design iteration with its corrections
- * applied in place rather than patched on afterwards.
- *
- * Keep the people, servers, stores and items stable. Extend it; do not rename
- * it.
- *
- * The corrections (`shell.js:71-84`):
- *   1. Engineering has a second Admin, `priya.n`, so "Readable by" on an
- *      Admin-read item is 3 people and not a coincidence of one. It sits
- *      third in the roster, where `FX.parties.splice(2, 0, …)` put it.
- *   2. `locally_manageable` means "this party is a local user". `deploy-bot`
- *      is a user of foks.acme-corp.com like any other, so it is `true`; only
- *      the member team is not a user of this server.
- *   3. The fixture pins Acme's lease as lapsed, but a lapsed lease stops
- *      reads as well as writes, so Engineering would never be listed. The
- *      shell starts in the fresh world — `applyLease(…, 'fresh')` below,
- *      exactly what `shell.js`'s closing `setLease('fresh')` does.
+ * Mock data fixture representing servers, stores, parties, and items for
+ * local development and testing.
  */
 
 import { applyLease } from './model/lease';
 import type { World } from './model/types';
 
-/** The fixture before the lease world is chosen. */
+/** Base fixture data prior to applying lease configuration. */
 const RAW: World = {
   agent: { phase: 'Ready' },
   servers: [
@@ -133,7 +118,8 @@ const RAW: World = {
       version: 9,
       read: 'Owner',
       write: 'Owner',
-      value: 'user: rae\npassword: ••••••••••••\nurl: https://github.com/login',
+      value:
+        'username: rae\npassword: ••••••••••••\nurl: https://github.com/login',
     },
     {
       store: 'acct:personal',
@@ -330,7 +316,7 @@ const RAW: World = {
       scoped_host_id_hex: '9f31c2aa07',
       source_role: { role: 'Owner' },
       destination_role: { role: 'Member', visibility: 0 },
-      note: "a member group; change it from Engineering's Federation page (Groups), not from here",
+      note: 'Federated group: manage permissions in Engineering > Federation.',
     },
     // A service account is a user like any other.
     {
@@ -343,7 +329,7 @@ const RAW: World = {
         '01c93d2f8b17e4a0148ab7f2e60155c9a71c6f93d23140e5b839d1c0f60ba48e57',
       source_role: { role: 'Member', visibility: 0 },
       destination_role: { role: 'Member', visibility: 0 },
-      note: 'a service account — a user of foks.acme-corp.com like any other, so its role can be changed from here',
+      note: 'Service account managed directly on this server.',
     },
     {
       store: 'team:household',
@@ -412,7 +398,7 @@ const RAW: World = {
       title: 'foks.acme-corp.com is locked',
       detail:
         'The server’s check-in expired. Work and Engineering groups are unavailable until the agent renews it.',
-      action: 'Wait for the agent',
+      action: 'Check status',
     },
     {
       id: 'team-homelab',
@@ -460,11 +446,11 @@ export const FIXTURE: World = applyLease(RAW, 'fresh');
  */
 export const COPY = {
   lease_lapsed:
-    'This server is locked until the agent renews its check-in. Items on this server are hidden and cannot be changed. Other servers are unaffected.',
+    'This server is locked because its connection expired. Items on this server cannot be viewed or edited until the connection is renewed. Other servers remain available.',
   remove_item:
-    'FOKS removes the item only if its version has not changed. After removal, earlier versions cannot be read.',
+    'This item will be deleted if it has not been modified by someone else. Earlier versions will no longer be accessible.',
   personal_store_fixed:
-    'Your Personal vault has no roster and cannot be shared. To share an item, put it in a group.',
+    'Your Personal vault is private and cannot be shared. To share an item, move it to a group vault.',
   resumable:
-    'Select Resume to continue an interrupted operation. FOKS checks completed steps and does not repeat them.',
+    'Select Resume to continue where you left off. Completed steps will not be repeated.',
 } as const;

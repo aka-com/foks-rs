@@ -1,10 +1,7 @@
 /**
  * The FOKS shell's pure model.
  *
- * TypeScript only, on purpose: the kind rule and the reader computation are
- * client-side readings with no protocol meaning, and a second copy in Rust
- * would be a second truth. Everything here is a function of the `World` it is
- * handed — no module globals, no DOM, no bridge.
+ * Pure data models and domain helper functions for the FOKS shell.
  */
 
 export * from './types';

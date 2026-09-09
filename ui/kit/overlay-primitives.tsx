@@ -332,14 +332,8 @@ function RovingCollection({
     setFocusTarget(target ?? null);
   }, [initialFocus, itemSelector, kind]);
 
-  // Roles and tabindex are stamped in the layout effect above, but the focus
-  // itself has to wait. This collection is a child of the Popover/ContextMenu
-  // host, so its layout effect commits before the parent's — and the parent's
-  // is what positions the portal and clears the stylesheet's
-  // `visibility: hidden`. Focusing a hidden element is a no-op in a real
-  // browser, which would leave every anchored menu keyboard-dead. Passive
-  // effects run after every layout effect in the commit, so by here the menu
-  // is placed and visible.
+  // Focus after layout and positioning to prevent flicker.
+  // The menu must be visible before its focus target can receive focus.
   useEffect(() => {
     if (focusTarget?.isConnected) focusTarget.focus();
   }, [focusTarget]);

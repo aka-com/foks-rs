@@ -336,7 +336,7 @@
   <!-- TOKENS -->
   <section class="guide-section anchor" id="tokens">
     <h2>Design tokens</h2>
-    <p class="lead">The variables from <code>shell.css</code> that every component consumes. No component invents its own colour or type size.</p>
+    <p class="lead">Core design tokens from <code>shell.css</code> defining color palettes, typography, and surface layers.</p>
     <div class="demo swatches" id="tokenSwatches"></div>
   </section>
 
@@ -398,7 +398,7 @@
   <!-- CHIPS / TAGS / BADGES / AVATARS -->
   <section class="guide-section anchor" id="chips">
     <h2>Chips, tags, badges &amp; avatars</h2>
-    <p class="lead"><code>Chip</code> is a computed fact, <code>Tag</code> is a quieter classification, and <code>Badge</code> is a count on navigation rows. <code>Avatar</code> and <code>Stack</code> draw people and groups with deterministic colours.</p>
+    <p class="lead">Badges, chips, and tags display item statuses and counts. Avatars and stacks represent users and groups.</p>
 
     <div class="demo">
       <h3>Chips</h3>
@@ -476,7 +476,7 @@
   <!-- SELECTION -->
   <section class="guide-section anchor" id="selection">
     <h2>Selection controls</h2>
-    <p class="lead"><code>SegmentedControl</code>, <code>Tabs</code>, <code>RadioCard</code> and <code>Toggle</code> are the four ways the app lets a person choose or disclose.</p>
+    <p class="lead">Controls for filtering, switching views, and toggling detailed information.</p>
 
     <div class="demo col" style="align-items:flex-start;">
       <h3>Segmented control (text)</h3>
@@ -511,7 +511,7 @@
       <div class="radios" role="radiogroup" aria-label="Choose a store">
         <button class="radio on" role="radio" aria-checked="true">
           <span class="rb"></span>
-          <span class="t"><b>Personal</b><small>Your account vault; new items default to Owner</small></span>
+          <span class="t"><b>Personal</b><small>Private account vault</small></span>
         </button>
         <button class="radio" role="radio" aria-checked="false">
           <span class="rb"></span>
@@ -576,7 +576,7 @@
         <h2>foks.acme-corp.com is locked</h2>
         <p>The server’s check-in expired. Work and Engineering groups are unavailable until the agent renews it.</p>
         <p class="fn">Other servers are unaffected. You can still use your Personal vault.</p>
-        <div class="acts2"><button class="btn">Wait for the agent</button></div>
+        <div class="acts2"><button class="btn">Check connection</button></div>
       </div>
 
       <div class="notice">
@@ -589,9 +589,9 @@
 
     <div class="demo col" style="align-items:flex-start;">
       <h3>Bands</h3>
-      <div class="band"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16h.01"/></svg><span><b>Deferred</b> This product is not implemented yet; it will arrive in a later release.</span></div>
-      <div class="band stop"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16h.01"/></svg><span>The KV item changed; refresh before retrying.</span></div>
-      <div class="band info"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></svg><span><b>Proposed</b> New group items use the roles you select below.</span></div>
+      <div class="band"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16h.01"/></svg><span>This feature is not yet available.</span></div>
+      <div class="band stop"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16h.01"/></svg><span>This item was modified elsewhere; refresh before retrying.</span></div>
+      <div class="band info"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></svg><span>New group items use the roles selected below.</span></div>
     </div>
 
     <div class="demo" style="height:360px;align-items:stretch;justify-content:flex-start;flex-direction:column;flex-wrap:nowrap;">
@@ -647,11 +647,11 @@
       <div class="danger-zone" style="width:100%;">
         <div class="dz-head">Danger zone</div>
         <div class="irow">
-          <span class="v"><b>Remove profile</b><span class="sub">This removes the profile from the Console but retains its durable profile directory.</span></span>
+          <span class="v"><b>Remove profile</b><span class="sub">Removes the profile from the application while keeping local data intact.</span></span>
           <button class="btn danger">Remove</button>
         </div>
         <div class="irow">
-          <span class="v"><b>Reset hard state</b><span class="sub">This discards the rollback checkpoint and hard-state database, including the authenticated host pin.</span></span>
+          <span class="v"><b>Reset security state</b><span class="sub">Clears local security checkpoints and saved server verification pins.</span></span>
           <button class="btn danger">Reset</button>
         </div>
       </div>
@@ -709,7 +709,7 @@
           <div class="app-lock">
             <div class="app-lock-card">
               <h1>Unlock FOKS</h1>
-              <p>Authenticate with Touch ID or your Mac password to allow FOKS to connect to servers and read vault data.</p>
+              <p>Authenticate with Touch ID or your system password to unlock your vault.</p>
               <button class="btn primary">Unlock</button>
             </div>
           </div>

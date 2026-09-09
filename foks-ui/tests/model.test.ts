@@ -1,10 +1,5 @@
 /**
- * Goldens for the model port.
- *
- * Every number here is the wave 6 fixture's own, taken by running
- * `dev/foks-desktop/iteration/wave6/shell.js` under node and reading the
- * answers off it. **They are the specification.** If the port disagrees with
- * one, the port is wrong: go back to `shell.js`, not to this file.
+ * Unit tests for domain models, role arithmetic, store permissions, and formatting.
  */
 
 import assert from 'node:assert/strict';
@@ -46,25 +41,25 @@ import type { Item, World } from '../src/model';
 
 function item(world: World, key: string): Item {
   const found = world.items.find((candidate) => itemKey(candidate) === key);
-  assert.ok(found, `${key} is in the fixture`);
+  assert.ok(found, `item not found in fixture: ${key}`);
   return found;
 }
 
 function readerCount(world: World, key: string): number {
   const readers = readersOf(world, item(world, key));
-  assert.ok(readers, `${key} is in a team store`);
+  assert.ok(readers, `item must belong to a team store: ${key}`);
   return readers.length;
 }
 
 /* ------------------------------------------------------------------ roles -- */
 
-test('the role order is Member(-0x4000) < Member(0) < Admin < Owner', () => {
+test('roleRank orders Member with visibility below Admin and Owner', () => {
   assert.equal(roleRank('Member · visibility -16384'), 1);
   assert.equal(roleRank('Member'), 1);
   assert.equal(roleRank('Admin'), 2);
   assert.equal(roleRank('Owner'), 3);
 
-  // Within Member the band breaks the tie; across ranks it never applies.
+  // Visibility breaks ties within the Member role, but does not affect comparisons across different roles.
   assert.equal(
     admits('Member · visibility 0', 'Member · visibility -16384'),
     true,
@@ -80,10 +75,7 @@ test('the role order is Member(-0x4000) < Member(0) < Admin < Owner', () => {
   assert.equal(admits('Admin', 'Admin'), true);
   assert.equal(admits('Owner', 'Owner'), true);
 
-  // A role this client cannot parse is refused whichever side it is on. The
-  // needed side is the one that used to fail open: an unparseable `need`
-  // ranks 0, so a Member out-ranked it and was told it could read an item
-  // whose read role the client does not understand.
+  // Unparseable roles must fail closed on both candidate and required roles.
   assert.equal(admits('Member · visibility 0', 'Reader'), false);
   assert.equal(admits('Member · visibility -32768', 'Superuser'), false);
   assert.equal(admits('Owner', 'Reader'), false);
@@ -91,7 +83,7 @@ test('the role order is Member(-0x4000) < Member(0) < Admin < Owner', () => {
   assert.equal(admits('Reader', 'Reader'), false);
 });
 
-test('admits reads the structured role the roster carries', () => {
+test('admits supports structured role objects with visibility', () => {
   assert.equal(
     admits(
       { role: 'Member', visibility: 0 },
@@ -108,7 +100,7 @@ test('admits reads the structured role the roster carries', () => {
   );
 });
 
-test('parseRole normalises both wire shapes and refuses anything else', () => {
+test('parseRole accepts string and object role formats and rejects invalid roles', () => {
   assert.deepEqual(parseRole('Owner'), { kind: 'owner' });
   assert.deepEqual(parseRole('Admin'), { kind: 'admin' });
   assert.deepEqual(parseRole('Member'), { kind: 'member', visibility: 0 });
@@ -122,14 +114,14 @@ test('parseRole normalises both wire shapes and refuses anything else', () => {
   });
   assert.deepEqual(parseRole({ role: 'Owner' }), { kind: 'owner' });
 
-  // The product has no Reader, Manager, Viewer or Editor item role.
+  // Ensure standard non-FOKS role names are rejected.
   for (const invented of ['Reader', 'Manager', 'Viewer', 'Editor']) {
     assert.equal(parseRole(invented), null, invented);
     assert.equal(roleRank(invented), 0, invented);
   }
 });
 
-test('formatRole writes the roles the way the design does', () => {
+test('formatRole formats role objects into canonical display strings', () => {
   assert.equal(formatRole({ kind: 'owner' }), 'Owner');
   assert.equal(formatRole({ kind: 'admin' }), 'Admin');
   assert.equal(
@@ -144,7 +136,7 @@ test('formatRole writes the roles the way the design does', () => {
 
 /* ---------------------------------------------------------------- readers -- */
 
-test('Readable by is read role times roster, on the fixture s own numbers', () => {
+test('readerCount calculates eligible readers from item role and roster', () => {
   // production-token reads at Admin: sam.ortiz (Owner), rae.chen and priya.n
   // (Admin). dana.okafor and deploy-bot are Members; homelab is excluded.
   assert.equal(readerCount(FIXTURE, 'team:eng|/deploy/production-token'), 3);
@@ -164,7 +156,7 @@ test('Readable by is read role times roster, on the fixture s own numbers', () =
   );
 });
 
-test('an inactive federation admission is the only thing keeping homelab out', () => {
+test('activating a federated team admission grants item read access', () => {
   const homelab = partiesOf(FIXTURE, 'team:eng').find(
     (party) => party.party_kind === 'named-team',
   );
@@ -172,7 +164,7 @@ test('an inactive federation admission is the only thing keeping homelab out', (
   assert.equal(admissionActive(FIXTURE, homelab, 'team:eng'), false);
   assert.equal(admits(homelab.destination_role, 'Member · visibility 0'), true);
 
-  // Flip the admission active and the count goes to six — nothing else changed.
+  // Activating federation admission increments reader count.
   const admitted: World = {
     ...FIXTURE,
     federation: FIXTURE.federation.map((entry) => ({ ...entry, active: true })),
@@ -206,14 +198,14 @@ test('admitted groups fail closed when the matching admission is missing or ambi
   );
 });
 
-test('an account store answers null rather than a count', () => {
+test('readersOf returns null for account store items', () => {
   assert.equal(
     readersOf(FIXTURE, item(FIXTURE, 'acct:personal|/logins/github.com')),
     null,
   );
 });
 
-test('a party that is a team is not a person', () => {
+test('peopleGroups formats counts of individuals and teams separately', () => {
   assert.equal(
     peopleGroups(partiesOf(FIXTURE, 'team:eng')),
     '5 people · 1 group',
@@ -226,7 +218,7 @@ test('a party that is a team is not a person', () => {
   );
 });
 
-test('a party names itself by username, team name, then id', () => {
+test('partyName falls back from username to team name and identifier', () => {
   const [sam, , , , homelab] = partiesOf(FIXTURE, 'team:eng');
   assert.equal(partyName(sam), 'sam.ortiz');
   assert.equal(partyName(homelab), 'homelab @ foks.example.net');
@@ -234,7 +226,7 @@ test('a party names itself by username, team name, then id', () => {
 
 /* ------------------------------------------------------------------ kinds -- */
 
-test('the kind rule reads Secrets as Passwords or Resources', () => {
+test('kindOf classifies Secret items as Password or Resource based on path and content', () => {
   // Under /logins/ — a Password however its value reads.
   assert.equal(
     kindOf(item(FIXTURE, 'acct:personal|/logins/github.com')),
@@ -258,7 +250,7 @@ test('the kind rule reads Secrets as Passwords or Resources', () => {
     kindOf(item(FIXTURE, 'acct:personal|/agents/anthropic-api-key')),
     'Resource',
   );
-  // File and Link are node types, not readings.
+  // File and Link items preserve their declared kinds.
   assert.equal(
     kindOf(item(FIXTURE, 'acct:personal|/documents/passport-scan.pdf')),
     'File',
@@ -267,7 +259,7 @@ test('the kind rule reads Secrets as Passwords or Resources', () => {
   assert.equal(kindOf(item(FIXTURE, 'acct:personal|/ssh')), 'Folder');
 });
 
-test('isLogin is the /logins/ Password, not every Password', () => {
+test('isLogin returns true only for items under /logins/', () => {
   assert.equal(
     isLogin(item(FIXTURE, 'acct:personal|/logins/github.com')),
     true,
@@ -279,14 +271,14 @@ test('isLogin is the /logins/ Password, not every Password', () => {
   assert.equal(isLogin(item(FIXTURE, 'acct:personal|/latest-key')), false);
 });
 
-test('rtype names the node type the kind is a reading of', () => {
+test('rtype maps UI item kinds to underlying node storage types', () => {
   assert.equal(rtype({ kind: 'Secret' }), 'small_file');
   assert.equal(rtype({ kind: 'File' }), 'file');
   assert.equal(rtype({ kind: 'Link' }), 'symlink');
   assert.equal(rtype({ kind: 'Folder' }), 'directory');
 });
 
-test('paths split into a name and a folder chip', () => {
+test('nameOf and prefixOf extract filename and parent directory from path', () => {
   assert.equal(nameOf('/logins/github.com'), 'github.com');
   assert.equal(prefixOf('/logins/github.com'), 'logins');
   assert.equal(nameOf('/latest-key'), 'latest-key');
@@ -296,7 +288,7 @@ test('paths split into a name and a folder chip', () => {
 
 /* ----------------------------------------------------------------- format -- */
 
-test('sizes read the way the design writes them', () => {
+test('fmtSize formats byte counts with standard human-readable units', () => {
   assert.equal(fmtSize(0), '0 B');
   assert.equal(fmtSize(142), '142 B');
   assert.equal(fmtSize(999), '999 B');
@@ -326,7 +318,7 @@ test('a name always gets the same avatar colour', () => {
 
 /* ------------------------------------------------------------------ lease -- */
 
-test('the shell starts in the fresh lease world', () => {
+test('fixture initializes with fresh lease state', () => {
   assert.equal(FIXTURE.leaseState, 'fresh');
   const acme = FIXTURE.servers.find((server) => server.id === 'acme');
   assert.deepEqual(acme?.lease, { state: 'fresh', expires_in: '12 d' });
@@ -400,7 +392,7 @@ test('group item changes require one authenticated local party that admits the w
   );
 });
 
-test('a lapsed lease stops reads with writes, and only on that server', () => {
+test('lapsed lease disables reads and writes for affected server stores', () => {
   const lapsed = applyLease(FIXTURE, 'lapsed');
 
   assert.equal(lapsed.leaseState, 'lapsed');
@@ -411,15 +403,15 @@ test('a lapsed lease stops reads with writes, and only on that server', () => {
   assert.equal(storeReadable(lapsed, 'acct:personal'), true);
   assert.equal(storeReadable(lapsed, 'team:household'), true);
 
-  // Folders are not items; Acme's four items and Homelab's none drop out.
+  // Folders and items on lapsed servers are excluded from the catalog.
   assert.equal(catalog(FIXTURE).length, 14);
   assert.equal(catalog(lapsed).length, 10);
 
-  // applyLease is pure: the world it was handed did not move.
+  // applyLease does not mutate the input state.
   assert.equal(FIXTURE.leaseState, 'fresh');
   assert.equal(storeReadable(FIXTURE, 'team:eng'), true);
 
-  // And it round-trips.
+  // Lease restoration round-trips correctly.
   assert.equal(storeReadable(applyLease(lapsed, 'fresh'), 'team:eng'), true);
 });
 
@@ -469,7 +461,7 @@ test('navigation orders vaults, named groups, then ad-hoc shares', () => {
   );
 });
 
-test('the safest removal target comes from live authority with roster order as the tie-break', () => {
+test('safestRemovalTarget selects member with lowest role rank, breaking ties by roster order', () => {
   assert.equal(
     safestRemovalTarget(FIXTURE, 'team:eng')?.username,
     'dana.okafor',
@@ -505,7 +497,7 @@ test('the safest removal target comes from live authority with roster order as t
   );
 });
 
-test("an admission from another host is not this scoped party's admission", () => {
+test('admissionActive rejects federation admissions with mismatching host IDs', () => {
   const homelab = FIXTURE.parties.find(
     (party) => party.party_kind !== 'user' && party.scoped_host_id_hex,
   );
@@ -517,9 +509,7 @@ test("an admission from another host is not this scoped party's admission", () =
     (entry) => entry.remote_team_id_hex === homelab.party_id_hex,
   );
   assert.ok(own);
-  // The same admission, active, but recorded from a different host: `loadWorld`
-  // would not select it for this party, and neither may the reader check —
-  // it used to count it and list the group as a live reader.
+  // Active admissions recorded from a different host must not grant access.
   const elsewhere = {
     ...own,
     remote_host_id_hex: 'ffff-not-this-host',
@@ -544,7 +534,7 @@ test("an admission from another host is not this scoped party's admission", () =
 });
 
 test('prefixOf yields no prefix for a path with no slash', () => {
-  // `lastIndexOf` is -1 here and `slice(1, -1)` chopped both ends off the name.
+  // Paths without directory slashes have no parent prefix.
   assert.equal(prefixOf('noSlash'), '');
   assert.equal(prefixOf('/top'), '');
   assert.equal(prefixOf('/logins/github.com'), 'logins');
@@ -563,16 +553,13 @@ test('a never-probed server is a stopped store, not a normal one', () => {
         : server,
     ),
   };
-  // `loadWorld` hides this server's stores exactly as it hides a lapsed one's;
-  // describing it as `normal` drew an undimmed row over an unexplained empty list.
+  // Never-probed servers must be treated as inactive rather than normal.
   assert.equal(storeDescriptionState(world, store), 'never-probed');
   assert.equal(storeDescriptionState(FIXTURE, store), 'normal');
 });
 
 test('every fixture admission names a profile, not an address', () => {
-  // `remote_profile` is the profile name as the agent records it. The fixture
-  // used to store the server's address here, which is why the pin lookup
-  // once had to try the address too.
+  // Verify that remote_profile references a known server profile ID rather than an address.
   for (const entry of FIXTURE.federation) {
     assert.ok(
       FIXTURE.servers.some((server) => server.id === entry.remote_profile),

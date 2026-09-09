@@ -312,7 +312,9 @@ impl Database {
             params![token_hash, activation_hash],
         )?;
         if updated != 1 {
-            return Err(Error::Invalid("team-admin token activation transition"));
+            return Err(Error::Invalid(
+                "team-admin token already activated or invalid",
+            ));
         }
         transaction.commit()?;
         Ok(Some(authority))

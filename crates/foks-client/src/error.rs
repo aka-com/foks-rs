@@ -10,9 +10,9 @@ pub enum Error {
     NoAddress(String),
     #[error("TCP connection to every resolved address failed: {0}")]
     Connect(std::io::Error),
-    #[error("FOKS operation was cancelled")]
+    #[error("FOKS operation cancelled")]
     Cancelled,
-    #[error("FOKS operation deadline was exceeded")]
+    #[error("FOKS operation deadline exceeded")]
     DeadlineExceeded,
     #[error("FOKS transport configuration failed: {0}")]
     Transport(&'static str),
@@ -66,11 +66,13 @@ pub enum Error {
     PinnedService(&'static str),
     #[error("invalid or excessive FOKS KV response: {0}")]
     KvResponse(&'static str),
-    #[error("invalid FOKS software-account request: {0}")]
+    #[error("invalid FOKS KV request: {0}")]
+    KvRequest(&'static str),
+    #[error("invalid FOKS account or user request: {0}")]
     AccountRequest(&'static str),
     #[error("invalid FOKS team request: {0}")]
     TeamRequest(&'static str),
-    #[error("invalid FOKS scheduler configuration: {0}")]
+    #[error("FOKS scheduler error: {0}")]
     Scheduler(&'static str),
 }
 

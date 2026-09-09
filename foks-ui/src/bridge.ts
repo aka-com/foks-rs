@@ -1,10 +1,8 @@
 /**
  * The only seam between the FOKS webview and the local agent.
  *
- * Tauri's generic `invoke<T>` is only a compile-time assertion. Every native
- * response therefore passes through the runtime decoders below before React
- * can see it. A Rust/TypeScript rename fails closed at this boundary instead
- * of becoming half-populated secret-manager UI.
+ * Tauri's generic `invoke<T>` does not validate types at runtime. Native
+ * responses pass through runtime decoders before entering the UI state.
  */
 
 import { invoke } from '@tauri-apps/api/core';
@@ -113,7 +111,7 @@ export type CatalogFailureDto =
   | { scope: 'store'; profile: string; store: string; error: CommandError };
 
 export interface ItemRequest {
-  /** Opaque canonical JSON emitted by Rust; never reconstruct this in JS. */
+  /** Canonical store identifier managed by the native agent. */
   storeId: StoreRef;
   path: string;
   version: number;
@@ -138,7 +136,7 @@ export interface MutationResponse {
   applied: boolean;
 }
 
-/** Strict role grammar accepted by the native group-write boundary. */
+/** Valid role formats accepted when writing group items. */
 export type KvRoleInput = 'Owner' | 'Admin' | `Member:${number}`;
 
 export interface CreateRoleRequest {
@@ -171,7 +169,7 @@ export interface EditTextRequest {
   storeId: StoreRef;
   path: string;
   value: string;
-  /** The CAS precondition: the write is refused unless this is still current. */
+  /** Item version expected by the write to prevent concurrent overwrites. */
   version: number;
 }
 
@@ -180,12 +178,12 @@ export type RemoveItemRequest = ItemRequest;
 export interface ImportDroppedFileRequest extends CreateRoleRequest {
   storeId: StoreRef;
   path: string;
-  /** A path registered by Rust from the native drop event, consumed once. */
+  /** Path registered from a native file drop event. */
   sourcePath: string;
 }
 
 export interface ReplaceDroppedFileRequest extends ItemRequest {
-  /** A path registered by Rust from the native drop event, consumed once. */
+  /** Path registered from a native file drop event. */
   sourcePath: string;
 }
 
@@ -228,7 +226,7 @@ export interface ExpelFederatedGroupRequest {
 
 export interface CheckedProfileResponse {
   profile: string;
-  /** A new profile inserts its pin; a reused profile can advance or retain it. */
+  /** Indicates whether the server identity was newly added, updated, or unchanged. */
   acceptance: 'inserted' | 'advanced' | 'unchanged';
   lookupName: string;
   canonicalName: string;
@@ -276,7 +274,7 @@ export interface FirstRunPassphraseRequest {
 
 export interface BackupPhraseResponse {
   backupAlias: string;
-  /** Ephemeral secret: callers must never put this in a checkpoint. */
+  /** Ephemeral recovery phrase; should not be cached or persisted. */
   phrase: string;
 }
 
@@ -306,9 +304,9 @@ export interface ServerStatusSnapshot {
   profile: string;
   configuredProbe: string;
   host: StoredHost | null;
-  /** Whether this profile's pinned protocol requires a compatibility lease. */
+  /** Whether this server requires a compatibility session lease. */
   leaseRequired: boolean;
-  /** Unix seconds from the signed lease; null means the agent has none. */
+  /** Expiration timestamp of the signed lease in Unix seconds, or null if unleased. */
   leaseExpiresAt: number | null;
 }
 
@@ -317,7 +315,7 @@ export interface AppInfo {
   agentSocket: string;
   /** Profile prepared and authenticated by the launcher before opening the app. */
   managedProfile?: string;
-  /** macOS Computer Name, the same string System Settings shows for this Mac. */
+  /** macOS Computer Name configured in System Settings. */
   computerName?: string;
 }
 
@@ -360,7 +358,7 @@ export interface CheckedServer extends StoredHost {
 
 export interface AccountDevice {
   id: string;
-  /** Optional authenticated name supplied by newer agents. */
+  /** Authenticated device name reported by the agent, if available. */
   name?: string;
   role: 'owner' | 'admin' | 'member';
   current: boolean;
@@ -380,7 +378,7 @@ export interface BackupRevocation extends BackupEnrollment {
 
 export interface PairingOffer {
   accountAlias: string;
-  /** Ephemeral: never persist or copy automatically. */
+  /** Ephemeral pairing phrase; not persisted. */
   phrase: string;
 }
 
@@ -400,7 +398,7 @@ export interface ResetPreview {
   profile: string;
   resumables: PendingOperation[];
   artifacts: { kind: string; entries: number; bytes: number }[];
-  /** Ephemeral, one-use authorization for exactly this preview. */
+  /** Single-use confirmation token valid only for this reset preview. */
   token: string;
   expiresInSeconds: number;
 }
@@ -509,7 +507,7 @@ export type YubiCommand =
       };
     };
 
-/** Mock-only review facts. Ordinary production builds eliminate their module. */
+/** Mock fixtures used for local development and testing. */
 export interface FirstRunFixturePath {
   profile: string;
   accountAlias: string;
@@ -543,9 +541,9 @@ export interface Bridge {
   unlockApp(): Promise<AppLockState>;
   agentStatus(): Promise<AgentStatus>;
   appInfo(): Promise<AppInfo>;
-  /** Catalog includes stores. Do not race it with `list_stores`: both cancel. */
+  /** Returns the full catalog including stores. Mutually exclusive with `listStores`. */
   listCatalog(): Promise<CatalogDto>;
-  /** Store-only refresh; callers must not race it with `listCatalog`. */
+  /** Returns store metadata only. Mutually exclusive with `listCatalog`. */
   listStores(): Promise<CatalogDto>;
   listServers(): Promise<Server[]>;
   listAccounts(): Promise<Account[]>;
@@ -729,10 +727,8 @@ const pendingServerStatuses = new WeakMap<
 const profileWork = new WeakMap<Bridge, Map<string, Promise<void>>>();
 
 /**
- * The agent tries the per-profile lock and does not wait. Overlapping UI
- * reads for one profile therefore fail with `profile-busy` instead of
- * queuing. Run `work` after other profile-scoped UI work for this bridge
- * and profile has finished, so the UI can wait behind a loading state.
+ * Queues profile-scoped requests sequentially to prevent concurrent
+ * requests from failing with `profile-busy`.
  */
 export function enqueueProfileWork<T>(
   bridge: Bridge,
@@ -924,7 +920,7 @@ function decodeServer(value: unknown, at: string): Server {
     throw new Error(`${at}.state is not a server state`);
   }
   if (item.lease !== null)
-    throw new Error(`${at}.lease must be null until lease facts exist`);
+    throw new Error(`${at}.lease must be null when no lease is active`);
   return {
     id: string(item.id, `${at}.id`),
     name: string(item.name, `${at}.name`),
@@ -1288,7 +1284,7 @@ export function decodeServerStatus(value: unknown): ServerStatusSnapshot {
   };
   if (!status.leaseRequired && status.leaseExpiresAt !== null) {
     throw new Error(
-      'describe_server_status returned a lease for a lease-free protocol',
+      'describe_server_status returned an expiration timestamp for a protocol that does not use leases',
     );
   }
   return status;
@@ -1412,13 +1408,13 @@ export function decodeAppLockState(value: unknown): AppLockState {
     throw new Error('app_lock_state.mechanism is not supported');
   }
   if (locked && !available) {
-    throw new Error('an unavailable app lock cannot be armed');
+    throw new Error('app_lock_state cannot be locked when lock is unavailable');
   }
   if (
     (available && mechanism === 'none') ||
     (!available && mechanism !== 'none')
   ) {
-    throw new Error('app_lock_state capability and mechanism disagree');
+    throw new Error('app_lock_state capability and mechanism are incompatible');
   }
   if ((!available && !unavailableReason) || (available && unavailableReason)) {
     throw new Error('app_lock_state availability reason is inconsistent');
@@ -1749,27 +1745,26 @@ function notificationsOf(
   catalog: CatalogDto,
   servers: readonly Server[],
 ): Notification[] {
-  // Every state that hides a server's stores gets a note, including
-  // `never-probed`: its contents were dropped just the same, but nothing
-  // said so anywhere.
+  // Generate a notification for any server state that hides stores,
+  // including unverified servers.
   const stopped: Partial<
     Record<Server['state'], { detail: string; action: string }>
   > = {
     'lease-lapsed': {
-      detail: `The server's check-in expired. Its stores are hidden until the agent renews it.`,
-      action: 'Wait for the agent',
+      detail: `The server session has expired. Vaults are unavailable until reconnected.`,
+      action: 'Reconnect',
     },
     'lease-unavailable': {
-      detail: `The agent has no signed check-in for this server. Its stores are hidden until it gets one.`,
+      detail: `Unable to verify connection with this server. Vaults are unavailable until verified.`,
       action: 'Inspect',
     },
     blocked: {
-      detail: `The server's history no longer matches what this Mac pinned. Its stores are hidden. Open the server to see the reported error.`,
+      detail: `Server verification failed because its history does not match the pinned record. View server details to review the error.`,
       action: 'Inspect',
     },
     'never-probed': {
-      detail: `This server has not been checked. Its stores are hidden until it is checked and its identity pinned.`,
-      action: 'Check',
+      detail: `This server has not been verified yet. Check the server to establish a connection and view its contents.`,
+      action: 'Verify',
     },
   };
   const notes: Notification[] = servers.flatMap((server) => {
@@ -1791,7 +1786,7 @@ function notificationsOf(
       severity: failure.error.fatal ? 'crit' : 'warn',
       title:
         failure.scope === 'store'
-          ? `Could not list one store on ${failure.profile}`
+          ? `Could not load vault on ${failure.profile}`
           : `Could not load ${failure.source} on ${failure.profile}`,
       detail: failure.error.message,
       action: failure.error.retryable ? 'Retry' : 'Inspect',
@@ -2199,7 +2194,7 @@ export async function selectBridge(): Promise<Bridge> {
     return mockBridge();
   }
   throw new Error(
-    'This production build must run inside the FOKS desktop host.',
+    'FOKS desktop host environment is required.',
   );
 }
 
@@ -2224,7 +2219,7 @@ function recoverableGroupDetailFailure(
   ) {
     if (typed.code === 'invalid-command-error') {
       throw new Error(
-        'The local agent returned an invalid group-detail error.',
+        'The agent returned an unrecognized group-detail error.',
       );
     }
     throw typed;
@@ -2238,7 +2233,7 @@ function recoverableGroupDetailFailure(
   };
 }
 
-/** Load once. `list_catalog` already includes stores, so no cancelling race. */
+/** Load the current world state. */
 export async function loadWorld(
   bridge: Bridge,
   base = bridge.fixtureWorld,
@@ -2276,8 +2271,7 @@ export async function loadWorld(
       (state) => state.profile === profile && state.accountsComplete,
     ),
   );
-  // A profile safety block is whole-server. Do not issue follow-up roster
-  // reads against it merely to construct the screen that explains the block.
+  // When a server profile is blocked, skip roster queries for that server.
   const blockedProfiles = new Set(response.blockedProfiles);
   const listedServers = await bridge.listServers();
   const statusResults = bridge.native
@@ -2302,7 +2296,7 @@ export async function loadWorld(
                 error:
                   error instanceof Error
                     ? error.message
-                    : 'The signed server status was unavailable.',
+                    : 'Server status was unavailable.',
               };
             }
           }),
@@ -2338,9 +2332,8 @@ export async function loadWorld(
       .filter((server) => server.state !== 'ok')
       .map((server) => server.id),
   );
-  // Inactive teams stay in the catalog so Finish setup can resume them, but
-  // ListTeamMembers and federation fail closed until creation finishes. Skip
-  // those reads the same way the catalog skips KV for `active: false`.
+  // Inactive teams cannot query members or federation until setup is complete;
+  // skip those reads.
   const teams = liveStores.filter(
     (store) =>
       store.kind === 'team' &&
@@ -2489,9 +2482,7 @@ export async function loadWorld(
             : bridge.native
               ? undefined
               : party.label,
-        // `remote_profile` is the profile name; the reader sees the server's
-        // address, resolved here, so the data can be exact without the name
-        // turning into `homelab @ personal`.
+        // Resolve the remote server's display name rather than its internal profile identifier.
         team_name:
           admissions.length === 1
             ? `${admissions[0].remote_team_alias} @ ${servers.find((server) => server.id === admissions[0].remote_profile)?.name ?? admissions[0].remote_profile}`
@@ -2551,14 +2542,16 @@ export async function loadWorld(
       ...[...statusFailures].map(([profile, message]) => ({
         id: `status-unavailable-${profile}`,
         severity: 'crit' as const,
-        title: `Signed status for ${profile} is unavailable`,
-        detail: `${message} Nothing on this server is listed until a usable signed expiry is available.`,
+        title: `Status for ${profile} is unavailable`,
+        detail: `${message} Server contents are unavailable until the connection status is verified.`,
         action: 'Inspect',
       })),
       ...groupDetailFailures.map((failure) => ({
         id: `group-${failure.source}-unavailable-${failure.store}`,
         severity: 'warn' as const,
-        title: `Group ${failure.source} is unavailable`,
+        title: failure.source === 'roster'
+          ? 'Group member list is unavailable'
+          : 'Group shared access is unavailable',
         detail: failure.message,
         action: failure.retryable ? 'Refresh' : 'Inspect',
       })),
@@ -2572,7 +2565,7 @@ export async function loadWorld(
   };
 }
 
-/** Convert either fixture role shape to the command contract's role shape. */
+/** Converts model roles to the command DTO role format. */
 export function roleDto(role: RoleWire): RoleDto {
   const parsed = parseRole(role);
   if (!parsed) throw new Error('fixture role is invalid');

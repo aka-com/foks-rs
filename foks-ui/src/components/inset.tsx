@@ -1,11 +1,8 @@
 /**
- * The bordered card of labelled rows the design uses twice.
+ * Grouped table container styled in the macOS system appearance.
  *
- * `shell.css` draws it in two places with the same geometry and two class
- * names: `.inset > .fr` in a sheet's field block, and `.prev > .irow` in the
- * details panel's preview. One component covers both — the variant chooses
- * the class pair and tells its rows which one they are in through context, so
- * a row cannot end up wearing the other's class.
+ * Supports standard field rows and item preview rows while keeping their
+ * label, value, and action columns aligned.
  */
 
 import {

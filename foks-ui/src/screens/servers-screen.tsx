@@ -1,11 +1,5 @@
 /**
- * The Servers section of Settings.
- *
- * A list of every server this Mac knows, then one server at a time. Servers
- * used to be a page of its own; it is drawn the way the other Settings
- * sections are now — a `SectionLabel` and a `settings-inset` per topic, small
- * buttons in the row's action slot, and a `Band` for the state that stops
- * work — so the controls are the same ones with less furniture around them.
+ * The Servers section of Settings, displaying configured servers and detailed server state.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -55,18 +49,18 @@ interface Props {
 type Sheet = 'add' | 'reset' | 'forget' | null;
 
 const expires = (value: number | null): string => {
-  if (value === null) return 'No signed expiry is available';
+  if (value === null) return 'No expiration date';
   const date = new Date(value * 1000);
   return Number.isFinite(date.getTime())
     ? new Intl.DateTimeFormat(undefined, {
         dateStyle: 'medium',
         timeStyle: 'short',
       }).format(date)
-    : `Unix time ${value} seconds`;
+    : 'Invalid date';
 };
-/** The row's compact form: "Sep 8, 9:14 AM" — the year is noise in a list. */
+/** Formats expiration timestamps for compact server row displays. */
 const expiresShort = (value: number | null): string => {
-  if (value === null) return 'no signed expiry';
+  if (value === null) return 'no expiration';
   const date = new Date(value * 1000);
   return Number.isFinite(date.getTime())
     ? new Intl.DateTimeFormat(undefined, {
@@ -75,14 +69,14 @@ const expiresShort = (value: number | null): string => {
         hour: 'numeric',
         minute: '2-digit',
       }).format(date)
-    : `Unix time ${value}`;
+    : 'Unknown date';
 };
 const acceptanceText = (value: CheckedServer['acceptance']): string =>
   value === 'inserted'
-    ? 'New pin'
+    ? 'Server identity pinned'
     : value === 'advanced'
-      ? 'Pinned history advanced safely'
-      : 'Pinned history unchanged';
+      ? 'Server verification updated'
+      : 'Server verification unchanged';
 
 function serverFor(
   world: World,
@@ -93,7 +87,7 @@ function serverFor(
     : undefined;
 }
 
-/** The five states a server can be in, and the one word each is called. */
+/** UI state representing server health and connectivity. */
 type ServerUiState =
   'checked' | 'unprobed' | 'lapsed' | 'unavailable' | 'blocked' | 'pending';
 
@@ -102,11 +96,11 @@ const STATE_LABEL: Readonly<Record<ServerUiState, string>> = {
   unprobed: 'Never checked',
   lapsed: 'Check-in expired',
   unavailable: 'Status unknown',
-  blocked: 'History changed',
-  pending: 'Reading status',
+  blocked: 'Untrusted',
+  pending: 'Checking status',
 };
 
-/** A stopped server is "locked": no reads, whatever stopped it. */
+/** Returns true if the server state blocks read and write operations. */
 const isLocked = (state: ServerUiState): boolean =>
   state === 'lapsed' || state === 'unavailable' || state === 'blocked';
 
@@ -151,7 +145,7 @@ function StatusChip({ state }: { state: ServerUiState }): ReactNode {
   );
 }
 
-/** The server mark, with the dot that carries the state's colour. */
+/** Status indicator icon for a server. */
 function ServerMark({ state }: { state: ServerUiState }): ReactNode {
   const locked = isLocked(state);
   return (
@@ -162,7 +156,7 @@ function ServerMark({ state }: { state: ServerUiState }): ReactNode {
   );
 }
 
-/** Where the section lives, with or without a server open. */
+/** Returns the location object for the servers section or a specific server profile. */
 const servers = (profile?: string): Location => ({
   kind: 'settings',
   section: 'servers',
@@ -207,8 +201,7 @@ export function ServersSection({
       enteredScene === 'servers-lapsed'),
   );
 
-  // The Reset sheet holds a one-shot preview token. Like the other Settings
-  // sheets, it does not outlive the window losing focus.
+  // Reset preview tokens are invalidated when the window loses focus.
   useEffect(() => {
     const conceal = (): void => {
       setSheet(null);
@@ -314,10 +307,7 @@ export function ServersSection({
   }, [loadResetPreview, selected, sheet]);
 
   const check = async (server: Server): Promise<void> => {
-    // Guarded here rather than at each caller, because ⌘R reached this with
-    // neither the busy flag nor the page's rule: a held key fired a request
-    // per repeat, and it would check a blocked or lapsed server the page
-    // deliberately offers no Check for.
+    // Prevent duplicate checks from rapid key events and ignore blocked servers.
     if (busy) return;
     if (rollback || server.state === 'blocked') return;
     setBusy(true);
@@ -363,9 +353,7 @@ export function ServersSection({
     ? (checked.get(selected.id) ?? statuses.get(selected.id)?.host ?? null)
     : null;
 
-  // ⌘R checks the open server. ⌘N and the arrow walk the old page had are
-  // gone: inside Settings ⌘N would collide with the other sections' sheets,
-  // and an inset of rows is not a selection list.
+  // Keyboard shortcut: ⌘R / Ctrl+R triggers a check on the selected server.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (
@@ -395,7 +383,7 @@ export function ServersSection({
         onAdded={async (added) => {
           setSheet(null);
           await onRefresh(
-            'Server added, check it before trusting anything on it',
+            'Server added. Check the server to verify its connection.',
           );
           onNavigate(servers(added));
         }}
@@ -417,7 +405,7 @@ export function ServersSection({
           setSheet(null);
           setReset(null);
           await onRefresh(
-            `Reset ${selected.name}, check it again before using it`,
+            `${selected.name} has been reset. Verify the server before reconnecting.`,
           );
         }}
         onError={(error) => void onMutationError(error)}
@@ -430,7 +418,7 @@ export function ServersSection({
         onForgot={async () => {
           setSheet(null);
           onNavigate(servers());
-          await onRefresh(`Forgot ${selected.name} on this Mac`);
+          await onRefresh(`Removed ${selected.name}`);
         }}
         onError={(error) => void onMutationError(error)}
       />
@@ -456,7 +444,7 @@ export function ServersSection({
           onCopy={(text) =>
             void bridge
               .copyText(text)
-              .then(() => toasts.show('Copied the full ID'))
+              .then(() => toasts.show('Host ID copied to clipboard'))
               .catch(onError)
           }
           onOpenGroup={(store) => onNavigate({ kind: 'store', ref: store.id })}
@@ -478,7 +466,7 @@ export function ServersSection({
   );
 }
 
-/** One line per row: the state in bold, then the single fact that matters. */
+/** Renders summary status metadata for a server row. */
 function StatusLine({
   state,
   account,
@@ -494,24 +482,24 @@ function StatusLine({
   if (state === 'checked')
     return (
       <>
-        {account ? account.username : 'no account'}
+        {account ? account.username : 'No account'}
         {sep}
-        {groups.length ? plural(groups.length, 'group') : 'no groups'}
-        {sep}check-in until {expiresShort(expiry)}
+        {groups.length ? plural(groups.length, 'group') : 'No groups'}
+        {sep}Valid until {expiresShort(expiry)}
       </>
     );
   if (state === 'pending')
     return (
       <>
-        <b>Reading status</b>
-        {sep}Waiting for a signed check-in
+        <b>Connecting</b>
+        {sep}Waiting for server response
       </>
     );
   if (state === 'unprobed')
     return (
       <>
-        <b>Never checked</b>
-        {sep}Check it before use
+        <b>Not verified</b>
+        {sep}Verify connection before use
       </>
     );
   if (state === 'lapsed')
@@ -525,21 +513,19 @@ function StatusLine({
     return (
       <>
         <b>Check-in status unknown</b>
-        {sep}Locked until the agent gets one
+        {sep}Locked until connection is verified
       </>
     );
   return (
     <>
-      <b>History changed</b>
-      {sep}Locked. The server no longer matches what this Mac pinned
+      <b>Identity changed</b>
+      {sep}Locked. The server identity does not match the pinned certificate.
     </>
   );
 }
 
 /**
- * A server as a settings row: mark, name and one status line, then the state
- * chip and Open. A never-checked server carries Check in the row, so the
- * required next step is one click from the list.
+ * Renders an individual server row in the settings server list.
  */
 function ServerRow({
   world,
@@ -638,8 +624,7 @@ function ServerList({
     );
     return { server, state, expiry: snapshot?.leaseExpiresAt ?? null };
   });
-  // A broken server is the only thing in this list worth acting on, so it
-  // leads, under its own label.
+  // Servers requiring user attention are displayed at the top of the list.
   const attention = rows.filter((row) => isLocked(row.state));
   const ready = rows.filter((row) => !isLocked(row.state));
   const box = (entries: typeof rows): ReactNode => (
@@ -681,7 +666,7 @@ function ServerList({
       {ready.length ? (
         <>
           <SectionLabel action={add}>
-            {attention.length ? 'Ready' : 'Servers on this Mac'}
+            {attention.length ? 'Ready' : 'Configured servers'}
           </SectionLabel>
           {box(ready)}
         </>
@@ -692,25 +677,23 @@ function ServerList({
           <Inset className="settings-inset">
             <div className="sempty">
               <ServerMark state="unprobed" />
-              <b>No servers on this Mac yet</b>Add one, then check it to pin its
-              identity here.
+              <b>No servers on this Mac yet</b>
+              <p>Add a server using the field above to begin.</p>
             </div>
           </Inset>
         </>
       ) : null}
       <div className="sfoot">
         <Icon name="shield" />
-        Before every operation, FOKS checks the server’s history against what
-        this Mac pinned.
+        FOKS verifies the server’s identity against its pinned certificate
+        before every operation.
       </div>
     </>
   );
 }
 
 /**
- * The band that says what stops work, and the one action that answers it.
- * A checked server has nothing to say here; its Check lives in the Check-in
- * row instead, so the verb is never offered twice.
+ * Displays an alert banner and primary action for servers requiring attention.
  */
 function StatusBand({
   state,
@@ -792,15 +775,15 @@ function StatusBand({
     return (
       <Band
         severity="crit"
-        label="History changed."
+        label="Server identity mismatch"
         action={
           <Button size="sm" variant="danger" onClick={onReset}>
             Reset…
           </Button>
         }
       >
-        The server’s history no longer matches the saved connection. This server
-        is locked.
+        The server certificate or security history does not match the pinned
+        identity on this Mac. Access has been blocked for your security.
       </Band>
     );
   return null;
@@ -879,7 +862,7 @@ function ServerBody({
     ? `${server.label}${account && !locked ? ` · signed in as ${account.username}` : ''}`
     : account && !locked
       ? `signed in as ${account.username}`
-      : 'No label';
+      : '';
   const hasHost = Boolean(host) && state !== 'unavailable';
 
   return (
@@ -928,19 +911,19 @@ function ServerBody({
             </InsetRow>
             <InsetRow label="Expires">
               {expires(expiry)}
-              <small>Renewed by the agent.</small>
+              <small>Automatically renewed in the background.</small>
             </InsetRow>
           </>
         ) : state === 'pending' ? (
-          <InsetRow label="Status">Reading signed status…</InsetRow>
+          <InsetRow label="Status">Verifying server status…</InsetRow>
         ) : state === 'unprobed' ? (
           <InsetRow label="Expires">
-            <span className="stopped">Not yet. Never checked.</span>
+            <span className="stopped">Not verified yet</span>
           </InsetRow>
         ) : state === 'lapsed' ? (
           <InsetRow label="Expired">
             <b className="danger-title">{expires(expiry)}</b>
-            <small>The agent renews it. Nothing to do here.</small>
+            <small>Automatically renewed in the background.</small>
           </InsetRow>
         ) : state === 'unavailable' ? (
           <InsetRow label="Expires">
@@ -961,11 +944,11 @@ function ServerBody({
           ) : account ? (
             <>
               <b>{account.username}</b>
-              <small>local alias {account.alias}</small>
+              <small>Local alias: {account.alias}</small>
             </>
           ) : (
             <>
-              No account on this server<small>You can still read from it</small>
+              No account on this server<small>Read-only access available</small>
             </>
           )}
         </InsetRow>
@@ -987,7 +970,7 @@ function ServerBody({
               ))}
             </span>
           ) : (
-            'None yet'
+            'No groups configured'
           )}
         </InsetRow>
       </Inset>
@@ -1013,14 +996,17 @@ function ServerBody({
               <span className="hostid" title={host.hostId}>
                 <code>{shortId(host.hostId, 8)}</code>
               </span>
-              <small>Hover for the full ID. Copy copies all of it.</small>
+              <small>
+                Hover to view the full ID. Click Copy to copy the full value.
+              </small>
             </InsetRow>
-            <InsetRow label="Signed history">
-              {host.chain} entries · version {host.epoch}
+            <InsetRow label="Audit log">
+              Verified · Checkpoint{' '}
+              {new Date(host.epoch * 1000).toLocaleDateString()}
             </InsetRow>
           </Inset>
           <Toggle
-            label="Inspect last check response"
+            label="View diagnostic response"
             open={rollback || undefined}
             disabled={rollback}
           >
@@ -1045,7 +1031,7 @@ function ServerBody({
           <InsetRow label="Host ID">
             <span className="stopped">
               {state === 'unprobed'
-                ? 'Set by the first check'
+                ? 'Discovered upon first verification'
                 : state === 'pending'
                   ? 'Reading signed status…'
                   : 'Hidden while locked'}
@@ -1054,7 +1040,7 @@ function ServerBody({
         </Inset>
       )}
 
-      <SectionLabel className="danger-title">On this Mac</SectionLabel>
+      <SectionLabel className="danger-title">Manage Server Data</SectionLabel>
       <Inset className="settings-inset middle danger-box">
         <InsetRow
           className="dangerrow"
@@ -1070,7 +1056,7 @@ function ServerBody({
             </Button>
           }
         >
-          <small>Removes it from this Mac.</small>
+          <small>Removes this server from this Mac.</small>
         </InsetRow>
         <InsetRow
           className="dangerrow"
@@ -1149,7 +1135,7 @@ function AddServerSheet({
   return (
     <SheetFrame
       title="Add a server"
-      subtitle="Save its address, then check its identity"
+      subtitle="Enter server connection details to verify and connect"
       onClose={onClose}
       footer={
         <>
@@ -1176,8 +1162,9 @@ function AddServerSheet({
       }
     >
       <p>
-        Adding a server saves its profile and address on this Mac. Check it next
-        to verify its identity and save the connection.
+        Adding a server saves its profile and address on this Mac. Verify the
+        server after adding it to confirm its identity and establish the
+        connection.
       </p>
       <Inset>
         <Field label="Profile" value={profile} onChange={setProfile} />
@@ -1254,27 +1241,27 @@ function ResetSheet({
       }
     >
       <p>
-        This does not delete server data. Check again before using this server.
+        This does not delete data stored on the server. You must verify the
+        server again before reconnecting.
       </p>
       <Inset>
-        <InsetRow label="Discarded">
-          Server certificate, connection history, and local cached data.
+        <InsetRow label="Removed">
+          Server certificate, connection history, and local cache.
         </InsetRow>
-        <InsetRow label="Lost">
-          Local writes that were never accepted by the server cannot be
-          recovered.
+        <InsetRow label="Unrecoverable">
+          Pending local changes not yet uploaded to the server will be lost.
         </InsetRow>
-        <InsetRow label="Kept">
-          Your keys and account remain on this Mac, but this reset does not sign
-          you in.
+        <InsetRow label="Preserved">
+          Your local account keys remain on this Mac, but you will need to sign
+          in again.
         </InsetRow>
-        <InsetRow label="Untouched">
-          Every other configured server and its local state.
+        <InsetRow label="Unaffected">
+          Other configured servers and their local data.
         </InsetRow>
       </Inset>
       {preview ? (
         <>
-          <SectionLabel>Also discarded · resumable operations</SectionLabel>
+          <SectionLabel>Discarded pending operations</SectionLabel>
           <Inset>
             {preview.resumables.length ? (
               preview.resumables.map((row, index) => (
@@ -1290,7 +1277,7 @@ function ResetSheet({
               <InsetRow label="None">No resumable operations found.</InsetRow>
             )}
           </Inset>
-          <SectionLabel>Local artifacts discarded</SectionLabel>
+          <SectionLabel>Discarded local cache</SectionLabel>
           <Inset>
             {preview.artifacts.length ? (
               preview.artifacts.map((row) => (
@@ -1303,9 +1290,11 @@ function ResetSheet({
             )}
           </Inset>
           <p className="hint">
-            This preview token expires in {preview.expiresInSeconds} seconds and
-            can be used once.
-            {available ? '' : ' Preview again by closing and reopening Reset.'}
+            This reset confirmation expires in {preview.expiresInSeconds}{' '}
+            seconds.
+            {available
+              ? ''
+              : ' Reopen this dialog to generate a new confirmation.'}
           </p>
         </>
       ) : resetError ? (
@@ -1328,7 +1317,7 @@ function ResetSheet({
           <input
             value={confirmation}
             onChange={(event) => setConfirmation(event.target.value)}
-            placeholder={`type ${server.id}`}
+            placeholder={`Type "${server.id}" to confirm`}
           />
         </InsetRow>
       </Inset>
@@ -1354,7 +1343,7 @@ function ForgetSheet({
   return (
     <SheetFrame
       title={`Forget ${server.name}?`}
-      subtitle="Erase this Mac’s keys and state for the whole server"
+      subtitle="Remove all local keys and stored data for this server"
       onClose={onClose}
       danger
       footer={
@@ -1388,16 +1377,16 @@ function ForgetSheet({
         name to confirm.
       </p>
       <Inset>
-        <InsetRow label="Erased">
-          Every account credential this Mac holds for this server, its pinned
-          Host ID, signed-history checkpoint and cached artifacts.
+        <InsetRow label="Removed">
+          All credentials for this server, pinned host identity, connection
+          history, and cached data.
         </InsetRow>
-        <InsetRow label="Lost">
-          An account with no backup phrase and no other paired device cannot be
-          signed in to again.
+        <InsetRow label="Warning">
+          Accounts without a backup recovery phrase or another paired device
+          cannot be accessed again.
         </InsetRow>
-        <InsetRow label="Untouched">
-          Every other configured server and its local state.
+        <InsetRow label="Unaffected">
+          Other configured servers and their local data.
         </InsetRow>
       </Inset>
       <Inset>
@@ -1405,7 +1394,7 @@ function ForgetSheet({
           <input
             value={confirmation}
             onChange={(event) => setConfirmation(event.target.value)}
-            placeholder={`type ${server.id}`}
+            placeholder={`Type "${server.id}" to confirm`}
           />
         </InsetRow>
       </Inset>

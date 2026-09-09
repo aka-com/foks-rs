@@ -42,10 +42,11 @@ impl HostKeyProvider for MemoryKeyProvider {
             return Ok(SecretKey::new(key.bytes, key.generation));
         }
         let mut key = [0; 32];
-        getrandom::fill(&mut key).map_err(|_| crate::Error::Key("operating-system entropy"))?;
+        getrandom::fill(&mut key)
+            .map_err(|_| crate::Error::Key("failed to acquire operating-system entropy"))?;
         let mut generation = [0; 16];
         getrandom::fill(&mut generation)
-            .map_err(|_| crate::Error::Key("operating-system entropy"))?;
+            .map_err(|_| crate::Error::Key("failed to acquire operating-system entropy"))?;
         keys.insert(
             purpose,
             StoredMemoryKey {
@@ -74,10 +75,11 @@ impl HostKeyProvider for MemoryKeyProvider {
             .map_err(|_| crate::Error::Key("lock poisoned"))?;
         for _ in 0..8 {
             let mut key = [0; 32];
-            getrandom::fill(&mut key).map_err(|_| crate::Error::Key("operating-system entropy"))?;
+            getrandom::fill(&mut key)
+                .map_err(|_| crate::Error::Key("failed to acquire operating-system entropy"))?;
             let mut generation = [0; 16];
             getrandom::fill(&mut generation)
-                .map_err(|_| crate::Error::Key("operating-system entropy"))?;
+                .map_err(|_| crate::Error::Key("failed to acquire operating-system entropy"))?;
             let id = KeyGenerationId::from_bytes(generation);
             if let Entry::Vacant(entry) = generations.entry((purpose, id)) {
                 entry.insert(StoredMemoryKey {

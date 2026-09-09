@@ -1,14 +1,10 @@
 //! The FOKS desktop application.
 //!
-//! A second Tauri app beside `src-tauri`'s AKA, sharing the workspace and the
-//! toolchain and nothing else — not the bundle identifier, the release train,
-//! the command surface or the trust boundary. FOKS talks only to a local agent
-//! over a private Unix socket and owns no server.
+//! FOKS communicates with a local agent over a private Unix socket and runs
+//! without a remote backend server.
 //!
-//! Two settings decided here and visible in `tauri.conf.json`:
-//! `dragDropEnabled: true`, so file drops arrive in Rust as paths (see
-//! [`dragdrop`]), and `withGlobalTauri: false`, so the IPC surface is not
-//! published on a global object in a window that renders secrets.
+//! Configures native file drop routing via `dragDropEnabled` (see [`dragdrop`])
+//! and disables `withGlobalTauri` to prevent exposing global IPC objects in webviews.
 
 mod agent;
 mod applock;
@@ -28,9 +24,7 @@ use agent::AgentHandle;
 use commands::{AppState, MAIN};
 
 pub fn run() {
-    // `args_os`, not `args`: the latter panics on an argument that is not valid
-    // UTF-8, and this process is handed flags it does not own. Resolve once so
-    // only the default managed endpoint grants us crash-marker storage.
+    // Use `args_os` to preserve non-UTF-8 arguments safely when inspecting flags.
     let endpoint = agent::resolve_endpoint(
         std::env::args_os().skip(1),
         std::env::var_os(agent::SOCKET_ENV).map(std::path::PathBuf::from),
@@ -47,29 +41,28 @@ pub fn run() {
         .and_then(|endpoint| endpoint.managed_crash_directory.clone())
     {
         if let Err(error) = agent::prepare_managed_crash_directory(&directory) {
-            tracing::error!(reason = %error.message, "FOKS could not prepare private crash storage");
+            tracing::error!(reason = %error.message, "Failed to initialize crash storage directory");
             std::process::exit(1);
         }
         foks_desktop::install_crash_reporter(directory);
     }
 
     let Some(endpoint) = endpoint else {
-        // No dialog: without a HOME there is no desktop session to show one in.
+        // Exit if agent socket path cannot be determined.
         tracing::error!(
-            "FOKS could not work out where its agent socket is; pass {} or set {}",
+            "Could not determine agent socket path; pass {} or set {}",
             agent::SOCKET_ARG,
             agent::SOCKET_ENV
         );
         std::process::exit(1);
     };
     let socket = endpoint.socket;
-    tracing::info!(socket = %socket.display(), "FOKS is using this agent socket");
+    tracing::info!(socket = %socket.display(), "Using agent socket");
     let agent = Arc::new(AgentHandle::new(socket));
 
     tauri::Builder::default()
-        // Must be the first plugin registered: a duplicate launch hands off to
-        // the running instance and exits here, before it can race for the
-        // agent socket inside the setup hook.
+        // Register single-instance plugin first so duplicate processes hand off
+        // and exit before competing for the agent socket.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window(MAIN) {
                 let _ = window.set_focus();
@@ -86,8 +79,8 @@ pub fn run() {
         // own origin. See navigation.rs.
         .plugin(navigation::policy())
         .plugin(tauri_plugin_dialog::init())
-        // Registered for the Rust-side copy-with-clear of Phase 2. The webview
-        // is granted no clipboard permission; see PERMISSIONS.md.
+        // Registered for Rust-side clipboard access with auto-clearing.
+        // The webview has no direct clipboard permissions.
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(AppState::new(Arc::clone(&agent)))
         .manage(Arc::new(applock::AppLock::new()))
@@ -185,21 +178,18 @@ pub fn run() {
             applock::unlock_app,
         ])
         .setup(move |app| {
-            // Tauri has already created the config-declared webview by the
-            // time setup runs, so this does not precede the window — it
-            // precedes the first request. An unreachable agent becomes a dialog
-            // and a clean exit rather than a shell that fails on every action.
+            // Verify agent reachability before handling requests; exit with a dialog if unreachable.
             startup::require_agent(app, &agent);
             if let Some(window) = app.get_webview_window(MAIN) {
                 dragdrop::observe(&window);
                 window_state::observe(&window);
             } else {
-                tracing::error!("the {MAIN} window is missing from tauri.conf.json");
+                tracing::error!("{MAIN} window configuration not found in tauri.conf.json");
             }
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("the FOKS desktop application could not start")
+        .expect("failed to start application")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
                 agent::terminate_managed_agent();
@@ -210,10 +200,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    /// The window-label gate is only meaningful while there is exactly one
-    /// window to gate on. If a second window is ever added to
-    /// `tauri.conf.json`, this fails and the posture in PERMISSIONS.md has to
-    /// be rewritten rather than silently widened.
+    /// Ensures that only a single window is configured, matching the expected security boundary.
     #[test]
     fn the_configuration_declares_exactly_one_window_and_it_is_main() {
         let configuration: serde_json::Value =
@@ -223,19 +210,21 @@ mod tests {
             .as_array()
             .expect("tauri.conf.json declares windows");
         assert_eq!(windows.len(), 1);
-        assert_eq!(windows[0]["label"], super::MAIN);
+        assert_eq!(
+            windows[0]["label"],
+            super::MAIN,
+            "primary window label must match MAIN constant"
+        );
         assert_eq!(windows[0]["dragDropEnabled"], true);
         assert_eq!(configuration["app"]["withGlobalTauri"], false);
     }
 
     /// The exact renderer capability, in the order the file lists it.
     ///
-    /// The webview needs three things and is granted three things: the two
-    /// halves of the drag-drop event subscription (`dragdrop.rs` emits, the
-    /// renderer listens), and the start-dragging command Tauri's own
-    /// `data-tauri-drag-region` script calls to move an overlay-title-bar
-    /// window. Everything else — image, menu, tray, path, app, webview, the
-    /// rest of window, `emit`/`emit_to`, and every plugin API — is absent.
+    /// The webview capability is limited to three permissions: the drag-drop
+    /// event listener and unlistener (`dragdrop.rs`), and the window drag command
+    /// used by Tauri's `data-tauri-drag-region` for custom title bar movement.
+    /// All other Tauri core, window, and plugin APIs are omitted.
     const RENDERER_PERMISSIONS: [&str; 3] = [
         "core:event:allow-listen",
         "core:event:allow-unlisten",
@@ -243,19 +232,15 @@ mod tests {
     ];
 
     /// The command identifiers the resolved capability grants, as
-    /// `<manifest>|<command>`. This is the whole IPC surface a script running
-    /// in the FOKS window can reach that FOKS did not write itself.
+    /// `<manifest>|<command>`. This represents the entire default Tauri IPC
+    /// surface accessible to scripts outside application-defined commands.
     const RENDERER_COMMANDS: [&str; 3] = [
         "core:event|listen",
         "core:event|unlisten",
         "core:window|start_dragging",
     ];
 
-    /// The capability file is the audited surface, and it is audited exactly:
-    /// an added entry, a dropped entry, a duplicate, a reordering or a second
-    /// window all fail here. A future Tauri bump that makes a broad set
-    /// convenient again has to change this list in the same commit, in front
-    /// of a reviewer, rather than widen the grant quietly.
+    /// Asserts that capabilities match the explicitly permitted set without additions or reordering.
     #[test]
     fn the_capability_grants_exactly_the_three_renderer_permissions() {
         let capability: serde_json::Value =
@@ -278,11 +263,10 @@ mod tests {
                 .collect::<std::collections::BTreeSet<_>>()
                 .len(),
             permissions.len(),
-            "a duplicated permission hides what the capability really grants"
+            "duplicate permission found in capability"
         );
 
-        // Named so the diff that reintroduces one of them fails on the name a
-        // reviewer would recognise, not only on the set comparison above.
+        // Explicitly check for disallowed sensitive permissions.
         for forbidden in [
             "core:default",
             "core:event:default",
@@ -299,7 +283,7 @@ mod tests {
         ] {
             assert!(
                 !permissions.contains(&forbidden),
-                "{forbidden} is back in the capability"
+                "forbidden permission present in capability: {forbidden}"
             );
         }
         for permission in &permissions {
@@ -310,15 +294,10 @@ mod tests {
         }
     }
 
-    /// What the capability *resolves to*, which is the thing that matters.
+    /// Verifies the expanded command set resolved from the renderer capability.
     ///
-    /// `core:default` looked like three entries in the file and was 92
-    /// commands after expansion. This walks `tauri-build`'s own generated
-    /// projection — the capability as ingested, resolved through the ACL
-    /// manifests — so the assertion is about command identifiers a webview can
-    /// invoke rather than about how the file happens to be written. Command
-    /// identifiers, not descriptions: a Tauri documentation change must not
-    /// make this fail, and a Tauri permission-set change must.
+    /// Resolves capability permissions through generated ACL manifests to verify the
+    /// concrete command set exposed to the webview.
     #[test]
     fn the_resolved_capability_reaches_only_those_three_commands() {
         let manifests = acl_manifests();
@@ -351,10 +330,7 @@ mod tests {
                 .collect::<std::collections::BTreeSet<_>>()
         );
 
-        // The specific commands the old `core:default` grant carried, by the
-        // identifier the ACL uses for each. `core:image|from_path` read any
-        // file the webview named; `core:webview|internal_toggle_devtools`
-        // opened an inspector over a window that renders secrets.
+        // Verify that sensitive commands remain inaccessible to the webview.
         for forbidden in [
             "core:image|from_path",
             "core:image|rgba",
@@ -370,16 +346,14 @@ mod tests {
         ] {
             assert!(
                 !commands.contains(forbidden),
-                "{forbidden} is reachable from the FOKS webview again"
+                "forbidden command reachable from webview: {forbidden}"
             );
         }
     }
 
-    /// `tauri-build` writes these next to the crate on every build, and
-    /// `.gitignore`s them: they are a projection of `tauri`'s own ACL, not
-    /// source. Read them from disk rather than `include_str!` so the Bazel
-    /// library build — which stages a different manifest directory and does
-    /// not carry `gen/` — is unaffected either way.
+    /// `tauri-build` generates these files during build (excluded via
+    /// `.gitignore`). They project Tauri's internal ACL rather than crate
+    /// source. Read them from disk so Bazel builds need not stage `gen/`.
     fn read_generated(name: &str) -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("gen/schemas")

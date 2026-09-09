@@ -58,9 +58,9 @@ fn incomplete_uploads_are_hidden_and_final_chunks_replay_exactly() {
     assert!(reader.kv_file(&UID, &file).unwrap().is_none());
     assert!(reader.kv_file_chunk(&UID, &file, 0).unwrap().is_none());
 
-    // Go links a large-file dirent immediately after upload-init and streams
-    // the remaining chunks afterward. The reference is valid even though the
-    // file remains unreadable until its final chunk commits.
+    // Large-file dirents can be linked immediately after upload initialization
+    // before remaining chunks are streamed. The reference is valid even though
+    // the file remains unreadable until its final chunk commits.
     let mut file_node = [0_u8; 17];
     file_node[0] = 2;
     file_node[1..].copy_from_slice(&file);

@@ -1,34 +1,25 @@
-//! Where the FOKS window is allowed to go.
+//! Navigation origin allowlist and policy for the FOKS webview window.
 //!
-//! The capability file (`PERMISSIONS.md`) bounds what a script inside the
-//! window may *call*. This bounds where the window may *be*. They are separate
-//! controls: a page that navigates itself to an attacker's origin keeps the
-//! window, the title bar and the process, and every custom command in
-//! `commands.rs` is then reachable from content FOKS did not build.
+//! Restricts top-level navigation to trusted local origins, preventing loaded
+//! pages from navigating to external origins where IPC commands
+//! would remain accessible.
 //!
-//! The classification is a pure function of a URL so the table below is the
-//! specification and the test at once. It is deliberately an allowlist of
-//! whole origins — scheme, host and effective port, compared exactly — rather
-//! than a prefix match, because `https://tauri.localhost.example/` and
-//! `http://127.0.0.1:14210/` both pass a prefix match and neither is this app.
+//! URLs are checked against an exact origin allowlist (scheme, host, and port)
+//! rather than prefix matches to avoid accepting adjacent hostnames or ports.
 //!
-//! CSP is the second line, not this one: `frame-src`/`form-action`/`base-uri`
-//! in `tauri.conf.json` close the mechanisms CSP does cover, but CSP does not
-//! reliably govern every top-level navigation, so the native policy is primary.
+//! While `tauri.conf.json` defines CSP directives for embedded frames and forms,
+//! this native navigation handler enforces top-level window navigation boundaries.
 
 use url::Url;
 
 // The host and port of `build.devUrl` in `tauri.conf.json`, which is also
-// `foks-ui/vite.config.ts`'s `strictPort` server. Pinned to the configuration
-// by a test below rather than remembered in two places.
+// `foks-ui/vite.config.ts`'s `strictPort` server. Verified against configuration
+// by a test below to avoid maintaining redundant definitions.
 const DEVELOPMENT_HOST: &str = "127.0.0.1";
 const DEVELOPMENT_PORT: u16 = 1421;
 
-// The custom scheme Tauri serves the embedded bundle from on macOS and Linux
-// (`tauri://localhost`), and the host of the `http(s)://tauri.localhost`
-// workaround form wry needs on Windows and Android. FOKS ships the first two
-// platforms; the workaround form is allowed so that adding a target, or
-// turning on `useHttpsScheme`, is not a silent blank window.
+// Custom scheme used in production bundles (`tauri://localhost`) and the
+// fallback hostname used by wry on certain platforms (`tauri.localhost`).
 const ASSET_SCHEME: &str = "tauri";
 const ASSET_HOST: &str = "localhost";
 const ASSET_WORKAROUND_HOST: &str = "tauri.localhost";
@@ -39,8 +30,7 @@ const ASSET_WORKAROUND_HOST: &str = "tauri.localhost";
 /// Vite server — see [`policy`] for why that is `tauri::is_dev()` and not
 /// `debug_assertions`.
 pub(crate) fn allowed_navigation(url: &Url, development: bool) -> bool {
-    // Tauri never emits either, and an origin is unchanged by them, but they
-    // are a classic way to make a denied host read like an allowed one.
+    // Reject URLs with embedded credentials to prevent origin misparsing.
     if !url.username().is_empty() || url.password().is_some() {
         return false;
     }
@@ -49,9 +39,7 @@ pub(crate) fn allowed_navigation(url: &Url, development: bool) -> bool {
         // the URL carries an explicit one, and `tauri://localhost:1/` is a
         // different origin than the app's.
         ASSET_SCHEME => host_is(url, ASSET_HOST) && url.port().is_none(),
-        // `port()` is `None` for the scheme's own default port, so this admits
-        // `http://tauri.localhost:80/` — the same origin — and refuses
-        // `http://tauri.localhost:8080/`, which is not.
+        // Allow default port connections while rejecting explicit non-default ports.
         "http" | "https" if host_is(url, ASSET_WORKAROUND_HOST) => url.port().is_none(),
         "http" => {
             development && host_is(url, DEVELOPMENT_HOST) && url.port() == Some(DEVELOPMENT_PORT)
@@ -73,36 +61,23 @@ fn host_is(url: &Url, host: &str) -> bool {
 /// The policy, as a plugin, so it is registered before the webview
 /// `tauri.conf.json` declares is created.
 ///
-/// The window comes from the configuration, so there is no `WebviewWindow`
-/// builder here to hang `on_navigation` off; replacing it with a manually
-/// built window to obtain one would be a far larger lifecycle and packaging
-/// change than this control is worth. Every plugin's hook is consulted and any
-/// `false` cancels the navigation, so this composes rather than competes.
+/// Enforces navigation policy via a Tauri plugin registered during initialization.
 ///
-/// `tauri::is_dev()`, not `cfg!(debug_assertions)`, decides whether the
-/// development origin is allowed: it is `!cfg!(feature = "custom-protocol")`,
-/// the *same* switch `tauri`'s own `get_app_url` reads to choose between
-/// `build.devUrl` and the embedded bundle. This repository does not declare a
-/// `custom-protocol` feature on the package, so `cargo build --release`
-/// produces a binary that still loads the Vite server (see
-/// `pnpm run foks:build`) — `debug_assertions` would deny that binary its own
-/// start page. The distributable artifacts turn the feature on (Bazel through
-/// `MODULE.bazel`'s crate annotation, `tauri build` through the CLI), so they
-/// are the builds where the development origin is refused.
+/// Uses `tauri::is_dev()` to determine if the development origin is permitted,
+/// matching Tauri's protocol selection logic.
 pub(crate) fn policy<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri::plugin::Builder::new("foks-navigation-policy")
         .on_navigation(|webview, url| {
             let allowed = allowed_navigation(url, tauri::is_dev());
             if !allowed {
-                // Scheme, host and port only. A denied URL's path, query and
-                // fragment are attacker-chosen and can carry a value that was
-                // in the window; the origin is what a reader needs.
+                // Log origin components only (scheme, host, port) to avoid leaking
+                // sensitive data potentially contained in path or query parameters.
                 tracing::warn!(
                     webview = webview.label(),
                     scheme = url.scheme(),
                     host = url.host_str().unwrap_or("<none>"),
                     port = ?url.port_or_known_default(),
-                    "FOKS refused a navigation away from its own origin"
+                    "Blocked navigation outside allowed origin"
                 );
             }
             allowed
@@ -137,7 +112,7 @@ mod tests {
         ("http://127.0.0.1:1421/", false, true),
         ("http://127.0.0.1:1421/index.html", false, true),
         ("https://127.0.0.1:1421/", false, false),
-        // Neighbours of every allowed origin. None of these is this app.
+        // Disallowed adjacent origins.
         ("http://127.0.0.1:14210/", false, false),
         ("http://127.0.0.1:1420/", false, false),
         ("http://127.0.0.1/", false, false),
@@ -181,10 +156,7 @@ mod tests {
         }
     }
 
-    /// The one origin a packaged build must accept is the one it is served
-    /// from, and the one a development build must accept is the one
-    /// `tauri.conf.json` points it at. Stated separately from the table so a
-    /// table edit cannot quietly delete the app's own start page.
+    /// Verifies that packaged and development builds admit their configured initial URLs.
     #[test]
     fn each_build_admits_the_page_it_actually_loads() {
         let start = Url::parse("tauri://localhost/index.html").unwrap();
@@ -210,11 +182,9 @@ mod tests {
         ));
     }
 
-    /// The CSP is defence in depth for the same boundary, so the directives it
-    /// is depended on for are pinned here rather than left to a reading of the
-    /// configuration.
+    /// Verifies required Content Security Policy directives configured in `tauri.conf.json`.
     #[test]
-    fn the_content_security_policy_closes_the_mechanisms_it_covers() {
+    fn the_content_security_policy_enforces_expected_directives() {
         let configuration: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json"))
                 .expect("tauri.conf.json is valid JSON");
@@ -240,7 +210,7 @@ mod tests {
         }
         assert!(
             !csp.contains("unsafe-eval"),
-            "a window that renders secrets does not evaluate strings: {csp}"
+            "CSP must not permit unsafe-eval: {csp}"
         );
     }
 }

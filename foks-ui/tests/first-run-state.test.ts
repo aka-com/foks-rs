@@ -32,7 +32,7 @@ function parsedCheckpoint(value: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-test('first-run re-entry clears completed server and account facts', () => {
+test('re-entering first-run resets server and account state', () => {
   let state = initialFirstRun('invited', 'boot');
   state = transitionFirstRun(state, { type: 'initialize' });
   state = transitionFirstRun(state, { type: 'choose', path: 'invited' });
@@ -57,7 +57,7 @@ test('first-run re-entry clears completed server and account facts', () => {
   assert.equal(completedFirstRunSteps(state), 1);
 });
 
-test('initialization enters managed local setup when the refreshed profile is ready', () => {
+test('initialization transitions to local state when managedLocal is true', () => {
   const state = transitionFirstRun(initialFirstRun('invited', 'boot'), {
     type: 'initialize',
     managedLocal: true,
@@ -68,7 +68,7 @@ test('initialization enters managed local setup when the refreshed profile is re
   assert.equal(state.initialized, true);
 });
 
-test('the managed local path reuses its authenticated profile and stops after recovery', () => {
+test('managed local setup completes through backup to local-done', () => {
   let state = initialFirstRun('own', 'local');
   state = transitionFirstRun(state, {
     type: 'managed-profile-selected',
@@ -90,7 +90,7 @@ test('the managed local path reuses its authenticated profile and stops after re
   assert.ok(decodeFirstRunCheckpoint(encodeFirstRunCheckpoint(state)));
 });
 
-test('skipping a revisited local recovery step retains completed protection', () => {
+test('skipping backup on completed local setup retains backupCommitted status', () => {
   const protectedState = {
     ...initialFirstRun('own', 'protect'),
     managedLocal: true,
@@ -108,7 +108,7 @@ test('skipping a revisited local recovery step retains completed protection', ()
   assert.ok(decodeFirstRunCheckpoint(encodeFirstRunCheckpoint(state)));
 });
 
-test('choosing another server leaves all managed local account facts behind', () => {
+test('switching to another server resets managed local state', () => {
   let selected = transitionFirstRun(initialFirstRun('own', 'local'), {
     type: 'managed-profile-selected',
     address: 'localhost:4430',
@@ -129,13 +129,13 @@ test('choosing another server leaves all managed local account facts behind', ()
   assert.equal(other.backupCommitted, false);
 });
 
-test('the checkpoint encoder cannot persist any first-run secret draft', () => {
+test('checkpoint encoding excludes sensitive draft fields', () => {
   const state = {
     ...initialFirstRun('invited', 'phrase'),
     profile: checked,
     serverAddress: 'foks.example',
     account: { alias: 'personal', username: 'sol', deviceName: 'Sol Mac' },
-    // Simulate future form fields accidentally being attached at runtime.
+    // Verify transient secret fields are omitted from serialized checkpoints.
     invite: 'INVITE-SENTINEL',
     passphrase: 'PASSPHRASE-SENTINEL',
     recoveryPhrase: 'RECOVERY-SENTINEL',
@@ -149,11 +149,11 @@ test('the checkpoint encoder cannot persist any first-run secret draft', () => {
   assert.equal(
     decodeFirstRunCheckpoint(encoded)?.state,
     'protect',
-    'a one-time phrase reveal resumes closed',
+    'resuming from phrase reveal defaults to protect state',
   );
 });
 
-test('skipped safeguards remain open and do not inflate the completed count', () => {
+test('skipped steps are excluded from completed step count', () => {
   const base = {
     ...initialFirstRun('own', 'checklist-own'),
     initialized: true,
@@ -166,7 +166,7 @@ test('skipped safeguards remain open and do not inflate the completed count', ()
   assert.equal(completedFirstRunSteps(base), 3);
 });
 
-test('skipping a revisit cannot erase an already completed safeguard', () => {
+test('skipping protection step does not clear an already completed passphrase', () => {
   const protectedState = {
     ...initialFirstRun('own', 'protect'),
     initialized: true,
@@ -181,7 +181,7 @@ test('skipping a revisit cannot erase an already completed safeguard', () => {
   assert.equal(completedFirstRunSteps(after), 4);
 });
 
-test('skipping a group revisit retains the authenticated completed group', () => {
+test('skipping group step retains existing group configuration', () => {
   const completed = {
     ...initialFirstRun('own', 'create-group'),
     initialized: true,
@@ -197,7 +197,7 @@ test('skipping a group revisit retains the authenticated completed group', () =>
   assert.equal(completedFirstRunSteps(after), 5);
 });
 
-test('checkpoint decoding rejects unknown versions and malformed authenticated display facts', () => {
+test('checkpoint decoding rejects invalid versions and malformed profile fields', () => {
   assert.equal(decodeFirstRunCheckpoint('{"version":2}'), null);
   const encoded = encodeFirstRunCheckpoint({
     ...initialFirstRun('own', 'checked'),
@@ -253,7 +253,7 @@ test('checkpoint decoding rejects unknown versions and malformed authenticated d
   );
 });
 
-test('checkpoint decoding rejects wrong entity kinds, explicit nulls and incoherent completion flags', () => {
+test('checkpoint decoding rejects invalid entity kinds, nulls, and conflicting completion flags', () => {
   const checkedState = {
     ...initialFirstRun('own', 'checked'),
     profile: checked,
@@ -282,7 +282,7 @@ test('checkpoint decoding rejects wrong entity kinds, explicit nulls and incoher
         }),
       ),
       null,
-      `${key}: null must not behave like an omitted optional fact`,
+      `${key}: explicit null must not be treated as an omitted optional field`,
     );
   }
 
@@ -369,7 +369,7 @@ test('checkpoint decoding rejects wrong entity kinds, explicit nulls and incoher
   );
 });
 
-test('invited and own completion transitions remain distinct and resumable', () => {
+test('invited and own paths transition to distinct completion states', () => {
   const invited = transitionFirstRun(initialFirstRun('invited', 'waiting'), {
     type: 'group-discovered',
     group: {
@@ -407,10 +407,9 @@ test('invited and own completion transitions remain distinct and resumable', () 
   );
 });
 
-test('setting a passphrase after skipping leaves a checkpoint that still decodes', () => {
-  // `skip-protect` then `passphrase-set` used to hold both `protectSkipped`
-  // and `passphraseSet`, a combination the decoder rejects — so the next
-  // launch threw the entire first run away with no message.
+test('setting a passphrase after skipping produces a valid decodable checkpoint', () => {
+  // Verify that setting a passphrase after skipping clears protectSkipped
+  // so the checkpoint passes decoder validation.
   const atProtect = (): ReturnType<typeof initialFirstRun> => {
     let state = initialFirstRun('own', 'boot');
     state = transitionFirstRun(state, { type: 'initialize' });
@@ -441,7 +440,7 @@ test('setting a passphrase after skipping leaves a checkpoint that still decodes
     'a passphrase set after a skip must still round-trip',
   );
 
-  // Committing a backup already cleared the flag; the two transitions agree now.
+  // Verify backup-committed similarly clears protectSkipped.
   let viaBackup = transitionFirstRun(atProtect(), { type: 'skip-protect' });
   viaBackup = transitionFirstRun(viaBackup, { type: 'backup-committed' });
   assert.equal(viaBackup.protectSkipped, false);

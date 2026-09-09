@@ -50,7 +50,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .app{flex:1;min-height:0;display:grid;grid-template-columns:224px 1fr}
 .app.with-details{grid-template-columns:224px 1fr 300px}
 
-/* ---------- sidebar (04) ---------- */
+/* ---------- Sidebar ---------- */
 .side{background:var(--surface);border-right:1px solid var(--line-soft);display:flex;flex-direction:column;padding:12px 10px 10px;overflow:auto}
 .side h6{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:10px 10px 5px}
 .nav{display:flex;align-items:center;gap:9px;width:100%;padding:6px 9px;border-radius:8px;text-align:left;color:var(--ink-2);font-weight:500;line-height:1.25}
@@ -64,7 +64,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side .fn code{font:10.5px var(--mono)}
 .side .foot{margin-top:auto;padding-top:10px;border-top:1px solid var(--line-soft)}
 .side .foot .nav{font-size:13px;padding:5px 9px}
-/* first-run mode of the same sidebar (02-first-run builds on these) */
+/* Setup and first-run sidebar variant */
 .side .appname{padding:6px 10px;font-size:15px;font-weight:700;letter-spacing:-.01em}
 .side .appname small{font-weight:500;color:var(--muted);font-size:12px;margin-left:6px}
 .nav .sdot{width:8px;height:8px;border-radius:50%;flex:none;background:rgba(0,0,0,.16);margin:0 5px}

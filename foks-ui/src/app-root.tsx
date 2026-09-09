@@ -1,17 +1,8 @@
 /**
- * The vault shell.
+ * Root application component for the FOKS desktop vault shell.
  *
- * The window, the sidebar, the item page and the details panel, with the
- * desktop fixture behind them. React owns the DOM, and
- * `tests/react-boundary.test.ts` forbids raw-HTML sinks here.
- *
- * First run is a resumable location in this same window. Servers and Settings
- * remain separate later surfaces. Values stay masked until Show performs the
- * version-bound read.
- *
- * Where the shell is lives in the location store, and the whole of it is a
- * deep link: `?state=`, plus `sel`, `view`, `kind`, `sort` and `lease`. See
- * `README.md` for the table.
+ * Integrates sidebar navigation, item screens, details panels, and modal
+ * workflows with bridge IPC and URL location state.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -327,8 +318,7 @@ function VaultShell({
       : null,
   );
 
-  // A lapsed compatibility lease is a property of the world, not a place in
-  // it, so the deep link applies it to the world rather than storing it.
+  // Apply URL query lease overrides to the active world snapshot.
   const shown = useMemo(() => {
     const leased =
       scene.lease === 'lapsed' ? applyLease(latest, 'lapsed') : latest;
@@ -418,10 +408,7 @@ function VaultShell({
         setWorkflow(routed);
         return;
       }
-      // A missing catalog snapshot is a refresh hint, not a failed account
-      // action: the desktop dropped its last list so the next command cannot
-      // bind to a stale store. The standard toast matches that, rather than the
-      // danger tone used for refused or broken work.
+      // Catalog synchronization requests use standard toast notifications rather than warning alerts.
       toasts.show(
         typed.message,
         typed.code === 'catalog-required' ? undefined : { tone: 'warning' },
@@ -441,7 +428,7 @@ function VaultShell({
           refresh(
             options.report === false
               ? 'Vault refreshed'
-              : 'Vault refreshed, you can try again',
+              : 'Vault refreshed. Please try again.',
           ),
         commandError,
       );
@@ -503,18 +490,15 @@ function VaultShell({
     try {
       window.history.replaceState(null, '', href);
     } catch {
-      // A realm with no navigable history (a file:// page, a test) simply
-      // keeps the state in memory.
+      // Non-navigable environments (e.g. file:// or test harnesses) retain state in memory.
     }
   }, [state, scene.lease]);
 
-  // Escape steps back out: the search first, then the selection.
+  // Escape clears search query first, then deselects active item.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return;
-      // A dialog that handled Escape has already prevented it. Without this
-      // check the keypress that closed a sheet also cleared the search filter
-      // or dropped the selection the sheet was about.
+      // Ignore Escape events already handled by open modal dialogs.
       if (event.defaultPrevented) return;
       const current = locations.getSnapshot();
       if (current.query) locations.search('');
@@ -629,7 +613,7 @@ function VaultShell({
           data-tauri-drag-region=""
         >
           <i data-tauri-drag-region="" />
-          {/* The agent's own word for where it is, as the design frames it. */}
+          {/* Local agent connection and readiness status */}
           Agent {shown.agent.phase === 'Bootstrap' ? 'starting' : 'ready'}
         </span>
         <Button
@@ -721,7 +705,7 @@ function VaultShell({
             value: draft,
             epoch: Date.now(),
           });
-          toasts.show('Refreshed the catalog, review your retained draft');
+          toasts.show('Catalog refreshed. Review your draft.');
         }}
         onDiscardConflict={() => {
           setWorkflow(null);
@@ -736,7 +720,7 @@ function VaultShell({
           );
           if (!current) {
             throw new Error(
-              'That path is free now. Your draft is still here; change the path or try creating it again.',
+              'That path is now available. Your draft has been saved. Choose a different path or retry creating the item.',
             );
           }
           setLatest(next);

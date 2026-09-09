@@ -1756,11 +1756,15 @@ pub fn derive_mutation_key(master_key: &[u8; 32]) -> Zeroizing<[u8; 32]> {
 
 fn validate_account(account: &StoredAccount, expected_alias: &str) -> Result<()> {
     if account.version != CREDENTIAL_VERSION || account.alias != expected_alias {
-        return Err(Error::InvalidAccount("version or alias binding changed"));
+        return Err(Error::InvalidAccount(
+            "credential version or alias does not match",
+        ));
     }
     validate_name(&account.alias)?;
     if account.username.is_empty() || account.username.len() > 256 {
-        return Err(Error::InvalidAccount("username is missing or excessive"));
+        return Err(Error::InvalidAccount(
+            "username is empty or exceeds 256 bytes",
+        ));
     }
     EntityId::from_bytes(account.uid.clone())?.require_type(ENTITY_USER)?;
     validate_certificates(&account.certificate_chain)
@@ -1852,7 +1856,7 @@ pub(super) fn validate_certificates(certificates: &[Vec<u8>]) -> Result<()> {
             .any(|certificate| certificate.is_empty() || certificate.len() > MAX_CERTIFICATE_BYTES)
     {
         return Err(Error::InvalidAccount(
-            "certificate chain is invalid or excessive",
+            "certificate chain is empty, exceeds certificate limit, or contains oversized certificates",
         ));
     }
     Ok(())

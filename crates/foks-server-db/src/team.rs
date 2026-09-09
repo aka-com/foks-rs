@@ -376,10 +376,9 @@ impl Database {
         }
         inject(failure, TeamMutationFailurePoint::Chain)?;
 
-        // A chain-view grant scoped to a remote roster party must not survive
-        // that exact party+host disappearing. Revoke inside the same team-edit
-        // transaction so readers can never observe the expelled roster with a
-        // still-current matching bearer.
+        // A chain-view grant scoped to a remote team member must not remain valid
+        // if that member is removed. Revoke within the same team-edit transaction
+        // so readers cannot use an existing bearer token for a removed member.
         let granted_scopes = {
             let mut statement = transaction.prepare(
                 "SELECT p.viewer_party_id, p.viewer_host_id

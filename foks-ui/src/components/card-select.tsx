@@ -1,18 +1,6 @@
 /**
- * The dropdown form of `RadioCard` — the same card, collapsed to the one
- * that is chosen.
- *
- * "Save in" listed every vault, group and ad-hoc share as a radio card, so a
- * person with a handful of groups met a wall of rows before reaching the
- * fields the sheet is actually asking for. The choice itself is unchanged —
- * a title and the reason under it — so this shows only the chosen card and
- * reopens the full list on demand.
- *
- * The list is the kit's `Listbox` in a `Popover`, which is what keeps the
- * arrow keys, Escape, dismissal on an outside pointer-down and focus return
- * to the trigger; the options are real `role="option"` buttons, so an
- * unavailable one is `aria-disabled` and the roving focus steps over it
- * rather than landing on a choice that cannot be taken.
+ * Dropdown selector displaying the chosen card option and expanding a
+ * popover listbox of selectable options on demand.
  */
 
 import { useRef, useState } from 'react';
@@ -21,21 +9,21 @@ import { Listbox, Popover } from '/kit/overlay-primitives';
 import { Icon } from './icon';
 
 export interface CardOption {
-  /** What `onChange` reports, and what `value` is compared against. */
+  /** The unique option identifier. */
   id: string;
-  /** The bold first line. */
+  /** Primary label text. */
   title: ReactNode;
-  /** The quiet explanation under it — why a reader would pick this one. */
+  /** Secondary explanatory text displayed below the title. */
   detail?: ReactNode;
-  /** Dimmed and unchoosable — the design's `.radio.off`. */
+  /** Disables the option and displays it in a dimmed state. */
   off?: boolean;
 }
 
 export interface CardSelectProps {
-  /** What is being chosen, for the screen reader. */
+  /** Accessible label describing the selection list. */
   label: string;
   options: CardOption[];
-  /** The chosen option's id, or one no option carries for "nothing yet". */
+  /** The chosen option ID, or an empty string when unselected. */
   value: string;
   onChange: (id: string) => void;
   /** The trigger's first line when `value` names no option. */
@@ -73,8 +61,7 @@ export function CardSelect({
           setOpen((was) => !was);
         }}
         onKeyDown={(event: KeyboardEvent<HTMLButtonElement>) => {
-          // Down and Up open the list the way a native select does; the
-          // Listbox then puts focus on the chosen option.
+          // Arrow keys open the popover listbox and focus the current option.
           if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
           event.preventDefault();
           setOpen(true);

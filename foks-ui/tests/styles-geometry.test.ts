@@ -1,11 +1,5 @@
 /**
- * What the stylesheet must keep being, checked against its source.
- *
- * jsdom computes no layout, so the geometry the design depends on cannot be
- * asserted by rendering. These read `src/styles/shell.css` — which is
- * `wave6/shell.css` lifted whole — and hold the few structural facts that a
- * careless edit would quietly break: the token split, the sidebar's width,
- * and the fact that nothing here re-declares a token the kit already owns.
+ * Static tests verifying stylesheet invariants, token declarations, and layout rules.
  */
 
 import assert from 'node:assert/strict';
@@ -42,8 +36,7 @@ test('the shared tokens come from the kit and are not re-declared here', async (
   const kit = await readSource(TOKENS, import.meta.url);
 
   assert.match(shell, /@import '\/kit\/tokens\.css';/);
-  // The import must precede the local block, or the cascade hands FOKS AKA's
-  // values for the five that diverge.
+  // The kit import must precede local declarations so local overrides take precedence.
   assert.ok(
     shell.indexOf("@import '/kit/tokens.css';") < shell.indexOf(':root{'),
     'the kit import comes before the local :root block',
@@ -51,7 +44,7 @@ test('the shared tokens come from the kit and are not re-declared here', async (
 
   const kitTokens = rootTokens(kit);
   const shellTokens = rootTokens(shell);
-  assert.equal(kitTokens.size, 35, 'the measured shared subset');
+  assert.equal(kitTokens.size, 35, 'expected exactly 35 shared kit tokens');
 
   for (const name of shellTokens.keys()) {
     assert.equal(
@@ -62,7 +55,7 @@ test('the shared tokens come from the kit and are not re-declared here', async (
   }
 });
 
-test('the nineteen FOKS tokens are the five that diverge and the fourteen that are ours', async () => {
+test('declares the 19 expected FOKS design tokens', async () => {
   const shell = await readSource(SHELL, import.meta.url);
   const tokens = rootTokens(shell);
 
@@ -88,7 +81,7 @@ test('the nineteen FOKS tokens are the five that diverge and the fourteen that a
     '--surface',
   ]);
 
-  // The five that share a name with AKA keep the design's values, not AKA's.
+  // Verify tokens with application-specific overrides retain local values.
   assert.equal(tokens.get('--faint'), '#8a8a92');
   assert.equal(tokens.get('--surface'), '#f6f6f9');
   assert.equal(tokens.get('--main-surface'), '#fff');
@@ -96,7 +89,7 @@ test('the nineteen FOKS tokens are the five that diverge and the fourteen that a
   assert.equal(tokens.get('--shadow-menu'), '0 10px 28px rgba(15,20,45,.14)');
 });
 
-test('the sheet is light only — no dark override travelled with it', async () => {
+test('stylesheet contains no dark mode media queries or theme overrides', async () => {
   const strip = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, '');
   const shell = strip(await readSource(SHELL, import.meta.url));
   const tokens = strip(await readSource(TOKENS, import.meta.url));
@@ -106,7 +99,7 @@ test('the sheet is light only — no dark override travelled with it', async () 
   }
 });
 
-test('the shell layout the design specifies survived the lift', async () => {
+test('shell stylesheet contains required grid and flexbox layout rules', async () => {
   const shell = await readSource(SHELL, import.meta.url);
 
   // The two- and three-column shells (sidebar · items · details).
@@ -115,26 +108,23 @@ test('the shell layout the design specifies survived the lift', async () => {
     shell,
     /\.app\.with-details\{grid-template-columns:224px 1fr 300px\}/,
   );
-  // Group roster stacks sit on the trailing edge, including a one-person
-  // stack that would otherwise rest on the left of the 28px slot.
+  // Position avatar stacks on the trailing edge of navigation rows.
   assert.match(shell, /\.nav \.stack\{margin-left:auto\}/);
   assert.match(shell, /\.nav \.stack \.av:only-child\{right:0\}/);
-  // The main column must be allowed to shrink, or a long path scrolls the
-  // window instead of the list.
+  // Allow main column flex shrinking to prevent horizontal window overflow.
   assert.match(shell, /\.main\{[^}]*min-width:0[^}]*\}/);
   assert.match(
     shell,
     /\.path\{[^}]*padding:8px 20px;[^}]*border-bottom:1px solid var\(--line-soft\)/,
   );
   assert.match(shell, /\.header-action\{[^}]*margin-left:auto;[^}]*flex:none/);
-  // The title row must shrink so takeover actions stay in `.header-action`
-  // instead of being pushed off the clipped window by a long group subtitle.
+  // Title row flex shrinkage preserves action button visibility in headers.
   assert.match(shell, /\.loc\{[^}]*flex:1 1 auto/);
   assert.match(shell, /\.loc-copy\{[^}]*white-space:nowrap/);
   assert.match(shell, /\.header-action \.btn\.cap\{height:28px;font-size:13px/);
   assert.match(shell, /\.loc h1\{display:inline;/);
   assert.match(shell, /\.loc small\{display:inline;/);
-  // The windowing estimate in ItemsScreen and the design's fixed row must agree.
+  // Ensure CSS row height matches the virtual list row estimate.
   assert.match(shell, /\.row\{height:50px;/);
   assert.match(shell, /\.toolbar \.btn,\.toolbar \.seg\{height:32px\}/);
   assert.match(
@@ -148,8 +138,7 @@ test('the shell layout the design specifies survived the lift', async () => {
   assert.match(shell, /\.btn \.ic\.chevron\{font-size:14px\}/);
   assert.match(shell, /\.menu button\{[^}]*padding:6px 9px;/);
   assert.match(shell, /\.menu button\.kind-menu-item\{padding-block:4px\}/);
-  // Disabled primary hover must not fall back to --btn-bg, or the blue
-  // fill disappears against the card while the pointer is still over it.
+  // Maintain accent background color on hover for disabled primary buttons.
   assert.match(
     shell,
     /\.btn\.primary\[disabled\]:hover\{background:var\(--accent\)\}/,
@@ -160,31 +149,26 @@ test('the shell layout the design specifies survived the lift', async () => {
   );
   assert.match(shell, /\.tile \.qa\{[^}]*right:8px;top:8px;/);
   assert.match(shell, /\.radio\{[^}]*text-align:left[^}]*width:100%/);
-  // The servers rows sit in a settings inset: the value column runs across,
-  // and the band's action hugs its right edge.
+  // Layout server settings rows with right-aligned action banners.
   assert.match(shell, /\.settings-inset \.fr \.v\.srv\{flex-direction:row/);
   assert.match(shell, /\.band \.a\{margin-left:auto/);
-  // Settings value columns are a flex stack; chips must hug their text
-  // instead of stretching across the row.
+  // Prevent chip elements from stretching full width inside flex value columns.
   assert.match(shell, /\.chip\{[^}]*width:max-content/);
   assert.match(
     shell,
     /\.settings-inset \.fr \.v \.chip\{align-self:flex-start\}/,
   );
-  // Sheet field rows: the value column grows, and the input fills it, so a
-  // click anywhere in the row hits the control rather than a shrink-wrapped
-  // text width.
+  // Ensure form inputs expand to fill the field row value column.
   assert.match(shell, /\.inset \.fr \.v\{flex:1;min-width:0/);
   assert.match(shell, /\.inset \.fr input\{[^}]*width:100%/);
-  // Toasts share `#overlays` with sheets; they must paint above `.backdrop`.
+  // Toast notifications must render with higher z-index than modal backdrops.
   assert.match(shell, /\.backdrop\{[^}]*z-index:10\}/);
   assert.match(shell, /\.toasts\{[^}]*position:fixed;[^}]*z-index:20/);
 });
 
-test('the app sheet only adapts the mock window; it invents no colours', async () => {
+test('app stylesheet uses design tokens and declares no hardcoded colors', async () => {
   const app = await readSource('../src/styles/app.css', import.meta.url);
-  // Every colour must be a token: a literal here is a place the design and
-  // the app can drift without the design being able to see it.
+  // Enforce CSS variables for all color values to prevent design drift.
   const declarations = app.replace(/\/\*[\s\S]*?\*\//g, '');
   assert.doesNotMatch(declarations, /#[0-9a-fA-F]{3,8}\b/);
   assert.doesNotMatch(declarations, /\brgba?\(/);
@@ -248,7 +232,7 @@ test('the app sheet only adapts the mock window; it invents no colours', async (
   assert.match(app, /\.inset\.danger\s*\{[^}]*overflow: visible/);
 });
 
-test('the desktop title clears the macOS traffic lights', async () => {
+test('desktop titlebar applies left padding to clear macOS window controls', async () => {
   const app = await readSource('../src/styles/app.css', import.meta.url);
   assert.match(
     app,

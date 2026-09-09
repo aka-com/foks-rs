@@ -1,17 +1,8 @@
 /**
- * A labelled text field inside an `Inset`.
+ * Form field row styled for use within an Inset container.
  *
- * `InsetRow` plus a controlled `<input>` is how every sheet in FOKS asks for
- * a value — a username, an alias, a path, a confirmation, a passphrase. The
- * write workflows had grown a local `field()` helper for it; everyone else
- * wrote the pair out by hand, which is why the `mono` treatment was applied
- * to the row on some call sites and to the input on others.
- *
- * The label is a real `<label>` — `InsetRow` gives its first control the
- * label's id — and the input keeps a matching `aria-label`. The two carry the
- * same string, so the accessible name is the same either way. The input fills
- * the value column, and a click anywhere else on the row (padding, empty
- * value space) focuses it, so the hit target is the whole row.
+ * Supports text, masked password, number, monospace, trailing action, and
+ * descriptive hint variants.
  */
 
 import type { ReactNode } from 'react';

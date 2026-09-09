@@ -42,11 +42,9 @@ function usableHeight(height: number | undefined): number {
 }
 
 /**
- * The slice of rows to mount, and the spacer heights that keep the scrollbar
- * describing the whole list.
+ * Calculates spacer heights and the visible item range for windowed rendering.
  *
- * Guarantees `padTop + sum(heights[start..end)) + padBottom` equals the full
- * list height, so windowing never changes how far the list scrolls.
+ * Unmeasured rows use the heights supplied by the caller.
  */
 export function virtualListWindow(input: VirtualListInput): VirtualListWindow {
   const count = input.heights.length;

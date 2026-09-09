@@ -490,13 +490,12 @@ pub(crate) fn apply_owner_rotation(
     match (owner_generation, current, mutation) {
         (None, _, None) => Ok(()),
         (None, _, Some(_)) => Err(Error::Invalid(
-            "passphrase annex without an owner PUK rotation",
+            "passphrase update requires an owner PUK rotation",
         )),
         (Some(_), None, None) => Ok(()),
         (Some(_), None, Some(_)) => Err(Error::PassphraseNotFound),
-        // Go permits owner-PUK rotation without a PPE annex and repairs the
-        // lag from its background passphrase responder. Preserve the existing
-        // authenticated parcel until that responder publishes generation +1.
+        // Owner-PUK rotation may occur without updating the passphrase entry.
+        // Preserve the existing parcel until generation +1 is published.
         (Some(_), Some(_), None) => Ok(()),
         (Some(owner_generation), Some(current), Some(mutation)) => {
             validate_mutation(config, uid, mutation)?;

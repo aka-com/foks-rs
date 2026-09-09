@@ -1,4 +1,4 @@
-/** Shared full-page treatment for a store whose contents are unavailable. */
+/** Full-page error and recovery view displayed when a store cannot be accessed. */
 
 import type { ReactNode } from 'react';
 import { Button, Notice } from '../components';
@@ -45,8 +45,8 @@ function accessCopy(
       };
     case 'never-probed':
       return {
-        title: 'Server not checked yet',
-        detail: `${serverName} has not been checked. ${subject} until it is verified.`,
+        title: 'Server not verified',
+        detail: `${serverName} has not been verified yet. Check the server in Server settings to access ${subject.toLowerCase()}.`,
         action: 'review-server',
       };
     case 'catalog-unavailable':
@@ -57,8 +57,8 @@ function accessCopy(
       };
     case 'lease-lapsed':
       return {
-        title: 'Check-in expired',
-        detail: `${subject} until FOKS reconnects to ${serverName}.`,
+        title: 'Connection expired',
+        detail: `Could not reach ${serverName} recently. Reconnect to restore access to ${subject.toLowerCase()}.`,
         action: 'open-server',
       };
     case 'inactive':
@@ -100,7 +100,7 @@ export function StoreAccessTakeover({
       </Button>
     ) : (
       <Button onClick={() => onOpenServer(server?.id ?? store.server)}>
-        {copy.action === 'open-server' ? 'Open server' : 'Review server'}
+        {copy.action === 'open-server' ? 'View server' : 'Server settings'}
       </Button>
     );
 
@@ -143,7 +143,7 @@ function joinNames(stores: readonly Store[]): string {
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
-/** Aggregate catalog-level access problems. Incomplete group setup stays on the group, not All items. */
+/** Aggregates store access problems by server for warning banners. */
 export function storeAccessBands(world: World): StoreAccessBand[] {
   const buckets = new Map<string, { state: AccessProblem; stores: Store[] }>();
   for (const store of world.stores) {

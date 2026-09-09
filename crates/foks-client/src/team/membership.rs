@@ -1873,7 +1873,7 @@ fn validate_addition_change(
 ) -> Result<()> {
     let [member] = change.changes.as_slice() else {
         return Err(Error::OperationBinding(
-            "prepared addition sequence contains another roster transition",
+            "prepared addition sequence contains unexpected roster transitions",
         ));
     };
     let keys = member.keys.as_ref().ok_or(Error::OperationBinding(

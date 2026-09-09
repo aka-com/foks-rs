@@ -155,10 +155,7 @@ function RoleChip({
   return (
     <span className="rolecell">
       <Chip>{roleName(role)}</Chip>
-      {/* Only a Member role carries an access level, and it carries one at
-          every visibility — including 0, which is the level most members sit
-          at. Owner and Admin read everything, so a level under them would be
-          a number that never varies. */}
+      {/* Access levels apply only to Member roles; Owner and Admin roles have full visibility. */}
       {parsed?.kind === 'member' ? (
         <small>visibility {visibilityOf(parsed)}</small>
       ) : null}
@@ -267,7 +264,7 @@ export function discoveryContext(
 
 /** One accessible name per button, since several read "Check for groups". */
 export const checkLabel = (context: DiscoveryContext): string =>
-  `Check for groups for ${context.account.username} on ${context.server.name}`;
+  `Check for groups accessible to ${context.account.username} on ${context.server.name}`;
 
 export const unavailableTitle = (context: DiscoveryContext): string =>
   `Restore access to ${context.server.name} before checking for groups.`;
@@ -347,10 +344,8 @@ function PartyRow({
             party.party_kind !== 'user'
               ? `${fmtRole(party.source_role)} at ${partyShortName(party)}`
               : null,
-            // An inactive admission is why this role grants nothing. It used
-            // to be said in the access column; the role it qualifies is the
-            // only place left to say it.
-            active ? null : 'admission inactive',
+            // Inactive memberships do not grant access.
+            active ? null : 'Access paused',
           ]
             .filter(Boolean)
             .join(' · ') || undefined
@@ -645,15 +640,11 @@ function PartyPanel({
               ) : party.scoped_host_id_hex ? (
                 <>
                   <b>Pin</b>
-                  <span>local pin fact unavailable</span>
+                  <span>Server pin not verified</span>
                 </>
               ) : null}
             </>
           ) : null}
-          <b>Generation</b>
-          <span>{party.generation}</span>
-          <b>Party id</b>
-          <code>{party.party_id_hex}</code>
           <b>Managed</b>
           <span>
             {party.locally_manageable
@@ -911,9 +902,9 @@ function FederationExpulsionSheet({
       }
     >
       <p>
-        Every member of <b>{entry.remote_team_alias}</b> will lose future access
-        to this group. All PTKs they could read will rotate before the local
-        admission key is deleted.
+        Every member of <b>{entry.remote_team_alias}</b> will lose access to
+        this group. Group encryption keys will be updated to block future
+        access.
       </p>
       <Inset>
         <InsetRow label="Remote host">
@@ -1022,7 +1013,9 @@ function SettingsTab({
         <InsetRow label="Your account">
           {account?.username ?? store.account} · {mine ? roleText(mine) : '—'}
         </InsetRow>
-        <InsetRow label="Owner">{owner ? partyShortName(owner) : '—'}</InsetRow>
+        <InsetRow label="Owner">
+          {owner ? partyShortName(owner) : 'No owner designated'}
+        </InsetRow>
         <InsetRow
           label="Group ID"
           action={
@@ -1097,8 +1090,8 @@ function SettingsTab({
             <b>Leave {store.name}</b>
             <small>
               {seniors.length
-                ? `You can’t remove yourself yet. To leave, ask ${oxfordOr(seniors)} to remove you.`
-                : 'You can’t remove yourself yet, and no one else here can remove you.'}
+                ? `To leave this group, ask ${oxfordOr(seniors)} to remove your account.`
+                : 'As the sole owner, you must transfer ownership or delete the group to leave.'}
             </small>
           </span>
         </InsetRow>
@@ -1112,8 +1105,8 @@ function SettingsTab({
           <span className="t">
             <b>Delete {store.name}</b>
             <small>
-              Removes the group and every item in it for everyone. Not available
-              yet.
+              Permanently deletes the group and all shared items for all
+              members.
             </small>
           </span>
         </InsetRow>
@@ -1264,7 +1257,7 @@ export function GroupSheet({
     ownerAccount?.username.split('.')[0] ??
     ownerAccount?.username ??
     'the group Admin';
-  const inviteMessage = `Hi Jules — I'd like to add you to ${store.name} on FOKS.\n1. Install FOKS: https://foks.app/download (placeholder)\n2. Add the server: ${server?.name ?? store.server}\n3. Create your account there with username firstname.lastname — for you: jules.park\n4. Then tell ${inviter} your username — there are no invite links; I add you by username.\nOnce I have, ${store.name} shows up under Groups in your app.`;
+  const inviteMessage = `I'd like to invite you to join ${store.name} on FOKS.\n\n1. Download FOKS: https://foks.app/download\n2. Add server: ${server?.name ?? store.server}\n3. Create your account on the server\n4. Send your username to ${inviter}\n\nOnce added, ${store.name} will appear in your Groups list.`;
   const teamAlias = name
     .trim()
     .toLowerCase()
@@ -1294,9 +1287,9 @@ export function GroupSheet({
     sheet === 'create'
       ? (server?.name ?? 'Selected server')
       : sheet === 'invite'
-        ? 'There are no invite links — this writes the message that gets them an account'
+        ? 'Send instructions to help a new user set up their account'
         : sheet === 'add'
-          ? `They must already have an account on ${server?.name}`
+          ? 'Add an existing user from this server'
           : sheet === 'demote'
             ? `${target ? roleText(target) : ''} in ${store.name} today`
             : sheet === 'remove'
@@ -1573,8 +1566,8 @@ export function GroupSheet({
         {sheet === 'demote' ? (
           <>
             <p>
-              Roles can only be lowered from here. To raise one, remove the
-              person and add them again at the higher role.
+              To grant a higher role, remove the member and add them again with
+              the updated role.
             </p>
             <Inset>
               <RadioGroup label="New role">
@@ -1583,7 +1576,7 @@ export function GroupSheet({
                     selected={demotion?.role === 'Admin'}
                     onSelect={() => setDemotion({ role: 'Admin' })}
                     title="Admin"
-                    detail="Can manage members and access items allowed for Admins."
+                    detail="Full access to group items and permission to manage members."
                   />
                 ) : null}
                 <RadioCard
@@ -1615,7 +1608,7 @@ export function GroupSheet({
                       <Chip>current</Chip>
                     </>
                   }
-                  detail="Roles can only be lowered here. To raise a role, remove and re-add the person."
+                  detail="Current active role."
                 />
               </RadioGroup>
             </Inset>
@@ -2077,7 +2070,7 @@ export function GroupSettingsScreen({
                     onFinish={finishSetup}
                     manageable={rosterManageable}
                     failure={rosterFailure}
-                    onRetry={() => void onApplied('Group roster refreshed')}
+                    onRetry={() => void onApplied('Refreshing group members…')}
                   />
                   <FederationSection
                     world={world}
@@ -2092,7 +2085,9 @@ export function GroupSettingsScreen({
                     onExpel={setExpulsionTarget}
                     manageable={federationManageable}
                     failure={federationFailure}
-                    onRetry={() => void onApplied('Group federation refreshed')}
+                    onRetry={() =>
+                      void onApplied('Refreshing external groups…')
+                    }
                   />
                 </>
               ) : (

@@ -47,9 +47,9 @@ button{background:none;border:0;cursor:pointer}
 a{color:inherit;text-decoration:none}
 svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
 
-/* ---------- review scaffolding (outside the window) ---------- */
+*(Delete comment entirely)*
 
-/* ---------- window ---------- */
+/* Window container */
 .window{position:relative;width:min(1180px,96vw);height:min(760px,88vh);background:var(--main-surface);border-radius:var(--radius-lg);border:1px solid rgba(0,0,0,.16);box-shadow:0 24px 60px rgba(15,20,45,.26),0 2px 8px rgba(15,20,45,.12);overflow:hidden;display:flex;flex-direction:column}
 .titlebar{height:44px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--surface);border-bottom:1px solid var(--line-soft);user-select:none}
 .lights{display:flex;gap:8px;margin-right:6px}.light{width:12px;height:12px;border-radius:50%}
@@ -62,7 +62,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .app{flex:1;min-height:0;display:grid;grid-template-columns:224px 1fr}
 .app.with-details{grid-template-columns:224px 1fr 300px}
 
-/* ---------- sidebar (04) ---------- */
+/* Sidebar */
 .side{background:var(--surface);border-right:1px solid var(--line-soft);display:flex;flex-direction:column;padding:12px 10px 10px;overflow:auto}
 .side h6{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:10px 10px 5px}
 .nav{display:flex;align-items:center;gap:9px;width:100%;padding:6px 9px;border-radius:8px;text-align:left;color:var(--ink-2);font-weight:500;line-height:1.25}
@@ -81,10 +81,10 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side .foot{margin-top:auto;padding-top:10px;border-top:1px solid var(--line-soft)}
 .side .foot .nav{font-size:13px}
 .side .foot-separator{margin:7px 9px;border-top:1px solid var(--line-soft)}
-/* first-run mode of the same sidebar (02-first-run builds on these) */
+/* Sidebar active state in onboarding mode */
 .nav.on .t small{color:var(--accent-ink);opacity:.85}
 
-/* avatars and stacks */
+/* Avatars and avatar stacks */
 .stack{display:inline-flex;position:relative;width:28px;height:20px;flex:none}
 .av{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:8.5px;font-weight:700;color:#fff;border:2px solid var(--surface);position:absolute;top:0;overflow:hidden;letter-spacing:-.04em}
 .av .ic{font-size:11px;color:#fff;width:auto}
@@ -95,13 +95,13 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .stack.xs .av .ic{font-size:9px}
 .av.team{border-radius:6px;font-size:11px;border:0}
 
-/* ---------- main ---------- */
+/* Main content area */
 .main{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;background:#fff}
 .path{display:flex;align-items:center;gap:10px;padding:8px 20px;min-height:48px;border-bottom:1px solid var(--line-soft);background:#fff}
 .header-action{display:flex;align-items:center;gap:6px;margin-left:auto;flex:none}
 .header-action .btn.cap{height:28px;font-size:13px;flex:none}
 .loc{display:flex;align-items:center;gap:9px;min-width:0;flex:1 1 auto}
-/* Title + subtitle are inline so mixed sizes share a baseline. Flex items with overflow:hidden synthesize the box bottom as the baseline. */
+/* Align title and subtitle along a shared text baseline. */
 .loc-copy{min-width:0;flex:1 1 auto;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .loc.text-only{align-items:baseline}
 .loc h1{display:inline;font-size:15px;font-weight:650;letter-spacing:-.01em}
@@ -150,7 +150,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .menu .cap{font-size:11.5px;color:var(--muted);padding:6px 9px 4px}
 .body{flex:1;min-height:0;overflow:auto;padding:8px 20px 80px}
 
-/* ---------- list rows (01) ---------- */
+/* List rows */
 .hdr,.row{display:grid;grid-template-columns:26px minmax(160px,1fr) minmax(112px,160px) 88px 52px;gap:10px;align-items:center;padding:0 10px}
 .hdr{height:30px;font-size:11.5px;color:var(--faint);font-weight:600;letter-spacing:.02em}
 .hdr button{color:inherit;text-align:left;font-weight:inherit;letter-spacing:inherit}.hdr button.on{color:var(--ink-3)}
@@ -182,13 +182,13 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .tag{display:inline-block;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--muted);background:var(--chip-bg);border-radius:5px;padding:1px 6px;white-space:nowrap;vertical-align:1px}
 .tag.warn{color:var(--amber-ink);background:var(--amber-wash)}
 
-/* group header row inside a group's page (01) */
+/* Group header row */
 .ghead{display:flex;align-items:center;gap:8px;padding:8px 10px 12px;margin-bottom:4px;border-bottom:1px solid var(--line-soft)}
 .ghead .t{flex:1;min-width:0}.ghead .t b{display:block;font-size:15px;font-weight:650;letter-spacing:-.01em}
 .ghead .t small{display:block;font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ghead .btn{height:30px;font-size:13px}
 
-/* ---------- tile grid (04) ---------- */
+/* Tile grid */
 .gsec{font-size:12px;font-weight:600;color:var(--faint);letter-spacing:.03em;text-transform:uppercase;padding:14px 4px 8px;display:flex;align-items:baseline;gap:8px}
 .gsec .stack{align-self:center}
 .gsec .n{text-transform:none;letter-spacing:0;font-weight:500}
@@ -225,7 +225,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .kico.File{background:var(--c-file)}.kico.Link{background:var(--c-link)}
 .kico.danger{background:var(--danger-wash);color:var(--danger-ink)}.kico.danger .ic{color:var(--danger-ink)}
 
-/* ---------- empty states, notices, bands, cards, panes ---------- */
+/* Notices, cards, and content panes */
 .empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:90px 20px 0;color:var(--muted)}
 .empty .big{width:88px;height:88px;border-radius:24px;background:var(--surface);display:grid;place-items:center;font-size:44px;color:var(--c-password);margin-bottom:16px}
 .empty h2{font-size:17px;font-weight:650;color:var(--ink);margin-bottom:4px}.empty p{max-width:380px;margin-bottom:16px}
@@ -256,11 +256,11 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .plain p{color:var(--muted);margin-bottom:12px}
 .plain code{font:12.5px var(--mono)}
 .plain .btn{margin-top:4px}
-/* full-window stop (agent lost) */
+/* Full-window error overlay when backend connection is lost */
 .stopwrap{position:absolute;inset:44px 0 0 0;background:var(--main-surface);z-index:12;display:flex;flex-direction:column;overflow:auto;padding:0 20px}
 .stopwrap .notice{margin-top:120px}
 
-/* a step/flow pane — the frame 02-first-run builds its steps in */
+/* Multi-step flow pane */
 .pane{max-width:700px;padding-top:6px}.pane.wide{max-width:880px}
 .pane h1{font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.2;margin:4px 0 8px;overflow-wrap:anywhere}
 .pane .lead{color:var(--muted);line-height:1.5;margin-bottom:14px;max-width:70ch}.pane .lead b{color:var(--ink-2);font-weight:600}
@@ -277,7 +277,7 @@ details.dd .dbody,details.dd > :not(summary){margin-top:12px;line-height:1.5}
 details.dd ol{padding-left:1.25em;display:flex;flex-direction:column;gap:10px}
 details.dd li b{color:var(--ink-2)}
 
-/* ---------- details panel (01) ---------- */
+/* Details panel */
 .details{border-left:1px solid var(--line-soft);background:var(--panel);display:flex;flex-direction:column;min-height:0}
 .details .dh{display:flex;align-items:center;gap:8px;padding:14px 16px 10px}
 .details .dh .t{flex:1;min-width:0}
@@ -339,7 +339,7 @@ details.dd li b{color:var(--ink-2)}
 .sheet-advanced .toggle-body>.inset{margin-top:6px}
 .deferred{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.5}
 
-/* ---------- sheets, fields, flash ---------- */
+/* Sheets and form fields */
 .backdrop{position:absolute;inset:0;background:var(--backdrop);display:grid;place-items:center;z-index:10}
 .sheet{width:460px;max-height:92%;display:flex;flex-direction:column;background:#fff;border-radius:var(--radius-xl);box-shadow:var(--shadow-sheet);padding:20px 24px 18px;overflow:hidden}
 .sheet.wide{width:560px}

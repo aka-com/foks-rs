@@ -134,10 +134,9 @@ pub struct JobRun {
     pub job_id_hex: String,
     pub completed: bool,
     pub error: Option<String>,
-    /// Set when the run finished without doing its work because it needs a
-    /// credential the unattended scheduler must not acquire on its own, such
-    /// as a locked YubiKey. The job is not failed and is not backed off; the
-    /// text names the action a person has to take.
+    /// Set when execution is deferred pending manual user intervention, such as
+    /// unlocking a hardware security key. The job is neither failed nor backed off;
+    /// the description specifies the required user action.
     pub deferred: Option<String>,
     pub next_run_at: u64,
 }

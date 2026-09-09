@@ -1,15 +1,8 @@
 /**
- * The jsdom realm every `*.render.test.tsx` boots into.
+ * Configures the JSDOM test environment for component render tests.
  *
- * Adapted from `ui/tests/lib/dom-harness.ts`, trimmed to what the FOKS shell
- * actually reads. It must run at module level, before any `await import(...)`
- * in a test's `before` hook: the app reads `location` while its modules
- * evaluate, and a bare import cannot intercept that.
- *
- * There is no `__TAURI__` install here, and there must not be:
- * `withGlobalTauri` is false for FOKS, so no such global exists in the
- * shipping app. Render tests inject their bridge explicitly; the Playwright
- * acceptance build opts into the mock with `VITE_FOKS_MOCK=1`.
+ * Initializes global browser DOM APIs and mock timers prior to module evaluation.
+ * Production builds and tests run without global Tauri IPC objects.
  */
 
 import { JSDOM } from 'jsdom';
@@ -24,7 +17,7 @@ class TestResizeObserver {
 }
 
 export interface InstallDomOptions {
-  /** Document URL. Load-bearing: `?state=` is read at import time. */
+  /** Initial document URL evaluated during module initialization. */
   url?: string;
   /** Inner HTML of `<body>` — the mount points the app boots into. */
   body?: string;

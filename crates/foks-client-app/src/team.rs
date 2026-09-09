@@ -1050,7 +1050,9 @@ fn discovery_alias(vault: &mut AccountVault<'_>, identity: &StoredTeam) -> Resul
         let suffix = &id[..suffix_bytes * 2];
         let keep = 64usize
             .checked_sub(suffix.len() + 1)
-            .ok_or(Error::InvalidAccount("discovered team alias is excessive"))?;
+            .ok_or(Error::InvalidAccount(
+                "discovered team alias exceeds maximum length",
+            ))?;
         let base = &identity.alias[..identity.alias.len().min(keep)];
         let candidate = format!("{base}_{suffix}");
         if !occupied.contains(&candidate) {
@@ -1596,7 +1598,9 @@ impl Drop for StoredTeamRekey {
 impl StoredTeam {
     pub(super) fn random_named(alias: &str, account_alias: &str, name: &str) -> Result<Self> {
         if name.trim().is_empty() || name.len() > 256 {
-            return Err(Error::InvalidAccount("team name is missing or excessive"));
+            return Err(Error::InvalidAccount(
+                "team name is empty or exceeds 256 bytes",
+            ));
         }
         let mut stored = Self::random(alias, account_alias, StoredTeamKind::Named)?;
         stored.name = Some(name.to_owned());

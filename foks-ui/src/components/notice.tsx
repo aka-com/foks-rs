@@ -1,18 +1,8 @@
 /**
- * The two ways the design says "something outranks what you were doing".
+ * Alert notices and banner strips.
  *
- * `Notice` is the full-pane panel that replaces a list: the lapsed check-in,
- * the group that reports itself inactive. It takes the model's own
- * `Severity`, so the severity a notification carries is the severity drawn:
- * `info` is a neutral panel, `warn` the amber one and `crit` the `.stop`
- * treatment. No fourth colour is invented here.
- *
- * `Band` is the compact strip beside or above what it qualifies — Proposed on
- * setup, Proposed in the first run, or the reason a section's controls are
- * inert. It is an aside, never a replacement: what it sits with still shows.
- * It takes the same `Severity` as `Notice`, so an aside about a stopped
- * server is drawn in the same red as the panel about one, and nothing has to
- * reach for the full-pane panel just to be the right colour.
+ * `Notice` renders an inset message container. `Band` renders a compact
+ * full-width banner. Both support `info`, `warn`, and `crit` severities.
  */
 
 import type { ReactNode } from 'react';

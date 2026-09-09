@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { reconcileMutationFailure } from '../src/mutation-recovery';
 
-test('a failed mutation refreshes once without replaying the write', async () => {
+test('mutation failure triggers a single state refresh without replaying the write', async () => {
   let refreshes = 0;
   let reported: unknown;
   await reconcileMutationFailure(
@@ -25,7 +25,7 @@ test('a failed mutation refreshes once without replaying the write', async () =>
   assert.equal(reported, undefined);
 });
 
-test('agent loss leaves reconciliation to the reconnect workflow', async () => {
+test('agent-lost error suppresses immediate refresh and delegates to reconnect handler', async () => {
   let refreshes = 0;
   await reconcileMutationFailure(
     {
@@ -38,12 +38,12 @@ test('agent loss leaves reconciliation to the reconnect workflow', async () => {
     async () => {
       refreshes += 1;
     },
-    () => assert.fail('no refresh error should be reported'),
+    () => assert.fail('unexpected refresh error callback invocation'),
   );
   assert.equal(refreshes, 0);
 });
 
-test('a failed catalog reload reports its own error without masking the mutation', async () => {
+test('catalog refresh failure passes error to report callback', async () => {
   const refreshError = { code: 'catalog-failed', message: 'still unavailable' };
   let reported: unknown;
   await reconcileMutationFailure(

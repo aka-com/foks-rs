@@ -414,7 +414,7 @@ const FX = {
       mechanism:
         "The agent on this Mac refreshes the signed lease from the server's lease URL on its own; nothing on this screen can do it sooner.",
       action: null,
-      action_label: 'Waiting for the server check-in',
+      action_label: 'Waiting for renewal',
       source: 'ListProfiles · lease state: lapsed',
     },
     {
@@ -465,9 +465,9 @@ const FX = {
     visibility:
       '0 is the default. Lower bands see less: a Member at band N reads items whose read role is Member at N or below, so a read role above 0 admits only Members raised to that band, plus Admins and Owners. Bands run from −16384 to 16383.',
     yubi_facts: [
-      'Preparing a card writes both keys in one step that cannot be split. If it stops part way, the slots are no longer empty and the retry is refused; getting the card back means resetting its PIV applet, which erases everything on it.',
+      'Key generation must complete in a single operation. If setup is interrupted, the PIV applet on the card may need to be reset before retrying.',
       'A card can only be prepared while it still holds its factory management key.',
-      'The unlock code (PUK) is yours to choose and yours to keep: nothing generates one for you and nothing will show it to you later.',
+      'Save your PIN Unlock Key (PUK) securely. It cannot be recovered or displayed again if lost.',
     ],
     deferred_team_writes:
       'Deferred — plan §5 group B. Adding, changing or removing items in a team store, and choosing who can read them, come in a later release. Today: items in your own account store (Owner / Owner, readable by you alone). No command writes a team item today either.',

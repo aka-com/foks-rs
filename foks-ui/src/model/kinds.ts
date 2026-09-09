@@ -1,22 +1,17 @@
 /**
- * The kind rule — ported from `wave6/shell.js:179-193`.
+ * Client-side item classification and display metadata.
  *
- * A **client-side reading** of the node type with no protocol meaning
- * which is why it lives here and not in Rust: duplicating it
- * across the seam would create two truths.
- *
- *   Password = a Secret with a `password:` line, or under `/logins/`
- *   Resource = any other Secret
- *   File     = a File node
- *   Link     = a symlink
- *
- * Folders are not items: the path prefix is a chip on the row.
+ * Classifies filesystem nodes into user-facing product kinds:
+ *   - Password: Secret node containing a password field or located under `/logins/`
+ *   - Resource: Any other Secret node
+ *   - File: File node
+ *   - Link: Symlink node
  */
 
 import type { Item, ItemKind, NodeKind, NodeType } from './types';
 
 export interface KindMeta {
-  /** The singular a person reads — Resource is shown as Note. */
+  /** Display label for the kind (e.g. Note for Resource). */
   label: string;
   plural: string;
   /** A `FoksIconName`; kept as a plain string so the model imports no view. */
@@ -49,7 +44,7 @@ export const KINDS: Readonly<
     label: 'Link',
     plural: 'Links',
     icon: 'link',
-    blurb: 'Keep links and shortcuts to other paths in the store.',
+    blurb: 'Keep links and shortcuts to other items in this vault.',
   },
 };
 
@@ -79,16 +74,16 @@ const NODE_TYPES: Readonly<Record<NodeKind, NodeType>> = {
   Folder: 'directory',
 };
 
-/** The node type the kind is a reading of. */
+/** Maps an item kind to its underlying filesystem node type. */
 export function rtype(item: Pick<Item, 'kind'>): NodeType {
   return NODE_TYPES[item.kind];
 }
 
 const NODE_WORDS: Readonly<Record<NodeKind, string>> = {
   Secret: 'a Secret',
-  File: 'a File node',
-  Link: 'a symlink',
-  Folder: 'a directory',
+  File: 'a file',
+  Link: 'a link',
+  Folder: 'a folder',
 };
 
 /** How the details panel names the node type in prose. */
@@ -108,8 +103,7 @@ export function nameOf(path: string): string {
 
 /** The folder chip: the path without its leading slash and last segment. */
 export function prefixOf(path: string): string {
-  // A path with no `/` has no prefix. `lastIndexOf` gives -1 for it, and
-  // `slice(1, -1)` then chopped the first and last character off the name.
+  // Return an empty prefix for paths without directory separators.
   const cut = path.lastIndexOf('/');
   return cut <= 0 ? '' : path.slice(1, cut);
 }

@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "FOKS",
+        "title": "FOKS Desktop",
         "width": 960,
         "height": 640,
         "minWidth": 960,
@@ -36,8 +36,8 @@
     "active": true,
     "targets": ["app"],
     "category": "Utility",
-    "shortDescription": "Desktop client for FOKS identity and encrypted vaults.",
-    "longDescription": "Manage FOKS servers, accounts, groups, devices, and encrypted vault items through a local managed agent.",
+    "shortDescription": "Desktop client for FOKS federated identity and secure vaults.",
+    "longDescription": "Manage FOKS servers, accounts, groups, devices, and encrypted vault items securely from your desktop.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

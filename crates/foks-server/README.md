@@ -358,10 +358,9 @@ The gate rejects any AKA dependency, any FOKS package defined outside
 `crates/foks-*` or `foks-tauri`, and any local path dependency that reaches
 outside those directories — under the default feature set and under
 `--all-features`, so a dependency hidden behind an optional feature is caught
-too. It reads the Cargo graph rather than a branch's changed files: this
-workspace builds both products, so a branch carrying FOKS work also carries AKA
-and shared-UI work, and a changed-path rule said nothing about whether FOKS
-still stands alone. The optional official-Go frame audit is
+too. It inspects the Cargo graph rather than changed file paths to verify that
+FOKS packages remain strictly decoupled from AKA and shared-UI dependencies.
+The optional official-Go frame audit is
 `tools/foks-v019-oracle/run-live-team-compat.sh`; it needs a Go 1.25-compatible
 toolchain and may populate Go compiler/module caches, but does not use an AKA
 crate or user data path.

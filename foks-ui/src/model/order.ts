@@ -1,9 +1,8 @@
 import type { Store, World } from './types';
 
 /**
- * Order stores without relying on fixture ids: configured server order, then
- * that server's account vault before its groups. This yields the design's
- * Personal · Household · Engineering and also works for opaque native ids.
+ * Sorts stores in display order: grouped by configured server order,
+ * with account stores preceding team stores.
  */
 export function storeDisplayOrder(world: World): Store[] {
   const servers = new Map(

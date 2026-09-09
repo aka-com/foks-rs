@@ -550,7 +550,7 @@ pub enum Error {
     UnsupportedSchema { found: u32, supported: u32 },
     #[error("lookup name {lookup_name:?} is pinned to a different HostID")]
     HostIdentityChanged { lookup_name: String },
-    #[error("the genesis key changed for an already-pinned HostID")]
+    #[error("genesis key does not match the pinned HostID")]
     GenesisChanged,
     #[error("host chain rolled back from sequence {stored} to {received}")]
     ChainRollback { stored: u64, received: u64 },
@@ -598,7 +598,7 @@ pub enum Error {
     WrongSoftApplicationId { found: i64, expected: i64 },
     #[error("soft-state database permissions {0:#o} allow group or other access")]
     InsecureSoftPermissions(u32),
-    #[error("The replaceable FOKS cache at {path} uses schema version {found}, but this build supports version {supported}. Quit FOKS, delete {path} and any {path}-wal or {path}-shm files, then reopen FOKS. Your accounts, credentials, and server trust state are stored separately.")]
+    #[error("unsupported soft-state cache schema version {found} at {path}; this build supports version {supported} (cache must be recreated)")]
     UnsupportedSoftSchema {
         path: String,
         found: u32,

@@ -17,9 +17,8 @@ CREATE TABLE log_send_files (
     log_send_id BLOB NOT NULL REFERENCES log_sends(log_send_id) ON DELETE CASCADE,
     file_id INTEGER NOT NULL CHECK(file_id >= 0),
     filename TEXT NOT NULL CHECK(length(filename) BETWEEN 1 AND 255),
-    -- Go's client reports the uncompressed size here even when the uploaded
-    -- blocks contain a much smaller gzip stream. Actual bytes are bounded at
-    -- block insertion time.
+    -- The client may report uncompressed size while uploading compressed blocks.
+    -- Actual bytes are bounded at block insertion time.
     content_length INTEGER NOT NULL CHECK(content_length >= 0),
     block_count INTEGER NOT NULL CHECK(block_count BETWEEN 0 AND 16),
     content_hash BLOB NOT NULL CHECK(length(content_hash) = 32),

@@ -1,27 +1,5 @@
 /* ============================================================================
-   ui/kit/tokens.css — the design tokens AKA and FOKS already agree on.
-
-   Measured, not assumed: every custom property below is declared on `:root`
-   in BOTH `ui/styles.css` and `dev/foks-desktop/component-kit.css`
-   under the same name AND with the same value (35 of the mock's 48).
-   `dev/foks-desktop/component-kit.css` has 48 `:root` tokens; 5 more
-   share a name but not a value and 8 are FOKS-only, and all thirteen stay in
-   `foks-ui/src/styles/shell.css`. See ./README.md.
-
-   Light values only. FOKS is light-only in Phase 1; AKA keeps its own
-   `:root[data-theme="dark"]` override block in `ui/styles.css`. The fork is
-   at this seam on purpose — a shared dark block would either drag a theme
-   FOKS does not have into the secrets app or force AKA's stamped
-   `data-theme` onto a sheet that never reads it.
-
-   `ui/styles.css` imports this file as its first statement and declares none
-   of the 35 itself; `ui/tests/kit-tokens.test.ts` fails if one is ever
-   declared in both places. That `@import` is relative (`./kit/tokens.css`),
-   not the `/kit/...` alias the TypeScript imports use: a `<link>`ed sheet has
-   no bundler to resolve an alias for it, and `dev/app-surface.html` links
-   `ui/styles.css` with a plain `<link>`. The Bazel dist copies this file to
-   `kit/tokens.css` beside `index.html` and `styles.css`, so the same relative
-   URL lands there too.
+   ui/kit/tokens.css — Shared design tokens for desktop UI surfaces.
    ============================================================================ */
 
 :root {

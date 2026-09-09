@@ -20,13 +20,13 @@ const MAXIMUM_UPLOAD_FRAME_BYTES: usize = 128 * 1024;
 pub enum Error {
     #[error("local agent IPC is unsupported on this platform")]
     Unsupported,
-    #[error("local agent socket is not private and authenticatable")]
+    #[error("local agent socket has insecure permissions or cannot be authenticated")]
     UnsafeSocket,
     #[error("local agent I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("local agent protocol failed: {0}")]
     Protocol(#[from] foks_agent_proto::Error),
-    #[error("local agent response ID changed")]
+    #[error("local agent response ID does not match request ID")]
     ResponseBinding,
     #[error("local agent mutation outcome is ambiguous: {0}")]
     Ambiguous(String),

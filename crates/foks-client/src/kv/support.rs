@@ -81,7 +81,7 @@ pub(crate) fn validate_kv_component(name: &[u8]) -> Result<()> {
         || name == b"."
         || name == b".."
     {
-        return Err(Error::KvResponse("invalid KV path component"));
+        return Err(Error::KvRequest("invalid KV path component"));
     }
     Ok(())
 }

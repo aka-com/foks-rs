@@ -1,8 +1,8 @@
 //! Standalone, single-host FOKS v0.1.9 server.
 //!
-//! The implementation is introduced in independently tested layers. The
-//! executable protocol contract and PKI feasibility tests intentionally land
-//! before network or persistence authority.
+//! The server architecture is organized in layered modules, separating the
+//! protocol contract and PKI verification from network transport and SQLite
+//! persistence.
 
 #![forbid(unsafe_code)]
 

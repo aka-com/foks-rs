@@ -1,4 +1,4 @@
-//! Testable screen and agent-operation model for the native FOKS desktop app.
+//! Screen state and agent operations for the FOKS desktop application.
 
 #![forbid(unsafe_code)]
 
@@ -26,8 +26,7 @@ const MAXIMUM_DESKTOP_REVEAL_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Typed desktop-side classification of local-agent failures.
 ///
-/// Protocol v2 expands the stable protocol variants in phase 4. Defining the desktop
-/// boundary now keeps transport prose from leaking into view code during the refactor.
+/// Desktop error variants mapped from local agent and transport failures.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AgentError {
     Protocol {
@@ -83,7 +82,7 @@ impl AgentError {
             Self::Protocol { message, .. }
             | Self::Transport(message)
             | Self::Ambiguous(message) => message,
-            Self::Cancelled => "The request was cancelled.",
+            Self::Cancelled => "Request cancelled.",
         }
     }
 }
@@ -106,7 +105,7 @@ impl std::fmt::Display for AgentError {
                 formatter,
                 "{message}\n\nThe upload commit may have completed. The store will be refreshed before another mutation."
             ),
-            Self::Cancelled => formatter.write_str("request cancelled"),
+            Self::Cancelled => formatter.write_str("Request cancelled"),
         }
     }
 }
@@ -161,7 +160,7 @@ impl Screen {
         match self {
             Self::Items => "Items",
             Self::Notifications => "Notifications",
-            Self::GetStarted => "Get started",
+            Self::GetStarted => "Get Started",
             Self::Stores => "Stores",
             Self::Parties => "Parties",
             Self::Servers => "Servers",
@@ -230,7 +229,7 @@ fn agent_client_error(error: foks_agent_client::Error) -> AgentError {
         foks_agent_client::Error::Protocol(foks_agent_proto::Error::Version) => {
             AgentError::Protocol {
                 code: ErrorCode::VersionMismatch,
-                message: "the desktop and local agent protocol versions do not match".to_owned(),
+                message: "desktop and agent protocol versions do not match".to_owned(),
                 fields: ErrorFields::default(),
             }
         }
@@ -238,9 +237,7 @@ fn agent_client_error(error: foks_agent_client::Error) -> AgentError {
     }
 }
 
-/// Response shapes the desktop interprets structurally. Parsing through serde
-/// keeps the coupling to agent payloads in one typed, testable place instead
-/// of scattering `Value` walking through views.
+/// Strongly typed response models deserialized from background service payloads.
 #[derive(serde::Deserialize)]
 struct ProfileSummary {
     name: String,
@@ -710,9 +707,9 @@ fn error_blocks_profile_catalog(error: &AgentError) -> bool {
     }
 }
 
-/// Reads the exact catalog version selected by the person. Large files are
-/// assembled only from version-bound chunks, so a concurrent edit can never
-/// splice two versions into one displayed value.
+/// Reads the exact catalog version selected by the user. Large files are
+/// assembled from version-bound chunks to ensure concurrent edits cannot
+/// result in spliced or inconsistent content.
 pub fn read_catalog_item(
     transport: &dyn AgentTransport,
     item: &CatalogItem,
@@ -741,11 +738,11 @@ pub fn read_catalog_item(
             if read.symlink_target.is_some() {
                 zeroize_kv_read_payload(&mut read);
                 return Err(AgentError::Transport(
-                    "agent mixed a symlink target into a small-file response".to_owned(),
+                    "Agent returned unexpected symlink target in small-file response".to_owned(),
                 ));
             }
             KvItemValue::File(Zeroizing::new(read.content.take().ok_or_else(|| {
-                AgentError::Transport("agent omitted small-file content".to_owned())
+                AgentError::Transport("missing content in small-file response".to_owned())
             })?))
         }
         "file" => {
@@ -756,15 +753,15 @@ pub fn read_catalog_item(
                 ));
             }
             let total = read.size.ok_or_else(|| {
-                AgentError::Transport("agent omitted the large-file size".to_owned())
+                AgentError::Transport("missing file size in large-file response".to_owned())
             })?;
             if total > MAXIMUM_DESKTOP_REVEAL_BYTES {
                 return Err(AgentError::Transport(format!(
-                    "this file is {total} bytes; this release reveals at most {MAXIMUM_DESKTOP_REVEAL_BYTES} bytes in memory"
+                    "File size of {total} bytes exceeds maximum in-memory preview limit of {MAXIMUM_DESKTOP_REVEAL_BYTES} bytes"
                 )));
             }
             let capacity = usize::try_from(total).map_err(|_| {
-                AgentError::Transport("KV file is too large for this desktop".to_owned())
+                AgentError::Transport("file size exceeds system memory address space".to_owned())
             })?;
             let mut content = Zeroizing::new(Vec::with_capacity(capacity));
             let mut offset = 0u64;
@@ -789,16 +786,18 @@ pub fn read_catalog_item(
                 if invalid {
                     chunk.content.zeroize();
                     return Err(AgentError::Transport(
-                        "agent returned an invalid or unbound KV chunk".to_owned(),
+                        "received invalid or mismatched KV chunk".to_owned(),
                     ));
                 }
                 offset = offset
                     .checked_add(chunk.content.len() as u64)
-                    .ok_or_else(|| AgentError::Transport("KV chunk offset overflow".to_owned()))?;
+                    .ok_or_else(|| {
+                        AgentError::Transport("chunk offset overflow while reading file".to_owned())
+                    })?;
                 if offset > total || chunk.eof != (offset == total) {
                     chunk.content.zeroize();
                     return Err(AgentError::Transport(
-                        "agent returned an inconsistent KV end-of-file marker".to_owned(),
+                        "inconsistent end-of-file indicator in chunk response".to_owned(),
                     ));
                 }
                 content.extend_from_slice(&chunk.content);
@@ -810,18 +809,18 @@ pub fn read_catalog_item(
             if read.content.is_some() {
                 zeroize_kv_read_payload(&mut read);
                 return Err(AgentError::Transport(
-                    "agent mixed file content into a symlink response".to_owned(),
+                    "unexpected file content in symlink response".to_owned(),
                 ));
             }
             KvItemValue::Symlink(Zeroizing::new(read.symlink_target.take().ok_or_else(
-                || AgentError::Transport("agent omitted the symlink target".to_owned()),
+                || AgentError::Transport("missing symlink target in response".to_owned()),
             )?))
         }
         "directory" => {
             if read.content.is_some() || read.symlink_target.is_some() {
                 zeroize_kv_read_payload(&mut read);
                 return Err(AgentError::Transport(
-                    "agent returned content for a directory".to_owned(),
+                    "unexpected content payload returned for directory".to_owned(),
                 ));
             }
             KvItemValue::Directory
@@ -829,7 +828,7 @@ pub fn read_catalog_item(
         _ => {
             zeroize_kv_read_payload(&mut read);
             return Err(AgentError::Transport(
-                "agent returned an unsupported KV node type".to_owned(),
+                "unsupported KV node type in response".to_owned(),
             ));
         }
     };
@@ -854,11 +853,9 @@ fn zeroize_kv_read_payload(read: &mut KvReadResult) {
 
 /// Builds the create mutation for one text item.
 ///
-/// A create carries `mkdir_p` because the path a person types names the
-/// folders it lives in — `/logins/github.com` is the first thing anyone writes
-/// into an empty store — and FOKS writes address a parent directory that
-/// already exists. Edits and replacements never carry it: they address a path
-/// the catalog already resolved.
+/// Creates set `mkdir_p` so parent directories are created automatically
+/// when writing a new path. Edits and replacements address existing paths
+/// and do not need parent directory creation.
 pub fn create_kv_file_mutation(
     store: &CatalogStoreRef,
     path: &str,
@@ -944,7 +941,7 @@ pub fn create_kv_symlink_operation(
     Ok(Operation::PutKvSymlink {
         store: kv_store_ref(store),
         path: required_path(path)?,
-        target: required_verbatim_text(target, "enter a symlink target")?,
+        target: required_verbatim_text(target, "symlink target is required")?,
         read_role: KvRole::Owner,
         write_role: KvRole::Owner,
         precondition: KvPrecondition::Create,
@@ -959,7 +956,7 @@ pub fn edit_kv_symlink_operation(
     if item.metadata.node_type != "symlink" {
         return Err("the selected item is not a symlink");
     }
-    Err("FOKS symlinks must be removed and recreated to change their target")
+    Err("symlink targets cannot be edited directly; delete and recreate the symlink")
 }
 
 pub fn create_kv_directory_operation(
@@ -1008,7 +1005,8 @@ fn file_mutation(
             mkdir_p,
         }))
     } else {
-        let total_length = u64::try_from(content.len()).map_err(|_| "item content is too large")?;
+        let total_length = u64::try_from(content.len())
+            .map_err(|_| "content size exceeds maximum upload limit")?;
         Ok(KvAccountMutation::Stream {
             header: KvUploadHeader {
                 store,
@@ -1163,7 +1161,9 @@ fn load_store_pages_once(
             ));
         }
         if page.entries.is_empty() && page.next_cursor.is_some() {
-            return Err(invalid_agent_response("catalog page made no progress"));
+            return Err(invalid_agent_response(
+                "pagination stalled on empty page with non-empty cursor",
+            ));
         }
         entries.extend(page.entries);
         let Some(next) = page.next_cursor else {
@@ -1171,7 +1171,9 @@ fn load_store_pages_once(
         };
         cursor = Some(next);
     }
-    Err(invalid_agent_response("catalog exceeded its page limit"))
+    Err(invalid_agent_response(
+        "catalog pagination exceeded maximum page count",
+    ))
 }
 
 fn catalog_cursor_snapshot_changed(error: &AgentError) -> bool {
@@ -1363,10 +1365,7 @@ impl DesktopModel {
 
     pub fn probe_operation(&self) -> Result<Operation, &'static str> {
         Ok(Operation::Probe {
-            profile: self
-                .selected_profile
-                .clone()
-                .ok_or("select a profile first")?,
+            profile: self.selected_profile.clone().ok_or("no profile selected")?,
         })
     }
 
@@ -1377,7 +1376,7 @@ impl DesktopModel {
     ) -> Result<Operation, &'static str> {
         Ok(Operation::AddProfile {
             name: required_text(name, "enter a profile name")?,
-            probe: required_text(probe, "enter a FOKS probe address")?,
+            probe: required_text(probe, "enter a probe address")?,
             protocol: ProfileProtocol::V019,
             trust: ProfileTrust::WebPki,
         })
@@ -1393,7 +1392,7 @@ impl DesktopModel {
     }
 
     pub fn reset_hard_state_operation(&self) -> Result<Operation, &'static str> {
-        Err("reset requires the bound preview flow in the new desktop")
+        Err("hard reset is not supported from this screen")
     }
 
     pub fn resume_account_operation(&self, alias: &str) -> Result<Operation, &'static str> {
@@ -1443,8 +1442,8 @@ impl DesktopModel {
                 .ok_or("select a profile first")
         };
         match self.screen {
-            Screen::Items | Screen::Stores => Err("refresh the catalog instead"),
-            Screen::Notifications => Err("notifications refresh with operation results"),
+            Screen::Items | Screen::Stores => Err("catalog data must be refreshed directly"),
+            Screen::Notifications => Err("notifications are updated automatically"),
             Screen::GetStarted => Ok(Operation::AgentStatus),
             Screen::Servers => Ok(Operation::ListProfiles),
             Screen::Settings => Ok(Operation::ListYubiAccounts {
@@ -1505,7 +1504,7 @@ impl DesktopModel {
         }
         match action {
             PassphraseAction::Set | PassphraseAction::Change => {
-                let confirmation = confirmation.ok_or("confirm the passphrase")?;
+                let confirmation = confirmation.ok_or("passphrase confirmation is required")?;
                 if passphrase.expose() != confirmation.expose() {
                     return Err("passphrase confirmation does not match");
                 }
@@ -1639,7 +1638,7 @@ impl DesktopModel {
                 .selected_profile
                 .clone()
                 .ok_or("select a profile first")?,
-            target_alias: required_text(target_alias, "enter the pending device alias")?,
+            target_alias: required_text(target_alias, "pending device alias is required")?,
         })
     }
 
@@ -1651,7 +1650,7 @@ impl DesktopModel {
         Ok(Operation::PrepareOwnerBackup {
             profile,
             account_alias,
-            backup_alias: required_text(backup_alias, "enter a local backup alias")?,
+            backup_alias: required_text(backup_alias, "backup alias is required")?,
         })
     }
 
@@ -1802,9 +1801,9 @@ impl DesktopModel {
         let account_alias = required_text(account_alias, "enter the owner account alias")?;
         let team_alias = required_text(team_alias, "enter a local team alias")?;
         let name = match kind {
-            TeamKind::Named => required_text(name, "enter the FOKS team name")?,
+            TeamKind::Named => required_text(name, "enter the team name")?,
             TeamKind::AdHoc if name.trim().is_empty() => String::new(),
-            TeamKind::AdHoc => return Err("ad-hoc teams do not have a FOKS name"),
+            TeamKind::AdHoc => return Err("ad-hoc teams do not support team names"),
         };
         Ok(Operation::CreateTeam {
             profile,
@@ -1824,7 +1823,7 @@ impl DesktopModel {
                 .selected_profile
                 .clone()
                 .ok_or("select a profile first")?,
-            team_alias: required_text(team_alias, "enter the pending team alias")?,
+            team_alias: required_text(team_alias, "pending team alias is required")?,
         })
     }
 
@@ -1975,7 +1974,7 @@ impl DesktopModel {
             .ok_or("select a profile first")?;
         match action {
             YubiAction::ListCards => Ok(Operation::ListYubiCards { profile }),
-            _ if alias.trim().is_empty() => Err("enter a YubiKey account alias"),
+            _ if alias.trim().is_empty() => Err("YubiKey account alias is required"),
             YubiAction::ResumeAccount => Ok(Operation::ResumeYubiAccount {
                 profile,
                 alias: alias.to_owned(),
@@ -2012,7 +2011,7 @@ impl DesktopModel {
                 yubi_alias: alias.to_owned(),
                 software_alias: software_alias
                     .filter(|alias| !alias.trim().is_empty())
-                    .ok_or("enter a software account alias")?
+                    .ok_or("software account alias is required")?
                     .to_owned(),
             }),
             YubiAction::RecoverSubkey => Ok(Operation::RecoverYubiSubkey {
@@ -2265,7 +2264,7 @@ fn validate_yubi_inputs(
         || !(0x82..=0x95).contains(&pq_slot)
         || signing_slot == pq_slot
     {
-        return Err("use two distinct PIV retired-key slots from 0x82 through 0x95");
+        return Err("signing and post-quantum keys must use distinct PIV slots (0x82-0x95)");
     }
     if !(6..=8).contains(&pin.len()) || !pin.bytes().all(|byte| byte.is_ascii_graphic()) {
         return Err("PIN must contain six to eight printable ASCII characters");
@@ -2344,7 +2343,7 @@ fn confirmed_optional_passphrase(
             }
             Ok(Some(passphrase))
         }
-        _ => Err("provide and confirm the signup passphrase"),
+        _ => Err("signup passphrase and confirmation are required"),
     }
 }
 
@@ -2969,7 +2968,7 @@ mod tests {
         symlink.metadata.node_type = "symlink".to_owned();
         assert_eq!(
             edit_kv_symlink_operation(&symlink, "replacement").unwrap_err(),
-            "FOKS symlinks must be removed and recreated to change their target"
+            "symlink targets cannot be edited directly; delete and recreate the symlink"
         );
 
         let team = CatalogStoreRef::Team(TeamStoreRef {
@@ -3042,10 +3041,7 @@ mod tests {
         let upload = AgentError::Ambiguous("socket closed after commit".to_owned());
         assert!(upload.transient());
         assert!(upload.ambiguous());
-        assert_eq!(
-            AgentError::Cancelled.user_message(),
-            "The request was cancelled."
-        );
+        assert_eq!(AgentError::Cancelled.user_message(), "Request cancelled.");
 
         let decoded_mismatch = agent_client_error(foks_agent_client::Error::Protocol(
             foks_agent_proto::Error::Version,
@@ -3060,7 +3056,10 @@ mod tests {
         });
         let mut model = DesktopModel::new(transport);
         model.navigate(Screen::Items);
-        assert_eq!(model.operation(), Err("refresh the catalog instead"));
+        assert_eq!(
+            model.operation(),
+            Err("catalog data must be refreshed directly")
+        );
         model.navigate(Screen::Settings);
         assert_eq!(model.operation(), Err("select a profile first"));
         model.select_profile("hosted");
@@ -3126,7 +3125,7 @@ mod tests {
         );
         assert_eq!(
             model.reset_hard_state_operation().unwrap_err(),
-            "reset requires the bound preview flow in the new desktop"
+            "hard reset is not supported from this screen"
         );
         model.forget_profile("hosted");
         assert!(model.profiles().is_empty());
@@ -3583,7 +3582,7 @@ mod tests {
         );
         assert_eq!(
             model.create_team_operation("personal", "project", "invented", TeamKind::AdHoc),
-            Err("ad-hoc teams do not have a FOKS name")
+            Err("ad-hoc teams do not support team names")
         );
         assert_eq!(
             model.resume_team_creation_operation("engineering").unwrap(),
@@ -3802,7 +3801,7 @@ mod tests {
                 SecretString::new("123456"),
                 None,
             ),
-            Err("use two distinct PIV retired-key slots from 0x82 through 0x95")
+            Err("signing and post-quantum keys must use distinct PIV slots (0x82-0x95)")
         );
         assert_eq!(
             model

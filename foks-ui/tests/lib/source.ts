@@ -1,19 +1,12 @@
 /**
- * Helpers for the tests that read source rather than render it.
- *
- * Adapted from `ui/tests/lib/source.ts`. Kept here rather than imported
- * across the seam: these are test-harness conveniences, not shared UI, and
- * `ui/kit` admits only app-neutral runtime code.
+ * Static analysis utility functions for source inspection tests.
  */
 
 import { readdir, readFile } from 'node:fs/promises';
 
 /**
- * Make a slice of source insensitive to how Prettier wrapped it.
- *
- * Structural assertions are written the way the code reads on one line;
- * Prettier owns the wrapping, so a formatter run that pushes an argument onto
- * its own line must not read as the invariant being broken.
+ * Normalizes whitespace and bracket spacing in source code strings to facilitate
+ * formatting-invariant structural assertions.
  */
 export function normalizeSource(source: string): string {
   return source
@@ -47,13 +40,8 @@ export function readSource(path: string, base: string | URL): Promise<string> {
 }
 
 /**
- * Drop comments from a source file.
- *
- * The invariant tests here are about what the code *does*, and a doc comment
- * that names the sink it exists to forbid — "nothing reads `window.__TAURI__`"
- * — must not read as the sink itself. Block comments go entirely; a line goes
- * only when it *starts* with `//`, so a `https://` inside a string is left
- * alone rather than truncating the line it sits on.
+ * Strips block comments and leading single-line comments from source code
+ * so that static analysis assertions match executable code rather than comments.
  */
 export function stripComments(source: string): string {
   return source

@@ -27,7 +27,9 @@ pub(crate) struct ReadLease {
 impl ReadPool {
     pub(crate) fn new(config: ReadDatabaseConfig, maximum_connections: usize) -> Result<Self> {
         if maximum_connections == 0 {
-            return Err(Error::Config("zero reader pool limit"));
+            return Err(Error::Config(
+                "maximum read connections must be greater than zero",
+            ));
         }
         let database = foks_server_db::ReadDatabase::open(&config.path, config.database.clone())?;
         Ok(Self {

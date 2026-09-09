@@ -32,7 +32,9 @@ impl RateLimitConfig {
             || self.requests_per_second == 0
             || self.maximum_tracked_ips == 0
         {
-            return Err(crate::Error::Config("zero rate limit"));
+            return Err(crate::Error::Config(
+                "rate limit parameters and tracked IP capacity must be non-zero",
+            ));
         }
         Ok(())
     }

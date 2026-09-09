@@ -1,13 +1,9 @@
 /**
- * Display formatting — ported from `wave6/shell.js:163-173`.
- *
- * Pure string arithmetic with no view attached, so the same numbers appear in
- * a row, a chip and a test.
+ * Text and numeric display formatting helpers.
  */
 
 /**
- * Bytes as the design writes them: bytes under 1 kB, one decimal of kB up to
- * 10 kB and whole kB above it, one decimal of MB from 1 MB.
+ * Formats a byte count into human-readable units (B, KB, MB).
  */
 export function fmtSize(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -32,7 +28,7 @@ export function initials(name: string): string {
     .join('');
 }
 
-/** The avatar palette, in the order `shell.js` declares it. */
+/** Palette of background colors used for user avatars. */
 export const HUES = [
   '#5e5ce6',
   '#ff9f0a',
@@ -47,8 +43,7 @@ export const HUES = [
 /**
  * A stable avatar colour for a name.
  *
- * Sum of code points modulo the palette — deterministic, so the same person
- * is the same colour on every screen and in every screenshot.
+ * Returns a deterministic avatar color based on the sum of character codes in the name.
  */
 export function hue(name: string): string {
   const sum = [...name].reduce((total, char) => total + char.charCodeAt(0), 0);
@@ -56,12 +51,8 @@ export function hue(name: string): string {
 }
 
 /**
- * A long hex id, shortened for a row that has no room for all of it.
- *
- * `tail` is how many trailing characters survive: four is enough to tell two
- * ids apart, but a host id is read out and compared by hand, so the server
- * screen keeps eight. A value that is already short is returned whole rather
- * than being padded out with an ellipsis into something longer than it was.
+ * Truncates a hex identifier with an ellipsis, preserving leading characters
+ * and the specified number of trailing characters.
  */
 export function shortId(value: string, tail = 4): string {
   return value.length > 10 + tail

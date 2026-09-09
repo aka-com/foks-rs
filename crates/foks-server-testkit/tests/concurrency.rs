@@ -157,7 +157,7 @@ fn conflicting_same_directory_writes_have_one_winner_and_no_busy_error() {
         .unwrap();
     // This client first pins after signup advanced the Merkle root. Its
     // imported credential therefore exercises authenticated historical-root
-    // discovery for the eldest link rather than sharing the creator's anchor.
+    // discovery for the oldest link rather than sharing the creator's anchor.
     let second_client = TestClient::new(&environment, "conflict-second").unwrap();
     let second_probe = second_client.probe_and_pin().unwrap();
     let second_authenticated = second_client

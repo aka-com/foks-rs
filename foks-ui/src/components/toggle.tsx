@@ -1,10 +1,7 @@
 /**
- * A disclosure control with a Lucide chevron-down, used for inspect blocks
- * that the native `<details>` triangle made look unfinished.
+ * Collapsible disclosure section with chevron indicator and expandable content.
  *
- * Closed, the chevron points right (the same orientation as the browser
- * marker). Open, it points down. The panel stays in the DOM when closed so
- * inspect JSON remains available to tests and to copy.
+ * Displays a disclosure button that expands or collapses associated panel content.
  */
 
 import { createElement, useId, useState } from 'react';

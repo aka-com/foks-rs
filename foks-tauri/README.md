@@ -4,10 +4,8 @@ The Tauri app for FOKS, beside `src-tauri`'s AKA: the native agent, catalog,
 exact-version read, app-lock, clipboard, and download boundary behind the React
 product shell, plus guarded writes and native streaming file ingress.
 
-The two apps share the Cargo workspace, its single `Cargo.lock`, and the
-pnpm/Vite toolchain. They share **nothing else** — not the bundle identifier,
-the entitlements, the single-instance identity, the release train, the capability
-set or the command surface.
+The two apps share the Cargo workspace, `Cargo.lock`, and the pnpm/Vite toolchain,
+but have separate bundle identifiers, entitlements, capabilities, and command surfaces.
 
 - Rust crate: `foks-desktop-app`, binary `foks-desktop`. The crate named
   `foks-desktop` provides the free command/library surface plus the
@@ -16,15 +14,15 @@ set or the command surface.
   `../foks-ui/dist`.
 - Bundle identifier: `org.foks.desktop` (matching packaging/foks-desktop/macos/Info.plist and the polkit action prefix; the AppStream component id stays `org.foks.Desktop`).
 
-## Two decisions frozen in `tauri.conf.json`
+## Key `tauri.conf.json` settings
 
 - **`dragDropEnabled: true`.** The runtime intercepts OS drag-drop and hands
   Rust the dropped file **paths**; HTML5 drag and drop is suppressed inside the
   window in exchange. `src/dragdrop.rs` forwards them to the webview as
   `foks://drop-paths` (a `string[]`) and the hover state as `foks://drop-hover`
-  (`{ hovering: boolean }`). This is a fork, not a flag: with it `false` the
-  webview would get a pathless `File` and the only upload route would be reading
-  the bytes into the renderer, which the secret-handling policy forbids.
+  (`{ hovering: boolean }`). This architectural choice is required: disabling
+  native drag-and-drop would provide the webview with a pathless `File` object,
+  requiring secret bytes to be read into the renderer contrary to security policy.
 - **`withGlobalTauri: false`.** The IPC surface is not published on
   `window.__TAURI__`. The FOKS bridge imports `@tauri-apps/api/core` instead.
   AKA sets this `true`; FOKS renders secrets and does not.
@@ -116,7 +114,7 @@ derive its stores; do not issue `list_stores` and `list_catalog` concurrently.
 response contains only a profile name; it has no read-only last-probe or lease
 status operation. FOKS therefore returns null host/chain/epoch/lease facts and
 does not silently call `Probe`, because Probe can insert or advance trust.
-Catalog failures and `blockedProfiles` are the honest typed Alerts source.
+Catalog failures and `blockedProfiles` provide the authoritative source for application alerts.
 
 ## Phase 3 mutation boundary
 
@@ -125,9 +123,8 @@ file replacements, and removes are built from the catalog item and use
 `KvPrecondition::ExactVersion`. Every mutation is single-flight, clears the
 cached catalog before touching the agent, and requires a fresh catalog after an
 ambiguous outcome. A create conflict is `already-exists`; a guarded conflict is
-`conflict`. The protocol's typed `CapabilityDenied(kv)` becomes the honest
-`capability-unavailable`, not “lease lapsed,” because no current read operation
-proves the cause. Catalog-blocked profiles and inactive groups fail before the
+`conflict`. The protocol's `CapabilityDenied(kv)` error maps to `capability-unavailable`
+because the underlying cause cannot be disambiguated at this boundary. Catalog-blocked profiles and inactive groups fail before the
 transport is touched; inactive groups return `inactive-group` and expose the
 explicit resumable creation operation.
 
@@ -140,13 +137,10 @@ to override an account role fails closed. Edit and replacement commands accept
 no role arguments: they preserve the authenticated roles retained with the
 exact catalog version.
 
-Every create also carries the protocol's `mkdir_p`, because a FOKS write
-addresses a parent directory that already exists and the path a person types
-names the folders it lives in: `/logins/github.com` is the first thing written
-into an empty store. The agent creates the missing components inside the same
-write session, with the roles the new item carries, so a parent never hides the
-item it holds. Edits, replacements, and removes never carry it — they address a
-path the catalog already resolved.
+Create operations enable `mkdir_p` so the agent provisions parent directories
+within the same write session, inheriting the item's role permissions. Edits,
+replacements, and removes do not enable `mkdir_p` because their target paths
+already exist.
 
 Native drops send path strings, never bytes. Rust authorizes one UTF-8 path only
 when the native event contains exactly one file; multi-drop paths are emitted
@@ -157,11 +151,9 @@ picker follows the same path without disclosing its source path to the
 webview. File replacement retains the selected item's roles and exact version.
 The v0.1.9 client encodes files of at most 2,040 bytes as `small-file` nodes;
 native replacement accepts both that inline encoding and chunked `file` nodes.
-Folder creation is live, while folder removal remains deliberately absent
-because the renderer boundary never authorizes recursive deletion. Link
-creation is live; link editing remains unavailable because the desktop
-builder requires links to be removed and recreated rather than presenting
-that pair as an atomic update.
+Folder creation is supported; folder removal is omitted to prevent unauthorized
+recursive deletion. Link creation is supported; link modification is performed
+by deleting and recreating the link.
 
 `take_agent_connection_loss` is the passive observation used for the
 full-window stop. `retry_agent_connection` validates/restarts the managed agent
@@ -342,5 +334,5 @@ socket. Crash upload remains disabled.
 
 Publisher and homepage metadata remain unset until the release owner supplies
 canonical values. Signing, notarization, graphical installed-package testing,
-and real security-key hardware checks are external release gates rather than
-facts a developer build can claim.
+and physical security key verification are enforced during release packaging
+rather than local developer builds.

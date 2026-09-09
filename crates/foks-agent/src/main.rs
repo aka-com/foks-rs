@@ -81,7 +81,7 @@ struct Arguments {
     socket: Option<PathBuf>,
     #[arg(long, default_value_t = 32)]
     maximum_connections: usize,
-    /// Global blocking read bound. Values may be lowered but not raised above four.
+    /// Maximum concurrent blocking reads (1-4).
     #[arg(long, default_value_t = MAXIMUM_CONCURRENT_READS)]
     blocking_workers: usize,
     #[arg(long, default_value_t = 15)]
@@ -602,7 +602,7 @@ async fn handle_connection(
                     .clone()
                     .acquire_owned()
                     .await
-                    .map_err(|_| AgentRequestError("agent mutation gate closed"))?;
+                    .map_err(|_| AgentRequestError("agent is shutting down"))?;
                 let updated = apply_hosted_lease(&state_dir, profile, &bytes)?;
                 Ok::<_, Box<dyn std::error::Error>>(serde_json::json!({
                     "profile": profile,
@@ -1914,8 +1914,8 @@ fn dispatch_result(
             // event. The CLI may have completed it while this resident agent was
             // still in bootstrap mode, or a prior request may have written the
             // state envelope before master-key verification was interrupted.
-            // Reopen and verify that state instead of stranding the process in
-            // Bootstrap behind "already initialized" forever.
+            // Reopen and verify existing state to ensure the agent transitions
+            // from Bootstrap to Ready if initialization already completed.
             let credentials = if ClientCredentials::is_initialized(state_dir)? {
                 ClientCredentials::open(state_dir)?
             } else {
@@ -3304,7 +3304,7 @@ fn dispatch_result(
                 || matches!(kind, TeamKind::AdHoc) && !name.is_empty()
             {
                 return Err(Box::new(AgentRequestError(
-                    "team creation requires account and team aliases plus a name only for named teams",
+                    "team creation requires account and team aliases; a team name must be provided only for named teams",
                 )));
             }
             let session =
@@ -3331,7 +3331,7 @@ fn dispatch_result(
         } => {
             if team_alias.trim().is_empty() {
                 return Err(Box::new(AgentRequestError(
-                    "team creation resume requires a team alias",
+                    "resuming team creation requires a team alias",
                 )));
             }
             let session =
@@ -3766,8 +3766,8 @@ fn refresh_federated_security(
     cancellation: CancellationToken,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let provider = HardwareYubiProvider::new();
-    // Check authority before touching hardware. A denied profile must not
-    // consume a PIN attempt or make someone present a key for nothing.
+    // Check required capabilities before prompting for hardware credentials
+    // or consuming PIN attempts.
     session.profile().require(Capability::Teams)?;
     session.profile().require(Capability::Federation)?;
     let credentials = ClientCredentials::open(state_dir)?;
@@ -4151,9 +4151,9 @@ mod tests {
             panic!("schema failure returned success");
         };
         assert_eq!(code, ErrorCode::OperationFailed);
-        assert!(message.contains("Quit FOKS"));
+        assert!(message.contains("unsupported soft-state cache schema version"));
         assert!(message.contains("/private/foks/profiles/local/soft.sqlite3"));
-        assert!(message.contains("credentials"));
+        assert!(message.contains("cache must be recreated"));
     }
 
     #[test]
@@ -4454,7 +4454,7 @@ mod tests {
             foks_agent_proto::ResponseResult::Success { value }
                 if value["profile"] == "local" && value["removed"] == true
         ));
-        // Deregistering alone used to leave the device keys readable on disk.
+        // Verify that profile removal deletes local credential keys from disk.
         assert!(!paths.directory.exists());
         assert!(ProfileRegistry::open(&state)
             .unwrap()

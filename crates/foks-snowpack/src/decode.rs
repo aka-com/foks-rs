@@ -26,14 +26,9 @@ pub fn validate(input: &[u8]) -> Result<(), Error> {
     decode(input).map(|_| ())
 }
 
-/// Validates one canonical value under the stricter rules go-foks applies to
-/// signed, verified, and hashed objects (`AssertCanonicalMsgpack`). The only
-/// form the general codec accepts but a signable encoding forbids is `array16`
-/// with 16 to 31 elements: go's canonical checker rejects every `array16`
-/// whose length is `<= 0x1f`, so any implementation that hashed or verified
-/// such a value would disagree with go on the signed bytes. This is applied
-/// only at sign, verify, and hash sites, never to general RPC arguments (the
-/// 16-field signup argument is a legitimate `array16(16)` on the RPC wire).
+/// Validates that an encoding satisfies strict canonical rules for signed,
+/// verified, and hashed objects. Rejects `array16` encodings with 16 to 31
+/// elements, which are reserved for fixarray representation in signable contexts.
 pub fn validate_signable(input: &[u8]) -> Result<(), Error> {
     let mut decoder = Decoder::new(input, true);
     decoder.value()?;

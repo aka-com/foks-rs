@@ -1,10 +1,7 @@
 # Wave 6 — the chosen combination, implemented
 
-The product owner picked the pieces from the wave 1b variants. This set
-implements them as one application mock: a shared shell, the vault, and the
-first run, linked to each other so they can be walked as one product. After
-the round-two audits, wave 5's Groups, Servers and Settings screens were
-carried onto the same shell, so all five screens of the product are here.
+Wave 6 combines the desktop shell, vault, onboarding, and management screens
+into a unified application surface across Groups, Servers, and Settings.
 
 ```text
 shell.css         tokens and components, extracted from wave1b/01 and wave1b/04
@@ -34,17 +31,17 @@ shell.js          the fixture (BRIEF §4, with the WAVE4-BRIEF §1 corrections),
 
 | Function | What it is for |
 | --- | --- |
-| `sidebar(active, opts)` | The left rail in both modes (vault and the first run's step list), including the footer rows that open `03-groups.html`, `04-servers.html` and `05-settings.html` |
+| `sidebar(active, opts)` | Renders the primary navigation sidebar across vault and onboarding modes, including navigation links to Groups, Servers, and Settings. |
 | `pageHeader(location, opts)` / `headerParts` | The item page header: location title, subtitle, search, toolbar |
-| `readersOf(item)` | Who can read an item: read role × roster, excluding any admission that reports inactive. Every "Readable by N of M" and every readable-by list is this function, never prose |
-| `admissionActive(party, storeId)` | Whether an admitted group's admission reports active — the one thing that makes it a reader |
-| `peopleGroups(parties)` | "5 people · 1 group": people and admitted groups counted apart, used by both the sidebar rows and the group page header |
-| `admits(held, need)` / `parseRole` / `roleRank` / `fmtRole` | The role ordering (Member{visibility} < Admin < Owner) the reader computation rests on |
+| `readersOf(item)` | Computes authorized readers for an item based on role permissions and active roster memberships, excluding inactive federated admissions. Centralizes reader calculations across all UI badges and lists. |
+| `admissionActive(party, storeId)` | Returns whether a federated group's admission is active, granting read access to the specified store. |
+| `peopleGroups(parties)` | Formats party counts into distinct user and federated group totals (e.g., '5 people · 1 group') for navigation badges and headers. |
+| `admits(held, need)` / `parseRole` / `roleRank` / `fmtRole` | Role hierarchy utilities (Member with visibility level, Admin, Owner) used to evaluate read and write permissions. |
 | `stack` / `stackOf` / `avatar` / `initials` | Roster avatars and the sidebar's avatar stacks |
-| `kindOf` / `kico` / `kglyph` / `rtype` | The client-side kind reading (BRIEF §2) |
-| `setLease(state)` | Puts a server's check-in into `lapsed` so the lease states can be seen |
-| `openSheet` / `closeSheet` / `flash` | Sheets and the transient confirmation line |
-| `review(states, current, extra)` / `getState` / `setUrl` | The review strip outside the window and `?state=` deep links |
+| `kindOf` / `kico` / `kglyph` / `rtype` | Infers and formats item types on the client per BRIEF §2 specifications. |
+| `setLease(state)` | Sets server lease status to lapsed for testing lease expiration states in the UI. |
+| `openSheet` / `closeSheet` / `flash` | Modal sheet presentation controls and temporary toast notification display. |
+| `review(states, current, extra)` / `getState` / `setUrl` | Manages the development toolbar and URL query-state routing for UI state inspection. |
 
 ## What comes from where
 
@@ -96,6 +93,5 @@ Eighty-nine states in all.
 ## Verification
 
 Every state renders at 1280×860 with zero console errors and scrollWidth
-1280 (`<scratch>/shot.mjs`). Each implementer self-reviews once against
-this file and the rules before reporting; the product owner's reviewer then
-reviews the whole; then the five persona audits are re-enacted against it.
+1280 (`<scratch>/shot.mjs`). Implementations are validated against the visual and functional specifications in this document,
+followed by full regression reviews across all defined user test flows.

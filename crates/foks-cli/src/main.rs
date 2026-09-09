@@ -86,7 +86,7 @@ enum ProfileCommand {
     },
     Add(ProfileAdd),
     Verify(ProfileAdd),
-    /// Destructively forgets a profile and erases every local artifact it owns.
+    /// Deletes a profile and all associated local state.
     Remove {
         name: String,
         #[arg(long)]
@@ -95,13 +95,13 @@ enum ProfileCommand {
     Probe {
         name: String,
     },
-    /// Destructively discards a profile's rollback checkpoint and hard-state database.
+    /// Discards a profile's rollback checkpoint and deletes its hard-state database.
     ResetHardState {
         name: String,
         #[arg(long)]
         confirm_delete: bool,
     },
-    /// Applies a signed compatibility lease or a fail-closed drift revocation.
+    /// Applies a signed compatibility lease or drift revocation artifact.
     ApplyCanary {
         name: String,
         #[arg(long)]
@@ -160,8 +160,7 @@ enum KvCommand {
         input: PathBuf,
         #[arg(long)]
         overwrite: bool,
-        /// Create the parent directories the path names but the store does
-        /// not have yet.
+        /// Create intermediate parent directories as needed.
         #[arg(long = "mkdir-p", short = 'p')]
         mkdir_p: bool,
     },
@@ -169,8 +168,7 @@ enum KvCommand {
         profile: String,
         alias: String,
         path: String,
-        /// Create the parent directories the path names but the store does
-        /// not have yet.
+        /// Create intermediate parent directories as needed.
         #[arg(long = "mkdir-p", short = 'p')]
         mkdir_p: bool,
     },
@@ -328,7 +326,7 @@ enum TeamCommand {
         team_alias: String,
         username: String,
     },
-    /// Strictly demotes a member; promotion needs a separate PTK distribution flow.
+    /// Demotes a team member to a lower role.
     DemoteMember {
         profile: String,
         team_alias: String,
@@ -363,13 +361,12 @@ enum TeamCommand {
         profile: String,
         team_alias: String,
     },
-    /// Runs the federated post-revocation security responder for one local
-    /// team. Supply `--local-pin-file` and/or `--remote-pin-file` when either
-    /// side's only remaining administrator is a YubiKey; this command is the
-    /// explicit workflow for a refresh that needs two different keys, which an
-    /// unattended scheduler can never perform on its own. A cascade that
-    /// reaches further than the immediate pair takes an additional
-    /// `--unlock PROFILE=ALIAS=PIN_FILE` per hardware-only profile it visits.
+    /// Runs the federated security responder for a local team.
+    ///
+    /// Supply `--local-pin-file` and/or `--remote-pin-file` when an administrator
+    /// requires hardware authentication. If the federation cascade visits
+    /// additional hardware-authenticated profiles, supply
+    /// `--unlock PROFILE=ALIAS=PIN_FILE` for each.
     RefreshRemote {
         profile: String,
         team_alias: String,
@@ -446,9 +443,9 @@ enum YubiCommand {
         alias: String,
         #[arg(long)]
         pin_file: PathBuf,
-        /// Also run every federated security responder this unlocked key can
-        /// drive. Bindings whose remote side needs its own locked hardware are
-        /// reported as deferred rather than failing the sync.
+        /// Also run federated security responders for teams administrable by
+        /// this key. Bindings requiring unsupplied hardware credentials will be
+        /// deferred rather than failing the sync.
         #[arg(long)]
         with_federation: bool,
     },
@@ -805,7 +802,7 @@ fn account_command(
                         Some(confirmed_passphrase(passphrase, confirmation)?)
                     }
                     (None, None) => None,
-                    _ => return Err("both passphrase files are required".into()),
+                    _ => return Err("both --passphrase-file and --passphrase-confirmation-file are required when setting a passphrase".into()),
                 };
                 let report = session.create_account(
                     &arguments.alias,
@@ -962,7 +959,7 @@ fn kv_command(
                         "output": destination,
                         "bytes": bytes,
                     }),
-                    "KV file written without replacing an existing path",
+                    "KV file downloaded successfully",
                 )
             })
         }
@@ -1052,10 +1049,8 @@ fn job_command(
                     &credentials,
                     &master,
                 )?;
-                // A deferred run is neither a success nor a failure: it is
-                // work waiting on a person. Saying so in the human output
-                // keeps a binding from sitting stuck and invisible to
-                // anyone not reading --json.
+                // Surface deferred jobs in human-readable output so operator
+                // action items are visible without requiring --json.
                 let deferred = report
                     .runs
                     .iter()
@@ -1339,7 +1334,7 @@ fn yubi_command(
                         Some(confirmed_passphrase(passphrase, confirmation)?)
                     }
                     (None, None) => None,
-                    _ => return Err("both passphrase files are required".into()),
+                    _ => return Err("both --passphrase-file and --passphrase-confirmation-file are required when setting a passphrase".into()),
                 };
                 let report = session.create_yubi_account(
                     YubiSignupInput {
@@ -1612,7 +1607,7 @@ fn read_invite(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error::Err
     let file = options.open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.len() > 4098 {
-        return Err("invite file is not a bounded regular file".into());
+        return Err("invite file must be a regular file of at most 4096 bytes".into());
     }
     #[cfg(unix)]
     {
@@ -1927,8 +1922,8 @@ fn refresh_remote_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let provider = HardwareYubiProvider::new();
     let session = ProfileSession::open(registry, &arguments.profile)?;
-    // Check authority before touching hardware. A denied profile must not
-    // consume a PIN attempt or make someone present a key for nothing.
+    // Verify capabilities before hardware interaction to avoid unnecessary
+    // PIN attempts or user prompts if the profile lacks permission.
     session.profile().require(Capability::Teams)?;
     session.profile().require(Capability::Federation)?;
     let credentials = ClientCredentials::open(state_dir)?;
@@ -2056,7 +2051,10 @@ fn read_phrase_tokens(
 ) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 4096 {
-        return Err(format!("{kind} phrase file is not a bounded regular file").into());
+        return Err(format!(
+            "{kind} phrase file must be a regular non-symlink file of at most 4096 bytes"
+        )
+        .into());
     }
     #[cfg(unix)]
     {
@@ -2078,7 +2076,7 @@ fn read_phrase_tokens(
     let mut phrase = Zeroizing::new(String::new());
     file.take(4097).read_to_string(&mut phrase)?;
     if phrase.len() > 4096 {
-        return Err(format!("{kind} phrase file grew beyond the size limit").into());
+        return Err(format!("{kind} phrase file exceeds the 4096-byte limit").into());
     }
     if phrase.split_whitespace().count() != expected_tokens {
         return Err(format!(
@@ -2112,7 +2110,7 @@ fn read_passphrase(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error:
     let file = options.open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.len() > 1026 {
-        return Err("passphrase file is not a bounded regular file".into());
+        return Err("passphrase file must be a regular file of at most 1024 bytes".into());
     }
     #[cfg(unix)]
     {
@@ -2124,7 +2122,7 @@ fn read_passphrase(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error:
     let mut value = Zeroizing::new(String::new());
     file.take(1027).read_to_string(&mut value)?;
     if value.len() > 1026 || value.contains('\0') {
-        return Err("passphrase file is invalid or excessive".into());
+        return Err("passphrase file contains invalid characters or exceeds 1024 bytes".into());
     }
     if value.ends_with("\r\n") {
         let length = value.len() - 2;
@@ -2145,7 +2143,9 @@ fn read_bounded_private_file(
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > maximum {
-        return Err("artifact is not a bounded regular file".into());
+        return Err(
+            format!("artifact must be a regular non-symlink file under {maximum} bytes").into(),
+        );
     }
     let mut options = OpenOptions::new();
     options.read(true);
@@ -2158,7 +2158,7 @@ fn read_bounded_private_file(
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(maximum + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > maximum {
-        return Err("artifact grew beyond its size limit".into());
+        return Err(format!("artifact content exceeds maximum size of {maximum} bytes").into());
     }
     Ok(bytes)
 }

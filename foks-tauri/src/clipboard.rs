@@ -49,7 +49,7 @@ pub fn copy_with_hygiene(app: &AppHandle, value: Zeroizing<String>) -> Result<()
     #[cfg(not(target_os = "macos"))]
     app.clipboard()
         .write_text(value.as_str())
-        .map_err(|error| format!("could not write the system clipboard: {error}"))?;
+        .map_err(|error| format!("Failed to write to system clipboard: {error}"))?;
     *pending = Some(expected);
     drop(pending);
 
@@ -57,7 +57,7 @@ pub fn copy_with_hygiene(app: &AppHandle, value: Zeroizing<String>) -> Result<()
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(AUTO_CLEAR_SECONDS));
         if let Err(error) = clear_if_unchanged(&app, expected) {
-            tracing::warn!(%error, "could not auto-clear copied FOKS value");
+            tracing::warn!(%error, "Failed to auto-clear clipboard value");
         }
     });
     Ok(())
@@ -79,14 +79,14 @@ fn clear_if_unchanged(app: &AppHandle, expected: PendingClipboard) -> Result<(),
         .clipboard()
         .read_text()
         .map(Some)
-        .map_err(|error| format!("could not read the system clipboard: {error}"))?;
+        .map_err(|error| format!("Failed to read system clipboard: {error}"))?;
     if current.as_deref().map(digest) == Some(expected.digest) {
         #[cfg(target_os = "macos")]
         macos::clear();
         #[cfg(not(target_os = "macos"))]
         app.clipboard()
             .write_text("")
-            .map_err(|error| format!("could not clear the system clipboard: {error}"))?;
+            .map_err(|error| format!("Failed to clear system clipboard: {error}"))?;
     }
     *pending = None;
     Ok(())
@@ -98,14 +98,13 @@ fn clear_pending(app: &AppHandle) {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(expected) = expected {
         if let Err(error) = clear_if_unchanged(app, expected) {
-            tracing::warn!(%error, "could not clear copied FOKS value on exit");
+            tracing::warn!(%error, "Could not clear copied FOKS value on application exit");
         }
     }
 }
 
-/// Keeps the runtime alive until the clipboard plugin can verify and clear
-/// FOKS's value. `RunEvent::Exit` is too late: plugin exit hooks have already
-/// run by then, and Linux clipboard ownership may already be gone.
+/// Keeps the runtime alive until pending clipboard data can be cleared.
+/// Exit is deferred because `RunEvent::Exit` occurs after plugin cleanup.
 pub fn defer_exit_cleanup(app: &AppHandle, code: Option<i32>, api: &tauri::ExitRequestApi) {
     let has_pending = PENDING
         .lock()
@@ -141,7 +140,7 @@ mod macos {
             pasteboard.clearContents();
             let value = NSString::from_str(value);
             if !pasteboard.setString_forType(&value, &NSString::from_str(UTF8)) {
-                return Err("failed to write the system pasteboard".to_owned());
+                return Err("Failed to write to system clipboard".to_owned());
             }
             let _ = pasteboard.setString_forType(&value, &NSString::from_str(CONCEALED_TYPE));
             Ok(())

@@ -1134,7 +1134,7 @@ fn path_components(path: &str) -> Result<Vec<Vec<u8>>> {
             || component.len() > 255
     }) {
         return Err(Error::InvalidKvPath(
-            "path contains an empty, relative, or excessive component",
+            "path component is empty, relative, or exceeds 255 bytes",
         ));
     }
     Ok(components)
@@ -1202,19 +1202,13 @@ fn resolve_directory(tree: &[KvDirectoryProjection], path: &str) -> Result<[u8; 
     Ok(current)
 }
 
-/// Resolves the parent directory a write addresses, creating the components
-/// the store does not have yet when `mkdir_p` asks for it.
+/// Resolves the parent directory for a KV write path, creating intermediate
+/// directories if `mkdir_p` is enabled.
 ///
-/// A FOKS write addresses an existing parent directory, so the first item ever
-/// written under a path fails with "directory component does not exist" unless
-/// something creates that path first. Upstream answers this with
-/// `foks kv put --mkdir-p`; this is the same walk, run inside the caller's
-/// write session so the created directories and the item they hold commit
-/// against one synchronized tree. Directories that already exist are left
-/// alone, and each `mkdir` returns the tree the walk continues from. The new
-/// directories carry the roles the item carries: a parent readable by fewer
-/// parties than its contents would hide those contents from the very members
-/// the item admits.
+/// KV writes require an existing parent directory. When `mkdir_p` is true,
+/// missing parent directories are created within the current write session,
+/// inheriting the item's read and write roles to ensure consistent access control
+/// across the directory hierarchy.
 fn resolve_write_parent(
     session: &mut foks_client::KvWriteSession<'_>,
     tree: Vec<KvDirectoryProjection>,

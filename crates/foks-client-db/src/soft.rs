@@ -1353,10 +1353,9 @@ mod tests {
         };
         let message = error.to_string();
         assert!(message.contains(path.canonicalize().unwrap().to_str().unwrap()));
-        assert!(message.contains("Quit FOKS"));
-        assert!(message.contains("delete"));
-        assert!(message.contains("credentials"));
-        assert!(message.contains("server trust state"));
+        assert!(message.contains("unsupported soft-state cache schema version 2"));
+        assert!(message.contains("this build supports version 4"));
+        assert!(message.contains("cache must be recreated"));
         assert!(path.exists());
     }
 

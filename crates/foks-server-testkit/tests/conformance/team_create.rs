@@ -200,7 +200,7 @@ pub(crate) fn public_client_creates_and_loads_named_and_adhoc_teams() {
     .unwrap();
     let removal_request = foks_rpc::encode_call(
         foks_rpc::TEAM_LOADER_PROTOCOL_ID,
-        5, // TeamLoader.loadRemovalForMember in v0.1.9.
+        5, // Member removal role.
         &removal_argument,
         0,
     )

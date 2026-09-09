@@ -156,14 +156,7 @@ interface NewSheetProps {
 }
 
 /**
- * One vault, group or ad-hoc share as the "Save in" dropdown draws it.
- *
- * The reading is `storeDescription` — the same sentence the sidebar row and
- * the page header give this store. The sheet used to compose its own, so a
- * group read "shared with 3 people · local" here and "3 people" two inches
- * to the left, and a lapsed server was explained in words no other surface
- * used. Whether the store can be written to is a separate question, and it
- * is the one `off` answers.
+ * Formats a store option for the "Save in" vault selector.
  */
 function storeOption(world: World, store: Store): CardOption {
   return {
@@ -175,27 +168,21 @@ function storeOption(world: World, store: Store): CardOption {
 }
 
 /**
- * Why the chosen store cannot take a new item, when it cannot.
- *
- * The chooser reads the way the sidebar reads, and that sentence says what a
- * store *is*, never whether this sheet may write to it. The reason belongs
- * with the choice rather than inside its label, so it is drawn as a band
- * under the chooser — otherwise a disabled Create button would be the only
- * word on the subject.
+ * Returns a user-facing explanation if the selected store is read-only or blocked.
  */
 function writeBlockReason(world: World, store: Store): string | null {
   if (canCreateInStore(world, store.id)) return null;
   if (leaseLapsed(world, store.id))
-    return 'server check-in lapsed — nothing can be written here';
+    return 'Server connection expired. Check your network connection and server status before retrying.';
   if (serverBlocked(world, store.id))
-    return 'server access is blocked — nothing can be written here';
+    return 'Server access is blocked. Cannot create items in this vault.';
   if (serverLeaseUnavailable(world, store.id))
-    return 'check-in status unknown — nothing can be written here';
+    return 'Server connection status unknown. Cannot create items in this vault.';
   if (store.kind === 'team' && !store.active)
-    return 'reports inactive — resume its creation first';
+    return 'Group setup is incomplete. Complete setup before adding items.';
   if (store.kind === 'team')
-    return 'no authenticated local group identity — writing is unavailable';
-  return 'nothing can be written here';
+    return 'You do not have write permissions for this group.';
+  return 'You do not have permission to create items in this vault.';
 }
 
 function AccessBlock({
@@ -238,12 +225,12 @@ function AccessBlock({
     ? Number(readRole.slice('Member:'.length))
     : 0;
   const choices: readonly [string, KvRoleInput, string][] = [
-    ['Owner', 'Owner', 'Only owners.'],
-    ['Admin', 'Admin', 'Admins and owners.'],
+    ['Owner', 'Owner', 'Only owners can read.'],
+    ['Admin', 'Admin', 'Admins and owners can read.'],
     [
       'Member',
       `Member:${readVisibility}`,
-      'Members at this visibility level and above.',
+      'Members at this visibility level and above can read.',
     ],
   ];
   const roleChoices = (
@@ -266,7 +253,9 @@ function AccessBlock({
           onSelect={() => choose(next)}
           title={label}
           detail={
-            forWrite ? detail.replace('.', ' can change or remove it.') : detail
+            forWrite
+              ? 'Members with Admin or Owner roles can modify or delete this item.'
+              : detail
           }
         />
       );
@@ -276,7 +265,7 @@ function AccessBlock({
       <SectionLabel
         action={
           <span className="pv">
-            would be readable by{' '}
+            accessible to{' '}
             <b>
               {admitted.length} of {roster.length}
             </b>
@@ -312,13 +301,13 @@ function AccessBlock({
             ? readRole
             : `Member · visibility ${readVisibility}`}
         </b>{' '}
-        this item would be readable by{' '}
+        this item will be readable by{' '}
         <b>
           {admitted.length} of {roster.length}
         </b>{' '}
-        in {store.name}: {admitted.map(partyName).join(', ') || 'nobody'}.
+        members in {store.name}: {admitted.map(partyName).join(', ') || 'none'}.
         {excluded.length
-          ? ` ${excluded.map(partyName).join(', ')} is not counted when its role or group membership provides no access here.`
+          ? ` ${excluded.map(partyName).join(', ')} cannot read this item under the selected role.`
           : ''}
       </p>
       <SectionLabel>
@@ -367,10 +356,7 @@ function NewSheet({
   onError,
   onMutationError,
 }: NewSheetProps): ReactNode {
-  // A workflow that names a store this Mac does not have — a deep link, or a
-  // store that left the catalog between the click and the sheet — would open
-  // the chooser on nothing at all. Fall back to the same first vault All Items
-  // starts on.
+  // If the specified store is not available locally, fall back to the default vault.
   const [storeId, setStoreId] = useState(() =>
     storeOf(world, workflow.storeId)
       ? workflow.storeId
@@ -431,7 +417,7 @@ function NewSheet({
         if (paths.length !== 1) {
           setSourcePath(null);
           setHovering(false);
-          setFileError('Drop one file at a time. No files were imported.');
+          setFileError('Please drop a single file.');
           return;
         }
         const first = paths[0];
@@ -525,7 +511,7 @@ function NewSheet({
         await onMutationError(error, { report: false });
       } else if (typed.code === 'inactive-group') {
         try {
-          await onApplied(`${store.name} is inactive`);
+          await onApplied(`Cannot create item: ${store.name} is inactive`);
           setWorkflow(null);
         } catch (refreshError) {
           onError(refreshError);
@@ -560,12 +546,12 @@ function NewSheet({
       title={`New ${kindLabel(itemKind).toLowerCase()}`}
       subtitle={
         itemKind === 'Password'
-          ? 'A login with a masked password.'
+          ? 'A saved login with username and password credentials.'
           : itemKind === 'Resource'
             ? 'A value such as an API key or recovery code.'
             : itemKind === 'File'
-              ? 'A file streamed from its path by the local agent.'
-              : 'A path pointing to another path in the same store.'
+              ? 'A file stored securely in this vault.'
+              : 'A reference pointing to another item in the same vault.'
       }
       footer={
         <>
@@ -579,7 +565,7 @@ function NewSheet({
               ? 'Creating…'
               : itemKind === 'File' && !sourcePath
                 ? 'Choose file and create'
-                : 'Create in this vault'}
+                : 'Create item'}
           </Button>
         </>
       }
@@ -595,11 +581,11 @@ function NewSheet({
               )}
               value={storeId}
               onChange={setStoreId}
-              placeholder="Choose a vault"
+              placeholder="Choose a destination"
             />
           ) : (
             <InsetRow label="Vault">
-              <span className="dim">No vault is available to save into.</span>
+              <span className="dim">No vaults available to store items.</span>
             </InsetRow>
           )}
         </Inset>
@@ -657,7 +643,7 @@ function NewSheet({
             </>
           ) : null}
           {itemKind === 'Link'
-            ? field('Points to', target, setTarget, '/ssh/id_ed25519', true)
+            ? field('Target path', target, setTarget, '/ssh/id_ed25519', true)
             : null}
           {itemKind === 'File' ? (
             <InsetRow label="File">
@@ -666,7 +652,7 @@ function NewSheet({
                   ? sourcePath.split(/[\\/]/).at(-1)
                   : hovering
                     ? 'Drop to use this file'
-                    : 'Drop a file here, or use the native picker'}
+                    : 'Drop a file here, or choose a file'}
               </span>
             </InsetRow>
           ) : null}
@@ -679,10 +665,9 @@ function NewSheet({
         <Toggle label="Advanced" className="sheet-advanced">
           <Inset>{field('Path', path, setPath, DRAFT_PATH[itemKind])}</Inset>
           <p className="hint">
-            Where this lands in the vault. Every kind fills it in from what you
-            typed above — the site, the name, the dropped file — and typing here
-            stops that only until the field it follows changes again. Any folder
-            in the path that does not exist yet is created with this item.
+            The vault path for this item. It is automatically filled in based on
+            the details above, but you can customize it here. Any missing parent
+            folders will be created automatically.
           </p>
         </Toggle>
       </>
@@ -714,8 +699,8 @@ function ExistsSheet({
       glyph={
         clash ? <KindIcon kind={kindOf(clash) as FilterKind} /> : undefined
       }
-      title={`Something is already at ${workflow.path}`}
-      subtitle={`New ${kindLabel(workflow.itemKind).toLowerCase()} · not created`}
+      title={`An item already exists at ${workflow.path}`}
+      subtitle={`New ${kindLabel(workflow.itemKind).toLowerCase()} · not saved`}
       footer={
         <>
           <Button
@@ -728,7 +713,7 @@ function ExistsSheet({
               })
             }
           >
-            Change the path
+            Change path
           </Button>
           <Button
             variant="primary"
@@ -739,20 +724,19 @@ function ExistsSheet({
               );
             }}
           >
-            Open{version ? ` version ${version}` : ' existing item'}
+            Open existing item
           </Button>
         </>
       }
     >
       <>
         <p>
-          Nothing was created and nothing was overwritten. An item already
-          exists at this path
+          An item already exists at this path. No files were overwritten
           {version
-            ? `, and ${nameOf(workflow.path)} is currently at version ${version} in ${storeOf(world, workflow.storeId)?.name ?? ''}`
+            ? ` in ${storeOf(world, workflow.storeId)?.name ?? 'this vault'} (currently version ${version})`
             : ''}
-          . Open the existing item to review it, or choose a different name or
-          path.
+          . You can open the existing item to review it, or choose a different
+          name or path.
         </p>
       </>
     </Sheet>
@@ -790,15 +774,13 @@ export function WriteOverlay({
       <Dialog
         className="stopwrap"
         role="alertdialog"
-        aria-label="Local agent connection lost"
+        aria-label="Connection to background service lost"
       >
         <div className="notice stop">
-          <div className="who">This Mac · the local agent</div>
-          <h2>The local agent connection was lost</h2>
+          <h2>Connection to background service lost</h2>
           <p>
-            We encountered a connection error with the local FOKS agent. Your
-            data has been saved, and in-progress operations can be continued
-            once a connection is restored.
+            The local background service stopped responding. Reconnect to
+            resume.
           </p>
           <div className="acts2">
             <Button
@@ -807,7 +789,7 @@ export function WriteOverlay({
                 void (async () => {
                   try {
                     await bridge.retryAgentConnection();
-                    await onApplied('Connected to the local agent');
+                    await onApplied('Reconnected to the local agent');
                     setWorkflow(null);
                   } catch (error) {
                     onError(error);
@@ -843,7 +825,7 @@ export function WriteOverlay({
     return (
       <DismissibleDialog
         className="backdrop"
-        aria-label="Creation refused because the path exists"
+        aria-label="Item path already exists"
         onDismiss={() => setWorkflow(null)}
       >
         <ExistsSheet
@@ -877,14 +859,7 @@ export function WriteOverlay({
 }
 
 /**
- * The save-refused sheet.
- *
- * Escape used to be wired straight to "discard my edit" here, while every
- * other overlay in the app treats Escape as a harmless cancel — and the body
- * of this very sheet promises the draft is retained. Pressing the most
- * reflexive key in the window therefore destroyed work the sheet had just
- * said it was keeping. Escape now asks; the discard itself is still one
- * deliberate click away in the footer.
+ * Modal sheet displayed when a save conflict occurs, prompting the user to review or discard changes.
  */
 function ConflictSheet({
   workflow,
@@ -906,9 +881,9 @@ function ConflictSheet({
       <Dialog
         className="backdrop"
         role="alertdialog"
-        aria-label="Discard your edit"
+        aria-label="Discard unsaved changes"
         onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
-          // Escape backs out of the question, not out of the draft.
+          // Escape closes the confirmation dialog without discarding the draft.
           if (event.key === 'Escape') setConfirmingDiscard(false);
         }}
       >
@@ -918,22 +893,22 @@ function ConflictSheet({
               <Icon name="trash" />
             </span>
           }
-          title="Discard your edit?"
-          subtitle={`${nameOf(workflow.item.path)} · not saved anywhere`}
+          title="Discard unsaved changes?"
+          subtitle={`${nameOf(workflow.item.path)} · Unsaved changes`}
           footer={
             <>
               <Button onClick={() => setConfirmingDiscard(false)}>
                 Keep editing
               </Button>
               <Button variant="primary" danger onClick={onDiscardConflict}>
-                Discard my edit
+                Discard changes
               </Button>
             </>
           }
         >
           <p>
-            Your draft has not been saved. Discarding it here is the only copy
-            gone — the item itself is untouched at its current version.
+            Your draft has not been saved. Discarding will permanently delete
+            your changes. The existing item will remain unchanged.
           </p>
         </Sheet>
       </Dialog>
@@ -949,8 +924,8 @@ function ConflictSheet({
     >
       <Sheet
         glyph={<KindIcon kind={kindOf(workflow.item) as FilterKind} />}
-        title="Conflict: item was updated"
-        subtitle={`${nameOf(workflow.item.path)} · changes could not be saved`}
+        title="Item modified elsewhere"
+        subtitle="A newer version was saved from another device. Choose which version to keep."
         footer={
           <>
             <Button onClick={() => setConfirmingDiscard(true)}>
@@ -972,12 +947,12 @@ function ConflictSheet({
       >
         <>
           <p>
-            Another member saved a newer version while you were editing. Review
-            the latest version and reapply your changes.
+            A newer version was saved while you were editing. Review the latest
+            version and reapply your changes.
           </p>
           <p className="fn">
-            Refresh to see the current version beside your retained draft,
-            review it, and save again under the refreshed version.
+            Refresh to compare the latest version with your draft, review
+            changes, and save your update.
           </p>
         </>
       </Sheet>
@@ -986,13 +961,7 @@ function ConflictSheet({
 }
 
 /**
- * The remove confirmation.
- *
- * Unlike every other write on this screen it had no busy flag, so the natural
- * response to a slow remove — clicking again — sent a second exact-version
- * remove. The item was already gone, so that one came back as a *conflict*,
- * and the user was shown "Someone else changed this first" with a retained
- * draft that never existed, for an item that no longer did.
+ * Confirmation dialog for removing an item.
  */
 function RemoveSheet({
   workflow,
@@ -1037,7 +1006,7 @@ function RemoveSheet({
                     path: workflow.item.path,
                     version: workflow.item.version,
                   });
-                  await onApplied(`Removed version ${workflow.item.version}`);
+                  await onApplied(`Removed ${nameOf(workflow.item.path)}`);
                   setWorkflow(null);
                 } catch (error) {
                   const typed = normalizeCommandError(error);
@@ -1045,7 +1014,7 @@ function RemoveSheet({
                     setWorkflow(null);
                     await onMutationError(error, { report: false });
                     toasts.show(
-                      'The item was modified upstream. Review the updated item before removing.',
+                      'This item was modified by another user or session. Review the updated item before removing.',
                       { tone: 'warning' },
                     );
                   } else {
@@ -1062,7 +1031,9 @@ function RemoveSheet({
         </>
       }
     >
-      <p>This will remove the item. This can’t be undone.</p>
+      <p>
+        This item will be permanently removed. This action cannot be undone.
+      </p>
     </SheetDialog>
   );
 }

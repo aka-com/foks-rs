@@ -153,9 +153,6 @@ function GroupsSection({
             {attention.map((store) => {
               const state = storeDescriptionState(world, store);
               const server = serverOf(world, store.id);
-              // `storeDescription` decides this, not a second copy of its
-              // branches: every store this row can list is one it already
-              // answers for, and a hand-written duplicate only drifts.
               const caption = storeDescription(world, store);
               return (
                 <InsetRow
@@ -212,7 +209,7 @@ function GroupsSection({
             );
           })
         ) : (
-          <InsetRow label="None">No account on this Mac yet.</InsetRow>
+          <InsetRow label="None">No accounts configured on this Mac.</InsetRow>
         )}
       </Inset>
     </>
@@ -230,23 +227,12 @@ export function SettingsScreen({
   onError,
   onMutationError,
 }: Props): ReactNode {
-  // The named fixture scene this screen was *entered* at, captured once.
-  // `scene` is read live from the address bar, which the shell rewrites to the
-  // canonical `settings` name on its first state change; without this, every
-  // fixture branch below would silently turn itself off as soon as anything
-  // re-rendered. Navigating away and back remounts and re-reads it, so leaving
-  // Settings still leaves its scene behind.
+  // Capture initial fixture scene once; the shell canonicalizes the route to 'settings' on mount.
   const [enteredScene] = useState(scene);
   const section =
     location.section === 'phrase' ? 'macs' : (location.section ?? 'macs');
   const stores = accountStores(world);
-  // Exact, by StoreRef. An alias is profile-local: two profiles may both hold
-  // an account called `personal`, and picking the first one that matches would
-  // point every device, recovery, pairing and passphrase action here at the
-  // wrong account. Three states, no fallback between them: no StoreRef in the
-  // address means this Mac's first account (and is rewritten to its exact
-  // StoreRef below); a StoreRef that resolves is the selection; a StoreRef
-  // that does not resolve is reported as unavailable.
+  // Select account by exact StoreRef to avoid ambiguous profile-local aliases.
   const requested = location.store;
   const selected = requested
     ? stores.find((store) => store.id === requested)
@@ -294,16 +280,12 @@ export function SettingsScreen({
       : null,
   );
   const toasts = useToast();
-  // Pairing, backup-phrase and Yubi sheets hold live secrets. A catalog reload
-  // must not start from a background read while one of those is open.
+  // Track open modal state to suppress background catalog reloads while sheets are active.
   const sheetOpen = useRef(sheet);
   sheetOpen.current = sheet;
-  // One silent catalog recovery per account until a read succeeds. Joins the
-  // shell's in-flight `loadWorld` instead of stacking `list_catalog`.
   const catalogRecovery = useRef<Promise<World> | null>(null);
   const recoveredAccounts = useRef(new Set<string>());
-  // Memoized on `onRefreshWorld`, its one captured value that is not a ref, so
-  // the effects below can depend on it without re-running on every render.
+  // Deduplicate concurrent catalog recovery requests.
   const recoverCatalog = useCallback((): Promise<World> => {
     if (!catalogRecovery.current) {
       const pending = onRefreshWorld().finally(() => {
@@ -313,9 +295,7 @@ export function SettingsScreen({
     }
     return catalogRecovery.current;
   }, [onRefreshWorld]);
-  // The profile of the selected account, and nothing when there is none: a
-  // YubiKey enrollment list belongs to a profile this Mac holds an account on,
-  // not to whichever server happens to be listed first.
+  // Profile of the currently selected account, or empty if none selected.
   const profile = selected?.server ?? '';
 
   useEffect(() => {
@@ -340,10 +320,7 @@ export function SettingsScreen({
     };
   }, []);
 
-  // A Settings address with no store in it means "this Mac's first account".
-  // Rewrite it to that account's exact StoreRef, so a reload, a copied link and
-  // every action from here name one account rather than a position in a list
-  // that a catalog refresh may reorder.
+  // Canonicalize default settings route to the first account's exact StoreRef.
   useEffect(() => {
     if (location.store || !selected) return;
     onNavigate({
@@ -360,10 +337,7 @@ export function SettingsScreen({
     selected,
   ]);
 
-  // Everything below is about one account. When the route moves to another —
-  // or to one this catalog no longer has — none of it carries over: an open
-  // sheet would submit against the account now on screen, and a device or
-  // enrollment list left in place would be read as that account's.
+  // Reset active sheets and account-specific state when switching accounts.
   const selectedId = selected?.id;
   const shown = useRef(selectedId);
   useEffect(() => {
@@ -406,10 +380,7 @@ export function SettingsScreen({
           next.set(candidate, status);
           loaded.add(candidate);
         } catch (error) {
-          // A failed probe is a settled answer — access is stopped — so it
-          // counts as loaded. Otherwise `selectedStatusLoaded` stayed false
-          // and the auto-close below never fired, leaving an open write
-          // sheet enabled behind the "access is stopped" band.
+          // Mark as loaded so UI status gates resolve even if the server probe fails.
           loaded.add(candidate);
           if (alive) onError(error);
         }
@@ -464,9 +435,7 @@ export function SettingsScreen({
       setMacsLoaded(true);
       return;
     }
-    // The StoreRef this request is for, captured before the await. `alive` is
-    // cleared when the route leaves it, so a slow answer for one account can
-    // never be drawn as another account's devices.
+    // Capture target store before await to avoid applying stale device responses.
     const requestedStore = selected.id;
     const requestedProfile = selected.server;
     setMacsLoaded(false);
@@ -488,10 +457,7 @@ export function SettingsScreen({
         try {
           result = await load();
         } catch (error) {
-          // Reads bind through the retained catalog. If a mutation already
-          // dropped it, join the in-flight world load (or start one) and retry
-          // this list once — do not replay any write, and do not stack a second
-          // `list_catalog` on a load that is already running.
+          // If catalog was invalidated, await world recovery and retry the query once.
           if (!alive) return;
           if (sheetOpen.current || !isCatalogRequired(error)) throw error;
           const already = recoveredAccounts.current.has(requestedStore);
@@ -535,8 +501,7 @@ export function SettingsScreen({
       setKeysLoaded(true);
       return;
     }
-    // Same rule as the device list: a late answer for the profile the route
-    // has left is dropped rather than shown under the one it moved to.
+    // Discard responses if selected profile changed while query was in-flight.
     setKeysLoaded(false);
     void enqueueProfileWork(bridge, profile, async () => {
       const nextCards = await bridge.listYubiCards(profile);
@@ -648,8 +613,7 @@ export function SettingsScreen({
     };
   }, [bridge, onError]);
 
-  // Moving between sections keeps the exact account, so Macs -> Accounts ->
-  // Security keys is three views of one StoreRef rather than three lookups.
+  // Retain selected account when navigating between settings sections.
   const go = (next: SettingsSection, store = selected?.id): void =>
     onNavigate({
       kind: 'settings',
@@ -689,13 +653,13 @@ export function SettingsScreen({
     : undefined;
   const inviteMessage =
     invitedStore && invitedAccount
-      ? `1. Install FOKS: https://foks.app/download\n2. When it asks for a server address, type ${invitedServer?.name ?? invitedStore.server}\n3. Create your account with username firstname.lastname\n4. Then tell ${invitedAccount.username} your username — there are no invite links, so that is what I add.`
+      ? `1. Install FOKS: https://foks.app/download\n2. When prompted for a server address, enter ${invitedServer?.name ?? invitedStore.server}\n3. Create your account with username firstname.lastname\n4. Send your username to ${invitedAccount.username} so you can be added to the group.`
       : '';
   return (
     <>
       <PageHeader
         title="Settings"
-        subtitle="Accounts, servers, keys, groups and this Mac"
+        subtitle="Manage accounts, servers, security keys, and local devices"
       />
       <div className="body">
         <div className="settings-cols">
@@ -718,7 +682,7 @@ export function SettingsScreen({
                 stores={stores}
                 world={world}
                 onSelect={(store) => go(section, store.id)}
-                onRefresh={() => void onRefresh('Refreshed the catalog')}
+                onRefresh={() => void onRefresh('Accounts refreshed')}
               />
             ) : null}
             {section === 'macs' && !unavailable ? (
@@ -822,7 +786,7 @@ export function SettingsScreen({
           onConnected={async (_profile, alias) => {
             setSheet(null);
             await onRefreshWorld();
-            toasts.show(`Connected ${alias} from the official FOKS client`);
+            toasts.show(`Connected account "${alias}" from FOKS CLI`);
           }}
           onError={(error) => void onMutationError(error)}
         />
@@ -840,11 +804,7 @@ export function SettingsScreen({
               : undefined
           }
           onClose={() => setSheet(null)}
-          onDone={async () =>
-            applied(
-              'Backup phrase enrolled; the secret was cleared from this window',
-            )
-          }
+          onDone={async () => applied('Backup phrase enrolled successfully.')}
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
@@ -863,11 +823,7 @@ export function SettingsScreen({
           bridge={bridge}
           store={selected}
           onClose={() => setSheet(null)}
-          onDone={async () =>
-            applied(
-              'Recovery submitted; refresh and review the authenticated device list',
-            )
-          }
+          onDone={async () => applied('Recovery submitted successfully.')}
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
@@ -877,11 +833,7 @@ export function SettingsScreen({
           store={selected}
           card={cards[0]}
           onClose={() => setSheet(null)}
-          onDone={async () =>
-            applied(
-              'YubiKey account created; refreshed authenticated key lists',
-            )
-          }
+          onDone={async () => applied('YubiKey account created successfully.')}
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
@@ -891,9 +843,7 @@ export function SettingsScreen({
           store={selected}
           cards={cards}
           onClose={() => setSheet(null)}
-          onDone={async () =>
-            applied('YubiKey device provisioned; refreshed authenticated lists')
-          }
+          onDone={async () => applied('YubiKey added to account successfully')}
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
@@ -914,9 +864,7 @@ export function SettingsScreen({
           }}
           onDone={async () => {
             setPendingYubi(null);
-            await applied(
-              'Security-key action completed; refreshed authenticated lists',
-            );
+            await applied('Security key updated.');
           }}
           onError={(error) => void onMutationError(error)}
         />
@@ -929,9 +877,7 @@ export function SettingsScreen({
           store={selected}
           alias={yubi.find((entry) => entry.state === 'complete')?.alias ?? ''}
           onClose={() => setSheet(null)}
-          onDone={async () =>
-            applied('YubiKey revoked and affected account keys rotated')
-          }
+          onDone={async () => applied('YubiKey revoked successfully')}
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
@@ -969,7 +915,7 @@ export function SettingsScreen({
           onDone={async () => {
             const name = removeDevice.name ?? 'device';
             setRemoveDevice(null);
-            await applied(`Removed ${name} from this account`);
+            await applied(`Device "${name}" removed`);
           }}
           onError={(error) => void onMutationError(error)}
         />
@@ -1032,7 +978,7 @@ export function SettingsScreen({
           title={
             invitedStore && invitedAccount
               ? `Invite to ${invitedServer?.name ?? invitedStore.server}`
-              : 'That account is no longer available'
+              : 'Account no longer available'
           }
           subtitle={
             invitedStore && invitedAccount
@@ -1074,21 +1020,25 @@ export function SettingsScreen({
                 </InsetRow>
                 <InsetRow label="Server">
                   {invitedServer?.name ?? invitedStore.server}
-                  <small>They enter this address during setup.</small>
+                  <small>
+                    The invited user enters this address during setup.
+                  </small>
                 </InsetRow>
                 <InsetRow label="Signup invite">
                   Optional
-                  <small>Required only if the server requires an invite.</small>
+                  <small>
+                    Only needed if this server requires an invitation code.
+                  </small>
                 </InsetRow>
-                <InsetRow label="When they reply">
-                  Add their username to a group from that group’s settings.
+                <InsetRow label="Next steps">
+                  Add their username to a group in that group’s settings.
                 </InsetRow>
               </Inset>
             </>
           ) : (
             <p className="fn">
-              This account is no longer available. Close this dialog and choose
-              another account.
+              This account is no longer available. Please select a different
+              account to send an invite.
             </p>
           )}
         </SheetDialog>
@@ -1098,13 +1048,7 @@ export function SettingsScreen({
 }
 
 /**
- * The address names an account this catalog does not have.
- *
- * Nothing is selected in its place. Another account that happens to share the
- * alias is not this one: its devices, its recovery enrollments, its passphrase
- * and its security keys are all different, and quietly substituting it would
- * aim every button on this page at the wrong account. The way out is an exact
- * choice or a refresh, both taken deliberately.
+ * Displayed when the requested account cannot be found in the current catalog.
  */
 function UnavailableAccount({
   stores,
@@ -1137,8 +1081,8 @@ function UnavailableAccount({
       }
     >
       <p>
-        This account is no longer associated with this Mac, and no other account
-        has been selected in its place.
+        This account is no longer available on this Mac. Select another account
+        below or refresh the catalog.
       </p>
       {stores.length ? null : (
         <p>
@@ -1180,7 +1124,7 @@ function MacsSection({
   if (!selected)
     return (
       <Notice title="No available account on this Mac">
-        <p>Add and check a server, then create or recover an account.</p>
+        <p>Add and verify a server, then create or recover an account.</p>
       </Notice>
     );
   const account = world.accounts.find((entry) => entry.store === selected.id);
@@ -1195,10 +1139,7 @@ function MacsSection({
             if (next) onSwitch(next);
           }}
           items={stores.map((store) => {
-            // The alias is profile-local, so two profiles can both hold `personal`.
-            // Where that happens the label carries the server too — otherwise the
-            // switcher would offer two identical-looking buttons for two different
-            // accounts.
+            // Disambiguate duplicate account aliases across different servers.
             const ambiguous = stores.some(
               (other) =>
                 other.id !== store.id && other.account === store.account,
@@ -1217,7 +1158,7 @@ function MacsSection({
       <SectionLabel>This account</SectionLabel>
       <Inset className="settings-inset">
         <InsetRow label="Signed in as">
-          <b>{account?.username ?? 'Identity unavailable'}</b>
+          <b>{account?.username ?? 'Unknown user'}</b>
         </InsetRow>
         <InsetRow label="Local alias">{selected.account}</InsetRow>
       </Inset>
@@ -1257,7 +1198,7 @@ function MacsSection({
                       Remove…
                     </Button>
                   ) : (
-                    <Chip>managed under Security keys</Chip>
+                    <Chip>Security key (managed separately)</Chip>
                   )}
                 </>
               }
@@ -1298,7 +1239,7 @@ function MacsSection({
             </Button>
           }
         >
-          Type a pairing phrase from another FOKS device you use.
+          Enter the pairing phrase displayed on your other FOKS device.
         </InsetRow>
       </Inset>
       <SectionLabel>Recovery</SectionLabel>
@@ -1315,7 +1256,7 @@ function MacsSection({
             ? 'Loading…'
             : backups.length
               ? `${backups.length} enrollment${backups.length === 1 ? '' : 's'} stored on this Mac`
-              : 'No locally recorded backup phrase for this account.'}
+              : 'No backup phrases stored on this Mac for this account.'}
         </InsetRow>
         {backups.map((backup) => (
           <InsetRow
@@ -1336,20 +1277,19 @@ function MacsSection({
           </InsetRow>
         ))}
         <InsetRow
-          label="Recover here"
+          label="Recover account"
           action={
             <Button disabled={stopped} onClick={() => onSheet('recover')}>
               Recover…
             </Button>
           }
         >
-          Use a backup phrase to recover another account.
+          Use a backup phrase to recover an existing account on this Mac.
         </InsetRow>
       </Inset>
       <p className="fn">
-        Only backup enrollments completed on this Mac are listed here.
-        Remote-only backup keys cannot currently be named or revoked from this
-        screen.
+        Only backup phrases created on this Mac are listed here. Backup keys
+        created on other devices cannot be viewed or revoked from this screen.
       </p>
     </>
   );
@@ -1404,17 +1344,17 @@ function KeysSection({
       'Verify passphrase',
       'Test the passphrase with the server login challenge.',
     ],
-    ['unblock', 'Unblock PIN', 'Use the PUK to set a new PIN.'],
-    ['change-puk', 'Change PUK', 'Set a new unlock code.'],
+    ['unblock', 'Unblock PIN', 'Use your unlock code (PUK) to set a new PIN.'],
+    ['change-puk', 'Change unlock code', 'Set a new unlock code (PUK).'],
     [
       'recover-management',
-      'Recover management key',
-      'Use a software account on this Mac without a card PIN.',
+      'Restore management access',
+      'Authorize this Mac to manage the security key.',
     ],
     [
       'recover-subkey',
-      'Recover subkey',
-      'Re-derive the FOKS subkey with the card PIN.',
+      'Restore signing key',
+      'Re-derive authentication credentials using your card PIN.',
     ],
     [
       'resume-enrollment',
@@ -1423,10 +1363,10 @@ function KeysSection({
     ],
     [
       'resume-rotation',
-      'Resume management rotation',
-      'Continue an interrupted rotation.',
+      'Resume key rotation',
+      'Continue an interrupted management key rotation.',
     ],
-    ['rotate', 'Rotate management key', 'Replace the card management key.'],
+    ['rotate', 'Rotate management key', 'Generate a new card management key.'],
   ];
   return (
     <>
@@ -1459,7 +1399,7 @@ function KeysSection({
             </InsetRow>
           ))
         ) : (
-          <InsetRow label="None">No card is connected right now.</InsetRow>
+          <InsetRow label="None">No security key is connected.</InsetRow>
         )}
       </Inset>
       {stopped ? (
@@ -1482,7 +1422,7 @@ function KeysSection({
             </Button>
           }
         >
-          Keys live on the card from the start.
+          Store credentials directly on the security key from creation.
         </InsetRow>
         <InsetRow
           label="Existing account"
@@ -1492,8 +1432,7 @@ function KeysSection({
             </Button>
           }
         >
-          Make a currently connected card an owner device for a software account
-          on this Mac.
+          Add a connected security key as an authorized device for this account.
         </InsetRow>
       </Inset>
       <SectionLabel>Everyday and recovery</SectionLabel>
@@ -1519,7 +1458,7 @@ function KeysSection({
                       : stopped
                         ? 'Server access is stopped'
                         : loading
-                          ? 'Reading this account…'
+                          ? 'Loading account…'
                           : id === 'resume-enrollment'
                             ? 'No pending enrollment found'
                             : 'No complete enrollment found'
@@ -1590,8 +1529,8 @@ function AccountSection({
         }
       >
         <p>
-          Add and check a server, then create or recover an account, or connect
-          one from the official CLI.
+          Add and verify a server, then create or recover an account, or connect
+          an existing account from the FOKS CLI.
         </p>
       </Notice>
     );
@@ -1628,16 +1567,16 @@ function AccountSection({
           (!pending && (!status?.host || lease !== 'fresh'));
         const inert = stopped || pending;
         const statusLabel = pending
-          ? 'Reading check-in…'
+          ? 'Checking status…'
           : inventoryUnavailable
-            ? 'connection error'
+            ? 'Connection error'
             : lapsed
-              ? 'server check-in lapsed'
+              ? 'Session expired'
               : stopped
-                ? 'check-in status unknown'
+                ? 'Status unknown'
                 : status?.leaseRequired === false
-                  ? 'check-in not required'
-                  : 'signed check-in available';
+                  ? 'Check-in not required'
+                  : 'Connected';
         return (
           <div key={store.id}>
             <SectionLabel>
@@ -1651,7 +1590,7 @@ function AccountSection({
               </InsetRow>
               <InsetRow label="Account alias">
                 {store.account}
-                <small>The local name; the server never sees it.</small>
+                <small>A local name on this Mac; not sent to the server.</small>
               </InsetRow>
               <InsetRow label="Device">
                 {pending
@@ -1689,12 +1628,11 @@ function AccountSection({
                   </Button>
                 </span>
                 <small>
-                  Passphrase status is not stored on this Mac.{' '}
                   {stopped
-                    ? 'Nothing can be set, changed or verified until server access is available.'
+                    ? 'Reconnect to the server to manage your passphrase.'
                     : pending
-                      ? 'Waiting for server check-in before passphrase actions are available.'
-                      : 'Verify checks your passphrase against the server.'}
+                      ? 'Checking server connection…'
+                      : 'Verify tests whether your passphrase matches the server.'}
                 </small>
               </InsetRow>
             </Inset>
@@ -1730,7 +1668,9 @@ function AgentSection({
             <i />
             {world.agent.phase}
           </span>
-          <small>FOKS is unavailable until the agent is ready.</small>
+          <small>
+            The local background agent must be connected to use FOKS.
+          </small>
         </InsetRow>
         <InsetRow
           label="Socket"
@@ -1764,8 +1704,12 @@ function AgentSection({
                   void bridge
                     .retryAgentConnection()
                     .then(async (status) => {
-                      await onRefresh(`Connection retry: ${status.phase}`);
-                      onMessage(`Connection retry: ${status.phase}`);
+                      const msg =
+                        status.phase === 'Ready'
+                          ? 'Connected to local agent.'
+                          : `Agent connection status: ${status.phase}`;
+                      await onRefresh(msg);
+                      onMessage(msg);
                     })
                     .catch(onError)
                 }
@@ -1777,10 +1721,10 @@ function AgentSection({
         >
           {ready
             ? 'Connected.'
-            : 'Reconnect to the local agent. Interrupted changes will not be repeated.'}
+            : 'Reconnect to the local agent. Incomplete operations will need to be restarted.'}
         </InsetRow>
       </Inset>
-      <Toggle label="Inspect AgentStatus">
+      <Toggle label="View agent diagnostics">
         <pre>{JSON.stringify(world.agent, null, 2)}</pre>
       </Toggle>
     </>
@@ -1816,7 +1760,7 @@ function AboutSection({
       <Inset className="settings-inset">
         <InsetRow label="Version">
           FOKS Desktop {appInfo?.version ?? '…'}
-          <small>Reported by this installed application.</small>
+          <small>Installed application version.</small>
         </InsetRow>
       </Inset>
     </>
@@ -1888,8 +1832,8 @@ function PhraseSheet({
   const words = phrase?.split(/\s+/) ?? [];
   return (
     <SheetFrame
-      title={phrase ? 'Write these 17 words down' : 'Enroll a backup phrase'}
-      subtitle={`${username} on ${server}`}
+      title={phrase ? 'Save backup phrase' : 'Create backup phrase'}
+      subtitle={`Generate a recovery phrase for ${username} on ${server}`}
       onClose={() => {
         setPhrase(null);
         onClose();
@@ -1929,7 +1873,7 @@ function PhraseSheet({
                     .finally(() => setBusy(false));
                 }}
               >
-                Prepare phrase
+                Generate phrase
               </Button>
             </>
           )}
@@ -1939,8 +1883,8 @@ function PhraseSheet({
       {phrase ? (
         <>
           <p>
-            This phrase is shown once and cannot be copied. Write it down now.
-            The agent stores only the public key.
+            This phrase is shown only once and cannot be copied. Write it down
+            and keep it in a secure location.
           </p>
           <div className="words">
             {words.map((word, index) => (
@@ -1956,7 +1900,7 @@ function PhraseSheet({
               checked={written}
               onChange={(event) => setWritten(event.target.checked)}
             />
-            I have written these down
+            I have written down these words
           </label>
         </>
       ) : (
@@ -2048,7 +1992,7 @@ function PairSheet({
                         'finish_device_pairing returned a different account.',
                       );
                     return result;
-                  }, 'Pairing finished; refreshed authenticated devices')
+                  }, 'Device paired successfully.')
                 }
               >
                 Finish
@@ -2211,13 +2155,13 @@ function RecoverSheet({
       }
     >
       <p>
-        Recovery adds this Mac as a new owner device. If interrupted, resume it
-        from Alerts with the same phrase.
+        Recovery adds this Mac as an authorized device. If interrupted, you can
+        resume recovery from Alerts using the same phrase.
       </p>
       <Inset>
         <Field label="Local alias" value={target} onChange={setTarget} />
         <Field label="Device name" value={device} onChange={setDevice} />
-        <InsetRow label="17 words">
+        <InsetRow label="Recovery phrase">
           <textarea
             value={phrase}
             onChange={(event) => setPhrase(event.target.value)}
@@ -2277,7 +2221,7 @@ function EnrollSheet({
   return (
     <SheetFrame
       title="Create a YubiKey account"
-      subtitle={`A new account on ${store.server}; keys live on the card from the start`}
+      subtitle={`Create a new account on ${store.server} with credentials stored directly on your hardware key`}
       onClose={() => {
         clear();
         onClose();
@@ -2337,24 +2281,26 @@ function EnrollSheet({
       <p>Before you continue:</p>
       <ol className="sheet-steps">
         <li>
-          <b>FOKS writes both keys to the card in one step.</b> If that step
-          fails, resetting the PIV applet erases the card.
+          <b>Credentials are written in a single operation.</b> If setup fails,
+          the card's security applet must be reset, erasing existing card data.
         </li>
         <li>
-          <b>The card must use its factory management key.</b> A managed card
-          cannot be used.
+          <b>The card must use default factory settings.</b> Custom-managed
+          cards are not supported.
         </li>
         <li>
-          <b>Save the unlock code you choose.</b> FOKS cannot recover it later.
+          <b>Save your unlock code securely.</b> It cannot be recovered if lost.
         </li>
       </ol>
       {card ? (
         <p>
-          <b>YubiKey {card.serial}</b> is connected. FOKS cannot identify an
-          existing alias from the card serial.
+          <b>YubiKey {card.serial}</b> is connected. Choose an alias for this
+          key below.
         </p>
       ) : (
-        <Band label="Connect a YubiKey.">No card is connected.</Band>
+        <Band label="Connect a YubiKey">
+          No security key is currently detected.
+        </Band>
       )}
       <Inset>
         <Field label="Alias" value={alias} onChange={setAlias} />
@@ -2377,7 +2323,7 @@ function EnrollSheet({
             value={invite}
             onChange={(event) => setInvite(event.target.value)}
           />
-          <small>Optional; cleared on submission.</small>
+          <small>Optional server invitation code.</small>
         </InsetRow>
       </Inset>
       <details className="adv">
@@ -2389,7 +2335,12 @@ function EnrollSheet({
             onChange={setSigningSlot}
             mono
           />
-          <Field label="Second slot" value={pqSlot} onChange={setPqSlot} mono />
+          <Field
+            label="Post-quantum slot"
+            value={pqSlot}
+            onChange={setPqSlot}
+            mono
+          />
           <InsetRow label="PIN tries">
             <input
               type="number"
@@ -2455,7 +2406,7 @@ function ProvisionSheet({
   return (
     <SheetFrame
       title="Provision a YubiKey device"
-      subtitle={`A fresh local alias on ${store.account}`}
+      subtitle={`Add a security key to ${store.account}`}
       onClose={() => {
         clear();
         onClose();
@@ -2498,11 +2449,13 @@ function ProvisionSheet({
     >
       <p>Enter a new alias and select a connected card.</p>
       {cards.length ? null : (
-        <Band label="Connect a YubiKey.">No card is connected.</Band>
+        <Band label="Connect a YubiKey">
+          No security key is currently detected.
+        </Band>
       )}
       <Inset>
         <Field
-          label="Target alias"
+          label="Key alias"
           value={targetAlias}
           onChange={setTargetAlias}
         />
@@ -2683,7 +2636,10 @@ function YubiActionSheet({
   };
   return (
     <SheetFrame
-      title={action.replaceAll('-', ' ')}
+      title={action
+        .split('-')
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ')}
       subtitle={alias || 'Choose an enrolled key alias'}
       onClose={() => {
         setPin('');

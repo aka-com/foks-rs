@@ -256,7 +256,7 @@ pub(crate) fn validate(
         .map(|(passphrase, link)| {
             let decoded = link.link.decode_generic()?;
             let foks_proto::GenericLinkPayload::UserSettings(info) = decoded.payload else {
-                return Err(Error::Signup("passphrase annex generic payload"));
+                return Err(Error::Signup("passphrase annex generic payload mismatch"));
             };
             let next_wire = foks_snowpack::encode(&foks_snowpack::Value::Binary(
                 link.next_tree_location.to_vec(),

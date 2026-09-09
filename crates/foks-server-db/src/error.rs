@@ -30,7 +30,7 @@ pub enum Error {
     AuthorizationChanged,
     #[error("idempotency identity was reused with different request bytes")]
     ReceiptConflict,
-    #[error("idempotency receipt expired; mutation outcome requires operator reconciliation")]
+    #[error("idempotency receipt expired")]
     ReceiptExpired,
     #[error("expected Merkle head does not match the authoritative head")]
     StaleRoot,

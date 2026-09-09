@@ -79,7 +79,7 @@ fn federation_scope_quotas_are_atomic_and_expired_grants_release_capacity() {
         .unwrap_err();
     assert!(matches!(
         user_error,
-        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1012, .. })
+        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1060, .. })
     ));
     second_client
         .foks()
@@ -91,7 +91,7 @@ fn federation_scope_quotas_are_atomic_and_expired_grants_release_capacity() {
         .unwrap_err();
     assert!(matches!(
         global_user_error,
-        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1012, .. })
+        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1060, .. })
     ));
 
     let first_team = client
@@ -115,7 +115,7 @@ fn federation_scope_quotas_are_atomic_and_expired_grants_release_capacity() {
         .unwrap_err();
     assert!(matches!(
         team_error,
-        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1012, .. })
+        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1060, .. })
     ));
     second_client
         .foks()
@@ -137,7 +137,7 @@ fn federation_scope_quotas_are_atomic_and_expired_grants_release_capacity() {
         .unwrap_err();
     assert!(matches!(
         global_team_error,
-        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1012, .. })
+        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1060, .. })
     ));
 
     server.shutdown().unwrap();

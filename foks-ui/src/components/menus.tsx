@@ -1,16 +1,8 @@
 /**
- * Buttons that open a menu, over the kit's overlay primitives.
+ * Dropdown action menu buttons built on shared overlay primitives.
  *
- * `ui/kit/overlay-primitives.tsx` already owns the hard parts — anchored
- * placement that stays inside the viewport, roving focus, Escape, dismissal
- * on an outside pointer-down, and returning focus to the trigger — so this
- * file adds the design's shapes and nothing else. Rewriting any of that here
- * would give FOKS a second, worse copy of a tested primitive.
- *
- * The one adaptation is where the menu lives. The mock draws `.menu`
- * absolutely inside `.menuwrap`; a portaled menu escapes the scrolling
- * surfaces instead, so the portal wrap is fixed and `.menu` inside it is
- * static (`src/styles/app.css`).
+ * `MenuButton` opens a dropdown menu. `SplitButton` combines a primary action
+ * with an attached dropdown menu.
  */
 
 import { useRef, useState } from 'react';

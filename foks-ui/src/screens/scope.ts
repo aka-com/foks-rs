@@ -1,9 +1,5 @@
 /**
- * What is listed, in what order — `01-vault.html`'s `scoped()`.
- *
- * Pure functions of a world and a navigation state, so the list a screen
- * draws and the list a test asserts are the same list. Nothing here formats
- * markup; the numbers and strings it returns are the model's.
+ * Item filtering and sorting utilities for vault catalog views.
  */
 
 import {
@@ -19,25 +15,21 @@ import {
 import type { Item, World } from '../model';
 import type { Location, LocationState, SortKey } from '../location';
 
-/** "Personal" — the store caption under a row's name; Server has its own column. */
+/** Returns the store display name for an item. */
 export function whereOf(world: World, item: Item): string {
   const store = storeOf(world, item.store);
   return store?.name ?? item.store;
 }
 
 /**
- * The "Readable by" cell.
- *
- * Always the computation, never prose: the roster filtered by the item's read
- * role. An account store has no roster, so it answers "only you" — sharing
- * anything means putting it in a group.
+ * Computes reader metadata for an item based on the store roster and read role.
  */
 export function readableBy(
   world: World,
   item: Item,
 ): { label: string; title?: string } {
   const readers = readersOf(world, item);
-  if (!readers) return { label: 'only you' };
+  if (!readers) return { label: 'Only you' };
   return {
     label: peopleLabel(readers.length),
     title: readers.map(partyName).join(', '),
@@ -60,16 +52,13 @@ const SORTS: Readonly<
     b.version - a.version || nameOf(a.path).localeCompare(nameOf(b.path)),
 };
 
-/** Whether a location lists items at all. */
+/** Checks whether the given location displays catalog items. */
 export function listsItems(location: Location): boolean {
   return location.kind === 'all' || location.kind === 'store';
 }
 
 /**
- * The items a location, a kind filter, a query and a sort choose.
- *
- * Search covers paths and store names, as the mock's does — contents stay
- * masked, so they are not searched.
+ * Filters and sorts items based on location, kind filter, search query, and sort key.
  */
 export function scopedItems(world: World, state: LocationState): Item[] {
   const { location, kind, query, sort } = state;

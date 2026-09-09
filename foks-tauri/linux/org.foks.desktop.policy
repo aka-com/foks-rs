@@ -5,20 +5,15 @@
 <!--
   The polkit action behind the FOKS desktop app lock.
 
-  Install to /usr/share/polkit-1/actions/org.foks.desktop.policy. Without it
-  the action is unregistered and polkit silently denies it, so the app must
-  report its lock as unavailable rather than offer a lock nobody could open.
-  Modelled on src-tauri/src/applock/com.aka.desktop.policy; the app lock itself
-  is wired up in Phase 5.
+  Installs to /usr/share/polkit-1/actions/org.foks.desktop.policy. If not
+  registered, polkit denies authorization requests and the app reports
+  app lock as unavailable.
 
-  Only a package that can write outside $HOME can install this. A .deb can; an
-  AppImage cannot, which is why .deb is the only Linux target (see README.md).
+  Requires system installation permissions outside $HOME.
 
-  allow_active is auth_self, not auth_admin: this authenticates the person
-  already at the console as themselves, exactly as Touch ID or the account
-  password does on macOS. It grants no privilege — the only thing it decides
-  is whether this app's own window unlocks. allow_inactive and allow_any are
-  no, because an app lock is about the person in front of the machine.
+  allow_active is set to auth_self to authenticate the current active console
+  user without requiring administrator privileges. allow_inactive and allow_any
+  are disallowed for non-active sessions.
 -->
 <policyconfig>
   <vendor>FOKS</vendor>
@@ -26,7 +21,7 @@
 
   <action id="org.foks.desktop.unlock">
     <description>Unlock FOKS</description>
-    <message>Authenticate to unlock FOKS and reach your vault.</message>
+    <message>Authenticate to unlock FOKS and access your vault.</message>
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>no</allow_inactive>

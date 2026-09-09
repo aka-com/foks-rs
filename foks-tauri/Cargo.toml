@@ -7,7 +7,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "Standalone FOKS desktop client."
+description = "FOKS desktop client application."
 
 [lib]
 name = "foks_desktop_app"

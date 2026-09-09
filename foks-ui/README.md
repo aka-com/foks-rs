@@ -4,10 +4,8 @@ The web half of `foks-desktop`, the second Tauri app in this repository. It is
 a sibling of `ui/` (aka-desktop), not a mode inside it: different trust
 boundary, different release train, different command surface.
 
-**Where it stands:** Phases 1–6 and the Phase 7 group-item web integration are complete. Production selects the
-Tauri bridge, loads the live catalog once (its response already includes
-stores), validates every response at runtime, and passes opaque Rust store ids
-back unchanged. Show and Read target each read one item at one exact version,
+In production, the application selects the Tauri bridge, loads the catalog once,
+validates all responses at runtime, and passes opaque store references back unchanged. Show and Read target each read one item at one exact version,
 hold the returned string only in the open details panel, and drop it on Hide,
 selection change or window blur. Copy value, Copy path and Download stay in Rust. List rows use
 `ui/kit/virtual-list.ts`; cards are capped at 200 because that row windower
@@ -56,27 +54,27 @@ operations, and the YubiKey lifecycle. Secret phrases, PINs, unlock codes and
 passphrases remain live-form state only and are cleared when dispatched,
 cancelled, concealed or unmounted.
 
-**Accounts are identified by StoreRef, never by alias.** Three words, used
-consistently here and in the code: an **alias** is a profile-local display
-label, a **profile** is a server configuration, and a **StoreRef** (the `id` on
-a `Store`, `store` on an `Account`) is exact application identity. Two profiles
-may both hold an account aliased `personal`, so Settings and Join carry the
-StoreRef — `?state=settings&section=macs&store=<StoreRef>` — and resolve
-exactly against it. A Settings address with no store names this Mac's first
-account and is rewritten to that account's StoreRef; a StoreRef that no longer
-resolves is reported as unavailable rather than silently replaced by another
-account, and reordering the catalog cannot change which account an address
-means. Switching accounts closes any open sheet and drops the device, backup
-and key lists that belonged to the previous one, and a slow answer for an
-account the route has left is never drawn under the one it moved to. Alias
-comparisons survive only where the native command takes `(profile, alias)` —
-the backup-phrase and recovery operations — and there the profile comes from
-the selected StoreRef.
+**Account identity model:**
 
-**What remains deliberately unavailable.** Link edits remain unavailable;
-Link replacement is remove then create, not an invented atomic operation.
-Promotions are deliberately remove-and-re-add
-plus a rekey, not one operation. There is no un-admit or invite-link operation.
+- **alias**: Profile-local display label.
+- **profile**: Server configuration reference.
+- **StoreRef**: Canonical application store identifier (`id` on `Store`, `store` on `Account`). Two profiles
+  may both hold an account aliased `personal`, so Settings and Join carry the
+  StoreRef — `?state=settings&section=macs&store=<StoreRef>` — and resolve
+  exactly against it. A Settings address with no store names this Mac's first
+  account and is rewritten to that account's StoreRef; a StoreRef that no longer
+  resolves is reported as unavailable rather than silently replaced by another
+  account, and reordering the catalog cannot change which account an address
+  means. Switching accounts closes any open sheet and drops the device, backup
+  and key lists that belonged to the previous one, and a slow answer for an
+  account the route has left is never drawn under the one it moved to. Alias
+  comparisons survive only where the native command takes `(profile, alias)` —
+  the backup-phrase and recovery operations — and there the profile comes from
+  the selected StoreRef.
+
+**Unsupported operations:** Link editing is not supported directly; links must be
+deleted and recreated. Role promotions require removal and re-addition with key
+rotation. Un-admit and invite-link operations are not supported.
 The live bridge now reads each group roster and federation
 admission, so Sharing and every readable-by count are computed from agent
 answers rather than fixture facts.
@@ -103,10 +101,9 @@ are decisions, not details:
 
 - **`invoke` is imported from `@tauri-apps/api/core`.** `withGlobalTauri` is
   **false** for this app, so there is no `window.__TAURI__` — publishing the
-  whole IPC surface on a global object maximises the blast radius of any script
-  execution in a secrets app for no gain FOKS needs. AKA does the opposite
-  (`ui/src/bridge.ts:34`); do not copy it here. `tests/react-boundary.test.ts`
-  fails the build if `__TAURI__` appears anywhere in first-party source.
+  whole IPC surface on a global object increases the blast radius of script
+  execution in a secrets app. `tests/react-boundary.test.ts` fails the build
+  if `__TAURI__` appears anywhere in first-party source.
 - **The mock stands in** only for an explicit `VITE_FOKS_MOCK=1` build or a
   non-native Vite development page. A Tauri development window still uses the
   real commands. An ordinary production build outside Tauri fails closed, and
@@ -182,25 +179,25 @@ authenticated in the catalog.
 
 ## What lives where
 
-| Path | What it is |
-| --- | --- |
-| `app.tsx` | Entry point. One window; mounts `src/app-root.tsx`. |
-| `src/app-root.tsx` | The shell: window, sidebar, screen, details panel, deep links. |
-| `src/components/` | The design's parts — Button, Chip, Tag, Badge, Avatar, Stack, KindIcon, Inset, SectionLabel, Notice, Band, SegmentedControl, SplitButton, MenuButton, SearchField. |
-| `src/shell/` | The chrome: `sidebar.tsx`, `page-header.tsx`, `toolbar.tsx`. |
-| `src/screens/` | The bodies: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx`, `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx`, `settings-screen.tsx`, `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `alerts-screen.tsx`, `scope.ts` (what is listed, in what order). |
-| `src/bridge.ts` | The typed `Bridge` interface and the Tauri implementation. |
-| `src/mock-bridge.ts` | The same interface, answered from the fixture. |
-| `src/fixture.ts` | The stable desktop fixture, as typed data. |
-| `src/model/` | The pure model — roles, kinds, readers, format, lease. TypeScript only. |
-| `src/location.ts` | `Location`, `Selection`, `transition`, the `?state=` codec, the store. |
-| `src/first-run-state.ts` | Pure versioned resumable setup state and its explicit nonsecret checkpoint codec. |
-| `src/icons.ts` | The mock's 31 icons as structured data. |
-| `src/components/icon.tsx` | `<Icon name size />`. |
-| `src/styles/shell.css` | `wave6/shell.css` lifted whole, minus the shared tokens. |
-| `src/styles/app.css` | Turns the mock's fake browser window into the real app window. |
-| `tests/` | `node:test` via `tsx`: goldens, source invariants, render tests. |
-| `tests/acceptance/run.mjs` | Layer 3: Chromium over the built UI, one load per deep link. |
+| Path                       | What it is                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.tsx`                  | Entry point. One window; mounts `src/app-root.tsx`.                                                                                                                                                                                                                                                                                                                         |
+| `src/app-root.tsx`         | The shell: window, sidebar, screen, details panel, deep links.                                                                                                                                                                                                                                                                                                              |
+| `src/components/`          | The design's parts — Button, Chip, Tag, Badge, Avatar, Stack, KindIcon, Inset, SectionLabel, Notice, Band, SegmentedControl, SplitButton, MenuButton, SearchField.                                                                                                                                                                                                          |
+| `src/shell/`               | The chrome: `sidebar.tsx`, `page-header.tsx`, `toolbar.tsx`.                                                                                                                                                                                                                                                                                                                |
+| `src/screens/`             | The bodies: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx`, `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx`, `settings-screen.tsx`, `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `alerts-screen.tsx`, `scope.ts` (what is listed, in what order). |
+| `src/bridge.ts`            | The typed `Bridge` interface and the Tauri implementation.                                                                                                                                                                                                                                                                                                                  |
+| `src/mock-bridge.ts`       | The same interface, answered from the fixture.                                                                                                                                                                                                                                                                                                                              |
+| `src/fixture.ts`           | The stable desktop fixture, as typed data.                                                                                                                                                                                                                                                                                                                                  |
+| `src/model/`               | The pure model — roles, kinds, readers, format, lease. TypeScript only.                                                                                                                                                                                                                                                                                                     |
+| `src/location.ts`          | `Location`, `Selection`, `transition`, the `?state=` codec, the store.                                                                                                                                                                                                                                                                                                      |
+| `src/first-run-state.ts`   | Pure versioned resumable setup state and its explicit nonsecret checkpoint codec.                                                                                                                                                                                                                                                                                           |
+| `src/icons.ts`             | The mock's 31 icons as structured data.                                                                                                                                                                                                                                                                                                                                     |
+| `src/components/icon.tsx`  | `<Icon name size />`.                                                                                                                                                                                                                                                                                                                                                       |
+| `src/styles/shell.css`     | `wave6/shell.css` lifted whole, minus the shared tokens.                                                                                                                                                                                                                                                                                                                    |
+| `src/styles/app.css`       | Turns the mock's fake browser window into the real app window.                                                                                                                                                                                                                                                                                                              |
+| `tests/`                   | `node:test` via `tsx`: goldens, source invariants, render tests.                                                                                                                                                                                                                                                                                                            |
+| `tests/acceptance/run.mjs` | Layer 3: Chromium over the built UI, one load per deep link.                                                                                                                                                                                                                                                                                                                |
 
 ### `ui/kit` versus `foks-ui`
 
@@ -208,14 +205,11 @@ authenticated in the catalog.
 app-specific: `overlay-primitives.tsx`, `menu-position.ts`, `toasts.tsx`,
 `virtual-list.ts`, `icon.tsx`, and `tokens.css`. `ui/kit/README.md` is the
 authority on what is in it and why — including why `ui/src/sheet.tsx` stayed
-behind. Reach it as `/kit/*` (a Vite alias and a tsconfig path). Everything
-FOKS-specific — the fixture, the model, the icons, the shell CSS — lives here,
-because it is a reading of *this* product and putting it in the kit would make
-AKA carry it.
+behind. Reach it as `/kit/*` (a Vite alias and a tsconfig path). Application-specific models, fixtures, icons, and shell styles remain in
+`foks-ui` to maintain modular boundaries between client applications.
 
-The model is deliberately **TypeScript only**. The kind rule and the reader
-computation are client-side readings with no protocol meaning; a second copy in
-Rust would be a second truth.
+The model logic is implemented exclusively in TypeScript because item kind classification
+and reader computations are client-side presentation models without protocol equivalents.
 
 ## Design tokens and the theme decision
 
@@ -234,19 +228,15 @@ places.
 
 **Theme: FOKS is light-only in Phase 1, and the fork is at the kit seam.**
 `ui/kit/tokens.css` carries light values only and there is no theme script in
-`index.html`. AKA keeps its `:root[data-theme="dark"]` override in
-`ui/styles.css`, stamped by `ui/public/theme.js`. If FOKS ever wants dark, it
-gets its own override block here rather than inheriting AKA's.
+`index.html`. Dark mode overrides are defined per-app. If dark theme support is added to FOKS,
+it should be declared in this stylesheet rather than inherited from AKA.
 
 ## Testing
 
 The unit and render-test layers live in `tests/`:
 
-- `model.test.ts` — goldens taken from the fixture by running `shell.js` under
-  node. **They are the specification**: production-token 3 readers,
-  staging-token 5 (the inactive federation admission is excluded), bundle.tar
-  5, guest-password 2, Engineering "5 people · 1 group". If the port disagrees
-  with one, the port is wrong.
+- `model.test.ts` — verifies reader calculations, role arithmetic, and store
+  aggregation invariants against expected baseline values.
 - `location.test.ts` — pure transitions and the `?state=` round trip, including
   the original design-state names used by the Playwright walks.
 - `react-boundary.test.ts` — the negative invariants: no raw-HTML sink
@@ -285,61 +275,59 @@ the address bar, so every state reloads into itself and the acceptance run can
 walk them. `?state=` is the mock's own vocabulary (`01-vault.html`'s `STATES`),
 kept so a link written against the design lands here.
 
-| `?state=` | Where it lands | What else it fixes |
-| --- | --- | --- |
-| `all` | All items | — |
-| `personal` | Personal (`acct:personal`) | — |
-| `work` · `household` · `homelab` | that store | — |
-| `password` | All items | selects the masked GitHub login |
-| `show` | All items | reads and reveals GitHub version 9 once |
-| `resource` | All items | selects the masked Anthropic API key |
-| `file` | All items | selects Household's emergency PDF |
-| `link` | All items | selects latest-key; its target stays masked until Read target issues an exact-version read |
-| `group` | Household (`team:household`) | selects the Wi-Fi password |
-| `new` | All items | Password sheet in Household with explicit group roles and computed reader preview |
-| `new-group` | All items | Resource sheet in Engineering with explicit roles and computed reader preview |
-| `new-resource` | All items | Resource sheet in Personal |
-| `new-file` | All items | File sheet in Household; renderer receives paths, never bytes |
-| `new-link` | All items | Link sheet in Personal |
-| `group-new-text` · `group-new-link` · `group-new-file` | Engineering | Phase 7 group create acceptance scenes for text, Link/symlink and streamed File writes |
-| `exists` | All items | must-not-exist refusal; Open refreshes the invalidated catalog first |
-| `conflict` | All items | exact-version refusal with retained draft and Refresh and review |
-| `grid` | All items | `view=grid` |
-| `lease` | Work (Acme) | `lease=lapsed` — the whole world, not a place |
-| `inactive` | Homelab | group reports inactive; Resume creation uses its resumable operation |
-| `alerts` | Alerts | `lease=lapsed`, so the pane has its critical entry |
-| `agent-lost` | Full window stop | Retry reconnects and refreshes without replay |
-| `groups` | Settings › Groups | create, discovery, attention and invite sections |
-| `people` · `party` · `federation` | Engineering Group settings | People tab, with federation below the roster, or party panel |
-| `danger` | Engineering Group settings | Settings tab |
-| `store` · `items` | Engineering | group vault |
-| `invite` · `add` · `demote` · `remove` · `admit` | Engineering Group settings | the named Group sheet |
-| `create` | Settings › Groups | named/ad-hoc Create group sheet, defaulting to Work (Acme) |
-| `groups-lease` · `groups-inactive` | Engineering Group settings or Homelab vault | distinct lease/inactive takeovers |
-| `manage` | Household Group settings | People tab, without a Manage overlay |
-| `party-remove` | Engineering Group settings | the non-local removal refusal |
-| `join` | Settings › Groups | account-specific discovery and invite choices |
-| `join-invite` | Settings › Groups | invite sheet opened on the exact `acct:work` fixture store |
-| `boot` · `who` · `address` · `no-address` · `checked` · `compare` · `error` | First run, steps 0–2 | `path=invited` or `path=own` selects the setup route |
-| `account` · `existing` · `protect` · `phrase` | First run, steps 3–4 | account creation/recovery and the one-time backup sheet |
-| `waiting` · `added` · `create-group` · `done` | First run, steps 5–6 | invited discovery or own-group completion |
-| `checklist-invited` · `checklist-own` | Get started inside the ordinary shell | resumable nonsecret progress summary |
-| `first-run&step=<step>&path=<path>` | the resumable first-run location codec | used after the first in-app transition and across reload |
-| `servers-list` · `servers-server` · `servers-lapsed` · `servers-rollback` | Servers & devices | list/detail/stopped states from `04-servers.html` |
-| `servers-reset` · `servers-add` · `servers-unprobed` · `servers-check` | Servers & devices | typed reset, add/check and explicit result states |
-| `settings-macs` · `settings-macs-work` · `settings-phrase` | Settings | devices, pairing, recovery and one-time backup reveal; `settings-macs-work` names the exact `acct:work` store |
-| `settings-keys` · `settings-enrol` · `settings-account` | Settings | YubiKey lifecycle and passphrase/account status |
-| `settings-agent` · `settings-about` | Settings | local agent status, inspect, version; `settings-agent` is an alias of About |
+| `?state=`                                                                   | Where it lands                              | What else it fixes                                                                                            |
+| --------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `all`                                                                       | All items                                   | —                                                                                                             |
+| `personal`                                                                  | Personal (`acct:personal`)                  | —                                                                                                             |
+| `work` · `household` · `homelab`                                            | that store                                  | —                                                                                                             |
+| `password`                                                                  | All items                                   | selects the masked GitHub login                                                                               |
+| `show`                                                                      | All items                                   | reads and reveals GitHub version 9 once                                                                       |
+| `resource`                                                                  | All items                                   | selects the masked Anthropic API key                                                                          |
+| `file`                                                                      | All items                                   | selects Household's emergency PDF                                                                             |
+| `link`                                                                      | All items                                   | selects latest-key; its target stays masked until Read target issues an exact-version read                    |
+| `group`                                                                     | Household (`team:household`)                | selects the Wi-Fi password                                                                                    |
+| `new`                                                                       | All items                                   | Password sheet in Household with explicit group roles and computed reader preview                             |
+| `new-group`                                                                 | All items                                   | Resource sheet in Engineering with explicit roles and computed reader preview                                 |
+| `new-resource`                                                              | All items                                   | Resource sheet in Personal                                                                                    |
+| `new-file`                                                                  | All items                                   | File sheet in Household; renderer receives paths, never bytes                                                 |
+| `new-link`                                                                  | All items                                   | Link sheet in Personal                                                                                        |
+| `group-new-text` · `group-new-link` · `group-new-file`                      | Engineering                                 | Phase 7 group create acceptance scenes for text, Link/symlink and streamed File writes                        |
+| `exists`                                                                    | All items                                   | must-not-exist refusal; Open refreshes the invalidated catalog first                                          |
+| `conflict`                                                                  | All items                                   | exact-version refusal with retained draft and Refresh and review                                              |
+| `grid`                                                                      | All items                                   | `view=grid`                                                                                                   |
+| `lease`                                                                     | Work (Acme)                                 | `lease=lapsed` — the whole world, not a place                                                                 |
+| `inactive`                                                                  | Homelab                                     | group reports inactive; Resume creation uses its resumable operation                                          |
+| `alerts`                                                                    | Alerts                                      | `lease=lapsed`, so the pane has its critical entry                                                            |
+| `agent-lost`                                                                | Full window stop                            | Retry reconnects and refreshes without replay                                                                 |
+| `groups`                                                                    | Settings › Groups                           | create, discovery, attention and invite sections                                                              |
+| `people` · `party` · `federation`                                           | Engineering Group settings                  | People tab, with federation below the roster, or party panel                                                  |
+| `danger`                                                                    | Engineering Group settings                  | Settings tab                                                                                                  |
+| `store` · `items`                                                           | Engineering                                 | group vault                                                                                                   |
+| `invite` · `add` · `demote` · `remove` · `admit`                            | Engineering Group settings                  | the named Group sheet                                                                                         |
+| `create`                                                                    | Settings › Groups                           | named/ad-hoc Create group sheet, defaulting to Work (Acme)                                                    |
+| `groups-lease` · `groups-inactive`                                          | Engineering Group settings or Homelab vault | distinct lease/inactive takeovers                                                                             |
+| `manage`                                                                    | Household Group settings                    | People tab, without a Manage overlay                                                                          |
+| `party-remove`                                                              | Engineering Group settings                  | the non-local removal refusal                                                                                 |
+| `join`                                                                      | Settings › Groups                           | account-specific discovery and invite choices                                                                 |
+| `join-invite`                                                               | Settings › Groups                           | invite sheet opened on the exact `acct:work` fixture store                                                    |
+| `boot` · `who` · `address` · `no-address` · `checked` · `compare` · `error` | First run, steps 0–2                        | `path=invited` or `path=own` selects the setup route                                                          |
+| `account` · `existing` · `protect` · `phrase`                               | First run, steps 3–4                        | account creation/recovery and the one-time backup sheet                                                       |
+| `waiting` · `added` · `create-group` · `done`                               | First run, steps 5–6                        | invited discovery or own-group completion                                                                     |
+| `checklist-invited` · `checklist-own`                                       | Get started inside the ordinary shell       | resumable nonsecret progress summary                                                                          |
+| `first-run&step=<step>&path=<path>`                                         | the resumable first-run location codec      | used after the first in-app transition and across reload                                                      |
+| `servers-list` · `servers-server` · `servers-lapsed` · `servers-rollback`   | Servers & devices                           | list/detail/stopped states from `04-servers.html`                                                             |
+| `servers-reset` · `servers-add` · `servers-unprobed` · `servers-check`      | Servers & devices                           | typed reset, add/check and explicit result states                                                             |
+| `settings-macs` · `settings-macs-work` · `settings-phrase`                  | Settings                                    | devices, pairing, recovery and one-time backup reveal; `settings-macs-work` names the exact `acct:work` store |
+| `settings-keys` · `settings-enrol` · `settings-account`                     | Settings                                    | YubiKey lifecycle and passphrase/account status                                                               |
+| `settings-agent` · `settings-about`                                         | Settings                                    | local agent status, inspect, version; `settings-agent` is an alias of About                                   |
 
-`decodeLocation` answers `null` for `grid`, `show` and `lease` on purpose:
-none of them is a *place*. `grid` is a view preference, `show` is a selection
-and a lapsed lease is a property of the **world** (`applyLease`), so
-`decodeScene` sits above the location codec and says what the name implies.
+`decodeLocation` returns `null` for display mode, item selection, or lease
+modifiers because those properties represent presentation options or environmental
+status rather than distinct navigation destinations. `decodeScene` encapsulates
+these orthogonal state properties alongside the active location.
 Everything is also addressable on its own — `sel=<store>|<path>`, `view=`,
 `kind=`, `sort=`, `lease=` — and `sceneHref` writes back only what differs
 from the default, so an ordinary `?state=all` stays `?state=all`.
 
-The one thing deliberately left out of the address is the **search text**. It
-is what someone is typing, not where they are, and it survives navigation
-inside a session (`transition` keeps it: a person filtering "wifi" and
-switching stores is still looking for the same thing).
+Search query text is intentionally omitted from the URL address state so that
+active filter queries persist across store navigation transitions within a session.

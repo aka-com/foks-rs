@@ -565,7 +565,8 @@ fn stored_member(
 }
 
 fn stored_role(kind: u64, visibility: i64) -> Result<Role> {
-    crate::auth::team::stored_role(kind, visibility).ok_or(Error::Signup("stored team role"))
+    crate::auth::team::stored_role(kind, visibility)
+        .ok_or(Error::Signup("invalid stored team role"))
 }
 
 fn member_key(member: &foks_verify::VerifiedTeamMemberState) -> Vec<u8> {

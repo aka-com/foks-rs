@@ -1,9 +1,4 @@
-/**
- * The group page's tab strip — underline, quiet count pills, a faint zero.
- *
- * The mock's `.tab.on::after` is what makes the selected tab look selected;
- * the old toolbar used `Button on=` and had no underline.
- */
+/** Navigation tab strip with an active indicator and optional badge counts. */
 
 import type { ReactNode } from 'react';
 

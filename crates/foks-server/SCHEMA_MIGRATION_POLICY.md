@@ -157,7 +157,7 @@ SQL appears equivalent.
     durations, row counts, database/WAL sizes, backup path, and checks—not user
     IDs, names, protocol blobs, encrypted payloads, or keys.
 
-If any step fails, stop. Do not attempt a clever reverse transform. Transactional
+If any step fails, stop. Do not attempt an automated reverse migration or custom rollback script. Transactional
 steps roll back; chunked steps resume from their authenticated journal with the
 same binary. If post-migration verification fails, quarantine the result and
 restore the pre-migration backup before running the older binary.

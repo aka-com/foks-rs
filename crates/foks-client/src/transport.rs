@@ -544,7 +544,10 @@ impl FoksClient {
         }
         let tcp = tcp.ok_or_else(|| {
             Error::Connect(last_error.unwrap_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::NotFound, "no resolved address")
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "connection attempt timed out before socket opened",
+                )
             }))
         })?;
         Ok(ControlledTcpStream {

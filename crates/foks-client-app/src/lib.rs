@@ -119,7 +119,7 @@ pub enum Error {
     #[error("FOKS hard-state rollback or fork detected: {0}")]
     RollbackDetected(&'static str),
     #[error(
-        "FOKS external rollback checkpoint rejected profile {profile}: {reason}. To deliberately discard both the checkpoint and hard-state database, run `foks-rs --state-dir <STATE_DIR> profile reset-hard-state {profile} --confirm-delete` using this state directory: {state_dir:?}"
+        "FOKS external rollback checkpoint rejected profile '{profile}': {reason}. To discard the checkpoint and reset local hard state, run: foks-rs --state-dir {state_dir:?} profile reset-hard-state {profile} --confirm-delete"
     )]
     CheckpointResetRequired {
         profile: String,
@@ -453,7 +453,9 @@ fn read_bounded_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>> {
 
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > maximum {
-        return Err(Error::InvalidConfig("file path is unsafe or excessive"));
+        return Err(Error::InvalidConfig(
+            "file path is invalid, symlinked, or exceeds maximum allowed size",
+        ));
     }
     let mut options = OpenOptions::new();
     options.read(true);
@@ -466,7 +468,9 @@ fn read_bounded_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>> {
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(maximum + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > maximum {
-        return Err(Error::InvalidConfig("file grew beyond its size limit"));
+        return Err(Error::InvalidConfig(
+            "file size exceeds maximum allowed limit",
+        ));
     }
     Ok(bytes)
 }

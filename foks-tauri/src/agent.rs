@@ -22,8 +22,7 @@ const DEFAULT_SOCKET_NAME: &str = "foks-rs.sock";
 /// The socket selected for this process and any state that this desktop owns.
 ///
 /// An explicit argument or environment socket is an external trust boundary:
-/// it may live beside files owned by another launcher, so it never grants this
-/// process a directory in which to write crash markers.
+/// managed crash directories are not created for sockets owned by an external launcher.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentEndpoint {
     pub socket: PathBuf,
@@ -74,33 +73,31 @@ impl AgentError {
         match error {
             Error::Unsupported => Self::new(
                 "unsupported",
-                "FOKS cannot talk to a local agent on this platform.",
+                "Local agent communication is not supported on this platform.",
                 false,
             ),
             Error::UnsafeSocket => Self::new(
                 "unsafe-socket",
-                "The agent socket is not private to this account; FOKS will not use it.",
+                "The agent socket is not private to this user account and cannot be used.",
                 false,
             ),
-            Error::Io(error) => Self::new(
-                "io",
-                format!("The agent could not be reached: {error}"),
-                true,
-            ),
+            Error::Io(error) => {
+                Self::new("io", format!("Failed to connect to agent: {error}"), true)
+            }
             Error::Protocol(error) => Self::new(
                 "protocol",
-                format!("The agent spoke an unexpected protocol: {error}"),
+                format!("Unexpected agent protocol response: {error}"),
                 false,
             ),
             Error::ResponseBinding => Self::new(
                 "response-binding",
-                "The agent reply did not match the request; FOKS discarded it.",
+                "The agent response did not match the request.",
                 true,
             ),
             Error::Ambiguous(detail) => {
                 let mut mapped = Self::new(
                     "ambiguous",
-                    format!("The change may or may not have been applied: {detail}"),
+                    format!("Ambiguous operation result: {detail}"),
                     false,
                 );
                 mapped.ambiguous = true;
@@ -231,7 +228,7 @@ fn client_to_desktop(error: foks_agent_client::Error) -> DesktopAgentError {
         foks_agent_client::Error::Protocol(foks_agent_proto::Error::Version) => {
             DesktopAgentError::Protocol {
                 code: ErrorCode::VersionMismatch,
-                message: "the desktop and local agent protocol versions do not match".to_owned(),
+                message: "Desktop and agent protocol versions do not match".to_owned(),
                 fields: Default::default(),
             }
         }
@@ -275,7 +272,7 @@ impl AgentHandle {
         tauri::async_runtime::spawn_blocking(move || handle.call_blocking(operation))
             .await
             .map_err(|error| {
-                AgentError::unknown(format!("the agent call did not finish: {error}"))
+                AgentError::unknown(format!("Agent call failed to complete: {error}"))
             })?
     }
 
@@ -301,7 +298,7 @@ impl AgentHandle {
             return self.call_blocking(Operation::AgentStatus);
         };
         let state_dir = self.socket.parent().ok_or_else(|| {
-            AgentError::unknown("the configured agent socket has no parent directory")
+            AgentError::unknown("Configured agent socket path has no parent directory.")
         })?;
         prepare_state_directory(state_dir)?;
         let spawn_lock = acquire_spawn_lock(&self.socket)?;
@@ -327,7 +324,7 @@ impl AgentHandle {
         Err(last_error.unwrap_or_else(|| {
             AgentError::new(
                 "agent-start-failed",
-                "The managed agent did not create its socket.",
+                "Failed to connect: background service endpoint was not created.",
                 true,
             )
         }))
@@ -382,7 +379,7 @@ fn acquire_spawn_lock(socket: &Path) -> Result<File, AgentError> {
         .map_err(|error| {
             AgentError::new(
                 "agent-lock",
-                format!("could not open {}: {error}", path.display()),
+                format!("Failed to open {}: {error}", path.display()),
                 true,
             )
         })?;
@@ -393,14 +390,14 @@ fn acquire_spawn_lock(socket: &Path) -> Result<File, AgentError> {
     if !metadata.is_file() || metadata.uid() != uid || metadata.permissions().mode() & 0o077 != 0 {
         return Err(AgentError::new(
             "agent-lock",
-            "The desktop agent lock is not a private regular file owned by this account.",
+            "Desktop agent lock file must be a regular file owned by the current user with private permissions.",
             false,
         ));
     }
     file.lock_exclusive().map_err(|error| {
         AgentError::new(
             "agent-lock",
-            format!("could not lock {}: {error}", path.display()),
+            format!("Failed to lock {}: {error}", path.display()),
             true,
         )
     })?;
@@ -413,7 +410,7 @@ fn validate_agent_binary(binary: &Path) -> Result<(), AgentError> {
         AgentError::new(
             "agent-binary",
             format!(
-                "the packaged local agent {} is unavailable: {error}",
+                "The packaged local agent at {} is unavailable: {error}",
                 binary.display()
             ),
             false,
@@ -430,7 +427,7 @@ fn validate_agent_binary(binary: &Path) -> Result<(), AgentError> {
         || metadata.permissions().mode() & 0o022 != 0
         || metadata.permissions().mode() & 0o111 == 0
     {
-        return Err(AgentError::new("agent-binary", "The packaged local agent must be an executable, non-writable regular file owned like the desktop.", false));
+        return Err(AgentError::new("agent-binary", "Agent binary must be an executable regular file owned by the same user as the desktop application.", false));
     }
     Ok(())
 }
@@ -452,7 +449,7 @@ fn prepare_state_directory(directory: &Path) -> Result<(), AgentError> {
     {
         return Err(AgentError::new(
             "agent-state",
-            "The FOKS state path must be a real directory owned by this account.",
+            "The FOKS state path must be a directory owned by the current user.",
             false,
         ));
     }
@@ -467,7 +464,7 @@ pub(crate) fn prepare_managed_crash_directory(directory: &Path) -> Result<(), Ag
     let state = directory.parent().ok_or_else(|| {
         AgentError::new(
             "crash-state",
-            "The managed crash directory has no private state parent.",
+            "Invalid crash report path: missing parent directory.",
             false,
         )
     })?;
@@ -499,7 +496,7 @@ fn launch_agent(binary: &Path, state_dir: &Path, socket: &Path) -> Result<(), Ag
         .map_err(|error| {
             AgentError::new(
                 "agent-log",
-                format!("could not open agent log: {error}"),
+                format!("Failed to open agent log: {error}"),
                 false,
             )
         })?;
@@ -509,7 +506,7 @@ fn launch_agent(binary: &Path, state_dir: &Path, socket: &Path) -> Result<(), Ag
     if !log_metadata.is_file() || log_metadata.uid() != unsafe { libc::geteuid() } {
         return Err(AgentError::new(
             "agent-log",
-            "The agent log must be a regular file owned by this account.",
+            "The agent log must be a regular file owned by the current user.",
             false,
         ));
     }
@@ -527,7 +524,7 @@ fn launch_agent(binary: &Path, state_dir: &Path, socket: &Path) -> Result<(), Ag
         .map_err(|error| {
             AgentError::new(
                 "agent-start-failed",
-                format!("could not launch local agent: {error}"),
+                format!("Failed to launch local agent: {error}"),
                 true,
             )
         })?;
@@ -549,7 +546,7 @@ fn launch_agent(binary: &Path, state_dir: &Path, socket: &Path) -> Result<(), Ag
         .map_err(|error| {
             AgentError::new(
                 "agent-start-failed",
-                format!("could not supervise local agent: {error}"),
+                format!("Failed to supervise local agent: {error}"),
                 false,
             )
         })?;

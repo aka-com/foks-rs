@@ -1,11 +1,8 @@
 /**
- * The shapes the FOKS shell reads.
+ * Domain data types for the FOKS desktop shell.
  *
- * Mirrors the desktop fixture and, through it, what the agent can actually
- * return. The product constraint is that item
- * metadata is exactly path, kind, version, size, read role and write role —
- * no modified time, no owner name, no per-item sync state, no tags, no
- * history. Do not add a field here that the agent cannot answer.
+ * Defines models for accounts, stores, parties, federation, and items
+ * corresponding to the backend agent command schema.
  */
 
 /* ---------------------------------------------------------------- roles -- */
@@ -13,10 +10,8 @@
 /**
  * A role, normalised.
  *
- * The protocol's three roles are Member { visibility }, Admin and Owner
- * Never "Reader", "Manager", "Viewer" or "Editor". `visibility`
- * is an ordered band inside Member — 0 is the default; lower bands see less —
- * and is meaningless on Admin and Owner, so it is absent there.
+ * Protocol roles are Member (with visibility band), Admin, and Owner.
+ * The optional visibility level applies only to Member roles.
  */
 export interface Role {
   kind: 'member' | 'admin' | 'owner';
@@ -147,12 +142,7 @@ export interface Server {
 }
 
 export interface Account {
-  /**
-   * Exact identity: the `id` of this account's `AccountStore`. Required, not
-   * optional — the live projection has always carried it (`list_accounts`
-   * fails closed without it) and every fixture now does too, so nothing has to
-   * fall back to matching on an alias that two profiles can share.
-   */
+  /** Canonical identifier of the account store. */
   store: StoreRef;
   /** The profile-local display label. Never an identity. */
   alias: string;
@@ -195,12 +185,8 @@ export interface AgentStatus {
 /* ---------------------------------------------------------------- world -- */
 
 /**
- * Everything the shell reads, in one immutable value.
- *
- * The mock reaches for module globals; every model function here takes the
- * world it is asked about instead, so a fixture, a mocked bridge and a live
- * bridge are the same code path and the lease switch is a pure function
- * (`applyLease`) rather than a mutation.
+ * Complete immutable snapshot of the application state, including servers,
+ * stores, items, parties, and active leases.
  */
 export type GroupDetailSource = 'roster' | 'federation';
 

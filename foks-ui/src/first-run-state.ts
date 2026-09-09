@@ -104,7 +104,7 @@ export function initialFirstRun(
   };
 }
 
-/** Pure state transition. Secret form values are deliberately not events. */
+/** Pure state transition function. */
 export function transitionFirstRun(
   state: FirstRunCheckpoint,
   event: FirstRunEvent,
@@ -155,10 +155,7 @@ export function transitionFirstRun(
         },
       };
     case 'passphrase-set':
-      // Setting a passphrase un-skips protection, exactly as committing a
-      // backup does below. Without this the checkpoint holds both
-      // `passphraseSet` and `protectSkipped`, which `decodeFirstRunCheckpoint`
-      // rejects — so the next launch throws the whole first run away.
+      // Setting a passphrase clears protectSkipped so the checkpoint remains valid.
       return { ...state, passphraseSet: true, protectSkipped: false };
     case 'backup-committed':
       return {
@@ -264,16 +261,11 @@ function localName(value: unknown): value is string {
 }
 
 function safeResumeState(state: FirstRunStateName): FirstRunStateName {
-  // A prepared phrase is an ephemeral reveal. Closing it returns to Protect;
-  // reopening must prepare a new phrase rather than pretending it was kept.
+  // A recovery phrase is ephemeral; resuming returns to 'protect' to require a new reveal.
   return state === 'phrase' ? 'protect' : state;
 }
 
-/**
- * Encode an explicit whitelist. This is the security boundary that keeps
- * invite codes, passphrases, recovery phrases and prepared backup phrases
- * out of local storage even if a form object grows new fields later.
- */
+/** Serialize safe checkpoint fields to storage, excluding sensitive secrets. */
 export function encodeFirstRunCheckpoint(state: FirstRunCheckpoint): string {
   return JSON.stringify({
     version: 1,
@@ -484,8 +476,7 @@ export function completedFirstRunSteps(state: FirstRunCheckpoint): number {
   let count = state.initialized ? 1 : 0;
   if (state.profile) count += 1;
   if (state.account) count += 1;
-  // A skipped safeguard or group remains an explicit open checklist item.
-  // Only work that actually completed contributes to “N of 5 done”.
+  // Skipped safeguards or groups do not count toward completed steps.
   if (state.passphraseSet || state.backupCommitted) count += 1;
   if (state.added || state.group) count += 1;
   return count;

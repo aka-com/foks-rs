@@ -16,9 +16,9 @@ pub struct PreparedYubiDevice {
     pub device: Box<dyn ManagedYubiDevice>,
 }
 
-/// Administrative PIV operations that remain available when the user PIN is
-/// blocked. This deliberately does not require a FOKS signing/decapsulation
-/// handle, since constructing one can itself require a valid PIN.
+/// Administrative PIV operations available even when the user PIN is blocked.
+/// This interface does not require a signing or decapsulation handle, which
+/// may require an active PIN.
 pub trait YubiAdministrativeDevice: Send + Sync {
     fn locator(&self) -> &YubiDeviceLocator;
     fn pin_retries(&self) -> Result<PinRetries>;

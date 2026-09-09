@@ -1,14 +1,5 @@
 /**
- * The item page — `01-vault.html`'s `renderMain()`.
- *
- * Header, toolbar, then one of five bodies: the lapsed-check-in notice, the
- * inactive-group notice, the list, the cards, or an empty state. Which one is
- * a function of the world and the navigation state; nothing here is a mode
- * someone has to remember to leave.
- *
- * Two orderings, deliberately different, both the mock's: the sidebar lists
- * stores in fixture order, and the cards view sections them in
- * `storeDisplayOrder`.
+ * Main vault items view, supporting list and grid card layouts with filtering and search.
  */
 
 import { Fragment, useLayoutEffect, useRef, useState } from 'react';
@@ -54,7 +45,7 @@ import type { NewKind } from './write-workflows';
 import { readableBy, scopedItems, whereOf } from './scope';
 import { StoreAccessTakeover, storeAccessBands } from './store-access';
 
-/** The shared virtual-list models rows, not a wrapping masonry/grid layout. */
+/** Maximum number of cards rendered in grid view before filtering is required. */
 const GRID_CAP = 200;
 
 /* --------------------------------------------------------------- pieces -- */
@@ -120,7 +111,11 @@ function ItemActions({
     <span className="acts">
       {kind === 'Password' || kind === 'Resource' ? (
         <>
-          {action('Show', 'eye', onReveal)}
+          {action(
+            kind === 'Password' ? 'Show password' : 'Show value',
+            'eye',
+            onReveal,
+          )}
           {action(
             kind === 'Password' ? 'Copy password' : 'Copy value',
             'copy',
@@ -130,12 +125,12 @@ function ItemActions({
       ) : kind === 'File' ? (
         action('Download', 'download', onDownload)
       ) : (
-        action('Open target', 'arrow', onOpen)
+        action('Open linked item', 'arrow', onOpen)
       )}
       {action('Copy path', 'path', onCopyPath)}
       {action(
         removeDisabled
-          ? 'Your current access does not allow removing this item'
+          ? 'You do not have permission to delete this item'
           : 'Delete this item',
         'trash',
         onRemove,
@@ -229,7 +224,7 @@ function Tile({
           <Stack
             parties={parties}
             size="xs"
-            title={`In ${store?.name ?? ''} · readable by ${readers.label} of ${parties.length}`}
+            title={`In ${store?.name ?? ''} · readable by ${readers.label} (${parties.length} total members)`}
           />
         ) : null}
         <span className="qa">
@@ -252,7 +247,8 @@ function Tile({
         <div className="sub">
           {kind === 'Link' ? (
             <>
-              <PathChip path={item.path} /> target read when opened
+              <PathChip path={item.path} /> Link destination resolves when
+              opened
             </>
           ) : kind === 'File' ? (
             <>
@@ -261,7 +257,7 @@ function Tile({
           ) : prefixOf(item.path) ? (
             <PathChip path={item.path} />
           ) : (
-            <span className="dim">at the root</span>
+            <span className="dim">Root</span>
           )}
         </div>
       </div>
@@ -395,11 +391,7 @@ export function ItemsScreen({
 
   const accessBands = storeAccessBands(world);
   const kindMeta = state.kind === 'All' ? null : KINDS[state.kind];
-  // A store page hands its own store to the sheet. All Items spans every
-  // store and names none, and this used to fall back to a hard-coded
-  // `acct:personal` — an id that is a fixture's, not this Mac's, so on a real
-  // vault the chooser opened on nothing. The first vault the sidebar lists is
-  // the honest default there.
+  // Default to the current store if readable; otherwise, fall back to the first available vault.
   const createStore =
     store && storeReadable(world, store.id)
       ? store.id
@@ -438,7 +430,7 @@ export function ItemsScreen({
         ({ saved }) =>
           toasts.show(
             saved
-              ? `Downloaded ${nameOf(item.path)} at version ${item.version}`
+              ? `Downloaded ${nameOf(item.path)} (version ${item.version})`
               : 'Download cancelled',
           ),
         report,
@@ -453,26 +445,22 @@ export function ItemsScreen({
           response.path !== item.path ||
           response.version !== item.version
         ) {
-          throw new Error(
-            'The local agent returned a target for a different catalog selection.',
-          );
+          throw new Error('Could not verify link destination.');
         }
-        // Resolved against the catalog, not the raw item list: the raw list
-        // still holds folders, and selecting one reaches KindIcon with a kind
-        // it does not draw.
+        // Resolve against the catalog to ensure the target is an item and not a folder.
         const target = catalog(world).find(
           (candidate) =>
             candidate.store === item.store && candidate.path === response.value,
         );
         if (target)
           locations.select({ store: target.store, path: target.path });
-        else toasts.show(`Nothing is currently at ${response.value}`);
+        else toasts.show(`Linked item not found: ${response.value}`);
       }, report)
       .catch(report);
   };
   const reveal = (item: Item): void => {
     locations.select({ store: item.store, path: item.path });
-    // The details panel owns the returned value and its blur/hide lifetime.
+    // Pass revealed item to details panel for display.
     onReveal(item);
   };
 
@@ -493,7 +481,7 @@ export function ItemsScreen({
     onOpen: () => openLink(item),
     onRemove: () => {
       locations.select({ store: item.store, path: item.path });
-      // The selected version travels with the confirmation sheet.
+      // Confirm deletion for the selected item version.
       onRemove(item);
     },
     removeDisabled:
@@ -535,8 +523,8 @@ export function ItemsScreen({
           : null}
         {state.view === 'grid' && items.length > GRID_CAP ? (
           <Band>
-            Showing the first {GRID_CAP} cards. Narrow the list with search or a
-            kind filter to see the rest.
+            Showing the first {GRID_CAP} cards. Use search or filters to view
+            more items.
           </Band>
         ) : null}
 
@@ -544,12 +532,12 @@ export function ItemsScreen({
           state.query ? (
             <div className="empty">
               <h2>
-                Nothing {store ? `in ${store.name}` : 'here'} matches “
+                No items {store ? `in ${store.name}` : 'here'} match “
                 {state.query}”
               </h2>
               <p>
-                Search covers paths and store names only, and not private
-                contents of items in the vault.
+                Search covers item names, paths, and vaults. Item contents are
+                encrypted and not searched.
               </p>
             </div>
           ) : (
@@ -559,10 +547,8 @@ export function ItemsScreen({
                   name={kindMeta ? (kindMeta.icon as FoksIconName) : 'key'}
                 />
               </div>
-              <h2>
-                No {kindMeta ? kindMeta.plural.toLowerCase() : 'items'} here
-              </h2>
-              <p>{(kindMeta ?? KINDS.Password).blurb}</p>
+              <h2>No items yet</h2>
+              <p>Save logins, secure notes, and credentials in this vault.</p>
               <NewItemButton
                 onNew={(itemKind) => onNew(itemKind, createStore)}
               />
@@ -582,7 +568,7 @@ export function ItemsScreen({
                 Name{state.sort === 'name' ? ' ↓' : ''}
               </button>
               <span>Server</span>
-              <span>Readable by</span>
+              <span>Access</span>
               <button
                 type="button"
                 className={state.sort === 'version' ? 'on' : ''}
@@ -657,7 +643,7 @@ export function ItemsScreen({
         ) : (
           <>
             <div className="gsec first">
-              {kindMeta ? kindMeta.plural : 'Everything'}
+              {kindMeta ? kindMeta.plural : 'All items'}
               <span className="n">· {items.length}</span>
             </div>
             <div className="tiles">

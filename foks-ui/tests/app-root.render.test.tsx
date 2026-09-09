@@ -1,14 +1,5 @@
 /**
- * The shell mounts.
- *
- * Boots `app.tsx` the way `ui/tests/app-root.render.test.tsx` does — jsdom
- * plus Vite's `ssrLoadModule`, so the module graph, the aliases and the JSX
- * transform are the real ones rather than a test-only approximation — and
- * asserts the Phase 1 frame is there and navigable.
- *
- * There is no `window.__TAURI__` in this realm and no Tauri runtime, so
- * `bridge.ts` takes the mock branch on its own. That is the point: the same
- * branch the Playwright acceptance run takes.
+ * Renders and verifies the primary application shell using jsdom and Vite SSR loader.
  */
 
 import assert from 'node:assert/strict';
@@ -46,76 +37,74 @@ test.after(async () => {
   await vite.close();
 });
 
-test('the shell frame mounts with the app name in it', () => {
-  assert.ok(document.querySelector('.window'), 'the window is drawn');
+test('renders shell frame with application brand name', () => {
+  assert.ok(document.querySelector('.window'), 'window container element should exist');
   assert.equal(document.querySelector('.titlebar .brand')?.textContent, 'FOKS');
   assert.equal(
     document.querySelectorAll('.web-mock-window .lights .light').length,
     3,
   );
-  // The sidebar is a landmark, not a div: it is how the whole app is reached.
-  assert.ok(document.querySelector('nav.side[aria-label="Places"]'));
+  // Verify main navigation landmark exists.
+  assert.ok(document.querySelector('nav.side[aria-label="Main Navigation"]'));
   assert.ok(document.querySelector('main.main'));
-  // `sidebar()` starts at All items — the app name is on the title bar, and
-  // only the first-run mode of this sidebar writes it again.
+  // Brand name is rendered in the title bar rather than sidebar navigation.
   assert.equal(document.querySelector('.side .appname'), null);
 });
 
-test('the sidebar lists the fixture s vaults and groups', () => {
+test('the sidebar lists configured vaults and groups', () => {
   const captions = [...document.querySelectorAll('.side .nav .t')].map((node) =>
     node.textContent?.trim(),
   );
   assert.ok(captions.some((text) => text?.startsWith('All items')));
   assert.ok(captions.some((text) => text?.startsWith('Personal')));
   assert.ok(captions.some((text) => text?.startsWith('Work (Acme)')));
-  // "5 people · 1 group" is `peopleGroups` on the real roster, not a literal.
+  // Verify roster summary caption is formatted from active group members.
   assert.ok(
     captions.some((text) => text?.includes('5 people · 1 group')),
     `Engineering's roster summary is on the row: ${captions.join(' | ')}`,
   );
 });
 
-test('alerts carries the badge for the notes that apply now', () => {
-  // The fresh lease world: the two warnings, not the lapsed-lease critical.
+test('displays active warning badge count in navigation', () => {
+  // Active warnings in default state reflect non-critical server alerts.
   assert.equal(document.querySelector('.side .badge')?.textContent, '2');
 });
 
-test('the icons render as SVG children, not as injected markup', () => {
+test('renders navigation icons as SVG elements', () => {
   const icon = document.querySelector('.side .nav .ic');
   assert.ok(icon, 'a nav row has an icon');
   assert.equal(icon.getAttribute('viewBox'), '0 0 24 24');
   assert.equal(icon.getAttribute('stroke'), 'currentColor');
   assert.equal(icon.getAttribute('fill'), 'none');
   assert.equal(icon.getAttribute('stroke-width'), '1.7');
-  assert.ok(icon.children.length > 0, 'the icon has drawn children');
+  assert.ok(icon.children.length > 0, 'icon contains SVG child elements');
 });
 
-test('the boot address lands on All items, listing the whole catalog', () => {
-  // No `?state=`, so the shell starts where `decodeScene` starts.
+test('defaults to All Items view on initial load', () => {
+  // Without query state, initial navigation defaults to All Items.
   assert.equal(document.querySelector('.loc h1')?.textContent, 'All items');
   const rows = document.querySelectorAll('.body .row');
-  assert.ok(rows.length > 0, 'the list is the body, not a placeholder');
+  assert.ok(rows.length > 0, 'items list is rendered in main body');
   assert.equal(document.querySelector('[data-shell-placeholder]'), null);
 });
 
 test('clicking a group navigates the shell to it', async () => {
   const rows = [...document.querySelectorAll<HTMLButtonElement>('.side .nav')];
-  // People outline on the left (same column as vault icons); roster stack
-  // on the right. The name is in `.t`, not the stack's initials.
+  // Locate group navigation item by name.
   const engineering = rows.find((row) =>
     row.querySelector('.t')?.textContent?.startsWith('Engineering'),
   );
   assert.ok(engineering, 'the Engineering row is in the sidebar');
   const icon = engineering.querySelector('.ic');
   const stack = engineering.querySelector('.stack');
-  assert.ok(icon, 'the people outline is the leading icon');
-  assert.ok(stack, 'the roster stack sits on the trailing edge');
+  assert.ok(icon, 'group icon is present');
+  assert.ok(stack, 'roster stack element is present');
   assert.equal(
     Boolean(
       icon.compareDocumentPosition(stack) & Node.DOCUMENT_POSITION_FOLLOWING,
     ),
     true,
-    'the people icon precedes the avatars',
+    'group icon precedes roster avatars in DOM order',
   );
 
   testingLibrary.fireEvent.click(engineering);

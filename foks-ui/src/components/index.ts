@@ -1,11 +1,5 @@
 /**
- * The shell's component vocabulary.
- *
- * Every one of these draws a class `src/styles/shell.css` already styles —
- * they are the design's own parts, given names and props, not a new design
- * system. Overlays (dialog, menu, listbox, popover, toasts) come from
- * `ui/kit` and are not re-exported here: reach for them at `/kit/...` so it
- * stays obvious which pieces are shared with AKA.
+ * Shared UI component exports for the FOKS shell.
  */
 
 export * from './avatar';

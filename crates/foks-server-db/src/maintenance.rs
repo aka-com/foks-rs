@@ -92,9 +92,9 @@ impl Database {
             "DELETE FROM log_sends WHERE created_at <= ?1",
             [sql_integer(now.saturating_sub(24 * 60 * 60 * 1_000_000))?],
         )?;
-        // Active federation rows are renewable capability envelopes even
-        // after bearer expiry; revoked rows are retained as non-resurrection
-        // tombstones. Neither class is ordinary expiry garbage.
+        // Active federation rows remain renewable after bearer expiry, and revoked
+        // rows are retained as tombstones. Neither category is removed during routine
+        // expiration sweeps.
         let federation_user_permissions = 0;
         let federation_team_permissions = 0;
         transaction.commit()?;

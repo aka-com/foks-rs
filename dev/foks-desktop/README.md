@@ -32,9 +32,8 @@ The transcription's top-level nouns are Items, Notifications, Get started,
 Stores, Parties, Servers, and Settings. Activity is absent because FOKS exposes
 no activity or audit log. Team creation and resume are represented; rename and
 closure remain deferred product decisions.
-The first release is live-only: in-memory results may survive navigation during the
-running session, but unreachable data is shown as unavailable rather than presented as an
-offline replica.
+The desktop operates in a live-only mode: cached results persist during an active
+session, but unreachable endpoints are displayed as unavailable rather than offline replicas.
 
 The desktop and agent use local protocol v2. It adds a bootstrap-only mode driven by the
 desktop, paged `ListKv` and `ListTeamKv` operations for one unified catalog, structured
@@ -51,4 +50,4 @@ state, or telemetry/facts that the selected response did not carry.
 
 ## Status
 
-Proposal. Nothing here has shipped.
+**Status:** Design proposal; features described here are not yet released.

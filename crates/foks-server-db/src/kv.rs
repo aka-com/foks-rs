@@ -122,9 +122,8 @@ impl Database {
         kv_dirent(&self.connection, uid, parent, id)
     }
 
-    /// Materializes a party-scoped KV namespace only for a local user or team.
-    /// The polymorphic party binding is resolved from authoritative identity
-    /// tables rather than accepted from the caller.
+    /// Materializes a party-scoped KV namespace for a local user or team.
+    /// The party binding is verified against existing user and team tables.
     pub fn ensure_kv_namespace(&mut self, namespace_id: &[u8]) -> Result<bool> {
         if namespace_id.len() != 33 {
             return Err(Error::Invalid("KV namespace ID"));

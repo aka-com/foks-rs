@@ -52,7 +52,7 @@ things that need you, not messages.
 | not on this Mac — Download reads version N in chunks | chunked read |
 | Someone else changed this first | compare-and-swap conflict |
 | Deferred — plan §5 group B | team-store writes and role choice |
-| Proposed — needs protocol work | anything the wire cannot do today |
+| Proposed — needs protocol work | Features requiring protocol extensions not yet implemented in the agent |
 
 Member · N, Admin and Owner keep their names. Visibility is explained once,
 wherever it appears: "0 is the default; lower numbers see less."

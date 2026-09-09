@@ -1,12 +1,8 @@
 /**
- * The shell's icon, rendered the way `ui/kit/icon.tsx`'s `AppIcon` renders
- * AKA's: one `<svg>` whose children are built with `createElement` from
- * structured data, never from a markup string.
+ * Renders SVG icons from structured element definitions without raw markup strings.
  *
- * The wrapper attributes reproduce `shell.css`'s bare `svg` rule — the mock
- * gives every icon `fill: none`, `stroke: currentColor`, `stroke-width: 1.7`
- * and round caps and joins from the stylesheet, so an icon lifted out of that
- * page keeps its weight here.
+ * Standard icon stroke width, line caps, and fill attributes default to consistent
+ * design system values.
  */
 
 import { createElement } from 'react';
@@ -23,8 +19,8 @@ const REACT_ATTR_NAMES: Readonly<Record<string, string>> = {
 export interface IconProps {
   name: FoksIconName;
   /**
-   * Explicit pixel size. Omit it and the icon is `1em`, which is how the mock
-   * sizes icons: the container's `font-size` decides.
+   * Explicit pixel size. Defaults to `1em`, inheriting font size from the
+   * containing element.
    */
   size?: number;
   className?: string;

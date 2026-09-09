@@ -1,23 +1,10 @@
 /**
- * Layer 3 of the plan's testing (§5): the built UI, in Chromium, with the
- * mocked bridge.
+ * Acceptance test runner for the built FOKS desktop UI in Chromium with a mocked bridge.
  *
- * This is new work, not something inherited — nothing in this repository
- * drove a browser before. It loads every deep link the shell answers at
- * 1280×860 and holds the Phase 1 gate: **zero console errors, zero page
- * errors, and `document.documentElement.scrollWidth === 1280`** — no
- * horizontal scrollbar at the design's width. A screenshot of each state
- * lands in `shots/` for visual inspection.
+ * Validates layout and deep-link routing at 1280x860, asserting zero console errors,
+ * zero page errors, and no horizontal overflow. Screenshots are saved to `shots/`.
  *
- * What it cannot do is named here so nobody mistakes it for coverage it is
- * not: `playwright-core` drives Chromium, never a WKWebView or a WebKitGTK
- * Tauri window, so this validates layout and logic and never the shipping
- * webview. Drag-drop, the picker, clipboard hygiene and the app lock are
- * layer 4 or by hand.
- *
- * The build must be made with `VITE_FOKS_MOCK=1` (the `acceptance:foks-ui`
- * script does that), and it is served over HTTP: a Vite build uses absolute
- * `/assets/...` URLs and module scripts, so `file://` cannot load it.
+ * Requires a build produced with `VITE_FOKS_MOCK=1`.
  */
 
 import { createServer } from 'node:http';
@@ -31,7 +18,7 @@ const here = fileURLToPath(new URL('.', import.meta.url));
 const DIST = resolve(here, '../../dist');
 const SHOTS = resolve(here, 'shots');
 
-/** The installed browser. `playwright install` is not run here. */
+/** Path to the Chromium binary used for acceptance tests. */
 const CHROME =
   process.env.FOKS_CHROMIUM ??
   '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
@@ -40,8 +27,7 @@ const WIDTH = 1280;
 const HEIGHT = 860;
 
 /**
- * The states the shell answers, as `README.md`'s table lists them. Each is a
- * deep link a person could paste, and each is a screenshot.
+ * UI states and routes verified by the acceptance test suite.
  */
 const STATES = [
   'all',
@@ -141,8 +127,7 @@ const TYPES = {
 async function serve(root) {
   const server = createServer((request, response) => {
     const path = new URL(request.url, 'http://127.0.0.1').pathname;
-    // The favicon is not part of the design; answering it keeps a 404 out of
-    // the console, where it would read as a failure of the page.
+    // Stub favicon request to avoid non-fatal console 404 errors during tests.
     if (path === '/favicon.ico') {
       response.writeHead(200, { 'content-type': 'image/x-icon' });
       response.end();
@@ -191,8 +176,7 @@ async function visit(context, url, shot) {
   if (response && !response.ok()) {
     problems.push(`http ${response.status()}`);
   }
-  // The shell is a synchronous render off the fixture, but wait for the
-  // frame it draws rather than assuming it.
+  // Wait for the app container to mount before inspecting state.
   await page
     .waitForSelector('.app', { timeout: 5000 })
     .catch(() => problems.push('the shell never drew `.app`'));
@@ -242,11 +226,7 @@ async function visit(context, url, shot) {
 }
 
 /**
- * Waits for the notification a mutation raises. Both products now share
- * `ui/kit/toasts.tsx`, so the element is `.toast` — the old `.flash` pill is
- * gone. Toasts also expire on their own (2.6 s), so a walk asserts one only
- * as the *acknowledgement* of a mutation and always checks the state the
- * mutation left behind separately.
+ * Waits for a toast notification element with the specified message to appear.
  */
 function toast(page, text) {
   return page.locator('.toast', { hasText: text }).waitFor();
@@ -335,13 +315,12 @@ async function writeWalk(context, origin) {
       .locator('input[aria-label="Name"]')
       .fill('PHASE3_ACCEPTANCE_KEY');
     await page.locator('input[aria-label="Value"]').fill('acceptance value');
-    // One create button now; the vault comes from the sheet's "Save in".
+    // Submit creation in target vault.
     await page
       .getByRole('button', { name: 'Create in this vault', exact: true })
       .click();
     await toast(page, 'created in Personal');
-    // The state that outlives the notification: the item is in the list, and
-    // it is in the vault the sheet was pointed at.
+    // Verify the item appears in the list under the selected vault.
     await page.locator('.search input').fill('phase3_acceptance_key');
     const written = page
       .locator('.body .row')
@@ -388,7 +367,7 @@ async function groupWalk(context, origin) {
     const inactive = page.locator('.rt.fed .prow', { hasText: 'Inactive' });
     await inactive.getByRole('button', { name: 'Restore access' }).click();
     await toast(page, 'Group access restored');
-    // The row itself must carry the restored admission, not just the toast.
+    // Verify the table row displays active status.
     await page.locator('.rt.fed .prow', { hasText: 'Active' }).waitFor();
     if (await inactive.count())
       failures.push('the restored group still reads as Inactive');
@@ -424,7 +403,7 @@ async function groupWalk(context, origin) {
       .getByRole('button', { name: 'Change role', exact: true })
       .click();
     await toast(page, 'Lower priya.n\u2019s role completed');
-    // A lowered role is the point of the walk, so read it off the roster.
+    // Confirm updated role in roster.
     const demoted = page.locator('.rt .prow', { hasText: 'priya.n' });
     await demoted.filter({ hasText: 'Member' }).waitFor();
     if ((await demoted.textContent())?.includes('Admin'))
@@ -448,8 +427,7 @@ async function groupItemWalk(context, origin) {
   });
   try {
     await page.goto(`${origin}/?state=group-new-text`, { waitUntil: 'load' });
-    // The role choices are a real radiogroup now (`RadioCard`), so they answer
-    // to `radio`, not `button`, and each name carries its own explanation.
+    // Select Admin role from the radiogroup.
     await page
       .getByRole('radiogroup', { name: 'Who can read' })
       .getByRole('radio', { name: /^Admin/ })
@@ -491,7 +469,7 @@ async function groupItemWalk(context, origin) {
       .getByRole('button', { name: 'Save version 2', exact: true })
       .click();
     await toast(page, 'Saved version 2');
-    // The saved version, not the notification, is what the edit produced.
+    // Verify the updated version number is rendered.
     await page.locator('.details', { hasText: 'Version2' }).waitFor();
     // The confirmation sheet adds a second "Remove", so each click is scoped.
     await page
@@ -550,8 +528,7 @@ async function firstRunWalk(context, origin) {
     await page.goto(`${origin}/?state=who&path=invited`, { waitUntil: 'load' });
     await page.evaluate("window.localStorage.removeItem('foks.first-run.v1')");
     await page.reload({ waitUntil: 'load' });
-    // "How are you joining?" is a radiogroup that a separate Continue commits,
-    // so picking a path no longer advances the step by itself.
+    // Select joining path and proceed.
     await page.getByRole('radio', { name: /Someone invited me/ }).click();
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await reloadAt('Select a server address');
@@ -635,16 +612,11 @@ async function adeWalk(context, origin) {
   try {
     await page.goto(`${origin}/?state=servers-unprobed`, { waitUntil: 'load' });
     await page.getByRole('button', { name: 'Check now', exact: true }).click();
-    // A first check announces the new pin in the toast; what it leaves on the
-    // page is a checked server whose signed history is now pinned.
+    // Verify pinned server status after initial check.
     await toast(page, 'New pin');
     await page.locator('.main', { hasText: 'Checked just now' }).waitFor();
 
-    // Ade compares the host id out of band. There is no "Show full" control
-    // and no in-page comparison field any more: the short id carries the full
-    // one in its `title`, Copy puts that on the clipboard, and the last check
-    // response prints it verbatim. All three must agree, or Ade would compare
-    // against something the app made up.
+    // Verify host ID consistency across the tooltip, check response, and display.
     await page
       .locator('summary', { hasText: 'Inspect last check response' })
       .click()
@@ -673,8 +645,7 @@ async function adeWalk(context, origin) {
       .getByRole('button', { name: 'Reset local state', exact: true })
       .click();
     await page.waitForSelector('.sheet', { state: 'detached' });
-    // A reset drops local state; it does not forget the server. Ade must be
-    // left on a server that is still configured and told to check it again.
+    // Resetting local state should retain the server configuration.
     await toast(page, 'check it again before using it');
     await page.locator('.main', { hasText: 'foks.example.net' }).waitFor();
     const stillConfigured = await page

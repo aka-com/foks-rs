@@ -1,15 +1,4 @@
-/**
- * The header's search box, with its ⌘K hint.
- *
- * It is a **controlled** input, and that is the point of the port. The mock
- * reassigns the whole header's `innerHTML` on every keystroke and then puts
- * the caret back by hand (`01-vault.html`'s `input` handler); React keeps the
- * same DOM node across the re-render, so focus, selection and scroll survive
- * without anyone restoring them.
- *
- * ⌘K (Ctrl+K off macOS) focuses it from anywhere in the window, which is what
- * the `<kbd>` promises.
- */
+/** Controlled search input with a clear button and keyboard shortcut. */
 
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';

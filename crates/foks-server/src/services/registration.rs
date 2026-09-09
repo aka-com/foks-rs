@@ -76,7 +76,9 @@ pub(crate) fn probe_key_exists(
     {
         Ok(())
     } else {
-        Err(RpcStatus::KeyNotFound("probed key".to_owned()))
+        Err(RpcStatus::KeyNotFound(
+            "device self-token key not found".to_owned(),
+        ))
     }
 }
 

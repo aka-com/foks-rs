@@ -19,25 +19,25 @@ const SECRET_KEY_BUNDLE_TYPE_ID: u64 = 0x8456_933b_bb8a_54ae;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Go FOKS installation path is unsafe")]
+    #[error("insecure secret store path")]
     UnsafePath,
-    #[error("Go FOKS secret store is too large")]
+    #[error("secret store exceeds size limit")]
     TooLarge,
-    #[error("Go FOKS secret store is invalid: {0}")]
+    #[error("invalid secret store: {0}")]
     Invalid(&'static str),
-    #[error("Go FOKS secret store uses an unsupported version")]
+    #[error("unsupported secret store version")]
     UnsupportedVersion,
-    #[error("Go FOKS source changed while it was being read")]
+    #[error("secret store modified concurrently during read")]
     Changed,
-    #[error("Go FOKS profile cannot copy its device key")]
+    #[error("device key export is unsupported for this profile")]
     CopyUnsupported,
-    #[error("Go FOKS Keychain credential is unavailable")]
+    #[error("Keychain credential unavailable")]
     Keychain,
-    #[error("Go FOKS device credential could not be decrypted")]
+    #[error("failed to decrypt device credential")]
     Decryption,
-    #[error("Go FOKS I/O failed: {0}")]
+    #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Go FOKS Snowpack decoding failed: {0}")]
+    #[error("Snowpack decode error: {0}")]
     Snowpack(#[from] foks_snowpack::Error),
 }
 

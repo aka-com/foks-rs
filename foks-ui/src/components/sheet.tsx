@@ -1,22 +1,8 @@
 /**
- * The design's sheet — `shell.css`'s `.sheet` and its three parts.
+ * Modal sheet with standardized header, content, and action footer.
  *
- * Every overlay in FOKS is the same panel: a header (`.hd`) carrying a glyph
- * and a title, a scrolling body (`.sb`), and a row of controls (`.ft`). That
- * shape was written out by hand nine times across five screens, and two
- * screens had each grown their own private `SheetFrame` helper with slightly
- * different props. This is the one of them.
- *
- * Two components, because there are genuinely two situations:
- *
- *   `Sheet`        the panel alone, for a caller that already supplies the
- *                  dialog around it (the write workflows do, so their
- *                  `aria-label` stays on the dialog where it belongs);
- *   `SheetDialog`  the panel and its dialog together, which is what every
- *                  other caller wants.
- *
- * Width is a named size rather than a class string, so `wide` and `mid` come
- * from `shell.css` and nobody invents a third by writing `.sheet big`.
+ * `Sheet` renders the panel within an existing dialog. `SheetDialog` supplies
+ * the accessible dialog wrapper and supports standard, mid, and wide sizes.
  */
 
 import { useId } from 'react';

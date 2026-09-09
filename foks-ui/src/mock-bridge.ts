@@ -26,7 +26,7 @@ export class VersionMismatchError extends Error {
     readonly found: number,
   ) {
     super(
-      `${path} is at version ${found}, not ${asked}. Refresh and review before reading it.`,
+      `${path} was updated to version ${found} (requested ${asked}). Refresh to view changes.`,
     );
     this.name = 'VersionMismatchError';
   }
@@ -52,7 +52,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       (candidate) =>
         candidate.store === request.storeId && candidate.path === request.path,
     );
-    if (!item) throw new Error(`${request.path} is not in ${request.storeId}.`);
+    if (!item) throw new Error(`Item '${request.path}' was not found in vault '${request.storeId}'.`);
     if (item.version !== request.version) {
       throw new VersionMismatchError(item.path, request.version, item.version);
     }
@@ -89,19 +89,19 @@ export function mockBridge(world: World = FIXTURE): Bridge {
   ): { read: RoleWire; write: RoleWire } => {
     const store = stores.find((candidate) => candidate.id === storeId);
     if (!store)
-      throw failure('store-not-found', 'This store is no longer listed.');
+      throw failure('store-not-found', 'This store was not found.');
     if (store.kind === 'account') {
       if (readRole !== undefined || writeRole !== undefined)
         throw failure(
           'invalid-request',
-          'Account item roles are fixed to Owner.',
+          'Account items always use the Owner role.',
         );
       return { read: { role: 'Owner' }, write: { role: 'Owner' } };
     }
     if (!store.active)
-      throw failure('inactive-group', 'Resume this group before changing it.');
+      throw failure('inactive-group', 'Finish setting up this group before making changes.');
     if (readRole === undefined || writeRole === undefined)
-      throw failure('invalid-request', 'Choose both group item roles.');
+      throw failure('invalid-request', 'Specify both read and write roles for the group item.');
     return {
       read: decodeCreateRole(readRole),
       write: decodeCreateRole(writeRole),
@@ -314,13 +314,13 @@ export function mockBridge(world: World = FIXTURE): Bridge {
   const assertNamedGroup = (storeId: string): void => {
     const store = stores.find((candidate) => candidate.id === storeId);
     if (!store || store.kind !== 'team')
-      throw failure('store-not-found', 'The group is not in the catalog.');
+      throw failure('store-not-found', 'The group was not found.');
     if (!store.active)
-      throw failure('inactive-group', 'The group is inactive.');
+      throw failure('inactive-group', 'The group setup is incomplete.');
     if (store.team_kind !== 'named')
       throw failure(
         'group-management-unavailable',
-        'Roster and federation changes require a named group.',
+        'Managing members and shared access requires a named group.',
       );
   };
   const catalogResponse = (): CatalogDto => ({
@@ -374,8 +374,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       Promise.resolve(servers.map((server) => ({ ...server }))),
     listAccounts: () => {
       restoreFirstRunAccount();
-      // Every fixture and checkpoint-restored account carries its exact store,
-      // the same way `list_accounts` does; there is nothing to resolve here.
+      // Fixture and restored accounts already map directly to their store IDs.
       return Promise.resolve(accounts.map((account) => ({ ...account })));
     },
     listGroupDetails: (storeId) =>
@@ -474,7 +473,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
         (item) => item.store === storeId && item.path === path,
       );
       const item = index < 0 ? undefined : items[index];
-      if (!item) throw failure('conflict', `${path} is no longer there.`);
+      if (!item) throw failure('conflict', `Item '${path}' was deleted or moved.`);
       if (item.version !== version)
         throw failure('conflict', `${path} changed first.`);
       items[index] = {
@@ -545,7 +544,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       if (!store || store.kind !== 'team' || store.active) {
         throw failure(
           'invalid-request',
-          'Only an inactive group can be resumed.',
+          'This group has already completed setup.',
         );
       }
       store.active = true;
@@ -560,11 +559,11 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       if (!account)
         throw failure(
           'store-not-found',
-          'The account store is not in the catalog.',
+          'The account was not found.',
         );
       const id = `team:${teamAlias}`;
       if (stores.some((store) => store.id === id))
-        throw failure('conflict', 'That group alias already exists.');
+        throw failure('conflict', 'A group with that identifier already exists.');
       stores.push({
         id,
         kind: 'team',
@@ -598,7 +597,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
           (party) => party.store === storeId && party.username === username,
         )
       )
-        throw failure('conflict', 'That username is already in the roster.');
+        throw failure('conflict', 'That user is already in the group.');
       parties.push({
         store: storeId,
         username,
@@ -634,7 +633,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
           next?.kind === 'member' &&
           visibilityOf(next) < visibilityOf(current));
       if (!lower)
-        throw failure('not-a-demotion', 'Choose a strictly lower role.');
+        throw failure('not-a-demotion', 'Choose a lower role.');
       party.destination_role = destination;
       party.generation += 1;
       return { applied: true };
@@ -674,13 +673,12 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       )
         throw failure(
           'invalid-request',
-          'Choose an active named group on a different profile.',
+          'Choose an active named group on a different server.',
         );
       const operation = `admission-${federation.length + 1}`;
       federation.push({
         store: storeId,
-        // The profile name, as the agent records it (Rust: `remote.profile.name`)
-        // — not its address.
+        // Use the profile name rather than the server address.
         remote_profile: remote.server,
         remote_team_alias: remote.alias,
         remote_host_id_hex:
@@ -722,7 +720,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       if (matches.length !== 1)
         throw failure(
           'invalid-request',
-          'Choose one exact active federated group.',
+          'Select a single active federated group.',
         );
       federation = federation.filter((candidate) => candidate !== matches[0]);
       parties = parties.filter(
@@ -745,7 +743,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       if (!entry || entry.active)
         throw failure(
           'admission-not-resumable',
-          'That group membership cannot be resumed.',
+          'This group invitation cannot be resumed.',
         );
       entry.active = true;
       return { applied: true };
@@ -804,7 +802,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       if (backupAlias !== 'paper' || phrase !== firstRunFixture.backupPhrase) {
         throw failure(
           'invalid-request',
-          'The prepared backup phrase no longer matches.',
+          'The backup phrase does not match.',
         );
       }
       return { applied: true };
@@ -928,7 +926,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     },
     addServer: async (profileName, probe) => {
       if (servers.some((server) => server.id === profileName))
-        throw failure('already-exists', 'That server profile already exists.');
+        throw failure('already-exists', 'A server with that name already exists.');
       servers.push({
         id: profileName,
         name: probe,
@@ -979,7 +977,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       if (index >= 0 && rows[index]?.backupId !== backup.backupId)
         throw failure(
           'invalid-request',
-          'The backup enrollment binding changed.',
+          'The backup configuration has changed. Please refresh and try again.',
         );
       if (index >= 0) rows.splice(index, 1);
       return {
@@ -1003,7 +1001,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       if (!store || !phrase)
         throw failure(
           'pending-operation-not-found',
-          'That pairing offer is no longer pending.',
+          'This pairing request has expired or already finished.',
         );
       return { accountAlias: store.account, phrase };
     },
@@ -1012,7 +1010,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       if (!store || !pairingOffers.has(accountStoreId))
         throw failure(
           'pending-operation-not-found',
-          'That pairing offer is not ready to finish.',
+          'Device pairing has not been completed yet.',
         );
       pairingOffers.delete(accountStoreId);
       return {
@@ -1101,7 +1099,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       if (profile !== confirmation || !resetTokens.delete(token))
         throw failure(
           'invalid-request',
-          'Preview the reset again and type the exact profile.',
+          'Review the reset details and enter the exact profile name to confirm.',
         );
       return { applied: true };
     },

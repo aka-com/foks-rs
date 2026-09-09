@@ -1,9 +1,4 @@
-//! Startup failures a person can act on are presented as a dialog, not a crash.
-//!
-//! Ported from `src-tauri/src/lib.rs`'s `fatal_startup`. The shape is the same
-//! — a blocking native dialog, then a non-zero exit through the standard path
-//! so no crash report is filed — but the failure set is FOKS's: there is one
-//! thing this app cannot start without, and that is a reachable agent.
+//! Displays blocking native dialogs and exits on fatal startup errors.
 
 use std::path::Path;
 
@@ -13,9 +8,8 @@ use crate::agent::{AgentError, AgentHandle};
 
 /// Shows a blocking dialog and exits non-zero.
 ///
-/// Called from the setup hook, which is a nounwind context: returning an `Err`
-/// there aborts the process with no explanation, which is precisely the outcome
-/// this function exists to avoid.
+/// Invoked during setup to display a fatal error dialog before non-zero exit,
+/// avoiding an unhandled setup abort.
 pub fn fatal_startup(app: &tauri::App, title: &str, body: &str) -> ! {
     app.dialog()
         .message(body)
@@ -27,9 +21,7 @@ pub fn fatal_startup(app: &tauri::App, title: &str, body: &str) -> ! {
 
 /// Confirms the agent is reachable before the first request.
 ///
-/// Two failures, one message each. A missing socket is the common one — the
-/// agent is not running — and is named separately from a socket that exists but
-/// does not answer, because the remedies differ.
+/// Verifies that the agent socket exists and the agent responds to requests.
 pub fn require_agent(app: &tauri::App, agent: &AgentHandle) {
     let socket = agent.socket();
     if let Err(error) = agent.ensure_started_blocking() {
@@ -38,12 +30,12 @@ pub fn require_agent(app: &tauri::App, agent: &AgentHandle) {
         } else {
             unreachable_agent(socket, &error)
         };
-        fatal_startup(app, "FOKS could not reach its agent", &body);
+        fatal_startup(app, "Agent Connection Failed", &body);
     }
     if let Err(error) = agent.call_blocking(foks_agent_proto::Operation::Ping) {
         fatal_startup(
             app,
-            "FOKS could not reach its agent",
+            "Agent Connection Failed",
             &unreachable_agent(socket, &error),
         );
     }
@@ -51,39 +43,31 @@ pub fn require_agent(app: &tauri::App, agent: &AgentHandle) {
 
 fn missing_socket(socket: &Path) -> String {
     format!(
-        "FOKS could not reach its agent at {}.\n\nThe socket does not exist, \
-         which usually means foks-agent is not running. Start the agent, then \
-         relaunch FOKS.",
+        "FOKS could not connect to the local background service at {}.\n\n\
+         Please verify that foks-agent is running and relaunch the application.",
         socket.display()
     )
 }
 
 fn unreachable_agent(socket: &Path, error: &AgentError) -> String {
     format!(
-        "FOKS could not reach its agent at {}.\n\n{}\n\nFix the underlying \
-         problem, then relaunch FOKS.",
+        "Failed to connect to agent at {}.\n\n{}\n\nPlease verify that the \
+         agent is running and try again.",
         socket.display(),
         error.message
     )
 }
 
-/// The state-tampered variant of the same dialog.
-///
-/// AKA raises this when its on-disk state fails an integrity check, because an
-/// app-identity change is security-relevant and must be reported rather than
-/// crashed through. FOKS has no such check yet — the agent owns its own state —
-/// so the copy is written and the call site is wired in Phase 5, alongside the
-/// app lock. It is kept here so that work adds a caller rather than a policy.
+/// Displays an error dialog when on-disk state fails integrity verification.
 #[allow(dead_code)]
 pub fn fatal_state_tampered(app: &tauri::App, file: &Path) -> ! {
     fatal_startup(
         app,
         "FOKS state has been altered",
         &format!(
-            "FOKS found unexpected changes to {}.\n\nThis is what an \
-             app-identity change looks like, and it is also what tampering \
-             looks like. FOKS will not use this state. Reinstall FOKS, or set \
-             it up again from a device you trust.",
+            "FOKS detected unexpected changes to {}.\n\nThe application state \
+             may be corrupted or tampered with and cannot be used safely. \
+             Please reinstall FOKS or restore state from a trusted backup.",
             file.display()
         ),
     );

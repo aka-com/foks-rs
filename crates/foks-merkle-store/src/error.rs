@@ -14,16 +14,16 @@ pub enum Error {
     ConflictingNode,
     #[error("Merkle tree contains a cycle or duplicate node reference")]
     Cycle,
-    #[error("Merkle key set contains an impossible duplicate or unsplittable key")]
+    #[error("Merkle key set contains a duplicate or invalid key prefix")]
     DuplicateKey,
     #[error("cannot generate a proof for an empty tree")]
     EmptyTree,
     #[error("Merkle tree exceeds the 256-bit key depth")]
     Depth,
     #[error(
-        "cannot mint FOKS v0.1.9 Merkle epoch {epoch}: its {pointer_count}-entry back-pointer array is rejected by go-foks canonical signable validation"
+        "Merkle epoch {epoch} back-pointer count {pointer_count} exceeds canonical encoding limit"
     )]
-    GoV019EpochCliff { epoch: u64, pointer_count: usize },
+    EpochLimitExceeded { epoch: u64, pointer_count: usize },
     #[error("node storage failed: {0}")]
     Storage(String),
 }

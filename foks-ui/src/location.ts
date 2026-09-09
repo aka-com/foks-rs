@@ -1,19 +1,9 @@
 /**
- * Where the shell is, and how that survives a reload.
+ * Navigation state management and URL routing.
  *
- * A small external store on `ui/src/ui-store.ts`'s pattern: the state is a
- * plain value, `transition` is a pure function of it, and React subscribes
- * through `useSyncExternalStore`. Nothing here touches the DOM, so every
- * transition and every URL round trip is testable without a renderer.
- *
- * First run is a **mode, not a window** (`Location` kind `first-run`): the
- * same shell, with the sidebar in its step-list form.
- *
- * Every place that names an account or a group names it by **StoreRef** — the
- * exact `Store.id` the agent projects — and never by alias. An alias is a
- * profile-local label, so two profiles may each hold an account called
- * `personal`; a location keyed by one would silently mean whichever the
- * catalog happened to list first.
+ * Provides a subscription-based external store managing application location,
+ * view options, selection, and query state without direct DOM dependencies.
+ * Stores and accounts are identified by canonical StoreRef identifiers.
  */
 
 import { useSyncExternalStore } from 'react';
@@ -51,10 +41,10 @@ export type Location =
 /** The item the details panel is showing, or nothing. */
 export type Selection = { store: StoreRef; path: string } | null;
 
-/** List or cards. A view preference, not a place. */
+/** Layout mode for displaying vault items. */
 export type ViewMode = 'list' | 'grid';
 
-/** The kind segmented control's choice. `All` is not a kind, it is no filter. */
+/** Kind filter selection, where 'All' disables kind filtering. */
 export type KindFilter = 'All' | 'Password' | 'Resource' | 'File' | 'Link';
 
 /** The sort menu's choice. */
@@ -93,7 +83,7 @@ export type LocationAction =
   | { type: 'kind'; kind: KindFilter }
   | { type: 'sort'; sort: SortKey };
 
-/** Two locations are the same place. */
+/** Returns whether two locations identify the same navigation target. */
 export function sameLocation(a: Location, b: Location): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === 'store' && b.kind === 'store') return a.ref === b.ref;
@@ -109,13 +99,11 @@ export function sameLocation(a: Location, b: Location): boolean {
 }
 
 /**
- * The whole navigation model, as one pure function.
+ * Pure transition function for location state actions.
  *
- * Moving to a different place drops the selection — the details panel cannot
- * show an item from a store you have left — but re-navigating to where you
- * already are keeps it, so a redundant click does not close the panel. The
- * search box is deliberately *not* cleared: a person filtering "wifi" and
- * switching stores is still looking for the same thing.
+ * Navigating to a new location clears the current item selection while
+ * preserving active search queries. Re-navigating to the current location
+ * preserves the active selection.
  */
 export function transition(
   state: LocationState,
@@ -127,9 +115,7 @@ export function transition(
         ? state
         : { ...state, location: action.location, selection: null };
     case 'select':
-      // Selecting an item opens the panel that describes it; deselecting
-      // leaves the panel where the person put it, empty, rather than closing
-      // a pane they opened on purpose.
+      // Selecting an item automatically opens the details panel; deselecting keeps the panel open.
       return {
         ...state,
         selection: action.selection,
@@ -261,15 +247,8 @@ const STATE_ALIASES: Readonly<Record<string, Location>> = {
 };
 
 /**
- * Every parameter any location owns, all cleared.
- *
- * `setUrl` leaves a parameter it is not told about alone, so a location that
- * names only its own parameters leaves the previous one's behind: a store
- * would inherit `section=` from Settings, and a `?state=all` reload would carry
- * a `store=` that means nothing there. Each encoder therefore spreads this and
- * overrides only what it owns. `account` is not a parameter of any location
- * any more — Settings is keyed by StoreRef — and is listed so that an address
- * saved before that change loses it rather than carrying a stale alias.
+ * Baseline dictionary of route query parameters reset during transitions to
+ * prevent parameter leakage across locations.
  */
 const CLEARED_PARAMS: Readonly<Record<string, string | null>> = {
   store: null,
@@ -361,11 +340,8 @@ const FIRST_RUN_STATE_NAMES = [
 ] as const;
 
 /**
- * Read a location out of a query string.
- *
- * `null` when the state names something that is not a location — an unknown
- * name, or one of the mock's sheet states. The caller decides the fallback;
- * this does not guess.
+ * Decodes a Location object from a URL query string, returning `null` if the
+ * state parameter is unrecognized or does not represent a standalone location.
  */
 export function decodeLocation(search: string): Location | null {
   const params = new URLSearchParams(search);
@@ -603,11 +579,8 @@ export const INITIAL_SCENE: Scene = {
 };
 
 /**
- * Read a whole scene out of a query string.
- *
- * The named alias comes first, then explicit parameters, so
- * `?state=grid&view=list` means what it says and a reload of an encoded
- * address lands exactly where it left.
+ * Decodes a complete Scene configuration from a URL search query, resolving
+ * named aliases first and applying explicit parameters as overrides.
  */
 export function decodeScene(search: string): Scene {
   const params = new URLSearchParams(search);
@@ -634,10 +607,7 @@ export function decodeScene(search: string): Scene {
 }
 
 /**
- * The address a scene deep-links to.
- *
- * Everything at its default is left out, so an ordinary `?state=all` stays
- * `?state=all` and only what a person actually changed shows up.
+ * Encodes a scene into a URL string, omitting parameters that match default values.
  */
 export function sceneHref(href: string, scene: Scene): string {
   const { state, params } = encodeLocation(scene.location);
@@ -653,7 +623,7 @@ export function sceneHref(href: string, scene: Scene): string {
   });
 }
 
-/** The scene a navigation state and a lease world make. */
+/** Constructs a Scene from location state and active lease status. */
 export function sceneOf(state: LocationState, lease: LeaseState): Scene {
   return {
     location: state.location,
@@ -670,12 +640,7 @@ export function sceneOf(state: LocationState, lease: LeaseState): Scene {
 /* ----------------------------------------------------------------- store -- */
 
 /**
- * The shell's navigation store.
- *
- * Modelled on `ui/src/ui-store.ts`: one mutable field, a revision counter and
- * a listener set, so React's external-store contract is satisfied without a
- * reducer in a context. It is deliberately not shared with AKA — the state
- * shape is FOKS's, only the pattern is borrowed.
+ * External navigation store satisfying React's `useSyncExternalStore` contract.
  */
 export class LocationStore {
   private current: LocationState;
@@ -732,7 +697,7 @@ export class LocationStore {
   }
 }
 
-/** A store standing at a scene — how a deep link becomes navigation state. */
+/** Initializes a LocationStore populated with state from a decoded Scene. */
 export function storeAtScene(scene: Scene): LocationStore {
   return new LocationStore({
     ...INITIAL_STATE,

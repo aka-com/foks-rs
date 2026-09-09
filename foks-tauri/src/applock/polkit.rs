@@ -1,4 +1,4 @@
-//! Linux app-lock authentication through the system polkit authority.
+//! Linux app-lock authentication via the PolicyKit (polkit) system D-Bus authority.
 
 use std::collections::HashMap;
 
@@ -24,7 +24,7 @@ pub(super) fn capability() -> Capability {
         Ok(connection) => connection,
         Err(error) => {
             return unavailable(format!(
-                "The FOKS app lock needs polkit, but the system bus is unavailable ({error})."
+                "Polkit authentication requires the system bus, which is unavailable ({error})."
             ));
         }
     };
@@ -34,10 +34,10 @@ pub(super) fn capability() -> Capability {
             reason: None,
             mechanism: "password",
         },
-        Ok(false) => unavailable(format!(
-            "The FOKS app lock needs {ACTION_ID} from {POLICY_FILE}; install the FOKS .deb."
-        )),
-        Err(error) => unavailable(format!("Polkit did not answer ({error}).")),
+        Ok(false) => unavailable(
+            "System authentication policy is not installed. Reinstall FOKS to enable application lock.".to_owned(),
+        ),
+        Err(error) => unavailable(format!("Polkit request failed: {error}")),
     }
 }
 
@@ -73,16 +73,16 @@ fn action_registered(connection: &Connection) -> Result<bool, String> {
 fn subject() -> Result<(String, HashMap<String, Value<'static>>), String> {
     let pid = std::process::id();
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .map_err(|error| format!("could not read process start time: {error}"))?;
+        .map_err(|error| format!("Failed to read process start time: {error}"))?;
     let after_name = stat
         .rfind(')')
         .map(|at| &stat[at + 1..])
-        .ok_or_else(|| "unrecognized /proc stat format".to_owned())?;
+        .ok_or_else(|| "Unrecognized /proc stat format".to_owned())?;
     let start_time = after_name
         .split_whitespace()
         .nth(19)
         .and_then(|field| field.parse::<u64>().ok())
-        .ok_or_else(|| "unrecognized /proc stat format".to_owned())?;
+        .ok_or_else(|| "Unrecognized /proc stat format".to_owned())?;
     Ok((
         "unix-process".to_owned(),
         HashMap::from([

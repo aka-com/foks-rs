@@ -1,7 +1,7 @@
 //! Opt-in end-to-end workload benchmarks.
 //!
-//! These tests report observations for the current host. They enforce bounded
-//! admission and recovery invariants, not universal latency promises.
+//! These benchmarks measure local host performance and verify admission and
+//! recovery bounds.
 
 use std::io::Write as _;
 use std::net::TcpStream;

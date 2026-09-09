@@ -1,9 +1,9 @@
 //! Rust-side gate for every command that can expose a vault value.
 //!
-//! The window label is only defence in depth. The app lock is the runtime
-//! control: even script executing in the sole webview cannot read a value
-//! while this state is locked. Authentication is delegated to the operating
-//! system; FOKS never receives an account password.
+//! Window labels provide defense-in-depth, while the app lock provides runtime
+//! access control. Value-returning commands are blocked when locked.
+//! Authentication is delegated to the operating system; FOKS does not store
+//! account passwords.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -39,10 +39,8 @@ impl AppLock {
 
     fn for_capability(capability: Capability) -> Self {
         Self {
-            // The lock is a useful command boundary only after it has actually
-            // been armed. Start closed on platforms that can present the OS
-            // authenticator; unavailable platforms must remain open so the
-            // user cannot be stranded behind an impossible prompt.
+            // Platforms supporting OS authentication start locked. On unsupported
+            // platforms, start unlocked to avoid blocking access.
             locked: AtomicBool::new(capability.available),
             authenticating: AtomicBool::new(false),
             capability,
@@ -63,7 +61,7 @@ impl AppLock {
             return Err(AgentError::new(
                 "app-lock-unavailable",
                 self.capability.reason.clone().unwrap_or_else(|| {
-                    "The operating system cannot authenticate this account.".to_owned()
+                    "Operating system authentication is unavailable for this account.".to_owned()
                 }),
                 false,
             ));
@@ -97,7 +95,7 @@ pub fn require_unlocked(app: &AppHandle) -> Result<(), AgentError> {
         Some(_) => Ok(()),
         None => Err(AgentError::new(
             "app-lock-unavailable",
-            "FOKS could not verify its app-lock state.",
+            "Unable to verify application lock state.",
             false,
         )),
     }
@@ -141,7 +139,7 @@ pub async fn unlock_app(
     let owned = Arc::clone(&lock);
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = AuthenticationGuard(&owned.authenticating);
-        match authenticate("Unlock FOKS to read vault items") {
+        match authenticate("Unlock FOKS to access your vault") {
             Ok(true) => owned.locked.store(false, Ordering::Release),
             Ok(false) => {}
             Err(message) => {
@@ -151,7 +149,7 @@ pub async fn unlock_app(
         Ok(owned.state())
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("the unlock prompt did not finish: {error}")))?
+    .map_err(|error| AgentError::unknown(format!("Unlock prompt failed to complete: {error}")))?
 }
 
 #[derive(Clone)]
@@ -180,7 +178,7 @@ fn platform_capability() -> Capability {
         Err(error) => Capability {
             available: false,
             reason: Some(format!(
-                "macOS cannot authenticate this account right now ({}).",
+                "macOS authentication unavailable ({}).",
                 error.localizedDescription()
             )),
             mechanism: "none",
@@ -243,14 +241,14 @@ fn authenticate(reason: &str) -> Result<bool, String> {
 fn platform_capability() -> Capability {
     Capability {
         available: false,
-        reason: Some("The FOKS app lock is not available on this platform.".to_owned()),
+        reason: Some("App lock is not supported on this platform.".to_owned()),
         mechanism: "none",
     }
 }
 
 #[cfg(not(any(target_os = "macos", all(unix, not(target_os = "macos")))))]
 fn authenticate(_reason: &str) -> Result<bool, String> {
-    Err("The FOKS app lock is not available on this platform.".to_owned())
+    Err("App lock authentication is not supported on this platform.".to_owned())
 }
 
 #[cfg(test)]

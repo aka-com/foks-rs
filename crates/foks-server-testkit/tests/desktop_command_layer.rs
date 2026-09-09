@@ -213,7 +213,7 @@ fn unix_seconds() -> u64 {
 /// executables, passes absolute paths, and runs this one ignored test.
 #[test]
 #[ignore = "run via scripts/test-foks-desktop-real-agent.sh"]
-fn sol_process_reentry_and_real_kv_conflict_against_testkit() {
+fn process_reentry_and_real_kv_conflict_against_testkit() {
     let agent_binary = required_binary("FOKS_AGENT_TEST_BINARY");
     let backend_binary = required_binary("FOKS_DESKTOP_BACKEND_TEST_BINARY");
     let environment = TestEnvironment::new().unwrap();
@@ -448,11 +448,8 @@ fn sol_process_reentry_and_real_kv_conflict_against_testkit() {
     ]));
     assert_eq!(content(&after_conflict), b"current secret");
 
-    // The first item anyone writes lives under folders nobody has created:
-    // the desktop offers `/logins/github.com` before `/logins` exists. A FOKS
-    // write addresses an existing parent, so the create carries `mkdir_p` and
-    // the agent builds the path in the same write session. A second create
-    // under the same folder reuses it rather than failing on it.
+    // New paths automatically create parent directories via `mkdir_p`.
+    // Subsequent writes reuse the created parent directory.
     let nested = backend.success(with_file(
         words(&[
             "kv-create-text",

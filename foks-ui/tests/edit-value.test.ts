@@ -15,21 +15,19 @@ const login: Item = {
   value: 'username: rae\npassword: ••••••••',
 };
 
-test('a learned password is spliced in verbatim, whatever characters it holds', () => {
-  // `String.replace` treats a string replacement as a *pattern*: `$&` is the
-  // match and `` $` `` is everything before it. A password containing them was
-  // corrupted in the editor, and Save would have written the corrupted value.
+test('editableValue preserves special regex replacement tokens in password value', () => {
+  // Verifies that replacement tokens in password values are treated as literals.
   assert.equal(editableValue(login, 'a$&b'), 'username: rae\npassword: a$&b');
   assert.equal(editableValue(login, 'x$`y'), 'username: rae\npassword: x$`y');
   assert.equal(editableValue(login, "p$'q"), "username: rae\npassword: p$'q");
 });
 
-test('a skeleton with no password line does not drop the learned value', () => {
+test('editableValue returns decrypted value when item value lacks a password field', () => {
   const bare: Item = { ...login, value: 'username: rae' };
   assert.equal(editableValue(bare, 'secret'), 'secret');
 });
 
-test('a complete learned text is shown as-is', () => {
+test('editableValue returns full record unchanged when matching existing format', () => {
   assert.equal(
     editableValue(login, 'username: rae\npassword: hunter2'),
     'username: rae\npassword: hunter2',

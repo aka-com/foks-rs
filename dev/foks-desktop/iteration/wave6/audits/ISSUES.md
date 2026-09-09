@@ -26,12 +26,12 @@ wave 6 shell".
 
 | # | Theme | Raised by | Needs protocol? | Plan phase |
 | - | ----- | --------- | --------------- | ---------- |
-| B1 | The New sheet has no Who-can-read / Who-can-change control, not even greyed | Priya 1, Jun 4 | Live: yes (group B). Drawn greyed with the reason: no | Phase 3 (greyed), Phase 7.6 (live) |
+| B1 | Item creation modal lacks read/write permission controls or disabled placeholders | Enterprise Lead, Agent Lead | Protocol changes required for active writes; UI placeholder can be added immediately | Phase 3 (placeholder), Phase 7.6 (active) |
 | B2 | A group someone else added you to cannot appear; the Waiting screen's Check now can never succeed | Sol 1 | Yes (team discovery) | Phase 7.2; Phase 5 for the interim copy |
 | B3 | No Remove on a party row and no rekey / rotate-these sentence; a bot's access cannot be taken away from the roster | Jun 1 | No | Phase 4 |
 | B4 | Nothing says how a program on another host obtains a value (no `foks` command, no "the bot needs its own account", no "this Mac's agent is not it") | Jun 2 | No | Phase 4 (party panel) |
 | B5 | Servers & devices cannot add, check, compare or pin a second server; host ids are neither full nor copyable | Ade 1 | No | Phase 6 |
-| B6 | "Set up another Mac", backup phrase and recovery are pointed at from first run and Done but do not exist in Settings or Servers & devices | Marcus 1, Marcus 2, Priya 7, Ade 7, Sol 7 | No (pairing operations exist) | Phase 6 |
+| B6 | Onboarding flows reference device pairing, recovery phrases, and account recovery, but target views are missing in Settings and Server views | Multiple Personas | No (operations supported in backend) | Phase 6 |
 
 ## Themes
 
@@ -126,7 +126,7 @@ not from the commit messages.
 | # | Status | Closed by |
 | - | ------ | --------- |
 | B1 | Partly | `01-vault.html?state=new-group` draws **Who can read** and **Who can change** greyed with a `comes with group writes` chip and a computed "would be readable by **N of M**" naming the readers; the live control still needs group writes (Phase 7.6) |
-| B2 | Open | Only the copy moved (see T2). Discovery itself stays Proposed — decided, not overlooked |
+| B2 | Open | Updated explanatory copy on the waiting screen; automatic group discovery remains marked as a planned feature pending protocol implementation |
 | B3 | Closed | `03-groups.html?state=remove` (rekey sentence + the rotate-these list from `readersOf`) and `?state=party`; `01-vault.html?state=party-remove` carries the short version |
 | B4 | Closed | `03-groups.html?state=party`: **Connect an agent** with `foks kv get … --team`, "its own account on <server> and its own device credentials there", and "this Mac's agent socket is not how an agent reads values" |
 | B5 | Closed | `04-servers.html` — `list` (cards with Check), `add`, `unprobed`, `check`, `server` (full 66-hex id behind Show full · Copy, the local out-of-band compare), `lapsed`, `rollback`, `reset` |

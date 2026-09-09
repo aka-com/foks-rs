@@ -1,18 +1,8 @@
 /**
- * The sidebar, as `shell.js`'s `sidebar()` draws it.
+ * Primary sidebar navigation component.
  *
- * All items · VAULTS · GROUPS · SHARES, then the footer. Three readings are
- * computed, never typed: an account names its server, an active group carries
- * its roster count, and an unavailable or inactive store says "Connection
- * error". The Alerts badge is absent at zero (`Badge`), not a "0".
- *
- * Rows are buttons in fixture order within each section. Account vaults come
- * first, followed by named groups and then ad-hoc shares.
- *
- * Control-Tab / Control-Shift-Tab walk All items, then each vault, named group
- * and share — the same order those rows are drawn. The footer (Alerts,
- * Settings, Set up new vault) is not in that walk. Servers is a Settings
- * section, not a place of its own.
+ * Renders account vaults, groups, alerts, and settings based on current agent
+ * state. Control-Tab navigation follows the displayed store order.
  */
 
 import { useEffect, type ReactNode } from 'react';
@@ -96,7 +86,7 @@ export function NavRow({
 export interface SidebarProps {
   world: World;
   location: Location;
-  /** How many notifications apply to the world as it stands. */
+  /** Count of active notifications shown in the sidebar. */
   alerts: number;
   onNavigate: (location: Location) => void;
   /**
@@ -150,6 +140,10 @@ export function Sidebar({
     (store) => store.kind === 'team' && store.team_kind === 'adhoc',
   );
 
+  /**
+   * Computes display state for a store. Account stores show item information,
+   * while group stores include their member roster.
+   */
   const storeRow = (store: Store): ReactNode => {
     const connectionError = storeDescriptionState(world, store) !== 'normal';
     return (
@@ -175,6 +169,7 @@ export function Sidebar({
           ) : undefined
         }
         onSelect={() => {
+          // Clicking the currently active store preserves the existing selection.
           onNavigate({ kind: 'store', ref: store.id });
         }}
       />
@@ -182,7 +177,7 @@ export function Sidebar({
   };
 
   return (
-    <nav className="side" aria-label="Places">
+    <nav className="side" aria-label="Main Navigation">
       <NavRow
         active={location.kind === 'all'}
         glyph={<Icon name="grid" />}
@@ -215,7 +210,7 @@ export function Sidebar({
           active={location.kind === 'alerts'}
           glyph={<Icon name="bell" />}
           name="Alerts"
-          tail={<Badge count={alerts} label="Open alerts" />}
+          tail={<Badge count={alerts} label="open alerts" />}
           onSelect={() => {
             onNavigate({ kind: 'alerts' });
           }}

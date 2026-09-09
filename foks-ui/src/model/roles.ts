@@ -1,8 +1,7 @@
 /**
- * Role arithmetic — ported from `wave6/shell.js:203-215`.
+ * Role parsing, ranking, and admission rules.
  *
- * Member(-0x4000) < Member(0) < Admin < Owner. Visibility is an ordered band
- * inside Member: 0 is the default; lower bands see less.
+ * Role hierarchy: Member (ordered by visibility band) < Admin < Owner.
  */
 
 import type { Role, RoleWire } from './types';
@@ -18,11 +17,8 @@ const KINDS: Readonly<Record<string, Role['kind']>> = {
 /**
  * Normalise a role off the wire.
  *
- * Accepts the display string (`"Owner"`, `"Member · visibility -16384"`,
- * `"Member"`) and the structured `{ role, visibility }`. Returns `null` for
- * anything that is not one of the three protocol roles — the mock let an
- * unknown string through with rank 0; refusing it is the same outcome without
- * inventing a fourth role.
+ * Accepts display strings (`"Owner"`, `"Member · visibility 0"`) or structured
+ * `{ role, visibility }` objects. Returns `null` for unparseable or unknown roles.
  */
 export function parseRole(wire: RoleWire): Role | null {
   if (typeof wire !== 'string') {
@@ -40,7 +36,7 @@ export function parseRole(wire: RoleWire): Role | null {
   return kind ? { kind } : null;
 }
 
-/** Owner 3, Admin 2, Member 1, anything else 0. Takes a role either way up. */
+/** Returns the numeric permission rank for a role (Owner: 3, Admin: 2, Member: 1, invalid: 0). Accepts either a Role or RoleWire representation. */
 export function roleRank(role: Role | RoleWire | null): number {
   if (role == null) return 0;
   const parsed =
@@ -49,7 +45,7 @@ export function roleRank(role: Role | RoleWire | null): number {
   return { owner: 3, admin: 2, member: 1 }[parsed.kind];
 }
 
-/** 0 is the default band; a role outside Member has no band of its own. */
+/** Returns the visibility level for a member role, defaulting to 0. Non-member roles return 0. */
 export function visibilityOf(role: Role): number {
   return role.visibility ?? 0;
 }
@@ -64,10 +60,7 @@ export function visibilityOf(role: Role): number {
 export function admits(held: RoleWire, need: RoleWire): boolean {
   const h = parseRole(held);
   const n = parseRole(need);
-  // A role this client cannot parse is refused, whichever side it is on. The
-  // rank comparison must not run first: an unparseable `need` ranks 0, so a
-  // Member would out-rank it and this would answer "yes, you may read that"
-  // about an item whose read role it does not understand.
+  // Reject unparseable roles on either side before comparing ranks.
   if (!h || !n) return false;
   const hr = roleRank(h);
   const nr = roleRank(n);
@@ -75,7 +68,7 @@ export function admits(held: RoleWire, need: RoleWire): boolean {
   return h.kind === 'member' ? visibilityOf(h) >= visibilityOf(n) : true;
 }
 
-/** "Owner" / "Member · visibility 0" — the wording the design uses. */
+/** Formats a role into its canonical display string. */
 export function formatRole(role: Role): string {
   switch (role.kind) {
     case 'owner':

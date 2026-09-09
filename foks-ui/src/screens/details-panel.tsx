@@ -1,20 +1,5 @@
 /**
- * The details panel — `01-vault.html`'s `renderDetails()`, extended with the
- * exact-version item actions that landed after the frozen mock.
- *
- * It says what an item *is*: where it lives, what kind of node it is a
- * reading of, its version and size, the roles that gate reading and writing
- * it, and — computed, never typed — who else can read it. Everything on it is
- * metadata the agent already answers.
- *
- * The value stays **masked** until Show. Show is the one call that returns a
- * secret to the webview and is guarded in Rust by the app lock. Copy and
- * Download execute entirely in Rust. Edit and Remove carry ExactVersion and
- * are enabled only when the authenticated account or group role admits the
- * listed write role.
- *
- * A link target is learned by the same exact-version content read, then Open
- * target changes the selection within the same store.
+ * Details panel displaying item metadata, content preview, sharing roster, and item actions.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -29,7 +14,6 @@ import {
   InsetRow,
   KindIcon,
   SectionLabel,
-  Toggle,
 } from '../components';
 import type { FilterKind } from '../components';
 import {
@@ -44,9 +28,7 @@ import {
   partyName,
   peopleLabel,
   readersOf,
-  rtype,
   serverOf,
-  shortId,
   storeOf,
 } from '../model';
 import type { Item, Party, RoleWire, World } from '../model';
@@ -63,7 +45,7 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   ssid: 'Network',
 };
 
-/** StrictMode can replay mount effects; coalesce only the in-flight read. */
+/** Coalesces concurrent in-flight read requests for the same item. */
 const readFlights = new WeakMap<
   Bridge,
   Map<string, Promise<ReadItemResponse>>
@@ -94,7 +76,7 @@ function assertExactRead(
     response.version !== request.version
   ) {
     throw new Error(
-      'The local agent returned a value for a different catalog selection.',
+      'Received content for a different item or version than requested.',
     );
   }
 }
@@ -106,16 +88,7 @@ function roleText(wire: RoleWire): string {
   return typeof wire === 'string' ? wire : wire.role;
 }
 
-/** The wire shape of a role: Member carries a band, Admin and Owner do not. */
-function wireRole(wire: RoleWire): { role: string; visibility?: number } {
-  const role = parseRole(wire);
-  if (!role) return { role: typeof wire === 'string' ? wire : wire.role };
-  if (role.kind === 'member')
-    return { role: 'Member', visibility: role.visibility ?? 0 };
-  return { role: role.kind === 'admin' ? 'Admin' : 'Owner' };
-}
-
-/** `user: rae` → `['user', 'rae']`; a line with no field is all value. */
+/** Parses lines formatted as "key: value". Lines without a colon delimiter are treated as raw values. */
 function parseFields(value: string): [string | null, string][] {
   return value.split('\n').map((line) => {
     const cut = line.indexOf(': ');
@@ -132,9 +105,7 @@ interface PasswordField {
 }
 
 /**
- * Fixture rows carry safe masked context; native catalog rows carry none.
- * After Show, a structured password record can introduce its own fields. An
- * unstructured read remains one Value row rather than being mislabeled.
+ * Maps raw or masked password values to displayable field rows.
  */
 function passwordFields(
   masked: string | undefined,
@@ -187,10 +158,9 @@ function PartyRow({
         ) : null}
         <small>
           {party.note ??
-            (party.party_kind !== 'user' ? 'a member group' : serverName)}
-          {' · '}
-          {shortId(party.party_id_hex)} · gen {party.generation}
-          {canRead ? '' : ' · cannot read this'}
+            (party.party_kind !== 'user' ? 'Member group' : serverName)}
+          {' · '}Access level {roleText(party.destination_role)}
+          {canRead ? '' : ' · no read access'}
         </small>
       </span>
       <Chip>{roleText(party.destination_role)}</Chip>
@@ -202,7 +172,7 @@ export interface DetailsPanelProps {
   world: World;
   bridge: Bridge;
   selection: Selection;
-  /** `<store>|<path>` when a row or the `show` scene requested Show. */
+  /** Key of an item requested to be revealed immediately on render. */
   revealRequest?: string | null;
   onRevealHandled?: () => void;
   onSelect: (selection: Selection) => void;
@@ -212,7 +182,7 @@ export interface DetailsPanelProps {
   onApplied: (message: string) => Promise<void>;
   onCommandError: (error: unknown, item?: Item) => void;
   onMutationError: MutationFailureHandler;
-  /** Increments when the agent is lost so every renderer-held value is dropped. */
+  /** Signal counter incremented to clear revealed secrets from view state. */
   concealSignal?: number;
   resumeDraft?: {
     store: string;
@@ -262,11 +232,9 @@ export function DetailsPanel({
   const [editError, setEditError] = useState<string | null>(null);
   const [binaryFile, setBinaryFile] = useState(false);
   const concealEpoch = useRef(0);
-  // The selection an async read was started for, readable from inside a
-  // promise callback without closing over a stale render's `key`.
-  // The epoch of the retained draft already restored, so a later refresh
-  // does not restore it a second time.
+  // Epoch of the retained draft already restored, preventing duplicate restores on refresh.
   const appliedDraft = useRef<number | null>(null);
+  // Current item key ref to avoid stale closures in asynchronous callbacks.
   const keyRef = useRef(key);
   keyRef.current = key;
 
@@ -318,8 +286,7 @@ export function DetailsPanel({
     setBinaryFile(false);
   }, [key]);
 
-  // Show is an explicit action. Selection alone never reads content, including
-  // a link target, which is not catalog metadata.
+  // Reveal content only when explicitly requested.
   useEffect(() => {
     if (!item) return;
     const requested = revealRequest === `${item.store}|${item.path}`;
@@ -328,8 +295,7 @@ export function DetailsPanel({
     if (read?.key !== key) void show();
   }, [item, key, onRevealHandled, read?.key, revealRequest, show]);
 
-  // JS strings cannot be zeroized. Dropping the only reference on blur is the
-  // strongest webview-side bound; Rust-side copy avoids creating another.
+  // Conceal sensitive values when the window loses focus.
   useEffect(() => {
     const conceal = (): void => {
       concealEpoch.current += 1;
@@ -352,11 +318,7 @@ export function DetailsPanel({
     if (!item || !resumeDraft) return;
     if (item.store !== resumeDraft.store || item.path !== resumeDraft.path)
       return;
-    // A retained draft is restored once, for the refresh that produced it.
-    // `item` is a fresh object after every `loadWorld`, so without this the
-    // effect re-ran on each catalog read and pushed the pre-conflict draft
-    // back into the editor — over a version the user had since saved, and
-    // back onto the screen after a conceal had cleared it.
+    // Restore the draft only once per refresh epoch to avoid overwriting newer changes.
     if (appliedDraft.current === resumeDraft.epoch) return;
     appliedDraft.current = resumeDraft.epoch;
     setEditValue(resumeDraft.value);
@@ -386,7 +348,7 @@ export function DetailsPanel({
         if (paths.length !== 1) {
           setReplacementPath(null);
           setEditError(
-            'Drop one file at a time. The original file was not changed.',
+            'Please drop a single file to replace the current contents.',
           );
         } else {
           setReplacementPath(paths[0] ?? null);
@@ -472,11 +434,7 @@ export function DetailsPanel({
       setEditing(true);
       return;
     }
-    // The same bound `show` keeps. `assertExactRead` only proves the response
-    // matches the request that was sent; it says nothing about what is
-    // selected by the time it lands. Without this, switching rows while a
-    // slow read is in flight opens the *new* item's editor holding the *old*
-    // item's plaintext — and Save then writes it under the new item's version.
+    // Ensure the response corresponds to the currently selected item before opening the editor.
     const requestKey = key;
     const epoch = concealEpoch.current;
     const current = (): boolean =>
@@ -500,9 +458,6 @@ export function DetailsPanel({
         onCommandError(error, item);
       }
     } finally {
-      // `saving` is shared with the row that is on screen now, so it is
-      // always cleared — otherwise a late read leaves the new item's Edit
-      // button disabled and reading "Reading…".
       setSaving(false);
     }
   };
@@ -523,7 +478,7 @@ export function DetailsPanel({
         await bridge.editTextItem({ ...request, value: editValue });
       }
       setEditing(false);
-      await onApplied(`Saved version ${item.version + 1}`);
+      await onApplied('Changes saved');
     } catch (error) {
       const typed = normalizeCommandError(error);
       if (typed.code === 'conflict') {
@@ -545,8 +500,8 @@ export function DetailsPanel({
             {replacementPath
               ? replacementPath.split(/[\\/]/).at(-1)
               : dropHover
-                ? 'Drop to use this file'
-                : 'Drop a file here, or use the native picker when saving'}
+                ? 'Release to replace file'
+                : 'Drop a file here, or choose a file when saving'}
           </span>
         </InsetRow>
       </Inset>
@@ -682,7 +637,7 @@ export function DetailsPanel({
                   ({ saved }) =>
                     toasts.show(
                       saved
-                        ? `Downloaded version ${item.version}`
+                        ? `Downloaded ${nameOf(item.path)}`
                         : 'Download cancelled',
                     ),
                   (error) => {
@@ -713,13 +668,13 @@ export function DetailsPanel({
               <span>
                 {shownValue === null ? (
                   reading ? (
-                    'reading the version-bound target…'
+                    'Reading target…'
                   ) : (
-                    'target masked until read'
+                    'Target path hidden'
                   )
                 ) : (
                   <>
-                    points to <code>{shownValue}</code>
+                    Links to <code>{shownValue}</code>
                   </>
                 )}
               </span>
@@ -735,9 +690,7 @@ export function DetailsPanel({
                   void show();
                   return;
                 }
-                // Through the catalog, not the raw item list: the raw list
-                // still holds folders, and selecting one reaches KindIcon
-                // with a kind it does not draw.
+                // Resolve against catalog items to avoid selecting folder nodes.
                 const target = catalog(world).find(
                   (candidate) =>
                     candidate.store === item.store &&
@@ -750,7 +703,7 @@ export function DetailsPanel({
               {shownValue === null
                 ? reading
                   ? 'Reading…'
-                  : 'Read target'
+                  : 'Reveal target'
                 : 'Open target'}
             </Button>
           </div>
@@ -761,8 +714,8 @@ export function DetailsPanel({
   const footnote =
     kind === 'Link'
       ? shownValue === null
-        ? `Read target loads the link from version ${item.version}. FOKS hides it again when the window loses focus.`
-        : `Version ${item.version} links to ${shownValue} on ${serverName}. Opening it reads the current item at that path.`
+        ? `Reveals the target path for version ${item.version}. The path is hidden when the window loses focus.`
+        : `Links to ${shownValue} on ${serverName}. Opening it navigates to the item at that path.`
       : '';
 
   return (
@@ -799,7 +752,7 @@ export function DetailsPanel({
         {editing || footnote ? (
           <div className="pfn">
             {editing
-              ? `Save succeeds only if this item is still version ${item.version}. If it changed, refresh it and try again.`
+              ? `This item will save as version ${item.version + 1}. If it was modified elsewhere, refresh to review updates before saving.`
               : footnote}
           </div>
         ) : null}
@@ -840,7 +793,8 @@ export function DetailsPanel({
             <>
               <p>
                 {peopleLabel(readers.length)} can read this — everyone in{' '}
-                {store?.name} at <b>{roleText(item.read)}</b> or above.
+                {store?.name} with <b>{roleText(item.read)}</b> access or
+                higher.
               </p>
               {parties.map((party) => (
                 <PartyRow
@@ -852,26 +806,11 @@ export function DetailsPanel({
               ))}
             </>
           ) : (
-            <p>Only you</p>
+            <p>Only you have access to this item.</p>
           )}
         </div>
 
-        <Toggle label="Inspect response">
-          <pre>
-            {JSON.stringify(
-              {
-                path: item.path,
-                node_type: rtype(item),
-                version: item.version,
-                size: item.size,
-                read_role: wireRole(item.read),
-                write_role: wireRole(item.write),
-              },
-              null,
-              1,
-            )}
-          </pre>
-        </Toggle>
+        {/* Raw metadata is available only in developer diagnostics. */}
       </div>
       <div className="dfoot">
         {editing ? (
@@ -884,7 +823,7 @@ export function DetailsPanel({
               disabled={saving}
               onClick={() => void saveEdit()}
             >
-              {saving ? 'Saving…' : `Save version ${item.version + 1}`}
+              {saving ? 'Saving…' : 'Save changes'}
             </Button>
           </>
         ) : (
@@ -896,8 +835,8 @@ export function DetailsPanel({
                 !canChange
                   ? `You need ${roleText(item.write)} permissions to edit this item.`
                   : kind === 'Link'
-                    ? 'Links cannot be edited directly. Delete this link and create a new one.'
-                    : `Edit this item (version ${item.version})`
+                    ? 'To update this link’s destination, delete it and create a new link.'
+                    : 'Edit this item'
               }
               onClick={() => void beginEdit()}
             >
@@ -927,8 +866,8 @@ export function DetailsPanel({
               disabled={!canChange}
               title={
                 canChange
-                  ? 'Delete this item'
-                  : `You need ${roleText(item.write)} permissions to delete this item.`
+                  ? 'Remove this item'
+                  : `You need ${roleText(item.write)} permissions to remove this item.`
               }
               onClick={() => onRemove(item)}
             >

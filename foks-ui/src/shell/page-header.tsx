@@ -1,9 +1,8 @@
 /**
- * The page header — `shell.js`'s `pageHeader()` and `headerParts()`.
+ * Page header displaying title, subtitle, member avatars, and search input.
  *
- * Title, subtitle, the avatar stack on a group, and the search field with its
- * ⌘K hint. Store descriptions come from the same model
- * function as the sidebar, so the two surfaces cannot disagree.
+ * Search input state is controlled by the active location. When searching is
+ * unsupported for the current view, omitting the query handlers hides the input.
  */
 
 import type { ReactNode } from 'react';

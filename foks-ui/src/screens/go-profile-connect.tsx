@@ -126,7 +126,7 @@ export function GoProfileConnectSheet({
       );
       if (result.hostId !== selected.hostId)
         throw new Error(
-          'The checked server does not match the selected CLI profile.',
+          'Server verification failed: the server does not match the selected CLI account.',
         );
       setChecked(result);
     } catch (failure) {
@@ -159,7 +159,9 @@ export function GoProfileConnectSheet({
             submitted,
           );
       if (result.alias !== alias.trim())
-        throw new Error('Pairing returned a different local account alias.');
+        throw new Error(
+          'Pairing failed: the server returned an unexpected account alias.',
+        );
       await onConnected(checked.profile, result.alias);
     } catch (failure) {
       setError(normalizeCommandError(failure).message);
@@ -202,7 +204,7 @@ export function GoProfileConnectSheet({
       onClose={onClose}
       dismissible={!busy}
       title="Connect from FOKS CLI"
-      subtitle="Use an account already configured by the official client"
+      subtitle="Use an existing account configured with the FOKS CLI"
       footer={
         <>
           <Button disabled={busy} onClick={onClose}>
@@ -246,13 +248,15 @@ export function GoProfileConnectSheet({
         </>
       }
     >
-      {!discovery && busy ? <p>Looking for the official FOKS client…</p> : null}
+      {!discovery && busy ? (
+        <p>Searching for existing FOKS CLI accounts…</p>
+      ) : null}
       {discovery && !candidates.length ? (
         <Inset>
           <p>
             {discovery.installed
               ? 'No usable CLI profiles were found.'
-              : 'The official FOKS client was not found in its standard location.'}
+              : 'The official FOKS CLI was not found on this computer.'}
           </p>
           <Button disabled={busy} onClick={scan}>
             Scan again
@@ -285,7 +289,7 @@ export function GoProfileConnectSheet({
             </Button>
             <Field
               disabled={busy}
-              label="Server name on this Mac"
+              label="Profile name"
               value={profileName}
               onChange={setProfileName}
             />
@@ -312,7 +316,7 @@ export function GoProfileConnectSheet({
             >
               Add as a new device
             </Button>
-            <p>Recommended. This desktop gets its own revocable device key.</p>
+            <p>Connect as an authorized device</p>
             <Button
               variant={method === 'copy' ? 'primary' : undefined}
               disabled={busy || !selected.copyable}
@@ -320,14 +324,14 @@ export function GoProfileConnectSheet({
             >
               Copy this Mac’s CLI device
             </Button>
-            <p>Advanced. Both applications will act as the same FOKS device.</p>
+            <p>Share existing credentials with the FOKS CLI</p>
           </Inset>
           {method === 'pair' ? (
             <>
               <SectionLabel>Pair through the official CLI</SectionLabel>
               <p>
-                In Terminal, switch the official client to the selected account
-                and run this command. Confirm the account shown there.
+                In Terminal, switch the FOKS CLI to the selected account and run
+                this command. Confirm the account when prompted.
               </p>
               <CopyBox
                 text="foks --simple-ui key assist"
@@ -338,28 +342,28 @@ export function GoProfileConnectSheet({
               <Inset>
                 <Field
                   disabled={busy}
-                  label="Account alias"
+                  label="Account name"
                   value={alias}
                   onChange={setAlias}
                 />
                 <Field
                   disabled={busy}
-                  label="This Mac’s name"
+                  label="Device name"
                   value={deviceName}
                   onChange={setDeviceName}
                 />
                 <Field
                   disabled={busy}
-                  label="Key-exchange code"
+                  label="Pairing code"
                   value={phrase}
                   onChange={setPhrase}
                   type="password"
                 />
               </Inset>
               <p>
-                Leave the CLI command running until pairing completes. If it
-                asks for this Mac’s code after the desktop connects, submit an
-                empty response so its concurrent pairing wait can finish.
+                Keep the CLI command running until pairing completes. If
+                prompted for a confirmation code in the terminal after
+                connecting, press Enter without typing a code to finish.
               </p>
             </>
           ) : (
@@ -368,16 +372,15 @@ export function GoProfileConnectSheet({
               <Inset>
                 <Field
                   disabled={busy}
-                  label="Account alias"
+                  label="Account name"
                   value={alias}
                   onChange={setAlias}
                 />
               </Inset>
-              <p>
-                macOS may ask for permission to read the official client’s
-                Keychain item. Removing the CLI profile will not remove this
-                copy; revoking the device disables both clients, and later CLI
-                passphrase changes do not change this desktop copy.
+              <p className="notice">
+                Sharing credentials connects this app using your CLI device
+                setup. Deleting the account in the FOKS CLI will also disconnect
+                this desktop app.
               </p>
             </>
           )}

@@ -89,8 +89,8 @@ impl<'a, 'device> FederationCredential<'a, 'device> {
 
     /// Fails closed unless `user` is this credential's own verified chain and
     /// enrolls exactly this device. A Yubi credential must additionally match
-    /// the parent's HEPK and its delegated subkey, so a chain that merely
-    /// shares a UID cannot stand in for the hardware identity.
+    /// the parent's HEPK and its delegated subkey; matching only the UID is
+    /// insufficient to authenticate the hardware identity.
     pub(crate) fn require_enrolled(&self, host: &EntityId, user: &VerifiedUserState) -> Result<()> {
         if user.uid() != self.uid() || user.host() != host {
             return Err(Error::UserBinding(
@@ -233,7 +233,7 @@ impl FoksClient {
         open_host: bool,
     ) -> Result<EntityId> {
         let normalized = foks_verify::normalize_username(username_utf8.as_bytes()).ok_or(
-            Error::AccountRequest("username is not valid after normalization"),
+            Error::UserBinding("username is not valid after normalization"),
         )?;
         let response = self.call_with_material(
             host,

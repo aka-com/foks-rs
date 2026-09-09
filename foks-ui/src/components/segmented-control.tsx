@@ -1,10 +1,6 @@
 /**
- * The design's `.seg` — one choice out of a few, all of them visible.
- *
- * Two shapes, both `shell.css`'s: `.seg` for the square icon pair (list /
- * cards) and `.seg.txt` for the word row (All · Passwords · Notes ·
- * Files · Links). Each button says its own state with `aria-pressed`, so the
- * highlight is not the only way to know which one is on.
+ * Segmented control for switching between mutually exclusive options.
+ * Supports text and icon display variants.
  */
 
 import type { ReactNode } from 'react';

@@ -392,16 +392,7 @@ const FX = {
   ],
 };
 
-/* ===================== corrections (WAVE4-BRIEF §1) =====================
-   1. Engineering has a second Admin, priya.n, so "Readable by" on an
-      Admin-read item is 3 people and not a coincidence of one.
-   2. locally_manageable means "this party is a local user". deploy-bot is a
-      user of foks.acme-corp.com like any other, so it is true; only the
-      member team is not a user of this server.
-   3. The fixture pins Acme's lease as lapsed. A lapsed lease stops reads as
-      well as writes, so Engineering would never be listed. The shell starts
-      with it fresh and setLease("lapsed") switches on the lapsed world.
-   ======================================================================== */
+/* Fixture configuration for multi-admin team permissions, service accounts, and lease states. */
 FX.parties.splice(2, 0, {
   store: 'team:eng',
   username: 'priya.n',
@@ -415,12 +406,10 @@ FX.parties.splice(2, 0, {
 });
 ((p) => {
   p.locally_manageable = true;
-  p.note =
-    'a service account — a user of foks.acme-corp.com like any other, so its role can be changed from here';
+  p.note = 'Service account';
 })(FX.parties.find((p) => p.username === 'deploy-bot'));
 ((p) => {
-  p.note =
-    "a member group; change it from Engineering's People page (Groups), not from here";
+  p.note = 'Member group managed in Group Settings';
 })(FX.parties.find((p) => p.party_kind === 'named-team'));
 
 /* Lease world. "fresh" by default so Engineering and Work list at all. */
@@ -454,7 +443,7 @@ const COPY = {
   lease_lapsed:
     'Access to this server is blocked until the agent renews its compatibility lease. Items on this server are hidden and cannot be changed. Other servers are unaffected.',
   remove_item:
-    'FOKS removes the item only if its version has not changed. After removal, earlier versions cannot be read.',
+    'Permanently deletes this item if no newer version exists. Previous versions will no longer be accessible.',
   personal_store_fixed:
     'Your Personal vault has no roster and cannot be shared. To share an item, put it in a group.',
   resumable:
@@ -669,7 +658,7 @@ function readersOf(it) {
     (p) => admissionActive(p, st.id) && admits(p.destination_role, it.read),
   );
 }
-/* "5 people · 1 group" — a party that is a team is not a person */
+// Format member totals distinguishing individual users from federated groups.
 function peopleGroups(parties) {
   const groups = parties.filter((p) => p.party_kind === 'named-team').length,
     ppl = parties.length - groups;
@@ -708,7 +697,7 @@ const storeDescriptionState = (st) => {
   return 'normal';
 };
 const storeDescription = (st) => {
-  if (storeDescriptionState(st) !== 'normal') return 'Connection error';
+  if (storeDescriptionState(st) !== 'normal') return 'Unavailable';
   return st.kind === 'account'
     ? serverOf(st.id).name
     : peopleGroups(partiesOf(st.id));
@@ -761,7 +750,7 @@ function sidebar(active, opts = {}) {
       <a class="nav ${active === 'servers' ? 'on' : ''}" href="04-servers.html">${ic('server')}<span class="t">Servers &amp; devices</span></a>
       <a class="nav ${active === 'alerts' ? 'on' : ''}" href="01-vault.html?state=alerts">${ic('bell')}<span class="t">Alerts</span>${badge ? `<span class="badge">${badge}</span>` : ''}</a>
       <a class="nav ${active === 'settings' ? 'on' : ''}" href="05-settings.html">${ic('gear')}<span class="t">Settings</span></a>
-      ${o.setupAgain ? `<a class="nav" href="${o.setupAgain}" title="Walk the first run again — nothing already set up is undone">${ic('again')}<span class="t">Set up again</span></a>` : ''}
+      ${o.setupAgain ? `<a class="nav" href="${o.setupAgain}" title="Revisit initial setup steps">${ic('again')}<span class="t">Set up again</span></a>` : ''}
     </div>`;
   return (
     navRow('all', ic('grid'), 'All items', '', false, false) +
@@ -847,7 +836,7 @@ function review(states, current, extra = '') {
   const r = document.getElementById('review');
   if (!r) return;
   r.innerHTML =
-    `<b>Review controls · not part of the app</b>` +
+    `<b>Prototype View Controls</b>` +
     states
       .map(
         (k) =>

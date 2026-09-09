@@ -88,8 +88,8 @@ impl Database {
         Ok(())
     }
 
-    /// Marks generations cryptographically unnecessary. Key-file deletion is
-    /// intentionally a following idempotent step in the key provider domain.
+    /// Marks retired key generations as revoked. Key-file deletion is performed
+    /// separately by the key provider.
     pub fn revoke_retired_capability_keys(&mut self, now: u64) -> Result<Vec<[u8; 16]>> {
         let transaction = self
             .connection

@@ -26,7 +26,7 @@ fn emit(window: &tauri::WebviewWindow) {
         return;
     };
     if let Err(error) = window.emit(EVT_WINDOW_STATE, state) {
-        tracing::warn!(%error, "could not report the FOKS window state");
+        tracing::warn!(%error, "Failed to emit window state event");
     }
 }
 

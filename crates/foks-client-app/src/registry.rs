@@ -908,14 +908,11 @@ impl ClientCredentials {
         Ok(report)
     }
 
-    /// Forgets a profile and erases the local state it accumulated, including
-    /// the credential store holding this device's keys. Deregistering alone
-    /// would only hide that state.
+    /// Removes a profile and deletes all associated local state, including
+    /// credential stores.
     ///
-    /// The state goes first and the registry entry last, so an interrupted
-    /// removal leaves a registered profile whose state is already gone — the
-    /// shape of a freshly added profile, and safe to re-run. The other order
-    /// would strand secrets under a name nothing can reach.
+    /// Local files are deleted before the registry entry so an interrupted
+    /// removal can be safely retried without leaving orphaned secrets.
     pub fn remove_profile(&self, registry: &mut ProfileRegistry, name: &str) -> Result<bool> {
         if self.root != registry.root {
             return Err(Error::InvalidConfig(

@@ -97,7 +97,7 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
     rendered.getByRole('button', { name: 'Connect selected account' }),
   );
   ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Use official FOKS server' }),
+    rendered.getByRole('button', { name: 'Use the official FOKS server' }),
   );
   assert.equal(
     (rendered.getByLabelText('Server address') as HTMLInputElement).value,
@@ -189,7 +189,7 @@ test('disables account selection and dialog dismissal while server verification 
   });
   assert.ok(
     rendered.getByText(
-      'The checked server does not match the selected CLI profile.',
+      'Server verification failed: the server does not match the selected CLI account.',
     ),
   );
   assert.equal(rendered.queryByText('Pair this Mac'), null);

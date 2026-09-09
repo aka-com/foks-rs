@@ -1,14 +1,8 @@
 /**
- * People, as the design draws them — `shell.js`'s `avatar()` and `stack()`.
+ * Avatar and avatar stack components.
  *
- * A person is initials on a colour derived from their name (`hue`), so the
- * same person is the same colour on every screen and in every screenshot. A
- * party that is an admitted **group** is not a person: it gets the square
- * team glyph on `--c-team`, which is how a reader tells "5 people · 1 group"
- * apart at a glance.
- *
- * Nothing here decides *who* is shown. `readersOf` and `partiesOf` do that;
- * these draw what they answer.
+ * Renders user initials on a deterministic hue derived from their name, or a
+ * team glyph for group parties.
  */
 
 import type { ReactNode } from 'react';
@@ -45,7 +39,7 @@ export function Avatar({ party, className = 'av' }: AvatarProps): ReactNode {
 export type StackSize = 'md' | 'lg' | 'xs';
 
 export interface StackProps {
-  /** The store's roster. The first two are drawn, as the mock draws them. */
+  /** The store's roster. Renders the first two avatars. */
   parties: readonly Party[];
   size?: StackSize;
   /** Hover text for the whole stack — usually the roster summary. */
@@ -63,8 +57,7 @@ export function Stack({ parties, size = 'md', title }: StackProps): ReactNode {
           .slice(0, 2)
           .map((party) => <Avatar key={party.party_id_hex} party={party} />)
       ) : (
-        // No roster at all — an account store, or a group with nobody in it
-        // yet. The design gives it the neutral glyph rather than a gap.
+        // Render neutral placeholder icon when the roster is empty.
         <span className="av" style={{ background: 'var(--c-none)' }}>
           <Icon name="people" />
         </span>
