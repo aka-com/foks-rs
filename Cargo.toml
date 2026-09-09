@@ -1,0 +1,111 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/foks-agent",
+    "crates/foks-agent-client",
+    "crates/foks-agent-proto",
+    "crates/foks-cli",
+    "crates/foks-client",
+    "crates/foks-client-app",
+    "crates/foks-client-db",
+    "crates/foks-compat-artifact",
+    "crates/foks-crypto",
+    "crates/foks-desktop",
+    "crates/foks-go-interop",
+    "crates/foks-keystore",
+    "crates/foks-merkle-store",
+    "crates/foks-proto",
+    "crates/foks-protocol-metadata",
+    "crates/foks-rpc",
+    "crates/foks-server",
+    "crates/foks-server-db",
+    "crates/foks-server-testkit",
+    "crates/foks-snowpack",
+    "crates/foks-verify",
+    "crates/foks-yubi",
+    "foks-tauri",
+]
+default-members = [
+    "crates/foks-client-db",
+    "crates/foks-crypto",
+    "crates/foks-proto",
+    "crates/foks-snowpack",
+    "crates/foks-verify",
+    "crates/foks-client",
+    "crates/foks-rpc",
+]
+
+[workspace.lints.clippy]
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+print_stdout = "allow"
+needless_pass_by_value = "allow"
+
+[workspace.package]
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+foks-agent-client = { path = "crates/foks-agent-client" }
+foks-agent-proto = { path = "crates/foks-agent-proto" }
+foks-client = { path = "crates/foks-client" }
+foks-client-app = { path = "crates/foks-client-app" }
+foks-client-db = { path = "crates/foks-client-db" }
+foks-compat-artifact = { path = "crates/foks-compat-artifact" }
+foks-crypto = { path = "crates/foks-crypto" }
+foks-go-interop = { path = "crates/foks-go-interop" }
+foks-keystore = { path = "crates/foks-keystore" }
+foks-merkle-store = { path = "crates/foks-merkle-store" }
+foks-proto = { path = "crates/foks-proto" }
+foks-protocol-metadata = { path = "crates/foks-protocol-metadata" }
+foks-rpc = { path = "crates/foks-rpc" }
+foks-server = { path = "crates/foks-server" }
+foks-server-db = { path = "crates/foks-server-db" }
+foks-server-testkit = { path = "crates/foks-server-testkit" }
+foks-snowpack = { path = "crates/foks-snowpack" }
+foks-verify = { path = "crates/foks-verify" }
+foks-yubi = { path = "crates/foks-yubi" }
+
+argon2 = "0.5"
+base64 = "0.23"
+bip39 = { version = "2", default-features = false, features = ["std"] }
+chacha20poly1305 = "0.11"
+clap = { version = "4", features = ["derive"] }
+crypto_secretbox = "0.1.1"
+ed25519-dalek = "2"
+fs2 = "0.4"
+getrandom = "0.4"
+libc = "0.2"
+lru = "=0.18.2"
+ml-kem = { version = "0.3.2", features = ["zeroize"] }
+rcgen = "0.14"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream", "form"] }
+rusqlite = { version = "=0.40.2", default-features = false, features = ["backup", "bundled", "uuid"] }
+rustix = { version = "1", features = ["process"] }
+rustls = "0.23"
+rustls-pki-types = "1"
+salsa20 = "0.10"
+secret-service = { version = "5.1", default-features = false, features = ["rt-async-io-crypto-rust"] }
+security-framework = "3.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+sha3 = "0.12"
+signal-hook = "0.3"
+tempfile = "3"
+thiserror = "2"
+time = "0.3"
+tokio = { version = "1", features = ["full"] }
+tokio-rustls = "0.26"
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+unicode-normalization = "0.1"
+url = "2"
+webpki-roots = "1.0"
+x25519-dalek = { version = "3", features = ["static_secrets"] }
+x509-parser = "0.18"
+yubikey = { version = "0.8", default-features = false, features = ["untested"] }
+zeroize = "1"

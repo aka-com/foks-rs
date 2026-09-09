@@ -353,7 +353,7 @@ mod tests {
 
     /// `tauri-build` generates these files during build (excluded via
     /// `.gitignore`). They project Tauri's internal ACL rather than crate
-    /// source. Read them from disk so Bazel builds need not stage `gen/`.
+    /// source. Read them from disk so the desktop build need not stage `gen/`.
     fn read_generated(name: &str) -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("gen/schemas")

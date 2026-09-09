@@ -5,20 +5,10 @@
    is the source of truth: change it there, then bring the change here, rather
    than diverging.
 
-   The one edit is the token block. The 35 `:root` tokens AKA and this sheet
-   already declared identically now come from `ui/kit/tokens.css` (imported
-   below); what remains here is the nineteen that are genuinely FOKS's:
+   Common tokens come from `foks-ui/kit/tokens.css`; the FOKS-specific values
+   remain here and override the imported defaults through cascade order.
 
-     · five that share a name with AKA but not a value — --faint, --surface,
-       --main-surface, --hover, --shadow-menu. They are declared AFTER the
-       import, so cascade order gives FOKS its values;
-     · fourteen FOKS-only — --sans, --mono, the six kind tints, --ok-wash,
-       which completes the kit's --ok-ink/--ok-solid pair for the status
-       chip, and the five-step radius scale. AKA has neither to share, so
-       they stay here.
-
-   See `ui/kit/README.md` for the measurement and the theme decision (this
-   sheet is light-only; AKA keeps its dark override in `ui/styles.css`).
+   See `foks-ui/kit/README.md` for the measurement and theme decision.
 
    The window chrome below (`.window`) is the mock's
    page furniture — a fake macOS window drawn inside a browser page. The real
@@ -46,8 +36,6 @@ button,input,textarea{font:inherit;color:inherit}
 button{background:none;border:0;cursor:pointer}
 a{color:inherit;text-decoration:none}
 svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
-
-*(Delete comment entirely)*
 
 /* Window container */
 .window{position:relative;width:min(1180px,96vw);height:min(760px,88vh);background:var(--main-surface);border-radius:var(--radius-lg);border:1px solid rgba(0,0,0,.16);box-shadow:0 24px 60px rgba(15,20,45,.26),0 2px 8px rgba(15,20,45,.12);overflow:hidden;display:flex;flex-direction:column}
@@ -463,7 +451,7 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;margi
 .virtual-rows{display:flex;flex-direction:column;min-height:0}
 
 /* ---------- toasts ----------
-   `ui/kit/toasts.tsx` owns the behaviour — auto-dismiss, dedupe, a cap on how
+   `foks-ui/kit/toasts.tsx` owns the behaviour — auto-dismiss, dedupe, a cap on how
    many stack, and a tone that decides whether a screen reader is interrupted.
    These are the design's pill, given that markup. Unlike the `.flash` they
    replace, two of them stack instead of landing on the same spot, and a long

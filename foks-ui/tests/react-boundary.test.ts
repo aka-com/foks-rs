@@ -19,11 +19,11 @@ const RAW_HTML_SINKS = [
   /createContextualFragment\s*\(/,
 ];
 
-/** The app's own sources, plus the kit it shares with AKA. */
+/** The app's own sources, including its presentation kit. */
 async function firstPartySources(): Promise<URL[]> {
   const [src, kit] = await Promise.all([
     collectSourceFiles(new URL('../src/', import.meta.url)),
-    collectSourceFiles(new URL('../../ui/kit/', import.meta.url)),
+    collectSourceFiles(new URL('../kit/', import.meta.url)),
   ]);
   return [new URL('../app.tsx', import.meta.url), ...src, ...kit];
 }

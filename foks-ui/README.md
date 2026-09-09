@@ -1,14 +1,13 @@
 # `foks-ui` — the FOKS desktop frontend
 
-The web half of `foks-desktop`, the second Tauri app in this repository. It is
-a sibling of `ui/` (aka-desktop), not a mode inside it: different trust
-boundary, different release train, different command surface.
+The web half of `foks-desktop`, with its own trust boundary, release train, and
+command surface.
 
 In production, the application selects the Tauri bridge, loads the catalog once,
 validates all responses at runtime, and passes opaque store references back unchanged. Show and Read target each read one item at one exact version,
 hold the returned string only in the open details panel, and drop it on Hide,
 selection change or window blur. Copy value, Copy path and Download stay in Rust. List rows use
-`ui/kit/virtual-list.ts`; cards are capped at 200 because that row windower
+`foks-ui/kit/virtual-list.ts`; cards are capped at 200 because that row windower
 does not model a wrapping grid. Account-store creates use must-not-exist;
 edits, removes and file replacements carry the catalog's exact version.
 Active authenticated groups can create the same four product kinds as account
@@ -89,7 +88,7 @@ pnpm run acceptance:foks-ui # build with the mock, then drive Chromium at 1280×
 tsc --noEmit -p foks-ui/tsconfig.json
 ```
 
-Port **1421**, one past AKA's 1420, so both dev servers can run at once.
+The development server uses port **1421**.
 `pnpm run foks:dev` builds and supervises the local server, agent, and Tauri
 app. `pnpm run foks:dev:tauri` and `pnpm run foks:start` run the Tauri layer
 and its frontend without supervising a server or agent.
@@ -199,11 +198,11 @@ authenticated in the catalog.
 | `tests/`                   | `node:test` via `tsx`: goldens, source invariants, render tests.                                                                                                                                                                                                                                                                                                            |
 | `tests/acceptance/run.mjs` | Layer 3: Chromium over the built UI, one load per deep link.                                                                                                                                                                                                                                                                                                                |
 
-### `ui/kit` versus `foks-ui`
+### `foks-ui/kit`
 
-`ui/kit/` holds the pieces both apps genuinely share and that depend on nothing
+`foks-ui/kit/` holds reusable presentation primitives that depend on nothing
 app-specific: `overlay-primitives.tsx`, `menu-position.ts`, `toasts.tsx`,
-`virtual-list.ts`, `icon.tsx`, and `tokens.css`. `ui/kit/README.md` is the
+`virtual-list.ts`, `icon.tsx`, and `tokens.css`. `foks-ui/kit/README.md` is the
 authority on what is in it and why — including why `ui/src/sheet.tsx` stayed
 behind. Reach it as `/kit/*` (a Vite alias and a tsconfig path). Application-specific models, fixtures, icons, and shell styles remain in
 `foks-ui` to maintain modular boundaries between client applications.
@@ -219,7 +218,7 @@ change here.
 
 The one edit is the token block. Measured against `ui/styles.css`, the mock's
 48 `:root` tokens split **35 identical / 5 same-name-different-value / 8
-FOKS-only**. The 35 moved to `ui/kit/tokens.css`, which this sheet `@import`s
+FOKS-only**. The 35 moved to `foks-ui/kit/tokens.css`, which this sheet `@import`s
 first; the thirteen that remain are declared after it, so the cascade gives
 FOKS its own `--faint`, `--surface`, `--main-surface`, `--hover` and
 `--shadow-menu` plus `--sans`, `--mono` and the six `--c-*` kind tints.
@@ -227,9 +226,9 @@ FOKS its own `--faint`, `--surface`, `--main-surface`, `--hover` and
 places.
 
 **Theme: FOKS is light-only in Phase 1, and the fork is at the kit seam.**
-`ui/kit/tokens.css` carries light values only and there is no theme script in
-`index.html`. Dark mode overrides are defined per-app. If dark theme support is added to FOKS,
-it should be declared in this stylesheet rather than inherited from AKA.
+`foks-ui/kit/tokens.css` carries light values only and there is no theme script in
+`index.html`. If dark theme support is added to FOKS, it should be declared in
+this stylesheet.
 
 ## Testing
 

@@ -1,0 +1,16 @@
+/target
+/crates/*/target
+node_modules/
+foks-tauri/binaries/
+dist/
+.pnpm-store/
+
+*.provisionprofile
+
+.env
+.DS_Store
+.claude/*
+.claude/settings.local.json
+.codex/
+.grok/
+.qmux/

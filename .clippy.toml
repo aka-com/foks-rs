@@ -1,0 +1,2 @@
+# Clippy defaults are fine here; this file exists because
+# lint_clippy_aspect() (tools/lint/linters.bzl) requires a config label.

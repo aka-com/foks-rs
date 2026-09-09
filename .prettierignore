@@ -1,0 +1,12 @@
+# Vendored third-party JS — not ours to reformat.
+foks-ui/public/vendor/
+**/*.min.js
+
+# Generated/staged output.
+node_modules/
+
+# Static design references; preserve their compact formatting.
+dev/foks-desktop/
+
+# Preserve the compact formatting of the imported shell stylesheet.
+foks-ui/src/styles/shell.css

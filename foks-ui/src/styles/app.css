@@ -1578,7 +1578,8 @@ body {
   color: var(--danger-ink);
 }
 
-/* Popover menus */
+/* Popover menus
+
    The mock draws `.menu` absolutely inside its `.menuwrap`, which works
    because nothing in that page scrolls under it. Here the kit's `Popover`
    portals a menu to `#overlays` so a scrolling body or the details panel
@@ -1599,7 +1600,8 @@ body {
   right: auto;
 }
 
-/* Card select dropdown */
+/* Card select dropdown
+
    The dropdown form of the design's `.radio` card. `shell.css` has no
    collapsed variant of that row, so the trigger and the list are drawn here —
    but only with the card's own geometry and tokens, so an option in the list

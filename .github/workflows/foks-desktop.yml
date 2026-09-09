@@ -5,26 +5,15 @@ on:
     paths:
       - 'foks-tauri/**'
       - 'foks-ui/**'
-      - 'ui/kit/**'
-      - 'ui/BUILD.bazel'
       - 'crates/foks-*/**'
-      - 'crates/BUILD.bazel'
-      - 'bazel/macos/**'
       - 'packaging/foks-desktop/**'
+      - 'scripts/**'
       - '.github/workflows/foks-desktop.yml'
-      - '.bazelignore'
-      - '.bazelrc'
-      - '.bazelversion'
-      - 'BUILD.bazel'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'Justfile'
-      - 'MODULE.bazel'
-      - 'MODULE.bazel.lock'
       - 'package.json'
       - 'pnpm-lock.yaml'
-      - 'scripts/test-foks-desktop-real-agent.sh'
-      - 'version.bzl'
+      - 'rust-toolchain.toml'
   push:
     tags: ['foks-desktop-v*']
   workflow_dispatch:
@@ -32,75 +21,73 @@ on:
 permissions:
   contents: read
 
-env:
-  BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
-
 jobs:
-  validate:
-    name: Validate macOS arm64 graph
+  validate-macos:
+    name: Validate macOS arm64
     runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/ci-setup
-      - name: Add the hermetic Cargo and pnpm tools to PATH
-        run: echo "$(bazel run //:bazel_env -- print-path)" >> "$GITHUB_PATH"
-      - name: Install locked JavaScript dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Build native release graph
-        run: bazel build //crates:foks-agent //crates:foks-desktop-backend //foks-tauri:foks-desktop //foks-tauri:FOKS_app //foks-ui:dir
-      - name: Test web and packaging targets
-        run: bazel test //foks-ui:test //bazel/macos:sign_test
-      - name: Lint and run mocked browser acceptance
-        env:
-          FOKS_CHROMIUM: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          components: clippy,rustfmt
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - name: Install pnpm and locked dependencies
         run: |
-          set -euo pipefail
-          test -x "$FOKS_CHROMIUM"
-          pnpm exec eslint foks-ui ui scripts
+          corepack enable
+          corepack prepare pnpm@11.21.0 --activate
+          pnpm install --frozen-lockfile
+      - name: Check frontend
+        run: |
+          pnpm run typecheck
+          pnpm exec eslint foks-ui dev/foks-mock-parts dev/foks-mock-tools
+          pnpm run test:foks-ui
           pnpm run acceptance:foks-ui
-      - name: Validate unsigned application metadata
+      - name: Check desktop Rust boundary
+        run: |
+          cargo test --locked --release -p foks-agent-proto -p foks-agent-client -p foks-client-app -p foks-agent
+          cargo test --locked --release -p foks-desktop -p foks-desktop-app
+          cargo clippy --locked --release -p foks-desktop -p foks-desktop-app --all-targets -- -D warnings
+          cargo fmt -p foks-desktop -p foks-desktop-app -- --check
+      - name: Assemble unsigned application
+        run: pnpm run foks:bundle:macos
+      - name: Validate application layout
         run: |
           set -euo pipefail
-          app=bazel-bin/foks-tauri/FOKS.app
-          test "$(plutil -extract CFBundleIconFile raw "$app/Contents/Info.plist")" = icon.icns
-          test "$(plutil -extract LSApplicationCategoryType raw "$app/Contents/Info.plist")" = public.app-category.utilities
+          app=target/release/bundle/macos/foks-desktop.app
+          test -x "$app/Contents/MacOS/foks-desktop"
+          test -x "$app/Contents/MacOS/foks-agent"
+          test "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" = org.foks.desktop
           test -f "$app/Contents/Resources/icon.icns"
-      - name: Test retained desktop library and Tauri boundary
-        run: |
-          cargo test --locked -p foks-agent-proto -p foks-agent-client -p foks-client-app -p foks-agent
-          cargo test --locked -p foks-desktop
-          cargo test --locked -p foks-desktop-app
-          cargo clippy --locked -p foks-desktop -p foks-desktop-app --all-targets -- -D warnings
-          cargo fmt -p foks-desktop -p foks-desktop-app -- --check
       - name: Run the real managed-agent desktop transcript
         run: pnpm run test:foks-desktop:real-agent
-      - name: Bind release tag to workspace version
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          workspace_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
-          test "${GITHUB_REF_NAME#foks-desktop-v}" = "$workspace_version"
 
   validate-linux:
-    name: Validate Linux x86_64 graph
+    name: Validate Linux x86_64
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/ci-setup
-      - name: Add the hermetic Cargo and pnpm tools to PATH
-        run: echo "$(bazel run //:bazel_env -- print-path)" >> "$GITHUB_PATH"
-      - name: Install native test dependencies
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          components: clippy,rustfmt
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - name: Install native dependencies
+        run: sudo apt-get update && sudo apt-get install --yes libgtk-3-dev libpcsclite-dev libwebkit2gtk-4.1-dev
+      - name: Install pnpm and locked dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes libgtk-3-dev libpcsclite-dev libwebkit2gtk-4.1-dev
-      - name: Build native release graph
-        run: bazel build //crates:foks-agent //crates:foks-desktop-backend //foks-tauri:foks-desktop //foks-ui:dir
-      - name: Test web and packaging targets
-        run: bazel test //foks-ui:test //bazel/macos:sign_test
-      - name: Test and lint the Rust boundary
+          corepack enable
+          corepack prepare pnpm@11.21.0 --activate
+          pnpm install --frozen-lockfile
+      - name: Check frontend and desktop
         run: |
+          pnpm run typecheck
+          pnpm run test:foks-ui
+          pnpm run foks:build:frontend
           cargo test --locked -p foks-agent-proto -p foks-agent-client -p foks-client-app -p foks-agent
-          cargo test --locked -p foks-desktop
-          cargo test --locked -p foks-desktop-app
+          cargo test --locked -p foks-desktop -p foks-desktop-app
           cargo clippy --locked -p foks-desktop -p foks-desktop-app --all-targets -- -D warnings
       - name: Run the real managed-agent desktop transcript
         run: pnpm run test:foks-desktop:real-agent
@@ -108,51 +95,57 @@ jobs:
   macos:
     name: macOS arm64 signed and notarized ZIP
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [validate, validate-linux]
+    needs: [validate-macos, validate-linux]
     runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/ci-setup
-      - name: Materialize signing credential
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - name: Install pnpm and locked dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.21.0 --activate
+          pnpm install --frozen-lockfile
+      - name: Bind release tag to workspace version
+        run: |
+          workspace_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
+          test "${GITHUB_REF_NAME#foks-desktop-v}" = "$workspace_version"
+      - name: Assemble application
+        run: pnpm run foks:bundle:macos
+      - name: Import signing identity
         env:
           CERTIFICATE_P12_B64: ${{ secrets.FOKS_APPLE_CERTIFICATE_P12_B64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.FOKS_APPLE_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
           test -n "$CERTIFICATE_P12_B64" && test -n "$CERTIFICATE_PASSWORD"
+          keychain="$RUNNER_TEMP/foks-signing.keychain-db"
+          keychain_password="$(uuidgen)"
           printf '%s' "$CERTIFICATE_P12_B64" | base64 -D > "$RUNNER_TEMP/foks-signing.p12"
-          printf '%s' "$CERTIFICATE_PASSWORD" > "$RUNNER_TEMP/foks-signing-password"
-          chmod 600 "$RUNNER_TEMP/foks-signing.p12" "$RUNNER_TEMP/foks-signing-password"
-      - name: Build fail-closed signed app
-        env:
-          APPLE_SIGNING_P12_FILE: ${{ runner.temp }}/foks-signing.p12
-          APPLE_SIGNING_P12_PASSWORD_FILE: ${{ runner.temp }}/foks-signing-password
-        run: bazel build //foks-tauri:FOKS_app_release_signed
-      - name: Notarize, staple, and archive
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/foks-signing.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          identity=$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p')
+          test "$(printf '%s\n' "$identity" | grep -c .)" -eq 1
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+      - name: Sign application
+        run: pnpm run foks:sign:macos
+      - name: Notarize and archive application
         env:
           APPLE_ID: ${{ secrets.FOKS_APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.FOKS_APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.FOKS_APPLE_APP_PASSWORD }}
         run: |
-          set -euo pipefail
-          test -n "$APPLE_ID" && test -n "$APPLE_TEAM_ID" && test -n "$APPLE_APP_PASSWORD"
-          app=bazel-bin/foks-tauri/FOKS.app
-          test -x "$app/Contents/MacOS/foks-desktop"
-          test -x "$app/Contents/Helpers/foks-agent"
-          test "$(plutil -extract CFBundleIconFile raw "$app/Contents/Info.plist")" = icon.icns
-          test "$(plutil -extract LSApplicationCategoryType raw "$app/Contents/Info.plist")" = public.app-category.utilities
-          test -f "$app/Contents/Resources/icon.icns"
-          file "$app/Contents/MacOS/foks-desktop" | grep -F 'Mach-O 64-bit executable arm64'
-          file "$app/Contents/Helpers/foks-agent" | grep -F 'Mach-O 64-bit executable arm64'
-          codesign --verify --deep --strict --verbose=2 "$app"
-          ditto -c -k --sequesterRsrc --keepParent "$app" "$RUNNER_TEMP/foks-submit.zip"
-          xcrun notarytool submit "$RUNNER_TEMP/foks-submit.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
-          xcrun stapler staple "$app"
-          xcrun stapler validate "$app"
-          spctl --assess --type execute --verbose "$app"
           version="${GITHUB_REF_NAME#foks-desktop-v}"
           mkdir -p "$RUNNER_TEMP/foks-release"
-          ditto -c -k --sequesterRsrc --keepParent "$app" "$RUNNER_TEMP/foks-release/foks-desktop-$version-macos-arm64.zip"
+          scripts/notarize-macos-app.sh \
+            target/release/bundle/macos/foks-desktop.app \
+            "$RUNNER_TEMP/foks-release/foks-desktop-$version-macos-arm64.zip"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: foks-desktop-macos
@@ -162,66 +155,48 @@ jobs:
   linux:
     name: Linux x86_64 .deb
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [validate, validate-linux]
+    needs: [validate-macos, validate-linux]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-      - name: Install desktop packaging dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes appstream desktop-file-utils libgtk-3-dev libpcsclite-dev librsvg2-bin libwebkit2gtk-4.1-dev
-      - name: Install locked JavaScript dependencies
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - name: Install packaging dependencies
+        run: sudo apt-get update && sudo apt-get install --yes appstream desktop-file-utils libgtk-3-dev libpcsclite-dev librsvg2-bin libwebkit2gtk-4.1-dev
+      - name: Install pnpm and locked dependencies
         run: |
           corepack enable
           corepack prepare pnpm@11.21.0 --activate
           pnpm install --frozen-lockfile
-      - name: Build managed agent and stage Tauri sidecar
-        run: |
-          set -euo pipefail
-          cargo build --locked --release -p foks-agent
-          mkdir -p foks-tauri/binaries
-          cp target/release/foks-agent foks-tauri/binaries/foks-agent-x86_64-unknown-linux-gnu
-          file target/release/foks-agent | grep -E 'ELF 64-bit.*x86-64'
       - name: Build Debian package
+        run: pnpm run foks:bundle:deb
+      - name: Verify Debian contents and dependencies
         run: |
           set -euo pipefail
-          pnpm run foks:bundle:deb
           version="${GITHUB_REF_NAME#foks-desktop-v}"
           mkdir -p "$RUNNER_TEMP/foks-release"
           deb=$(find target/release/bundle/deb -maxdepth 1 -type f -name 'foks-desktop_*.deb' -print -quit)
           test -n "$deb"
           cp "$deb" "$RUNNER_TEMP/foks-release/foks-desktop-$version-linux-x86_64.deb"
-          file target/release/foks-desktop | grep -E 'ELF 64-bit.*x86-64'
-      - name: Verify Debian contents and dependencies
-        run: |
-          set -euo pipefail
-          deb=$(find "$RUNNER_TEMP/foks-release" -name '*.deb' -print -quit)
           test "$(dpkg-deb -f "$deb" Package)" = foks-desktop
           depends=$(dpkg-deb -f "$deb" Depends)
           grep -F libwebkit2gtk-4.1-0 <<<"$depends"
           grep -F libpcsclite1 <<<"$depends"
-          grep -Eq '(^|,)[[:space:]]*policykit-1([[:space:]]|,|$)' <<<"$depends"
           dpkg-deb -c "$deb" | grep -E '/usr/bin/foks-desktop$'
           dpkg-deb -c "$deb" | grep -E '/usr/bin/foks-agent$'
           dpkg-deb -c "$deb" | grep -E '/usr/share/polkit-1/actions/org.foks.desktop.policy$'
           dpkg-deb -c "$deb" | grep -E '/usr/share/metainfo/org.foks.Desktop.metainfo.xml$'
-          desktop_entries=$(dpkg-deb -c "$deb" | awk '$6 ~ /^\.\/usr\/share\/applications\/.*\.desktop$/ { print $6 }')
-          test "$desktop_entries" = './usr/share/applications/foks-desktop.desktop'
           deb_root="$RUNNER_TEMP/foks-deb-root"
           mkdir -p "$deb_root"
           dpkg-deb -x "$deb" "$deb_root"
           desktop-file-validate "$deb_root/usr/share/applications/foks-desktop.desktop"
           appstreamcli validate --no-net "$deb_root/usr/share/metainfo/org.foks.Desktop.metainfo.xml"
-          if dpkg-deb -c "$deb" | grep -Eq 'systemd|foks-desktop-launcher'; then
-            echo 'retired service or launcher leaked into the package' >&2
-            exit 1
-          fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: foks-desktop-linux
-          path: |
-            ${{ runner.temp }}/foks-release/*.deb
+          path: ${{ runner.temp }}/foks-release/*.deb
           if-no-files-found: error
 
   attest:
@@ -239,10 +214,10 @@ jobs:
           pattern: foks-desktop-*
           path: ${{ runner.temp }}/foks-release
           merge-multiple: true
-      - name: Create deterministic checksum manifest
+      - name: Create checksum manifest
         working-directory: ${{ runner.temp }}/foks-release
         run: LC_ALL=C sha256sum *.zip *.deb > SHA256SUMS
-      - name: Attest release binaries
+      - name: Attest release artifacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: |

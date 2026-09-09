@@ -4776,7 +4776,7 @@ async fn read_profile_operation_value(
         execute_read_profile_operation(transport.as_ref(), &profile, operation)
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("Failed to read setup details: {error}")))??
+    .map_err(|error| AgentError::unknown(format!("Failed to read setup details: {error}")))?
 }
 
 fn execute_read_profile_operation(

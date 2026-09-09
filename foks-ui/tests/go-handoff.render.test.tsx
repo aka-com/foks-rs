@@ -47,7 +47,7 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
   )) as typeof import('../src/screens/first-run-screen');
   const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
     '/kit/toasts.tsx',
-  )) as typeof import('../../ui/kit/toasts');
+  )) as typeof import('../kit/toasts');
   const { FIXTURE } = (await vite.ssrLoadModule(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
@@ -136,7 +136,7 @@ test('disables account selection and dialog dismissal while server verification 
   };
   const { OverlayProvider } = (await vite.ssrLoadModule(
     '/kit/overlay-primitives.tsx',
-  )) as typeof import('../../ui/kit/overlay-primitives');
+  )) as typeof import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   const rendered = ui.render(

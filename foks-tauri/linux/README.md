@@ -1,21 +1,16 @@
 # Linux packaging for FOKS desktop
 
 The supported Linux bundle is the x86-64 Debian package. Build it from the
-repository root after staging the managed agent under the exact Tauri sidecar
-name:
+repository root; the package script stages the managed agent under the exact
+Tauri sidecar name:
 
 ```sh
-cargo build --locked --release -p foks-agent
-mkdir -p foks-tauri/binaries
-cp target/release/foks-agent \
-  foks-tauri/binaries/foks-agent-x86_64-unknown-linux-gnu
 pnpm run foks:bundle:deb
 ```
 
 `tauri.linux.conf.json` is a release overlay. Keeping `externalBin` out of the
-base configuration lets ordinary `cargo check` and macOS Bazel builds run
-without an undeclared staged binary; a Linux package build fails if its sidecar
-is missing.
+base configuration lets ordinary `cargo check` and desktop development run
+without a staged binary; a package build fails if its sidecar is missing.
 
 ## Installed boundary
 

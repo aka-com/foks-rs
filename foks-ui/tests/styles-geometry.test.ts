@@ -8,7 +8,7 @@ import test from 'node:test';
 import { readSource } from './lib/source';
 
 const SHELL = '../src/styles/shell.css';
-const TOKENS = '../../ui/kit/tokens.css';
+const TOKENS = '../kit/tokens.css';
 
 /** The `:root` declarations in a stylesheet, as name → value. */
 function rootTokens(css: string): Map<string, string> {
@@ -50,7 +50,7 @@ test('the shared tokens come from the kit and are not re-declared here', async (
     assert.equal(
       kitTokens.has(name),
       false,
-      `${name} is declared in both ui/kit/tokens.css and the FOKS shell`,
+      `${name} is declared in both foks-ui/kit/tokens.css and the FOKS shell`,
     );
   }
 });

@@ -80,10 +80,10 @@ mod tests {
     #[test]
     fn the_missing_socket_message_names_the_path_and_the_remedy() {
         let message = missing_socket(Path::new("/run/user/1000/foks-rs/agent.sock"));
-        assert!(
-            message.contains("FOKS could not reach its agent at /run/user/1000/foks-rs/agent.sock")
-        );
-        assert!(message.contains("foks-agent is not running"));
+        assert!(message.contains(
+            "FOKS could not connect to the local background service at /run/user/1000/foks-rs/agent.sock"
+        ));
+        assert!(message.contains("verify that foks-agent is running"));
     }
 
     #[test]

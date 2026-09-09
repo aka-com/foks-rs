@@ -1,0 +1,50 @@
+/* ============================================================================
+   foks-ui/kit/tokens.css — Shared design tokens for FOKS UI surfaces.
+   ============================================================================ */
+
+:root {
+  /* text */
+  --ink: #1d1d1f;
+  --ink-2: #2c2c30;
+  --ink-3: #3c3c42;
+  --muted: #66666f;
+  --muted-2: #6d6d76;
+
+  /* accents */
+  --accent: #0a7cff;
+  --accent-ink: #0a63d0;
+  --accent-wash: rgba(10, 124, 255, 0.08);
+  --accent-wash-2: rgba(10, 124, 255, 0.12);
+  --accent-border: rgba(10, 124, 255, 0.32);
+  --danger: #ff3b30;
+  --danger-ink: #d70015;
+  --danger-text: #7a1208;
+  --danger-wash: rgba(255, 59, 48, 0.08);
+  --danger-border: rgba(255, 59, 48, 0.38);
+  --amber-ink: #7a5410;
+  --amber-strong: #b06a00;
+  --amber-wash: rgba(255, 190, 50, 0.16);
+  --amber-border: rgba(200, 140, 20, 0.3);
+  --warning-dot: #d59600;
+  --ok-ink: #248a3d;
+  --ok-solid: #34c759;
+
+  /* surfaces */
+  --panel: #fbfbfd;
+  --btn-bg: #fff;
+  --btn-hover: #f2f2f5;
+  --chip-bg: rgba(0, 0, 0, 0.06);
+  --chip-ink: #4c4c53;
+  --wash: rgba(0, 0, 0, 0.025);
+  --backdrop: rgba(20, 20, 30, 0.28);
+
+  /* lines */
+  --line: rgba(0, 0, 0, 0.08);
+  --line-soft: rgba(0, 0, 0, 0.06);
+  --line-mid: rgba(0, 0, 0, 0.1);
+  --line-field: rgba(0, 0, 0, 0.16);
+
+  /* shadows */
+  --shadow-xs: 0 1px 1px rgba(15, 20, 45, 0.04);
+  --shadow-sheet: 0 14px 34px rgba(15, 20, 45, 0.16);
+}

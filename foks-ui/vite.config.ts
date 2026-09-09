@@ -4,26 +4,19 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repo = resolve(here, '..');
-
-// The FOKS desktop frontend. A sibling of `ui/vite.config.ts`, not a variant
-// of it: the two apps share the toolchain and `ui/kit`, and nothing else.
+// The FOKS desktop frontend.
 export default defineConfig({
   root: here,
   plugins: [react()],
   resolve: {
     alias: {
-      // `/src/*` is how the app imports itself, matching `ui/`'s convention
-      // and the `paths` entry in tsconfig.json.
+      // Keep absolute source aliases aligned with tsconfig.json.
       '/src': resolve(here, 'src'),
-      // `/kit/*` is the shared kit in `ui/kit` — the only thing reached
-      // outside this directory. See ui/kit/README.md.
-      '/kit': resolve(repo, 'ui/kit'),
+      '/kit': resolve(here, 'kit'),
     },
   },
   server: {
     host: '127.0.0.1',
-    // 1421, one past AKA's 1420, so both dev servers can run at once.
     port: 1421,
     strictPort: true,
   },

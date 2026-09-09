@@ -1984,7 +1984,7 @@ test('mock resumeGroupCreation activates an inactive team', async () => {
 });
 
 test('mock expelFederatedGroup requires both host ID and team ID to match', async () => {
-  const active = { ...FIXTURE.federation[0]!, active: true };
+  const active = { ...FIXTURE.federation[0], active: true };
   const bridge = mockBridge({ ...FIXTURE, federation: [active] });
   await assert.rejects(
     bridge.expelFederatedGroup({

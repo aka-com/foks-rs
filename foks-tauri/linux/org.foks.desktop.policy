@@ -17,8 +17,6 @@
 -->
 <policyconfig>
   <vendor>FOKS</vendor>
-  <vendor_url>https://github.com/aka-com/multitool</vendor_url>
-
   <action id="org.foks.desktop.unlock">
     <description>Unlock FOKS</description>
     <message>Authenticate to unlock FOKS and access your vault.</message>

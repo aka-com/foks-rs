@@ -7,7 +7,7 @@
     "jsx": "react-jsx",
     "paths": {
       "/src/*": ["./src/*"],
-      "/kit/*": ["../ui/kit/*"]
+      "/kit/*": ["./kit/*"]
     },
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
@@ -24,6 +24,8 @@
   "include": [
     "app.tsx",
     "vite.config.ts",
+    "kit/**/*.ts",
+    "kit/**/*.tsx",
     "src/**/*.ts",
     "src/**/*.tsx",
     "tests/**/*.ts",

@@ -58,9 +58,9 @@ Key architectural considerations regarding command permissions:
   (`tauri-2.11.5/src/lib.rs:112`) and this crate does not enable `tray-icon`,
   so they are not registered in a Cargo build of this package. That is a
   property of *this crate's feature set*, and Cargo unifies features across a
-  workspace while Bazel resolves them per target: a sibling in the same build
-  that wants `tray-icon` can make them present again without touching this
-  file. The same holds for `internal_toggle_devtools`, which is
+  workspace: a sibling in the same build that wants `tray-icon` can make them
+  present again without touching this file. The same holds for
+  `internal_toggle_devtools`, which is
   `#[cfg(all(desktop, any(debug_assertions, feature = "devtools")))]`
   (`tauri-2.11.5/src/webview/plugin.rs:180,253`) and is therefore compiled into
   every debug build. Feature unification decides what exists; the capability
@@ -157,9 +157,9 @@ that feature is the same switch `tauri`'s own `get_app_url` reads when it
 chooses between `build.devUrl` and the embedded bundle. This package declares
 no `custom-protocol` feature, so `cargo build --release` still produces a
 binary that loads the Vite server; `debug_assertions` would deny that binary
-its own start page. The distributable artifacts do turn the feature on — Bazel
-through `MODULE.bazel`'s crate annotation, `tauri build` through the CLI — and
-those are exactly the builds where `http://127.0.0.1:1421` is refused.
+its own start page. `tauri build` turns the feature on for distributable
+artifacts, which are exactly the builds where `http://127.0.0.1:1421` is
+refused.
 
 The CSP is the second line for the same boundary, not the first: `form-action
 'none'`, `base-uri 'none'`, `object-src 'none'`, `frame-src 'none'` and
@@ -191,11 +191,9 @@ The capability allowlist is restricted to the three required permissions.
 - **Automated test verification.** Tests compare the capability file against the
   expected permission set, explicitly forbidding sensitive core permissions, and
   verify that resolved ACL manifests expand only to the permitted command identifiers.
-- **Bazel feature unification must not be mistaken for the control.** See the
-  two notes above: whether `tray-icon` or `devtools` happens to be enabled in a
-  given build decides what is *compiled*, not what the webview may *call*. The
-  capability is the control, and the Bazel-built macOS artifact resolves the
-  same three commands as the Cargo build because both read this same file.
+- **Compiled features must not be mistaken for the control.** See the notes
+  above: whether `tray-icon` or `devtools` is enabled decides what is compiled,
+  not what the webview may call. The capability file remains the control.
 
 If titlebar double-click-to-maximize is required, only grant
 `core:window:allow-internal-toggle-maximize` specifically rather than the broader

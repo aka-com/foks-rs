@@ -1,12 +1,8 @@
 # Placeholder icons
 
-Every file here is a copy of AKA's application icon
-(`src-tauri/icons/icon.png`), resized by `tauri icon`. They exist so the bundle
-targets resolve and the deb's hicolor theme entries are well-formed — **not**
-because FOKS should ship AKA's mark.
-
-Replace all of them with FOKS artwork before the first packaged build. The
-regeneration step is:
+These placeholder files let the bundle targets resolve and keep the Debian
+hicolor theme entries well-formed. Replace them with final FOKS artwork before
+the first packaged build. The regeneration step is:
 
     pnpm exec tauri icon path/to/foks-icon.png -o foks-tauri/icons
 

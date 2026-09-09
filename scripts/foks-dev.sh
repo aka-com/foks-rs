@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-state_root="${FOKS_DEV_ROOT:-${TMPDIR:-/tmp}/aka-foks-dev-${UID}}"
+state_root="${FOKS_DEV_ROOT:-${TMPDIR:-/tmp}/foks-dev-${UID}}"
 server_pid=""
 agent_pid=""
 
@@ -14,7 +14,7 @@ Build and run a local FOKS server, agent, and desktop application.
 
 Environment:
   FOKS_DEV_ROOT  Persistent server and client state directory.
-                 Defaults to $TMPDIR/aka-foks-dev-$UID.
+                 Defaults to $TMPDIR/foks-dev-$UID.
 EOF
 }
 

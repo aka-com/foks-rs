@@ -85,9 +85,8 @@ packaging/
 crates/foks-snowpack/tests/fixtures/foks-v0.1.9/server/
 ```
 
-The root manifest and lock files (`Cargo.toml`, `Cargo.lock`, `rust-project.json`,
-`MODULE.bazel`, `MODULE.bazel.lock`) are shared build metadata, not an
-authorization to rewrite another product's crate.
+The root manifest and lock files (`Cargo.toml` and `Cargo.lock`) are shared
+build metadata, not an authorization to rewrite another product's crate.
 
 The enforced rule is a property of the Cargo graph, not of a branch's changed
 files: no `foks-*` production or test crate may directly or transitively depend
@@ -241,8 +240,8 @@ an arbitrary persistent root or non-loopback listen address.
 
 The normal gate for every phase is `tools/foks-server/check.sh`. It runs only
 explicit FOKS package selectors for formatting, clippy, unit tests, and
-integration tests. It must not invoke a bare Cargo command, `--workspace`,
-`just test`, or `bazel test //...`. Its final test set is equivalent to:
+integration tests. It must not invoke a bare Cargo command, `--workspace`, or
+an unrelated package. Its final test set is equivalent to:
 
 ```sh
 cargo test \
@@ -266,11 +265,9 @@ repository-isolation allowlist. The Go oracle is opt-in and runs only when addin
 or auditing fixtures; ordinary CI consumes its checked-in output without Go or
 network access.
 
-Cargo manifests and `Cargo.lock` remain the source for Bazel's crate universe;
-`MODULE.bazel` changes only if a new dependency needs an annotation. A
+Cargo manifests and `Cargo.lock` are the build source of truth. A
 repository-wide build may run independently in the repository's normal CI, but
-it is not a development or acceptance gate for this server. Regenerate
-`rust-project.json` after adding crates.
+it is not a development or acceptance gate for this server.
 
 ## 5. Implementation phases
 
@@ -279,14 +276,11 @@ not begin a phase while the preceding phase's tests are flaky or depend on test
 ordering.
 
 When a crate is introduced, add it to the root workspace members and workspace
-dependencies in `Cargo.toml`, then update `Cargo.lock` and regenerate
-`rust-project.json`. Leave the root `default-members` list unchanged; all new
+dependencies in `Cargo.toml`, then update `Cargo.lock`. Leave the root
+`default-members` list unchanged; all new
 server crates are exercised only through explicit package selectors. New
 third-party dependencies are declared once under workspace dependencies and
-consumed with `workspace = true`. The repository's Bazel crate universe derives
-from the Cargo manifests and lockfile, so the FOKS crates do not gain
-hand-written `BUILD.bazel` files; edit `MODULE.bazel` only when a dependency
-requires a feature or build annotation. Phase 0 introduces the minimal
+consumed with `workspace = true`. Phase 0 introduces the minimal
 `foks-server` scaffold for the X.509 feasibility gate; phase 2 introduces
 `foks-merkle-store`; phase 3 introduces `foks-server-db`; phase 4 completes
 `foks-server` and introduces the dev-only `foks-server-testkit`.

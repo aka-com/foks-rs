@@ -92,7 +92,7 @@
   },
   "capabilityUnavailableError": {
     "code": "capability-unavailable",
-    "message": "KV access is not permitted by this server. Check compatibility status before reading or writing.",
+    "message": "This server is not granting vault access. Check its compatibility status before reading or writing.",
     "retryable": false,
     "ambiguous": false,
     "fatal": false,

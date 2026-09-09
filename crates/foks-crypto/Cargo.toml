@@ -12,8 +12,7 @@ crypto_secretbox = { workspace = true }
 ed25519-dalek = { workspace = true }
 foks-proto = { workspace = true }
 foks-snowpack = { workspace = true }
-# FOKS v0.1.9 uses the digest-0.10 RustCrypto API. Keep these independent
-# from AKA's current digest-0.11 workspace line.
+# FOKS v0.1.9 uses the digest-0.10 RustCrypto API.
 getrandom = { workspace = true }
 hmac = "0.12"
 ml-kem = { workspace = true }

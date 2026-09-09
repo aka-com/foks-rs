@@ -1,0 +1,52 @@
+{
+  "name": "foks-desktop",
+  "private": true,
+  "packageManager": "pnpm@11.21.0",
+  "scripts": {
+    "format": "prettier --write '**/*.{js,mjs,ts,tsx,json,css}'",
+    "lint": "eslint . && cargo fmt --all -- --check",
+    "start": "cd foks-tauri && tauri dev",
+    "foks:start": "cd foks-tauri && tauri dev",
+    "foks:dev": "bash scripts/foks-dev.sh",
+    "foks:dev:frontend": "vite --config foks-ui/vite.config.ts",
+    "foks:dev:tauri": "cd foks-tauri && tauri dev",
+    "foks:build:frontend": "vite build --config foks-ui/vite.config.ts",
+    "foks:build": "pnpm run foks:build:frontend && cargo build --locked --release -p foks-desktop-app --bin foks-desktop",
+    "foks:stage-agent": "bash scripts/stage-foks-agent.sh",
+    "foks:bundle:macos": "pnpm run foks:stage-agent && cd foks-tauri && tauri build --bundles app --config tauri.macos.conf.json",
+    "foks:bundle:deb": "pnpm run foks:stage-agent && cd foks-tauri && tauri build --bundles deb --config tauri.linux.conf.json",
+    "foks:sign:macos": "bash scripts/sign-macos-app.sh",
+    "foks:notarize:macos": "bash scripts/notarize-macos-app.sh",
+    "typecheck": "tsc --noEmit -p foks-ui/tsconfig.json",
+    "test": "cargo test --locked && pnpm run test:foks-ui",
+    "test:foks-ui": "tsx --test --test-concurrency=1 foks-ui/tests/*.test.ts foks-ui/tests/*.test.tsx",
+    "test:foks-desktop:real-agent": "bash scripts/test-foks-desktop-real-agent.sh",
+    "acceptance:foks-ui": "VITE_FOKS_MOCK=1 pnpm run foks:build:frontend && node foks-ui/tests/acceptance/run.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "@tauri-apps/cli": "^2",
+    "@testing-library/react": "^16.3.2",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.4",
+    "eslint": "^10.0.0",
+    "eslint-plugin-react-hooks": "^5",
+    "globals": "^17.11.0",
+    "jsdom": "^30.0.1",
+    "playwright-core": "^1.62.1",
+    "prettier": "^3",
+    "tsx": "^4.23.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8",
+    "vite": "^8.1.4"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "lucide": "^1.23.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  }
+}
