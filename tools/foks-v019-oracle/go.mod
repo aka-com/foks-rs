@@ -51,7 +51,7 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/foks-proj/go-ctxlog v0.0.0-20250303173751-8f2c09f6847f // indirect
 	github.com/foks-proj/go-git-remhelp v0.0.6 // indirect
-	github.com/go-chi/chi/v5 v5.2.2 // indirect
+	github.com/go-chi/chi/v5 v5.2.4 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.9.0 // indirect
 	github.com/go-git/go-git/v5 v5.19.1 // indirect
