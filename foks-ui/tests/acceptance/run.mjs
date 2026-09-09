@@ -241,6 +241,17 @@ async function visit(context, url, shot) {
   return problems;
 }
 
+/**
+ * Waits for the notification a mutation raises. Both products now share
+ * `ui/kit/toasts.tsx`, so the element is `.toast` — the old `.flash` pill is
+ * gone. Toasts also expire on their own (2.6 s), so a walk asserts one only
+ * as the *acknowledgement* of a mutation and always checks the state the
+ * mutation left behind separately.
+ */
+function toast(page, text) {
+  return page.locator('.toast', { hasText: text }).waitFor();
+}
+
 async function personaWalks(context, origin) {
   const page = await context.newPage();
   const failures = [];
@@ -324,15 +335,20 @@ async function writeWalk(context, origin) {
       .locator('input[aria-label="Name"]')
       .fill('PHASE3_ACCEPTANCE_KEY');
     await page.locator('input[aria-label="Value"]').fill('acceptance value');
+    // One create button now; the vault comes from the sheet's "Save in".
     await page
-      .getByRole('button', { name: 'Create in Personal', exact: true })
+      .getByRole('button', { name: 'Create in this vault', exact: true })
       .click();
-    await page.waitForSelector('.flash');
+    await toast(page, 'created in Personal');
+    // The state that outlives the notification: the item is in the list, and
+    // it is in the vault the sheet was pointed at.
     await page.locator('.search input').fill('phase3_acceptance_key');
-    await page
+    const written = page
       .locator('.body .row')
-      .filter({ hasText: 'phase3_acceptance_key' })
-      .waitFor();
+      .filter({ hasText: 'phase3_acceptance_key' });
+    await written.waitFor();
+    if (!(await written.textContent())?.includes('Personal'))
+      failures.push('the created item did not land in Personal');
 
     await page.goto(`${origin}/?state=exists`, { waitUntil: 'load' });
     await page.getByRole('button', { name: /Open version/ }).click();
@@ -341,6 +357,7 @@ async function writeWalk(context, origin) {
     await page.goto(`${origin}/?state=agent-lost`, { waitUntil: 'load' });
     await page.getByRole('button', { name: 'Retry', exact: true }).click();
     await page.waitForSelector('.stopwrap', { state: 'detached' });
+    await page.locator('.body .row').first().waitFor();
   } catch (error) {
     failures.push(
       `write walk: ${error instanceof Error ? error.message : String(error)}`,
@@ -370,7 +387,11 @@ async function groupWalk(context, origin) {
     await page.goto(`${origin}/?state=federation`, { waitUntil: 'load' });
     const inactive = page.locator('.rt.fed .prow', { hasText: 'Inactive' });
     await inactive.getByRole('button', { name: 'Restore access' }).click();
-    await page.waitForSelector('.flash');
+    await toast(page, 'Group access restored');
+    // The row itself must carry the restored admission, not just the toast.
+    await page.locator('.rt.fed .prow', { hasText: 'Active' }).waitFor();
+    if (await inactive.count())
+      failures.push('the restored group still reads as Inactive');
 
     await page.goto(`${origin}/?state=group`, { waitUntil: 'load' });
     await page
@@ -402,7 +423,12 @@ async function groupWalk(context, origin) {
     await page
       .getByRole('button', { name: 'Change role', exact: true })
       .click();
-    await page.waitForSelector('.flash');
+    await toast(page, 'Lower priya.n\u2019s role completed');
+    // A lowered role is the point of the walk, so read it off the roster.
+    const demoted = page.locator('.rt .prow', { hasText: 'priya.n' });
+    await demoted.filter({ hasText: 'Member' }).waitFor();
+    if ((await demoted.textContent())?.includes('Admin'))
+      failures.push('priya.n is still an Admin after the role change');
   } catch (error) {
     failures.push(
       `group walk: ${error instanceof Error ? error.message : String(error)}`,
@@ -422,8 +448,11 @@ async function groupItemWalk(context, origin) {
   });
   try {
     await page.goto(`${origin}/?state=group-new-text`, { waitUntil: 'load' });
+    // The role choices are a real radiogroup now (`RadioCard`), so they answer
+    // to `radio`, not `button`, and each name carries its own explanation.
     await page
-      .getByRole('button', { name: 'Read role Admin', exact: true })
+      .getByRole('radiogroup', { name: 'Who can read' })
+      .getByRole('radio', { name: /^Admin/ })
       .click();
     const preview = await page.locator('.sheet').textContent();
     const count = /would be readable by (\d+) of (\d+)/.exec(preview ?? '');
@@ -436,8 +465,9 @@ async function groupItemWalk(context, origin) {
       .getByRole('textbox', { name: 'Value', exact: true })
       .fill('browser value');
     await page
-      .getByRole('button', { name: 'Create in Engineering', exact: true })
+      .getByRole('button', { name: 'Create in this vault', exact: true })
       .click();
+    await toast(page, 'created in Engineering');
     const created = page
       .locator('.body .row')
       .filter({ hasText: 'phase7_browser_key' });
@@ -460,10 +490,19 @@ async function groupItemWalk(context, origin) {
     await page
       .getByRole('button', { name: 'Save version 2', exact: true })
       .click();
-    await page.locator('.flash', { hasText: 'Saved version 2' }).waitFor();
-    await page.getByRole('button', { name: 'Remove', exact: true }).click();
-    await page.getByRole('button', { name: 'Remove', exact: true }).click();
-    await page.locator('.flash', { hasText: 'Removed version 2' }).waitFor();
+    await toast(page, 'Saved version 2');
+    // The saved version, not the notification, is what the edit produced.
+    await page.locator('.details', { hasText: 'Version2' }).waitFor();
+    // The confirmation sheet adds a second "Remove", so each click is scoped.
+    await page
+      .locator('.details')
+      .getByRole('button', { name: 'Remove', exact: true })
+      .click();
+    await page
+      .locator('.sheet')
+      .getByRole('button', { name: 'Remove', exact: true })
+      .click();
+    await toast(page, 'Removed version 2');
     await created.waitFor({ state: 'detached' });
 
     await page.goto(`${origin}/?state=group-new-link`, { waitUntil: 'load' });
@@ -471,7 +510,7 @@ async function groupItemWalk(context, origin) {
       .getByRole('textbox', { name: 'Points to', exact: true })
       .fill('/deploy/staging-token');
     await page
-      .getByRole('button', { name: 'Create in Engineering', exact: true })
+      .getByRole('button', { name: 'Create in this vault', exact: true })
       .click();
     await page
       .locator('.body .row')
@@ -511,7 +550,10 @@ async function firstRunWalk(context, origin) {
     await page.goto(`${origin}/?state=who&path=invited`, { waitUntil: 'load' });
     await page.evaluate("window.localStorage.removeItem('foks.first-run.v1')");
     await page.reload({ waitUntil: 'load' });
-    await page.getByRole('button', { name: /Someone invited me/ }).click();
+    // "How are you joining?" is a radiogroup that a separate Continue commits,
+    // so picking a path no longer advances the step by itself.
+    await page.getByRole('radio', { name: /Someone invited me/ }).click();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await reloadAt('Select a server address');
     await page
       .getByRole('button', { name: 'Check the server', exact: true })
@@ -593,24 +635,35 @@ async function adeWalk(context, origin) {
   try {
     await page.goto(`${origin}/?state=servers-unprobed`, { waitUntil: 'load' });
     await page.getByRole('button', { name: 'Check now', exact: true }).click();
-    await page.locator('.main', { hasText: 'New pin' }).waitFor();
+    // A first check announces the new pin in the toast; what it leaves on the
+    // page is a checked server whose signed history is now pinned.
+    await toast(page, 'New pin');
+    await page.locator('.main', { hasText: 'Checked just now' }).waitFor();
+
+    // Ade compares the host id out of band. There is no "Show full" control
+    // and no in-page comparison field any more: the short id carries the full
+    // one in its `title`, Copy puts that on the clipboard, and the last check
+    // response prints it verbatim. All three must agree, or Ade would compare
+    // against something the app made up.
     await page
-      .locator('summary', { hasText: 'Details' })
+      .locator('summary', { hasText: 'Inspect last check response' })
       .click()
       .catch(() => {});
-    await page.getByRole('button', { name: 'Show full', exact: true }).click();
-    const host = await page.locator('.inset .mono').first().textContent();
+    const response = await page.locator('.main pre').first().textContent();
+    const host = /"hostId":\s*"([0-9a-f]+)"/.exec(response ?? '')?.[1];
     if (!host) failures.push('Ade could not inspect the checked host id');
     else {
       if (!/^02[0-9a-f]{64}$/.test(host))
         failures.push('Ade did not receive the full canonical host id');
-      await page.getByLabel('They published').fill(host);
-      if (
-        (await page.locator('.server-compare').textContent())?.includes(
-          'Match',
-        ) !== true
-      )
-        failures.push('Ade out-of-band comparison did not report Match');
+      const shown = page.locator('.hostid').first();
+      if ((await shown.getAttribute('title')) !== host)
+        failures.push('the host id shown to Ade is not the checked host id');
+      const short = (await shown.textContent())?.trim() ?? '';
+      const [head, tail] = short.split('\u2026');
+      if (!head || !tail || !host.startsWith(head) || !host.endsWith(tail))
+        failures.push(
+          'the abbreviated host id does not abbreviate the real one',
+        );
     }
 
     await page.goto(`${origin}/?state=servers-reset`, { waitUntil: 'load' });
@@ -620,6 +673,15 @@ async function adeWalk(context, origin) {
       .getByRole('button', { name: 'Reset local state', exact: true })
       .click();
     await page.waitForSelector('.sheet', { state: 'detached' });
+    // A reset drops local state; it does not forget the server. Ade must be
+    // left on a server that is still configured and told to check it again.
+    await toast(page, 'check it again before using it');
+    await page.locator('.main', { hasText: 'foks.example.net' }).waitFor();
+    const stillConfigured = await page
+      .getByRole('button', { name: 'Reset…', exact: true })
+      .count();
+    if (!stillConfigured)
+      failures.push('the reset server is no longer configured on this Mac');
 
     await page.goto(`${origin}/?state=settings-phrase`, { waitUntil: 'load' });
     const tokens = await page.locator('.sheet .word').count();

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
 import {
@@ -302,7 +302,9 @@ export function SettingsScreen({
   // shell's in-flight `loadWorld` instead of stacking `list_catalog`.
   const catalogRecovery = useRef<Promise<World> | null>(null);
   const recoveredAccounts = useRef(new Set<string>());
-  const recoverCatalog = (): Promise<World> => {
+  // Memoized on `onRefreshWorld`, its one captured value that is not a ref, so
+  // the effects below can depend on it without re-running on every render.
+  const recoverCatalog = useCallback((): Promise<World> => {
     if (!catalogRecovery.current) {
       const pending = onRefreshWorld().finally(() => {
         if (catalogRecovery.current === pending) catalogRecovery.current = null;
@@ -310,7 +312,7 @@ export function SettingsScreen({
       catalogRecovery.current = pending;
     }
     return catalogRecovery.current;
-  };
+  }, [onRefreshWorld]);
   // The profile of the selected account, and nothing when there is none: a
   // YubiKey enrollment list belongs to a profile this Mac holds an account on,
   // not to whichever server happens to be listed first.
@@ -518,7 +520,7 @@ export function SettingsScreen({
   }, [
     bridge,
     onError,
-    onRefreshWorld,
+    recoverCatalog,
     selected,
     selectedStatusLoaded,
     selectedStopped,
@@ -623,7 +625,7 @@ export function SettingsScreen({
     enteredScene,
     loadedProfiles,
     onError,
-    onRefreshWorld,
+    recoverCatalog,
     section,
     statuses,
     world,

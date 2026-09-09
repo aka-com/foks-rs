@@ -4,40 +4,19 @@ set -eu
 repository_root=$(git rev-parse --show-toplevel)
 cd "$repository_root"
 
-base_ref=${FOKS_BASE_REF:-origin/main}
-if ! git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
-    echo "FOKS boundary base ref does not exist: $base_ref" >&2
-    exit 1
-fi
-
-changed_paths=$(mktemp)
-package_names=$(mktemp)
-trap 'rm -f "$changed_paths" "$package_names"' EXIT HUP INT TERM
-
-git diff --name-only "$base_ref"...HEAD -- >"$changed_paths"
-git diff --name-only HEAD -- >>"$changed_paths"
-git diff --cached --name-only -- >>"$changed_paths"
-git ls-files --others --exclude-standard >>"$changed_paths"
-sort -u -o "$changed_paths" "$changed_paths"
-
-while IFS= read -r path; do
-    case "$path" in
-        ""|crates/foks-*|tools/foks-v019-oracle/*|tools/foks-protocol-sync/*|tools/foks-server/*|tools/foks-client/*|packaging/*|.github/workflows/foks-protocol-drift.yml|.github/workflows/foks-standalone.yml|.github/workflows/foks-hosted-compat.yml|.github/workflows/foks-desktop.yml|Cargo.toml|Cargo.lock|rust-project.json|MODULE.bazel|MODULE.bazel.lock|.gitattributes)
-            ;;
-        *)
-            echo "path escapes standalone FOKS boundary: $path" >&2
-            exit 1
-            ;;
-    esac
-done <"$changed_paths"
-
 if ! command -v jq >/dev/null 2>&1; then
     echo "jq is required for the isolated Cargo dependency check" >&2
     exit 1
 fi
 
-cargo metadata --offline --locked --no-deps --format-version 1 \
-    | jq -r '.packages[].name | select(startswith("foks-"))' \
+metadata=$(mktemp)
+package_names=$(mktemp)
+boundary_paths=$(mktemp)
+trap 'rm -f "$metadata" "$package_names" "$boundary_paths"' EXIT HUP INT TERM
+
+cargo metadata --offline --locked --no-deps --format-version 1 >"$metadata"
+
+jq -r '.packages[].name | select(startswith("foks-"))' "$metadata" \
     | sort -u >"$package_names"
 
 if [ ! -s "$package_names" ]; then
@@ -45,11 +24,58 @@ if [ ! -s "$package_names" ]; then
     exit 1
 fi
 
+# The standalone boundary is a property of the Cargo graph, not of a branch's
+# changed files. This repository builds two products out of one workspace, so
+# a branch that carries FOKS work legitimately also carries AKA and shared-UI
+# work; a whole-branch changed-path allowlist rejected that without saying
+# anything about whether FOKS still stands alone. What has to hold is that
+# every FOKS package is *defined* inside FOKS-owned directories and reaches
+# only FOKS-owned directories for its local sources.
+#
+# `crates/foks-*` holds the libraries and binaries; `foks-tauri` holds the
+# desktop shell package (`foks-desktop-app`). Nothing else may define or be
+# reached by a FOKS package.
+jq -r --arg root "$repository_root/" '
+    .packages[]
+    | select(.name | startswith("foks-"))
+    | . as $package
+    | [
+        "\($package.name)\tmanifest\t\($package.manifest_path | ltrimstr($root))",
+        (
+            $package.dependencies[]
+            | select(.path != null)
+            | "\($package.name)\t\(.name)\t\(.path | ltrimstr($root))"
+        )
+      ]
+    | .[]
+' "$metadata" >"$boundary_paths"
+
+tab=$(printf '\t')
+while IFS="$tab" read -r package relation path; do
+    case "$path" in
+        crates/foks-*/Cargo.toml|foks-tauri/Cargo.toml|crates/foks-*) ;;
+        *)
+            if [ "$relation" = manifest ]; then
+                echo "$package is defined outside the standalone FOKS boundary: $path" >&2
+            else
+                echo "$package depends on $relation outside the standalone FOKS boundary: $path" >&2
+            fi
+            exit 1
+            ;;
+    esac
+done <"$boundary_paths"
+
+# The AKA-free rule itself, by name and across every feature combination: a
+# dependency reachable only behind a non-default feature is still a dependency.
 while IFS= read -r package; do
-    if cargo tree --offline --locked --prefix none -p "$package" | sed 's/ .*//' | grep '^aka-' >/dev/null; then
-        echo "$package has an AKA dependency" >&2
-        exit 1
-    fi
+    for features in "" "--all-features"; do
+        # shellcheck disable=SC2086
+        if cargo tree --offline --locked --prefix none $features -p "$package" \
+            | sed 's/ .*//' | grep '^aka-' >/dev/null; then
+            echo "$package has an AKA dependency" >&2
+            exit 1
+        fi
+    done
     if [ "$package" != "foks-server-testkit" ] \
         && cargo tree --offline --locked --edges normal --prefix none -p "$package" \
             | sed 's/ .*//' | grep '^foks-server-testkit$' >/dev/null; then

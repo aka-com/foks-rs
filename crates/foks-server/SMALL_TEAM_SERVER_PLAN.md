@@ -129,24 +129,23 @@ join another host's identity or team authority:
 
 ## 3. Repository and dependency isolation
 
-This remains a standalone FOKS subsystem. Permitted changes are limited to:
+This remains a standalone FOKS subsystem. Its source belongs in:
 
 ```text
 crates/foks-*
 tools/foks-server/
 tools/foks-v019-oracle/
 crates/foks-snowpack/tests/fixtures/foks-v0.1.9/
-Cargo.toml
-Cargo.lock
-rust-project.json
-MODULE.bazel                      # only if a dependency annotation is required
-MODULE.bazel.lock                 # only when regenerated for that annotation
 ```
 
-No `aka-*`, desktop, UI, or npm source may change. No FOKS crate may directly
-or transitively depend on an AKA crate. `foks-server-testkit` remains
-`publish = false`, outside workspace `default-members`, and absent from every
-production dependency graph.
+with `Cargo.toml`, `Cargo.lock`, `rust-project.json`, `MODULE.bazel` and
+`MODULE.bazel.lock` as shared build metadata.
+
+No FOKS crate may directly or transitively depend on an AKA crate, be defined
+outside `crates/foks-*` or `foks-tauri`, or declare a local path dependency
+that resolves outside them. `foks-server-testkit` remains `publish = false`,
+outside workspace `default-members`, and absent from every production
+dependency graph.
 
 No new production crate is expected. The current crate boundaries already
 match the work:
