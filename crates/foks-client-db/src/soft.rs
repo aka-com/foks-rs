@@ -9,7 +9,7 @@ use foks_proto::{
     BeaconHint, EntityId, KvDirectoryVersion, KvDirentVersion, KvPathVersionVector, ENTITY_HOST,
 };
 
-use crate::soft_schema::{APPLICATION_ID, V3_SCHEMA, V3_TO_V4, VERSION};
+use crate::soft_schema::{APPLICATION_ID, KNOWN_STORES_SCHEMA, KV_SCHEMA, VERSION};
 use crate::{sqlite_integer, stored_unsigned, Acceptance, Error, Result};
 
 pub const MAX_DISCOVERY_HINTS: usize = 128;
@@ -38,6 +38,9 @@ pub enum KnownStore {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KvProjectedEntry {
+    /// False only for an explicit child permission denial. Retain its authenticated
+    /// dirent for namespace and version checks, without caching any node payload.
+    pub readable: bool,
     pub dirent_id: [u8; 16],
     pub node_id: [u8; 17],
     pub version: u64,
@@ -450,7 +453,8 @@ impl SoftStateStore {
     }
 
     /// Replaces verified stale directories and removes only directory/file
-    /// rows no longer reachable from the persisted root.
+    /// rows no longer readable/reachable from the persisted root. Ciphertext-only
+    /// directory and dirent rollback anchors survive pruning.
     pub fn project_reachable_tree_with_large_files(
         &mut self,
         snapshots: &[KvDirectoryProjection],
@@ -459,7 +463,7 @@ impl SoftStateStore {
         self.project_tree_impl(snapshots, large_files, true, false)
     }
 
-    /// Records a complete authenticated metadata traversal under the same
+    /// Records an authenticated traversal of every readable directory under the same
     /// rollback and fork checks as a content projection, while deliberately
     /// omitting plaintext and large-file stages.
     pub fn project_reachable_metadata(
@@ -584,6 +588,29 @@ impl SoftStateStore {
         }
 
         for snapshot in snapshots {
+            let anchor = transaction.query_row(
+                "SELECT version, dir_bytes FROM kv_directory_history WHERE host_id = ?1 AND party_id = ?2 AND dir_id = ?3",
+                params![snapshot.host_id, snapshot.party_id, snapshot.directory_id.as_slice()],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            ).optional()?;
+            if let Some((version, bytes)) = anchor {
+                let version = stored_unsigned("KV directory version", version)?;
+                if snapshot.directory_version < version {
+                    return Err(Error::KvDirectoryRollback {
+                        stored: version,
+                        received: snapshot.directory_version,
+                    });
+                }
+                if snapshot.directory_version == version && snapshot.directory_bytes != bytes {
+                    return Err(Error::KvProjectionConflict(
+                        "directory changed at the same version",
+                    ));
+                }
+            }
+            transaction.execute(
+                "INSERT INTO kv_directory_history (host_id, party_id, dir_id, version, dir_bytes) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(host_id, party_id, dir_id) DO UPDATE SET version = excluded.version, dir_bytes = excluded.dir_bytes",
+                params![snapshot.host_id, snapshot.party_id, snapshot.directory_id.as_slice(), sqlite_integer("KV directory version", snapshot.directory_version)?, snapshot.directory_bytes],
+            )?;
             let stored_directory = load_directory(
                 &transaction,
                 &snapshot.host_id,
@@ -691,7 +718,7 @@ impl SoftStateStore {
                         entry.dirent_bytes
                     ],
                 )?;
-                let large_file_id = if entry.node_id[0] == 2 && !metadata_only {
+                let large_file_id = if entry.readable && entry.node_id[0] == 2 && !metadata_only {
                     let stage = large_files
                         .get(&entry.node_id)
                         .ok_or(Error::InvalidKvProjection)?;
@@ -721,8 +748,8 @@ impl SoftStateStore {
                 transaction.execute(
                     "INSERT INTO kv_entries (host_id, party_id, parent_dir_id, dirent_id, node_id, \
                      version, dir_version, name, write_role_type, write_role_visibility, creation_time, \
-                     dirent_bytes, node_bytes, content, symlink, large_file_id) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                     dirent_bytes, node_bytes, content, symlink, large_file_id, readable) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
                     params![
                         snapshot.host_id,
                         snapshot.party_id,
@@ -740,6 +767,7 @@ impl SoftStateStore {
                         entry.content,
                         entry.symlink,
                         large_file_id,
+                        entry.readable,
                     ],
                 )?;
             }
@@ -1047,7 +1075,7 @@ fn prune_unreachable(
     connection.execute(
         "WITH RECURSIVE reachable(dir_id) AS (VALUES (?3) UNION SELECT substr(e.node_id, 2, 16) \
          FROM kv_entries e JOIN reachable r ON e.parent_dir_id = r.dir_id \
-         WHERE e.host_id = ?1 AND e.party_id = ?2 AND substr(e.node_id, 1, 1) = x'01') \
+         WHERE e.host_id = ?1 AND e.party_id = ?2 AND e.readable = 1 AND substr(e.node_id, 1, 1) = x'01') \
          DELETE FROM kv_directories WHERE host_id = ?1 AND party_id = ?2 \
          AND dir_id NOT IN (SELECT dir_id FROM reachable)",
         params![host_id, party_id, root.as_slice()],
@@ -1064,7 +1092,7 @@ fn ensure_complete_tree(
     let missing: i64 = connection.query_row(
         "WITH RECURSIVE reachable(dir_id) AS (VALUES (?3) UNION SELECT substr(e.node_id, 2, 16) \
          FROM kv_entries e JOIN reachable r ON e.parent_dir_id = r.dir_id \
-         WHERE e.host_id = ?1 AND e.party_id = ?2 AND substr(e.node_id, 1, 1) = x'01') \
+         WHERE e.host_id = ?1 AND e.party_id = ?2 AND e.readable = 1 AND substr(e.node_id, 1, 1) = x'01') \
          SELECT count(*) FROM reachable r LEFT JOIN kv_directories d ON d.host_id = ?1 \
          AND d.party_id = ?2 AND d.dir_id = r.dir_id WHERE d.dir_id IS NULL",
         params![host_id, party_id, root.as_slice()],
@@ -1093,8 +1121,8 @@ fn initialize(connection: &mut Connection, path: &Path) -> Result<()> {
             });
         }
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute_batch(V3_SCHEMA)?;
-        transaction.execute_batch(V3_TO_V4)?;
+        transaction.execute_batch(KV_SCHEMA)?;
+        transaction.execute_batch(KNOWN_STORES_SCHEMA)?;
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
         transaction.pragma_update(None, "user_version", VERSION)?;
         transaction.commit()?;
@@ -1105,13 +1133,6 @@ fn initialize(connection: &mut Connection, path: &Path) -> Result<()> {
             found: application_id,
             expected: APPLICATION_ID,
         });
-    }
-    if version == 3 {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute_batch(V3_TO_V4)?;
-        transaction.pragma_update(None, "user_version", VERSION)?;
-        transaction.commit()?;
-        return Ok(());
     }
     if version != VERSION {
         return Err(Error::UnsupportedSoftSchema {
@@ -1139,7 +1160,13 @@ fn validate(snapshot: &KvDirectoryProjection, metadata_only: bool) -> Result<()>
                     (entry.write_role_type, entry.write_role_visibility),
                     (1, -32768..=32767) | (2 | 3, 0)
                 )
-                || if metadata_only {
+                || if !entry.readable {
+                    !matches!(entry.node_id[0], 1..=4)
+                        || entry.node_bytes.is_some()
+                        || entry.content.is_some()
+                        || entry.symlink.is_some()
+                        || entry.large_file_size.is_some()
+                } else if metadata_only {
                     match entry.node_id[0] {
                         1 => {
                             entry.node_bytes.is_some()
@@ -1233,7 +1260,7 @@ fn load_directory(
     let mut statement = connection.prepare(
         "SELECT e.dirent_id, e.node_id, e.version, e.dir_version, e.name, e.write_role_type, \
          e.write_role_visibility, e.creation_time, e.dirent_bytes, e.node_bytes, e.content, \
-         e.symlink, f.size FROM kv_entries e LEFT JOIN kv_large_files f ON f.id = e.large_file_id \
+         e.symlink, f.size, e.readable FROM kv_entries e LEFT JOIN kv_large_files f ON f.id = e.large_file_id \
          WHERE e.host_id = ?1 AND e.party_id = ?2 AND e.parent_dir_id = ?3 \
          ORDER BY name, dirent_id",
     )?;
@@ -1255,11 +1282,13 @@ fn load_directory(
                 row.get::<_, Option<Vec<u8>>>(10)?,
                 row.get::<_, Option<Vec<u8>>>(11)?,
                 row.get::<_, Option<i64>>(12)?,
+                row.get::<_, bool>(13)?,
             ))
         })?
         .map(|row| {
             let row = row?;
             Ok(KvProjectedEntry {
+                readable: row.13,
                 dirent_id: row.0.try_into().map_err(|_| Error::InvalidKvProjection)?,
                 node_id: row.1.try_into().map_err(|_| Error::InvalidKvProjection)?,
                 version: stored_unsigned("KV dirent version", row.2)?,
@@ -1303,39 +1332,20 @@ mod tests {
     }
 
     #[test]
-    fn version_three_soft_schema_migrates_in_place() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("soft.sqlite3");
-        let hint = BeaconHint::new(host(7), "preserved.test:4430".to_owned()).unwrap();
-        let projection = snapshot();
-        {
-            let mut store = SoftStateStore::open(&path).unwrap();
-            store.store_discovery_hint(&hint, 10).unwrap();
-            store.project_directory(&projection).unwrap();
+    fn previous_soft_schemas_require_explicit_cache_rebuild() {
+        for version in [3, 4] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("soft.sqlite3");
+            drop(SoftStateStore::open(&path).unwrap());
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .pragma_update(None, "user_version", version)
+                .unwrap();
+            drop(connection);
+            assert!(
+                matches!(SoftStateStore::open(&path), Err(Error::UnsupportedSoftSchema { found, supported: VERSION, .. }) if found == version)
+            );
         }
-        let connection = Connection::open(&path).unwrap();
-        connection.execute("DROP TABLE known_stores", []).unwrap();
-        connection.pragma_update(None, "user_version", 3).unwrap();
-        drop(connection);
-
-        let mut store = SoftStateStore::open(&path).unwrap();
-        assert!(store.discovery_hint(&host(7), 11).unwrap().is_some());
-        assert_eq!(
-            store
-                .directory(
-                    &projection.host_id,
-                    &projection.party_id,
-                    &projection.directory_id,
-                )
-                .unwrap(),
-            Some(projection),
-        );
-        assert!(store.known_stores().unwrap().is_empty());
-        let version: u32 = store
-            .connection
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, VERSION);
     }
 
     #[test]
@@ -1354,7 +1364,7 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains(path.canonicalize().unwrap().to_str().unwrap()));
         assert!(message.contains("unsupported soft-state cache schema version 2"));
-        assert!(message.contains("this build supports version 4"));
+        assert!(message.contains("this build supports version 5"));
         assert!(message.contains("cache must be recreated"));
         assert!(path.exists());
     }
@@ -1454,6 +1464,7 @@ mod tests {
         let mut node_id = [id; 17];
         node_id[0] = 3;
         KvProjectedEntry {
+            readable: true,
             dirent_id: [id; 16],
             node_id,
             version: 1,
@@ -1688,6 +1699,7 @@ mod tests {
         let mut node_id = [9; 17];
         node_id[0] = 2;
         projected.entries = vec![KvProjectedEntry {
+            readable: true,
             dirent_id: [7; 16],
             node_id,
             version: 4,
@@ -1790,6 +1802,7 @@ mod tests {
         let mut node_id = [9; 17];
         node_id[0] = 2;
         projected.entries = vec![KvProjectedEntry {
+            readable: true,
             dirent_id: [7; 16],
             node_id,
             version: 4,
@@ -1825,6 +1838,95 @@ mod tests {
     }
 
     #[test]
+    fn permission_pruning_preserves_directory_and_dirent_rollback_anchors() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("soft.sqlite3");
+        let mut store = SoftStateStore::open(&path).unwrap();
+        let mut root = snapshot();
+        let mut child = root.clone();
+        child.directory_id = [8; 16];
+        child.directory_version = 2;
+        child.directory_bytes = vec![8];
+        child.entries[0].version = 2;
+        let mut edge = entry(8, b"restricted");
+        edge.node_id[0] = 1;
+        edge.node_bytes = None;
+        edge.content = None;
+        root.entries = vec![edge];
+        store
+            .project_reachable_tree_with_large_files(&[root.clone(), child.clone()], &[])
+            .unwrap();
+
+        let mut denied = root.clone();
+        denied.entries[0].readable = false;
+        store.project_reachable_metadata(&[denied.clone()]).unwrap();
+        assert!(store
+            .directory(&root.host_id, &root.party_id, &child.directory_id)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store.tree(&root.host_id, &root.party_id).unwrap(),
+            vec![denied.clone()]
+        );
+
+        let mut replay = child.clone();
+        replay.directory_version = 1;
+        assert!(matches!(
+            store.project_reachable_tree_with_large_files(&[root.clone(), replay], &[]),
+            Err(Error::KvDirectoryRollback { .. })
+        ));
+        let mut fork = child.clone();
+        fork.directory_bytes = vec![99];
+        assert!(matches!(
+            store.project_reachable_tree_with_large_files(&[root.clone(), fork], &[]),
+            Err(Error::KvProjectionConflict(_))
+        ));
+        let mut replay = child.clone();
+        replay.entries[0].version = 1;
+        assert!(matches!(
+            store.project_reachable_tree_with_large_files(&[root.clone(), replay], &[]),
+            Err(Error::KvProjectionConflict(_))
+        ));
+        let mut fork = child.clone();
+        fork.entries[0].dirent_bytes = vec![99];
+        assert!(matches!(
+            store.project_reachable_tree_with_large_files(&[root.clone(), fork], &[]),
+            Err(Error::KvProjectionConflict(_))
+        ));
+        // A denial does not mark a still-present entry deleted. Exact reaccess
+        // is permitted, and all failed projections above were atomic.
+        store
+            .project_reachable_tree_with_large_files(&[root.clone(), child.clone()], &[])
+            .unwrap();
+        assert_eq!(store.tree(&root.host_id, &root.party_id).unwrap().len(), 2);
+        let mut deleted = child.clone();
+        deleted.entries.clear();
+        store
+            .project_reachable_tree_with_large_files(&[root.clone(), deleted], &[])
+            .unwrap();
+        store.project_reachable_metadata(&[denied.clone()]).unwrap();
+        assert!(matches!(
+            store.project_reachable_tree_with_large_files(&[root.clone(), child], &[]),
+            Err(Error::KvProjectionConflict(_))
+        ));
+
+        // Missing a readable directory remains corruption, not a permission boundary.
+        let mut missing = root.clone();
+        missing.entries[0].node_id[1..].fill(10);
+        missing.entries[0].version += 1;
+        missing.entries[0].dirent_bytes = vec![10];
+        assert!(matches!(
+            store.project_reachable_tree_with_large_files(&[missing], &[]),
+            Err(Error::InvalidKvProjection)
+        ));
+        denied.entries[0].content = Some(b"must not persist".to_vec());
+        assert!(matches!(
+            store.project_reachable_metadata(&[denied]),
+            Err(Error::InvalidKvProjection)
+        ));
+    }
+
+    #[test]
     fn local_namespace_mutation_invalidates_only_affected_directories() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("soft.sqlite3");
@@ -1836,6 +1938,7 @@ mod tests {
         let mut child_node_id = [8; 17];
         child_node_id[0] = 1;
         root.entries = vec![KvProjectedEntry {
+            readable: true,
             dirent_id: [9; 16],
             node_id: child_node_id,
             version: 1,

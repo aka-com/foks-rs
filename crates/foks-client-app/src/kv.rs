@@ -1030,6 +1030,11 @@ fn checked_entry<'a>(
     version: u64,
 ) -> Result<&'a foks_client_db::KvProjectedEntry> {
     let entry = optional_entry(tree, path)?.ok_or(Error::KvConflict)?;
+    if !entry.readable {
+        return Err(Error::InvalidKvPath(
+            "KV entry is not readable by this account",
+        ));
+    }
     if entry.version != version {
         return Err(Error::KvConflict);
     }
@@ -1354,6 +1359,9 @@ fn flatten_tree(tree: &[KvDirectoryProjection]) -> Result<Vec<KvEntrySummary>> {
         let mut entries = directory.entries.iter().collect::<Vec<_>>();
         entries.sort_by(|left, right| left.name.cmp(&right.name));
         for entry in entries {
+            if !entry.readable {
+                continue;
+            }
             let name = display_component(&entry.name);
             let path = format!("{parent_path}/{name}");
             let node_type = KvNodeId(entry.node_id).node_type()?;
@@ -1412,6 +1420,9 @@ fn flatten_catalog_tree(tree: &[KvDirectoryProjection]) -> Result<Vec<KvCatalogE
         let mut entries = directory.entries.iter().collect::<Vec<_>>();
         entries.sort_by(|left, right| left.name.cmp(&right.name));
         for entry in entries {
+            if !entry.readable {
+                continue;
+            }
             let name = display_component(&entry.name);
             let path = format!("{parent_path}/{name}");
             let node_id = KvNodeId(entry.node_id);
@@ -1510,6 +1521,7 @@ mod tests {
 
     fn projected_entry(name: &[u8]) -> foks_client_db::KvProjectedEntry {
         foks_client_db::KvProjectedEntry {
+            readable: true,
             dirent_id: [1; 16],
             node_id: [2; 17],
             version: 1,
@@ -1553,6 +1565,33 @@ mod tests {
     }
 
     #[test]
+    fn restricted_entries_are_hidden_but_not_treated_as_absent() {
+        let mut denied = projected_entry(b"restricted");
+        denied.readable = false;
+        let tree = [KvDirectoryProjection {
+            host_id: Vec::new(),
+            party_id: Vec::new(),
+            root_version: 1,
+            root_directory_id: [7; 16],
+            root_bytes: Vec::new(),
+            directory_id: [7; 16],
+            directory_version: 1,
+            directory_bytes: Vec::new(),
+            entries: vec![denied],
+        }];
+        assert!(flatten_catalog_tree(&tree).unwrap().is_empty());
+        assert!(flatten_tree(&tree).unwrap().is_empty());
+        assert!(matches!(
+            verify_precondition(&tree, "/restricted", KvMutationPrecondition::Create),
+            Err(Error::KvConflict)
+        ));
+        assert!(checked_entry(&tree, "/restricted", 1).is_err());
+        let mut malformed = tree.clone();
+        malformed[0].entries[0].readable = true;
+        assert!(flatten_catalog_tree(&malformed).is_err());
+    }
+
+    #[test]
     fn exact_large_file_read_reports_the_selected_nodes_size() {
         let fixture = |name: &str| {
             std::fs::read(format!(
@@ -1577,6 +1616,7 @@ mod tests {
             directory_version: 1,
             directory_bytes: Vec::new(),
             entries: vec![foks_client_db::KvProjectedEntry {
+                readable: true,
                 dirent_id: [1; 16],
                 node_id: node_id.0,
                 version: 4,

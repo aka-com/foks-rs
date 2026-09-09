@@ -140,6 +140,11 @@ pub(crate) fn kv_directory_reaches(
             .ok_or(Error::KvResponse("move source tree is incomplete"))?;
         for entry in &directory.entries {
             if entry.node_id[0] == KvNodeType::Directory as u8 {
+                if !entry.readable {
+                    return Err(Error::KvResponse(
+                        "move source tree contains an inaccessible directory",
+                    ));
+                }
                 queue.push_back(
                     entry.node_id[1..]
                         .try_into()
@@ -168,7 +173,7 @@ pub(crate) fn reachable_kv_tree(
             ))?
             .clone();
         for entry in &directory.entries {
-            if entry.node_id[0] == 1 {
+            if entry.readable && entry.node_id[0] == 1 {
                 queue.push_back(
                     entry.node_id[1..]
                         .try_into()
