@@ -1060,15 +1060,16 @@ function ServerBody({
         </InsetRow>
         <InsetRow
           className="dangerrow"
-          label="Reset local state"
+          label="Erase local credentials and reset trust"
           action={
             <Button size="sm" variant="danger" onClick={onReset}>
-              Reset…
+              Erase and reset…
             </Button>
           }
         >
           <small>
-            Drops the pinned identity, cache and unfinished operations.
+            Deletes this server's local account keys, trust history, cache and
+            unfinished operations. A separate recovery method is required.
           </small>
         </InsetRow>
       </Inset>
@@ -1205,8 +1206,8 @@ function ResetSheet({
   }, [preview?.token]);
   return (
     <SheetFrame
-      title={`Reset ${server.name}?`}
-      subtitle="Remove local data for this server from this Mac"
+      title={`Erase local credentials for ${server.name}?`}
+      subtitle="Delete local account keys and reset server trust on this device"
       onClose={() => {
         if (busy) return;
         onClose();
@@ -1235,25 +1236,30 @@ function ResetSheet({
                 .finally(() => setBusy(false));
             }}
           >
-            Reset local state
+            Erase credentials and reset
           </Button>
         </>
       }
     >
       <p>
-        This does not delete data stored on the server. You must verify the
-        server again before reconnecting.
+        This permanently deletes local account keys for this server. Server
+        data is not deleted, but you can permanently lose access to it without
+        another enrolled device, a saved recovery phrase for an enrolled backup,
+        or a usable external backup of your local state. Your account passphrase
+        alone cannot restore the deleted keys.
       </p>
       <Inset>
         <InsetRow label="Removed">
-          Server certificate, connection history, and local cache.
+          Local account keys and credentials, server trust history, local cache,
+          and pending operations.
         </InsetRow>
         <InsetRow label="Unrecoverable">
           Pending local changes not yet uploaded to the server will be lost.
         </InsetRow>
-        <InsetRow label="Preserved">
-          Your local account keys remain on this Mac, but you will need to sign
-          in again.
+        <InsetRow label="Recovery required">
+          Verify the server again and recover or pair an account before using
+          it on this device. Saving a recovery phrase here is not part of this
+          operation.
         </InsetRow>
         <InsetRow label="Unaffected">
           Other configured servers and their local data.
@@ -1277,7 +1283,7 @@ function ResetSheet({
               <InsetRow label="None">No resumable operations found.</InsetRow>
             )}
           </Inset>
-          <SectionLabel>Discarded local cache</SectionLabel>
+          <SectionLabel>Local credentials and data to erase</SectionLabel>
           <Inset>
             {preview.artifacts.length ? (
               preview.artifacts.map((row) => (
@@ -1286,7 +1292,7 @@ function ResetSheet({
                 </InsetRow>
               ))
             ) : (
-              <InsetRow label="None">No local cached data to remove.</InsetRow>
+              <InsetRow label="None">No local data to erase.</InsetRow>
             )}
           </Inset>
           <p className="hint">
