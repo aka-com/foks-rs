@@ -25,7 +25,9 @@ use thiserror::Error;
 
 pub mod arguments;
 mod generated;
+mod realtime;
 mod response;
+pub use realtime::*;
 mod server;
 
 pub use generated::*;

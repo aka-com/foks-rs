@@ -182,7 +182,7 @@ struct PoolKey {
     host_id: Vec<u8>,
     authentication: [u8; 32],
     trust: [u8; 32],
-    selected_vhost: bool,
+    selection_protocol: Option<u64>,
 }
 
 impl PartialEq for PoolKey {
@@ -192,7 +192,7 @@ impl PartialEq for PoolKey {
             && self.host_id == other.host_id
             && self.authentication == other.authentication
             && self.trust == other.trust
-            && self.selected_vhost == other.selected_vhost
+            && self.selection_protocol == other.selection_protocol
     }
 }
 
@@ -203,7 +203,7 @@ impl Hash for PoolKey {
         self.host_id.hash(state);
         self.authentication.hash(state);
         self.trust.hash(state);
-        self.selected_vhost.hash(state);
+        self.selection_protocol.hash(state);
     }
 }
 
@@ -256,7 +256,22 @@ impl PooledConnection {
             .stream
             .sock
             .set_control(control);
-        self.call_current(request, is_void)
+        let result = self.call_current(request, is_void);
+        if result.is_err()
+            && !matches!(
+                &result,
+                Err(Error::Rpc(foks_rpc::Error::RemoteStatus { .. }))
+            )
+        {
+            // An unread or partial response must never satisfy a later call.
+            self.invalidate();
+        }
+        result
+    }
+
+    pub(crate) fn invalidate(&mut self) {
+        self.reusable = false;
+        self.connection.take();
     }
 
     fn call_current(&mut self, request: &[u8], is_void: bool) -> Result<Vec<u8>> {
@@ -294,12 +309,19 @@ impl PooledConnection {
                 read_bare_response(&mut connection.stream, self.maximum_frame_length, sequence)
             }
         }
-        .map_err(map_rpc_error)?;
+        .map_err(map_rpc_error);
+        // A status error is a complete frame with the expected sequence, so
+        // consume its sequence just like success. It does not desynchronize I/O.
+        if let Err(error) = &response {
+            if !matches!(error, Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) {
+                return response;
+            }
+        }
         connection.next_sequence = sequence
             .checked_add(1)
             .ok_or(Error::Transport("RPC sequence overflow"))?;
         self.reusable = true;
-        Ok(response)
+        response
     }
 }
 
@@ -817,7 +839,11 @@ impl FoksClient {
             host_id: host.host_id.as_bytes().to_vec(),
             authentication,
             trust,
-            selected_vhost: select_request.is_some(),
+            selection_protocol: select_request
+                .map(|request| {
+                    call_protocol_id(request, self.maximum_frame_length).map_err(map_rpc_error)
+                })
+                .transpose()?,
         };
         let roots = authenticated_tls_roots(host)?;
         // Build and validate the credential even on a pool hit. This prevents
@@ -1006,5 +1032,32 @@ mod transport_tests {
         assert_ne!(first, changed_key);
         assert_ne!(first, changed_chain);
         assert_ne!(first, authentication_fingerprint(None));
+    }
+    #[test]
+    fn pool_scope_includes_selection_protocol_and_security_material() {
+        let base = PoolKey {
+            hostname: "localhost".into(),
+            port: 443,
+            host_id: vec![2; 33],
+            authentication: [3; 32],
+            trust: [4; 32],
+            selection_protocol: Some(foks_rpc::REAL_TIME_PROTOCOL_ID),
+        };
+        let mut keys = std::collections::HashSet::from([base.clone()]);
+        let mut key = base.clone();
+        key.selection_protocol = None;
+        assert!(keys.insert(key));
+        let mut key = base.clone();
+        key.selection_protocol = Some(1);
+        assert!(keys.insert(key));
+        let mut key = base.clone();
+        key.host_id[1] ^= 1;
+        assert!(keys.insert(key));
+        let mut key = base.clone();
+        key.authentication[0] ^= 1;
+        assert!(keys.insert(key));
+        let mut key = base;
+        key.trust[0] ^= 1;
+        assert!(keys.insert(key));
     }
 }

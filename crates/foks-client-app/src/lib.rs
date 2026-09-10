@@ -1315,12 +1315,17 @@ mod tests {
             Err(Error::CapabilityDenied(Capability::Kv))
         ));
 
+        assert!(granted.require_at(Capability::Chat, 199).is_err());
+        let mut chat_artifact = artifact.clone();
+        chat_artifact.capabilities.insert("chat".to_owned());
+        let signed_chat = SignedCanaryArtifact::sign(chat_artifact, &seed).unwrap();
+        let chat = initial.apply_canary(&signed_chat, 101).unwrap();
+        assert!(chat.require_at(Capability::Chat, 199).is_ok());
+        assert!(chat.require_at(Capability::Chat, 200).is_err());
+
         let mut tampered = granted.clone();
         if let ProtocolPolicy::CurrentValidated { artifact, .. } = &mut tampered.protocol {
-            artifact
-                .artifact
-                .capabilities
-                .insert("federation".to_owned());
+            artifact.artifact.capabilities.insert("chat".to_owned());
         }
         assert!(matches!(
             tampered.validate(),

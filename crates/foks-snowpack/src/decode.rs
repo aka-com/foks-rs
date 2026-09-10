@@ -1,3 +1,5 @@
+use zeroize::Zeroizing;
+
 use crate::{Error, ErrorKind, PathSegment, Value, MAX_DEPTH};
 
 // Snowpack frames are network-facing. Cap the total decoded AST, rather than
@@ -20,6 +22,19 @@ pub fn decode_prefix(input: &[u8]) -> Result<(Value, usize), Error> {
     let mut decoder = Decoder::new(input, false);
     let value = decoder.value()?;
     Ok((value, decoder.offset))
+}
+
+/// Decodes sensitive input with erasure of complete and partially decoded trees.
+/// The caller retains responsibility for erasing the input buffer.
+/// Variant tags in diagnostic paths are redacted.
+pub fn decode_sensitive(input: &[u8]) -> Result<Zeroizing<Value>, Error> {
+    let mut decoder = Decoder::new(input, false);
+    decoder.sensitive = true;
+    let value = Zeroizing::new(decoder.value()?);
+    if decoder.offset != input.len() {
+        return Err(Error::new(ErrorKind::TrailingBytes, decoder.offset, &[]));
+    }
+    Ok(value)
 }
 
 pub fn validate(input: &[u8]) -> Result<(), Error> {
@@ -45,6 +60,7 @@ struct Decoder<'a> {
     values: usize,
     /// Enforce go-foks's stricter canonical rules for signable encodings.
     signable: bool,
+    sensitive: bool,
 }
 
 impl<'a> Decoder<'a> {
@@ -55,6 +71,7 @@ impl<'a> Decoder<'a> {
             path: Vec::new(),
             values: 0,
             signable,
+            sensitive: false,
         }
     }
 }
@@ -74,7 +91,7 @@ impl Decoder<'_> {
         Ok(byte)
     }
 
-    fn bytes(&mut self, length: usize) -> Result<Vec<u8>, Error> {
+    fn borrowed_bytes(&mut self, length: usize) -> Result<&[u8], Error> {
         let end = self
             .offset
             .checked_add(length)
@@ -82,24 +99,36 @@ impl Decoder<'_> {
         let bytes = self
             .input
             .get(self.offset..end)
-            .ok_or_else(|| self.error(ErrorKind::UnexpectedEof))?
-            .to_vec();
+            .ok_or_else(|| self.error(ErrorKind::UnexpectedEof))?;
         self.offset = end;
         Ok(bytes)
     }
 
+    fn bytes(&mut self, length: usize) -> Result<Vec<u8>, Error> {
+        Ok(self.borrowed_bytes(length)?.to_vec())
+    }
+
     fn u16(&mut self) -> Result<u16, Error> {
-        let bytes: [u8; 2] = self.bytes(2)?.try_into().expect("length checked by bytes");
+        let bytes: [u8; 2] = self
+            .borrowed_bytes(2)?
+            .try_into()
+            .expect("length checked by bytes");
         Ok(u16::from_be_bytes(bytes))
     }
 
     fn u32(&mut self) -> Result<u32, Error> {
-        let bytes: [u8; 4] = self.bytes(4)?.try_into().expect("length checked by bytes");
+        let bytes: [u8; 4] = self
+            .borrowed_bytes(4)?
+            .try_into()
+            .expect("length checked by bytes");
         Ok(u32::from_be_bytes(bytes))
     }
 
     fn u64(&mut self) -> Result<u64, Error> {
-        let bytes: [u8; 8] = self.bytes(8)?.try_into().expect("length checked by bytes");
+        let bytes: [u8; 8] = self
+            .borrowed_bytes(8)?
+            .try_into()
+            .expect("length checked by bytes");
         Ok(u64::from_be_bytes(bytes))
     }
 
@@ -282,14 +311,14 @@ impl Decoder<'_> {
         if self.values.saturating_add(length) > MAXIMUM_DECODED_VALUES {
             return Err(self.error(ErrorKind::ValueLimit));
         }
-        let mut values = Vec::with_capacity(length);
+        let mut values = Zeroizing::new(Vec::with_capacity(length));
         for index in 0..length {
             self.path.push(PathSegment::Index(index));
             let result = self.value();
             self.path.pop();
             values.push(result?);
         }
-        Ok(Value::Array(values))
+        Ok(Value::Array(std::mem::take(&mut *values)))
     }
 
     fn variant(&mut self) -> Result<Value, Error> {
@@ -297,11 +326,19 @@ impl Decoder<'_> {
         if !(0xa0..=0xbf).contains(&marker) {
             return Err(self.error(ErrorKind::InvalidVariantTag));
         }
-        let tag = self.bytes((marker & 0x1f) as usize)?;
-        self.path.push(PathSegment::Variant(tag.clone()));
+        let mut tag = Zeroizing::new(self.bytes((marker & 0x1f) as usize)?);
+        self.path.push(PathSegment::Variant(if self.sensitive {
+            Vec::new()
+        } else {
+            tag.to_vec()
+        }));
         let result = self.value();
         self.path.pop();
-        Ok(Value::Variant(Some((tag, Box::new(result?)))))
+        let value = result?;
+        Ok(Value::Variant(Some((
+            std::mem::take(&mut *tag),
+            Box::new(value),
+        ))))
     }
 }
 
@@ -426,5 +463,35 @@ mod tests {
         encoded.resize(length + 5, 0xc0);
         let error = decode(&encoded).unwrap_err();
         assert_eq!(error.kind, ErrorKind::ValueLimit);
+    }
+}
+
+#[cfg(test)]
+mod sensitive_tests {
+    use super::*;
+    #[test]
+    fn sensitive_decode_matches_regular_decode_and_redacts_error_paths() {
+        let value = Value::Array(vec![
+            Value::Text(b"secret".to_vec()),
+            Value::Binary(vec![7; 256]),
+        ]);
+        let bytes = crate::encode(&value).unwrap();
+        assert_eq!(*decode_sensitive(&bytes).unwrap(), value);
+        // Exercise cleanup after a decoded sibling, a truncated child, and
+        // trailing data, as well as tags that must not reach diagnostics.
+        for input in [
+            vec![0x92, 0xa3, b'o', b'n', b'e', 0xc1],
+            vec![0x92, 0xa3, b'o', b'n', b'e', 0xc4, 4, 1],
+            [bytes.as_slice(), &[0]].concat(),
+            vec![0x81, 0xa6, b's', b'e', b'c', b'r', b'e', b't', 0xc1],
+        ] {
+            let error = decode_sensitive(&input).unwrap_err();
+            assert!(!format!("{error:?}").contains("secret"));
+            assert!(decode(&input).is_err());
+            assert!(error
+                .path
+                .iter()
+                .all(|part| !matches!(part, PathSegment::Variant(tag) if !tag.is_empty())));
+        }
     }
 }

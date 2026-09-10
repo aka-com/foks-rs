@@ -678,7 +678,15 @@ pub(crate) fn bearer_token_introspection() {
 
 #[test]
 pub(crate) fn unsupported_team_routes_return_typed_status() {
-    let fixture = Fixture::start("unsupported-team-routes");
+    unsupported_routes_return_typed_status("Team");
+}
+
+pub(crate) fn unsupported_realtime_routes_return_typed_status() {
+    unsupported_routes_return_typed_status("RealTime");
+}
+
+fn unsupported_routes_return_typed_status(protocol_prefix: &str) {
+    let fixture = Fixture::start("unsupported-routes");
     let created = fixture
         .client
         .create_account(
@@ -688,7 +696,7 @@ pub(crate) fn unsupported_team_routes_return_typed_status() {
         .unwrap();
     for route in foks_server::rpc::ROUTES
         .iter()
-        .filter(|route| route.protocol.starts_with("Team") && !route.supported)
+        .filter(|route| route.protocol.starts_with(protocol_prefix) && !route.supported)
     {
         let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
         let certificates = created

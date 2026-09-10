@@ -112,6 +112,15 @@ pub const LOG_SEND_INIT_METHOD_POSITION: u64 = 1;
 pub const LOG_SEND_INIT_FILE_METHOD_POSITION: u64 = 2;
 pub const LOG_SEND_UPLOAD_BLOCK_METHOD_POSITION: u64 = 3;
 
+pub const REAL_TIME_PROTOCOL_ID: u64 = 0x4f58e7d4;
+pub const RT_NEW_CHANNEL_METHOD_POSITION: u64 = 0;
+pub const RT_GET_CHANNEL_METHOD_POSITION: u64 = 1;
+pub const RT_LIST_CHANNELS_METHOD_POSITION: u64 = 2;
+pub const RT_SEND_METHOD_POSITION: u64 = 3;
+pub const RT_GET_THREAD_METHOD_POSITION: u64 = 4;
+pub const RT_SELECT_VHOST_METHOD_POSITION: u64 = 9;
+pub const RT_RECENTS_METHOD_POSITION: u64 = 10;
+
 /// Reports whether this protocol omits its argument header.
 pub const fn is_headerless_argument_protocol(protocol_id: u64) -> bool {
     matches!(

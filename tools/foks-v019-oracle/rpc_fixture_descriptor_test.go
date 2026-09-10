@@ -16,6 +16,7 @@ import (
 
 func TestFixtureProtocolsUseGeneratedDescriptors(t *testing.T) {
 	protocols := []rpc.ProtocolUniqueID{
+		rem.RealTimeProtocolID,
 		rem.BeaconProtocolID,
 		rem.KexProtocolID,
 		rem.KVStoreProtocolID,

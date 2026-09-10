@@ -117,6 +117,7 @@ pub struct PinnedHost {
     pub(crate) user: ProbeTarget,
     pub(crate) merkle_query: ProbeTarget,
     pub(crate) kv_store: ProbeTarget,
+    pub(crate) realtime: Option<ProbeTarget>,
     pub(crate) tls_ca_certificates: Vec<Vec<u8>>,
 }
 
@@ -313,6 +314,13 @@ fn pinned_host_from_snapshot(snapshot: StoredHostSnapshot, path: &Path) -> Resul
         "Merkle query",
     )?;
     let kv_store = service_target(identity.services(), ServiceType::KvStore, "KV store")?;
+    // Hosts without RT remain usable for their existing services.
+    let realtime = identity
+        .services()
+        .iter()
+        .any(|service| service.service_type == ServiceType::Realtime)
+        .then(|| service_target(identity.services(), ServiceType::Realtime, "realtime"))
+        .transpose()?;
     let tls_ca_certificates = identity.tls_ca_certificates().to_vec();
     if tls_ca_certificates.is_empty() {
         return Err(Error::HostTlsRoots);
@@ -327,6 +335,7 @@ fn pinned_host_from_snapshot(snapshot: StoredHostSnapshot, path: &Path) -> Resul
         user,
         merkle_query,
         kv_store,
+        realtime,
         tls_ca_certificates,
     })
 }

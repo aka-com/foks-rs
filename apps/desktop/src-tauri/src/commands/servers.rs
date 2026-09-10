@@ -636,6 +636,7 @@ fn canary_grants_desktop(artifact: &foks_compat_artifact::SignedCanaryArtifact) 
                     | "recovery"
                     | "passphrases"
                     | "teams"
+                    | "chat"
                     | "federation"
             )
         })

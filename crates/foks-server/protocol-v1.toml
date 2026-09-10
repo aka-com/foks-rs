@@ -33,6 +33,12 @@ permission_denied = 1013
 quota_exceeded = 1060
 rate_limited = 1012
 revoke_race = 1044
+rt_ambiguous_channel = 12004
+rt_channel_exists = 12002
+rt_generic = 12001
+rt_msg_order = 12006
+rt_not_found = 12005
+rt_race = 12003
 stale_cache = 8012
 stale_root = 1014
 team_adhoc_creator_included = 7101
@@ -127,6 +133,13 @@ result_header = false
 name = "LogSend"
 upstream = "LogSend"
 protocol_id = 0xfa4726d9
+argument_header = true
+result_header = true
+
+[[protocol]]
+name = "RealTime"
+upstream = "RealTime"
+protocol_id = 0x4f58e7d4
 argument_header = true
 result_header = true
 
@@ -1831,3 +1844,122 @@ statuses = ["ok", "bad_args", "not_found"]
 max_request_bytes = 4096
 supported = true
 coverage = ["kv_small"]
+
+[[route]]
+protocol = "RealTime"
+protocol_id = 0x4f58e7d4
+method = "rtNewChannel"
+position = 0
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtCreateChannelArgument"
+result = "Void"
+upstream_result = "void"
+argument_header = true
+result_header = true
+statuses = ["unsupported"]
+max_request_bytes = 1048576
+supported = false
+coverage = ["unsupported_realtime_routes"]
+
+[[route]]
+protocol = "RealTime"
+protocol_id = 0x4f58e7d4
+method = "rtGetChannel"
+position = 1
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "Unsupported"
+result = "Unsupported"
+upstream_result = "RTChannelMetadata"
+argument_header = true
+result_header = true
+statuses = ["unsupported"]
+max_request_bytes = 1048576
+supported = false
+coverage = ["unsupported_realtime_routes"]
+
+[[route]]
+protocol = "RealTime"
+protocol_id = 0x4f58e7d4
+method = "rtListAllChannelsForTeam"
+position = 2
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtListChannelsArgument"
+result = "RtChannelSet"
+upstream_result = "RTChannelSet"
+argument_header = true
+result_header = true
+statuses = ["unsupported"]
+max_request_bytes = 1048576
+supported = false
+coverage = ["unsupported_realtime_routes"]
+
+[[route]]
+protocol = "RealTime"
+protocol_id = 0x4f58e7d4
+method = "rtSend"
+position = 3
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtSendArgument"
+result = "RtSendResult"
+upstream_result = "RTSendRes"
+argument_header = true
+result_header = true
+statuses = ["unsupported"]
+max_request_bytes = 1048576
+supported = false
+coverage = ["unsupported_realtime_routes"]
+
+[[route]]
+protocol = "RealTime"
+protocol_id = 0x4f58e7d4
+method = "rtGetThread"
+position = 4
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtGetThreadArgument"
+result = "RtThreadPage"
+upstream_result = "RTThreadPage"
+argument_header = true
+result_header = true
+statuses = ["unsupported"]
+max_request_bytes = 1048576
+supported = false
+coverage = ["unsupported_realtime_routes"]
+
+[[route]]
+protocol = "RealTime"
+protocol_id = 0x4f58e7d4
+method = "rtSelectVHost"
+position = 9
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtSelectVhostArgument"
+result = "Void"
+upstream_result = "void"
+argument_header = true
+result_header = true
+statuses = ["unsupported"]
+max_request_bytes = 1048576
+supported = false
+coverage = ["unsupported_realtime_routes"]
+
+[[route]]
+protocol = "RealTime"
+protocol_id = 0x4f58e7d4
+method = "rtGetThreadRecents"
+position = 10
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtRecentsArgument"
+result = "RtMessageList"
+upstream_result = "RTMsgList"
+argument_header = true
+result_header = true
+statuses = ["unsupported"]
+max_request_bytes = 1048576
+supported = false
+coverage = ["unsupported_realtime_routes"]

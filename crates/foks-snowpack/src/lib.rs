@@ -11,7 +11,7 @@ mod decode;
 mod encode;
 mod error;
 
-pub use decode::{decode, decode_prefix, validate, validate_signable};
+pub use decode::{decode, decode_prefix, decode_sensitive, validate, validate_signable};
 pub use encode::{encode, encode_ref};
 pub use error::{Error, ErrorKind, PathSegment};
 
@@ -44,6 +44,8 @@ pub enum Value {
 /// cloning them into an ordinary [`Vec`].
 #[derive(Debug, Eq, PartialEq)]
 pub enum ValueRef<'a> {
+    /// An owned nonsensitive subtree used alongside borrowed sensitive fields.
+    Owned(Value),
     /// An already-owned subtree that can be embedded without cloning it.
     Value(&'a Value),
     Null,
@@ -59,5 +61,21 @@ pub enum ValueRef<'a> {
 impl<'a> From<&'a Value> for ValueRef<'a> {
     fn from(value: &'a Value) -> Self {
         Self::Value(value)
+    }
+}
+
+// Opt-in erasure; ordinary Value ownership and destructuring remain unchanged.
+impl zeroize::Zeroize for Value {
+    fn zeroize(&mut self) {
+        match self {
+            Self::Binary(bytes) | Self::Text(bytes) => bytes.zeroize(),
+            Self::Array(values) => values.zeroize(),
+            Self::Variant(Some((tag, value))) => {
+                tag.zeroize();
+                value.zeroize();
+            }
+            _ => {}
+        }
+        *self = Self::Null;
     }
 }

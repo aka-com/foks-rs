@@ -197,6 +197,7 @@ fn unsigned_newer_merkle_root_is_rejected_before_user_state_is_used() {
         registration: registration_target,
         user: user_target.clone(),
         merkle_query: merkle_target,
+        realtime: Some(user_target.clone()),
         kv_store: user_target,
         tls_ca_certificates: vec![pki.server_ca.clone()],
     };
@@ -254,4 +255,239 @@ fn stalled_tls_obeys_the_overall_deadline() {
     assert!(matches!(error, Error::DeadlineExceeded));
     assert!(started.elapsed() < Duration::from_secs(2));
     drop(stalled_peer);
+}
+
+#[test]
+fn realtime_selects_pinned_host_with_mtls_and_preserves_pooled_sequence() {
+    realtime_sequence_scenario(false);
+}
+
+#[test]
+fn realtime_status_error_consumes_sequence_and_preserves_connection() {
+    realtime_sequence_scenario(true);
+}
+
+fn realtime_sequence_scenario(status_error: bool) {
+    use foks_proto::{
+        RealtimeWire, RtChannelSet, RtHostId, RtListChannelsArgument, RtSelectVhostArgument,
+    };
+    use foks_rpc::{read_call, RealtimeRequest, RealtimeResponse, REAL_TIME_PROTOCOL_ID};
+    let pki = test_pki();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let target = ProbeTarget::parse(&format!(
+        "localhost:{}",
+        listener.local_addr().unwrap().port()
+    ))
+    .unwrap();
+    let mut client = FoksClient::with_roots(rustls::RootCertStore::empty());
+    client.set_timeout(Duration::from_secs(5));
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("hard.sqlite3");
+    let public = verify_public_host("foks.app", PROBE).unwrap();
+    HardStateStore::open(&database)
+        .unwrap()
+        .accept_verified_host(&public.snapshot)
+        .unwrap();
+    let mut host = client.pinned_host("foks.app", &database).unwrap();
+    host.realtime = Some(target);
+    host.tls_ca_certificates = vec![pki.server_ca];
+    let Value::Array(certs) = decode(&pki.certificate_result).unwrap() else {
+        panic!()
+    };
+    let credential = DeviceCredential {
+        uid: entity("uid.snowp"),
+        seed: pki.seed,
+        certificate_chain: certs
+            .into_iter()
+            .map(|v| {
+                let Value::Binary(b) = v else { panic!() };
+                b
+            })
+            .collect(),
+    };
+    let select = RealtimeRequest::SelectVhost(RtSelectVhostArgument {
+        host: RtHostId::new(host.host_id.clone()).unwrap(),
+    });
+    let expected_select = select.argument().unwrap();
+    let server = thread::spawn(move || {
+        let (tcp, _) = listener.accept().unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let conn = rustls::ServerConnection::new(pki.authenticated_server).unwrap();
+        let mut tls = rustls::StreamOwned::new(conn, tcp);
+        for (sequence, position) in [(0, 9), (1, 2), (2, 2)] {
+            let call = read_call(&mut tls, DEFAULT_MAX_FRAME_LENGTH).unwrap();
+            assert!(tls.conn.peer_certificates().is_some());
+            assert_eq!(call.protocol_id(), REAL_TIME_PROTOCOL_ID);
+            assert_eq!(call.method_position(), position);
+            assert_eq!(call.sequence(), sequence);
+            if sequence == 0 {
+                assert_eq!(call.argument(), expected_select);
+            }
+            if sequence == 1 && status_error {
+                tls.write_all(
+                    &foks_rpc::encode_status_response_at(
+                        &foks_rpc::RpcStatus::RtRace("retry after refresh".into()),
+                        sequence,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+                tls.flush().unwrap();
+                continue;
+            }
+            let result = if sequence == 0 {
+                vec![0xc0]
+            } else {
+                RtChannelSet {
+                    version: 7,
+                    channels: vec![],
+                    mtime: 8,
+                }
+                .encoded()
+                .unwrap()
+            };
+            tls.write_all(&encode_success_response_at(&result, sequence).unwrap())
+                .unwrap();
+            tls.flush().unwrap();
+        }
+    });
+    let fixture = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../foks-snowpack/tests/fixtures/foks-v0.1.9/realtime/request-2.frame"
+    ))
+    .unwrap();
+    let call = read_call(&mut fixture.as_slice(), DEFAULT_MAX_FRAME_LENGTH).unwrap();
+    let request =
+        RealtimeRequest::ListChannels(RtListChannelsArgument::decode(call.argument()).unwrap());
+    for attempt in 0..2 {
+        let mut connection = client.realtime_connection(&host, &credential).unwrap();
+        assert!(connection.call(&select).is_err());
+        if attempt == 0 && status_error {
+            assert!(matches!(
+                connection.call(&request),
+                Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                    code: 12003,
+                    ..
+                }))
+            ));
+        } else {
+            assert!(
+                matches!(connection.call(&request).unwrap(), RealtimeResponse::Channels(v) if v.version == 7)
+            );
+        }
+    }
+    server.join().unwrap();
+    host.realtime = None;
+    assert!(matches!(
+        client.realtime_connection(&host, &credential),
+        Err(Error::PinnedService("realtime"))
+    ));
+}
+
+#[test]
+fn realtime_timeout_closes_stream_and_rejects_subsequent_calls() {
+    use foks_proto::{
+        RealtimeWire, RtChannelSet, RtHostId, RtListChannelsArgument, RtSelectVhostArgument,
+    };
+    use foks_rpc::{read_call, RealtimeRequest, RealtimeResponse, REAL_TIME_PROTOCOL_ID};
+    let pki = test_pki();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let target = ProbeTarget::parse(&format!(
+        "localhost:{}",
+        listener.local_addr().unwrap().port()
+    ))
+    .unwrap();
+    let mut client = FoksClient::with_roots(rustls::RootCertStore::empty());
+    client.set_timeout(Duration::from_millis(250));
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("hard.sqlite3");
+    let public = verify_public_host("foks.app", PROBE).unwrap();
+    HardStateStore::open(&database)
+        .unwrap()
+        .accept_verified_host(&public.snapshot)
+        .unwrap();
+    let mut host = client.pinned_host("foks.app", &database).unwrap();
+    host.realtime = Some(target);
+    host.tls_ca_certificates = vec![pki.server_ca];
+    let Value::Array(certs) = decode(&pki.certificate_result).unwrap() else {
+        panic!()
+    };
+    let credential = DeviceCredential {
+        uid: entity("uid.snowp"),
+        seed: pki.seed,
+        certificate_chain: certs
+            .into_iter()
+            .map(|v| {
+                let Value::Binary(b) = v else { panic!() };
+                b
+            })
+            .collect(),
+    };
+    let select = RealtimeRequest::SelectVhost(RtSelectVhostArgument {
+        host: RtHostId::new(host.host_id.clone()).unwrap(),
+    });
+    let expected_select = select.argument().unwrap();
+    let server = thread::spawn(move || {
+        let (tcp, _) = listener.accept().unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let conn = rustls::ServerConnection::new(pki.authenticated_server).unwrap();
+        let mut tls = rustls::StreamOwned::new(conn, tcp);
+        for (sequence, position) in [(0, 9), (1, 2), (2, 2)] {
+            if sequence == 2 {
+                // After the timeout, the peer must close instead of issuing a
+                // new request that could consume the delayed response.
+                assert!(read_call(&mut tls, DEFAULT_MAX_FRAME_LENGTH).is_err());
+                break;
+            }
+            let call = read_call(&mut tls, DEFAULT_MAX_FRAME_LENGTH).unwrap();
+            assert!(tls.conn.peer_certificates().is_some());
+            assert_eq!(call.protocol_id(), REAL_TIME_PROTOCOL_ID);
+            assert_eq!(call.method_position(), position);
+            assert_eq!(call.sequence(), sequence);
+            if sequence == 0 {
+                assert_eq!(call.argument(), expected_select);
+            }
+            if sequence == 1 {
+                continue;
+            }
+            let result = if sequence == 0 {
+                vec![0xc0]
+            } else {
+                RtChannelSet {
+                    version: 7,
+                    channels: vec![],
+                    mtime: 8,
+                }
+                .encoded()
+                .unwrap()
+            };
+            tls.write_all(&encode_success_response_at(&result, sequence).unwrap())
+                .unwrap();
+            tls.flush().unwrap();
+        }
+    });
+    let fixture = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../foks-snowpack/tests/fixtures/foks-v0.1.9/realtime/request-2.frame"
+    ))
+    .unwrap();
+    let call = read_call(&mut fixture.as_slice(), DEFAULT_MAX_FRAME_LENGTH).unwrap();
+    let request =
+        RealtimeRequest::ListChannels(RtListChannelsArgument::decode(call.argument()).unwrap());
+    let mut connection = client.realtime_connection(&host, &credential).unwrap();
+    assert!(connection.call(&request).is_err());
+    let RealtimeRequest::ListChannels(mut next) = request else {
+        panic!()
+    };
+    next.last = 999;
+    assert!(matches!(
+        connection.call(&RealtimeRequest::ListChannels(next)),
+        Err(Error::Transport("pooled connection is absent"))
+    ));
+    server.join().unwrap();
+    host.realtime = None;
+    assert!(matches!(
+        client.realtime_connection(&host, &credential),
+        Err(Error::PinnedService("realtime"))
+    ));
 }

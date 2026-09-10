@@ -9,6 +9,12 @@ use super::{
 /// Application errors that a v1 server may place on the v0.1.9 wire.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RpcStatus {
+    Realtime(String),
+    RtChannelExists,
+    RtRace(String),
+    RtAmbiguousChannel(String),
+    RtNotFound(String),
+    RtMessageOrder(String),
     BadArguments(String),
     BadInvite,
     BadPassphrase,
@@ -56,6 +62,12 @@ pub enum RpcStatus {
 impl RpcStatus {
     fn code(&self) -> u64 {
         match self {
+            Self::Realtime(_) => 12001,
+            Self::RtChannelExists => 12002,
+            Self::RtRace(_) => 12003,
+            Self::RtAmbiguousChannel(_) => 12004,
+            Self::RtNotFound(_) => 12005,
+            Self::RtMessageOrder(_) => 12006,
             Self::BadArguments(_) => 1030,
             Self::BadInvite => 1019,
             Self::BadPassphrase => STATUS_BAD_PASSPHRASE_ERROR,
@@ -162,6 +174,11 @@ fn status_switch_variant(status: &RpcStatus) -> Value {
         | RpcStatus::TeamKey(message)
         | RpcStatus::TeamRemovalKey(message)
         | RpcStatus::TeamExplore(message)
+        | RpcStatus::Realtime(message)
+        | RpcStatus::RtRace(message)
+        | RpcStatus::RtAmbiguousChannel(message)
+        | RpcStatus::RtNotFound(message)
+        | RpcStatus::RtMessageOrder(message)
         | RpcStatus::TeamAdHocInvalidChange(message) => {
             arm(b"1", Value::Text(message.as_bytes().to_vec()))
         }

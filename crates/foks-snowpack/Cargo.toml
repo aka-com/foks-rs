@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Canonical Snowpack codec compatible with FOKS v0.1.9"
 
+[dependencies]
+zeroize = { workspace = true }
+
 [dev-dependencies]
 quickcheck = { version = "1", default-features = false }
 serde = { workspace = true }

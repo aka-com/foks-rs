@@ -29,6 +29,7 @@ pub enum Capability {
     Recovery,
     Passphrases,
     Teams,
+    Chat,
     Federation,
 }
 
@@ -288,6 +289,7 @@ fn capability_from_canary(value: &str) -> Result<Capability> {
         "recovery" => Ok(Capability::Recovery),
         "passphrases" => Ok(Capability::Passphrases),
         "teams" => Ok(Capability::Teams),
+        "chat" => Ok(Capability::Chat),
         "federation" => Ok(Capability::Federation),
         _ => Err(Error::InvalidProfile("canary grants an unknown capability")),
     }
@@ -303,6 +305,7 @@ fn capability_canary_name(capability: Capability) -> &'static str {
         Capability::Recovery => "recovery",
         Capability::Passphrases => "passphrases",
         Capability::Teams => "teams",
+        Capability::Chat => "chat",
         Capability::Federation => "federation",
     }
 }

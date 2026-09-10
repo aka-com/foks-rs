@@ -9,10 +9,12 @@
 mod backup;
 mod kex;
 mod passphrase;
+mod realtime;
 
 pub use backup::*;
 pub use kex::*;
 pub use passphrase::*;
+pub use realtime::*;
 
 use crypto_secretbox::{aead::Aead, KeyInit, XSalsa20Poly1305};
 use ed25519_dalek::{Signature as DalekSignature, Signer as _, SigningKey, VerifyingKey};
@@ -98,6 +100,8 @@ pub enum Error {
     Passphrase,
     #[error("FOKS passphrase stretching failed")]
     PassphraseStretch,
+    #[error("invalid realtime crypto context or encryption input")]
+    Realtime,
     #[error("OS randomness is unavailable")]
     Entropy,
 }

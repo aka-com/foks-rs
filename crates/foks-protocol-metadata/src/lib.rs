@@ -511,7 +511,11 @@ fn validate_listener(value: &str) -> Result<(), MetadataError> {
 fn validate_route_result(value: &str) -> Result<(), MetadataError> {
     if matches!(
         value,
-        "ActivatedTeamView"
+        "RtChannelSet"
+            | "RtSendResult"
+            | "RtThreadPage"
+            | "RtMessageList"
+            | "ActivatedTeamView"
             | "CertificateChain"
             | "DeviceNagInfo"
             | "GenericChain"

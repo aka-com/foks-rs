@@ -115,7 +115,14 @@ pub(super) fn response(
         LogSendLogSendInit | LogSendLogSendInitFile | LogSendLogSendUploadBlock => {
             logsend::response(data, call, principal)
         }
-        TeamAdminPutTeamCert
+        RealTimeRtNewChannel
+        | RealTimeRtGetChannel
+        | RealTimeRtListAllChannelsForTeam
+        | RealTimeRtSend
+        | RealTimeRtGetThread
+        | RealTimeRtSelectVHost
+        | RealTimeRtGetThreadRecents
+        | TeamAdminPutTeamCert
         | TeamAdminGetCurrentTeamCerts
         | TeamAdminLoadTeamRemoteJoinReq
         | TeamAdminPostTeamRemoval

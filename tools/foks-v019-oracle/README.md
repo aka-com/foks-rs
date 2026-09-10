@@ -179,3 +179,18 @@ This requires a working Docker daemon because the official Go test environment
 uses testcontainers for Postgres. It requires no browser or interactive input.
 Ordinary `go test ./...` skips the live test unless `FOKS_RUST_LIVE_DRIVER` is
 set, so the existing fixture suite remains command-line-only and hermetic.
+
+## Realtime phase-1 fixtures
+
+`TestRealtimeFixtures` generates deterministic synthetic identities, RT keys,
+message/name/description boxes and the six initial generated-client RPC frames.
+Ordinary execution compares immutable fixtures and opens the encrypted payloads:
+
+```sh
+GOPROXY=off GOSUMDB=off go test -run '^TestRealtimeFixtures$' -count=1
+```
+
+To intentionally regenerate, set `FOKS_RT_FIXTURE_OUT` to
+`../../crates/foks-snowpack/tests/fixtures/foks-v0.1.9/realtime`.
+The fixture seeds are public test data. No live account or server is contacted.
+Rust crypto and RPC tests assert exact equality with these Go-produced bytes.

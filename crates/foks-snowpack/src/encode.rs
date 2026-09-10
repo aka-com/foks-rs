@@ -1,12 +1,14 @@
+use zeroize::Zeroizing;
+
 use crate::{Error, ErrorKind, PathSegment, Value, ValueRef, MAX_DEPTH};
 
 pub fn encode(value: &Value) -> Result<Vec<u8>, Error> {
     let mut encoder = Encoder {
-        output: Vec::new(),
+        output: Zeroizing::new(Vec::new()),
         path: Vec::new(),
     };
     encoder.value(value)?;
-    Ok(encoder.output)
+    Ok(std::mem::take(&mut *encoder.output))
 }
 
 /// Encodes a borrowed canonical value.
@@ -14,16 +16,72 @@ pub fn encode(value: &Value) -> Result<Vec<u8>, Error> {
 /// The returned buffer is not zeroized automatically. Callers encoding
 /// sensitive fields should immediately move it into zeroizing storage.
 pub fn encode_ref(value: &ValueRef<'_>) -> Result<Vec<u8>, Error> {
+    // Reserve an upper bound before copying sensitive fields. Growing a Vec
+    // after a plaintext write could free an unerased previous allocation.
+    let capacity = encoding_capacity(value, 0)?;
     let mut encoder = Encoder {
-        output: Vec::new(),
+        output: Zeroizing::new(Vec::with_capacity(capacity)),
         path: Vec::new(),
     };
     encoder.value_ref(value)?;
-    Ok(encoder.output)
+    Ok(std::mem::take(&mut *encoder.output))
+}
+
+fn encoding_capacity(value: &ValueRef<'_>, depth: usize) -> Result<usize, Error> {
+    if depth > MAX_DEPTH {
+        return Err(Error::new(ErrorKind::DepthLimit, 0, &[]));
+    }
+    let add = |a: usize, b: usize| {
+        a.checked_add(b)
+            .ok_or_else(|| Error::new(ErrorKind::LengthOverflow, 0, &[]))
+    };
+    let bytes = |length: usize| {
+        if length > u32::MAX as usize {
+            return Err(Error::new(ErrorKind::LengthOverflow, 0, &[]));
+        }
+        add(9, length)
+    };
+    match value {
+        ValueRef::Owned(value) => owned_capacity(value, depth),
+        ValueRef::Value(value) => owned_capacity(value, depth),
+        ValueRef::Binary(value) | ValueRef::Text(value) => bytes(value.len()),
+        ValueRef::Array(values) => values.iter().try_fold(9, |total, value| {
+            add(total, encoding_capacity(value, depth + 1)?)
+        }),
+        ValueRef::Variant(Some((tag, value))) => {
+            add(bytes(tag.len())?, encoding_capacity(value, depth + 1)?)
+        }
+        _ => Ok(9),
+    }
+}
+fn owned_capacity(value: &Value, depth: usize) -> Result<usize, Error> {
+    match value {
+        Value::Binary(value) => encoding_capacity(&ValueRef::Binary(value), depth),
+        Value::Text(value) => encoding_capacity(&ValueRef::Text(value), depth),
+        Value::Array(values) => {
+            if depth > MAX_DEPTH {
+                return Err(Error::new(ErrorKind::DepthLimit, 0, &[]));
+            }
+            values.iter().try_fold(9usize, |total, value| {
+                total
+                    .checked_add(owned_capacity(value, depth + 1)?)
+                    .ok_or_else(|| Error::new(ErrorKind::LengthOverflow, 0, &[]))
+            })
+        }
+        Value::Variant(Some((tag, value))) => {
+            if depth > MAX_DEPTH {
+                return Err(Error::new(ErrorKind::DepthLimit, 0, &[]));
+            }
+            (9 + tag.len())
+                .checked_add(owned_capacity(value, depth + 1)?)
+                .ok_or_else(|| Error::new(ErrorKind::LengthOverflow, 0, &[]))
+        }
+        _ => Ok(9),
+    }
 }
 
 struct Encoder {
-    output: Vec<u8>,
+    output: Zeroizing<Vec<u8>>,
     path: Vec<PathSegment>,
 }
 
@@ -55,6 +113,7 @@ impl Encoder {
             return Err(self.error(ErrorKind::DepthLimit));
         }
         match value {
+            ValueRef::Owned(value) => self.value(value)?,
             ValueRef::Value(value) => self.value(value)?,
             ValueRef::Null => self.output.push(0xc0),
             ValueRef::Bool(false) => self.output.push(0xc2),

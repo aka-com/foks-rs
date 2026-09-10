@@ -3,6 +3,12 @@ version = 1
 baseline = "foks-v0.1.9"
 
 [status_aliases]
+rt_generic = "RT_GENERIC_ERROR"
+rt_channel_exists = "RT_CHANNEL_EXISTS_ERROR"
+rt_race = "RT_RACE"
+rt_ambiguous_channel = "RT_AMBIGUOUS_CHANNEL_ERROR"
+rt_not_found = "RT_NOT_FOUND_ERROR"
+rt_msg_order = "RT_MSG_ORDER_ERROR"
 ok = "OK"
 bad_args = "BAD_ARGS_ERROR"
 bad_invite = "BAD_INVITE_CODE_ERROR"
@@ -1513,3 +1519,99 @@ statuses = ["ok", "bad_args", "not_found"]
 max_request_bytes = 4096
 supported = true
 coverage = ["kv_small"]
+
+[[protocol]]
+name = "RealTime"
+upstream = "RealTime"
+id_constant = "REAL_TIME_PROTOCOL_ID"
+
+[[route]]
+protocol = "RealTime"
+method = "rtNewChannel"
+position_constant = "RT_NEW_CHANNEL_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtCreateChannelArgument"
+result = "Void"
+statuses = ["unsupported"]
+max_request_bytes = 1048576
+supported = false
+coverage = ["unsupported_realtime_routes"]
+
+[[route]]
+protocol = "RealTime"
+method = "rtGetChannel"
+position_constant = "RT_GET_CHANNEL_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "Unsupported"
+result = "Unsupported"
+statuses = ["unsupported"]
+max_request_bytes = 1048576
+supported = false
+coverage = ["unsupported_realtime_routes"]
+
+[[route]]
+protocol = "RealTime"
+method = "rtListAllChannelsForTeam"
+position_constant = "RT_LIST_CHANNELS_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtListChannelsArgument"
+result = "RtChannelSet"
+statuses = ["unsupported"]
+max_request_bytes = 1048576
+supported = false
+coverage = ["unsupported_realtime_routes"]
+
+[[route]]
+protocol = "RealTime"
+method = "rtSend"
+position_constant = "RT_SEND_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtSendArgument"
+result = "RtSendResult"
+statuses = ["unsupported"]
+max_request_bytes = 1048576
+supported = false
+coverage = ["unsupported_realtime_routes"]
+
+[[route]]
+protocol = "RealTime"
+method = "rtGetThread"
+position_constant = "RT_GET_THREAD_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtGetThreadArgument"
+result = "RtThreadPage"
+statuses = ["unsupported"]
+max_request_bytes = 1048576
+supported = false
+coverage = ["unsupported_realtime_routes"]
+
+[[route]]
+protocol = "RealTime"
+method = "rtSelectVHost"
+position_constant = "RT_SELECT_VHOST_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtSelectVhostArgument"
+result = "Void"
+statuses = ["unsupported"]
+max_request_bytes = 1048576
+supported = false
+coverage = ["unsupported_realtime_routes"]
+
+[[route]]
+protocol = "RealTime"
+method = "rtGetThreadRecents"
+position_constant = "RT_RECENTS_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtRecentsArgument"
+result = "RtMessageList"
+statuses = ["unsupported"]
+max_request_bytes = 1048576
+supported = false
+coverage = ["unsupported_realtime_routes"]

@@ -258,12 +258,18 @@ type teamMemberDescriptorStub struct{ rem.TeamMemberInterface }
 
 func (teamMemberDescriptorStub) ErrorWrapper() func(error) proto.Status { return fixtureErrorWrapper() }
 
+type realtimeDescriptorStub struct{ rem.RealTimeInterface }
+
+func (realtimeDescriptorStub) ErrorWrapper() func(error) proto.Status { return fixtureErrorWrapper() }
+
 type userDescriptorStub struct{ rem.UserInterface }
 
 func (userDescriptorStub) ErrorWrapper() func(error) proto.Status { return fixtureErrorWrapper() }
 
 func generatedProtocol(protocol rpc.ProtocolUniqueID) (rpc.ProtocolV2, error) {
 	switch protocol {
+	case rem.RealTimeProtocolID:
+		return rem.RealTimeProtocol(realtimeDescriptorStub{}), nil
 	case rem.BeaconProtocolID:
 		return rem.BeaconProtocol(beaconDescriptorStub{}), nil
 	case rem.KexProtocolID:
@@ -369,6 +375,19 @@ func generatedWireResult(protocol rpc.ProtocolUniqueID, position rpc.Position, d
 	ctx := context.Background()
 	var err error
 	switch {
+	case protocol == rem.RealTimeProtocolID && position == 0:
+		err = (rem.RealTimeClient{Cli: capture}).RtNewChannel(ctx, rem.RtNewChannelArg{})
+	case protocol == rem.RealTimeProtocolID && position == 2:
+		_, err = (rem.RealTimeClient{Cli: capture}).RtListAllChannelsForTeam(ctx, rem.RtListAllChannelsForTeamArg{})
+	case protocol == rem.RealTimeProtocolID && position == 3:
+		_, err = (rem.RealTimeClient{Cli: capture}).RtSend(ctx, rem.RTSendArg{})
+	case protocol == rem.RealTimeProtocolID && position == 4:
+		_, err = (rem.RealTimeClient{Cli: capture}).RtGetThread(ctx, rem.RTThreadQuery{})
+	case protocol == rem.RealTimeProtocolID && position == 9:
+		err = (rem.RealTimeClient{Cli: capture}).RtSelectVHost(ctx, proto.HostID{})
+	case protocol == rem.RealTimeProtocolID && position == 10:
+		_, err = (rem.RealTimeClient{Cli: capture}).RtGetThreadRecents(ctx, rem.RtGetThreadRecentsArg{})
+
 	case protocol == rem.TeamAdminProtocolID && position == 1:
 		err = (rem.TeamAdminClient{Cli: capture}).CreateTeam(ctx, rem.CreateTeamArg{})
 	case protocol == rem.TeamLoaderProtocolID && position == 3:
