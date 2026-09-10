@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import {
   Avatar,
@@ -53,7 +53,8 @@ import type {
   StoreRef,
   World,
 } from '../model';
-import type { Bridge } from '../bridge';
+import { enqueueProfileWork } from '../bridge';
+import type { Bridge, PendingOperation } from '../bridge';
 import type { RoleDto } from '../bridge';
 import type { GroupSettingsTab, Location } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
@@ -1776,9 +1777,9 @@ export function GroupSettingsScreen({
   bridge,
   location,
   onNavigate,
-  onApplied,
+  onApplied: onWorldApplied,
   onError,
-  onMutationError,
+  onMutationError: onWorldMutationError,
 }: {
   world: World;
   bridge: Bridge;
@@ -1823,6 +1824,60 @@ export function GroupSettingsScreen({
   );
   const [expulsionTarget, setExpulsionTarget] =
     useState<FederationEntry | null>(null);
+  // An interrupted member addition or role change leaves durable local state
+  // that blocks every later membership mutation until it is resumed. Read the
+  // account's pending operations for this group so the UI can finish it.
+  const [membershipPending, setMembershipPending] = useState<
+    PendingOperation[]
+  >([]);
+  const pendingProfile = store?.kind === 'team' ? store.server : undefined;
+  const pendingAlias = store?.kind === 'team' ? store.alias : undefined;
+  const loadMembershipPending = useCallback(async (): Promise<void> => {
+    if (!pendingProfile || !pendingAlias) {
+      setMembershipPending([]);
+      return;
+    }
+    try {
+      const rows = await enqueueProfileWork(bridge, pendingProfile, () =>
+        bridge.listPendingOperations(pendingProfile),
+      );
+      setMembershipPending(
+        rows.filter(
+          (row) =>
+            row.alias === pendingAlias &&
+            (row.kind === 'team-member-addition' ||
+              row.kind === 'team-member-edit'),
+        ),
+      );
+    } catch {
+      setMembershipPending([]);
+    }
+  }, [bridge, pendingAlias, pendingProfile]);
+  useEffect(() => {
+    void loadMembershipPending();
+  }, [loadMembershipPending]);
+  // Both successful changes and reconciled failures can change the durable
+  // pending records. Refresh them for every membership action and manual refresh.
+  const onApplied = useCallback(
+    async (message: string): Promise<void> => {
+      try {
+        await onWorldApplied(message);
+      } finally {
+        await loadMembershipPending();
+      }
+    },
+    [loadMembershipPending, onWorldApplied],
+  );
+  const onMutationError = useCallback<MutationFailureHandler>(
+    async (error, options) => {
+      try {
+        await onWorldMutationError(error, options);
+      } finally {
+        await loadMembershipPending();
+      }
+    },
+    [loadMembershipPending, onWorldMutationError],
+  );
   const [target, setTarget] = useState<Party | null>(() => {
     if (initial === 'demote')
       return parties.find((party) => party.username === 'priya.n') ?? null;
@@ -1912,6 +1967,24 @@ export function GroupSettingsScreen({
       await onApplied(message);
     } catch (error) {
       await onMutationError(error);
+    }
+  };
+  const resumeMembership = (operation: PendingOperation): void => {
+    if (!store || store.kind !== 'team') return;
+    if (operation.kind === 'team-member-addition') {
+      const username = operation.target;
+      if (!username) return;
+      void mutate(
+        () => bridge.resumeGroupMemberAddition({ storeId: store.id, username }),
+        'Member addition resumed',
+      );
+      return;
+    }
+    if (operation.kind === 'team-member-edit') {
+      void mutate(
+        () => bridge.resumeGroupMemberEdit(store.id),
+        'Member change resumed',
+      );
     }
   };
 
@@ -2038,6 +2111,37 @@ export function GroupSettingsScreen({
         />
       ) : (
         <>
+          {membershipPending.length ? (
+            <Notice
+              severity="warn"
+              title="Finish a pending membership change"
+            >
+              <p>
+                FOKS stopped partway through changing this group’s members.
+                Finish the pending change before adding, removing, or changing
+                anyone else.
+              </p>
+              {membershipPending.map((operation) => (
+                <p key={`${operation.kind}:${operation.target ?? ''}`}>
+                  {operation.kind === 'team-member-addition'
+                    ? `Add ${operation.target ?? 'member'}`
+                    : 'Finish the role change'}{' '}
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    aria-label={
+                      operation.kind === 'team-member-addition'
+                        ? `Resume adding ${operation.target ?? 'member'}`
+                        : 'Resume the role change'
+                    }
+                    onClick={() => resumeMembership(operation)}
+                  >
+                    Resume
+                  </Button>
+                </p>
+              ))}
+            </Notice>
+          ) : null}
           <Tabs
             label="Group sections"
             value={tab}
