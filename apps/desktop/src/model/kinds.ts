@@ -3,9 +3,16 @@
  *
  * Classifies filesystem nodes into user-facing product kinds:
  *   - Password: Secret node containing a password field or located under `/logins/`
+ *   - File: File node, or a small-file node under `/documents/`
  *   - Resource: Any other Secret node
- *   - File: File node
  *   - Link: Symlink node
+ *
+ * The v0.1.9 KV format stores every value up to 2,040 bytes as one `small-file`
+ * node whether it was written as a note or as a file, so the protocol node type
+ * cannot separate the two. The File product always files its items under
+ * `/documents/`, which is the same kind of path convention the app already uses
+ * to read a `/logins/` secret as a Password; an explicitly custom path on a
+ * small file remains the one case this cannot recover.
  */
 
 import type { Item, ItemKind, NodeKind, NodeType } from './types';
@@ -58,13 +65,15 @@ export const KIND_LIST = Object.keys(KINDS) as (keyof typeof KINDS)[];
 
 const PASSWORD_LINE = /^password:/m;
 
+const DOCUMENT_PREFIX = '/documents/';
+
 /** The kind a person reads this item as. */
 export function kindOf(item: Pick<Item, 'kind' | 'path' | 'value'>): ItemKind {
   if (item.kind !== 'Secret') return item.kind;
-  return PASSWORD_LINE.test(item.value ?? '') ||
-    item.path.startsWith('/logins/')
-    ? 'Password'
-    : 'Resource';
+  if (PASSWORD_LINE.test(item.value ?? '') || item.path.startsWith('/logins/'))
+    return 'Password';
+  if (item.path.startsWith(DOCUMENT_PREFIX)) return 'File';
+  return 'Resource';
 }
 
 const NODE_TYPES: Readonly<Record<NodeKind, NodeType>> = {

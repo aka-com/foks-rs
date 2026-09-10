@@ -250,6 +250,21 @@ test('kindOf classifies Secret items as Password or Resource based on path and c
     kindOf(item(FIXTURE, 'acct:personal|/agents/anthropic-api-key')),
     'Resource',
   );
+  // A small file is stored as the same `small-file` node as a note, so the
+  // File product's /documents/ path is what keeps its kind as File even
+  // when its bytes happen to be UTF-8 text.
+  assert.equal(
+    kindOf({
+      kind: 'Secret',
+      path: '/documents/readme.txt',
+      value: 'plain UTF-8 text',
+    }),
+    'File',
+  );
+  assert.equal(
+    kindOf({ kind: 'Secret', path: '/documents/empty.csv', value: '' }),
+    'File',
+  );
   // File and Link items preserve their declared kinds.
   assert.equal(
     kindOf(item(FIXTURE, 'acct:personal|/documents/passport-scan.pdf')),
