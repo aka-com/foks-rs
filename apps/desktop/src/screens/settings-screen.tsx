@@ -63,6 +63,7 @@ interface Props {
   onRefreshWorld: () => Promise<World>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
+  onLock: () => Promise<boolean>;
 }
 
 type Sheet =
@@ -281,6 +282,7 @@ export function SettingsScreen({
   onRefreshWorld,
   onError,
   onMutationError,
+  onLock,
 }: Props): ReactNode {
   // Capture initial fixture scene once; the shell canonicalizes the route to 'settings' on mount.
   const [enteredScene] = useState(scene);
@@ -862,6 +864,7 @@ export function SettingsScreen({
                 onRefresh={onRefresh}
                 onError={onError}
                 onMessage={(text: string) => toasts.show(text)}
+                onLock={onLock}
               />
             ) : null}
           </div>
@@ -1826,6 +1829,7 @@ function AboutSection({
   onRefresh,
   onError,
   onMessage,
+  onLock,
 }: {
   world: World;
   bridge: Bridge;
@@ -1833,9 +1837,40 @@ function AboutSection({
   onRefresh: (message: string) => Promise<void>;
   onError: (error: unknown) => void;
   onMessage: (message: string) => void;
+  onLock: () => Promise<boolean>;
 }): ReactNode {
   return (
     <>
+      <SectionLabel>Application</SectionLabel>
+      <Inset className="settings-inset middle">
+        <InsetRow
+          label="Lock application"
+          action={
+            <Button
+              size="sm"
+              icon="shield"
+              onClick={() => {
+                void onLock().then(
+                  (locked) => {
+                    if (!locked)
+                      onMessage(
+                        'Application lock is not available on this system.',
+                      );
+                  },
+                  (error) => onError(error),
+                );
+              }}
+            >
+              Lock now
+            </Button>
+          }
+        >
+          <small>
+            Require your operating-system credentials before FOKS can read
+            vault data again.
+          </small>
+        </InsetRow>
+      </Inset>
       <AgentSection
         world={world}
         bridge={bridge}

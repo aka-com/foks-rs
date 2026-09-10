@@ -178,6 +178,18 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
     };
   }, [bootEpoch, bridge, world]);
 
+  // Re-arm the app lock from the shell. The command layer arms the lock and
+  // returns its state; on a platform that cannot authenticate, `locked` stays
+  // false and nothing is torn down.
+  const lockNow = useCallback(async (): Promise<boolean> => {
+    if (!activeBridge) return false;
+    const next = await activeBridge.lockApp();
+    if (!next.locked) return false;
+    setLoaded(null);
+    setLockState(next);
+    return true;
+  }, [activeBridge]);
+
   if (lockState && activeBridge) {
     const mechanism =
       lockState.mechanism === 'biometry'
@@ -268,6 +280,7 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
       store={store}
       firstRunStart={firstRunStart}
       managedProfile={managedProfile}
+      onLock={lockNow}
     />
   );
 }
@@ -278,6 +291,7 @@ interface VaultShellProps {
   store?: LocationStore;
   firstRunStart?: 'who' | 'local' | null;
   managedProfile?: string | null;
+  onLock: () => Promise<boolean>;
 }
 
 function VaultShell({
@@ -286,6 +300,7 @@ function VaultShell({
   store,
   firstRunStart = null,
   managedProfile = null,
+  onLock,
 }: VaultShellProps): ReactNode {
   const [{ scene, automaticFirstRun }] = useState(() => {
     const decoded = initialScene();
@@ -597,6 +612,7 @@ function VaultShell({
       onRefreshWorld={refreshWorld}
       onError={commandError}
       onMutationError={mutationError}
+      onLock={onLock}
     />
   ) : (
     <PlaceholderScreen location={here} />
