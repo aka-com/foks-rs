@@ -34,6 +34,10 @@ pub enum Error {
     ReceiptExpired,
     #[error("expected Merkle head does not match the authoritative head")]
     StaleRoot,
+    #[error("realtime version changed")]
+    RtRace,
+    #[error("realtime message ordering precondition failed")]
+    RtMessageOrder,
     #[error("KV object conflicts with authoritative state")]
     KvConflict,
     #[error("KV mutation is not permitted by the stored object role")]

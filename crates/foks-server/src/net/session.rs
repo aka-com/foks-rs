@@ -46,6 +46,7 @@ pub(crate) struct ServerData {
     execution: Arc<Semaphore>,
     request_memory: Arc<Semaphore>,
     kex_relay: Arc<kex::Relay>,
+    realtime: crate::services::realtime::RealtimeService,
 }
 
 pub(crate) struct OwnedPassphraseMutation {
@@ -140,6 +141,7 @@ impl ServerData {
             execution: Arc::new(Semaphore::new(config.limits.maximum_in_flight_requests)),
             request_memory: Arc::new(Semaphore::new(config.limits.maximum_request_memory_bytes)),
             kex_relay: Arc::new(kex::Relay::default()),
+            realtime: Default::default(),
         })
     }
 

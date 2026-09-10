@@ -5,6 +5,7 @@ mod kex;
 mod kv;
 mod logsend;
 mod probe;
+mod realtime;
 mod registration;
 mod team;
 mod user;
@@ -116,12 +117,12 @@ pub(super) fn response(
             logsend::response(data, call, principal)
         }
         RealTimeRtNewChannel
-        | RealTimeRtGetChannel
         | RealTimeRtListAllChannelsForTeam
         | RealTimeRtSend
         | RealTimeRtGetThread
         | RealTimeRtSelectVHost
-        | RealTimeRtGetThreadRecents
+        | RealTimeRtGetThreadRecents => realtime::response(data, call, principal),
+        RealTimeRtGetChannel
         | TeamAdminPutTeamCert
         | TeamAdminGetCurrentTeamCerts
         | TeamAdminLoadTeamRemoteJoinReq
@@ -145,6 +146,7 @@ mod tests {
         let dispatch_sources = [
             include_str!("mod.rs"),
             include_str!("kv.rs"),
+            include_str!("realtime.rs"),
             include_str!("probe.rs"),
             include_str!("registration.rs"),
             include_str!("team.rs"),

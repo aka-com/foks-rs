@@ -23,6 +23,7 @@ mod names;
 mod passphrases;
 mod peripheral;
 mod read;
+mod realtime;
 mod receipts;
 mod recovery;
 mod schema;
@@ -76,6 +77,7 @@ pub use read::{
     TeamLinkSnapshot, TeamMemberSnapshot, TeamRemovalSnapshot, TeamSnapshot, UserAuthoritySnapshot,
     UserChainLinkSnapshot, UserChainSnapshot, UserDeviceSnapshot, UserSharedKeySnapshot,
 };
+pub use realtime::{RealtimeActor, RealtimeCommit, RealtimeLimits, RealtimeWakeTarget};
 pub use receipts::Receipt;
 pub use recovery::RecoveryCredentialSnapshot;
 pub use schema::{APPLICATION_ID, SCHEMA_VERSION};

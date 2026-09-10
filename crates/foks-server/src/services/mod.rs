@@ -2,6 +2,7 @@ pub(crate) mod federation;
 pub(crate) mod generic;
 pub(crate) mod kv;
 pub(crate) mod peripheral;
+pub(crate) mod realtime;
 pub(crate) mod registration;
 pub(crate) mod team_admin;
 pub(crate) mod team_loader;

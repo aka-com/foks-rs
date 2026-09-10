@@ -215,9 +215,13 @@ const COVERAGE: &[Coverage] = &[
     Coverage {
         name: "unsupported_realtime_routes",
         run: crate::authorization::unsupported_realtime_routes_return_typed_status,
+        routes: &[("RealTime", "rtGetChannel")],
+    },
+    Coverage {
+        name: "realtime_text",
+        run: crate::realtime::realtime_text,
         routes: &[
             ("RealTime", "rtNewChannel"),
-            ("RealTime", "rtGetChannel"),
             ("RealTime", "rtListAllChannelsForTeam"),
             ("RealTime", "rtSend"),
             ("RealTime", "rtGetThread"),

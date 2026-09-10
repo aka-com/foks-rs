@@ -177,7 +177,7 @@ supported = true
 name = "realtime"
 service_type = 16
 listener = "authenticated"
-supported = false
+supported = true
 
 [[route]]
 protocol = "Beacon"
@@ -1857,10 +1857,10 @@ result = "Void"
 upstream_result = "void"
 argument_header = true
 result_header = true
-statuses = ["unsupported"]
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
-supported = false
-coverage = ["unsupported_realtime_routes"]
+supported = true
+coverage = ["realtime_text"]
 
 [[route]]
 protocol = "RealTime"
@@ -1891,10 +1891,10 @@ result = "RtChannelSet"
 upstream_result = "RTChannelSet"
 argument_header = true
 result_header = true
-statuses = ["unsupported"]
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
-supported = false
-coverage = ["unsupported_realtime_routes"]
+supported = true
+coverage = ["realtime_text"]
 
 [[route]]
 protocol = "RealTime"
@@ -1908,10 +1908,10 @@ result = "RtSendResult"
 upstream_result = "RTSendRes"
 argument_header = true
 result_header = true
-statuses = ["unsupported"]
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
-supported = false
-coverage = ["unsupported_realtime_routes"]
+supported = true
+coverage = ["realtime_text"]
 
 [[route]]
 protocol = "RealTime"
@@ -1925,10 +1925,10 @@ result = "RtThreadPage"
 upstream_result = "RTThreadPage"
 argument_header = true
 result_header = true
-statuses = ["unsupported"]
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
-supported = false
-coverage = ["unsupported_realtime_routes"]
+supported = true
+coverage = ["realtime_text"]
 
 [[route]]
 protocol = "RealTime"
@@ -1942,10 +1942,10 @@ result = "Void"
 upstream_result = "void"
 argument_header = true
 result_header = true
-statuses = ["unsupported"]
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
-supported = false
-coverage = ["unsupported_realtime_routes"]
+supported = true
+coverage = ["realtime_text"]
 
 [[route]]
 protocol = "RealTime"
@@ -1959,7 +1959,7 @@ result = "RtMessageList"
 upstream_result = "RTMsgList"
 argument_header = true
 result_header = true
-statuses = ["unsupported"]
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
-supported = false
-coverage = ["unsupported_realtime_routes"]
+supported = true
+coverage = ["realtime_text"]

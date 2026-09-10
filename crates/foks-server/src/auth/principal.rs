@@ -15,6 +15,7 @@ pub(crate) struct Principal {
     uid: Vec<u8>,
     credential_id: Vec<u8>,
     kind: CredentialKind,
+    certificate_expires_at: u64,
 }
 
 impl Principal {
@@ -45,11 +46,22 @@ impl Principal {
                 ))
             }
         };
+        let (_, parsed) = parse_x509_certificate(certificate.as_ref())
+            .map_err(|_| Error::Config("invalid certificate"))?;
+        let certificate_expires_at = u64::try_from(parsed.validity().not_after.timestamp())
+            .ok()
+            .and_then(|seconds| seconds.checked_mul(1_000_000))
+            .ok_or(Error::Config("certificate expiry out of range"))?;
         Ok(Self {
+            certificate_expires_at,
             uid: binding.uid,
             credential_id: binding.credential_id,
             kind,
         })
+    }
+
+    pub(crate) fn certificate_expires_at(&self) -> u64 {
+        self.certificate_expires_at
     }
 
     pub(crate) fn uid(&self) -> &[u8] {

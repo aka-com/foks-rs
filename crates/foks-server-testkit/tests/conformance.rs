@@ -44,3 +44,6 @@ mod team_kv;
 mod trust_and_registration;
 #[path = "conformance/yubikey.rs"]
 mod yubikey;
+
+#[path = "conformance/realtime.rs"]
+mod realtime;

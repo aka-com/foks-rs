@@ -142,7 +142,7 @@ supported = true
 name = "realtime"
 upstream = "RealTime"
 listener = "authenticated"
-supported = false
+supported = true
 
 [[route]]
 protocol = "Beacon"
@@ -1533,10 +1533,10 @@ listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "RtCreateChannelArgument"
 result = "Void"
-statuses = ["unsupported"]
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
-supported = false
-coverage = ["unsupported_realtime_routes"]
+supported = true
+coverage = ["realtime_text"]
 
 [[route]]
 protocol = "RealTime"
@@ -1559,10 +1559,10 @@ listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "RtListChannelsArgument"
 result = "RtChannelSet"
-statuses = ["unsupported"]
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
-supported = false
-coverage = ["unsupported_realtime_routes"]
+supported = true
+coverage = ["realtime_text"]
 
 [[route]]
 protocol = "RealTime"
@@ -1572,10 +1572,10 @@ listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "RtSendArgument"
 result = "RtSendResult"
-statuses = ["unsupported"]
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
-supported = false
-coverage = ["unsupported_realtime_routes"]
+supported = true
+coverage = ["realtime_text"]
 
 [[route]]
 protocol = "RealTime"
@@ -1585,10 +1585,10 @@ listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "RtGetThreadArgument"
 result = "RtThreadPage"
-statuses = ["unsupported"]
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
-supported = false
-coverage = ["unsupported_realtime_routes"]
+supported = true
+coverage = ["realtime_text"]
 
 [[route]]
 protocol = "RealTime"
@@ -1598,10 +1598,10 @@ listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "RtSelectVhostArgument"
 result = "Void"
-statuses = ["unsupported"]
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
-supported = false
-coverage = ["unsupported_realtime_routes"]
+supported = true
+coverage = ["realtime_text"]
 
 [[route]]
 protocol = "RealTime"
@@ -1611,7 +1611,7 @@ listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "RtRecentsArgument"
 result = "RtMessageList"
-statuses = ["unsupported"]
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
-supported = false
-coverage = ["unsupported_realtime_routes"]
+supported = true
+coverage = ["realtime_text"]
