@@ -615,6 +615,68 @@ pub(crate) fn go_chain_load_authorizations_follow_current_local_permissions() {
 }
 
 #[test]
+pub(crate) fn bearer_token_introspection() {
+    let fixture = Fixture::start("bearer-token-introspection");
+    let created = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("bearertokens", 0x72))
+        .unwrap();
+    let route = |protocol: &str, method: &str| {
+        foks_server::rpc::ROUTES
+            .iter()
+            .find(|route| route.protocol == protocol && route.method == method)
+            .unwrap()
+    };
+    let admin = route("TeamAdmin", "checkTeamBearerToken");
+    let loader = route("TeamLoader", "checkTeamVOBearerToken");
+    assert!(admin.supported && loader.supported);
+
+    let unknown = [0x3c; 16];
+    let host = fixture.host().host_id();
+
+    let call = |protocol_id: u64, position: u64, argument: &[u8]| {
+        let request = foks_rpc::encode_call(protocol_id, position, argument, 0).unwrap();
+        let mut stream = authenticated_stream(&fixture, &created.credential);
+        stream.write_all(&request).unwrap();
+        foks_rpc::read_response(&mut stream, MAX_RESPONSE, 0)
+    };
+
+    // An unknown admin token is a typed stale status, not `unsupported`.
+    let argument =
+        foks_snowpack::encode(&Value::Array(vec![Value::Binary(unknown.to_vec())])).unwrap();
+    let result = call(admin.protocol_id, admin.position, &argument);
+    assert!(
+        matches!(
+            result,
+            Err(foks_rpc::Error::RemoteStatus { code: 7003, .. })
+        ),
+        "unexpected admin result: {result:?}"
+    );
+
+    // The view-token check rejects a different host before any token lookup.
+    let argument = foks_snowpack::encode(&Value::Array(vec![
+        Value::Binary([vec![foks_proto::ENTITY_HOST], vec![0x11; 32]].concat()),
+        Value::Binary(unknown.to_vec()),
+    ]))
+    .unwrap();
+    assert!(matches!(
+        call(loader.protocol_id, loader.position, &argument),
+        Err(foks_rpc::Error::RemoteStatus { code: 1013, .. })
+    ));
+
+    // An unknown view token for this host is the same typed stale status.
+    let argument = foks_snowpack::encode(&Value::Array(vec![
+        Value::Binary(host.as_bytes().to_vec()),
+        Value::Binary(unknown.to_vec()),
+    ]))
+    .unwrap();
+    assert!(matches!(
+        call(loader.protocol_id, loader.position, &argument),
+        Err(foks_rpc::Error::RemoteStatus { code: 7003, .. })
+    ));
+}
+
+#[test]
 pub(crate) fn unsupported_team_routes_return_typed_status() {
     let fixture = Fixture::start("unsupported-team-routes");
     let created = fixture

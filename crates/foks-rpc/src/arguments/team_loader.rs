@@ -44,6 +44,28 @@ pub struct LoadTeamMembershipChainArgument {
     pub start: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckTeamViewArgument {
+    pub host: EntityId,
+    pub token: [u8; 16],
+}
+
+pub fn decode_check_team_view(bytes: &[u8]) -> Result<CheckTeamViewArgument> {
+    let Value::Array(fields) = decode(bytes)? else {
+        return Err(shape("team-view check argument"));
+    };
+    let [Value::Binary(host), Value::Binary(token)] = fields.as_slice() else {
+        return Err(shape("team-view check fields"));
+    };
+    Ok(CheckTeamViewArgument {
+        host: EntityId::from_bytes(host.clone())?,
+        token: token
+            .as_slice()
+            .try_into()
+            .map_err(|_| shape("16-byte team-view bearer token"))?,
+    })
+}
+
 pub fn decode_load_team_membership_chain(bytes: &[u8]) -> Result<LoadTeamMembershipChainArgument> {
     let Value::Array(fields) = decode(bytes)? else {
         return Err(shape("team membership-chain load argument"));

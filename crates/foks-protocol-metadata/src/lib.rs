@@ -552,6 +552,7 @@ fn validate_route_result(value: &str) -> Result<(), MetadataError> {
             | "TeamChain"
             | "TeamConfig"
             | "TeamEditResult"
+            | "TeamID"
             | "TeamNameReservation"
             | "TeamRemoteViewTokenSet"
             | "TeamRemovalAndKeyBox"

@@ -183,6 +183,35 @@ pub(crate) fn activate(
     .map_err(|_| RpcStatus::TransactionRetry)
 }
 
+/// Introspects an already-activated team view bearer token and returns its
+/// team id. This is the re-establish call a client makes after a dropped
+/// connection, so it never re-runs the challenge/activation handshake and only
+/// accepts a token that is still active on this host.
+pub(crate) fn check_team_view_token(
+    argument: &[u8],
+    principal: &Principal,
+    host: &EntityId,
+    reader: &foks_server_db::ReadDatabase,
+    clock: &Arc<dyn foks_server_db::Clock>,
+) -> Result<Vec<u8>, RpcStatus> {
+    principal.require_ordinary_device()?;
+    let request = foks_rpc::arguments::decode_check_team_view(argument).map_err(bad_arguments)?;
+    if request.host != *host {
+        return Err(permission_denied());
+    }
+    let now = clock
+        .now_micros()
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    let authority = reader
+        .resolve_team_view_token(&team::token_hash(&request.token), now)
+        .map_err(|_| RpcStatus::TransactionRetry)?
+        .ok_or_else(|| {
+            RpcStatus::TeamBearerTokenStale("team-view bearer token is not active".to_owned())
+        })?;
+    foks_snowpack::encode(&foks_snowpack::Value::Binary(authority.team_id))
+        .map_err(|_| RpcStatus::TransactionRetry)
+}
+
 pub(crate) fn load_chain(
     argument: &[u8],
     principal: Option<&Principal>,

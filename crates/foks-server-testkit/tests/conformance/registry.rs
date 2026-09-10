@@ -171,8 +171,8 @@ const COVERAGE: &[Coverage] = &[
         ],
     },
     Coverage {
-        name: "unsupported_federation_routes",
-        run: crate::federation::unsupported_federation_routes,
+        name: "beacon_lookup",
+        run: crate::federation::beacon_lookup,
         routes: &[("Beacon", "beaconLookup")],
     },
     Coverage {
@@ -193,11 +193,17 @@ const COVERAGE: &[Coverage] = &[
         ],
     },
     Coverage {
-        name: "unsupported_team_routes",
-        run: crate::authorization::unsupported_team_routes_return_typed_status,
+        name: "bearer_token_introspection",
+        run: crate::authorization::bearer_token_introspection,
         routes: &[
             ("TeamLoader", "checkTeamVOBearerToken"),
             ("TeamAdmin", "checkTeamBearerToken"),
+        ],
+    },
+    Coverage {
+        name: "unsupported_team_routes",
+        run: crate::authorization::unsupported_team_routes_return_typed_status,
+        routes: &[
             ("TeamAdmin", "putTeamCert"),
             ("TeamAdmin", "getCurrentTeamCerts"),
             ("TeamAdmin", "loadTeamRemoteJoinReq"),

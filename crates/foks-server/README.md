@@ -21,9 +21,12 @@ KV. KV covers roots, directories, optimistic dirent writes,
 small files, symlinks, chunked files, pagination, cache checks, and expiring
 locks. Public-client tests exercise these paths without server test hooks.
 
-Federation is limited to client-side Beacon discovery followed by independently
-pinned remote hosts, expiring bearer grants for public user/team chains, and a
-durable client-coordinated remote-team admission saga. There is no general
+Federation is limited to Beacon discovery followed by independently pinned
+remote hosts, expiring bearer grants for public user/team chains, and a durable
+client-coordinated remote-team admission workflow. This server answers the public
+`Beacon.beaconLookup` for its own HostID with its advertised probe endpoint and
+returns a typed not-found for any other host; the client still treats the hint
+as untrusted until a direct probe authenticates the requested HostID. There is no general
 federated trust administration, remote-host push channel, direct remote-user
 membership, remote authentication to local services, team nesting,
 team-member/guest services, realtime service, or arbitrary cross-host

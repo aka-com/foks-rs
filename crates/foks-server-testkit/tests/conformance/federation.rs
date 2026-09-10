@@ -1,4 +1,3 @@
-use std::io::Write as _;
 use std::sync::Arc;
 
 use foks_client::{
@@ -601,8 +600,12 @@ pub(crate) fn remote_team_permission_renewal_preserves_the_embedded_bearer() {
 }
 
 #[test]
-pub(crate) fn unsupported_federation_routes() {
-    let fixture = Fixture::start("unsupported-federation");
+pub(crate) fn beacon_lookup() {
+    use std::io::Write as _;
+
+    use foks_client::ProbeTarget;
+
+    let fixture = Fixture::start("beacon-lookup");
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let mut roots = rustls::RootCertStore::empty();
     for certificate in fixture.host().tls_ca_certificates() {
@@ -615,10 +618,12 @@ pub(crate) fn unsupported_federation_routes() {
         .unwrap()
         .with_root_certificates(roots)
         .with_no_client_auth();
-    for route in foks_server::rpc::ROUTES
-        .iter()
-        .filter(|route| route.protocol == "Beacon" && !route.supported)
-    {
+
+    fn lookup(
+        fixture: &Fixture,
+        config: &rustls::ClientConfig,
+        host: &EntityId,
+    ) -> Result<Vec<u8>, foks_rpc::Error> {
         let tcp = std::net::TcpStream::connect(fixture.server.addresses().public_services).unwrap();
         let connection = rustls::ClientConnection::new(
             Arc::new(config.clone()),
@@ -626,16 +631,29 @@ pub(crate) fn unsupported_federation_routes() {
         )
         .unwrap();
         let mut tls = rustls::StreamOwned::new(connection, tcp);
-        let argument = foks_snowpack::encode(&foks_snowpack::Value::Null).unwrap();
-        let request =
-            foks_rpc::encode_call(route.protocol_id, route.position, &argument, 0).unwrap();
+        let request = foks_rpc::encode_beacon_lookup_request(host).unwrap();
         tls.write_all(&request).unwrap();
-        let error = foks_rpc::read_response(&mut tls, 4096, 0).unwrap_err();
-        assert!(matches!(
-            error,
-            foks_rpc::Error::RemoteStatus { code: 1020, .. }
-        ));
+        foks_rpc::read_response(&mut tls, 4096, 0)
     }
+
+    // This host resolves to its advertised probe endpoint.
+    let own = fixture.host().host_id().clone();
+    let hint = foks_rpc::decode_beacon_lookup_response(
+        own.clone(),
+        &lookup(&fixture, &config, &own).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(hint.host_id, own);
+    let resolved = ProbeTarget::parse(&hint.address).unwrap();
+    assert_eq!(resolved.hostname(), "localhost");
+
+    // Any other HostID is a typed not-found, not an unsupported route.
+    let unknown = entity(ENTITY_HOST, 0x5a);
+    let error = lookup(&fixture, &config, &unknown).unwrap_err();
+    assert!(
+        matches!(error, foks_rpc::Error::RemoteStatus { code: 1049, .. }),
+        "unknown host must be a typed not-found: {error}"
+    );
 }
 
 /// One YubiKey enrolled onto an existing software account, kept as owned parts

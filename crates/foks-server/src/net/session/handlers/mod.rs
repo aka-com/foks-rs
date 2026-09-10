@@ -1,5 +1,6 @@
 //! Typed RPC family dispatch over narrow operation ports.
 
+mod beacon;
 mod kex;
 mod kv;
 mod logsend;
@@ -34,6 +35,7 @@ pub(super) fn response(
         | MerkleQuerySelectVHost
         | RegSelectVHost
         | KvStoreSelectVHost => probe::response(data, call),
+        BeaconBeaconLookup => beacon::response(data, call),
         RegReserveUsername
         | RegCheckNameExists
         | RegJoinWaitList
@@ -76,6 +78,7 @@ pub(super) fn response(
         | UserGrantRemoteViewPermissionForUser => user::response(data, call, principal),
         TeamLoaderGetTeamVOBearerTokenChallenge
         | TeamLoaderActivateTeamVOBearerToken
+        | TeamLoaderCheckTeamVOBearerToken
         | TeamLoaderLoadTeamChain
         | TeamLoaderLoadTeamMembershipChain
         | TeamLoaderLoadRemovalForMember
@@ -87,6 +90,7 @@ pub(super) fn response(
         | TeamAdminEditTeam
         | TeamAdminMakeInertTeamBearerToken
         | TeamAdminActivateTeamBearerToken
+        | TeamAdminCheckTeamBearerToken
         | TeamAdminLoadRemovalKeyBoxForTeamAdmin
         | TeamAdminPostTeamMembershipLink
         | TeamAdminGetTeamConfig
@@ -111,10 +115,7 @@ pub(super) fn response(
         LogSendLogSendInit | LogSendLogSendInitFile | LogSendLogSendUploadBlock => {
             logsend::response(data, call, principal)
         }
-        BeaconBeaconLookup
-        | TeamLoaderCheckTeamVOBearerToken
-        | TeamAdminCheckTeamBearerToken
-        | TeamAdminPutTeamCert
+        TeamAdminPutTeamCert
         | TeamAdminGetCurrentTeamCerts
         | TeamAdminLoadTeamRemoteJoinReq
         | TeamAdminPostTeamRemoval

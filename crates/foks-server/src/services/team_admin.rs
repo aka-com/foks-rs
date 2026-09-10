@@ -194,6 +194,32 @@ pub(crate) fn activate_token(
     Ok(())
 }
 
+/// Introspects an already-activated team admin bearer token and returns its
+/// team id. The token must still be active and held by the authenticated user,
+/// matching the binding `makeInertTeamBearerToken`/`activateTeamBearerToken`
+/// established.
+pub(crate) fn check_team_bearer_token(
+    argument: &[u8],
+    principal: &Principal,
+    reader: &foks_server_db::ReadDatabase,
+    clock: &Arc<dyn foks_server_db::Clock>,
+) -> Result<Vec<u8>, RpcStatus> {
+    principal.require_ordinary_device()?;
+    let token =
+        foks_rpc::arguments::decode_check_team_bearer_token(argument).map_err(bad_arguments)?;
+    let now = clock.now_micros().map_err(internal)?;
+    let authority = reader
+        .resolve_team_admin_token(&crate::auth::team::admin_token_hash(&token), now)
+        .map_err(internal)?
+        .ok_or_else(|| {
+            RpcStatus::TeamBearerTokenStale("team bearer token is not active".to_owned())
+        })?;
+    if authority.holder_id.as_slice() != principal.uid() {
+        return Err(permission_denied());
+    }
+    foks_snowpack::encode(&foks_snowpack::Value::Binary(authority.team_id)).map_err(internal)
+}
+
 pub(crate) fn load_removal_box(
     argument: &[u8],
     principal: &Principal,

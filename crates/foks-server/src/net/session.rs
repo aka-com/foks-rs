@@ -30,6 +30,9 @@ pub(crate) struct ServerData {
     probe_response: Arc<[u8]>,
     host_id: Vec<u8>,
     canonical_name: String,
+    /// The advertised `host:port` a peer should use to reach this host, taken
+    /// from the probe service in the signed public zone.
+    probe_endpoint: String,
     current_root: Vec<u8>,
     read_database: Option<crate::read_pool::ReadPool>,
     writer: Option<WriterHandle>,
@@ -106,13 +109,15 @@ impl ServerData {
         let host_id = first.decode_change()?.host.into_bytes();
         let zone = foks_proto::PublicZone::decode(&probe.public_zone.inner)?;
         let root = MerkleRoot::decode(&probe.merkle_root.inner)?;
-        let canonical_name = endpoint_host(&zone.services.probe)
+        let probe_endpoint = zone.services.probe.clone();
+        let canonical_name = endpoint_host(&probe_endpoint)
             .ok_or(crate::Error::Config("invalid bootstrap probe endpoint"))?
             .to_owned();
         Ok(Self {
             probe_response,
             host_id,
             canonical_name,
+            probe_endpoint,
             current_root: probe.merkle_root.encoded()?,
             read_database: config
                 .read_database
@@ -1017,6 +1022,16 @@ impl ServerData {
             return Err(RpcStatus::NotFound("host not found".to_owned()));
         }
         Ok(())
+    }
+
+    /// Answers a public Beacon lookup for this host's advertised endpoint. The
+    /// request names an exact HostID; any other host is a typed not-found. The
+    /// hint is untrusted routing data: a peer must still probe the returned
+    /// endpoint and verify its hostchain against the requested HostID.
+    fn beacon_lookup(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
+        validate_host_argument_against(argument, &self.host_id, false)?;
+        foks_snowpack::encode(&Value::Text(self.probe_endpoint.as_bytes().to_vec()))
+            .map_err(|_| RpcStatus::TransactionRetry)
     }
 
     fn validate_probe(&self, argument: &[u8]) -> std::result::Result<(), RpcStatus> {

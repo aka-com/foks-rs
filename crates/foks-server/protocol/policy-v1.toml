@@ -146,10 +146,10 @@ listeners = ["public_services"]
 authentication = "public"
 request = "HostId"
 result = "TcpAddress"
-statuses = ["unsupported"]
+statuses = ["ok", "bad_args", "not_found", "unsupported"]
 max_request_bytes = 4096
-supported = false
-coverage = ["unsupported_federation_routes"]
+supported = true
+coverage = ["beacon_lookup"]
 
 [[route]]
 protocol = "Kex"
@@ -841,12 +841,12 @@ protocol = "TeamLoader"
 method = "checkTeamVOBearerToken"
 listeners = ["authenticated"]
 authentication = "active_team_view_token"
-request = "TeamViewToken"
-result = "Unsupported"
-statuses = ["unsupported"]
+request = "CheckTeamVOBearerTokenArg"
+result = "TeamID"
+statuses = ["ok", "bad_args", "team_bearer_token_stale", "permission_denied"]
 max_request_bytes = 4096
-supported = false
-coverage = ["unsupported_team_routes"]
+supported = true
+coverage = ["bearer_token_introspection"]
 
 
 [[route]]
@@ -993,12 +993,12 @@ protocol = "TeamAdmin"
 method = "checkTeamBearerToken"
 listeners = ["authenticated"]
 authentication = "active_team_admin_token"
-request = "Unsupported"
-result = "Unsupported"
-statuses = ["unsupported"]
+request = "CheckTeamBearerTokenArg"
+result = "TeamID"
+statuses = ["ok", "bad_args", "team_bearer_token_stale", "permission_denied"]
 max_request_bytes = 4096
-supported = false
-coverage = ["unsupported_team_routes"]
+supported = true
+coverage = ["bearer_token_introspection"]
 
 
 [[route]]

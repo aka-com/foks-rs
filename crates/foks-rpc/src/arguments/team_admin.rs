@@ -33,6 +33,19 @@ pub struct PostTeamMembershipLinkArgument {
     pub link: PostGenericLinkArgument,
 }
 
+pub fn decode_check_team_bearer_token(bytes: &[u8]) -> Result<[u8; 16]> {
+    let Value::Array(fields) = decode(bytes)? else {
+        return Err(shape("team bearer-token check argument"));
+    };
+    let [Value::Binary(token)] = fields.as_slice() else {
+        return Err(shape("team bearer-token check fields"));
+    };
+    token
+        .as_slice()
+        .try_into()
+        .map_err(|_| shape("16-byte team bearer token"))
+}
+
 pub fn decode_post_team_membership_link(bytes: &[u8]) -> Result<PostTeamMembershipLinkArgument> {
     let Value::Array(fields) = decode(bytes)? else {
         return Err(shape("team membership-link post argument"));
