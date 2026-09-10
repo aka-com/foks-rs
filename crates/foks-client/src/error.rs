@@ -4,6 +4,30 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("invalid chat input: {0}")]
+    ChatInvalidInput(&'static str),
+    #[error("unsupported chat operation: {0}")]
+    ChatUnsupported(&'static str),
+    #[error("chat access denied: {0}")]
+    ChatAccessDenied(&'static str),
+    #[error("refresh chat state before retrying: {0}")]
+    ChatRefreshRequired(&'static str),
+    #[error("cancel this preparation and prepare a new chat operation: {0}")]
+    ChatReprepareRequired(&'static str),
+    #[error("chat object unavailable: {0}")]
+    ChatNotFound(&'static str),
+    #[error("verified chat key unavailable: {0}")]
+    ChatKeyUnavailable(&'static str),
+    #[error("chat capacity exceeded: {0}")]
+    ChatLimit(&'static str),
+    #[error("chat operation cannot make this transition: {0}")]
+    ChatOperationState(&'static str),
+    #[error("chat channel name conflict: {0}")]
+    ChatNameConflict(&'static str),
+    #[error("chat randomness failed: {0}")]
+    ChatRandomness(&'static str),
+    #[error("chat integrity check failed: {0}")]
+    ChatIntegrity(&'static str),
     #[error("invalid probe target: {0}")]
     Target(&'static str),
     #[error("DNS lookup returned no addresses for {0}")]

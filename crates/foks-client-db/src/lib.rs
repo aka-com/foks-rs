@@ -6,9 +6,15 @@
 
 #![forbid(unsafe_code)]
 
+mod chat_limits;
+pub use chat_limits::ChatLimits;
 mod schema;
 mod soft;
 mod soft_schema;
+
+pub use repositories::chat::{
+    ChatAnchor, ChatOperation, ChatOperationKind, ChatOperationState, ChatScope,
+};
 
 pub use soft::{
     KnownStore, KnownTeamStore, KvDirectoryProjection, KvLargeFileStage, KvProjectedEntry,
@@ -534,6 +540,14 @@ pub struct FederationSagaOperation {
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("chat state conflict: {0}")]
+    ChatConflict(&'static str),
+    #[error("invalid chat operation transition: {0}")]
+    ChatOperationState(&'static str),
+    #[error("chat capacity exceeded: {0}")]
+    ChatLimit(&'static str),
+    #[error("chat operation not found: {0}")]
+    ChatNotFound(&'static str),
     #[error("hard-state filesystem operation failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("SQLite hard-state operation failed: {0}")]

@@ -774,6 +774,16 @@ impl ClientCredentials {
         }
     }
 
+    /// Called while the checked profile lock is held, before chat can submit
+    /// protected work. This also covers prepare+attempt in one checked closure.
+    pub(super) fn checkpoint_before_chat_delivery(
+        &self,
+        session: &CheckedProfileSession<'_>,
+    ) -> Result<()> {
+        self.ensure_session_root(session)?;
+        self.advance_checkpoint(session)
+    }
+
     fn advance_checkpoint(&self, session: &ProfileSession) -> Result<()> {
         if self.backend != CredentialBackend::Native {
             return Ok(());

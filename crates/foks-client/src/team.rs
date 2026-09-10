@@ -1769,6 +1769,24 @@ impl FoksClient {
         .map_err(Into::into)
     }
 
+    // Prior state is only an optimization for recipient ordering/incremental
+    // loads. Use the same full, authenticated reload fallback in both places;
+    // persistence still enforces the existing monotonic team pin.
+    fn prior_team_for_reload(
+        &self,
+        host: &PinnedHost,
+        team: &EntityId,
+    ) -> Result<Option<VerifiedTeamState>> {
+        match self.pinned_team(host, team) {
+            Ok(prior) => Ok(prior),
+            Err(Error::Verify(
+                foks_verify::Error::PersistedMerkleEvidence
+                | foks_verify::Error::TeamChainContinuity,
+            )) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Acquires a short-lived view token with the current device-role PUK,
     /// loads and verifies a team chain, unboxes exactly the PTKs visible to
     /// this member, and atomically seals the public team projection in SQLite.
@@ -1781,7 +1799,7 @@ impl FoksClient {
         team: &EntityId,
     ) -> Result<AuthenticatedTeamOutcome> {
         let mut last_error = None;
-        let prior = self.pinned_team(host, team)?;
+        let prior = self.prior_team_for_reload(host, team)?;
         let mut candidates = puks.iter().rev().collect::<Vec<_>>();
         candidates.sort_by_key(|puk| {
             !prior
@@ -1832,7 +1850,7 @@ impl FoksClient {
             ));
         }
         let mut last_error = None;
-        let prior = self.pinned_team(host, team)?;
+        let prior = self.prior_team_for_reload(host, team)?;
         let mut candidates = puks.iter().rev().collect::<Vec<_>>();
         candidates.sort_by_key(|puk| {
             !prior
@@ -1971,7 +1989,7 @@ impl FoksClient {
             ));
         }
         let history = verified_team_private_history(actor)?;
-        let prior = self.pinned_team(host, team)?;
+        let prior = self.prior_team_for_reload(host, team)?;
         let mut candidates = actor.ptks.iter().rev().collect::<Vec<_>>();
         candidates.sort_by_key(|private| {
             !prior.as_ref().is_some_and(|prior| {
@@ -2715,14 +2733,7 @@ impl FoksClient {
         }
         let (merkle_acceptance, chain_bytes, verified) = self.retry_chain_load(host, |host| {
             let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
-            let prior = match self.pinned_team(host, team) {
-                Ok(prior) => prior,
-                Err(Error::Verify(
-                    foks_verify::Error::PersistedMerkleEvidence
-                    | foks_verify::Error::TeamChainContinuity,
-                )) => None,
-                Err(error) => return Err(error),
-            };
+            let prior = self.prior_team_for_reload(host, team)?;
             let (start, name) = match prior.as_ref() {
                 Some(prior) => (
                     prior

@@ -49,3 +49,13 @@ impl FoksClient {
         })
     }
 }
+
+mod history;
+mod operations;
+mod session;
+pub use history::{ChatContent, ChatHistory, ChatMessage};
+pub use operations::normalize_chat_name;
+pub use session::{ChatChannel, ChatChannels, ChatSession, ChatTransport};
+
+mod policy;
+pub use policy::ChatLimits;

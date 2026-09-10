@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 25;
+pub(crate) const VERSION: u32 = 26;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -21,9 +21,39 @@ pub(crate) const REVISION_TABLES: &[&str] = &[
     "mutation_operations",
     "federation_saga_operations",
     "scheduled_jobs",
+    "chat_operations",
+    "chat_anchors",
 ];
 
 pub(crate) const INITIAL: &str = r#"
+CREATE TABLE chat_operations (
+    operation_id BLOB PRIMARY KEY CHECK(length(operation_id)=16),
+    host_id BLOB NOT NULL CHECK(length(host_id)=33),
+    uid BLOB NOT NULL CHECK(length(uid)=33),
+    team_id BLOB NOT NULL CHECK(length(team_id)=33),
+    channel_id BLOB NOT NULL CHECK(length(channel_id)=16),
+    kind INTEGER NOT NULL CHECK(kind IN (0,1)),
+    state INTEGER NOT NULL CHECK(state IN (0,1,2,3,4)),
+    request_hash BLOB NOT NULL CHECK(length(request_hash)=32),
+    scan_cursor INTEGER NOT NULL CHECK(scan_cursor>=0),
+    receipt BLOB CHECK(receipt IS NULL OR length(receipt) BETWEEN 1 AND 256),
+    rejection_code INTEGER,
+    CHECK ((state=3) = (rejection_code IS NOT NULL)),
+    CHECK ((state=2) = (receipt IS NOT NULL))
+) STRICT, WITHOUT ROWID;
+CREATE INDEX chat_pending ON chat_operations(host_id,uid,team_id,state);
+CREATE TABLE chat_anchors (
+    host_id BLOB NOT NULL CHECK(length(host_id)=33),
+    uid BLOB NOT NULL CHECK(length(uid)=33),
+    team_id BLOB NOT NULL CHECK(length(team_id)=33),
+    channel_id BLOB NOT NULL CHECK(length(channel_id)=16),
+    sequence INTEGER NOT NULL CHECK(sequence>0),
+    message_id BLOB NOT NULL CHECK(length(message_id)=16),
+    digest BLOB NOT NULL CHECK(length(digest)=32),
+    PRIMARY KEY(host_id,uid,team_id,channel_id,sequence),
+    UNIQUE(host_id,uid,team_id,channel_id,message_id)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE hard_state_metadata (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     database_id BLOB NOT NULL UNIQUE CHECK (length(database_id) = 16),

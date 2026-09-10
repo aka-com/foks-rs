@@ -186,6 +186,7 @@ pub use yubi::{
 };
 
 mod account;
+mod chat;
 mod checkpoint;
 mod kv;
 mod registry;

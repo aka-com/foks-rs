@@ -280,6 +280,18 @@ pub(crate) fn realtime_text() {
             seed: &rotated_member,
         },
     ];
+    let mut member_chat = client
+        .foks()
+        .chat_session(&member_host.pinned, &member.credential, &created.team)
+        .unwrap();
+    assert_eq!(
+        member_chat
+            .read_thread(&mut reader, md.id, 1, 2)
+            .unwrap()
+            .messages
+            .len(),
+        2
+    );
     let mut protected = fixture.client.open_protected_store().unwrap();
     fixture
         .client
@@ -310,6 +322,20 @@ pub(crate) fn realtime_text() {
             ..
         }))
     ));
+    assert!(member_chat.read_thread(&mut reader, md.id, 1, 2).is_err());
+    let mut owner_chat = fixture
+        .client
+        .foks()
+        .chat_session(fixture.host(), &owner.credential, &created.team)
+        .unwrap();
+    assert_eq!(
+        owner_chat
+            .read_thread(&mut writer, md.id, 1, 2)
+            .unwrap()
+            .messages
+            .len(),
+        2
+    );
     assert_eq!(writer.call(&first).unwrap(), receipt);
     // Restart with exact ciphertext and receipts intact. A new connection must
     // select the host again; no in-memory chat state is required for recovery.
@@ -379,5 +405,419 @@ fn go_roundtrip(
         "Go RT test failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn client_chat_recovers_original_operations_after_lost_responses() {
+    use foks_client::{ChatContent, ChatTransport, EncryptedFileMutationStore};
+    use foks_client_db::ChatOperationState as State;
+    let fixture = Fixture::start("chat-recovery");
+    let owner = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("chatowner", 0x41))
+        .unwrap();
+    let secrets = NamedTeamSecrets {
+        member_min: SecretSeed::new([0x51; 32]),
+        member: SecretSeed::new([0x52; 32]),
+        admin: SecretSeed::new([0x53; 32]),
+        owner: SecretSeed::new([0x54; 32]),
+        removal_key: SecretSeed::new([0x55; 32]),
+        team_name_commitment_key: [0x56; 16],
+    };
+    let created = fixture
+        .client
+        .foks()
+        .create_single_owner_named_team(fixture.host(), &owner.credential, "chatrecover", &secrets)
+        .unwrap();
+    let cancellation = foks_client::CancellationToken::new();
+    cancellation.cancel();
+    let offline_client = fixture.client.foks().with_cancellation_token(cancellation);
+    let offline = offline_client
+        .chat_session(fixture.host(), &owner.credential, &created.team)
+        .unwrap();
+    assert!(offline.list_pending().unwrap().is_empty());
+    assert!(offline.connection().is_err());
+    let mut chat = fixture
+        .client
+        .foks()
+        .chat_session(fixture.host(), &owner.credential, &created.team)
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut protected =
+        EncryptedFileMutationStore::open(dir.path(), zeroize::Zeroizing::new([9; 32])).unwrap();
+    struct Faults {
+        conn: foks_client::RealtimeConnection,
+        drop_create: bool,
+        drop_send: bool,
+        channel: RtChannelId,
+        sender: FqParty,
+        team: FqParty,
+        corrupt_time: bool,
+        unsupported_kind: bool,
+        hide_exact: bool,
+        hide_create: bool,
+        drop_before_send: bool,
+        send_calls: usize,
+        reject_next: bool,
+    }
+    impl ChatTransport for Faults {
+        fn request(&mut self, req: &Request) -> foks_client::Result<Response> {
+            if let Request::Send(arg) = req {
+                self.send_calls += 1;
+                if self.reject_next {
+                    self.reject_next = false;
+                    let mut rejected = arg.clone();
+                    rejected.send.expected_previous_sequence = i64::MAX as u64;
+                    return self.conn.call(&Request::Send(rejected));
+                }
+                if self.drop_before_send {
+                    self.drop_before_send = false;
+                    return Err(foks_client::Error::DeadlineExceeded);
+                }
+                if self.drop_send {
+                    // Advance a busy channel beyond one recovery page before the target.
+                    let keys = foks_crypto::derive_realtime_keys(
+                        &SecretSeed::new([0x52; 32]),
+                        RtAppId::Chat,
+                    )
+                    .unwrap();
+                    for tag in 1..=101u8 {
+                        let mut send = arg.send.clone();
+                        send.metadata.id = RtMessageId([tag; 16]);
+                        let nonce = RtMessageNoncer {
+                            metadata: send.metadata.clone(),
+                            sender: Some(self.sender.clone()),
+                            team: self.team.clone(),
+                            channel: self.channel,
+                            app: RtAppId::Chat,
+                        };
+                        let RtMessageWrapper::Encrypted(b) = &mut send.wrapper else {
+                            panic!()
+                        };
+                        let body = if tag <= 9 {
+                            vec![b'x'; RT_MAX_BODY_BYTES - 100]
+                        } else {
+                            b"intervening message".to_vec()
+                        };
+                        b.ciphertext = keys.seal_basic_message(&nonce, &body).unwrap();
+                        self.conn.call(&Request::Send(RtSendArgument { send }))?;
+                    }
+                    self.drop_send = false;
+                    self.conn.call(req)?;
+                    return Err(foks_client::Error::DeadlineExceeded);
+                }
+            }
+            let mut res = self.conn.call(req)?;
+            if self.hide_exact {
+                if let Response::Thread(page) = &mut res {
+                    page.sequences.clear();
+                }
+            }
+            if self.hide_create {
+                if let Response::Channels(set) = &mut res {
+                    for c in &mut set.channels {
+                        c.id = RtChannelId([0xab; 16]);
+                    }
+                }
+            }
+            if matches!(req, Request::CreateChannel(_)) && self.drop_create {
+                self.drop_create = false;
+                return Err(foks_client::Error::DeadlineExceeded);
+            }
+            if self.unsupported_kind {
+                if let Response::Thread(page) = &mut res {
+                    if let Some(m) = page.ranges.first_mut().and_then(|r| r.messages.first_mut()) {
+                        m.metadata.kind = RtMessageType::Edit;
+                    }
+                }
+            }
+            if self.corrupt_time {
+                if let Response::Thread(page) = &mut res {
+                    if let Some(m) = page.ranges.first_mut().and_then(|r| r.messages.first_mut()) {
+                        m.insert_time += 1;
+                    }
+                }
+            }
+            Ok(res)
+        }
+    }
+    let mut rpc = Faults {
+        conn: chat.connection().unwrap(),
+        drop_create: true,
+        drop_send: false,
+        channel: RtChannelId([0; 16]),
+        sender: FqParty {
+            host: fixture.host().host_id().clone(),
+            party: owner.credential.uid.clone(),
+        },
+        team: FqParty {
+            host: fixture.host().host_id().clone(),
+            party: created.team.clone(),
+        },
+        corrupt_time: false,
+        unsupported_kind: false,
+        hide_exact: false,
+        hide_create: false,
+        drop_before_send: false,
+        send_calls: 0,
+        reject_next: false,
+    };
+    struct FailAfterPut<'a>(&'a mut EncryptedFileMutationStore);
+    impl foks_client::ProtectedMutationStore for FailAfterPut<'_> {
+        fn put_if_absent(
+            &mut self,
+            key: &[u8],
+            bytes: &[u8],
+        ) -> Result<(), foks_client::ProtectedStoreError> {
+            foks_client::ProtectedMutationStore::put_if_absent(self.0, key, bytes)?;
+            Err(foks_client::ProtectedStoreError::Backend(
+                "crash after protected commit".into(),
+            ))
+        }
+        fn get(
+            &mut self,
+            key: &[u8],
+        ) -> Result<zeroize::Zeroizing<Vec<u8>>, foks_client::ProtectedStoreError> {
+            foks_client::ProtectedMutationStore::get(self.0, key)
+        }
+        fn remove(&mut self, key: &[u8]) -> Result<(), foks_client::ProtectedStoreError> {
+            foks_client::ProtectedMutationStore::remove(self.0, key)
+        }
+    }
+    assert!(chat
+        .prepare_channel(
+            &mut rpc,
+            &mut FailAfterPut(&mut protected),
+            "orphan",
+            "",
+            RtChannelTier::Bottom
+        )
+        .is_err());
+    assert!(chat.list_pending().unwrap().is_empty());
+    let create = chat
+        .prepare_channel(
+            &mut rpc,
+            &mut protected,
+            "  Recovery  ",
+            "test channel",
+            RtChannelTier::Bottom,
+        )
+        .unwrap();
+    rpc.channel = RtChannelId(create.scope.channel);
+    let mut wrong_key =
+        EncryptedFileMutationStore::open(dir.path(), zeroize::Zeroizing::new([8; 32])).unwrap();
+    assert!(chat
+        .attempt_operation(&mut rpc, &mut wrong_key, &create.id)
+        .is_err());
+    assert_eq!(chat.list_pending().unwrap()[0].state, State::Prepared);
+    assert!(chat
+        .attempt_operation(&mut rpc, &mut protected, &create.id)
+        .is_err());
+    assert_eq!(chat.list_pending().unwrap()[0].state, State::Uncertain);
+    rpc.hide_create = true;
+    assert_eq!(
+        chat.reconcile_operation(&mut rpc, &mut protected, &create.id)
+            .unwrap()
+            .state,
+        State::Uncertain
+    );
+    rpc.hide_create = false;
+    assert_eq!(
+        chat.reconcile_operation(&mut rpc, &mut protected, &create.id)
+            .unwrap()
+            .state,
+        State::Confirmed
+    );
+    let list = chat.list_channels(&mut rpc).unwrap();
+    assert_eq!(list.channels[0].name.0, "recovery");
+    let channel = rpc.channel;
+    let pending = chat.prepare_send(&mut rpc, &mut protected, channel, "original message");
+    let pending = pending.unwrap();
+    rpc.drop_send = true;
+    assert!(chat
+        .attempt_operation(&mut rpc, &mut protected, &pending.id)
+        .is_err());
+    drop(chat);
+    drop(protected);
+    if fixture.client.soft_state_path().exists() {
+        std::fs::remove_file(fixture.client.soft_state_path()).unwrap();
+    }
+    // Both hard state and protected request are reopened, with no message cache.
+    let mut chat = fixture
+        .client
+        .foks()
+        .chat_session(fixture.host(), &owner.credential, &created.team)
+        .unwrap();
+    let mut protected =
+        EncryptedFileMutationStore::open(dir.path(), zeroize::Zeroizing::new([9; 32])).unwrap();
+    let first = chat
+        .reconcile_operation(&mut rpc, &mut protected, &pending.id)
+        .unwrap();
+    assert_eq!(first.state, State::Uncertain);
+    assert_eq!(first.scan_cursor, 6);
+    let second = chat
+        .attempt_operation(&mut rpc, &mut protected, &pending.id)
+        .unwrap();
+    assert_eq!(second.state, State::Confirmed);
+    let receipt = RtSendResult::decode(second.receipt.as_ref().unwrap()).unwrap();
+    assert_eq!(receipt.sequence, 102);
+    let channel = rpc.channel;
+    let history = chat.read_thread(&mut rpc, channel, 102, 100).unwrap();
+    assert!(
+        matches!(&history.messages[0].content,ChatContent::Text(text) if text.as_str()=="original message")
+    );
+    assert!(chat.list_pending().unwrap().is_empty());
+    let reply = chat
+        .prepare_send(&mut rpc, &mut protected, channel, "reply")
+        .unwrap();
+    assert_eq!(
+        chat.attempt_operation(&mut rpc, &mut protected, &reply.id)
+            .unwrap()
+            .state,
+        State::Confirmed
+    );
+    let fresh_client = TestClient::new(&fixture.environment, "chat-fresh-evidence").unwrap();
+    let fresh_host = fresh_client.probe_and_pin().unwrap();
+    let mut fresh = fresh_client
+        .foks()
+        .chat_session(&fresh_host.pinned, &owner.credential, &created.team)
+        .unwrap();
+    rpc.hide_exact = true;
+    assert_eq!(
+        fresh
+            .read_thread(&mut rpc, channel, 103, 103)
+            .unwrap()
+            .missing_predecessors,
+        vec![102]
+    );
+    rpc.hide_exact = false;
+    assert!(fresh
+        .read_thread(&mut rpc, channel, 103, 103)
+        .unwrap()
+        .missing_predecessors
+        .is_empty());
+    rpc.unsupported_kind = true;
+    assert!(chat.read_thread(&mut rpc, channel, 102, 100).is_err());
+    rpc.unsupported_kind = false;
+    rpc.corrupt_time = true;
+    assert!(chat.read_thread(&mut rpc, channel, 102, 100).is_err());
+    rpc.corrupt_time = false;
+    let unsent = chat
+        .prepare_send(
+            &mut rpc,
+            &mut protected,
+            channel,
+            "uncertain before transmission",
+        )
+        .unwrap();
+    rpc.drop_before_send = true;
+    assert!(chat
+        .attempt_operation(&mut rpc, &mut protected, &unsent.id)
+        .is_err());
+    let calls = rpc.send_calls;
+    assert_eq!(
+        chat.attempt_operation(&mut rpc, &mut protected, &unsent.id)
+            .unwrap()
+            .state,
+        State::Uncertain
+    );
+    assert_eq!(
+        rpc.send_calls, calls,
+        "uncertainty must not cause a blind repost"
+    );
+    assert!(offline
+        .cancel_prepared_operation(&mut protected, &unsent.id)
+        .is_err());
+    let count = std::fs::read_dir(dir.path()).unwrap().count();
+    let cancelled = chat
+        .prepare_send(&mut rpc, &mut protected, channel, "cancel me")
+        .unwrap();
+    assert_eq!(
+        offline
+            .cancel_prepared_operation(&mut protected, &cancelled.id)
+            .unwrap()
+            .state,
+        State::Cancelled
+    );
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), count);
+    let rejected = chat
+        .prepare_send(&mut rpc, &mut protected, channel, "reject me")
+        .unwrap();
+    rpc.reject_next = true;
+    assert!(chat
+        .attempt_operation(&mut rpc, &mut protected, &rejected.id)
+        .is_err());
+    let rejected = offline
+        .finalize_operation(&mut protected, &rejected.id)
+        .unwrap();
+    assert_eq!(rejected.state, State::Rejected);
+    assert_eq!(rejected.rejection_code, Some(12006));
+    struct FailRemove<'a>(&'a mut EncryptedFileMutationStore);
+    impl foks_client::ProtectedMutationStore for FailRemove<'_> {
+        fn put_if_absent(
+            &mut self,
+            k: &[u8],
+            v: &[u8],
+        ) -> Result<(), foks_client::ProtectedStoreError> {
+            foks_client::ProtectedMutationStore::put_if_absent(self.0, k, v)
+        }
+        fn get(
+            &mut self,
+            k: &[u8],
+        ) -> Result<zeroize::Zeroizing<Vec<u8>>, foks_client::ProtectedStoreError> {
+            foks_client::ProtectedMutationStore::get(self.0, k)
+        }
+        fn remove(&mut self, _: &[u8]) -> Result<(), foks_client::ProtectedStoreError> {
+            Err(foks_client::ProtectedStoreError::Backend(
+                "cleanup interrupted".into(),
+            ))
+        }
+    }
+    let cleanup = chat
+        .prepare_send(&mut rpc, &mut protected, channel, "cleanup retry")
+        .unwrap();
+    assert!(chat
+        .attempt_operation(&mut rpc, &mut FailRemove(&mut protected), &cleanup.id)
+        .is_err());
+    let calls = rpc.send_calls;
+    assert_eq!(
+        offline
+            .finalize_operation(&mut protected, &cleanup.id)
+            .unwrap()
+            .state,
+        State::Confirmed
+    );
+    assert_eq!(rpc.send_calls, calls);
+    let stale = chat
+        .prepare_channel(
+            &mut rpc,
+            &mut protected,
+            "stale-channel",
+            "",
+            RtChannelTier::Bottom,
+        )
+        .unwrap();
+    let concurrent = chat
+        .prepare_channel(
+            &mut rpc,
+            &mut protected,
+            "concurrent-channel",
+            "",
+            RtChannelTier::Bottom,
+        )
+        .unwrap();
+    chat.attempt_operation(&mut rpc, &mut protected, &concurrent.id)
+        .unwrap();
+    assert!(matches!(
+        chat.attempt_operation(&mut rpc, &mut protected, &stale.id),
+        Err(foks_client::Error::ChatReprepareRequired(_))
+    ));
+    assert_eq!(
+        offline
+            .cancel_prepared_operation(&mut protected, &stale.id)
+            .unwrap()
+            .state,
+        State::Cancelled
     );
 }
