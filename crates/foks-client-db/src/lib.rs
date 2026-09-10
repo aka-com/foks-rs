@@ -13,7 +13,7 @@ mod soft;
 mod soft_schema;
 
 pub use repositories::chat::{
-    ChatAnchor, ChatOperation, ChatOperationKind, ChatOperationState, ChatScope,
+    ChatAnchor, ChatOperation, ChatOperationKind, ChatOperationState, ChatScope, ChatSubmission,
 };
 
 pub use soft::{

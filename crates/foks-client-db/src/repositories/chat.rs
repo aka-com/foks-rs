@@ -70,8 +70,49 @@ pub struct ChatAnchor {
     pub id: [u8; 16],
     pub digest: [u8; 32],
 }
+/// Local submission identity and a keyed commitment to the original input.
+#[derive(Clone, Copy)]
+pub struct ChatSubmission {
+    pub id: [u8; 16],
+    pub input_mac: [u8; 32],
+}
+
 impl HardStateStore {
+    pub fn chat_submission(
+        &self,
+        scope: &ChatScope,
+        submission: &ChatSubmission,
+    ) -> Result<Option<ChatOperation>> {
+        let row: Option<([u8; 16], [u8; 32])> = self
+            .connection
+            .query_row(
+                "SELECT operation_id, input_mac
+                 FROM chat_submissions
+                 WHERE host_id = ?1
+                   AND uid = ?2
+                   AND team_id = ?3
+                   AND submission_id = ?4",
+                params![scope.host, scope.uid, scope.team, submission.id.as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        match row {
+            Some((id, mac)) if mac == submission.input_mac => self.chat_operation(&id),
+            Some(_) => Err(Error::ChatConflict(
+                "submission ID reused with different input",
+            )),
+            None => Ok(None),
+        }
+    }
+
     pub fn chat_record(&mut self, op: &ChatOperation) -> Result<()> {
+        self.chat_record_submission(op, None)
+    }
+    pub fn chat_record_submission(
+        &mut self,
+        op: &ChatOperation,
+        submission: Option<&ChatSubmission>,
+    ) -> Result<()> {
         if op.state != ChatOperationState::Prepared
             || op.receipt.is_some()
             || op.rejection_code.is_some()
@@ -115,6 +156,21 @@ impl HardStateStore {
                 sqlite_integer("chat cursor", op.scan_cursor)?
             ],
         )?;
+        if let Some(submission) = submission {
+            tx.execute(
+                "INSERT INTO chat_submissions (
+                     host_id, uid, team_id, submission_id, input_mac, operation_id
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    op.scope.host,
+                    op.scope.uid,
+                    op.scope.team,
+                    submission.id.as_slice(),
+                    submission.input_mac.as_slice(),
+                    op.id.as_slice()
+                ],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -435,8 +491,36 @@ mod tests {
             receipt: None,
             rejection_code: None,
         };
-        db.chat_record(&op).unwrap();
+        let submission = ChatSubmission {
+            id: [9; 16],
+            input_mac: [10; 32],
+        };
+        db.chat_record_submission(&op, Some(&submission)).unwrap();
+        assert_eq!(
+            db.chat_submission(&op.scope, &submission).unwrap(),
+            Some(op.clone())
+        );
+        assert!(db
+            .chat_submission(&scope(9), &submission)
+            .unwrap()
+            .is_none());
+        let changed = ChatSubmission {
+            input_mac: [11; 32],
+            ..submission
+        };
+        assert!(matches!(
+            db.chat_submission(&op.scope, &changed),
+            Err(Error::ChatConflict(_))
+        ));
         assert!(db.metadata().unwrap().revision > initial);
+        let mut conflicting = op.clone();
+        conflicting.id = [12; 16];
+        let revision = db.metadata().unwrap().revision;
+        assert!(db
+            .chat_record_submission(&conflicting, Some(&submission))
+            .is_err());
+        assert!(db.chat_operation(&conflicting.id).unwrap().is_none());
+        assert_eq!(db.metadata().unwrap().revision, revision);
         assert!(db
             .chat_pending(&op.scope.host, &scope(9).uid, &op.scope.team)
             .unwrap()
@@ -449,6 +533,13 @@ mod tests {
             ChatOperationState::Uncertain
         );
         assert!(db.chat_begin(&op.id).is_err());
+        assert_eq!(
+            db.chat_submission(&op.scope, &submission)
+                .unwrap()
+                .unwrap()
+                .id,
+            op.id
+        );
         db.chat_progress(&op.id, 100).unwrap();
         db.chat_progress(&op.id, 50).unwrap();
         assert_eq!(db.chat_operation(&op.id).unwrap().unwrap().scan_cursor, 100);

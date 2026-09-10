@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 26;
+pub(crate) const VERSION: u32 = 27;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -23,6 +23,7 @@ pub(crate) const REVISION_TABLES: &[&str] = &[
     "scheduled_jobs",
     "chat_operations",
     "chat_anchors",
+    "chat_submissions",
 ];
 
 pub(crate) const INITIAL: &str = r#"
@@ -42,6 +43,15 @@ CREATE TABLE chat_operations (
     CHECK ((state=2) = (receipt IS NOT NULL))
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX chat_pending ON chat_operations(host_id,uid,team_id,state);
+CREATE TABLE chat_submissions (
+    host_id BLOB NOT NULL CHECK(length(host_id)=33),
+    uid BLOB NOT NULL CHECK(length(uid)=33),
+    team_id BLOB NOT NULL CHECK(length(team_id)=33),
+    submission_id BLOB NOT NULL CHECK(length(submission_id)=16),
+    input_mac BLOB NOT NULL CHECK(length(input_mac)=32),
+    operation_id BLOB NOT NULL REFERENCES chat_operations(operation_id),
+    PRIMARY KEY(host_id, uid, team_id, submission_id)
+) STRICT, WITHOUT ROWID;
 CREATE TABLE chat_anchors (
     host_id BLOB NOT NULL CHECK(length(host_id)=33),
     uid BLOB NOT NULL CHECK(length(uid)=33),

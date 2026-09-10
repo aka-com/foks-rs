@@ -24,6 +24,7 @@ export type FirstRunPath = 'invited' | 'own';
 export type Location =
   | { kind: 'all' }
   | { kind: 'store'; ref: StoreRef }
+  | { kind: 'team-chat'; ref: StoreRef; channel?: string }
   | { kind: 'group-settings'; ref: StoreRef; tab?: GroupSettingsTab }
   | { kind: 'alerts' }
   /**
@@ -87,6 +88,8 @@ export type LocationAction =
 export function sameLocation(a: Location, b: Location): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === 'store' && b.kind === 'store') return a.ref === b.ref;
+  if (a.kind === 'team-chat' && b.kind === 'team-chat')
+    return a.ref === b.ref && a.channel === b.channel;
   if (a.kind === 'group-settings' && b.kind === 'group-settings')
     return a.ref === b.ref && a.tab === b.tab;
   if (a.kind === 'settings' && b.kind === 'settings')
@@ -113,7 +116,16 @@ export function transition(
     case 'navigate':
       return sameLocation(state.location, action.location)
         ? state
-        : { ...state, location: action.location, selection: null };
+        : {
+            ...state,
+            location: action.location,
+            selection: null,
+            query:
+              action.location.kind === 'team-chat' ||
+              state.location.kind === 'team-chat'
+                ? ''
+                : state.query,
+          };
     case 'select':
       // Selecting an item automatically opens the details panel; deselecting keeps the panel open.
       return {
@@ -258,6 +270,7 @@ const CLEARED_PARAMS: Readonly<Record<string, string | null>> = {
   path: null,
   tab: null,
   account: null,
+  channel: null,
 };
 
 /** The `?state=` value and extra parameters a location deep-links as. */
@@ -270,6 +283,15 @@ export function encodeLocation(location: Location): {
       return {
         state: 'store',
         params: { ...CLEARED_PARAMS, store: location.ref },
+      };
+    case 'team-chat':
+      return {
+        state: 'team-chat',
+        params: {
+          ...CLEARED_PARAMS,
+          store: location.ref,
+          channel: location.channel ?? null,
+        },
       };
     case 'group-settings':
       return {
@@ -350,6 +372,13 @@ export function decodeLocation(search: string): Location | null {
   if (state === 'store') {
     const ref = params.get('store');
     return ref ? { kind: 'store', ref } : null;
+  }
+  if (state === 'team-chat') {
+    const ref = params.get('store');
+    const channel = params.get('channel');
+    if (!ref || (channel !== null && !/^[0-9a-f]{32}$/.test(channel)))
+      return null;
+    return { kind: 'team-chat', ref, ...(channel ? { channel } : {}) };
   }
   if (state === 'group-settings') {
     const ref = params.get('store');

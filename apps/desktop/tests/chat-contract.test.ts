@@ -1,0 +1,133 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { decodeChatReply, sequence } from '../src/chat-contract';
+import {
+  decodeLocation,
+  encodeLocation,
+  transition,
+  INITIAL_STATE,
+} from '../src/location';
+const store = {
+  profile: 'local',
+  account_alias: 'me',
+  team_alias: 'team',
+  team_id: '03' + 'ab'.repeat(32),
+};
+const storeId = JSON.stringify({
+  kind: 'team',
+  profile: store.profile,
+  accountAlias: store.account_alias,
+  teamAlias: store.team_alias,
+  teamId: store.team_id,
+});
+const channel = 'ab'.repeat(16);
+test('chat navigation round trips and clears vault-only state', () => {
+  const location = { kind: 'team-chat' as const, ref: storeId, channel };
+  const encoded = encodeLocation(location);
+  const params = new URLSearchParams({ state: encoded.state });
+  for (const [k, v] of Object.entries(encoded.params))
+    if (v !== null) params.set(k, v);
+  assert.deepEqual(decodeLocation(params.toString()), location);
+  assert.equal(
+    transition(
+      { ...INITIAL_STATE, query: 'secret query' },
+      { type: 'navigate', location },
+    ).query,
+    '',
+  );
+  assert.equal(
+    encodeLocation({ kind: 'store', ref: storeId }).params.channel,
+    null,
+  );
+});
+test('chat decoding preserves large sequences and rejects wrong identity and contradictory rows', () => {
+  const message = {
+    id: 'cd'.repeat(16),
+    sequence: '9007199254740993',
+    sender: null,
+    content: { kind: 'text', text: '<script>hostile</script>' },
+  };
+  const reply = {
+    scope: {
+      store,
+      host: '02' + 'ab'.repeat(32),
+      actor: '01' + 'ab'.repeat(32),
+    },
+    result: {
+      kind: 'history',
+      channel,
+      messages: [message],
+      before: message.sequence,
+      missing_predecessors: [],
+    },
+  };
+  const action = { action: 'history' as const, channel, before: null };
+  assert.equal(decodeChatReply(reply, storeId, action).result.kind, 'history');
+  assert.equal(sequence(message.sequence), message.sequence);
+  assert.throws(() =>
+    decodeChatReply(
+      {
+        ...reply,
+        scope: { ...reply.scope, store: { ...store, account_alias: 'other' } },
+      },
+      storeId,
+      action,
+    ),
+  );
+  assert.throws(() =>
+    decodeChatReply(
+      { ...reply, result: { ...reply.result, messages: [message, message] } },
+      storeId,
+      action,
+    ),
+  );
+  assert.throws(() =>
+    decodeChatReply(
+      { ...reply, result: { ...reply.result, before: '2' } },
+      storeId,
+      action,
+    ),
+  );
+  assert.throws(() => sequence('01'));
+  assert.throws(() => sequence('9223372036854775808'));
+});
+
+test('shared Rust and TypeScript chat reply fixtures agree', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const fixtures = JSON.parse(
+    await readFile(
+      new URL(
+        '../../../crates/foks-agent-proto/tests/fixtures/chat-replies.json',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  ) as {
+    store: typeof store;
+    cases: {
+      name: string;
+      valid: boolean;
+      action: import('../src/chat-contract').ChatAction;
+      reply: unknown;
+    }[];
+  };
+  const id = JSON.stringify({
+    kind: 'team',
+    profile: fixtures.store.profile,
+    accountAlias: fixtures.store.account_alias,
+    teamAlias: fixtures.store.team_alias,
+    teamId: fixtures.store.team_id,
+  });
+  for (const fixture of fixtures.cases) {
+    if (fixture.valid)
+      assert.doesNotThrow(
+        () => decodeChatReply(fixture.reply, id, fixture.action),
+        fixture.name,
+      );
+    else
+      assert.throws(
+        () => decodeChatReply(fixture.reply, id, fixture.action),
+        fixture.name,
+      );
+  }
+});

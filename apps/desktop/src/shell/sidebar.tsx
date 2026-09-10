@@ -5,7 +5,7 @@
  * state. Control-Tab navigation follows the displayed store order.
  */
 
-import { useEffect, type ReactNode } from 'react';
+import { Fragment, useEffect, type ReactNode } from 'react';
 import { Badge, Icon, SectionLabel, Stack } from '../components';
 import {
   partiesOf,
@@ -21,10 +21,14 @@ import type { Location } from '../location';
 export function sidebarCycleLocations(world: World): Location[] {
   return [
     { kind: 'all' },
-    ...storeNavigationOrder(world).map((store) => ({
-      kind: 'store' as const,
-      ref: store.id,
-    })),
+    ...storeNavigationOrder(world).flatMap((store): Location[] => [
+      { kind: 'store', ref: store.id },
+      ...(store.kind === 'team' &&
+      store.team_kind === 'named' &&
+      store.active !== false
+        ? [{ kind: 'team-chat' as const, ref: store.id }]
+        : []),
+    ]),
   ];
 }
 
@@ -194,7 +198,24 @@ export function Sidebar({
       )}
       <SectionLabel as="side">Groups</SectionLabel>
       {groups.length ? (
-        groups.map(storeRow)
+        groups.map((store) => (
+          <Fragment key={store.id}>
+            {storeRow(store)}
+            {store.kind === 'team' &&
+              store.team_kind === 'named' &&
+              store.active !== false && (
+                <NavRow
+                  active={
+                    location.kind === 'team-chat' && location.ref === store.id
+                  }
+                  name={`${store.name} chat`}
+                  onSelect={() =>
+                    onNavigate({ kind: 'team-chat', ref: store.id })
+                  }
+                />
+              )}
+          </Fragment>
+        ))
       ) : (
         <p className="fn">No groups yet</p>
       )}

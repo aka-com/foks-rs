@@ -108,6 +108,18 @@ impl AgentError {
 
     pub fn from_agent(code: ErrorCode, message: String) -> Self {
         let (slug, retryable) = match code {
+            ErrorCode::ChatInvalidInput => ("chat-invalid-input", false),
+            ErrorCode::ChatUnsupported => ("chat-unsupported", false),
+            ErrorCode::ChatAccessDenied => ("chat-access-denied", false),
+            ErrorCode::ChatRefreshRequired => ("chat-refresh-required", true),
+            ErrorCode::ChatReprepareRequired => ("chat-reprepare-required", false),
+            ErrorCode::ChatNotFound => ("chat-not-found", false),
+            ErrorCode::ChatKeyUnavailable => ("chat-key-unavailable", false),
+            ErrorCode::ChatLimit => ("chat-limit", false),
+            ErrorCode::ChatOperationState => ("chat-operation-state", false),
+            ErrorCode::ChatNameConflict => ("chat-name-conflict", false),
+            ErrorCode::ChatRandomness => ("chat-randomness", true),
+            ErrorCode::ChatIntegrity => ("chat-integrity", false),
             ErrorCode::InvalidRequest => ("invalid-request", false),
             ErrorCode::VersionMismatch => ("version-mismatch", false),
             ErrorCode::BootstrapRequired => ("bootstrap-required", false),
@@ -124,7 +136,7 @@ impl AgentError {
         };
         let mut mapped = Self::new(slug, message, retryable);
         mapped.ambiguous = code == ErrorCode::DeadlineExceeded;
-        mapped.fatal = code == ErrorCode::VersionMismatch;
+        mapped.fatal = matches!(code, ErrorCode::VersionMismatch | ErrorCode::ChatIntegrity);
         mapped
     }
 
@@ -179,6 +191,20 @@ impl ObservedTransport {
 }
 
 impl AgentTransport for ObservedTransport {
+    fn call_cancellable(
+        &self,
+        operation: Operation,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Value, DesktopAgentError> {
+        let result = self
+            .client
+            .call_cancellable(operation, cancelled)
+            .map_err(client_to_desktop)
+            .and_then(|response| response_result(response.result));
+        self.record(&result);
+        result
+    }
+
     fn call(&self, operation: Operation) -> Result<Value, DesktopAgentError> {
         let result = match self.client.call(operation).map_err(client_to_desktop) {
             Ok(response) => response_result(response.result),

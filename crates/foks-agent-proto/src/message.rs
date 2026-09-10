@@ -383,6 +383,10 @@ impl Request {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "operation", rename_all = "kebab-case")]
 pub enum Operation {
+    Chat {
+        store: TeamStoreRef,
+        action: crate::chat::ChatAction,
+    },
     Ping,
     AgentStatus,
     DiscoverGoProfiles,
@@ -871,6 +875,9 @@ impl Operation {
     /// allow-listed calls still advance authenticated local checkpoints or
     /// host pins under the per-profile lock.
     pub fn is_mutation(&self) -> bool {
+        if let Self::Chat { action, .. } = self {
+            return action.is_mutation();
+        }
         !matches!(
             self,
             Self::Ping
@@ -905,6 +912,11 @@ impl Operation {
 impl std::fmt::Debug for Operation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Chat { store, action } => formatter
+                .debug_struct("Chat")
+                .field("store", store)
+                .field("action", action)
+                .finish(),
             Self::Ping => formatter.write_str("Ping"),
             Self::AgentStatus => formatter.write_str("AgentStatus"),
             Self::DiscoverGoProfiles => formatter.write_str("DiscoverGoProfiles"),
@@ -1812,6 +1824,19 @@ impl std::fmt::Debug for ResponseResult {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorCode {
+    ChatInvalidInput,
+    ChatUnsupported,
+    ChatAccessDenied,
+    ChatRefreshRequired,
+    ChatReprepareRequired,
+    ChatNotFound,
+    ChatKeyUnavailable,
+    ChatLimit,
+    ChatOperationState,
+    ChatNameConflict,
+    ChatRandomness,
+    ChatIntegrity,
+
     InvalidRequest,
     VersionMismatch,
     BootstrapRequired,

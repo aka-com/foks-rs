@@ -187,6 +187,7 @@ pub use yubi::{
 
 mod account;
 mod chat;
+pub use chat::{chat_submission, ChatChannelInput};
 mod checkpoint;
 mod kv;
 mod registry;

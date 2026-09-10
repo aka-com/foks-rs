@@ -19,9 +19,7 @@ const DIST = resolve(here, '../../dist');
 const SHOTS = resolve(here, 'shots');
 
 /** Path to the Chromium binary used for acceptance tests. */
-const CHROME =
-  process.env.FOKS_CHROMIUM ??
-  chromium.executablePath();
+const CHROME = process.env.FOKS_CHROMIUM ?? chromium.executablePath();
 
 const WIDTH = 1280;
 const HEIGHT = 860;
@@ -242,6 +240,42 @@ async function personaWalks(context, origin) {
     if (message.type() === 'error') failures.push(`console: ${message.text()}`);
   });
   try {
+    // Chat: create a channel, send text, and navigate back without vault mutation refreshes.
+    await page.goto(`${origin}/?state=team-chat&store=team%3Aeng`, {
+      waitUntil: 'load',
+    });
+    await page.getByText('Team chat is ready.', { exact: true }).waitFor();
+    await page
+      .getByRole('textbox', { name: 'Channel name' })
+      .fill('design-chat');
+    await page
+      .getByRole('button', { name: 'Create channel', exact: true })
+      .click();
+    await page.getByRole('button', { name: '# design-chat' }).click();
+    await page
+      .getByRole('textbox', { name: 'Message', exact: true })
+      .fill('Browser walkthrough message');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await page
+      .getByText('Browser walkthrough message', { exact: true })
+      .waitFor();
+    check(
+      (await page.locator('.chat-message').count()) === 1,
+      'chat message was duplicated',
+    );
+    check(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+      'chat overflowed the viewport',
+    );
+    await page.screenshot({ path: join(SHOTS, 'team-chat.png') });
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
+    check(
+      !new URL(page.url()).searchParams.has('channel'),
+      'chat channel leaked into file navigation',
+    );
+
     // Marcus: find and open the PDF, then reveal the Household Wi-Fi value.
     await page.goto(`${origin}/?state=all`, { waitUntil: 'load' });
     await page.locator('.search input').fill('passport');
@@ -576,9 +610,7 @@ async function firstRunWalk(context, origin) {
       .locator('.pcard')
       .getByRole('button', { name: 'Check now', exact: true })
       .click();
-    await page
-      .locator('.notice', { hasText: 'Joined Engineering' })
-      .waitFor();
+    await page.locator('.notice', { hasText: 'Joined Engineering' }).waitFor();
     await reloadAt('Joined Engineering');
 
     const checkpoint = await page.evaluate(

@@ -43,6 +43,7 @@ import { Sidebar } from './shell/sidebar';
 import { AlertsScreen } from './screens/alerts-screen';
 import { DetailsPanel } from './screens/details-panel';
 import { ItemsScreen } from './screens/items-screen';
+import { ChatScreen } from './screens/chat-screen';
 import { GroupSettingsScreen } from './screens/groups-screen';
 import { FirstRunExperience } from './screens/first-run-screen';
 import { PlaceholderScreen } from './screens/placeholder-screen';
@@ -582,6 +583,14 @@ function VaultShell({
         })
       }
       onCommandError={commandError}
+    />
+  ) : here.kind === 'team-chat' ? (
+    <ChatScreen
+      key={`chat:${here.ref}:${concealSignal}`}
+      world={shown}
+      bridge={bridge}
+      location={here}
+      onNavigate={(location) => locations.navigate(location)}
     />
   ) : here.kind === 'group-settings' ? (
     <GroupSettingsScreen

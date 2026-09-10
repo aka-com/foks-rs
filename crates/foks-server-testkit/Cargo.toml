@@ -18,6 +18,7 @@ tempfile = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+foks-desktop = { path = "../foks-desktop", default-features = false }
 foks-agent-client = { workspace = true }
 foks-agent-proto = { workspace = true }
 foks-client = { workspace = true, features = ["test-support"] }

@@ -5,6 +5,8 @@
  * responses pass through runtime decoders before entering the UI state.
  */
 
+import { decodeChatReply } from './chat-contract';
+import type { ChatAction, ChatReply } from './chat-contract';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { itemKey, parseRole } from './model';
@@ -540,6 +542,12 @@ export interface FirstRunFixture {
 export type Unlisten = () => void;
 
 export interface Bridge {
+  chat(
+    storeId: StoreRef,
+    action: ChatAction,
+    viewId?: string,
+  ): Promise<ChatReply>;
+  cancelChat(viewId: string): Promise<void>;
   readonly native: boolean;
   /** Present only on the development bridge, never on the native bridge. */
   readonly fixtureWorld?: World;
@@ -1842,6 +1850,11 @@ function decodeAgentStatus(value: unknown): AgentStatus {
 }
 
 export const tauriBridge: Bridge = {
+  cancelChat: (viewId) => invoke<void>('cancel_chat_requests', { viewId }),
+  chat: (storeId, action, viewId) =>
+    checked('chat_request', { storeId, action, viewId }, (value) =>
+      decodeChatReply(value, storeId, action),
+    ),
   native: true,
   appLockState: () => checked('app_lock_state', undefined, decodeAppLockState),
   windowState: () => checked('get_window_state', undefined, decodeWindowState),
@@ -2221,9 +2234,7 @@ export async function selectBridge(): Promise<Bridge> {
     const { mockBridge } = await import('./mock-bridge');
     return mockBridge();
   }
-  throw new Error(
-    'FOKS desktop host environment is required.',
-  );
+  throw new Error('FOKS desktop host environment is required.');
 }
 
 function recoverableGroupDetailFailure(
@@ -2246,9 +2257,7 @@ function recoverableGroupDetailFailure(
     ].includes(typed.code)
   ) {
     if (typed.code === 'invalid-command-error') {
-      throw new Error(
-        'The agent returned an unrecognized group-detail error.',
-      );
+      throw new Error('The agent returned an unrecognized group-detail error.');
     }
     throw typed;
   }
@@ -2612,9 +2621,10 @@ export async function loadWorld(
       ...groupDetailFailures.map((failure) => ({
         id: `group-${failure.source}-unavailable-${failure.store}`,
         severity: 'warn' as const,
-        title: failure.source === 'roster'
-          ? 'Group member list is unavailable'
-          : 'Group shared access is unavailable',
+        title:
+          failure.source === 'roster'
+            ? 'Group member list is unavailable'
+            : 'Group shared access is unavailable',
         detail: failure.message,
         action: failure.retryable ? 'Refresh' : 'Inspect',
       })),

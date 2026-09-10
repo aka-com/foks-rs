@@ -2078,6 +2078,7 @@ dependencies = [
  "foks-client-db",
  "foks-compat-artifact",
  "foks-crypto",
+ "foks-desktop",
  "foks-merkle-store",
  "foks-proto",
  "foks-rpc",

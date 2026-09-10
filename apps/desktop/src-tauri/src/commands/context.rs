@@ -24,6 +24,7 @@ pub const MAIN: &str = "main";
 
 pub struct AppState {
     pub agent: Arc<AgentHandle>,
+    pub(super) chat_views: Mutex<HashMap<String, Arc<AtomicBool>>>,
     catalog_load: Mutex<Option<CatalogLoadToken>>,
     catalog_coordination: Mutex<()>,
     pub(super) catalog_generation: AtomicU64,
@@ -41,6 +42,7 @@ impl AppState {
     pub fn new(agent: Arc<AgentHandle>) -> Self {
         Self {
             agent,
+            chat_views: Mutex::new(HashMap::new()),
             catalog_load: Mutex::new(None),
             catalog_coordination: Mutex::new(()),
             catalog_generation: AtomicU64::new(0),

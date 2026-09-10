@@ -1,0 +1,139 @@
+.chat-screen {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.chat-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.chat-channels {
+  width: 230px;
+  flex-shrink: 0;
+  padding: 18px;
+  border-right: 1px solid var(--line);
+  overflow: auto;
+}
+.chat-row,
+.chat-thread-header,
+.chat-message header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.chat-channel {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 12px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.chat-channel[aria-current] {
+  background: var(--wash);
+  font-weight: 600;
+}
+.chat-screen small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+.chat-create {
+  display: grid;
+  gap: 12px;
+  margin-top: 24px;
+}
+.chat-create label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+.chat-create input,
+.chat-create select,
+.chat-composer textarea {
+  width: 100%;
+  box-sizing: border-box;
+  color: inherit;
+  background: var(--main-surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  font: inherit;
+}
+.chat-conversation {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chat-thread-header {
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--line);
+}
+.chat-messages {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 24px;
+  min-height: 0;
+}
+.chat-message {
+  margin: 0 0 20px;
+}
+.chat-message p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 6px 0;
+  line-height: 1.5;
+  user-select: text;
+}
+.chat-pending {
+  border: 1px dashed var(--line);
+  padding: 12px;
+  margin: 8px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.chat-composer {
+  padding: 16px 24px;
+  border-top: 1px solid var(--line);
+}
+.chat-composer textarea {
+  resize: vertical;
+  min-height: 76px;
+  max-height: 180px;
+  margin-bottom: 8px;
+}
+.chat-error,
+.chat-notice,
+.chat-empty {
+  padding: 12px 24px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.chat-error {
+  color: var(--danger);
+}
+.chat-notice {
+  color: var(--muted);
+}
+@media (max-width: 760px) {
+  .chat-channels {
+    width: 170px;
+    padding: 12px;
+  }
+  .chat-thread-header,
+  .chat-messages,
+  .chat-composer {
+    padding: 12px;
+  }
+}

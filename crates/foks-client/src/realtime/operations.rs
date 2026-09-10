@@ -2,7 +2,9 @@ use super::history::anchor;
 use super::policy::{ChatLimits, PROTECTED_MATERIAL_DOMAIN, REQUEST_HASH_DOMAIN};
 use super::session::{floor, random_id, ChatSession, ChatTransport};
 use crate::{Error, ProtectedMutationStore, Result};
-use foks_client_db::{ChatOperation, ChatOperationKind as Kind, ChatOperationState as State};
+use foks_client_db::{
+    ChatOperation, ChatOperationKind as Kind, ChatOperationState as State, ChatSubmission,
+};
 use foks_proto::{
     RealtimeWire, Role, RtAppId, RtBox, RtChannelId, RtChannelMetadata, RtChannelTier,
     RtCreateChannelArgument, RtKeyType, RtMessage, RtMessageBox, RtMessageId, RtMessageMetadata,
@@ -41,6 +43,19 @@ pub fn normalize_chat_name(name: &str) -> Result<String> {
     Ok(name)
 }
 impl ChatSession<'_> {
+    /// Resolve a durable submission without connecting or loading protected material.
+    pub fn submitted_operation(
+        &self,
+        submission: Option<&ChatSubmission>,
+    ) -> Result<Option<ChatOperation>> {
+        match submission {
+            Some(submission) => Ok(self
+                .hard()?
+                .chat_submission(&self.scope(RtChannelId([0; 16])), submission)?),
+            None => Ok(None),
+        }
+    }
+
     /// Persist first; submit in a later checked application operation.
     pub fn prepare_channel(
         &mut self,
@@ -50,6 +65,21 @@ impl ChatSession<'_> {
         description: &str,
         tier: RtChannelTier,
     ) -> Result<ChatOperation> {
+        self.prepare_channel_submission(rpc, store, name, description, tier, None)
+    }
+    pub fn prepare_channel_submission(
+        &mut self,
+        rpc: &mut impl ChatTransport,
+        store: &mut impl ProtectedMutationStore,
+        name: &str,
+        description: &str,
+        tier: RtChannelTier,
+        submission: Option<&ChatSubmission>,
+    ) -> Result<ChatOperation> {
+        if let Some(operation) = self.submitted_operation(submission)? {
+            return Ok(operation);
+        }
+
         self.refresh()?;
         let name = RtText(normalize_chat_name(name)?);
         let desc = RtText(
@@ -126,7 +156,7 @@ impl ChatSession<'_> {
         self.prepare(
             store,
             id,
-            Kind::Create,
+            submission,
             RtChannelId(id),
             0,
             RealtimeRequest::CreateChannel(RtCreateChannelArgument {
@@ -142,6 +172,20 @@ impl ChatSession<'_> {
         channel: RtChannelId,
         text: &str,
     ) -> Result<ChatOperation> {
+        self.prepare_send_submission(rpc, store, channel, text, None)
+    }
+    pub fn prepare_send_submission(
+        &mut self,
+        rpc: &mut impl ChatTransport,
+        store: &mut impl ProtectedMutationStore,
+        channel: RtChannelId,
+        text: &str,
+        submission: Option<&ChatSubmission>,
+    ) -> Result<ChatOperation> {
+        if let Some(operation) = self.submitted_operation(submission)? {
+            return Ok(operation);
+        }
+
         if text.is_empty() || text.len() > RT_MAX_BODY_BYTES {
             return Err(Error::ChatInvalidInput("invalid message text length"));
         }
@@ -188,7 +232,7 @@ impl ChatSession<'_> {
         self.prepare(
             store,
             id,
-            Kind::Send,
+            submission,
             channel,
             lower,
             RealtimeRequest::Send(RtSendArgument {
@@ -205,11 +249,16 @@ impl ChatSession<'_> {
         &self,
         store: &mut impl ProtectedMutationStore,
         id: [u8; 16],
-        kind: Kind,
+        submission: Option<&ChatSubmission>,
         channel: RtChannelId,
         lower: u64,
         request: RealtimeRequest,
     ) -> Result<ChatOperation> {
+        let kind = match &request {
+            RealtimeRequest::CreateChannel(_) => Kind::Create,
+            RealtimeRequest::Send(_) => Kind::Send,
+            _ => return Err(Error::ChatInvalidInput("invalid chat preparation")),
+        };
         let bytes = Zeroizing::new(request.argument()?);
         let op = ChatOperation {
             id,
@@ -224,7 +273,7 @@ impl ChatSession<'_> {
         store
             .put_if_absent(&material_key(&op), &bytes)
             .map_err(|e| Error::ProtectedMaterial(e.to_string()))?;
-        self.hard()?.chat_record(&op)?;
+        self.hard()?.chat_record_submission(&op, submission)?;
         Ok(op)
     }
     fn operation(&self, id: &[u8; 16]) -> Result<ChatOperation> {

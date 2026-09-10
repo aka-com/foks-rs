@@ -513,7 +513,7 @@ fn process_reentry_and_real_kv_conflict_against_testkit() {
         CanaryArtifact {
             schema_version: foks_compat_artifact::SCHEMA_VERSION,
             generation: 1,
-            target: probe,
+            target: probe.clone(),
             run_id: "desktop-command-layer-gate".to_owned(),
             generated_at,
             expires_at,
@@ -560,6 +560,192 @@ fn process_reentry_and_real_kv_conflict_against_testkit() {
     ));
     assert!(String::from_utf8_lossy(&denied_write.stderr).contains("CapabilityDenied"));
 
+    exercise_chat(&socket, &team_id, &probe, &certificate);
     agent.assert_running();
     backend.assert_every_invocation_was_a_fresh_process();
+}
+
+fn exercise_chat(socket: &Path, team_id: &str, probe: &str, certificate: &Path) {
+    use foks_agent_proto::{
+        chat::{ChatAction as A, ChatContent, ChatResult as R, ChatState},
+        SecretString, TeamRole, TeamStoreRef,
+    };
+    let client = AgentClient::new(socket);
+    let owner = TeamStoreRef {
+        profile: "work".into(),
+        account_alias: "personal".into(),
+        team_alias: "engineering".into(),
+        team_id: team_id.into(),
+    };
+    let call = |operation| match client.call(operation).unwrap().result {
+        ResponseResult::Success { value } => value,
+        other => panic!("agent operation failed: {other:?}"),
+    };
+    let chat = |store: &TeamStoreRef, action| {
+        foks_desktop::chat_request(&client, store.clone(), action)
+            .unwrap()
+            .result
+    };
+    let create = A::PrepareChannel {
+        submission: "ab".repeat(16),
+        name: SecretString::new(""),
+        admin: false,
+    };
+    let R::Operation {
+        operation: prepared,
+    } = chat(&owner, create.clone())
+    else {
+        panic!("expected preparation")
+    };
+    let R::Operation {
+        operation: repeated,
+    } = chat(&owner, create.clone())
+    else {
+        panic!("expected preparation")
+    };
+    assert_eq!(prepared.id, repeated.id);
+    let channel = prepared.channel.clone();
+    let R::Operation {
+        operation: confirmed,
+    } = chat(
+        &owner,
+        A::Attempt {
+            operation: prepared.id.clone(),
+        },
+    )
+    else {
+        panic!("expected create receipt")
+    };
+    assert_eq!(confirmed.state, ChatState::Confirmed);
+    // A fresh local client recovers the same completed submission without resealing.
+    let restarted = AgentClient::new(socket);
+    let reply = foks_desktop::chat_request(&restarted, owner.clone(), create).unwrap();
+    assert!(
+        matches!(reply.result, R::Operation { operation } if operation.id == prepared.id && operation.state == ChatState::Confirmed)
+    );
+    call(Operation::AddProfile {
+        name: "chatguest".into(),
+        probe: probe.into(),
+        protocol: ProfileProtocol::V019,
+        trust: ProfileTrust::CertificateDer {
+            path: certificate.to_string_lossy().into_owned(),
+        },
+    });
+    call(Operation::Probe {
+        profile: "chatguest".into(),
+    });
+    call(Operation::CreateAccount {
+        profile: "chatguest".into(),
+        alias: "chatguest".into(),
+        username: "chatguest".into(),
+        device_name: "Guest laptop".into(),
+        email: "".into(),
+        invite: SecretString::new(""),
+        passphrase: None,
+    });
+    call(Operation::AddTeamMember {
+        profile: "work".into(),
+        team_alias: "engineering".into(),
+        username: "chatguest".into(),
+        role: TeamRole::Member,
+        visibility: 0,
+    });
+    let discovery = call(Operation::DiscoverTeams {
+        profile: "chatguest".into(),
+        account_alias: "chatguest".into(),
+    });
+    let alias = discovery["teams"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["team_id_hex"] == team_id)
+        .unwrap()["alias"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let guest = TeamStoreRef {
+        profile: "chatguest".into(),
+        account_alias: "chatguest".into(),
+        team_alias: alias,
+        ..owner.clone()
+    };
+    for (index, actor) in [&owner, &guest].into_iter().enumerate() {
+        let action = A::PrepareMessage {
+            submission: format!("{:032x}", index + 1),
+            channel: channel.clone(),
+            text: SecretString::new(format!("chat from account {index}")),
+        };
+        let R::Operation {
+            operation: prepared,
+        } = chat(actor, action.clone())
+        else {
+            panic!("expected prepared send")
+        };
+        let altered = A::PrepareMessage {
+            submission: format!("{:032x}", index + 1),
+            channel: channel.clone(),
+            text: SecretString::new("changed"),
+        };
+        assert!(foks_desktop::chat_request(&client, actor.clone(), altered).is_err());
+        let R::Operation { operation: receipt } = chat(
+            actor,
+            A::Attempt {
+                operation: prepared.id.clone(),
+            },
+        ) else {
+            panic!("expected receipt")
+        };
+        assert_eq!(receipt.sequence, Some((index + 1).to_string()));
+        let R::Operation { operation: replay } = chat(actor, action) else {
+            panic!("expected replay")
+        };
+        assert_eq!(replay, receipt);
+    }
+    for actor in [&owner, &guest] {
+        let R::History { messages, .. } = chat(
+            actor,
+            A::History {
+                channel: channel.clone(),
+                before: None,
+            },
+        ) else {
+            panic!("expected history")
+        };
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|m|matches!(&m.content,ChatContent::Text {text} if text.expose().starts_with("chat from account"))));
+        let R::Pending { operations } = chat(actor, A::Pending) else {
+            panic!("expected pending list")
+        };
+        assert!(operations.is_empty());
+    }
+    let R::Operation {
+        operation: prepared,
+    } = chat(
+        &owner,
+        A::PrepareMessage {
+            submission: "ef".repeat(16),
+            channel: channel.clone(),
+            text: SecretString::new("cancel me"),
+        },
+    )
+    else {
+        panic!("expected preparation")
+    };
+    let R::Operation {
+        operation: cancelled,
+    } = chat(
+        &owner,
+        A::Cancel {
+            operation: prepared.id,
+        },
+    )
+    else {
+        panic!("expected cancellation")
+    };
+    assert_eq!(cancelled.state, ChatState::Cancelled);
+    let wrong = TeamStoreRef {
+        account_alias: "chatguest".into(),
+        ..owner.clone()
+    };
+    assert!(foks_desktop::chat_request(&client, wrong, A::Channels).is_err());
 }

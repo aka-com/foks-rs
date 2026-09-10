@@ -2,6 +2,9 @@
 
 #![forbid(unsafe_code)]
 
+mod chat;
+pub use chat::{chat_request, chat_request_cancellable, validate_chat_reply};
+
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -171,6 +174,25 @@ impl Screen {
 
 pub trait AgentTransport: Send + Sync + 'static {
     fn call(&self, operation: Operation) -> Result<Value, AgentError>;
+    fn call_cancellable(
+        &self,
+        operation: Operation,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Value, AgentError> {
+        if cancelled() {
+            return Err(AgentError::Cancelled);
+        }
+        let mutation = operation.is_mutation();
+        let result = self.call(operation);
+        if cancelled() {
+            return Err(if mutation {
+                AgentError::Ambiguous("Request cancelled after mutation started.".into())
+            } else {
+                AgentError::Cancelled
+            });
+        }
+        result
+    }
 
     fn put_kv_stream(
         &self,
@@ -185,7 +207,16 @@ pub trait AgentTransport: Send + Sync + 'static {
 
 impl AgentTransport for AgentClient {
     fn call(&self, operation: Operation) -> Result<Value, AgentError> {
-        let response = self.call(operation).map_err(agent_client_error)?;
+        <Self as AgentTransport>::call_cancellable(self, operation, &|| false)
+    }
+
+    fn call_cancellable(
+        &self,
+        operation: Operation,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Value, AgentError> {
+        let response = AgentClient::call_cancellable(self, operation, cancelled)
+            .map_err(agent_client_error)?;
         match response.result {
             ResponseResult::Success { value } => Ok(value),
             ResponseResult::Error {
@@ -3845,5 +3876,40 @@ mod tests {
         assert!(contents.contains("foks-desktop-version="));
         assert!(!contents.contains("panic"));
         assert!(!contents.contains(temporary.path().to_string_lossy().as_ref()));
+    }
+}
+
+#[cfg(test)]
+mod chat_transport_tests {
+    use super::*;
+
+    #[test]
+    fn fallback_cancellation_preserves_started_mutation_uncertainty() {
+        struct Transport(AtomicBool);
+        impl AgentTransport for Transport {
+            fn call(&self, _: Operation) -> Result<Value, AgentError> {
+                self.0.store(true, Ordering::Release);
+                Ok(Value::Null)
+            }
+        }
+        let transport = Transport(AtomicBool::new(false));
+        let cancelled = || transport.0.load(Ordering::Acquire);
+        let error = transport
+            .call_cancellable(
+                Operation::SyncAccount {
+                    profile: "test".into(),
+                    alias: "me".into(),
+                },
+                &cancelled,
+            )
+            .unwrap_err();
+        assert!(matches!(error, AgentError::Ambiguous(_)));
+        transport.0.store(false, Ordering::Release);
+        assert_eq!(
+            transport
+                .call_cancellable(Operation::Ping, &cancelled)
+                .unwrap_err(),
+            AgentError::Cancelled
+        );
     }
 }

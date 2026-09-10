@@ -1,5 +1,6 @@
 /** A deterministic command bridge for render and browser acceptance tests. */
 
+import { mockChat } from './chat-mock';
 import type {
   Bridge,
   CatalogDto,
@@ -356,6 +357,8 @@ export function mockBridge(world: World = FIXTURE): Bridge {
   });
   return {
     native: false,
+    chat: mockChat(),
+    cancelChat: async () => {},
     fixtureWorld: world,
     firstRunFixture,
     appLockState: async () => appLockState(),

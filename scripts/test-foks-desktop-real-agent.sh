@@ -15,4 +15,4 @@ test -x "$backend_binary"
 FOKS_AGENT_TEST_BINARY="$agent_binary" \
 FOKS_DESKTOP_BACKEND_TEST_BINARY="$backend_binary" \
   cargo test -p foks-server-testkit --test desktop_command_layer \
-    sol_process_reentry_and_real_kv_conflict_against_testkit -- --ignored --exact
+    process_reentry_and_real_kv_conflict_against_testkit -- --ignored --exact

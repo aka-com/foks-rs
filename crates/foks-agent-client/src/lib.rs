@@ -61,6 +61,15 @@ impl AgentClient {
     }
 
     pub fn call(&self, operation: Operation) -> Result<Response> {
+        self.call_cancellable(operation, &|| false)
+    }
+
+    /// Cancellation closes the IPC socket; a started mutation remains ambiguous.
+    pub fn call_cancellable(
+        &self,
+        operation: Operation,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Response> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let mutation = operation.is_mutation();
         let timeout = if operation.is_device_pairing_wait() {
@@ -68,7 +77,13 @@ impl AgentClient {
         } else {
             self.timeout
         };
-        let response = call_platform(&self.socket, timeout, Request::new(id, operation), mutation)?;
+        let response = call_platform(
+            &self.socket,
+            timeout,
+            Request::new(id, operation),
+            mutation,
+            cancelled,
+        )?;
         if response.id != Some(id) {
             return Err(if mutation {
                 Error::Ambiguous(Error::ResponseBinding.to_string())
@@ -99,12 +114,20 @@ fn call_platform(
     timeout: Duration,
     mut request: Request,
     mutation: bool,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<Response> {
     use std::io::Write as _;
     let frame = foks_agent_proto::encode(&request);
     request.operation.zeroize_plaintext();
     let frame = frame?;
+    if cancelled() {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "request cancelled",
+        )));
+    }
     let mut stream = connect_platform(socket, timeout)?;
+    let deadline = std::time::Instant::now() + timeout;
     if let Err(error) = stream.write_all(&frame) {
         return Err(if mutation {
             Error::Ambiguous(error.to_string())
@@ -113,7 +136,7 @@ fn call_platform(
         });
     }
     drop(frame);
-    read_response(&mut stream).map_err(|error| {
+    read_response_cancellable(&mut stream, cancelled, deadline).map_err(|error| {
         if mutation {
             Error::Ambiguous(error.to_string())
         } else {
@@ -230,6 +253,64 @@ fn connect_platform(socket: &Path, timeout: Duration) -> Result<std::os::unix::n
 }
 
 #[cfg(unix)]
+fn read_response_cancellable(
+    stream: &mut std::os::unix::net::UnixStream,
+    cancelled: &dyn Fn() -> bool,
+    deadline: std::time::Instant,
+) -> Result<Response> {
+    use std::io::{ErrorKind, Read as _};
+    stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+    let mut read = |mut bytes: &mut [u8]| -> std::io::Result<()> {
+        while !bytes.is_empty() {
+            if cancelled() {
+                return Err(std::io::Error::new(
+                    ErrorKind::Interrupted,
+                    "request cancelled",
+                ));
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(std::io::Error::new(
+                    ErrorKind::TimedOut,
+                    "request deadline exceeded",
+                ));
+            }
+            match stream.read(bytes) {
+                Ok(0) => {
+                    return Err(std::io::Error::new(
+                        ErrorKind::UnexpectedEof,
+                        "agent disconnected",
+                    ))
+                }
+                Ok(count) => bytes = &mut bytes[count..],
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+                    ) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    };
+    let mut prefix = [0; 4];
+    read(&mut prefix)?;
+    let length = u32::from_be_bytes(prefix) as usize;
+    if length > MAXIMUM_MESSAGE_BYTES {
+        return Err(foks_agent_proto::Error::TooLarge.into());
+    }
+    let mut frame = Zeroizing::new(vec![0; 4 + length]);
+    frame[..4].copy_from_slice(&prefix);
+    read(&mut frame[4..])?;
+    if cancelled() {
+        return Err(Error::Io(std::io::Error::new(
+            ErrorKind::Interrupted,
+            "request cancelled",
+        )));
+    }
+    Ok(foks_agent_proto::decode_response(&frame)?)
+}
+
+#[cfg(unix)]
 fn read_response(stream: &mut std::os::unix::net::UnixStream) -> Result<Response> {
     use std::io::Read as _;
 
@@ -252,6 +333,7 @@ fn call_platform(
     _timeout: Duration,
     mut request: Request,
     _mutation: bool,
+    _cancelled: &dyn Fn() -> bool,
 ) -> Result<Response> {
     request.operation.zeroize_plaintext();
     Err(Error::Unsupported)
@@ -443,5 +525,59 @@ mod tests {
         ));
         release.send(()).ok();
         server.join().unwrap();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod chat_cancellation_tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        os::unix::{fs::PermissionsExt, net::UnixListener},
+        sync::{atomic::AtomicBool, Arc},
+        time::Instant,
+    };
+    #[test]
+    fn cancellation_closes_partial_replies_and_preserves_mutation_uncertainty() {
+        for mutation in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("agent.sock");
+            let listener = UnixListener::bind(&socket).unwrap();
+            std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let (ready, received) = std::sync::mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut prefix = [0; 4];
+                stream.read_exact(&mut prefix).unwrap();
+                let mut body = vec![0; u32::from_be_bytes(prefix) as usize];
+                stream.read_exact(&mut body).unwrap();
+                stream.write_all(&[0, 0]).unwrap();
+                ready.send(()).unwrap();
+                assert_eq!(stream.read(&mut [0; 1]).unwrap(), 0);
+            });
+            let cancel = Arc::new(AtomicBool::new(false));
+            let cancelled = cancel.clone();
+            let client = std::thread::spawn(move || {
+                let op = if mutation {
+                    Operation::SyncAccount {
+                        profile: "test".into(),
+                        alias: "me".into(),
+                    }
+                } else {
+                    Operation::Ping
+                };
+                AgentClient::new(socket).call_cancellable(op, &|| cancelled.load(Ordering::Acquire))
+            });
+            received.recv_timeout(Duration::from_secs(3)).unwrap();
+            let start = Instant::now();
+            cancel.store(true, Ordering::Release);
+            let error = client.join().unwrap().unwrap_err();
+            assert_eq!(matches!(error, Error::Ambiguous(_)), mutation);
+            assert!(start.elapsed() < Duration::from_secs(2));
+            server.join().unwrap();
+        }
     }
 }

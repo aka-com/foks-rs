@@ -5,7 +5,7 @@
 //! Authentication is delegated to the operating system; FOKS does not store
 //! account passwords.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -28,6 +28,7 @@ pub struct LockStateDto {
 
 pub struct AppLock {
     locked: AtomicBool,
+    generation: AtomicU64,
     authenticating: AtomicBool,
     capability: Capability,
 }
@@ -42,6 +43,7 @@ impl AppLock {
             // Platforms supporting OS authentication start locked. On unsupported
             // platforms, start unlocked to avoid blocking access.
             locked: AtomicBool::new(capability.available),
+            generation: AtomicU64::new(0),
             authenticating: AtomicBool::new(false),
             capability,
         }
@@ -67,6 +69,7 @@ impl AppLock {
             ));
         }
         self.locked.store(true, Ordering::Release);
+        self.generation.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 }
@@ -83,6 +86,30 @@ impl Drop for AuthenticationGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
+}
+
+/// Bind plaintext-producing work to one unlocked interval, including lock/unlock races.
+pub fn unlocked_generation(app: &AppHandle) -> Result<u64, AgentError> {
+    let lock = app.try_state::<Arc<AppLock>>().ok_or_else(|| {
+        AgentError::new(
+            "app-lock-unavailable",
+            "Unable to verify application lock state.",
+            false,
+        )
+    })?;
+    let generation = lock.generation.load(Ordering::Acquire);
+    require_unlocked(app)?;
+    Ok(generation)
+}
+pub fn require_unlocked_generation(app: &AppHandle, generation: u64) -> Result<(), AgentError> {
+    if unlocked_generation(app)? != generation {
+        return Err(AgentError::new(
+            "chat-interrupted",
+            "Chat was closed when the app locked.",
+            false,
+        ));
+    }
+    Ok(())
 }
 
 pub fn require_unlocked(app: &AppHandle) -> Result<(), AgentError> {
@@ -254,6 +281,20 @@ fn authenticate(_reason: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locking_invalidates_work_even_after_unlock() {
+        let lock = AppLock::for_capability(Capability {
+            available: true,
+            reason: None,
+            mechanism: "password",
+        });
+        lock.locked.store(false, Ordering::Release);
+        let before = lock.generation.load(Ordering::Acquire);
+        lock.lock().unwrap();
+        lock.locked.store(false, Ordering::Release);
+        assert_ne!(before, lock.generation.load(Ordering::Acquire));
+    }
 
     #[test]
     fn a_lock_never_arms_when_the_platform_cannot_unlock_it() {

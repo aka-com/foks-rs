@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+mod chat;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -1120,6 +1121,43 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
     }
     let mut source = Some(error);
     while let Some(candidate) = source {
+        if let Some(chat) = candidate.downcast_ref::<foks_client::Error>() {
+            let code = match chat {
+                foks_client::Error::ChatInvalidInput(..) => Some(ErrorCode::ChatInvalidInput),
+                foks_client::Error::ChatUnsupported(..) => Some(ErrorCode::ChatUnsupported),
+                foks_client::Error::ChatAccessDenied(..) => Some(ErrorCode::ChatAccessDenied),
+                foks_client::Error::ChatRefreshRequired(..) => Some(ErrorCode::ChatRefreshRequired),
+                foks_client::Error::ChatReprepareRequired(..) => {
+                    Some(ErrorCode::ChatReprepareRequired)
+                }
+                foks_client::Error::ChatNotFound(..) => Some(ErrorCode::ChatNotFound),
+                foks_client::Error::ChatKeyUnavailable(..) => Some(ErrorCode::ChatKeyUnavailable),
+                foks_client::Error::ChatLimit(..) => Some(ErrorCode::ChatLimit),
+                foks_client::Error::ChatOperationState(..) => Some(ErrorCode::ChatOperationState),
+                foks_client::Error::ChatNameConflict(..) => Some(ErrorCode::ChatNameConflict),
+                foks_client::Error::ChatRandomness(..) => Some(ErrorCode::ChatRandomness),
+                foks_client::Error::ChatIntegrity(..) => Some(ErrorCode::ChatIntegrity),
+                _ => None,
+            };
+            if let Some(code) = code {
+                return Response::error(id, code, chat.to_string());
+            }
+        }
+        if let Some(chat) = candidate.downcast_ref::<foks_client_db::Error>() {
+            let code = match chat {
+                foks_client_db::Error::ChatConflict(..) => Some(ErrorCode::Conflict),
+                foks_client_db::Error::ChatOperationState(..) => {
+                    Some(ErrorCode::ChatOperationState)
+                }
+                foks_client_db::Error::ChatLimit(..) => Some(ErrorCode::ChatLimit),
+                foks_client_db::Error::ChatNotFound(..) => Some(ErrorCode::ChatNotFound),
+                _ => None,
+            };
+            if let Some(code) = code {
+                return Response::error(id, code, chat.to_string());
+            }
+        }
+
         if let Some(foks_rpc::Error::RemoteStatus { code, .. }) =
             candidate.downcast_ref::<foks_rpc::Error>()
         {
@@ -3342,6 +3380,17 @@ fn dispatch_result(
                     vault,
                     master,
                 )?)?)
+            })
+        }
+        Operation::Chat { store, action } => {
+            let session = ProfileSession::open_with_control(
+                &registry,
+                &store.profile,
+                timeout,
+                cancellation,
+            )?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                chat::dispatch(state_dir, session, vault, master, store, action)
             })
         }
         Operation::ListTeams { profile } => {

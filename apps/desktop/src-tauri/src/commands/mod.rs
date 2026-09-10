@@ -3,6 +3,7 @@
 
 pub(crate) mod accounts;
 pub(crate) mod application;
+pub(crate) mod chat;
 mod context;
 pub(crate) mod enrollment;
 mod execution;

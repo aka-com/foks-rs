@@ -5,10 +5,74 @@ use crate::{
     Result,
 };
 use foks_client::{ChatChannels, ChatHistory, ChatSession, EncryptedFileMutationStore};
-use foks_client_db::{ChatOperation, HardStateStore};
+use foks_client_db::{ChatOperation, ChatSubmission, HardStateStore};
 use foks_proto::{EntityId, RtChannelId, RtChannelTier};
 
+pub struct ChatChannelInput<'a> {
+    pub name: &'a str,
+    pub description: &'a str,
+    pub tier: RtChannelTier,
+}
+
+const SUBMISSION_MAC_DOMAIN: u64 = 0x8d7a_1f31_697c_f490;
+
+/// The commitment is keyed so durable metadata does not reveal guessable text.
+pub fn chat_submission(master_key: &[u8; 32], id: [u8; 16], input: &[u8]) -> ChatSubmission {
+    ChatSubmission {
+        id,
+        input_mac: foks_crypto::capability_mac(master_key, SUBMISSION_MAC_DOMAIN, input),
+    }
+}
+
 impl CheckedProfileSession<'_> {
+    pub fn chat_operation_status(
+        &self,
+        team_alias: &str,
+        id: &[u8; 16],
+        vault: &mut AccountVault<'_>,
+    ) -> Result<ChatOperation> {
+        self.profile.require(Capability::Chat)?;
+        let team = vault.team(team_alias)?;
+        let account = vault.account(&team.account_alias)?;
+        let host = self.pinned_host()?;
+        let op = HardStateStore::open(&self.paths.hard_database)?
+            .chat_operation(id)?
+            .ok_or(foks_client::Error::ChatNotFound("chat operation not found"))?;
+        if op.scope.host != host.host_id().as_bytes()
+            || op.scope.uid != account.credential.uid.as_bytes()
+            || op.scope.team != team.team_id
+        {
+            return Err(foks_client::Error::ChatIntegrity("chat operation scope mismatch").into());
+        }
+        Ok(op)
+    }
+
+    pub fn chat_scope(
+        &self,
+        account_alias: &str,
+        team_alias: &str,
+        team_id: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<foks_client_db::ChatScope> {
+        self.profile.require(Capability::Chat)?;
+        let stored = vault.team(team_alias)?;
+        if stored.account_alias != account_alias
+            || crate::hex(&stored.team_id) != team_id
+            || !stored.active
+        {
+            return Err(Error::InvalidAccount(
+                "chat team identity does not match the selected store",
+            ));
+        }
+        let account = vault.account(account_alias)?;
+        Ok(foks_client_db::ChatScope {
+            host: self.pinned_host()?.host_id().as_bytes().to_vec(),
+            uid: account.credential.uid.as_bytes().to_vec(),
+            team: stored.team_id.clone(),
+            channel: [0; 16],
+        })
+    }
+
     fn with_chat<T>(
         &self,
         team_alias: &str,
@@ -70,17 +134,41 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<ChatOperation> {
+        self.prepare_chat_channel_submission(
+            team_alias,
+            ChatChannelInput {
+                name,
+                description,
+                tier,
+            },
+            vault,
+            master_key,
+            None,
+        )
+    }
+    pub fn prepare_chat_channel_submission(
+        &self,
+        team_alias: &str,
+        input: ChatChannelInput<'_>,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+        submission: Option<&ChatSubmission>,
+    ) -> Result<ChatOperation> {
         self.with_chat(team_alias, vault, |chat| {
+            if let Some(operation) = chat.submitted_operation(submission)? {
+                return Ok(operation);
+            }
             let mut protected = EncryptedFileMutationStore::open(
                 &self.paths.protected_mutations,
                 derive_mutation_key(master_key),
             )?;
-            Ok(chat.prepare_channel(
+            Ok(chat.prepare_channel_submission(
                 &mut chat.connection()?,
                 &mut protected,
-                name,
-                description,
-                tier,
+                input.name,
+                input.description,
+                input.tier,
+                submission,
             )?)
         })
     }
@@ -92,12 +180,32 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<ChatOperation> {
+        self.prepare_chat_send_submission(team_alias, channel, text, vault, master_key, None)
+    }
+    pub fn prepare_chat_send_submission(
+        &self,
+        team_alias: &str,
+        channel: RtChannelId,
+        text: &str,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+        submission: Option<&ChatSubmission>,
+    ) -> Result<ChatOperation> {
         self.with_chat(team_alias, vault, |chat| {
+            if let Some(operation) = chat.submitted_operation(submission)? {
+                return Ok(operation);
+            }
             let mut protected = EncryptedFileMutationStore::open(
                 &self.paths.protected_mutations,
                 derive_mutation_key(master_key),
             )?;
-            Ok(chat.prepare_send(&mut chat.connection()?, &mut protected, channel, text)?)
+            Ok(chat.prepare_send_submission(
+                &mut chat.connection()?,
+                &mut protected,
+                channel,
+                text,
+                submission,
+            )?)
         })
     }
     /// Publishes the prepared ledger checkpoint before delivery. An uncertain
@@ -216,6 +324,12 @@ mod tests {
             let recent=session.read_recent_chat("chat-team",RtChannelId(op.scope.channel),10,&mut vault)?;
             assert!(matches!(&recent.messages[0].content,foks_client::ChatContent::Text(text) if text.as_str()=="hello from the app"));
             assert!(session.list_pending_chat("chat-team",&mut vault)?.is_empty());
+            let submission = super::chat_submission(&master, [7; 16], b"offline replay");
+            let prepared = session.prepare_chat_send_submission("chat-team", RtChannelId(op.scope.channel), "offline replay", &mut vault, &master, Some(&submission))?;
+            drop(_server);
+            let replay = session.prepare_chat_send_submission("chat-team", RtChannelId(op.scope.channel), "offline replay", &mut vault, &master, Some(&submission))?;
+            assert_eq!(prepared, replay);
+
             Ok::<_,Error>(())
         }).unwrap();
     }

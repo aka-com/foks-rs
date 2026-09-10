@@ -1,0 +1,1226 @@
+{
+  "store": {
+    "profile": "local",
+    "account_alias": "me",
+    "team_alias": "team",
+    "team_id": "03abababababababababababababababababababababababababababababababab"
+  },
+  "cases": [
+    {
+      "name": "large sequence and literal text",
+      "valid": true,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "null sender and unsupported content",
+      "valid": true,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": null,
+              "content": {
+                "kind": "unsupported"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "oversized placeholder",
+      "valid": true,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "oversized"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "wrong account binding",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "other",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "wrong actor entity type",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "03abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "wrong sender entity type",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "03abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "zero missing predecessor",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": [
+            "0"
+          ]
+        }
+      }
+    },
+    {
+      "name": "noncanonical predecessor",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": [
+            "01"
+          ]
+        }
+      }
+    },
+    {
+      "name": "full page of unresolved predecessors",
+      "valid": true,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+            "11",
+            "12",
+            "13",
+            "14",
+            "15",
+            "16",
+            "17",
+            "18",
+            "19",
+            "20",
+            "21",
+            "22",
+            "23",
+            "24",
+            "25",
+            "26",
+            "27",
+            "28",
+            "29",
+            "30",
+            "31",
+            "32",
+            "33",
+            "34",
+            "35",
+            "36",
+            "37",
+            "38",
+            "39",
+            "40",
+            "41",
+            "42",
+            "43",
+            "44",
+            "45",
+            "46",
+            "47",
+            "48",
+            "49",
+            "50"
+          ]
+        }
+      }
+    },
+    {
+      "name": "too many unresolved predecessors",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+            "11",
+            "12",
+            "13",
+            "14",
+            "15",
+            "16",
+            "17",
+            "18",
+            "19",
+            "20",
+            "21",
+            "22",
+            "23",
+            "24",
+            "25",
+            "26",
+            "27",
+            "28",
+            "29",
+            "30",
+            "31",
+            "32",
+            "33",
+            "34",
+            "35",
+            "36",
+            "37",
+            "38",
+            "39",
+            "40",
+            "41",
+            "42",
+            "43",
+            "44",
+            "45",
+            "46",
+            "47",
+            "48",
+            "49",
+            "50",
+            "51"
+          ]
+        }
+      }
+    },
+    {
+      "name": "duplicate message identity",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            },
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "duplicate sequence across identities",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            },
+            {
+              "id": "efefefefefefefefefefefefefefefef",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "zero message identity",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "00000000000000000000000000000000",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "sequence exceeds signed storage range",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9223372036854775808",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "wrong older cursor",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "2",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "message at exclusive upper bound",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": "9007199254740993"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "wrong channel",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "efefefefefefefefefefefefefefefef",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "prepared",
+      "valid": true,
+      "action": {
+        "action": "status",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "create": false,
+            "state": "prepared",
+            "sequence": null,
+            "rejection_code": null
+          }
+        }
+      }
+    },
+    {
+      "name": "confirmed",
+      "valid": true,
+      "action": {
+        "action": "status",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "create": false,
+            "state": "confirmed",
+            "sequence": "3",
+            "rejection_code": null
+          }
+        }
+      }
+    },
+    {
+      "name": "rejected",
+      "valid": true,
+      "action": {
+        "action": "status",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "create": false,
+            "state": "rejected",
+            "sequence": null,
+            "rejection_code": 12002
+          }
+        }
+      }
+    },
+    {
+      "name": "missing rejection code",
+      "valid": false,
+      "action": {
+        "action": "status",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "create": false,
+            "state": "rejected",
+            "sequence": null,
+            "rejection_code": null
+          }
+        }
+      }
+    },
+    {
+      "name": "missing receipt",
+      "valid": false,
+      "action": {
+        "action": "status",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "create": false,
+            "state": "confirmed",
+            "sequence": null,
+            "rejection_code": null
+          }
+        }
+      }
+    },
+    {
+      "name": "prepared with receipt",
+      "valid": false,
+      "action": {
+        "action": "status",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "create": false,
+            "state": "prepared",
+            "sequence": "3",
+            "rejection_code": null
+          }
+        }
+      }
+    },
+    {
+      "name": "unknown reply field",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        },
+        "unexpected": "field"
+      }
+    },
+    {
+      "name": "unknown scope field",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab",
+          "unexpected": "field"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "unknown result field",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": [],
+          "unexpected": "field"
+        }
+      }
+    },
+    {
+      "name": "unknown message field",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>"
+              },
+              "unexpected": "field"
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "unknown content field",
+      "valid": false,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "content": {
+                "kind": "text",
+                "text": "<script>plain text</script>",
+                "unexpected": "field"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "channel UTF-8 name bytes 128",
+      "valid": true,
+      "action": {
+        "action": "channels"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "channels",
+          "version": "1",
+          "channels": [
+            {
+              "id": "abababababababababababababababab",
+              "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+              "admin": false,
+              "readable": true,
+              "read_role": "Member (0)",
+              "write_role": "Member (0)"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "channel UTF-8 name bytes 129",
+      "valid": false,
+      "action": {
+        "action": "channels"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "channels",
+          "version": "1",
+          "channels": [
+            {
+              "id": "abababababababababababababababab",
+              "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9x",
+              "admin": false,
+              "readable": true,
+              "read_role": "Member (0)",
+              "write_role": "Member (0)"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

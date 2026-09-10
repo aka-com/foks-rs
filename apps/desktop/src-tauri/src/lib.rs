@@ -159,6 +159,8 @@ pub fn run() {
             commands::servers::list_servers,
             commands::accounts::list_accounts,
             commands::groups::list_group_details,
+            commands::chat::chat_request,
+            commands::chat::cancel_chat_requests,
             commands::groups::list_parties,
             commands::groups::list_federation,
             commands::vault::read_item,
