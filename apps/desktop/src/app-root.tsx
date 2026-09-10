@@ -9,7 +9,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { OverlayProvider } from '/kit/overlay-primitives';
 import { ToastController, ToastProvider } from '/kit/toasts';
-import { loadWorld, normalizeCommandError, selectBridge } from './bridge';
+import {
+  discoverUnboundTeams,
+  loadWorld,
+  normalizeCommandError,
+  selectBridge,
+} from './bridge';
 import type { AppLockState, Bridge } from './bridge';
 import { Button } from './components';
 import {
@@ -127,6 +132,17 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
           } catch (error) {
             if (!requested) throw error;
             next = emptyWorld(status);
+          }
+          // On an ordinary launch, look for teams that were granted to an
+          // account after its first-run setup. An explicit first-run location
+          // keeps its own discovery step, so leave it untouched.
+          if (!requested && next.accountInventoryComplete) {
+            try {
+              if (await discoverUnboundTeams(selected, next))
+                next = await loadWorld(selected);
+            } catch {
+              // Team discovery is best-effort and must not block launch.
+            }
           }
           if (
             !requested &&

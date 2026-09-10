@@ -43,7 +43,13 @@ import {
 import type { AccountStore, StoreRef, TeamStore, World } from '../model';
 import { PageHeader } from '../shell/page-header';
 import type { MutationFailureHandler } from '../mutation-recovery';
-import { GroupSheet } from './groups-screen';
+import {
+  checkLabel,
+  discoveryContext,
+  GroupSheet,
+  unavailableTitle,
+} from './groups-screen';
+import type { DiscoveryContext } from './groups-screen';
 import { GoProfileConnectSheet } from './go-profile-connect';
 import { ServersSection } from './servers-screen';
 
@@ -97,11 +103,15 @@ function accountStores(world: World): AccountStore[] {
 
 function GroupsSection({
   world,
+  discovering,
+  onDiscover,
   onCreate,
   onInvite,
   onOpen,
 }: {
   world: World;
+  discovering: StoreRef | null;
+  onDiscover: (context: DiscoveryContext) => Promise<void>;
   onCreate: () => void;
   onInvite: (store: AccountStore) => void;
   onOpen: (store: TeamStore) => void;
@@ -146,6 +156,51 @@ function GroupsSection({
           restore access to a server.
         </p>
       )}
+      <SectionLabel>Find groups</SectionLabel>
+      <Inset className="settings-inset">
+        {accounts.length ? (
+          accounts.map((store) => {
+            const context = discoveryContext(world, store.id);
+            const busy = discovering === store.id;
+            const account = world.accounts.find(
+              (candidate) => candidate.store === store.id,
+            );
+            return (
+              <InsetRow
+                key={store.id}
+                label={context?.server.name ?? store.name}
+                action={
+                  <Button
+                    size="sm"
+                    aria-label={
+                      context ? checkLabel(context) : 'Check for groups'
+                    }
+                    title={
+                      context && !context.available
+                        ? unavailableTitle(context)
+                        : 'Ask the server which groups this account belongs to.'
+                    }
+                    disabled={!context || !context.available || busy}
+                    onClick={() => {
+                      if (context) void onDiscover(context);
+                    }}
+                  >
+                    {busy ? 'Checking…' : 'Check for groups'}
+                  </Button>
+                }
+              >
+                <small>
+                  {account
+                    ? `Groups the server lists for ${account.username} appear in the sidebar.`
+                    : 'This account is not signed in on this Mac.'}
+                </small>
+              </InsetRow>
+            );
+          })
+        ) : (
+          <InsetRow label="None">No accounts configured on this Mac.</InsetRow>
+        )}
+      </Inset>
       {attention.length ? (
         <>
           <SectionLabel>Needs attention</SectionLabel>
@@ -279,6 +334,7 @@ export function SettingsScreen({
         null)
       : null,
   );
+  const [discovering, setDiscovering] = useState<StoreRef | null>(null);
   const toasts = useToast();
   // Track open modal state to suppress background catalog reloads while sheets are active.
   const sheetOpen = useRef(sheet);
@@ -297,6 +353,36 @@ export function SettingsScreen({
   }, [onRefreshWorld]);
   // Profile of the currently selected account, or empty if none selected.
   const profile = selected?.server ?? '';
+
+  // Ask one account's server which groups it belongs to. Discovery writes
+  // durable local bindings, so it runs through the profile work queue and any
+  // failure is reconciled like a mutation rather than replayed blindly.
+  const discover = useCallback(
+    async (context: DiscoveryContext): Promise<void> => {
+      setDiscovering(context.store.id);
+      try {
+        const result = await enqueueProfileWork(bridge, context.server.id, () =>
+          bridge.discoverGroups(context.server.id, context.account.alias),
+        );
+        if (result.accountAlias !== context.account.alias) {
+          throw new Error(
+            'Group discovery returned data for a different account.',
+          );
+        }
+        const found = result.groups.filter((group) => group.active).length;
+        await onRefresh(
+          found
+            ? `Found ${found} group${found === 1 ? '' : 's'} for ${context.account.username}.`
+            : `No groups found for ${context.account.username}.`,
+        );
+      } catch (error) {
+        await onMutationError(error);
+      } finally {
+        setDiscovering(null);
+      }
+    },
+    [bridge, onMutationError, onRefresh],
+  );
 
   useEffect(() => {
     const conceal = (): void => {
@@ -761,6 +847,8 @@ export function SettingsScreen({
             {section === 'groups' ? (
               <GroupsSection
                 world={world}
+                discovering={discovering}
+                onDiscover={discover}
                 onCreate={() => setGroupCreate(true)}
                 onInvite={(store) => setInviteStore(store.id)}
                 onOpen={(store) => onNavigate({ kind: 'store', ref: store.id })}

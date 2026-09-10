@@ -646,6 +646,14 @@ mod tests {
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("cage"));
         assert!(imported.is_device_pairing_wait());
+        // Reading a Go CLI credential can raise a blocking Keychain prompt, so
+        // the copy runs on the same long deadline as interactive pairing.
+        assert!(Operation::CopyGoProfileDevice {
+            candidate_id: "ab".repeat(32),
+            profile: "local".to_owned(),
+            target_alias: "laptop".to_owned(),
+        }
+        .is_device_pairing_wait());
         assert!(!Operation::StartDevicePairing {
             profile: "local".to_owned(),
             account_alias: "owner".to_owned(),

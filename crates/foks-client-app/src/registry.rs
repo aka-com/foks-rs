@@ -1,4 +1,12 @@
 use super::*;
+use foks_proto::{ClientVersionExt, SemVer};
+
+/// The pinned client protocol version this application speaks.
+const PINNED_CLIENT_VERSION: SemVer = SemVer {
+    major: 0,
+    minor: 1,
+    patch: 9,
+};
 
 const PROFILE_PUBLICATION_MARKER: &str = ".profile-publication-v1";
 const PROFILE_STAGING_PREFIX: &str = ".pending-profile-";
@@ -992,6 +1000,53 @@ pub struct ProbeReport {
     pub host_id_hex: String,
     pub host_chain_sequence: u64,
     pub merkle_epoch: u64,
+    /// The server's advertised client-version compatibility, when it answered
+    /// `Reg.getClientVersionInfo`. Older servers that do not implement the call
+    /// leave this unset rather than failing the probe.
+    #[serde(default)]
+    pub server_version: Option<ServerVersionReport>,
+}
+
+/// The server's advertised client-version range plus this client's verdict for
+/// its own pinned protocol version.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ServerVersionReport {
+    /// Oldest client version the server accepts, `"major.minor.patch"`.
+    pub minimum: Option<String>,
+    /// Newest client version the server accepts, `"major.minor.patch"`.
+    pub newest: Option<String>,
+    /// Free-text notice the server attached, if any.
+    pub message: String,
+    /// Whether the pinned client version falls inside the advertised range.
+    pub compatible: bool,
+}
+
+fn format_semver(version: SemVer) -> String {
+    format!("{}.{}.{}", version.major, version.minor, version.patch)
+}
+
+/// The server's notice is untrusted display text. Decode it lossily, replace
+/// control characters, bound it, and collapse surrounding whitespace so it can
+/// never corrupt the desktop's strict response projection.
+fn sanitize_server_message(bytes: &[u8]) -> String {
+    let mut message = String::new();
+    for character in String::from_utf8_lossy(bytes).chars().take(512) {
+        let character = if character.is_control() {
+            ' '
+        } else {
+            character
+        };
+        // Match the desktop projection's byte limit without splitting UTF-8.
+        if message.len() + character.len_utf8() > 1024 {
+            break;
+        }
+        message.push(character);
+    }
+    message.trim().to_owned()
+}
+
+fn semver_at_most(left: SemVer, right: SemVer) -> bool {
+    (left.major, left.minor, left.patch) <= (right.major, right.minor, right.patch)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1100,11 +1155,38 @@ impl ProfileSession {
         super::checkpoint::hard_state_artifacts_exist(&self.paths.hard_database)
     }
 
+    /// Asks the verified host which client versions it accepts and judges this
+    /// client's pinned version against that range. A server too old to know the
+    /// call yields an error, which the caller treats as "not reported".
+    fn server_version_report(&self, host: &foks_client::PinnedHost) -> Result<ServerVersionReport> {
+        let info = self.client.client_version_info(
+            host,
+            &ClientVersionExt {
+                version: PINNED_CLIENT_VERSION,
+                linker_version: b"fennec".to_vec(),
+                linker_packaging: b"rust".to_vec(),
+            },
+        )?;
+        let compatible = info
+            .minimum
+            .is_none_or(|minimum| semver_at_most(minimum, PINNED_CLIENT_VERSION))
+            && info
+                .newest
+                .is_none_or(|newest| semver_at_most(PINNED_CLIENT_VERSION, newest));
+        Ok(ServerVersionReport {
+            minimum: info.minimum.map(format_semver),
+            newest: info.newest.map(format_semver),
+            message: sanitize_server_message(&info.message),
+            compatible,
+        })
+    }
+
     fn probe_and_pin_unchecked(&self) -> Result<ProbeReport> {
         let target = ProbeTarget::parse(&self.profile.probe)?;
         let outcome = self
             .client
             .probe_and_pin(&target, &self.paths.hard_database)?;
+        let server_version = self.server_version_report(&outcome.pinned).ok();
         Ok(ProbeReport {
             acceptance: outcome.acceptance.into(),
             lookup_name: target.hostname().to_owned(),
@@ -1112,6 +1194,7 @@ impl ProfileSession {
             host_id_hex: hex(outcome.pinned.host_id().as_bytes()),
             host_chain_sequence: outcome.verified.snapshot.chain_seqno(),
             merkle_epoch: outcome.verified.snapshot.merkle_root().epoch(),
+            server_version,
         })
     }
 
@@ -1235,6 +1318,26 @@ mod tests {
     use foks_keystore::MemorySecretStore;
     use foks_server_testkit::TestEnvironment;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn server_notices_fit_the_desktop_utf8_byte_limit() {
+        for (notice, expected_bytes) in [
+            ("a".repeat(600), 512),
+            ("界".repeat(512), 1023),
+            ("🦊".repeat(512), 1024),
+            (format!("{}a界", "界".repeat(341)), 1024),
+        ] {
+            let sanitized = sanitize_server_message(notice.as_bytes());
+            assert_eq!(sanitized.len(), expected_bytes);
+            assert!(notice.starts_with(&sanitized));
+        }
+        let invalid_utf8 = vec![0xff; 512];
+        assert_eq!(sanitize_server_message(&invalid_utf8).len(), 1023);
+        assert_eq!(
+            sanitize_server_message(b"\nhello\0world\r\n"),
+            "hello world"
+        );
+    }
 
     struct MemoryPublicationAuthorizer {
         store: std::sync::Mutex<MemorySecretStore>,
@@ -1840,6 +1943,7 @@ mod tests {
                 host_id_hex: "02".repeat(33),
                 host_chain_sequence: 1,
                 merkle_epoch: 1,
+                server_version: None,
             },
             &session.rollback_checkpoint().unwrap(),
             [7; 32],

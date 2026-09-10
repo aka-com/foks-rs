@@ -32,6 +32,7 @@ fn first_run_response_projection_fails_closed() {
             host_id_hex: "01".to_owned(),
             host_chain_sequence: 1,
             merkle_epoch: 2,
+            server_version: None,
         },
     };
     assert_eq!(
@@ -55,6 +56,7 @@ fn first_run_response_projection_fails_closed() {
             host_id_hex: "01".repeat(33),
             host_chain_sequence: 1,
             merkle_epoch: 2,
+            server_version: None,
         },
     };
     assert_eq!(
@@ -80,6 +82,7 @@ fn first_run_response_projection_fails_closed() {
                 host_id_hex: "02".repeat(33),
                 host_chain_sequence: 1,
                 merkle_epoch: 2,
+                server_version: None,
             },
         }
     )
@@ -100,6 +103,7 @@ fn first_run_response_projection_fails_closed() {
                 host_id_hex: "02".repeat(33),
                 host_chain_sequence: 1,
                 merkle_epoch: 2,
+                server_version: None,
             },
         };
         assert_eq!(

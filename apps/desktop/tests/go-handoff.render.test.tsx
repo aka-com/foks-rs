@@ -194,3 +194,71 @@ test('disables account selection and dialog dismissal while server verification 
   );
   assert.equal(rendered.queryByText('Pair this Mac'), null);
 });
+
+for (const refreshFails of [false, true]) {
+  test(`reconciles uncertain initialization before profile selection (refresh fails: ${refreshFails})`, async () => {
+    const { FirstRunExperience } = await vite.ssrLoadModule(
+      '/src/screens/first-run-screen.tsx',
+    );
+    const { ToastProvider, ToastController } =
+      await vite.ssrLoadModule('/kit/toasts.tsx');
+    const { FIXTURE } = await vite.ssrLoadModule('/src/fixture.ts');
+    const { mockBridge } = await vite.ssrLoadModule('/src/mock-bridge.ts');
+    let refreshes = 0;
+    let pendingReads = 0;
+    const bridge: Bridge = {
+      ...mockBridge(),
+      native: true,
+      firstRunFixture: undefined,
+      initializeClientState: async () => {
+        throw {
+          code: 'ambiguous',
+          message: 'Initialization timed out',
+          retryable: false,
+          ambiguous: true,
+          fatal: false,
+        };
+      },
+      discoverGoProfiles: async () => ({ installed: false, candidates: [] }),
+      listPendingOperations: async () => {
+        pendingReads++;
+        return [];
+      },
+    };
+    const rendered = ui.render(
+      createElement(ToastProvider, {
+        controller: new ToastController(),
+        children: createElement(FirstRunExperience, {
+          bridge,
+          world: FIXTURE,
+          location: { kind: 'first-run', path: 'own', step: 'who' },
+          onNavigate: () => {},
+          automaticEntry: true,
+          onRefreshWorld: async () => {
+            refreshes++;
+            if (refreshFails) throw new Error('Catalog unavailable');
+            return FIXTURE;
+          },
+          concealSignal: 0,
+        }),
+      }),
+    );
+    await ui.waitFor(() => assert.equal(refreshes, 1));
+    await ui.waitFor(() =>
+      assert.ok(
+        rendered.getByText(
+          refreshFails
+            ? /FOKS could not finish checking the vault/
+            : /FOKS refreshed the vault after an uncertain result/,
+        ),
+      ),
+    );
+    assert.equal(
+      pendingReads,
+      0,
+      'pending operations require a selected profile',
+    );
+    if (refreshFails)
+      assert.equal(rendered.queryByText(/FOKS refreshed the vault/), null);
+  });
+}

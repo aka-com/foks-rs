@@ -926,6 +926,12 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       return {
         profile: server.id,
         acceptance: existing ? ('unchanged' as const) : ('inserted' as const),
+        serverVersion: {
+          minimum: null,
+          newest: null,
+          message: '',
+          compatible: true,
+        },
         ...host,
       };
     },

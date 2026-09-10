@@ -215,7 +215,7 @@ pub use kv::{
 pub use registry::{
     Capability, CheckedProfileSession, ProbeAcceptance, ProbeReport, Profile, ProfilePaths,
     ProfilePublicationReport, ProfileRegistry, ProfileSession, ProtocolPolicy,
-    ServerStatusSnapshot, StoredHostStatus, TrustRoot,
+    ServerStatusSnapshot, ServerVersionReport, StoredHostStatus, TrustRoot,
 };
 #[cfg(test)]
 use team::StoredTeam;

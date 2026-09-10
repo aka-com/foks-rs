@@ -351,9 +351,18 @@ export interface AppLockState {
   unavailableReason?: string;
 }
 
+/** The server's advertised client-version range and this client's verdict. */
+export interface ServerVersionInfo {
+  minimum: string | null;
+  newest: string | null;
+  message: string;
+  compatible: boolean;
+}
+
 export interface CheckedServer extends StoredHost {
   profile: string;
   acceptance: 'inserted' | 'advanced' | 'unchanged';
+  serverVersion: ServerVersionInfo | null;
 }
 
 export interface AccountDevice {
@@ -1427,6 +1436,20 @@ export function decodeAppLockState(value: unknown): AppLockState {
   };
 }
 
+function decodeServerVersion(value: unknown): ServerVersionInfo {
+  const item = record(value, 'check_server.serverVersion');
+  return {
+    minimum: nullable(item.minimum, 'serverVersion.minimum', (entry, at) =>
+      string(entry, at),
+    ),
+    newest: nullable(item.newest, 'serverVersion.newest', (entry, at) =>
+      string(entry, at),
+    ),
+    message: string(item.message, 'serverVersion.message'),
+    compatible: bool(item.compatible, 'serverVersion.compatible'),
+  };
+}
+
 export function decodeCheckedServer(value: unknown): CheckedServer {
   const item = record(value, 'check_server response');
   const acceptance = string(item.acceptance, 'check_server.acceptance');
@@ -1435,9 +1458,14 @@ export function decodeCheckedServer(value: unknown): CheckedServer {
       'check_server.acceptance must be inserted, advanced, or unchanged',
     );
   }
+  const version = item.serverVersion;
   return {
     profile: string(item.profile, 'check_server.profile'),
     acceptance: acceptance as CheckedServer['acceptance'],
+    serverVersion:
+      version === undefined || version === null
+        ? null
+        : decodeServerVersion(version),
     ...decodeStoredHost(item, 'check_server response'),
   };
 }
@@ -2231,6 +2259,41 @@ function recoverableGroupDetailFailure(
     message: typed.message,
     retryable: typed.retryable,
   };
+}
+
+/**
+ * Runs authenticated team discovery for each account store that is not bound to
+ * any team yet, so a user who is added to a group after setup sees it on the
+ * next ordinary launch. Discovery is best-effort: an unavailable server or a
+ * profile that cannot be opened remains unbound until a later discovery attempt.
+ *
+ * Returns true when any discovery was attempted. The native command invalidates
+ * the catalog even if no groups are found or the operation fails, so the
+ * catalog must be reloaded before the shell renders in all of those cases.
+ */
+export async function discoverUnboundTeams(
+  bridge: Bridge,
+  world: World,
+): Promise<boolean> {
+  if (!world.accountInventoryComplete) return false;
+  const bound = new Set<string>();
+  for (const store of world.stores) {
+    if (store.kind === 'team')
+      bound.add(`${store.server}\u0000${store.account}`);
+  }
+  let attempted = false;
+  for (const account of world.accounts) {
+    if (bound.has(`${account.server}\u0000${account.alias}`)) continue;
+    attempted = true;
+    try {
+      await enqueueProfileWork(bridge, account.server, () =>
+        bridge.discoverGroups(account.server, account.alias),
+      );
+    } catch {
+      // Best effort: leave the account unbound until a later launch.
+    }
+  }
+  return attempted;
 }
 
 /** Load the current world state. */

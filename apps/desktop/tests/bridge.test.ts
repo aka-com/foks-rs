@@ -33,6 +33,7 @@ import {
   decodeParties,
   decodeFederation,
   decodeGroupDetails,
+  discoverUnboundTeams,
   loadWorld,
   enqueueProfileWork,
   normalizeCommandError,
@@ -46,6 +47,7 @@ import {
   canCreateInStore,
   signedLeaseState,
   storeReadable,
+  type World,
 } from '../src/model';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
@@ -391,6 +393,12 @@ test('decoders successfully parse the full wire contract golden fixture', async 
     decodeCheckedServer(fixture.checkedServer).acceptance,
     'advanced',
   );
+  assert.deepEqual(decodeCheckedServer(fixture.checkedServer).serverVersion, {
+    minimum: null,
+    newest: null,
+    message: '',
+    compatible: true,
+  });
   assert.equal(decodeAccountDevices([fixture.device])[0]?.name, 'This Mac');
   assert.equal(
     decodeBackupEnrollments([fixture.backupEnrollment])[0]?.backupAlias,
@@ -871,6 +879,112 @@ test('loadWorld retains validated account-store identities in the mock world', a
       'account',
     );
   }
+});
+
+test('discoverUnboundTeams discovers teams only for accounts with no binding', async () => {
+  const calls: { profile: string; alias: string }[] = [];
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    discoverGroups: async (profile, accountAlias) => {
+      calls.push({ profile, alias: accountAlias });
+      return {
+        accountAlias,
+        groups: [
+          {
+            alias: 'discovered',
+            accountAlias,
+            teamIdHex: 'aa'.repeat(33),
+            kind: 'named',
+            name: 'Discovered',
+            active: true,
+          },
+        ],
+      };
+    },
+  };
+  const world: World = {
+    ...FIXTURE,
+    accountInventoryComplete: true,
+    accounts: [
+      {
+        store: 'acct:personal',
+        alias: 'personal',
+        username: 'rae',
+        server: 'foks.example.net',
+      },
+      {
+        store: 'acct:work',
+        alias: 'work',
+        username: 'rae.chen',
+        server: 'acme',
+      },
+    ],
+    stores: [
+      {
+        id: 'acct:work',
+        kind: 'account',
+        name: 'Work',
+        server: 'acme',
+        account: 'work',
+      },
+      {
+        id: 'team:eng',
+        kind: 'team',
+        name: 'Engineering',
+        alias: 'eng',
+        server: 'acme',
+        account: 'work',
+        active: true,
+        team_kind: 'named',
+        team_id_hex: 'bb'.repeat(33),
+      },
+    ],
+  };
+  assert.equal(await discoverUnboundTeams(bridge, world), true);
+  assert.deepEqual(calls, [{ profile: 'foks.example.net', alias: 'personal' }]);
+});
+
+test('startup discovery requests a catalog reload even for empty or failed discovery', async () => {
+  const world: World = {
+    ...FIXTURE,
+    accountInventoryComplete: true,
+    stores: FIXTURE.stores.filter((store) => store.kind !== 'team'),
+    accounts: FIXTURE.accounts.slice(0, 1),
+  };
+  assert.equal(world.accounts.length, 1);
+  for (const failed of [false, true]) {
+    let catalogValid = true;
+    const bridge: Bridge = {
+      ...mockBridge(world),
+      discoverGroups: async (_profile, accountAlias) => {
+        // The native mutation command invalidates its catalog before dispatch.
+        catalogValid = false;
+        if (failed)
+          throw {
+            code: 'ambiguous',
+            message: 'Timed out',
+            retryable: false,
+            ambiguous: true,
+          };
+        return { accountAlias, groups: [] };
+      },
+    };
+    assert.equal(await discoverUnboundTeams(bridge, world), true);
+    assert.equal(catalogValid, false);
+  }
+});
+
+test('discoverUnboundTeams leaves a fully bound world untouched', async () => {
+  let calls = 0;
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    discoverGroups: async (_profile, accountAlias) => {
+      calls += 1;
+      return { accountAlias, groups: [] };
+    },
+  };
+  assert.equal(await discoverUnboundTeams(bridge, FIXTURE), false);
+  assert.equal(calls, 0);
 });
 
 test('loadWorld makes a single catalog call and does not leak fixture data in native mode', async () => {

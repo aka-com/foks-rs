@@ -211,7 +211,13 @@
     "canonicalName": "foks.example",
     "hostId": "020202020202020202020202020202020202020202020202020202020202020202",
     "chain": 12,
-    "epoch": 43
+    "epoch": 43,
+    "serverVersion": {
+      "minimum": null,
+      "newest": null,
+      "message": "",
+      "compatible": true
+    }
   },
   "device": {
     "id": "040404040404040404040404040404040404040404040404040404040404040404",

@@ -63,6 +63,57 @@ pub(super) struct CheckedProbeResponse {
     pub(super) host_id_hex: String,
     pub(super) host_chain_sequence: u64,
     pub(super) merkle_epoch: u64,
+    #[serde(default)]
+    pub(super) server_version: Option<CheckedServerVersionResponse>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CheckedServerVersionResponse {
+    pub(super) minimum: Option<String>,
+    pub(super) newest: Option<String>,
+    pub(super) message: String,
+    pub(super) compatible: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckedServerVersionDto {
+    pub minimum: Option<String>,
+    pub newest: Option<String>,
+    pub message: String,
+    pub compatible: bool,
+}
+
+fn checked_server_version(
+    version: Option<CheckedServerVersionResponse>,
+) -> Result<Option<CheckedServerVersionDto>, AgentError> {
+    let Some(version) = version else {
+        return Ok(None);
+    };
+    // The message is often empty on a compatible server, so it is only bounded
+    // and control-character checked rather than required to be non-empty.
+    if version
+        .minimum
+        .as_deref()
+        .is_some_and(|value| !valid_response_text(value, 64))
+        || version
+            .newest
+            .as_deref()
+            .is_some_and(|value| !valid_response_text(value, 64))
+        || version.message.len() > 1024
+        || version.message.contains(['\0', '\r', '\n'])
+    {
+        return Err(invalid_response(
+            "The agent returned an invalid server version response.",
+        ));
+    }
+    Ok(Some(CheckedServerVersionDto {
+        minimum: version.minimum,
+        newest: version.newest,
+        message: version.message,
+        compatible: version.compatible,
+    }))
 }
 
 impl CheckedProfileDto {
@@ -140,6 +191,7 @@ pub(super) fn checked_server_response(
             "The agent returned an invalid server verification response.",
         ));
     }
+    let server_version = checked_server_version(report.server_version)?;
     Ok(CheckedServerDto {
         profile: expected_profile.to_owned(),
         acceptance: report.acceptance,
@@ -148,6 +200,7 @@ pub(super) fn checked_server_response(
         host_id: report.host_id_hex,
         chain: report.host_chain_sequence,
         epoch: report.merkle_epoch,
+        server_version,
     })
 }
 
@@ -408,6 +461,8 @@ pub struct CheckedServerDto {
     pub host_id: String,
     pub chain: u64,
     pub epoch: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_version: Option<CheckedServerVersionDto>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

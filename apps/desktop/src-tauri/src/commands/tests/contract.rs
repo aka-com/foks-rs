@@ -15,8 +15,8 @@ use crate::commands::groups::{
 use crate::commands::servers::{
     added_server_response, checked_server_response, forgotten_server_response,
     reset_preview_response, server_status_response, AddedServerDto, CheckedProfileDto,
-    CheckedServerDto, ForgottenServerDto, ResetArtifactDto, ResetPreviewDto,
-    ServerStatusSnapshotDto, StoredHostDto,
+    CheckedServerDto, CheckedServerVersionDto, ForgottenServerDto, ResetArtifactDto,
+    ResetPreviewDto, ServerStatusSnapshotDto, StoredHostDto,
 };
 use crate::commands::tests::support::test_profile_value;
 use crate::commands::types::{CommandAck, MutationDto, RoleDto};
@@ -297,6 +297,12 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         host_id: "02".repeat(33),
         chain: 12,
         epoch: 43,
+        server_version: Some(CheckedServerVersionDto {
+            minimum: None,
+            newest: None,
+            message: String::new(),
+            compatible: true,
+        }),
     };
     assert_eq!(
         serde_json::to_value(checked).unwrap(),
@@ -564,6 +570,53 @@ fn phase_six_wire_responses_are_exact_bounded_and_request_bound() {
             acceptance
         );
     }
+    let versioned = checked_server_response(
+        serde_json::json!({
+            "acceptance":"unchanged",
+            "lookup_name":"foks.example",
+            "canonical_name":"foks.example",
+            "host_id_hex":"02".repeat(33),
+            "host_chain_sequence":5,
+            "merkle_epoch":9,
+            "server_version":{
+                "minimum":"0.2.0",
+                "newest":null,
+                "message":"Upgrade required",
+                "compatible":false
+            }
+        }),
+        "work",
+    )
+    .unwrap();
+    let version = versioned
+        .server_version
+        .expect("the server version was decoded");
+    assert_eq!(version.minimum.as_deref(), Some("0.2.0"));
+    assert_eq!(version.newest, None);
+    assert!(!version.compatible);
+    assert_eq!(
+        checked_server_response(
+            serde_json::json!({
+                "acceptance":"unchanged",
+                "lookup_name":"foks.example",
+                "canonical_name":"foks.example",
+                "host_id_hex":"02".repeat(33),
+                "host_chain_sequence":5,
+                "merkle_epoch":9,
+                "server_version":{
+                    "minimum":"0.2.0",
+                    "newest":null,
+                    "message":"",
+                    "compatible":false,
+                    "invented":true
+                }
+            }),
+            "work",
+        )
+        .unwrap_err()
+        .code,
+        "invalid-response"
+    );
     assert_eq!(
         checked_server_response(
             serde_json::json!({

@@ -919,8 +919,43 @@ export function FirstRunExperience({
     [go],
   );
   const fail = useCallback(
-    (error: unknown): void => setMessage(normalizeCommandError(error).message),
-    [],
+    (error: unknown): void => {
+      const typed = normalizeCommandError(error);
+      // The command layer sets its write gate when a first-run mutation
+      // returns an ambiguous or response-binding result, and only a fresh
+      // catalog load releases it. Without this refresh the user is stuck on
+      // "Refresh the vault..." until the app restarts, so reconcile here and
+      // re-read pending operations so a committed-but-unacknowledged signup
+      // can still be resumed.
+      const latched =
+        typed.code === 'ambiguous' || typed.code === 'response-binding';
+      if (!latched) {
+        setMessage(typed.message);
+        return;
+      }
+      report('Checking the vault after an uncertain result…');
+      // Even initialization and the first server check can set the gate,
+      // before a profile has been selected. Only the pending read needs one.
+      void onRefreshWorld()
+        .then(async () => {
+          if (profile) {
+            const rows = await enqueueProfileWork(bridge, profile.profile, () =>
+              bridge.listPendingOperations(profile.profile),
+            );
+            pendingRef.current = rows;
+            setPending(rows);
+          }
+          setMessage(
+            'FOKS refreshed the vault after an uncertain result. Review the current state and try again.',
+          );
+        })
+        .catch((refreshError: unknown) => {
+          setMessage(
+            `FOKS could not finish checking the vault. ${normalizeCommandError(refreshError).message}`,
+          );
+        });
+    },
+    [bridge, onRefreshWorld, profile],
   );
 
   const refreshAccountIdentity = async (alias: string) => {

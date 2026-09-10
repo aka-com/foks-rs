@@ -862,6 +862,7 @@ impl Operation {
                 | Self::AcceptGoProfilePairing { .. }
                 | Self::ResumeDevicePairingAcceptance { .. }
                 | Self::ResumeGoProfilePairing { .. }
+                | Self::CopyGoProfileDevice { .. }
         )
     }
 

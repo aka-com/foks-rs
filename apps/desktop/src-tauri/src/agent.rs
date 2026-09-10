@@ -537,12 +537,17 @@ pub(crate) fn prepare_managed_crash_directory(directory: &Path) -> Result<(), Ag
     })
 }
 
-fn managed_agent_arguments(state_dir: &Path, socket: &Path) -> [std::ffi::OsString; 4] {
+fn managed_agent_arguments(state_dir: &Path, socket: &Path) -> [std::ffi::OsString; 6] {
     [
         "--state-dir".into(),
         state_dir.as_os_str().to_owned(),
         "--socket".into(),
         socket.as_os_str().to_owned(),
+        // The resident agent must allow as long as the desktop client waits.
+        // Accessing a Go CLI credential can raise a blocking macOS Keychain
+        // prompt, so the default 15 seconds is too short for that path.
+        "--request-timeout-seconds".into(),
+        "60".into(),
     ]
 }
 
@@ -824,7 +829,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_launch_passes_only_the_named_state_and_socket_arguments() {
+    fn managed_launch_passes_state_socket_and_the_desktop_request_timeout() {
         let arguments = managed_agent_arguments(
             Path::new("/private/foks-state"),
             Path::new("/private/foks-state/agent.sock"),
@@ -836,6 +841,8 @@ mod tests {
                 std::ffi::OsString::from("/private/foks-state"),
                 std::ffi::OsString::from("--socket"),
                 std::ffi::OsString::from("/private/foks-state/agent.sock"),
+                std::ffi::OsString::from("--request-timeout-seconds"),
+                std::ffi::OsString::from("60"),
             ]
         );
     }

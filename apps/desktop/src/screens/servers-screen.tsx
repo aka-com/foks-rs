@@ -78,6 +78,18 @@ const acceptanceText = (value: CheckedServer['acceptance']): string =>
       ? 'Server verification updated'
       : 'Server verification unchanged';
 
+/** Explains why a checked server does not accept this client's v0.1.9. */
+function versionMismatchText(
+  version: NonNullable<CheckedServer['serverVersion']>,
+): string {
+  const bounds: string[] = [];
+  if (version.minimum) bounds.push(`requires ${version.minimum} or newer`);
+  if (version.newest) bounds.push(`supports up to ${version.newest}`);
+  const range = bounds.length ? `; it ${bounds.join(' and ')}` : '';
+  const message = version.message ? ` ${version.message}` : '';
+  return `This server does not accept FOKS client 0.1.9${range}.${message}`;
+}
+
 function serverFor(
   world: World,
   profile: string | undefined,
@@ -886,6 +898,11 @@ function ServerBody({
         onCheck={onCheck}
         onReset={onReset}
       />
+      {checked?.serverVersion && !checked.serverVersion.compatible ? (
+        <Band severity="warn" label="Version mismatch.">
+          {versionMismatchText(checked.serverVersion)}
+        </Band>
+      ) : null}
 
       <SectionLabel>Check-in</SectionLabel>
       <Inset className="settings-inset middle">
