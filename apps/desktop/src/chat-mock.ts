@@ -16,6 +16,10 @@ export function mockChat() {
       messages: Map<string, ChatMessage[]>;
       operations: Map<string, ChatOperation>;
       submissions: Map<string, { input: string; op: ChatOperation }>;
+      inboxVersion: bigint;
+      versions: Map<string, bigint>;
+      reads: Map<string, bigint>;
+      waiters: Set<() => void>;
     }
   >();
   let counter = 10;
@@ -49,9 +53,19 @@ export function mockChat() {
         ]),
         operations: new Map(),
         submissions: new Map(),
+        inboxVersion: 1n,
+        versions: new Map([[id, 1n]]),
+        reads: new Map([[id, 0n]]),
+        waiters: new Set(),
       };
       teams.set(storeId, team);
     }
+    const bump = (channel: string) => {
+      team.inboxVersion += 1n;
+      team.versions.set(channel, team.inboxVersion);
+      for (const wake of team.waiters) wake();
+      team.waiters.clear();
+    };
     let result: ChatResult;
     if (action.action === 'channels')
       result = {
@@ -74,6 +88,66 @@ export function mockChat() {
         before:
           rows.length && rows[0].sequence !== '1' ? rows[0].sequence : null,
         missing_predecessors: [],
+      };
+    } else if (action.action === 'inbox' || action.action === 'sync-inbox') {
+      result = {
+        kind: 'inbox',
+        cursor: String(team.inboxVersion),
+        head: String(team.inboxVersion),
+        degraded: false,
+        conversations: team.channels.map((channel) => {
+          const rows = team.messages.get(channel.id) ?? [];
+          const last = rows.at(-1);
+          const readThrough = team.reads.get(channel.id) ?? 0n;
+          const lastSequence = last ? BigInt(last.sequence) : 0n;
+          return {
+            channel,
+            inbox_version: String(team.versions.get(channel.id) ?? 1n),
+            read_through: String(readThrough),
+            pending_read: null,
+            unread: String(
+              lastSequence > readThrough ? lastSequence - readThrough : 0n,
+            ),
+            hidden: false,
+            muted: false,
+          };
+        }),
+      };
+    } else if (action.action === 'mark-read') {
+      const sequence = BigInt(action.sequence);
+      const old = team.reads.get(action.channel) ?? 0n;
+      if (sequence > old) {
+        team.reads.set(action.channel, sequence);
+        bump(action.channel);
+      }
+      result = {
+        kind: 'read',
+        channel: action.channel,
+        sequence: action.sequence,
+      };
+    } else if (action.action === 'poll-inbox') {
+      const since = BigInt(action.since);
+      if (team.inboxVersion <= since) {
+        let wake!: () => void;
+        const changed = new Promise<void>((resolve) => {
+          wake = resolve;
+          team.waiters.add(wake);
+        });
+        await Promise.race([
+          changed,
+          new Promise<void>((resolve) =>
+            setTimeout(
+              resolve,
+              Math.min(action.timeout_milliseconds || 250, 250),
+            ),
+          ),
+        ]);
+        team.waiters.delete(wake);
+      }
+      result = {
+        kind: 'poll',
+        bumped: team.inboxVersion > since,
+        inbox_version: String(team.inboxVersion),
       };
     } else if (action.action === 'pending')
       result = {
@@ -122,6 +196,8 @@ export function mockChat() {
             write_role: submitted.admin ? 'Admin' : 'Member (0)',
           });
           team.messages.set(op.channel, []);
+          team.reads.set(op.channel, 0n);
+          bump(op.channel);
         }
         if (submitted.action === 'prepare-message') {
           const rows = team.messages.get(op.channel) ?? [];
@@ -129,10 +205,12 @@ export function mockChat() {
           rows.push({
             id: op.id,
             sequence: op.sequence,
-            sender: null,
+            sender: '01' + 'ab'.repeat(32),
             content: { kind: 'text', text: submitted.text },
           });
           team.messages.set(op.channel, rows);
+          team.reads.set(op.channel, BigInt(op.sequence));
+          bump(op.channel);
         }
         op.state = 'confirmed';
       }

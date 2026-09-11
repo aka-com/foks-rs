@@ -13,6 +13,7 @@ impl RealtimeLimits {
     pub const INBOX_ROWS: usize = 1000;
     pub const INBOX_SCAN_ROWS: usize = 4096;
     pub const INBOX_RECONCILE_CHANNELS: usize = 4096;
+    pub const INBOX_MEMBERSHIP_BYTES: usize = 1024 * 1024;
     pub const HISTORY_ROWS: usize = 1000;
     /// Sum of stored message encodings, excluding the small response container.
     pub const HISTORY_MESSAGE_BYTES: usize = 8 * 1024 * 1024;

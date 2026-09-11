@@ -77,6 +77,21 @@ pub(super) async fn poll_response(
     loop {
         let mut notified = Box::pin(Arc::clone(&listener).notified_owned());
         notified.as_mut().enable();
+        let read_head = |pool: crate::read_pool::ReadPool,
+                         actor: foks_server_db::RealtimeActor,
+                         clock: Arc<dyn foks_server_db::Clock>| async move {
+            blocking(move || {
+                let database = pool.checkout().map_err(|_| RpcStatus::TransactionRetry)?;
+                crate::services::realtime::RealtimeService::inbox_head(
+                    &actor, app, &database, &clock,
+                )
+            })
+            .await
+        };
+        let head = read_head(pool.clone(), actor.clone(), Arc::clone(&data.clock)).await?;
+        if head > since {
+            return poll_result(sequence, head, true);
+        }
         let reconcile_actor = actor.clone();
         let reconcile_writer = writer.clone();
         let reconcile_service = service.clone();
@@ -85,40 +100,28 @@ pub(super) async fn poll_response(
             reconcile_service.reconcile(reconcile_actor, app, &reconcile_writer, &reconcile_clock)
         })
         .await?;
-        let pool = pool.clone();
-        let actor = actor.clone();
-        let clock = Arc::clone(&data.clock);
-        let head = blocking(move || {
-            let database = pool.checkout().map_err(|_| RpcStatus::TransactionRetry)?;
-            crate::services::realtime::RealtimeService::inbox_head(&actor, app, &database, &clock)
-        })
-        .await?;
+        let head = read_head(pool.clone(), actor.clone(), Arc::clone(&data.clock)).await?;
         if head > since {
-            return encode_success_response_at(
-                &RtInboxPollResult {
-                    bumped: true,
-                    inbox_version: head,
-                }
-                .encoded()
-                .map_err(|_| RpcStatus::TransactionRetry)?,
-                sequence,
-            )
-            .map_err(|_| RpcStatus::TransactionRetry);
+            return poll_result(sequence, head, true);
         }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() || tokio::time::timeout(remaining, notified).await.is_err() {
-            return encode_success_response_at(
-                &RtInboxPollResult {
-                    bumped: false,
-                    inbox_version: head,
-                }
-                .encoded()
-                .map_err(|_| RpcStatus::TransactionRetry)?,
-                sequence,
-            )
-            .map_err(|_| RpcStatus::TransactionRetry);
+            return poll_result(sequence, head, false);
         }
     }
+}
+
+fn poll_result(sequence: u64, inbox_version: u64, bumped: bool) -> Result<Vec<u8>, RpcStatus> {
+    encode_success_response_at(
+        &RtInboxPollResult {
+            bumped,
+            inbox_version,
+        }
+        .encoded()
+        .map_err(|_| RpcStatus::TransactionRetry)?,
+        sequence,
+    )
+    .map_err(|_| RpcStatus::TransactionRetry)
 }
 
 async fn blocking<T: Send + 'static>(

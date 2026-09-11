@@ -38,12 +38,14 @@ function merge(
 export function useChatHistory(
   channel: ChatChannel,
   request: (action: ChatAction) => Promise<ChatReply>,
+  revision = 0,
 ) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [before, setBefore] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [atBottom, setAtBottom] = useState(true);
   const active = useRef(false);
   const reading = useRef(false);
   const scroller = useRef<HTMLDivElement>(null);
@@ -51,6 +53,14 @@ export function useChatHistory(
   const verification = useRef(new Map<string, boolean>());
   const followBottom = useRef(true);
   const scroll = useRef<{ height: number; top: number } | null>(null);
+  const seenRevision = useRef(revision);
+  const onScroll = useCallback(() => {
+    const element = scroller.current;
+    if (!element) return;
+    setAtBottom(
+      element.scrollHeight - element.scrollTop - element.clientHeight < 80,
+    );
+  }, []);
   const load = useCallback(
     async (older: string | null = null) => {
       if (reading.current) return;
@@ -64,6 +74,7 @@ export function useChatHistory(
             scroller.current.scrollTop -
             scroller.current.clientHeight <
             80);
+      if (older) setAtBottom(false);
       if (older && scroller.current)
         scroll.current = {
           height: scroller.current.scrollHeight,
@@ -134,6 +145,11 @@ export function useChatHistory(
       active.current = false;
     };
   }, [load, channel.readable]);
+  useEffect(() => {
+    if (revision === seenRevision.current) return;
+    seenRevision.current = revision;
+    if (active.current && channel.readable) void load();
+  }, [channel.readable, load, revision]);
   useLayoutEffect(() => {
     if (scroll.current && scroller.current) {
       scroller.current.scrollTop =
@@ -144,7 +160,8 @@ export function useChatHistory(
     } else if (followBottom.current && scroller.current) {
       scroller.current.scrollTop = scroller.current.scrollHeight;
     }
-  }, [messages]);
+    onScroll();
+  }, [messages, onScroll]);
   return {
     messages,
     before,
@@ -155,5 +172,7 @@ export function useChatHistory(
     load,
     scroller,
     active,
+    atBottom,
+    onScroll,
   };
 }

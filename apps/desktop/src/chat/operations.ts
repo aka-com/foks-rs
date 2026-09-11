@@ -24,5 +24,14 @@ export function reconcileOperations(
     return old.filter(
       (op) => !result.messages.some((message) => message.id === op.id),
     );
+  if (result.kind === 'channels')
+    return old.filter(
+      (op) =>
+        !(
+          op.create &&
+          op.state === 'confirmed' &&
+          result.channels.some((channel) => channel.id === op.channel)
+        ),
+    );
   return old;
 }

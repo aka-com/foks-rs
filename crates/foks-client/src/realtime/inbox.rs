@@ -80,7 +80,12 @@ impl ChatSession<'_> {
         }
         let mut applied = 0u64;
         let mut maximum = DEFAULT_PAGE;
-        for _ in 0..ChatLimits::INBOX_PAGES {
+        let pages = if state.degraded && remote_head == state.head {
+            0
+        } else {
+            ChatLimits::INBOX_PAGES
+        };
+        for _ in 0..pages {
             let RealtimeResponse::InboxDelta(delta) = rpc.request(
                 &RealtimeRequest::GetChangedThreads(RtGetChangedThreadsArgument {
                     query: RtChangedThreads {

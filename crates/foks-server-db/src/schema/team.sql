@@ -74,6 +74,7 @@ CREATE TABLE team_members (
     removal_key_commitment BLOB CHECK (removal_key_commitment IS NULL OR length(removal_key_commitment) = 32),
     PRIMARY KEY (team_id, party_id, source_role_type, source_visibility)
 ) STRICT;
+CREATE INDEX team_members_party ON team_members(party_id, team_id);
 
 CREATE TABLE team_shared_keys (
     team_id BLOB NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,

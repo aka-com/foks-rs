@@ -22,6 +22,19 @@ impl ChatTransport for EmptyFirstInboxPage<'_> {
     }
 }
 
+struct CountChangedThreads<'a> {
+    connection: &'a mut RealtimeConnection,
+    requests: usize,
+}
+impl ChatTransport for CountChangedThreads<'_> {
+    fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
+        if matches!(request, Request::GetChangedThreads(_)) {
+            self.requests += 1;
+        }
+        self.connection.call(request)
+    }
+}
+
 struct FailedRead<'a>(&'a mut RealtimeConnection);
 impl ChatTransport for FailedRead<'_> {
     fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
@@ -29,6 +42,88 @@ impl ChatTransport for FailedRead<'_> {
             return Err(foks_client::Error::DeadlineExceeded);
         }
         self.0.call(request)
+    }
+}
+
+#[test]
+pub(crate) fn realtime_poll_capacity_is_separate_and_bounded() {
+    let fixture = Fixture::start("realtime-poll-capacity");
+    let account = fixture
+        .client
+        .create_account(
+            fixture.host(),
+            &TestAccountSpec::new("rtpollcapacity", 0x30),
+        )
+        .unwrap();
+    let mut pollers = Vec::new();
+    for _ in 0..32 {
+        pollers.push(
+            fixture
+                .client
+                .foks()
+                .realtime_connection(&fixture.probe.pinned, &account.credential)
+                .unwrap(),
+        );
+    }
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(33));
+    let waiting = pollers
+        .into_iter()
+        .map(|mut poller| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                poller.call(&Request::PollInbox(RtPollInboxArgument {
+                    poll: RtPollInbox {
+                        app: RtAppId::Chat,
+                        since: 0,
+                        timeout_milliseconds: 2_000,
+                    },
+                }))
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    std::thread::sleep(std::time::Duration::from_millis(750));
+    let mut ordinary = fixture
+        .client
+        .foks()
+        .realtime_connection(&fixture.probe.pinned, &account.credential)
+        .unwrap();
+    assert_eq!(
+        ordinary
+            .call(&Request::GetInboxVersion(RtGetInboxVersionArgument {
+                key: RtInboxKey { app: RtAppId::Chat },
+            }))
+            .unwrap(),
+        Response::InboxVersion(0)
+    );
+    let mut overflow = fixture
+        .client
+        .foks()
+        .realtime_connection(&fixture.probe.pinned, &account.credential)
+        .unwrap();
+    let overflow_result = overflow.call(&Request::PollInbox(RtPollInboxArgument {
+        poll: RtPollInbox {
+            app: RtAppId::Chat,
+            since: 0,
+            timeout_milliseconds: 500,
+        },
+    }));
+    assert!(
+        matches!(
+            &overflow_result,
+            Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: 1012,
+                ..
+            }))
+        ),
+        "unexpected overflow result: {overflow_result:?}"
+    );
+    for waiter in waiting {
+        let Response::PollResult(result) = waiter.join().unwrap().unwrap() else {
+            panic!()
+        };
+        assert!(!result.bumped);
     }
 }
 
@@ -273,13 +368,13 @@ pub(crate) fn realtime_text() {
     assert!(member_chat
         .mark_read(&mut FailedRead(&mut reader), &mut soft, md.id, 1)
         .is_err());
+    let inbox_scope = foks_client_db::ChatInboxScope {
+        host: fixture.host().host_id().as_bytes().to_vec(),
+        uid: member.credential.uid.as_bytes().to_vec(),
+        app: RtAppId::Chat,
+    };
     assert_eq!(
-        soft.pending_chat_reads(&foks_client_db::ChatInboxScope {
-            host: fixture.host().host_id().as_bytes().to_vec(),
-            uid: member.credential.uid.as_bytes().to_vec(),
-            app: RtAppId::Chat,
-        })
-        .unwrap(),
+        soft.pending_chat_reads(&inbox_scope).unwrap(),
         vec![(md.id, 1)]
     );
     assert_eq!(
@@ -299,6 +394,25 @@ pub(crate) fn realtime_text() {
             .unread,
         0
     );
+    let Response::InboxVersion(unchanged_head) = reader
+        .call(&Request::GetInboxVersion(RtGetInboxVersionArgument {
+            key: RtInboxKey { app: RtAppId::Chat },
+        }))
+        .unwrap()
+    else {
+        panic!()
+    };
+    soft.observe_chat_inbox_head(&inbox_scope, unchanged_head, true)
+        .unwrap();
+    let mut unchanged_degraded = CountChangedThreads {
+        connection: &mut reader,
+        requests: 0,
+    };
+    let resumed = member_chat
+        .sync_inbox(&mut unchanged_degraded, &mut soft)
+        .unwrap();
+    assert_eq!(unchanged_degraded.requests, 0);
+    assert!(resumed.inbox.degraded);
     noncer.metadata.previous_id = noncer.metadata.id;
     noncer.metadata.previous_sequence = 1;
     noncer.metadata.id = RtMessageId([0x64; 16]);
@@ -488,6 +602,23 @@ pub(crate) fn realtime_text() {
             .len(),
         2
     );
+    let removal_since = poll.inbox_version;
+    let mut removal_poller = client
+        .foks()
+        .realtime_connection(&member_host.pinned, &member.credential)
+        .unwrap();
+    let removal_wait = std::thread::spawn(move || {
+        removal_poller
+            .call(&Request::PollInbox(RtPollInboxArgument {
+                poll: RtPollInbox {
+                    app: RtAppId::Chat,
+                    since: removal_since,
+                    timeout_milliseconds: 5_000,
+                },
+            }))
+            .unwrap()
+    });
+    std::thread::sleep(std::time::Duration::from_millis(50));
     let mut protected = fixture.client.open_protected_store().unwrap();
     fixture
         .client
@@ -504,6 +635,11 @@ pub(crate) fn realtime_text() {
             &mut protected,
         )
         .unwrap();
+    let Response::PollResult(removal_poll) = removal_wait.join().unwrap() else {
+        panic!()
+    };
+    assert!(removal_poll.bumped);
+    assert!(removal_poll.inbox_version > removal_since);
     assert!(matches!(
         reader.call(&recent),
         Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {

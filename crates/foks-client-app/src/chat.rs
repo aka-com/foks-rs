@@ -119,7 +119,12 @@ impl CheckedProfileSession<'_> {
     ) -> Result<ChatSyncResult> {
         self.with_chat(team_alias, vault, |chat| {
             let mut soft = SoftStateStore::open(&self.paths.soft_database)?;
-            Ok(chat.sync_inbox(&mut chat.connection()?, &mut soft)?)
+            let mut connection = chat.connection()?;
+            let mut result = chat.sync_inbox(&mut connection, &mut soft)?;
+            if chat.retry_pending_reads(&mut connection, &mut soft)? > 0 {
+                result.inbox = chat.inbox_from_store(&soft)?;
+            }
+            Ok(result)
         })
     }
     pub fn list_chat_inbox(

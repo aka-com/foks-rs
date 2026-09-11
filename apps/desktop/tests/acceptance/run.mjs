@@ -244,11 +244,16 @@ async function personaWalks(context, origin) {
     });
     await page.getByText('Team chat is ready.', { exact: true }).waitFor();
     await page
+      .getByRole('button', { name: 'New channel', exact: true })
+      .first()
+      .click();
+    await page
       .getByRole('textbox', { name: 'Channel name' })
       .fill('design-chat');
     await page
       .getByRole('button', { name: 'Create channel', exact: true })
       .click();
+    await page.getByRole('dialog').waitFor({ state: 'detached' });
     await page.getByRole('button', { name: '# design-chat' }).click();
     await page
       .getByRole('textbox', { name: 'Message', exact: true })

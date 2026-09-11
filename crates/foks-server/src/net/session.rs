@@ -44,6 +44,7 @@ pub(crate) struct ServerData {
     metrics: Arc<crate::ServerMetrics>,
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     execution: Arc<Semaphore>,
+    realtime_polling: Arc<Semaphore>,
     request_memory: Arc<Semaphore>,
     kex_relay: Arc<kex::Relay>,
     realtime: crate::services::realtime::RealtimeService,
@@ -139,6 +140,9 @@ impl ServerData {
             metrics: Arc::clone(&config.metrics),
             rate_limiter,
             execution: Arc::new(Semaphore::new(config.limits.maximum_in_flight_requests)),
+            realtime_polling: Arc::new(Semaphore::new(
+                config.limits.maximum_in_flight_requests.min(32),
+            )),
             request_memory: Arc::new(Semaphore::new(config.limits.maximum_request_memory_bytes)),
             kex_relay: Arc::new(kex::Relay::default()),
             realtime: Default::default(),
@@ -1446,29 +1450,35 @@ pub(crate) async fn serve(
                     disconnect_before_response: true,
                 }
             } else {
-                let response = if let Some(certificate) = certificate {
-                    tokio::select! {
-                        result = handlers::realtime_poll_response(
-                            service_data.as_ref(),
-                            call,
-                            certificate,
-                        ) => {
-                            match result {
-                                Ok(response) => response,
-                                Err(status) => encode_status_response_at(&status, sequence)?,
+                let response = match service_data.realtime_polling.clone().try_acquire_owned() {
+                    Ok(poll_permit) => {
+                        let _poll_permit = poll_permit;
+                        if let Some(certificate) = certificate {
+                            tokio::select! {
+                                result = handlers::realtime_poll_response(
+                                    service_data.as_ref(),
+                                    call,
+                                    certificate,
+                                ) => {
+                                    match result {
+                                        Ok(response) => response,
+                                        Err(status) => encode_status_response_at(&status, sequence)?,
+                                    }
+                                }
+                                result = stream.get_ref().0.readable() => {
+                                    let _ = result;
+                                    return Ok(());
+                                }
+                                result = stop.changed() => {
+                                    let _ = result;
+                                    break;
+                                }
                             }
-                        }
-                        result = stream.get_ref().0.readable() => {
-                            let _ = result;
-                            return Ok(());
-                        }
-                        result = stop.changed() => {
-                            let _ = result;
-                            break;
+                        } else {
+                            encode_status_response_at(&permission_denied(), sequence)?
                         }
                     }
-                } else {
-                    encode_status_response_at(&permission_denied(), sequence)?
+                    Err(_) => encode_status_response_at(&RpcStatus::RateLimited, sequence)?,
                 };
                 RequestOutcome {
                     response,

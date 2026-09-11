@@ -2079,10 +2079,10 @@ pub const ROUTES: &[RouteSpec] = &[
         upstream_result: "lib.RTInboxPollRes",
         argument_header: true,
         result_header: true,
-        statuses: &["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_not_found"],
+        statuses: &["ok", "bad_args", "permission_denied", "tx_retry", "rate_limited", "rt_generic", "rt_not_found"],
         max_request_bytes: 1048576,
         supported: true,
-        coverage: &["realtime_text"],
+        coverage: &["realtime_text", "realtime_poll_capacity_is_separate_and_bounded"],
     },
     RouteSpec {
         id: RouteId::RealTimeRtSelectVHost,

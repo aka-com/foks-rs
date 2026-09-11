@@ -237,8 +237,8 @@ fn stamp(
         } else {
             0
         };
-        c.execute("INSERT INTO rt_user_channels(uid,app_id,channel_id,inbox_version,read_through) VALUES (?1,1,?2,?3,?4)
-            ON CONFLICT(uid,channel_id) DO UPDATE SET inbox_version=excluded.inbox_version, read_through=MAX(read_through,excluded.read_through)",
+        c.execute("INSERT INTO rt_user_channels(uid,app_id,channel_id,inbox_version,read_through,accessible) VALUES (?1,1,?2,?3,?4,1)
+            ON CONFLICT(uid,channel_id) DO UPDATE SET inbox_version=excluded.inbox_version, read_through=MAX(read_through,excluded.read_through), accessible=1",
             params![uid,md.id.0.as_slice(),next,read])?;
         wake.push(RealtimeWakeTarget {
             host: a.host.clone(),
@@ -267,20 +267,76 @@ fn next_inbox_version(c: &Connection, uid: &[u8], app: RtAppId) -> Result<u64> {
     crate::error::unsigned(next)
 }
 
+fn inbox_membership_snapshot(c: &Connection, uid: &[u8]) -> Result<Vec<u8>> {
+    let mut query = c.prepare(
+        "SELECT team_id,scoped_host_id,source_role_type,source_visibility,role_type,visibility
+         FROM team_members WHERE party_id=?1
+         ORDER BY team_id,scoped_host_id,source_role_type,source_visibility,role_type,visibility",
+    )?;
+    let rows = query.query_map(params![uid], |row| {
+        Ok((
+            row.get::<_, Vec<u8>>(0)?,
+            row.get::<_, Option<Vec<u8>>>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+        ))
+    })?;
+    let mut snapshot = Vec::new();
+    for row in rows {
+        let (team, scoped_host, source_type, source_visibility, role_type, visibility) = row?;
+        let team_length = u8::try_from(team.len()).map_err(|_| Error::IntegerRange)?;
+        let host_length = u8::try_from(scoped_host.as_deref().map_or(0, <[u8]>::len))
+            .map_err(|_| Error::IntegerRange)?;
+        let additional = 2usize
+            .checked_add(team.len())
+            .and_then(|length| length.checked_add(usize::from(host_length)))
+            .and_then(|length| length.checked_add(32))
+            .ok_or(Error::IntegerRange)?;
+        if snapshot.len().saturating_add(additional) > Limits::INBOX_MEMBERSHIP_BYTES {
+            return Err(Error::Capacity("realtime inbox memberships"));
+        }
+        snapshot.push(team_length);
+        snapshot.extend_from_slice(&team);
+        snapshot.push(host_length);
+        if let Some(scoped_host) = scoped_host {
+            snapshot.extend_from_slice(&scoped_host);
+        }
+        snapshot.extend_from_slice(&source_type.to_be_bytes());
+        snapshot.extend_from_slice(&source_visibility.to_be_bytes());
+        snapshot.extend_from_slice(&role_type.to_be_bytes());
+        snapshot.extend_from_slice(&visibility.to_be_bytes());
+    }
+    Ok(snapshot)
+}
+
 fn remove_user_channel(
     c: &Connection,
     uid: &[u8],
     app: RtAppId,
     channel: RtChannelId,
 ) -> Result<bool> {
-    let removed = c.execute(
-        "DELETE FROM rt_user_channels WHERE uid=?1 AND app_id=?2 AND channel_id=?3",
-        params![uid, app as i64, channel.0.as_slice()],
-    )?;
-    if removed == 0 {
+    let accessible = c
+        .query_row(
+            "SELECT accessible FROM rt_user_channels WHERE uid=?1 AND app_id=?2 AND channel_id=?3",
+            params![uid, app as i64, channel.0.as_slice()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+    if accessible != Some(1) {
         return Ok(false);
     }
-    next_inbox_version(c, uid, app)?;
+    let version = next_inbox_version(c, uid, app)?;
+    c.execute(
+        "UPDATE rt_user_channels SET inbox_version=?4,accessible=0 WHERE uid=?1 AND app_id=?2 AND channel_id=?3",
+        params![
+            uid,
+            app as i64,
+            channel.0.as_slice(),
+            sql_integer(version)?
+        ],
+    )?;
     Ok(true)
 }
 
@@ -291,28 +347,39 @@ fn insert_user_channel(
     channel: RtChannelId,
     read_through: u64,
 ) -> Result<bool> {
-    let exists = c
+    let accessible = c
         .query_row(
-            "SELECT 1 FROM rt_user_channels WHERE uid=?1 AND channel_id=?2",
+            "SELECT accessible FROM rt_user_channels WHERE uid=?1 AND channel_id=?2",
             params![uid, channel.0.as_slice()],
-            |_| Ok(()),
+            |row| row.get::<_, i64>(0),
         )
-        .optional()?
-        .is_some();
-    if exists {
+        .optional()?;
+    if accessible == Some(1) {
         return Ok(false);
     }
     let version = next_inbox_version(c, uid, app)?;
-    c.execute(
-        "INSERT INTO rt_user_channels(uid,app_id,channel_id,inbox_version,read_through) VALUES (?1,?2,?3,?4,?5)",
-        params![
-            uid,
-            app as i64,
-            channel.0.as_slice(),
-            sql_integer(version)?,
-            sql_integer(read_through)?
-        ],
-    )?;
+    if accessible == Some(0) {
+        c.execute(
+            "UPDATE rt_user_channels SET inbox_version=?3,read_through=MAX(read_through,?4),accessible=1 WHERE uid=?1 AND channel_id=?2",
+            params![
+                uid,
+                channel.0.as_slice(),
+                sql_integer(version)?,
+                sql_integer(read_through)?
+            ],
+        )?;
+    } else {
+        c.execute(
+            "INSERT INTO rt_user_channels(uid,app_id,channel_id,inbox_version,read_through,accessible) VALUES (?1,?2,?3,?4,?5,1)",
+            params![
+                uid,
+                app as i64,
+                channel.0.as_slice(),
+                sql_integer(version)?,
+                sql_integer(read_through)?
+            ],
+        )?;
+    }
     Ok(true)
 }
 
@@ -536,23 +603,77 @@ impl Database {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         check_actor(&tx, actor, now)?;
-        let channels = {
+        tx.execute(
+            "INSERT INTO rt_user_inboxes(uid,app_id,version) VALUES (?1,?2,0) ON CONFLICT DO NOTHING",
+            params![actor.uid, app as i64],
+        )?;
+        let memberships = inbox_membership_snapshot(&tx, &actor.uid)?;
+        let (previous, cursor): (Option<Vec<u8>>, Option<Vec<u8>>) = tx.query_row(
+            "SELECT reconcile_memberships,reconcile_after FROM rt_user_inboxes WHERE uid=?1 AND app_id=?2",
+            params![actor.uid, app as i64],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let continuing = previous.as_deref() == Some(memberships.as_slice());
+        if continuing && cursor.is_none() {
+            tx.commit()?;
+            return Ok(RealtimeCommit {
+                value: (),
+                wake: vec![],
+            });
+        }
+        let after = if continuing { cursor } else { None };
+        let mut channels = {
             let mut query = tx.prepare(
-                "SELECT metadata,last_message FROM rt_channels WHERE app_id=?1 ORDER BY channel_id LIMIT ?2",
+                "SELECT channel.channel_id,channel.metadata,channel.last_message
+                 FROM team_members AS member
+                 JOIN rt_channels AS channel ON channel.team_id=member.team_id
+                 WHERE member.party_id=?2 AND channel.app_id=?1
+                   AND (?3 IS NULL OR channel.channel_id>?3)
+                 UNION
+                 SELECT channel.channel_id,channel.metadata,channel.last_message
+                 FROM rt_user_channels AS user_channel
+                 JOIN rt_channels AS channel ON channel.channel_id=user_channel.channel_id
+                 WHERE user_channel.uid=?2 AND user_channel.app_id=?1 AND user_channel.accessible=1
+                   AND (?3 IS NULL OR channel.channel_id>?3)
+                 ORDER BY channel_id LIMIT ?4",
             )?;
             let rows = query.query_map(
-                params![app as i64, (Limits::INBOX_RECONCILE_CHANNELS + 1) as i64],
-                |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Option<Vec<u8>>>(1)?)),
+                params![
+                    app as i64,
+                    actor.uid,
+                    after,
+                    (Limits::INBOX_RECONCILE_CHANNELS + 1) as i64
+                ],
+                |r| {
+                    Ok((
+                        r.get::<_, Vec<u8>>(0)?,
+                        r.get::<_, Vec<u8>>(1)?,
+                        r.get::<_, Option<Vec<u8>>>(2)?,
+                    ))
+                },
             )?;
             rows.collect::<std::result::Result<Vec<_>, _>>()?
         };
-        if channels.len() > Limits::INBOX_RECONCILE_CHANNELS {
-            return Err(Error::Capacity("realtime inbox reconciliation"));
-        }
+        let incomplete = channels.len() > Limits::INBOX_RECONCILE_CHANNELS;
+        channels.truncate(Limits::INBOX_RECONCILE_CHANNELS);
+        let next_cursor = if incomplete {
+            channels.last().map(|channel| channel.0.clone())
+        } else {
+            None
+        };
+        let mut roles = std::collections::BTreeMap::<Vec<u8>, Option<Role>>::new();
         let mut changed = false;
-        for (bytes, activity) in channels {
+        for (_, bytes, activity) in channels {
             let md = project_channel(&bytes, activity.as_deref())?;
-            let readable = match membership_role(&tx, actor, md.team.entity().as_bytes())? {
+            let team = md.team.entity().as_bytes();
+            let access = if let Some(access) = roles.get(team) {
+                *access
+            } else {
+                let access = membership_role(&tx, actor, team)?;
+                roles.insert(team.to_vec(), access);
+                access
+            };
+            let readable = match access {
                 Some(access) => ChannelPolicy::new(&md)?.can_read(access),
                 None => false,
             };
@@ -562,6 +683,10 @@ impl Database {
                 remove_user_channel(&tx, &actor.uid, app, md.id)?
             };
         }
+        tx.execute(
+            "UPDATE rt_user_inboxes SET reconcile_memberships=?3,reconcile_after=?4 WHERE uid=?1 AND app_id=?2",
+            params![actor.uid, app as i64, memberships, next_cursor],
+        )?;
         tx.commit()?;
         Ok(RealtimeCommit {
             value: (),
@@ -605,22 +730,22 @@ impl Database {
         if !message_exists {
             return Err(Error::NotFound("realtime message"));
         }
-        let current: Option<i64> = tx
+        let current: Option<(i64, i64)> = tx
             .query_row(
-                "SELECT read_through FROM rt_user_channels WHERE uid=?1 AND channel_id=?2",
+                "SELECT read_through,accessible FROM rt_user_channels WHERE uid=?1 AND channel_id=?2",
                 params![actor.uid, arg.read.channel.0.as_slice()],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
         let changed = match current {
-            None => insert_user_channel(
+            None | Some((_, 0)) => insert_user_channel(
                 &tx,
                 &actor.uid,
                 RtAppId::Chat,
                 arg.read.channel,
                 arg.read.sequence,
             )?,
-            Some(current) if arg.read.sequence > crate::error::unsigned(current)? => {
+            Some((current, 1)) if arg.read.sequence > crate::error::unsigned(current)? => {
                 let version = next_inbox_version(&tx, &actor.uid, RtAppId::Chat)?;
                 tx.execute(
                     "UPDATE rt_user_channels SET inbox_version=?3,read_through=?4 WHERE uid=?1 AND channel_id=?2",
@@ -633,7 +758,8 @@ impl Database {
                 )?;
                 true
             }
-            Some(_) => false,
+            Some((_, 1)) => false,
+            Some(_) => return Err(Error::Invalid("stored realtime accessibility")),
         };
         tx.commit()?;
         Ok(RealtimeCommit {
@@ -708,7 +834,7 @@ impl ReadSnapshot<'_> {
         let rows = {
             let mut query = c.prepare(
                 "SELECT channel_id,inbox_version,read_through FROM rt_user_channels
-                 WHERE uid=?1 AND app_id=?2 AND inbox_version>?3 AND inbox_version<=?4
+                 WHERE uid=?1 AND app_id=?2 AND accessible=1 AND inbox_version>?3 AND inbox_version<=?4
                  ORDER BY inbox_version ASC LIMIT ?5",
             )?;
             let rows = query.query_map(
@@ -1699,6 +1825,24 @@ mod tests {
             .unwrap();
         assert_eq!(after.channels.len(), 1);
         assert_eq!(after.channels[0].metadata.id, restricted.metadata.id);
+        let mut restricted_send = f.send(3);
+        restricted_send.send.channel = restricted.metadata.id.short();
+        let RtMessageWrapper::Encrypted(boxed) = &mut restricted_send.send.wrapper else {
+            panic!()
+        };
+        boxed.key.role = Role::ADMIN;
+        f.db.rt_send(&f.owner, &restricted_send, 1010).unwrap();
+        f.db.rt_read_through(
+            &f.member,
+            &RtReadThroughArgument {
+                read: RtReadThrough {
+                    channel: restricted.metadata.id,
+                    sequence: 1,
+                },
+            },
+            1020,
+        )
+        .unwrap();
         f.db.connection
             .execute(
                 "UPDATE team_members SET role_type=1,visibility=0 WHERE party_id=?1",
@@ -1715,19 +1859,130 @@ mod tests {
             .unwrap()
             .rt_changed_threads(&f.member, &query(0), 1100)
             .unwrap();
-        assert_eq!(filtered.inbox_version, 5);
+        assert_eq!(filtered.inbox_version, 7);
         assert_eq!(filtered.channels.len(), 1);
         assert_eq!(filtered.channels[0].metadata.id, f.create.metadata.id);
         assert_eq!(
             f.db.connection
                 .query_row(
-                    "SELECT COUNT(*) FROM rt_user_channels WHERE uid=?1 AND channel_id=?2",
+                    "SELECT read_through,accessible FROM rt_user_channels WHERE uid=?1 AND channel_id=?2",
                     params![f.member.uid, restricted.metadata.id.0.as_slice()],
-                    |r| r.get::<_, i64>(0)
+                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
                 )
                 .unwrap(),
-            0
+            (1, 0)
         );
+        f.db.connection
+            .execute(
+                "UPDATE team_members SET role_type=2,visibility=0 WHERE party_id=?1",
+                params![f.member.uid],
+            )
+            .unwrap();
+        f.db.rt_reconcile_inbox(&f.member, RtAppId::Chat, 1150)
+            .unwrap();
+        let restored = f
+            .reader()
+            .snapshot()
+            .unwrap()
+            .rt_changed_threads(&f.member, &query(7), 1200)
+            .unwrap();
+        assert_eq!(restored.inbox_version, 8);
+        assert_eq!(restored.channels.len(), 1);
+        assert_eq!(restored.channels[0].metadata.id, restricted.metadata.id);
+        assert_eq!(restored.channels[0].read_through, 1);
+    }
+
+    #[test]
+    fn inbox_reconciliation_ignores_foreign_host_channels_above_the_work_bound() {
+        let mut f = Fixture::new();
+        f.db.rt_create_channel(&f.owner, &f.create, 100).unwrap();
+        let foreign_team = id(ENTITY_NAMED_TEAM, 9);
+        f.db.connection
+            .execute(
+                "INSERT INTO team_names(normalized_name,reservation_sequence,team_id) VALUES (?1,1,?1)",
+                params![foreign_team],
+            )
+            .unwrap();
+        f.db.connection
+            .execute(
+                "INSERT INTO teams(team_id,team_kind,host_id,normalized_name,team_name_utf8,team_name_sequence,team_name_commitment_key,member_load_floor_type,member_load_floor_visibility,created_at) VALUES (?1,3,?2,?1,?1,1,zeroblob(16),1,0,0)",
+                params![foreign_team, f.owner.host],
+            )
+            .unwrap();
+        f.db.connection
+            .execute(
+                "INSERT INTO rt_channel_sets(team_id,app_id,version,mtime) VALUES (?1,1,1,0)",
+                params![foreign_team],
+            )
+            .unwrap();
+        let tx = f.db.connection.transaction().unwrap();
+        for index in 0..=Limits::INBOX_RECONCILE_CHANNELS {
+            let mut channel = [0xfe; 16];
+            channel[..8].copy_from_slice(&(index as u64).to_be_bytes());
+            tx.execute(
+                "INSERT INTO rt_channels(channel_id,short_id,team_id,app_id,metadata) VALUES (?1,?2,?3,1,X'00')",
+                params![
+                    channel.as_slice(),
+                    1_000_000i64 + index as i64,
+                    foreign_team
+                ],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        let reconciled =
+            f.db.rt_reconcile_inbox(&f.member, RtAppId::Chat, 200)
+                .unwrap();
+        assert!(reconciled.wake.is_empty());
+    }
+
+    #[test]
+    fn read_state_converges_across_two_devices_of_one_user() {
+        let mut f = Fixture::new();
+        let mut other_device = f.member.clone();
+        other_device.credential = id(ENTITY_DEVICE, 9);
+        f.db.connection
+            .execute(
+                "INSERT INTO devices(device_id,uid,active,role_type,visibility,hepk_fingerprint,self_token,exact_hepk,exact_name)
+                 VALUES (?1,?2,1,3,0,zeroblob(32),?3,X'00',X'00')",
+                params![other_device.credential, other_device.uid, vec![9u8; 17]],
+            )
+            .unwrap();
+        f.db.rt_create_channel(&f.owner, &f.create, 100).unwrap();
+        f.db.rt_send(&f.owner, &f.send(2), 200).unwrap();
+        let query = |since| RtGetChangedThreadsArgument {
+            query: RtChangedThreads {
+                app: RtAppId::Chat,
+                since,
+                maximum: 100,
+            },
+        };
+        let before = f
+            .reader()
+            .snapshot()
+            .unwrap()
+            .rt_changed_threads(&other_device, &query(0), 300)
+            .unwrap();
+        assert_eq!(before.channels[0].read_through, 0);
+        f.db.rt_read_through(
+            &f.member,
+            &RtReadThroughArgument {
+                read: RtReadThrough {
+                    channel: f.create.metadata.id,
+                    sequence: 1,
+                },
+            },
+            400,
+        )
+        .unwrap();
+        let after = f
+            .reader()
+            .snapshot()
+            .unwrap()
+            .rt_changed_threads(&other_device, &query(2), 500)
+            .unwrap();
+        assert_eq!(after.inbox_version, 3);
+        assert_eq!(after.channels[0].read_through, 1);
     }
 
     #[test]

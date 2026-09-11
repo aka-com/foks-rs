@@ -218,6 +218,11 @@ const COVERAGE: &[Coverage] = &[
         routes: &[("RealTime", "rtGetChannel")],
     },
     Coverage {
+        name: "realtime_poll_capacity_is_separate_and_bounded",
+        run: crate::realtime::realtime_poll_capacity_is_separate_and_bounded,
+        routes: &[("RealTime", "rtPollInbox")],
+    },
+    Coverage {
         name: "realtime_text",
         run: crate::realtime::realtime_text,
         routes: &[

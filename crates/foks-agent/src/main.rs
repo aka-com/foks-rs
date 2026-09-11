@@ -730,7 +730,7 @@ async fn handle_connection(
     Ok(())
 }
 
-#[derive(Clone, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ChatPollKey {
     profile: String,
     account: String,
@@ -5327,6 +5327,33 @@ mod tests {
         ));
         assert!(observed.load(std::sync::atomic::Ordering::Acquire));
         assert_eq!(workers.available_permits(), 1);
+    }
+
+    #[test]
+    fn chat_poll_ownership_is_one_per_profile_account() {
+        let first = TeamStoreRef {
+            profile: "local".into(),
+            account_alias: "personal".into(),
+            team_alias: "one".into(),
+            team_id: format!("03{}", "11".repeat(32)),
+        };
+        let second = TeamStoreRef {
+            team_alias: "two".into(),
+            team_id: format!("03{}", "22".repeat(32)),
+            ..first.clone()
+        };
+        let first_key = ChatPollKey::from(&first);
+        let second_key = ChatPollKey::from(&second);
+        assert_eq!(first_key, second_key);
+        let polls = Arc::new(Mutex::new(std::collections::HashSet::new()));
+        assert!(polls.lock().unwrap().insert(first_key.clone()));
+        assert!(!polls.lock().unwrap().insert(second_key));
+        let guard = ActiveChatPollGuard {
+            polls: polls.clone(),
+            key: first_key,
+        };
+        drop(guard);
+        assert!(polls.lock().unwrap().is_empty());
     }
 
     #[tokio::test(flavor = "current_thread")]

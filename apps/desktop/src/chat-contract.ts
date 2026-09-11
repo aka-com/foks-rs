@@ -7,11 +7,17 @@ import {
   CHAT_LABEL_BYTES,
   CHAT_MISSING_PREDECESSORS,
   CHAT_PENDING_ROWS,
+  CHAT_INBOX_ROWS,
+  CHAT_POLL_MILLISECONDS,
 } from './chat-limits';
 export { CHAT_TEXT_BYTES } from './chat-limits';
 export type ChatAction =
   | { action: 'channels' }
   | { action: 'pending' }
+  | { action: 'inbox' }
+  | { action: 'sync-inbox' }
+  | { action: 'mark-read'; channel: string; sequence: string }
+  | { action: 'poll-inbox'; since: string; timeout_milliseconds: number }
   | { action: 'history'; channel: string; before: string | null }
   | {
       action: 'prepare-channel';
@@ -51,6 +57,15 @@ export interface ChatMessage {
   content:
     { kind: 'text'; text: string } | { kind: 'unsupported' | 'oversized' };
 }
+export interface ChatConversation {
+  channel: ChatChannel;
+  inbox_version: string;
+  read_through: string;
+  pending_read: string | null;
+  unread: string;
+  hidden: boolean;
+  muted: boolean;
+}
 export interface ChatOperation {
   id: string;
   channel: string;
@@ -68,6 +83,15 @@ export type ChatResult =
       before: string | null;
       missing_predecessors: string[];
     }
+  | {
+      kind: 'inbox';
+      cursor: string;
+      head: string;
+      degraded: boolean;
+      conversations: ChatConversation[];
+    }
+  | { kind: 'read'; channel: string; sequence: string }
+  | { kind: 'poll'; bumped: boolean; inbox_version: string }
   | { kind: 'operation'; operation: ChatOperation }
   | { kind: 'pending'; operations: ChatOperation[] };
 export interface ChatReply {
@@ -121,6 +145,24 @@ function entity(v: unknown, prefix?: string): string {
 function array<T>(v: unknown, max: number, decode: (v: unknown) => T): T[] {
   if (!Array.isArray(v) || v.length > max) return fail();
   return v.map(decode);
+}
+function channel(value: unknown): ChatChannel {
+  const c = object(value, [
+    'id',
+    'name',
+    'admin',
+    'readable',
+    'read_role',
+    'write_role',
+  ]);
+  return {
+    id: chatId(c.id),
+    name: text(c.name, CHAT_NAME_BYTES),
+    admin: bool(c.admin),
+    readable: bool(c.readable),
+    read_role: text(c.read_role),
+    write_role: text(c.write_role),
+  };
 }
 function operation(value: unknown): ChatOperation {
   const v = object(value, [
@@ -201,24 +243,7 @@ export function decodeChatReply(
   let result: ChatResult;
   if (r.kind === 'channels' && action.action === 'channels') {
     object(r, ['kind', 'channels', 'version']);
-    const channels = array(r.channels, CHAT_CHANNEL_ROWS, (v): ChatChannel => {
-      const c = object(v, [
-        'id',
-        'name',
-        'admin',
-        'readable',
-        'read_role',
-        'write_role',
-      ]);
-      return {
-        id: chatId(c.id),
-        name: text(c.name, CHAT_NAME_BYTES),
-        admin: bool(c.admin),
-        readable: bool(c.readable),
-        read_role: text(c.read_role),
-        write_role: text(c.write_role),
-      };
-    });
+    const channels = array(r.channels, CHAT_CHANNEL_ROWS, channel);
     if (new Set(channels.map((c) => c.id)).size !== channels.length)
       return fail();
     result = { kind: 'channels', channels, version: sequence(r.version) };
@@ -282,6 +307,83 @@ export function decodeChatReply(
         },
       ),
     };
+  } else if (
+    r.kind === 'inbox' &&
+    (action.action === 'inbox' || action.action === 'sync-inbox')
+  ) {
+    object(r, ['kind', 'cursor', 'head', 'degraded', 'conversations']);
+    const cursor = sequence(r.cursor);
+    const head = sequence(r.head);
+    const degraded = bool(r.degraded);
+    if (BigInt(cursor) > BigInt(head) || degraded !== (cursor !== head))
+      return fail();
+    const conversations = array(
+      r.conversations,
+      CHAT_INBOX_ROWS,
+      (value): ChatConversation => {
+        const c = object(value, [
+          'channel',
+          'inbox_version',
+          'read_through',
+          'pending_read',
+          'unread',
+          'hidden',
+          'muted',
+        ]);
+        const inboxVersion = sequence(c.inbox_version);
+        const pendingRead =
+          c.pending_read === null ? null : sequence(c.pending_read);
+        const decoded = {
+          channel: channel(c.channel),
+          inbox_version: inboxVersion,
+          read_through: sequence(c.read_through),
+          pending_read: pendingRead,
+          unread: sequence(c.unread),
+          hidden: bool(c.hidden),
+          muted: bool(c.muted),
+        };
+        if (
+          inboxVersion === '0' ||
+          BigInt(inboxVersion) > BigInt(head) ||
+          pendingRead === '0' ||
+          !decoded.channel.readable
+        )
+          return fail();
+        return decoded;
+      },
+    );
+    if (
+      new Set(conversations.map((c) => c.channel.id)).size !==
+        conversations.length ||
+      new Set(conversations.map((c) => c.inbox_version)).size !==
+        conversations.length
+    )
+      return fail();
+    result = { kind: 'inbox', cursor, head, degraded, conversations };
+  } else if (r.kind === 'read' && action.action === 'mark-read') {
+    object(r, ['kind', 'channel', 'sequence']);
+    const channel = chatId(r.channel);
+    const readThrough = sequence(r.sequence);
+    if (
+      channel !== action.channel ||
+      readThrough === '0' ||
+      readThrough !== action.sequence
+    )
+      return fail();
+    result = { kind: 'read', channel, sequence: readThrough };
+  } else if (r.kind === 'poll' && action.action === 'poll-inbox') {
+    object(r, ['kind', 'bumped', 'inbox_version']);
+    if (
+      !Number.isSafeInteger(action.timeout_milliseconds) ||
+      action.timeout_milliseconds < 0 ||
+      action.timeout_milliseconds > CHAT_POLL_MILLISECONDS
+    )
+      return fail();
+    const since = sequence(action.since);
+    const inboxVersion = sequence(r.inbox_version);
+    const bumped = bool(r.bumped);
+    if (bumped !== BigInt(inboxVersion) > BigInt(since)) return fail();
+    result = { kind: 'poll', bumped, inbox_version: inboxVersion };
   } else if (
     r.kind === 'operation' &&
     [

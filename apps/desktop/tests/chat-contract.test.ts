@@ -92,6 +92,92 @@ test('chat decoding preserves large sequences and rejects wrong identity and con
   assert.throws(() => sequence('9223372036854775808'));
 });
 
+test('inbox, read, and poll results retain exact decimal state', () => {
+  const scope = {
+    store,
+    host: '02' + 'ab'.repeat(32),
+    actor: '01' + 'ab'.repeat(32),
+  };
+  const conversation = {
+    channel: {
+      id: channel,
+      name: '',
+      admin: false,
+      readable: true,
+      read_role: 'Member (0)',
+      write_role: 'Member (0)',
+    },
+    inbox_version: '9007199254740993',
+    read_through: '1',
+    pending_read: null,
+    unread: '9007199254740992',
+    hidden: false,
+    muted: false,
+  };
+  const inbox = {
+    scope,
+    result: {
+      kind: 'inbox',
+      cursor: '9007199254740993',
+      head: '9007199254740993',
+      degraded: false,
+      conversations: [conversation],
+    },
+  };
+  const decoded = decodeChatReply(inbox, storeId, { action: 'sync-inbox' });
+  assert.equal(decoded.result.kind, 'inbox');
+  assert.throws(() =>
+    decodeChatReply(
+      {
+        ...inbox,
+        result: { ...inbox.result, head: '9007199254740994' },
+      },
+      storeId,
+      { action: 'sync-inbox' },
+    ),
+  );
+  assert.throws(() =>
+    decodeChatReply(
+      {
+        ...inbox,
+        result: {
+          ...inbox.result,
+          conversations: [conversation, conversation],
+        },
+      },
+      storeId,
+      { action: 'sync-inbox' },
+    ),
+  );
+  assert.equal(
+    decodeChatReply(
+      {
+        scope,
+        result: {
+          kind: 'poll',
+          bumped: true,
+          inbox_version: '9007199254740994',
+        },
+      },
+      storeId,
+      {
+        action: 'poll-inbox',
+        since: '9007199254740993',
+        timeout_milliseconds: 25_000,
+      },
+    ).result.kind,
+    'poll',
+  );
+  assert.equal(
+    decodeChatReply(
+      { scope, result: { kind: 'read', channel, sequence: '7' } },
+      storeId,
+      { action: 'mark-read', channel, sequence: '7' },
+    ).result.kind,
+    'read',
+  );
+});
+
 test('shared Rust and TypeScript chat reply fixtures agree', async () => {
   const { readFile } = await import('node:fs/promises');
   const fixtures = JSON.parse(
