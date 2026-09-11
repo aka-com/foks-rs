@@ -15,6 +15,12 @@ fn entity(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
+fn valid_channel(channel: &ChatChannel) -> bool {
+    valid_chat_id(&channel.id)
+        && channel.name.expose().len() <= CHAT_NAME_BYTES
+        && channel.read_role.len() <= CHAT_LABEL_BYTES
+        && channel.write_role.len() <= CHAT_LABEL_BYTES
+}
 fn valid_operation(op: &ChatOperation) -> bool {
     valid_chat_id(&op.id)
         && valid_chat_id(&op.channel)
@@ -48,13 +54,9 @@ pub fn validate_chat_reply(
             let mut ids = HashSet::new();
             chat_sequence(version).is_some()
                 && channels.len() <= CHAT_CHANNEL_ROWS
-                && channels.iter().all(|c| {
-                    valid_chat_id(&c.id)
-                        && ids.insert(&c.id)
-                        && c.name.expose().len() <= CHAT_NAME_BYTES
-                        && c.read_role.len() <= CHAT_LABEL_BYTES
-                        && c.write_role.len() <= CHAT_LABEL_BYTES
-                })
+                && channels
+                    .iter()
+                    .all(|channel| valid_channel(channel) && ids.insert(&channel.id))
         }
         (
             ChatAction::History {
@@ -102,6 +104,57 @@ pub fn validate_chat_reply(
                         .filter(|n| *n > 1)
                         .map(|n| n.to_string())
         }
+        (
+            ChatAction::Inbox | ChatAction::SyncInbox,
+            ChatResult::Inbox {
+                cursor,
+                head,
+                degraded,
+                conversations,
+            },
+        ) => {
+            let Some(cursor) = chat_sequence(cursor) else {
+                return Err(invalid());
+            };
+            let Some(head) = chat_sequence(head) else {
+                return Err(invalid());
+            };
+            let mut ids = HashSet::new();
+            let mut versions = HashSet::new();
+            cursor <= head
+                && *degraded == (cursor < head)
+                && conversations.len() <= CHAT_INBOX_ROWS
+                && conversations.iter().all(|conversation| {
+                    valid_channel(&conversation.channel)
+                        && ids.insert(&conversation.channel.id)
+                        && chat_sequence(&conversation.inbox_version)
+                            .is_some_and(|version| version > 0 && version <= head)
+                        && versions.insert(&conversation.inbox_version)
+                        && chat_sequence(&conversation.read_through).is_some()
+                        && conversation
+                            .pending_read
+                            .as_ref()
+                            .is_none_or(|value| chat_sequence(value).is_some_and(|value| value > 0))
+                        && chat_sequence(&conversation.unread).is_some()
+                })
+        }
+        (
+            ChatAction::MarkRead {
+                channel: expected_channel,
+                sequence: expected_sequence,
+            },
+            ChatResult::Read { channel, sequence },
+        ) => channel == expected_channel && sequence == expected_sequence,
+        (
+            ChatAction::PollInbox { since, .. },
+            ChatResult::Poll {
+                bumped,
+                inbox_version,
+            },
+        ) => chat_sequence(since).is_some_and(|since| {
+            chat_sequence(inbox_version)
+                .is_some_and(|head| (*bumped && head > since) || (!*bumped && head <= since))
+        }),
         (ChatAction::PrepareMessage { channel, .. }, ChatResult::Operation { operation }) => {
             valid_operation(operation) && !operation.create && &operation.channel == channel
         }
@@ -223,6 +276,68 @@ mod tests {
             *before = Some("2".into());
         }
         assert!(validate_chat_reply(&store, &action, &reply).is_err());
+    }
+
+    #[test]
+    fn inbox_and_poll_results_are_bounded_and_cursor_consistent() {
+        let store = TeamStoreRef {
+            profile: "local".into(),
+            account_alias: "me".into(),
+            team_alias: "team".into(),
+            team_id: format!("03{}", "ab".repeat(32)),
+        };
+        let scope = ChatScope {
+            store: store.clone(),
+            host: format!("02{}", "ab".repeat(32)),
+            actor: format!("01{}", "ab".repeat(32)),
+        };
+        let conversation = ChatConversation {
+            channel: ChatChannel {
+                id: "ab".repeat(16),
+                name: foks_agent_proto::SecretString::new("general"),
+                admin: false,
+                readable: true,
+                read_role: "Member (0)".into(),
+                write_role: "Member (0)".into(),
+            },
+            inbox_version: "2".into(),
+            read_through: "1".into(),
+            pending_read: None,
+            unread: "1".into(),
+            hidden: false,
+            muted: false,
+        };
+        let mut reply = ChatReply {
+            scope: scope.clone(),
+            result: ChatResult::Inbox {
+                cursor: "2".into(),
+                head: "2".into(),
+                degraded: false,
+                conversations: vec![conversation],
+            },
+        };
+        validate_chat_reply(&store, &ChatAction::SyncInbox, &reply).unwrap();
+        let ChatResult::Inbox { head, .. } = &mut reply.result else {
+            panic!()
+        };
+        *head = "1".into();
+        assert!(validate_chat_reply(&store, &ChatAction::SyncInbox, &reply).is_err());
+        let poll = ChatReply {
+            scope,
+            result: ChatResult::Poll {
+                bumped: true,
+                inbox_version: "3".into(),
+            },
+        };
+        validate_chat_reply(
+            &store,
+            &ChatAction::PollInbox {
+                since: "2".into(),
+                timeout_milliseconds: 1,
+            },
+            &poll,
+        )
+        .unwrap();
     }
 }
 

@@ -2,6 +2,7 @@
 use crate::{DeviceCredential, Error, FoksClient, PinnedHost, PooledConnection, Result};
 use foks_proto::{RtHostId, RtSelectVhostArgument};
 use foks_rpc::{RealtimeRequest, RealtimeResponse};
+use std::time::Duration;
 
 pub struct RealtimeConnection {
     pooled: PooledConnection,
@@ -25,6 +26,15 @@ impl RealtimeConnection {
     }
 }
 impl FoksClient {
+    pub fn realtime_poll_connection(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+    ) -> Result<RealtimeConnection> {
+        self.isolated_with_timeout(Duration::from_secs(60))
+            .realtime_connection(host, credential)
+    }
+
     pub fn realtime_connection(
         &self,
         host: &PinnedHost,
@@ -51,9 +61,11 @@ impl FoksClient {
 }
 
 mod history;
+mod inbox;
 mod operations;
 mod session;
 pub use history::{ChatContent, ChatHistory, ChatMessage};
+pub use inbox::{ChatConversation, ChatInbox, ChatPollResult, ChatSyncResult};
 pub use operations::normalize_chat_name;
 pub use session::{ChatChannel, ChatChannels, ChatSession, ChatTransport};
 

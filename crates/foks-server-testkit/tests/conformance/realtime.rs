@@ -1,8 +1,36 @@
 use crate::support::Fixture;
-use foks_client::{AddLocalTeamMemberRequest, NamedTeamSecrets};
+use foks_client::{AddLocalTeamMemberRequest, ChatTransport, NamedTeamSecrets, RealtimeConnection};
 use foks_proto::*;
 use foks_rpc::{RealtimeRequest as Request, RealtimeResponse as Response};
 use foks_server_testkit::{TestAccountSpec, TestClient};
+
+struct EmptyFirstInboxPage<'a> {
+    connection: &'a mut RealtimeConnection,
+    injected: bool,
+}
+impl ChatTransport for EmptyFirstInboxPage<'_> {
+    fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
+        let mut response = self.connection.call(request)?;
+        if !self.injected && matches!(request, Request::GetChangedThreads(_)) {
+            self.injected = true;
+            let Response::InboxDelta(delta) = &mut response else {
+                panic!()
+            };
+            delta.channels.clear();
+        }
+        Ok(response)
+    }
+}
+
+struct FailedRead<'a>(&'a mut RealtimeConnection);
+impl ChatTransport for FailedRead<'_> {
+    fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
+        if matches!(request, Request::ReadThrough(_)) {
+            return Err(foks_client::Error::DeadlineExceeded);
+        }
+        self.0.call(request)
+    }
+}
 
 #[test]
 pub(crate) fn realtime_text() {
@@ -216,6 +244,61 @@ pub(crate) fn realtime_text() {
             .as_slice(),
         b"hello teammate"
     );
+    let mut member_chat = client
+        .foks()
+        .chat_session(&member_host.pinned, &member.credential, &created.team)
+        .unwrap();
+    let soft_path = fixture
+        .environment
+        .client_path("realtime-member", "chat-soft.sqlite3")
+        .unwrap();
+    let mut soft = foks_client_db::SoftStateStore::open(&soft_path).unwrap();
+    let mut fallback = EmptyFirstInboxPage {
+        connection: &mut reader,
+        injected: false,
+    };
+    let synced = member_chat.sync_inbox(&mut fallback, &mut soft).unwrap();
+    assert!(fallback.injected);
+    drop(fallback);
+    assert_eq!(
+        synced
+            .inbox
+            .conversations
+            .iter()
+            .find(|conversation| conversation.channel.metadata.id == md.id)
+            .unwrap()
+            .unread,
+        1
+    );
+    assert!(member_chat
+        .mark_read(&mut FailedRead(&mut reader), &mut soft, md.id, 1)
+        .is_err());
+    assert_eq!(
+        soft.pending_chat_reads(&foks_client_db::ChatInboxScope {
+            host: fixture.host().host_id().as_bytes().to_vec(),
+            uid: member.credential.uid.as_bytes().to_vec(),
+            app: RtAppId::Chat,
+        })
+        .unwrap(),
+        vec![(md.id, 1)]
+    );
+    assert_eq!(
+        member_chat
+            .retry_pending_reads(&mut reader, &mut soft)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        member_chat
+            .inbox_from_store(&soft)
+            .unwrap()
+            .conversations
+            .iter()
+            .find(|conversation| conversation.channel.metadata.id == md.id)
+            .unwrap()
+            .unread,
+        0
+    );
     noncer.metadata.previous_id = noncer.metadata.id;
     noncer.metadata.previous_sequence = 1;
     noncer.metadata.id = RtMessageId([0x64; 16]);
@@ -397,10 +480,6 @@ pub(crate) fn realtime_text() {
             seed: &rotated_member,
         },
     ];
-    let mut member_chat = client
-        .foks()
-        .chat_session(&member_host.pinned, &member.credential, &created.team)
-        .unwrap();
     assert_eq!(
         member_chat
             .read_thread(&mut reader, md.id, 1, 2)

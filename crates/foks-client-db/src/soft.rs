@@ -6,13 +6,50 @@ use std::time::Duration;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension as _, TransactionBehavior};
 
 use foks_proto::{
-    BeaconHint, EntityId, KvDirectoryVersion, KvDirentVersion, KvPathVersionVector, ENTITY_HOST,
+    BeaconHint, EntityId, KvDirectoryVersion, KvDirentVersion, KvPathVersionVector, RealtimeWire,
+    RtAppId, RtChannelId, RtChannelMetadata, RtInboxChannel, ENTITY_HOST, ENTITY_USER,
 };
 
-use crate::soft_schema::{APPLICATION_ID, KNOWN_STORES_SCHEMA, KV_SCHEMA, VERSION};
-use crate::{sqlite_integer, stored_unsigned, Acceptance, Error, Result};
+use crate::soft_schema::{APPLICATION_ID, CHAT_SCHEMA, KNOWN_STORES_SCHEMA, KV_SCHEMA, VERSION};
+use crate::{sqlite_integer, stored_unsigned, Acceptance, ChatLimits, Error, Result};
 
 pub const MAX_DISCOVERY_HINTS: usize = 128;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChatInboxScope {
+    pub host: Vec<u8>,
+    pub uid: Vec<u8>,
+    pub app: RtAppId,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ChatInboxState {
+    pub cursor: u64,
+    pub head: u64,
+    pub degraded: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChatInboxEntry {
+    pub metadata: RtChannelMetadata,
+    pub inbox_version: u64,
+    pub read_through: u64,
+    pub pending_read: Option<u64>,
+    pub hidden: bool,
+    pub muted: bool,
+}
+
+fn validate_chat_inbox_scope(scope: &ChatInboxScope) -> Result<()> {
+    if scope.host.len() != 33
+        || scope.host.first() != Some(&ENTITY_HOST)
+        || scope.uid.len() != 33
+        || scope.uid.first() != Some(&ENTITY_USER)
+        || scope.app != RtAppId::Chat
+    {
+        return Err(Error::InvalidChatInbox("invalid account scope"));
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KnownTeamStore {
@@ -122,6 +159,375 @@ impl SoftStateStore {
             connection,
             owned_stages: std::collections::BTreeSet::new(),
         })
+    }
+
+    pub fn chat_inbox_state(&self, scope: &ChatInboxScope) -> Result<ChatInboxState> {
+        validate_chat_inbox_scope(scope)?;
+        self.connection
+            .query_row(
+                "SELECT cursor,head,degraded FROM chat_inbox_state
+                 WHERE host_id=?1 AND uid=?2 AND app_id=?3",
+                params![scope.host, scope.uid, scope.app as i64],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .map(|(cursor, head, degraded)| {
+                Ok(ChatInboxState {
+                    cursor: stored_unsigned("chat inbox cursor", cursor)?,
+                    head: stored_unsigned("chat inbox head", head)?,
+                    degraded: degraded != 0,
+                })
+            })
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+
+    pub fn apply_chat_inbox_page(
+        &mut self,
+        scope: &ChatInboxScope,
+        head: u64,
+        channels: &[RtInboxChannel],
+    ) -> Result<ChatInboxState> {
+        validate_chat_inbox_scope(scope)?;
+        let head = sqlite_integer("chat inbox head", head)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "INSERT INTO chat_inbox_state(host_id,uid,app_id,cursor,head,degraded)
+             VALUES (?1,?2,?3,0,0,0) ON CONFLICT DO NOTHING",
+            params![scope.host, scope.uid, scope.app as i64],
+        )?;
+        let (cursor, old_head): (i64, i64) = transaction.query_row(
+            "SELECT cursor,head FROM chat_inbox_state
+             WHERE host_id=?1 AND uid=?2 AND app_id=?3",
+            params![scope.host, scope.uid, scope.app as i64],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if head < cursor || head < old_head {
+            return Err(Error::InvalidChatInbox("inbox head rolled back"));
+        }
+        let mut page_cursor = cursor;
+        let mut ids = std::collections::BTreeSet::new();
+        let mut versions = std::collections::BTreeSet::new();
+        for channel in channels {
+            channel
+                .validate()
+                .map_err(|_| Error::InvalidChatInbox("malformed inbox channel"))?;
+            let version = sqlite_integer("chat inbox row version", channel.inbox_version)?;
+            let read_through = sqlite_integer("chat read pointer", channel.read_through)?;
+            if channel.metadata.app != scope.app
+                || channel.metadata.id.0 == [0; 16]
+                || channel.metadata.team.entity().as_bytes().len() != 33
+                || version <= cursor
+                || version > head
+                || !ids.insert(channel.metadata.id)
+                || !versions.insert(version)
+                || channel
+                    .metadata
+                    .last_message
+                    .as_ref()
+                    .map_or(channel.read_through != 0, |last| {
+                        channel.read_through > last.sequence
+                    })
+            {
+                return Err(Error::InvalidChatInbox(
+                    "invalid inbox page ordering or identity",
+                ));
+            }
+            let existing: Option<Vec<u8>> = transaction
+                .query_row(
+                    "SELECT channel_id FROM chat_inbox_channels
+                     WHERE host_id=?1 AND uid=?2 AND app_id=?3 AND inbox_version=?4",
+                    params![scope.host, scope.uid, scope.app as i64, version],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if existing
+                .as_deref()
+                .is_some_and(|id| id != channel.metadata.id.0.as_slice())
+            {
+                return Err(Error::InvalidChatInbox("inbox version reused"));
+            }
+            let metadata = channel
+                .metadata
+                .encoded()
+                .map_err(|_| Error::InvalidChatInbox("invalid channel metadata"))?;
+            transaction.execute(
+                "INSERT INTO chat_inbox_channels(
+                     host_id,uid,app_id,channel_id,team_id,inbox_version,
+                     read_through,pending_read,hidden,muted,metadata
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,NULL,?8,?9,?10)
+                 ON CONFLICT(host_id,uid,app_id,channel_id) DO UPDATE SET
+                     team_id=excluded.team_id,
+                     inbox_version=excluded.inbox_version,
+                     read_through=excluded.read_through,
+                     pending_read=CASE
+                         WHEN chat_inbox_channels.pending_read<=excluded.read_through THEN NULL
+                         ELSE chat_inbox_channels.pending_read
+                     END,
+                     hidden=excluded.hidden,
+                     muted=excluded.muted,
+                     metadata=excluded.metadata
+                 WHERE excluded.inbox_version>chat_inbox_channels.inbox_version",
+                params![
+                    scope.host,
+                    scope.uid,
+                    scope.app as i64,
+                    channel.metadata.id.0.as_slice(),
+                    channel.metadata.team.entity().as_bytes(),
+                    version,
+                    read_through,
+                    i64::from(channel.hidden),
+                    i64::from(channel.muted),
+                    metadata
+                ],
+            )?;
+            page_cursor = page_cursor.max(version);
+        }
+        if !channels.is_empty() && page_cursor == cursor {
+            return Err(Error::InvalidChatInbox("inbox page made no progress"));
+        }
+        transaction.execute(
+            "UPDATE chat_inbox_state SET cursor=?4,head=?5,degraded=0
+             WHERE host_id=?1 AND uid=?2 AND app_id=?3",
+            params![scope.host, scope.uid, scope.app as i64, page_cursor, head],
+        )?;
+        transaction.commit()?;
+        Ok(ChatInboxState {
+            cursor: stored_unsigned("chat inbox cursor", page_cursor)?,
+            head: stored_unsigned("chat inbox head", head)?,
+            degraded: false,
+        })
+    }
+
+    pub fn observe_chat_inbox_head(
+        &mut self,
+        scope: &ChatInboxScope,
+        head: u64,
+        degraded: bool,
+    ) -> Result<ChatInboxState> {
+        validate_chat_inbox_scope(scope)?;
+        let state = self.chat_inbox_state(scope)?;
+        if head < state.cursor || head < state.head {
+            return Err(Error::InvalidChatInbox("inbox head rolled back"));
+        }
+        self.connection.execute(
+            "INSERT INTO chat_inbox_state(host_id,uid,app_id,cursor,head,degraded)
+             VALUES (?1,?2,?3,0,?4,?5)
+             ON CONFLICT(host_id,uid,app_id) DO UPDATE SET
+                 head=excluded.head,degraded=excluded.degraded",
+            params![
+                scope.host,
+                scope.uid,
+                scope.app as i64,
+                sqlite_integer("chat inbox head", head)?,
+                i64::from(degraded)
+            ],
+        )?;
+        Ok(ChatInboxState {
+            head,
+            degraded,
+            ..state
+        })
+    }
+
+    pub fn reset_chat_inbox(&mut self, scope: &ChatInboxScope) -> Result<()> {
+        validate_chat_inbox_scope(scope)?;
+        self.connection.execute(
+            "DELETE FROM chat_inbox_state WHERE host_id=?1 AND uid=?2 AND app_id=?3",
+            params![scope.host, scope.uid, scope.app as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn chat_inbox_entries(
+        &self,
+        scope: &ChatInboxScope,
+        team: &[u8],
+    ) -> Result<Vec<ChatInboxEntry>> {
+        validate_chat_inbox_scope(scope)?;
+        if team.len() != 33 {
+            return Err(Error::InvalidChatInbox("invalid chat team"));
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT metadata,inbox_version,read_through,pending_read,hidden,muted
+             FROM chat_inbox_channels
+             WHERE host_id=?1 AND uid=?2 AND app_id=?3 AND team_id=?4
+             ORDER BY inbox_version DESC LIMIT 1001",
+        )?;
+        let rows = statement
+            .query_map(
+                params![scope.host, scope.uid, scope.app as i64, team],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if rows.len() > ChatLimits::INBOX_ROWS {
+            return Err(Error::ChatLimit("inbox conversation limit"));
+        }
+        rows.into_iter()
+            .map(
+                |(metadata, inbox_version, read_through, pending_read, hidden, muted)| {
+                    Ok(ChatInboxEntry {
+                        metadata: RtChannelMetadata::decode(&metadata)
+                            .map_err(|_| Error::InvalidChatInbox("stored channel metadata"))?,
+                        inbox_version: stored_unsigned("chat inbox row version", inbox_version)?,
+                        read_through: stored_unsigned("chat read pointer", read_through)?,
+                        pending_read: pending_read
+                            .map(|value| stored_unsigned("pending chat read", value))
+                            .transpose()?,
+                        hidden: hidden != 0,
+                        muted: muted != 0,
+                    })
+                },
+            )
+            .collect()
+    }
+
+    pub fn retain_chat_inbox_team(
+        &mut self,
+        scope: &ChatInboxScope,
+        team: &[u8],
+        channels: &[RtChannelId],
+    ) -> Result<()> {
+        let retained = channels
+            .iter()
+            .map(|id| id.0)
+            .collect::<std::collections::BTreeSet<_>>();
+        for entry in self.chat_inbox_entries(scope, team)? {
+            if !retained.contains(&entry.metadata.id.0) {
+                self.connection.execute(
+                    "DELETE FROM chat_inbox_channels
+                     WHERE host_id=?1 AND uid=?2 AND app_id=?3 AND channel_id=?4",
+                    params![
+                        scope.host,
+                        scope.uid,
+                        scope.app as i64,
+                        entry.metadata.id.0.as_slice()
+                    ],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn stage_chat_read(
+        &mut self,
+        scope: &ChatInboxScope,
+        channel: RtChannelId,
+        sequence: u64,
+    ) -> Result<()> {
+        validate_chat_inbox_scope(scope)?;
+        if sequence == 0 {
+            return Err(Error::InvalidChatInbox("invalid read pointer"));
+        }
+        let metadata: Vec<u8> = self
+            .connection
+            .query_row(
+                "SELECT metadata FROM chat_inbox_channels
+                 WHERE host_id=?1 AND uid=?2 AND app_id=?3 AND channel_id=?4",
+                params![
+                    scope.host,
+                    scope.uid,
+                    scope.app as i64,
+                    channel.0.as_slice()
+                ],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(Error::ChatNotFound("inbox channel"))?;
+        let metadata = RtChannelMetadata::decode(&metadata)
+            .map_err(|_| Error::InvalidChatInbox("stored channel metadata"))?;
+        if metadata
+            .last_message
+            .as_ref()
+            .is_none_or(|last| sequence > last.sequence)
+        {
+            return Err(Error::InvalidChatInbox(
+                "read pointer exceeds known messages",
+            ));
+        }
+        let count = self.connection.execute(
+            "UPDATE chat_inbox_channels SET pending_read=max(coalesce(pending_read,0),?5)
+             WHERE host_id=?1 AND uid=?2 AND app_id=?3 AND channel_id=?4",
+            params![
+                scope.host,
+                scope.uid,
+                scope.app as i64,
+                channel.0.as_slice(),
+                sqlite_integer("pending chat read", sequence)?
+            ],
+        )?;
+        if count != 1 {
+            return Err(Error::ChatNotFound("inbox channel"));
+        }
+        Ok(())
+    }
+
+    pub fn confirm_chat_read(
+        &mut self,
+        scope: &ChatInboxScope,
+        channel: RtChannelId,
+        sequence: u64,
+    ) -> Result<()> {
+        validate_chat_inbox_scope(scope)?;
+        let count = self.connection.execute(
+            "UPDATE chat_inbox_channels
+             SET read_through=max(read_through,?5),
+                 pending_read=CASE WHEN pending_read<=?5 THEN NULL ELSE pending_read END
+             WHERE host_id=?1 AND uid=?2 AND app_id=?3 AND channel_id=?4",
+            params![
+                scope.host,
+                scope.uid,
+                scope.app as i64,
+                channel.0.as_slice(),
+                sqlite_integer("confirmed chat read", sequence)?
+            ],
+        )?;
+        if count != 1 {
+            return Err(Error::ChatNotFound("inbox channel"));
+        }
+        Ok(())
+    }
+
+    pub fn pending_chat_reads(&self, scope: &ChatInboxScope) -> Result<Vec<(RtChannelId, u64)>> {
+        validate_chat_inbox_scope(scope)?;
+        let mut statement = self.connection.prepare(
+            "SELECT channel_id,pending_read FROM chat_inbox_channels
+             WHERE host_id=?1 AND uid=?2 AND app_id=?3 AND pending_read IS NOT NULL
+             ORDER BY channel_id LIMIT 1001",
+        )?;
+        let rows = statement
+            .query_map(params![scope.host, scope.uid, scope.app as i64], |row| {
+                Ok((row.get::<_, [u8; 16]>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if rows.len() > ChatLimits::INBOX_ROWS {
+            return Err(Error::ChatLimit("pending read limit"));
+        }
+        rows.into_iter()
+            .map(|(id, sequence)| {
+                Ok((
+                    RtChannelId(id),
+                    stored_unsigned("pending chat read", sequence)?,
+                ))
+            })
+            .collect()
     }
 
     pub fn replace_known_accounts(&mut self, aliases: &[String], observed_at: u64) -> Result<()> {
@@ -1123,6 +1529,7 @@ fn initialize(connection: &mut Connection, path: &Path) -> Result<()> {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute_batch(KV_SCHEMA)?;
         transaction.execute_batch(KNOWN_STORES_SCHEMA)?;
+        transaction.execute_batch(CHAT_SCHEMA)?;
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
         transaction.pragma_update(None, "user_version", VERSION)?;
         transaction.commit()?;
@@ -1326,6 +1733,7 @@ fn load_directory(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use foks_proto::{RtLastMessage, RtMessageType};
 
     fn host(fill: u8) -> EntityId {
         EntityId::from_bytes([vec![ENTITY_HOST], vec![fill; 32]].concat()).unwrap()
@@ -1333,7 +1741,7 @@ mod tests {
 
     #[test]
     fn previous_soft_schemas_require_explicit_cache_rebuild() {
-        for version in [3, 4] {
+        for version in [3, 4, 5] {
             let temp = tempfile::tempdir().unwrap();
             let path = temp.path().join("soft.sqlite3");
             drop(SoftStateStore::open(&path).unwrap());
@@ -1364,9 +1772,133 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains(path.canonicalize().unwrap().to_str().unwrap()));
         assert!(message.contains("unsupported soft-state cache schema version 2"));
-        assert!(message.contains("this build supports version 5"));
+        assert!(message.contains("this build supports version 6"));
         assert!(message.contains("cache must be recreated"));
         assert!(path.exists());
+    }
+
+    #[test]
+    fn chat_inbox_pages_reads_pruning_and_reset_are_scope_bound() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("soft.sqlite3");
+        let mut store = SoftStateStore::open(&path).unwrap();
+        let scope = ChatInboxScope {
+            host: [vec![ENTITY_HOST], vec![2; 32]].concat(),
+            uid: [vec![ENTITY_USER], vec![3; 32]].concat(),
+            app: RtAppId::Chat,
+        };
+        let mut metadata = RtChannelMetadata::decode(include_bytes!(
+            "../../foks-snowpack/tests/fixtures/foks-v0.1.9/realtime/channel.snowp"
+        ))
+        .unwrap();
+        metadata.last_message = Some(RtLastMessage {
+            sequence: 1,
+            kind: RtMessageType::Basic,
+            insert_time: 1,
+            sender: None,
+            further_user_attribution: None,
+        });
+        let first = RtInboxChannel {
+            metadata: metadata.clone(),
+            inbox_version: 1,
+            read_through: 0,
+            hidden: false,
+            muted: false,
+        };
+        assert_eq!(
+            store
+                .apply_chat_inbox_page(&scope, 2, std::slice::from_ref(&first))
+                .unwrap(),
+            ChatInboxState {
+                cursor: 1,
+                head: 2,
+                degraded: false
+            }
+        );
+        let mut valid_metadata = metadata.clone();
+        valid_metadata.id = RtChannelId([2; 16]);
+        let mut invalid_metadata = metadata.clone();
+        invalid_metadata.id = RtChannelId([3; 16]);
+        invalid_metadata.app = RtAppId::Crdt;
+        assert!(store
+            .apply_chat_inbox_page(
+                &scope,
+                3,
+                &[
+                    RtInboxChannel {
+                        metadata: valid_metadata,
+                        inbox_version: 2,
+                        read_through: 0,
+                        hidden: false,
+                        muted: false,
+                    },
+                    RtInboxChannel {
+                        metadata: invalid_metadata,
+                        inbox_version: 3,
+                        read_through: 0,
+                        hidden: false,
+                        muted: false,
+                    },
+                ],
+            )
+            .is_err());
+        assert_eq!(store.chat_inbox_state(&scope).unwrap().cursor, 1);
+        assert_eq!(
+            store
+                .chat_inbox_entries(&scope, metadata.team.entity().as_bytes())
+                .unwrap()
+                .len(),
+            1
+        );
+        store.stage_chat_read(&scope, metadata.id, 1).unwrap();
+        assert_eq!(
+            store.pending_chat_reads(&scope).unwrap(),
+            vec![(metadata.id, 1)]
+        );
+        store.confirm_chat_read(&scope, metadata.id, 1).unwrap();
+        assert!(store.pending_chat_reads(&scope).unwrap().is_empty());
+        let mut second_metadata = metadata.clone();
+        second_metadata.id = RtChannelId([2; 16]);
+        let second = RtInboxChannel {
+            metadata: second_metadata.clone(),
+            inbox_version: 2,
+            read_through: 0,
+            hidden: false,
+            muted: false,
+        };
+        store
+            .apply_chat_inbox_page(&scope, 2, std::slice::from_ref(&second))
+            .unwrap();
+        assert_eq!(
+            store
+                .chat_inbox_entries(&scope, metadata.team.entity().as_bytes())
+                .unwrap()
+                .len(),
+            2
+        );
+        store
+            .retain_chat_inbox_team(&scope, metadata.team.entity().as_bytes(), &[metadata.id])
+            .unwrap();
+        assert_eq!(
+            store
+                .chat_inbox_entries(&scope, metadata.team.entity().as_bytes())
+                .unwrap()
+                .len(),
+            1
+        );
+        drop(store);
+        let mut store = SoftStateStore::open(&path).unwrap();
+        assert_eq!(store.chat_inbox_state(&scope).unwrap().cursor, 2);
+        assert!(store.observe_chat_inbox_head(&scope, 1, false).is_err());
+        store.reset_chat_inbox(&scope).unwrap();
+        assert_eq!(
+            store.chat_inbox_state(&scope).unwrap(),
+            ChatInboxState::default()
+        );
+        assert!(store
+            .chat_inbox_entries(&scope, metadata.team.entity().as_bytes())
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

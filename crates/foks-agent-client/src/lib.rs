@@ -14,6 +14,7 @@ use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
 
 const DEVICE_PAIRING_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const CHAT_POLL_TIMEOUT: Duration = Duration::from_secs(60);
 const MAXIMUM_UPLOAD_FRAME_BYTES: usize = 128 * 1024;
 
 #[derive(Debug, Error)]
@@ -74,6 +75,8 @@ impl AgentClient {
         let mutation = operation.is_mutation();
         let timeout = if operation.is_device_pairing_wait() {
             self.timeout.max(DEVICE_PAIRING_TIMEOUT)
+        } else if operation.is_chat_poll_wait() {
+            self.timeout.max(CHAT_POLL_TIMEOUT)
         } else {
             self.timeout
         };

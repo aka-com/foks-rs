@@ -12,6 +12,16 @@ pub enum ChatAction {
         channel: String,
         before: Option<String>,
     },
+    Inbox,
+    SyncInbox,
+    MarkRead {
+        channel: String,
+        sequence: String,
+    },
+    PollInbox {
+        since: String,
+        timeout_milliseconds: u64,
+    },
     PrepareChannel {
         submission: String,
         name: SecretString,
@@ -40,7 +50,13 @@ impl ChatAction {
     pub fn is_mutation(&self) -> bool {
         !matches!(
             self,
-            Self::Channels | Self::History { .. } | Self::Pending | Self::Status { .. }
+            Self::Channels
+                | Self::History { .. }
+                | Self::Inbox
+                | Self::SyncInbox
+                | Self::PollInbox { .. }
+                | Self::Pending
+                | Self::Status { .. }
         )
     }
     pub fn validate(&self) -> bool {
@@ -50,6 +66,16 @@ impl ChatAction {
                     && before
                         .as_ref()
                         .is_none_or(|n| chat_sequence(n).is_some_and(|n| n > 1))
+            }
+            Self::MarkRead { channel, sequence } => {
+                valid_chat_id(channel) && chat_sequence(sequence).is_some_and(|n| n > 0)
+            }
+            Self::PollInbox {
+                since,
+                timeout_milliseconds,
+            } => {
+                chat_sequence(since).is_some()
+                    && *timeout_milliseconds <= CHAT_POLL_MILLISECONDS as u64
             }
             Self::PrepareChannel {
                 submission, name, ..
@@ -68,7 +94,7 @@ impl ChatAction {
             | Self::Attempt { operation }
             | Self::Cancel { operation }
             | Self::Finalize { operation } => valid_chat_id(operation),
-            Self::Channels | Self::Pending => true,
+            Self::Channels | Self::Inbox | Self::SyncInbox | Self::Pending => true,
         }
     }
 }
@@ -126,6 +152,17 @@ pub enum ChatState {
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct ChatConversation {
+    pub channel: ChatChannel,
+    pub inbox_version: String,
+    pub read_through: String,
+    pub pending_read: Option<String>,
+    pub unread: String,
+    pub hidden: bool,
+    pub muted: bool,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChatOperation {
     pub id: String,
     pub channel: String,
@@ -146,6 +183,20 @@ pub enum ChatResult {
         messages: Vec<ChatMessage>,
         before: Option<String>,
         missing_predecessors: Vec<String>,
+    },
+    Inbox {
+        cursor: String,
+        head: String,
+        degraded: bool,
+        conversations: Vec<ChatConversation>,
+    },
+    Read {
+        channel: String,
+        sequence: String,
+    },
+    Poll {
+        bumped: bool,
+        inbox_version: String,
     },
     Operation {
         operation: ChatOperation,
@@ -188,5 +239,17 @@ mod tests {
             text: SecretString::new("x".repeat(CHAT_TEXT_BYTES + 1))
         }
         .validate());
+        let poll = ChatAction::PollInbox {
+            since: "9007199254740993".into(),
+            timeout_milliseconds: CHAT_POLL_MILLISECONDS as u64,
+        };
+        assert!(poll.validate());
+        assert!(!poll.is_mutation());
+        assert!(ChatAction::MarkRead {
+            channel: "cd".repeat(16),
+            sequence: "1".into(),
+        }
+        .is_mutation());
+        assert!(!ChatAction::SyncInbox.is_mutation());
     }
 }

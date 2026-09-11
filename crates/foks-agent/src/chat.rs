@@ -26,6 +26,116 @@ fn role_label(role: foks_proto::Role) -> String {
         _ => format!("Member ({})", role.visibility().unwrap_or(0)),
     }
 }
+fn channel(value: foks_client::ChatChannel) -> ChatChannel {
+    ChatChannel {
+        id: hex(&value.metadata.id.0),
+        name: SecretString::new(value.name.0.as_str()),
+        admin: value.metadata.tier == RtChannelTier::Admin,
+        readable: !value.metadata.unreadable,
+        read_role: role_label(value.metadata.roles.read),
+        write_role: role_label(value.metadata.roles.write),
+    }
+}
+fn inbox(
+    value: foks_client::ChatInbox,
+    expected: &foks_client_db::ChatScope,
+) -> Result<ChatResult> {
+    if value.host.entity().as_bytes() != expected.host
+        || value.actor.entity().as_bytes() != expected.uid
+        || value.team.entity().as_bytes() != expected.team
+        || value.conversations.len() > CHAT_INBOX_ROWS
+    {
+        return Err(foks_client::Error::ChatIntegrity("inbox response scope changed").into());
+    }
+    Ok(ChatResult::Inbox {
+        cursor: value.cursor.to_string(),
+        head: value.head.to_string(),
+        degraded: value.degraded,
+        conversations: value
+            .conversations
+            .into_iter()
+            .map(|conversation| ChatConversation {
+                channel: channel(conversation.channel),
+                inbox_version: conversation.inbox_version.to_string(),
+                read_through: conversation.read_through.to_string(),
+                pending_read: conversation.pending_read.map(|value| value.to_string()),
+                unread: conversation.unread.to_string(),
+                hidden: conversation.hidden,
+                muted: conversation.muted,
+            })
+            .collect(),
+    })
+}
+pub(super) struct PollContext {
+    scope: ChatScope,
+    connection: foks_client::RealtimeConnection,
+}
+
+pub(super) fn resolve_scope(
+    session: &CheckedProfileSession<'_>,
+    vault: &mut AccountVault<'_>,
+    store: &TeamStoreRef,
+) -> Result<(foks_client_db::ChatScope, ChatScope)> {
+    let resolved = session.chat_scope(
+        &store.account_alias,
+        &store.team_alias,
+        &store.team_id,
+        vault,
+    )?;
+    let scope = ChatScope {
+        store: store.clone(),
+        host: hex(&resolved.host),
+        actor: hex(&resolved.uid),
+    };
+    Ok((resolved, scope))
+}
+
+pub(super) fn prepare_poll(
+    session: &CheckedProfileSession<'_>,
+    vault: &mut AccountVault<'_>,
+    store: &TeamStoreRef,
+) -> Result<PollContext> {
+    let (_, scope) = resolve_scope(session, vault, store)?;
+    Ok(PollContext {
+        scope,
+        connection: session.chat_poll_connection(&store.team_alias, vault)?,
+    })
+}
+
+pub(super) fn poll(
+    mut context: PollContext,
+    since: u64,
+    timeout_milliseconds: u64,
+) -> Result<ChatReply> {
+    let response = context
+        .connection
+        .call(&foks_rpc::RealtimeRequest::PollInbox(
+            foks_proto::RtPollInboxArgument {
+                poll: foks_proto::RtPollInbox {
+                    app: foks_proto::RtAppId::Chat,
+                    since,
+                    timeout_milliseconds,
+                },
+            },
+        ))?;
+    let foks_rpc::RealtimeResponse::PollResult(result) = response else {
+        return Err(foks_client::Error::ChatIntegrity("unexpected inbox poll response").into());
+    };
+    if result.inbox_version > i64::MAX as u64
+        || (result.bumped && result.inbox_version <= since)
+        || (!result.bumped && result.inbox_version > since)
+    {
+        return Err(foks_client::Error::ChatIntegrity("invalid inbox poll result").into());
+    }
+    Ok(ChatReply {
+        scope: context.scope,
+        result: ChatResult::Poll {
+            bumped: result.bumped,
+            inbox_version: result.inbox_version.to_string(),
+        },
+    })
+}
+
 fn operation(op: foks_client_db::ChatOperation) -> Result<ChatOperation> {
     use foks_client_db::{ChatOperationKind as K, ChatOperationState as S};
     let sequence = if op.kind == K::Send {
@@ -63,17 +173,7 @@ pub(super) fn dispatch(
     if !action.validate() {
         return Err(Box::new(super::AgentRequestError("invalid chat request")));
     }
-    let resolved = session.chat_scope(
-        &store.account_alias,
-        &store.team_alias,
-        &store.team_id,
-        vault,
-    )?;
-    let scope = ChatScope {
-        store: store.clone(),
-        host: hex(&resolved.host),
-        actor: hex(&resolved.uid),
-    };
+    let (resolved, scope) = resolve_scope(session, vault, &store)?;
     let submission = match &action {
         ChatAction::PrepareChannel { submission, .. }
         | ChatAction::PrepareMessage { submission, .. } => {
@@ -100,19 +200,25 @@ pub(super) fn dispatch(
             }
             ChatResult::Channels {
                 version: channels.version.to_string(),
-                channels: channels
-                    .channels
-                    .into_iter()
-                    .map(|c| ChatChannel {
-                        id: hex(&c.metadata.id.0),
-                        name: SecretString::new(c.name.0.as_str()),
-                        admin: c.metadata.tier == RtChannelTier::Admin,
-                        readable: !c.metadata.unreadable,
-                        read_role: role_label(c.metadata.roles.read),
-                        write_role: role_label(c.metadata.roles.write),
-                    })
-                    .collect(),
+                channels: channels.channels.into_iter().map(channel).collect(),
             }
+        }
+        ChatAction::Inbox | ChatAction::SyncInbox => {
+            inbox(session.sync_chat_inbox(team, vault)?.inbox, &resolved)?
+        }
+        ChatAction::MarkRead { channel, sequence } => {
+            let sequence = chat_sequence(&sequence)
+                .ok_or(super::AgentRequestError("invalid chat sequence"))?;
+            session.mark_chat_read(team, RtChannelId(id(&channel)?), sequence, vault)?;
+            ChatResult::Read {
+                channel,
+                sequence: sequence.to_string(),
+            }
+        }
+        ChatAction::PollInbox { .. } => {
+            return Err(Box::new(super::AgentRequestError(
+                "chat polling requires dedicated dispatch",
+            )))
         }
         ChatAction::History { channel, before } => {
             let channel_id = RtChannelId(id(&channel)?);

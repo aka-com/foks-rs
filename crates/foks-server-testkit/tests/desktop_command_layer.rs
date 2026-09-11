@@ -718,6 +718,109 @@ fn exercise_chat(socket: &Path, team_id: &str, probe: &str, certificate: &Path) 
         };
         assert!(operations.is_empty());
     }
+    let R::Inbox { conversations, .. } = chat(&owner, A::SyncInbox) else {
+        panic!("expected inbox")
+    };
+    assert_eq!(conversations.len(), 1);
+    assert_eq!(conversations[0].unread, "1");
+    let R::Read {
+        channel: read_channel,
+        sequence,
+    } = chat(
+        &owner,
+        A::MarkRead {
+            channel: channel.clone(),
+            sequence: "2".into(),
+        },
+    )
+    else {
+        panic!("expected read receipt")
+    };
+    assert_eq!(read_channel, channel);
+    assert_eq!(sequence, "2");
+    let R::Inbox {
+        head,
+        conversations,
+        ..
+    } = chat(&owner, A::SyncInbox)
+    else {
+        panic!("expected inbox")
+    };
+    assert_eq!(conversations[0].unread, "0");
+    let poll_socket = socket.to_owned();
+    let poll_store = owner.clone();
+    let waiting = std::thread::spawn(move || {
+        foks_desktop::chat_request(
+            &AgentClient::new(poll_socket),
+            poll_store,
+            A::PollInbox {
+                since: head,
+                timeout_milliseconds: 5_000,
+            },
+        )
+        .unwrap()
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(matches!(chat(&owner, A::Channels), R::Channels { .. }));
+    let R::Operation {
+        operation: prepared,
+    } = chat(
+        &guest,
+        A::PrepareMessage {
+            submission: "de".repeat(16),
+            channel: channel.clone(),
+            text: SecretString::new("wake agent poll"),
+        },
+    )
+    else {
+        panic!("expected poll-wake preparation")
+    };
+    let R::Operation { .. } = chat(
+        &guest,
+        A::Attempt {
+            operation: prepared.id,
+        },
+    ) else {
+        panic!("expected poll-wake receipt")
+    };
+    let R::Poll {
+        bumped,
+        inbox_version,
+    } = waiting.join().unwrap().result
+    else {
+        panic!("expected poll wake")
+    };
+    assert!(bumped);
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cancel_flag = cancelled.clone();
+    let cancel_socket = socket.to_owned();
+    let cancel_store = owner.clone();
+    let cancel_since = inbox_version.clone();
+    let cancelling = std::thread::spawn(move || {
+        foks_desktop::chat_request_cancellable(
+            &AgentClient::new(cancel_socket),
+            cancel_store,
+            A::PollInbox {
+                since: cancel_since,
+                timeout_milliseconds: 5_000,
+            },
+            &|| cancel_flag.load(std::sync::atomic::Ordering::Acquire),
+        )
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    cancelled.store(true, std::sync::atomic::Ordering::Release);
+    assert!(cancelling.join().unwrap().is_err());
+    std::thread::sleep(Duration::from_millis(1_100));
+    let R::Poll { bumped, .. } = chat(
+        &owner,
+        A::PollInbox {
+            since: inbox_version,
+            timeout_milliseconds: 1,
+        },
+    ) else {
+        panic!("expected reusable poll slot")
+    };
+    assert!(!bumped);
     let R::Operation {
         operation: prepared,
     } = chat(

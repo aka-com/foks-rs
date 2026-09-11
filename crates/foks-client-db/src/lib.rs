@@ -17,8 +17,8 @@ pub use repositories::chat::{
 };
 
 pub use soft::{
-    KnownStore, KnownTeamStore, KvDirectoryProjection, KvLargeFileStage, KvProjectedEntry,
-    SoftStateStore, MAX_DISCOVERY_HINTS,
+    ChatInboxEntry, ChatInboxScope, ChatInboxState, KnownStore, KnownTeamStore,
+    KvDirectoryProjection, KvLargeFileStage, KvProjectedEntry, SoftStateStore, MAX_DISCOVERY_HINTS,
 };
 
 use foks_proto::ServiceType;
@@ -548,6 +548,8 @@ pub enum Error {
     ChatLimit(&'static str),
     #[error("chat operation not found: {0}")]
     ChatNotFound(&'static str),
+    #[error("invalid chat inbox state: {0}")]
+    InvalidChatInbox(&'static str),
     #[error("hard-state filesystem operation failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("SQLite hard-state operation failed: {0}")]

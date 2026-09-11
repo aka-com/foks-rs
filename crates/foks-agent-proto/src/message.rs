@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -867,6 +867,16 @@ impl Operation {
                 | Self::ResumeDevicePairingAcceptance { .. }
                 | Self::ResumeGoProfilePairing { .. }
                 | Self::CopyGoProfileDevice { .. }
+        )
+    }
+
+    pub fn is_chat_poll_wait(&self) -> bool {
+        matches!(
+            self,
+            Self::Chat {
+                action: crate::chat::ChatAction::PollInbox { .. },
+                ..
+            }
         )
     }
 

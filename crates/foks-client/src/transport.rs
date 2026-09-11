@@ -403,6 +403,17 @@ impl FoksClient {
         self.timeout = timeout;
     }
 
+    pub(crate) fn isolated_with_timeout(&self, timeout: Duration) -> Self {
+        Self {
+            roots: self.roots.clone(),
+            timeout,
+            io_poll_interval: self.io_poll_interval,
+            cancellation: self.cancellation.clone(),
+            connection_pool: Arc::new(Mutex::new(ConnectionPool::default())),
+            maximum_frame_length: self.maximum_frame_length,
+        }
+    }
+
     pub fn set_maximum_frame_length(&mut self, maximum: usize) -> Result<()> {
         if !(1..=MAX_CONFIGURABLE_FRAME_LENGTH).contains(&maximum) {
             return Err(Error::Transport("frame limit is outside supported bounds"));
@@ -1009,6 +1020,17 @@ mod transport_tests {
         assert!(client.set_connection_pool_limits(2, 1).is_err());
         client.set_connection_pool_limits(0, 0).unwrap();
         client.clear_connection_pool().unwrap();
+    }
+
+    #[test]
+    fn isolated_timeout_uses_a_dedicated_connection_pool() {
+        let client = FoksClient::with_roots(rustls::RootCertStore::empty());
+        let isolated = client.isolated_with_timeout(Duration::from_secs(60));
+        assert!(!Arc::ptr_eq(
+            &client.connection_pool,
+            &isolated.connection_pool
+        ));
+        assert_eq!(isolated.timeout, Duration::from_secs(60));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464b_5653; // `FKVS`
-pub(crate) const VERSION: u32 = 5;
+pub(crate) const VERSION: u32 = 6;
 
 pub(crate) const KNOWN_STORES_SCHEMA: &str = r#"
 CREATE TABLE known_stores (
@@ -20,6 +20,35 @@ CREATE TABLE known_stores (
     ),
     PRIMARY KEY (kind, account_alias, team_alias)
 ) STRICT, WITHOUT ROWID;
+"#;
+
+pub(crate) const CHAT_SCHEMA: &str = r#"
+CREATE TABLE chat_inbox_state (
+    host_id BLOB NOT NULL CHECK(length(host_id)=33),
+    uid BLOB NOT NULL CHECK(length(uid)=33),
+    app_id INTEGER NOT NULL CHECK(app_id=1),
+    cursor INTEGER NOT NULL CHECK(cursor>=0),
+    head INTEGER NOT NULL CHECK(head>=cursor),
+    degraded INTEGER NOT NULL CHECK(degraded IN (0,1)),
+    PRIMARY KEY(host_id,uid,app_id)
+) STRICT, WITHOUT ROWID;
+CREATE TABLE chat_inbox_channels (
+    host_id BLOB NOT NULL,
+    uid BLOB NOT NULL,
+    app_id INTEGER NOT NULL,
+    channel_id BLOB NOT NULL CHECK(length(channel_id)=16),
+    team_id BLOB NOT NULL CHECK(length(team_id)=33),
+    inbox_version INTEGER NOT NULL CHECK(inbox_version>0),
+    read_through INTEGER NOT NULL CHECK(read_through>=0),
+    pending_read INTEGER CHECK(pending_read IS NULL OR pending_read>0),
+    hidden INTEGER NOT NULL CHECK(hidden IN (0,1)),
+    muted INTEGER NOT NULL CHECK(muted IN (0,1)),
+    metadata BLOB NOT NULL CHECK(length(metadata) BETWEEN 1 AND 32768),
+    PRIMARY KEY(host_id,uid,app_id,channel_id),
+    UNIQUE(host_id,uid,app_id,inbox_version),
+    FOREIGN KEY(host_id,uid,app_id) REFERENCES chat_inbox_state(host_id,uid,app_id) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+CREATE INDEX chat_inbox_team ON chat_inbox_channels(host_id,uid,app_id,team_id,inbox_version DESC);
 "#;
 
 pub(crate) const KV_SCHEMA: &str = r#"

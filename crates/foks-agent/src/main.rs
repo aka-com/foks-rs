@@ -45,6 +45,8 @@ const CANCELLATION_GRACE: Duration = Duration::from_secs(1);
 const MAXIMUM_CANARY_BYTES: usize = 64 * 1024;
 const MAXIMUM_CANARY_FETCHES: usize = 4;
 const MAXIMUM_CONCURRENT_READS: usize = 4;
+const MAXIMUM_CONCURRENT_CHAT_POLLS: usize = 32;
+const CHAT_POLL_TIMEOUT: Duration = Duration::from_secs(60);
 const DEVICE_PAIRING_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 // Byte vectors are JSON integer arrays on local protocol v2. Keep enough
 // headroom for their worst-case textual expansion inside the 1 MiB frame.
@@ -68,6 +70,14 @@ struct ResetTicket {
 
 static RESET_TICKETS: OnceLock<Mutex<BTreeMap<[u8; 32], ResetTicket>>> = OnceLock::new();
 
+#[derive(Clone)]
+struct ConnectionCapacity {
+    blocking: Arc<Semaphore>,
+    chat_polling: Arc<Semaphore>,
+    active_chat_polls: Arc<Mutex<std::collections::HashSet<ChatPollKey>>>,
+    mutations: Arc<Semaphore>,
+}
+
 #[derive(clap::Parser)]
 #[command(
     name = "foks-agent",
@@ -85,6 +95,8 @@ struct Arguments {
     /// Maximum concurrent blocking reads (1-4).
     #[arg(long, default_value_t = MAXIMUM_CONCURRENT_READS)]
     blocking_workers: usize,
+    #[arg(long, default_value_t = 4)]
+    chat_poll_workers: usize,
     #[arg(long, default_value_t = 15)]
     request_timeout_seconds: u64,
     #[arg(long, default_value_t = 30)]
@@ -139,6 +151,8 @@ fn compatibility_http_client(timeout: Duration) -> Result<reqwest::Client, reqwe
 async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     if arguments.maximum_connections == 0
         || arguments.blocking_workers == 0
+        || arguments.chat_poll_workers == 0
+        || arguments.chat_poll_workers > MAXIMUM_CONCURRENT_CHAT_POLLS
         || arguments.request_timeout_seconds == 0
         || arguments.scheduler_poll_seconds == 0
         || arguments.compatibility_poll_seconds == 0
@@ -179,6 +193,8 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let _socket_guard = SocketGuard(socket.clone());
     let active = Arc::new(Semaphore::new(arguments.maximum_connections));
     let blocking = Arc::new(Semaphore::new(arguments.blocking_workers));
+    let chat_polling = Arc::new(Semaphore::new(arguments.chat_poll_workers));
+    let active_chat_polls = Arc::new(Mutex::new(std::collections::HashSet::new()));
     let mutations = Arc::new(Semaphore::new(1));
     let scheduler_gate = Arc::new(Semaphore::new(1));
     let compatibility_gate = Arc::new(Semaphore::new(1));
@@ -228,15 +244,18 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 };
                 let state_dir = state_dir.clone();
-                let blocking = blocking.clone();
-                let mutations = mutations.clone();
+                let capacity = ConnectionCapacity {
+                    blocking: blocking.clone(),
+                    chat_polling: chat_polling.clone(),
+                    active_chat_polls: active_chat_polls.clone(),
+                    mutations: mutations.clone(),
+                };
                 let ready = ready.clone();
                 tokio::spawn(async move {
                     if let Err(error) = handle_connection(
                         stream,
                         state_dir,
-                        blocking,
-                        mutations,
+                        capacity,
                         ready,
                         timeout,
                         permit,
@@ -515,8 +534,7 @@ fn apply_hosted_lease_with_gate(
 async fn handle_connection(
     mut stream: tokio::net::UnixStream,
     state_dir: PathBuf,
-    blocking: Arc<Semaphore>,
-    mutations: Arc<Semaphore>,
+    capacity: ConnectionCapacity,
     ready: Arc<AtomicBool>,
     timeout: Duration,
     _active_permit: OwnedSemaphorePermit,
@@ -578,8 +596,8 @@ async fn handle_connection(
             handle_streaming_upload(
                 &mut stream,
                 state_dir.clone(),
-                blocking.clone(),
-                mutations.clone(),
+                capacity.blocking.clone(),
+                capacity.mutations.clone(),
                 timeout,
                 request.id,
                 header.clone(),
@@ -599,7 +617,8 @@ async fn handle_connection(
                     .to_owned();
                 let client = compatibility_http_client(timeout)?;
                 let bytes = fetch_canary(&client, &url).await?;
-                let _mutation_permit = mutations
+                let _mutation_permit = capacity
+                    .mutations
                     .clone()
                     .acquire_owned()
                     .await
@@ -622,45 +641,62 @@ async fn handle_connection(
             write_response(&mut stream, &response, timeout).await?;
             continue;
         }
-        let mutation_permit =
-            if request.operation.is_mutation() && !request.operation.is_device_pairing_wait() {
-                match tokio::time::timeout(timeout, mutations.clone().acquire_owned()).await {
-                    Ok(Ok(permit)) => Some(permit),
-                    Ok(Err(_)) => return Err("agent mutation gate closed".into()),
-                    Err(_) => {
-                        write_response(
-                            &mut stream,
-                            &Response::error(
-                                request.id,
-                                ErrorCode::Busy,
-                                "another mutation is still in progress",
-                            ),
-                            timeout,
-                        )
-                        .await?;
-                        continue;
-                    }
-                }
-            } else {
-                None
-            };
-        let permit = match tokio::time::timeout(timeout, blocking.clone().acquire_owned()).await {
-            Ok(Ok(permit)) => permit,
-            Ok(Err(_)) => return Err("agent worker pool closed".into()),
-            Err(_) => {
-                write_response(
-                    &mut stream,
-                    &Response::error(
-                        request.id,
-                        ErrorCode::Busy,
-                        "agent worker pool is saturated",
-                    ),
-                    timeout,
-                )
-                .await?;
-                continue;
+        if request.operation.is_chat_poll_wait() {
+            if handle_chat_poll(
+                &mut stream,
+                state_dir.clone(),
+                capacity.chat_polling.clone(),
+                capacity.active_chat_polls.clone(),
+                timeout,
+                request,
+            )
+            .await?
+            {
+                return Ok(());
             }
+            continue;
+        }
+        let mutation_permit = if request.operation.is_mutation()
+            && !request.operation.is_device_pairing_wait()
+        {
+            match tokio::time::timeout(timeout, capacity.mutations.clone().acquire_owned()).await {
+                Ok(Ok(permit)) => Some(permit),
+                Ok(Err(_)) => return Err("agent mutation gate closed".into()),
+                Err(_) => {
+                    write_response(
+                        &mut stream,
+                        &Response::error(
+                            request.id,
+                            ErrorCode::Busy,
+                            "another mutation is still in progress",
+                        ),
+                        timeout,
+                    )
+                    .await?;
+                    continue;
+                }
+            }
+        } else {
+            None
         };
+        let permit =
+            match tokio::time::timeout(timeout, capacity.blocking.clone().acquire_owned()).await {
+                Ok(Ok(permit)) => permit,
+                Ok(Err(_)) => return Err("agent worker pool closed".into()),
+                Err(_) => {
+                    write_response(
+                        &mut stream,
+                        &Response::error(
+                            request.id,
+                            ErrorCode::Busy,
+                            "agent worker pool is saturated",
+                        ),
+                        timeout,
+                    )
+                    .await?;
+                    continue;
+                }
+            };
         let state = state_dir.clone();
         let operation_ready = ready.clone();
         let operation_timeout = if request.operation.is_device_pairing_wait() {
@@ -692,6 +728,192 @@ async fn handle_connection(
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct ChatPollKey {
+    profile: String,
+    account: String,
+}
+impl From<&TeamStoreRef> for ChatPollKey {
+    fn from(store: &TeamStoreRef) -> Self {
+        Self {
+            profile: store.profile.clone(),
+            account: store.account_alias.clone(),
+        }
+    }
+}
+struct ActiveChatPollGuard {
+    polls: Arc<Mutex<std::collections::HashSet<ChatPollKey>>>,
+    key: ChatPollKey,
+}
+impl Drop for ActiveChatPollGuard {
+    fn drop(&mut self) {
+        if let Ok(mut polls) = self.polls.lock() {
+            polls.remove(&self.key);
+        }
+    }
+}
+
+#[cfg(unix)]
+async fn handle_chat_poll(
+    stream: &mut tokio::net::UnixStream,
+    state_dir: PathBuf,
+    polling: Arc<Semaphore>,
+    active: Arc<Mutex<std::collections::HashSet<ChatPollKey>>>,
+    timeout: Duration,
+    request: Request,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    let Operation::Chat { store, action } = &request.operation else {
+        return Err("chat poll dispatch received another operation".into());
+    };
+    if !action.validate() {
+        write_response(
+            stream,
+            &Response::error(
+                request.id,
+                ErrorCode::InvalidRequest,
+                "invalid chat poll request",
+            ),
+            timeout,
+        )
+        .await?;
+        return Ok(false);
+    }
+    let foks_agent_proto::chat::ChatAction::PollInbox {
+        since,
+        timeout_milliseconds,
+    } = action
+    else {
+        return Err("chat poll dispatch received another action".into());
+    };
+    let since =
+        foks_agent_proto::chat::chat_sequence(since).ok_or("chat poll cursor is invalid")?;
+    let poll_timeout = *timeout_milliseconds;
+    let key = ChatPollKey::from(store);
+    let inserted = active
+        .lock()
+        .map_err(|_| "chat poll registry is unavailable")?
+        .insert(key.clone());
+    if !inserted {
+        write_response(
+            stream,
+            &Response::error(
+                request.id,
+                ErrorCode::Busy,
+                "chat synchronization is already active for this team",
+            ),
+            timeout,
+        )
+        .await?;
+        return Ok(false);
+    }
+    let guard = ActiveChatPollGuard { polls: active, key };
+    let permit = match tokio::time::timeout(timeout, polling.acquire_owned()).await {
+        Ok(Ok(permit)) => permit,
+        Ok(Err(_)) => return Err("agent chat poll pool closed".into()),
+        Err(_) => {
+            write_response(
+                stream,
+                &Response::error(
+                    request.id,
+                    ErrorCode::Busy,
+                    "agent chat poll pool is saturated",
+                ),
+                timeout,
+            )
+            .await?;
+            return Ok(false);
+        }
+    };
+    let cancellation = CancellationToken::new();
+    let worker_cancellation = cancellation.clone();
+    let store = store.clone();
+    let id = request.id;
+    let mut task = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let _guard = guard;
+        match run_chat_poll(
+            &state_dir,
+            store,
+            since,
+            poll_timeout,
+            timeout,
+            worker_cancellation,
+        ) {
+            Ok(value) => Response::success(id, value),
+            Err(error) => dispatch_error_response(id, error.as_ref()),
+        }
+    });
+    let deadline = tokio::time::Instant::now() + CHAT_POLL_TIMEOUT;
+    let (response, close) = loop {
+        tokio::select! {
+            result = &mut task => {
+                let response = result.unwrap_or_else(|error| Response::error(
+                    id,
+                    ErrorCode::OperationFailed,
+                    format!("agent chat poll worker failed: {error}"),
+                ));
+                break (response, false);
+            }
+            _ = tokio::time::sleep_until(deadline) => {
+                cancellation.cancel();
+                let _ = tokio::time::timeout(CANCELLATION_GRACE, &mut task).await;
+                break (Response::error(
+                    id,
+                    ErrorCode::DeadlineExceeded,
+                    "chat poll operation deadline exceeded",
+                ), true);
+            }
+            result = stream.readable() => {
+                result?;
+                let mut byte = [0; 1];
+                match stream.try_read(&mut byte) {
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+                    Ok(_) | Err(_) => {
+                        cancellation.cancel();
+                        let _ = tokio::time::timeout(CANCELLATION_GRACE, &mut task).await;
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    };
+    write_response(stream, &response, timeout).await?;
+    Ok(close)
+}
+
+fn run_chat_poll(
+    state_dir: &Path,
+    store: TeamStoreRef,
+    since: u64,
+    timeout_milliseconds: u64,
+    timeout: Duration,
+    cancellation: CancellationToken,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let registry = ProfileRegistry::open(state_dir)?;
+    let session = ProfileSession::open_with_control(
+        &registry,
+        &store.profile,
+        timeout,
+        cancellation.clone(),
+    )?;
+    let context = with_vault(state_dir, &session, |session, vault| {
+        chat::prepare_poll(session, vault, &store)
+    })?;
+    drop(session);
+    drop(registry);
+    let reply = chat::poll(context, since, timeout_milliseconds)?;
+    let registry = ProfileRegistry::open(state_dir)?;
+    let session =
+        ProfileSession::open_with_control(&registry, &store.profile, timeout, cancellation)?;
+    let (_, current_scope) = with_vault(state_dir, &session, |session, vault| {
+        chat::resolve_scope(session, vault, &store)
+    })?;
+    if current_scope != reply.scope {
+        return Err(foks_client::Error::ChatIntegrity("chat poll scope changed").into());
+    }
+    Ok(serde_json::to_value(reply)?)
 }
 
 enum UploadMessage {
@@ -3950,14 +4172,14 @@ fn go_candidate_for_session(
     Ok(candidate)
 }
 
-fn with_vault(
+fn with_vault<T>(
     state_dir: &Path,
     session: &ProfileSession,
     operation: impl FnOnce(
         &CheckedProfileSession<'_>,
         &mut AccountVault<'_>,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>>,
-) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<T, Box<dyn std::error::Error>>,
+) -> Result<T, Box<dyn std::error::Error>> {
     let credentials = ClientCredentials::open(state_dir)?;
     checked_session(&credentials, session, |session| {
         let master = credentials.master_key()?;

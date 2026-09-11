@@ -4,8 +4,11 @@ use crate::{
     derive_mutation_key, AccountVault, Capability, CheckedProfileSession, ClientCredentials, Error,
     Result,
 };
-use foks_client::{ChatChannels, ChatHistory, ChatSession, EncryptedFileMutationStore};
-use foks_client_db::{ChatOperation, ChatSubmission, HardStateStore};
+use foks_client::{
+    ChatChannels, ChatHistory, ChatInbox, ChatSession, ChatSyncResult, EncryptedFileMutationStore,
+    RealtimeConnection,
+};
+use foks_client_db::{ChatOperation, ChatSubmission, HardStateStore, SoftStateStore};
 use foks_proto::{EntityId, RtChannelId, RtChannelTier};
 
 pub struct ChatChannelInput<'a> {
@@ -93,6 +96,13 @@ impl CheckedProfileSession<'_> {
         )?;
         operation(&mut chat)
     }
+    pub fn chat_poll_connection(
+        &self,
+        team_alias: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<RealtimeConnection> {
+        self.with_chat(team_alias, vault, |chat| Ok(chat.poll_connection()?))
+    }
     pub fn list_chat_channels(
         &self,
         team_alias: &str,
@@ -100,6 +110,35 @@ impl CheckedProfileSession<'_> {
     ) -> Result<ChatChannels> {
         self.with_chat(team_alias, vault, |chat| {
             Ok(chat.list_channels(&mut chat.connection()?)?)
+        })
+    }
+    pub fn sync_chat_inbox(
+        &self,
+        team_alias: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<ChatSyncResult> {
+        self.with_chat(team_alias, vault, |chat| {
+            let mut soft = SoftStateStore::open(&self.paths.soft_database)?;
+            Ok(chat.sync_inbox(&mut chat.connection()?, &mut soft)?)
+        })
+    }
+    pub fn list_chat_inbox(
+        &self,
+        team_alias: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<ChatInbox> {
+        Ok(self.sync_chat_inbox(team_alias, vault)?.inbox)
+    }
+    pub fn mark_chat_read(
+        &self,
+        team_alias: &str,
+        channel: RtChannelId,
+        sequence: u64,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<()> {
+        self.with_chat(team_alias, vault, |chat| {
+            let mut soft = SoftStateStore::open(&self.paths.soft_database)?;
+            Ok(chat.mark_read(&mut chat.connection()?, &mut soft, channel, sequence)?)
         })
     }
     pub fn read_recent_chat(
@@ -323,6 +362,10 @@ mod tests {
             session.attempt_chat_operation(&credentials,"chat-team",&send.id,&mut vault,&master)?;
             let recent=session.read_recent_chat("chat-team",RtChannelId(op.scope.channel),10,&mut vault)?;
             assert!(matches!(&recent.messages[0].content,foks_client::ChatContent::Text(text) if text.as_str()=="hello from the app"));
+            let inbox=session.sync_chat_inbox("chat-team",&mut vault)?;
+            assert_eq!(inbox.inbox.conversations.len(),1);
+            assert_eq!(inbox.inbox.conversations[0].unread,0);
+            session.mark_chat_read("chat-team",RtChannelId(op.scope.channel),recent.messages[0].message.sequence,&mut vault)?;
             assert!(session.list_pending_chat("chat-team",&mut vault)?.is_empty());
             let submission = super::chat_submission(&master, [7; 16], b"offline replay");
             let prepared = session.prepare_chat_send_submission("chat-team", RtChannelId(op.scope.channel), "offline replay", &mut vault, &master, Some(&submission))?;

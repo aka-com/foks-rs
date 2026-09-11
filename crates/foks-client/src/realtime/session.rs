@@ -27,11 +27,13 @@ pub struct ChatSession<'a> {
     pub(super) team_id: EntityId,
     pub(super) role: Role,
 }
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChatChannel {
     pub metadata: RtChannelMetadata,
     pub name: RtText,
     pub description: Option<RtText>,
 }
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChatChannels {
     pub host: RtHostId,
     pub actor: RtUserId,
@@ -63,6 +65,10 @@ impl FoksClient {
 impl ChatSession<'_> {
     pub fn connection(&self) -> Result<RealtimeConnection> {
         self.client.realtime_connection(self.host, self.credential)
+    }
+    pub fn poll_connection(&self) -> Result<RealtimeConnection> {
+        self.client
+            .realtime_poll_connection(self.host, self.credential)
     }
     pub(super) fn refresh(&mut self) -> Result<()> {
         // Drop prior private keys before refreshing, including on failure.
@@ -107,7 +113,7 @@ impl ChatSession<'_> {
             "team and actor roots changed during refresh",
         ))
     }
-    fn team(&self) -> Result<&AuthenticatedTeamOutcome> {
+    pub(super) fn team(&self) -> Result<&AuthenticatedTeamOutcome> {
         self.team.as_ref().ok_or(Error::ChatOperationState(
             "chat operation is not authenticated",
         ))
@@ -162,6 +168,36 @@ impl ChatSession<'_> {
         }
         Ok(())
     }
+    pub(super) fn open_channel(&self, mut md: RtChannelMetadata) -> Result<ChatChannel> {
+        self.validate_channel(&md)?;
+        let name = self
+            .keys(md.name.key)?
+            .open_text(RtKeyType::ChannelName, &md.name.boxed)?;
+        let readable = self.role >= md.roles.read && !md.unreadable;
+        let description = if readable {
+            md.description
+                .as_ref()
+                .map(|box_| {
+                    self.keys(box_.key)?
+                        .open_text(RtKeyType::ChannelDescription, &box_.boxed)
+                        .map_err(Error::from)
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        if !readable {
+            md.description = None;
+            md.last_message = None;
+            md.mtime = md.ctime;
+            md.unreadable = true;
+        }
+        Ok(ChatChannel {
+            metadata: md,
+            name,
+            description,
+        })
+    }
     pub fn list_channels(&mut self, rpc: &mut impl ChatTransport) -> Result<ChatChannels> {
         self.refresh()?;
         self.list_current_channels(rpc)
@@ -194,34 +230,7 @@ impl ChatSession<'_> {
             {
                 return Err(Error::ChatIntegrity("duplicate channel or invalid version"));
             }
-            let name = self
-                .keys(md.name.key)?
-                .open_text(RtKeyType::ChannelName, &md.name.boxed)?;
-            let readable = self.role >= md.roles.read && !md.unreadable;
-            let description = if readable {
-                md.description
-                    .as_ref()
-                    .map(|b| {
-                        self.keys(b.key)?
-                            .open_text(RtKeyType::ChannelDescription, &b.boxed)
-                            .map_err(Error::from)
-                    })
-                    .transpose()?
-            } else {
-                None
-            };
-            let mut md = md;
-            if !readable {
-                md.description = None;
-                md.last_message = None;
-                md.mtime = md.ctime;
-                md.unreadable = true;
-            }
-            channels.push(ChatChannel {
-                metadata: md,
-                name,
-                description,
-            });
+            channels.push(self.open_channel(md)?);
         }
         Ok(ChatChannels {
             host: RtHostId::new(self.host.host_id().clone())?,
