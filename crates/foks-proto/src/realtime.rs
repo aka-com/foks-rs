@@ -496,6 +496,40 @@ rt_struct!(RtChannelMetadata { id: RtChannelId, team: RtTeamId, app: RtAppId, se
 
 rt_struct!(RtChannelSet { version: u64, channels: Vec<RtChannelMetadata>, mtime: u64 });
 
+rt_struct!(RtInboxKey { app: RtAppId });
+
+rt_struct!(RtChangedThreads {
+    app: RtAppId,
+    since: u64,
+    maximum: u64
+});
+
+rt_struct!(RtReadThrough {
+    channel: RtChannelId,
+    sequence: u64
+});
+
+rt_struct!(RtPollInbox {
+    app: RtAppId,
+    since: u64,
+    timeout_milliseconds: u64
+});
+
+rt_struct!(RtInboxPollResult {
+    bumped: bool,
+    inbox_version: u64
+});
+
+rt_struct!(RtInboxChannel {
+    metadata: RtChannelMetadata,
+    inbox_version: u64,
+    read_through: u64,
+    hidden: bool,
+    muted: bool
+});
+
+rt_struct!(RtInboxDelta { inbox_version: u64, app: RtAppId, channels: Vec<RtInboxChannel> });
+
 rt_struct!(RtSend {
     metadata: RtMessageMetadata,
     channel: RtChannelIdShort,
@@ -537,6 +571,18 @@ rt_struct!(RtSendArgument { send: RtSend });
 rt_struct!(RtGetThreadArgument {
     query: RtThreadQuery
 });
+
+rt_struct!(RtGetInboxVersionArgument { key: RtInboxKey });
+
+rt_struct!(RtGetChangedThreadsArgument {
+    query: RtChangedThreads
+});
+
+rt_struct!(RtReadThroughArgument {
+    read: RtReadThrough
+});
+
+rt_struct!(RtPollInboxArgument { poll: RtPollInbox });
 
 rt_struct!(RtSelectVhostArgument { host: RtHostId });
 

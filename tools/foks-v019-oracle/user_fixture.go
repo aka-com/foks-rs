@@ -383,6 +383,14 @@ func generatedWireResult(protocol rpc.ProtocolUniqueID, position rpc.Position, d
 		_, err = (rem.RealTimeClient{Cli: capture}).RtSend(ctx, rem.RTSendArg{})
 	case protocol == rem.RealTimeProtocolID && position == 4:
 		_, err = (rem.RealTimeClient{Cli: capture}).RtGetThread(ctx, rem.RTThreadQuery{})
+	case protocol == rem.RealTimeProtocolID && position == 5:
+		_, err = (rem.RealTimeClient{Cli: capture}).RtGetInboxVersion(ctx, rem.RTInboxKey{})
+	case protocol == rem.RealTimeProtocolID && position == 6:
+		_, err = (rem.RealTimeClient{Cli: capture}).RtGetChangedThreads(ctx, rem.RTGetChangedThreadsArg{})
+	case protocol == rem.RealTimeProtocolID && position == 7:
+		err = (rem.RealTimeClient{Cli: capture}).RtReadThrough(ctx, rem.RTReadThroughArg{})
+	case protocol == rem.RealTimeProtocolID && position == 8:
+		_, err = (rem.RealTimeClient{Cli: capture}).RtPollInbox(ctx, rem.RTPollInboxArg{})
 	case protocol == rem.RealTimeProtocolID && position == 9:
 		err = (rem.RealTimeClient{Cli: capture}).RtSelectVHost(ctx, proto.HostID{})
 	case protocol == rem.RealTimeProtocolID && position == 10:

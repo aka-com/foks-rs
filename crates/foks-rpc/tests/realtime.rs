@@ -14,8 +14,8 @@ fn request(position: u64) -> RealtimeRequest {
     RealtimeRequest::decode_argument(position, call.argument()).unwrap()
 }
 #[test]
-fn all_six_methods_match_generated_go_frames_and_results() {
-    for position in [0, 2, 3, 4, 9, 10] {
+fn all_ten_methods_match_generated_go_frames_and_results() {
+    for position in [0, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
         let req = request(position);
         assert_eq!(req.position(), position);
         assert_eq!(
@@ -41,6 +41,9 @@ fn all_six_methods_match_generated_go_frames_and_results() {
             RealtimeResponse::Channels(v) => v.encoded().unwrap(),
             RealtimeResponse::Sent(v) => v.encoded().unwrap(),
             RealtimeResponse::Thread(v) => v.encoded().unwrap(),
+            RealtimeResponse::InboxVersion(v) => v.encoded().unwrap(),
+            RealtimeResponse::InboxDelta(v) => v.encoded().unwrap(),
+            RealtimeResponse::PollResult(v) => v.encoded().unwrap(),
             RealtimeResponse::Messages(v) => v.encoded().unwrap(),
         };
         assert_eq!(encoded, decoded);
@@ -98,6 +101,14 @@ fn bounds_and_optional_values_preserve_the_wire() {
     assert!(q.encoded().is_err());
     q.sequences.clear();
     assert_eq!(RtThreadQuery::decode(&q.encoded().unwrap()).unwrap(), q);
+    let RealtimeRequest::GetChangedThreads(arg) = request(6) else {
+        panic!()
+    };
+    assert_eq!(arg.query.since, 3);
+    let RealtimeRequest::PollInbox(arg) = request(8) else {
+        panic!()
+    };
+    assert_eq!(arg.poll.timeout_milliseconds, 25_000);
 }
 #[test]
 fn realtime_statuses_preserve_void_and_text_details() {
@@ -118,7 +129,7 @@ fn realtime_statuses_preserve_void_and_text_details() {
 
 #[test]
 fn realtime_rejects_bad_compatibility_headers() {
-    for position in [0, 2, 3, 4, 9, 10] {
+    for position in [0, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
         let mut wire = fixture(&format!("request-{position}.frame"));
         let version = wire.windows(4).position(|w| w == b"Vers").unwrap() + 4;
         wire[version] = 0;

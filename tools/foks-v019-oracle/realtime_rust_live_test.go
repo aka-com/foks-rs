@@ -106,6 +106,25 @@ func TestGoRealtimeAgainstRustServer(t *testing.T) {
 	if e != nil || receipt != replay {
 		t.Fatalf("replay mismatch: %+v %+v %v", receipt, replay, e)
 	}
+	inboxVersion, e := cli.RtGetInboxVersion(ctx, r.RTInboxKey{AppID: p.RTAppID_Chat})
+	if e != nil || inboxVersion < 3 {
+		t.Fatalf("inbox version: %d %v", inboxVersion, e)
+	}
+	delta, e := cli.RtGetChangedThreads(ctx, r.RTGetChangedThreadsArg{AppID: p.RTAppID_Chat, Max: 1})
+	if e != nil || len(delta.Channels) != 1 || delta.InboxVersion != inboxVersion {
+		t.Fatalf("inbox delta: %+v %v", delta, e)
+	}
+	if e = cli.RtReadThrough(ctx, r.RTReadThroughArg{ChannelID: nc.Chid, Seq: receipt.Seq}); e != nil {
+		t.Fatal(e)
+	}
+	poll, e := cli.RtPollInbox(ctx, r.RTPollInboxArg{AppID: p.RTAppID_Chat, Since: 0, Timeout: 1})
+	if e != nil || !poll.Bumped || poll.InboxVersion != inboxVersion {
+		t.Fatalf("stale poll: %+v %v", poll, e)
+	}
+	poll, e = cli.RtPollInbox(ctx, r.RTPollInboxArg{AppID: p.RTAppID_Chat, Since: inboxVersion, Timeout: 1})
+	if e != nil || poll.Bumped || poll.InboxVersion != inboxVersion {
+		t.Fatalf("timeout poll: %+v %v", poll, e)
+	}
 	recent, e := cli.RtGetThreadRecents(ctx, r.RtGetThreadRecentsArg{Ch: nc.Chid, Lim: 100})
 	if e != nil {
 		t.Fatal(e)

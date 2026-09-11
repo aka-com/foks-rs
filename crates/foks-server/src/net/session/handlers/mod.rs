@@ -120,6 +120,10 @@ pub(super) fn response(
         | RealTimeRtListAllChannelsForTeam
         | RealTimeRtSend
         | RealTimeRtGetThread
+        | RealTimeRtGetInboxVersion
+        | RealTimeRtGetChangedThreads
+        | RealTimeRtReadThrough
+        | RealTimeRtPollInbox
         | RealTimeRtSelectVHost
         | RealTimeRtGetThreadRecents => realtime::response(data, call, principal),
         RealTimeRtGetChannel
@@ -137,6 +141,14 @@ pub(super) async fn kex_receive_response(
     call: RoutedCall,
 ) -> Result<Vec<u8>, RpcStatus> {
     kex::receive_response(data, call).await
+}
+
+pub(super) async fn realtime_poll_response(
+    data: &ServerData,
+    call: RoutedCall,
+    certificate: Vec<u8>,
+) -> Result<Vec<u8>, RpcStatus> {
+    realtime::poll_response(data, call, certificate).await
 }
 
 #[cfg(test)]

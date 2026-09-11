@@ -266,6 +266,123 @@ pub(crate) fn realtime_text() {
             .as_slice(),
         b"hello back"
     );
+    let Response::InboxVersion(inbox_version) = reader
+        .call(&Request::GetInboxVersion(RtGetInboxVersionArgument {
+            key: RtInboxKey { app: RtAppId::Chat },
+        }))
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert!(inbox_version >= 3);
+    let Response::InboxDelta(delta) = reader
+        .call(&Request::GetChangedThreads(RtGetChangedThreadsArgument {
+            query: RtChangedThreads {
+                app: RtAppId::Chat,
+                since: 0,
+                maximum: 100,
+            },
+        }))
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(delta.inbox_version, inbox_version);
+    assert_eq!(
+        delta
+            .channels
+            .iter()
+            .find(|channel| channel.metadata.id == md.id)
+            .unwrap()
+            .read_through,
+        2
+    );
+    reader
+        .call(&Request::ReadThrough(RtReadThroughArgument {
+            read: RtReadThrough {
+                channel: md.id,
+                sequence: 2,
+            },
+        }))
+        .unwrap();
+    let Response::PollResult(poll) = reader
+        .call(&Request::PollInbox(RtPollInboxArgument {
+            poll: RtPollInbox {
+                app: RtAppId::Chat,
+                since: 0,
+                timeout_milliseconds: 1,
+            },
+        }))
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert!(poll.bumped);
+    assert_eq!(poll.inbox_version, inbox_version);
+    let Response::PollResult(poll) = reader
+        .call(&Request::PollInbox(RtPollInboxArgument {
+            poll: RtPollInbox {
+                app: RtAppId::Chat,
+                since: inbox_version,
+                timeout_milliseconds: 1,
+            },
+        }))
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert!(!poll.bumped);
+    assert_eq!(poll.inbox_version, inbox_version);
+    let mut poller = client
+        .foks()
+        .realtime_connection(&member_host.pinned, &member.credential)
+        .unwrap();
+    let waiting = std::thread::spawn(move || {
+        poller
+            .call(&Request::PollInbox(RtPollInboxArgument {
+                poll: RtPollInbox {
+                    app: RtAppId::Chat,
+                    since: inbox_version,
+                    timeout_milliseconds: 5_000,
+                },
+            }))
+            .unwrap()
+    });
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let mut third_noncer = noncer.clone();
+    third_noncer.metadata.previous_id = third_noncer.metadata.id;
+    third_noncer.metadata.previous_sequence = 2;
+    third_noncer.metadata.id = RtMessageId([0x65; 16]);
+    third_noncer.sender = Some(
+        FqParty::new(
+            owner.credential.uid.clone(),
+            fixture.host().host_id().clone(),
+        )
+        .unwrap(),
+    );
+    writer
+        .call(&Request::Send(RtSendArgument {
+            send: RtSend {
+                metadata: third_noncer.metadata.clone(),
+                channel: md.id.short(),
+                wrapper: RtMessageWrapper::Encrypted(RtMessageBox {
+                    key: RoleAndGeneration {
+                        role: Role::member(0),
+                        generation: 1,
+                    },
+                    ciphertext: data_keys
+                        .seal_basic_message(&third_noncer, b"wake poller")
+                        .unwrap(),
+                }),
+                expected_previous_sequence: 2,
+            },
+        }))
+        .unwrap();
+    let Response::PollResult(poll) = waiting.join().unwrap() else {
+        panic!()
+    };
+    assert!(poll.bumped);
+    assert_eq!(poll.inbox_version, inbox_version + 1);
     // A committed member removal must be honored on an already-open RT
     // connection, and exact old-generation replay remains available to owner.
     let rotated_min = SecretSeed::new([0x71; 32]);
@@ -354,7 +471,7 @@ pub(crate) fn realtime_text() {
     let Response::Messages(messages) = writer.call(&recent).unwrap() else {
         panic!()
     };
-    assert_eq!(messages.messages.len(), 2);
+    assert_eq!(messages.messages.len(), 3);
     drop(writer);
     drop(restarted);
 }

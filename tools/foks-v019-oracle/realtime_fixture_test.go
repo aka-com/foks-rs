@@ -140,6 +140,10 @@ func TestRealtimeFixtures(t *testing.T) {
 	emit("channel", &md)
 	msg := r.RTMsg{Md: nc.Md, Mw: mw, Seq: 1, Sender: &user, InsertTime: 1700000000001}
 	emit("message", &msg)
+	inboxVersion := p.RTInboxVersion(5)
+	inboxChannel := r.RTInboxChannel{Md: md, InboxVersion: 4, ReadThrough: 1, Hidden: false, Muted: true}
+	inboxDelta := r.RTInboxDelta{InboxVersion: inboxVersion, AppID: p.RTAppID_Chat, Channels: []r.RTInboxChannel{inboxChannel}}
+	pollResult := p.RTInboxPollRes{Bumped: true, InboxVersion: inboxVersion}
 	cases := []struct {
 		position rpc.Position
 		arg      interface{}
@@ -149,6 +153,10 @@ func TestRealtimeFixtures(t *testing.T) {
 		{2, (&r.RtListAllChannelsForTeamArg{Team: team, AppID: p.RTAppID_Chat, Last: 0}).Export(), (&r.RTChannelSet{Vers: 1, Lst: []r.RTChannelMetadata{md}, Mtime: 1700000000001}).Export()},
 		{3, (&r.RtSendArg{Rtarg: r.RTSendArg{Md: nc.Md, Chid: chid.Short(), Mw: mw}}).Export(), (&r.RTSendRes{Seq: 1, InsertTime: 1700000000001}).Export()},
 		{4, (&r.RtGetThreadArg{Q: r.RTThreadQuery{ChannelID: chid, Bookends: []r.RTThreadRangeBookends{{Start: 3, End: 1}}, Seqs: []p.RTMsgSeq{1, 2}}}).Export(), (&r.RTThreadPage{RangeMsgs: []r.RTMsgList{{Lst: []r.RTMsg{msg}}}, SeqMsgs: []r.RTMsg{msg}}).Export()},
+		{5, (&r.RtGetInboxVersionArg{Key: r.RTInboxKey{AppID: p.RTAppID_Chat}}).Export(), inboxVersion.Export()},
+		{6, (&r.RtGetChangedThreadsArg{Rtarg: r.RTGetChangedThreadsArg{AppID: p.RTAppID_Chat, Since: 3, Max: 100}}).Export(), inboxDelta.Export()},
+		{7, (&r.RtReadThroughArg{Rtarg: r.RTReadThroughArg{ChannelID: chid, Seq: 1}}).Export(), nil},
+		{8, (&r.RtPollInboxArg{Rtarg: r.RTPollInboxArg{AppID: p.RTAppID_Chat, Since: 4, Timeout: p.DurationMilli(25000)}}).Export(), pollResult.Export()},
 		{9, (&r.RTSelectVhost{Host: host}).Export(), nil},
 		{10, (&r.RtGetThreadRecentsArg{Ch: chid, StopAt: 0, Lim: 100}).Export(), (&r.RTMsgList{Lst: []r.RTMsg{msg}}).Export()},
 	}

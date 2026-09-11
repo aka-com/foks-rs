@@ -1933,6 +1933,74 @@ coverage = ["realtime_text"]
 [[route]]
 protocol = "RealTime"
 protocol_id = 0x4f58e7d4
+method = "rtGetInboxVersion"
+position = 5
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtGetInboxVersionArgument"
+result = "RtInboxVersion"
+upstream_result = "lib.RTInboxVersion"
+argument_header = true
+result_header = true
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_not_found"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["realtime_text"]
+
+[[route]]
+protocol = "RealTime"
+protocol_id = 0x4f58e7d4
+method = "rtGetChangedThreads"
+position = 6
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtGetChangedThreadsArgument"
+result = "RtInboxDelta"
+upstream_result = "RTInboxDelta"
+argument_header = true
+result_header = true
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_not_found"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["realtime_text"]
+
+[[route]]
+protocol = "RealTime"
+protocol_id = 0x4f58e7d4
+method = "rtReadThrough"
+position = 7
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtReadThroughArgument"
+result = "Void"
+upstream_result = "void"
+argument_header = true
+result_header = true
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_not_found"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["realtime_text"]
+
+[[route]]
+protocol = "RealTime"
+protocol_id = 0x4f58e7d4
+method = "rtPollInbox"
+position = 8
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtPollInboxArgument"
+result = "RtInboxPollResult"
+upstream_result = "lib.RTInboxPollRes"
+argument_header = true
+result_header = true
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_not_found"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["realtime_text"]
+
+[[route]]
+protocol = "RealTime"
+protocol_id = 0x4f58e7d4
 method = "rtSelectVHost"
 position = 9
 listeners = ["authenticated"]

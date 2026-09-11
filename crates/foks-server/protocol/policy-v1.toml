@@ -1592,6 +1592,58 @@ coverage = ["realtime_text"]
 
 [[route]]
 protocol = "RealTime"
+method = "rtGetInboxVersion"
+position_constant = "RT_GET_INBOX_VERSION_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtGetInboxVersionArgument"
+result = "RtInboxVersion"
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_not_found"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["realtime_text"]
+
+[[route]]
+protocol = "RealTime"
+method = "rtGetChangedThreads"
+position_constant = "RT_GET_CHANGED_THREADS_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtGetChangedThreadsArgument"
+result = "RtInboxDelta"
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_not_found"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["realtime_text"]
+
+[[route]]
+protocol = "RealTime"
+method = "rtReadThrough"
+position_constant = "RT_READ_THROUGH_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtReadThroughArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_not_found"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["realtime_text"]
+
+[[route]]
+protocol = "RealTime"
+method = "rtPollInbox"
+position_constant = "RT_POLL_INBOX_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtPollInboxArgument"
+result = "RtInboxPollResult"
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_not_found"]
+max_request_bytes = 1048576
+supported = true
+coverage = ["realtime_text"]
+
+[[route]]
+protocol = "RealTime"
 method = "rtSelectVHost"
 position_constant = "RT_SELECT_VHOST_METHOD_POSITION"
 listeners = ["authenticated"]

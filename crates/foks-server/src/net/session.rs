@@ -1374,6 +1374,10 @@ pub(crate) async fn serve(
             &routed,
             Ok(call) if call.route.id == crate::rpc::RouteId::KexReceive
         );
+        let realtime_poll = matches!(
+            &routed,
+            Ok(call) if call.route.id == crate::rpc::RouteId::RealTimeRtPollInbox
+        );
         let outcome = if kex_receive {
             // Go-compatible KEX receives can remain open for up to an hour.
             // Await the relay directly rather than occupying a blocking worker;
@@ -1417,6 +1421,54 @@ pub(crate) async fn serve(
                         let _ = result;
                         break;
                     }
+                };
+                RequestOutcome {
+                    response,
+                    route,
+                    disconnect_before_response: false,
+                }
+            }
+        } else if realtime_poll {
+            let _request_memory = request_memory;
+            let call = match routed {
+                Ok(call) => call,
+                Err(_) => unreachable!("realtime poll was recognized above"),
+            };
+            let route = Some(call.route);
+            if service_data.should_disconnect(
+                crate::SessionFaultPoint::BeforeDurableMutation,
+                call.route.protocol,
+                call.route.method,
+            ) {
+                RequestOutcome {
+                    response: Vec::new(),
+                    route,
+                    disconnect_before_response: true,
+                }
+            } else {
+                let response = if let Some(certificate) = certificate {
+                    tokio::select! {
+                        result = handlers::realtime_poll_response(
+                            service_data.as_ref(),
+                            call,
+                            certificate,
+                        ) => {
+                            match result {
+                                Ok(response) => response,
+                                Err(status) => encode_status_response_at(&status, sequence)?,
+                            }
+                        }
+                        result = stream.get_ref().0.readable() => {
+                            let _ = result;
+                            return Ok(());
+                        }
+                        result = stop.changed() => {
+                            let _ = result;
+                            break;
+                        }
+                    }
+                } else {
+                    encode_status_response_at(&permission_denied(), sequence)?
                 };
                 RequestOutcome {
                     response,

@@ -20,6 +20,7 @@ pub struct RealtimeActor {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RealtimeWakeTarget {
+    pub host: Vec<u8>,
     pub uid: Vec<u8>,
     pub app: RtAppId,
 }
@@ -65,20 +66,22 @@ fn check_actor(c: &Connection, a: &RealtimeActor, now: u64) -> Result<()> {
     }
     Ok(())
 }
-fn authorize(c: &Connection, a: &RealtimeActor, team: &[u8], now: u64) -> Result<Role> {
-    check_actor(c, a, now)?;
-    let member = c
-        .query_row(
-            "SELECT m.role_type, m.visibility FROM team_members m
+fn membership_role(c: &Connection, a: &RealtimeActor, team: &[u8]) -> Result<Option<Role>> {
+    c.query_row(
+        "SELECT m.role_type, m.visibility FROM team_members m
         JOIN teams t ON t.team_id=m.team_id WHERE m.team_id=?1 AND t.team_kind=3
         AND t.host_id=?2 AND m.party_id=?3 AND m.source_role_type=3 AND m.source_visibility=0
         AND (m.scoped_host_id IS NULL OR m.scoped_host_id=?2)",
-            params![team, a.host, a.uid],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
-    let (kind, visibility) = member.ok_or(Error::AuthorizationChanged)?;
-    role(kind, visibility)
+        params![team, a.host, a.uid],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()?
+    .map(|(kind, visibility)| role(kind, visibility))
+    .transpose()
+}
+fn authorize(c: &Connection, a: &RealtimeActor, team: &[u8], now: u64) -> Result<Role> {
+    check_actor(c, a, now)?;
+    membership_role(c, a, team)?.ok_or(Error::AuthorizationChanged)
 }
 fn floor(md: &RtChannelMetadata) -> Result<Role> {
     match md.tier {
@@ -238,11 +241,79 @@ fn stamp(
             ON CONFLICT(uid,channel_id) DO UPDATE SET inbox_version=excluded.inbox_version, read_through=MAX(read_through,excluded.read_through)",
             params![uid,md.id.0.as_slice(),next,read])?;
         wake.push(RealtimeWakeTarget {
+            host: a.host.clone(),
             uid,
             app: RtAppId::Chat,
         });
     }
     Ok(wake)
+}
+
+fn next_inbox_version(c: &Connection, uid: &[u8], app: RtAppId) -> Result<u64> {
+    c.execute(
+        "INSERT INTO rt_user_inboxes(uid,app_id,version) VALUES (?1,?2,0) ON CONFLICT DO NOTHING",
+        params![uid, app as i64],
+    )?;
+    let old: i64 = c.query_row(
+        "SELECT version FROM rt_user_inboxes WHERE uid=?1 AND app_id=?2",
+        params![uid, app as i64],
+        |r| r.get(0),
+    )?;
+    let next = old.checked_add(1).ok_or(Error::IntegerRange)?;
+    c.execute(
+        "UPDATE rt_user_inboxes SET version=?3 WHERE uid=?1 AND app_id=?2",
+        params![uid, app as i64, next],
+    )?;
+    crate::error::unsigned(next)
+}
+
+fn remove_user_channel(
+    c: &Connection,
+    uid: &[u8],
+    app: RtAppId,
+    channel: RtChannelId,
+) -> Result<bool> {
+    let removed = c.execute(
+        "DELETE FROM rt_user_channels WHERE uid=?1 AND app_id=?2 AND channel_id=?3",
+        params![uid, app as i64, channel.0.as_slice()],
+    )?;
+    if removed == 0 {
+        return Ok(false);
+    }
+    next_inbox_version(c, uid, app)?;
+    Ok(true)
+}
+
+fn insert_user_channel(
+    c: &Connection,
+    uid: &[u8],
+    app: RtAppId,
+    channel: RtChannelId,
+    read_through: u64,
+) -> Result<bool> {
+    let exists = c
+        .query_row(
+            "SELECT 1 FROM rt_user_channels WHERE uid=?1 AND channel_id=?2",
+            params![uid, channel.0.as_slice()],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if exists {
+        return Ok(false);
+    }
+    let version = next_inbox_version(c, uid, app)?;
+    c.execute(
+        "INSERT INTO rt_user_channels(uid,app_id,channel_id,inbox_version,read_through) VALUES (?1,?2,?3,?4,?5)",
+        params![
+            uid,
+            app as i64,
+            channel.0.as_slice(),
+            sql_integer(version)?,
+            sql_integer(read_through)?
+        ],
+    )?;
+    Ok(true)
 }
 
 impl Database {
@@ -451,11 +522,256 @@ impl Database {
             wake,
         })
     }
+
+    pub fn rt_reconcile_inbox(
+        &mut self,
+        actor: &RealtimeActor,
+        app: RtAppId,
+        now: u64,
+    ) -> Result<RealtimeCommit<()>> {
+        if app != RtAppId::Chat {
+            return Err(Error::Invalid("realtime app"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        check_actor(&tx, actor, now)?;
+        let channels = {
+            let mut query = tx.prepare(
+                "SELECT metadata,last_message FROM rt_channels WHERE app_id=?1 ORDER BY channel_id LIMIT ?2",
+            )?;
+            let rows = query.query_map(
+                params![app as i64, (Limits::INBOX_RECONCILE_CHANNELS + 1) as i64],
+                |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Option<Vec<u8>>>(1)?)),
+            )?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        if channels.len() > Limits::INBOX_RECONCILE_CHANNELS {
+            return Err(Error::Capacity("realtime inbox reconciliation"));
+        }
+        let mut changed = false;
+        for (bytes, activity) in channels {
+            let md = project_channel(&bytes, activity.as_deref())?;
+            let readable = match membership_role(&tx, actor, md.team.entity().as_bytes())? {
+                Some(access) => ChannelPolicy::new(&md)?.can_read(access),
+                None => false,
+            };
+            changed |= if readable {
+                insert_user_channel(&tx, &actor.uid, app, md.id, 0)?
+            } else {
+                remove_user_channel(&tx, &actor.uid, app, md.id)?
+            };
+        }
+        tx.commit()?;
+        Ok(RealtimeCommit {
+            value: (),
+            wake: changed
+                .then(|| RealtimeWakeTarget {
+                    host: actor.host.clone(),
+                    uid: actor.uid.clone(),
+                    app,
+                })
+                .into_iter()
+                .collect(),
+        })
+    }
+
+    pub fn rt_read_through(
+        &mut self,
+        actor: &RealtimeActor,
+        arg: &RtReadThroughArgument,
+        now: u64,
+    ) -> Result<RealtimeCommit<()>> {
+        proto(arg.validate())?;
+        if arg.read.sequence == 0 {
+            return Err(Error::Invalid("realtime read sequence"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let md = channel(&tx, &arg.read.channel.0)?;
+        require_read(&tx, actor, &md, now)?;
+        let message_exists = tx
+            .query_row(
+                "SELECT 1 FROM rt_messages WHERE channel_id=?1 AND sequence=?2",
+                params![
+                    arg.read.channel.0.as_slice(),
+                    sql_integer(arg.read.sequence)?
+                ],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !message_exists {
+            return Err(Error::NotFound("realtime message"));
+        }
+        let current: Option<i64> = tx
+            .query_row(
+                "SELECT read_through FROM rt_user_channels WHERE uid=?1 AND channel_id=?2",
+                params![actor.uid, arg.read.channel.0.as_slice()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let changed = match current {
+            None => insert_user_channel(
+                &tx,
+                &actor.uid,
+                RtAppId::Chat,
+                arg.read.channel,
+                arg.read.sequence,
+            )?,
+            Some(current) if arg.read.sequence > crate::error::unsigned(current)? => {
+                let version = next_inbox_version(&tx, &actor.uid, RtAppId::Chat)?;
+                tx.execute(
+                    "UPDATE rt_user_channels SET inbox_version=?3,read_through=?4 WHERE uid=?1 AND channel_id=?2",
+                    params![
+                        actor.uid,
+                        arg.read.channel.0.as_slice(),
+                        sql_integer(version)?,
+                        sql_integer(arg.read.sequence)?
+                    ],
+                )?;
+                true
+            }
+            Some(_) => false,
+        };
+        tx.commit()?;
+        Ok(RealtimeCommit {
+            value: (),
+            wake: changed
+                .then(|| RealtimeWakeTarget {
+                    host: actor.host.clone(),
+                    uid: actor.uid.clone(),
+                    app: RtAppId::Chat,
+                })
+                .into_iter()
+                .collect(),
+        })
+    }
 }
 
 impl ReadSnapshot<'_> {
     pub fn rt_check_actor(&self, actor: &RealtimeActor, now: u64) -> Result<()> {
         check_actor(self.connection(), actor, now)
+    }
+    pub fn rt_inbox_version(&self, actor: &RealtimeActor, app: RtAppId, now: u64) -> Result<u64> {
+        if app != RtAppId::Chat {
+            return Err(Error::Invalid("realtime app"));
+        }
+        check_actor(self.connection(), actor, now)?;
+        self.connection()
+            .query_row(
+                "SELECT version FROM rt_user_inboxes WHERE uid=?1 AND app_id=?2",
+                params![actor.uid, app as i64],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(crate::error::unsigned)
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+    pub fn rt_changed_threads(
+        &self,
+        actor: &RealtimeActor,
+        arg: &RtGetChangedThreadsArgument,
+        now: u64,
+    ) -> Result<RtInboxDelta> {
+        proto(arg.validate())?;
+        if arg.query.app != RtAppId::Chat {
+            return Err(Error::Invalid("realtime app"));
+        }
+        let c = self.connection();
+        check_actor(c, actor, now)?;
+        let head = c
+            .query_row(
+                "SELECT version FROM rt_user_inboxes WHERE uid=?1 AND app_id=?2",
+                params![actor.uid, arg.query.app as i64],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(crate::error::unsigned)
+            .transpose()?
+            .unwrap_or_default();
+        if head <= arg.query.since {
+            return Ok(RtInboxDelta {
+                inbox_version: head,
+                app: arg.query.app,
+                channels: vec![],
+            });
+        }
+        let maximum = if arg.query.maximum == 0 {
+            Limits::DEFAULT_INBOX_ROWS
+        } else {
+            usize::try_from(arg.query.maximum.min(Limits::INBOX_ROWS as u64))
+                .map_err(|_| Error::IntegerRange)?
+        };
+        let rows = {
+            let mut query = c.prepare(
+                "SELECT channel_id,inbox_version,read_through FROM rt_user_channels
+                 WHERE uid=?1 AND app_id=?2 AND inbox_version>?3 AND inbox_version<=?4
+                 ORDER BY inbox_version ASC LIMIT ?5",
+            )?;
+            let rows = query.query_map(
+                params![
+                    actor.uid,
+                    arg.query.app as i64,
+                    sql_integer(arg.query.since)?,
+                    sql_integer(head)?,
+                    (Limits::INBOX_SCAN_ROWS + 1) as i64
+                ],
+                |r| {
+                    Ok((
+                        r.get::<_, Vec<u8>>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                },
+            )?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        let mut roles = std::collections::BTreeMap::<Vec<u8>, Option<Role>>::new();
+        let mut channels = Vec::new();
+        for (scanned, (id, inbox_version, read_through)) in rows.into_iter().enumerate() {
+            if channels.len() == maximum {
+                break;
+            }
+            if scanned == Limits::INBOX_SCAN_ROWS {
+                return Err(Error::Capacity("realtime inbox scan"));
+            }
+            let id: [u8; 16] = id
+                .try_into()
+                .map_err(|_| Error::Invalid("stored realtime channel"))?;
+            let md = channel(c, &id)?;
+            let team = md.team.entity().as_bytes();
+            let access = if let Some(access) = roles.get(team) {
+                *access
+            } else {
+                let access = membership_role(c, actor, team)?;
+                roles.insert(team.to_vec(), access);
+                access
+            };
+            let Some(access) = access else {
+                continue;
+            };
+            let policy = ChannelPolicy::new(&md)?;
+            if !policy.can_read(access) {
+                continue;
+            }
+            channels.push(RtInboxChannel {
+                metadata: policy
+                    .project(access, md)
+                    .ok_or(Error::AuthorizationChanged)?,
+                inbox_version: crate::error::unsigned(inbox_version)?,
+                read_through: crate::error::unsigned(read_through)?,
+                hidden: false,
+                muted: false,
+            });
+        }
+        Ok(RtInboxDelta {
+            inbox_version: head,
+            app: arg.query.app,
+            channels,
+        })
     }
     pub fn rt_list_channels(
         &self,
@@ -1276,6 +1592,186 @@ mod tests {
         );
         assert_eq!(f.count("rt_channels"), 2);
     }
+    #[test]
+    fn inbox_delta_read_through_and_membership_reconciliation_are_monotonic() {
+        let mut f = Fixture::new();
+        f.db.rt_create_channel(&f.owner, &f.create, 100).unwrap();
+        f.db.rt_send(&f.owner, &f.send(2), 200).unwrap();
+        let query = |since| RtGetChangedThreadsArgument {
+            query: RtChangedThreads {
+                app: RtAppId::Chat,
+                since,
+                maximum: 100,
+            },
+        };
+        let initial = f
+            .reader()
+            .snapshot()
+            .unwrap()
+            .rt_changed_threads(&f.member, &query(0), 300)
+            .unwrap();
+        assert_eq!(initial.inbox_version, 2);
+        assert_eq!(initial.channels.len(), 1);
+        assert_eq!(initial.channels[0].read_through, 0);
+        let marked =
+            f.db.rt_read_through(
+                &f.member,
+                &RtReadThroughArgument {
+                    read: RtReadThrough {
+                        channel: f.create.metadata.id,
+                        sequence: 1,
+                    },
+                },
+                400,
+            )
+            .unwrap();
+        assert_eq!(marked.wake.len(), 1);
+        let stale =
+            f.db.rt_read_through(
+                &f.member,
+                &RtReadThroughArgument {
+                    read: RtReadThrough {
+                        channel: f.create.metadata.id,
+                        sequence: 1,
+                    },
+                },
+                500,
+            )
+            .unwrap();
+        assert!(stale.wake.is_empty());
+        let changed = f
+            .reader()
+            .snapshot()
+            .unwrap()
+            .rt_changed_threads(&f.member, &query(2), 600)
+            .unwrap();
+        assert_eq!(changed.inbox_version, 3);
+        assert_eq!(changed.channels[0].read_through, 1);
+        assert!(matches!(
+            f.db.rt_read_through(
+                &f.member,
+                &RtReadThroughArgument {
+                    read: RtReadThrough {
+                        channel: f.create.metadata.id,
+                        sequence: 2,
+                    },
+                },
+                700
+            ),
+            Err(Error::NotFound(_))
+        ));
+
+        let mut restricted = f.create.clone();
+        restricted.metadata.id = RtChannelId([2; 16]);
+        restricted.metadata.updated_at = 2;
+        restricted.set_version = 2;
+        restricted.metadata.roles = RtRolePair {
+            read: Role::ADMIN,
+            write: Role::ADMIN,
+        };
+        restricted.metadata.description.as_mut().unwrap().key.role = Role::ADMIN;
+        f.db.rt_create_channel(&f.owner, &restricted, 800).unwrap();
+        assert_eq!(
+            f.db.connection
+                .query_row(
+                    "SELECT COUNT(*) FROM rt_user_channels WHERE uid=?1 AND channel_id=?2",
+                    params![f.member.uid, restricted.metadata.id.0.as_slice()],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        f.db.connection
+            .execute(
+                "UPDATE team_members SET role_type=2,visibility=0 WHERE party_id=?1",
+                params![f.member.uid],
+            )
+            .unwrap();
+        let reconciled =
+            f.db.rt_reconcile_inbox(&f.member, RtAppId::Chat, 900)
+                .unwrap();
+        assert_eq!(reconciled.wake.len(), 1);
+        let after = f
+            .reader()
+            .snapshot()
+            .unwrap()
+            .rt_changed_threads(&f.member, &query(3), 1000)
+            .unwrap();
+        assert_eq!(after.channels.len(), 1);
+        assert_eq!(after.channels[0].metadata.id, restricted.metadata.id);
+        f.db.connection
+            .execute(
+                "UPDATE team_members SET role_type=1,visibility=0 WHERE party_id=?1",
+                params![f.member.uid],
+            )
+            .unwrap();
+        let reconciled =
+            f.db.rt_reconcile_inbox(&f.member, RtAppId::Chat, 1050)
+                .unwrap();
+        assert_eq!(reconciled.wake.len(), 1);
+        let filtered = f
+            .reader()
+            .snapshot()
+            .unwrap()
+            .rt_changed_threads(&f.member, &query(0), 1100)
+            .unwrap();
+        assert_eq!(filtered.inbox_version, 5);
+        assert_eq!(filtered.channels.len(), 1);
+        assert_eq!(filtered.channels[0].metadata.id, f.create.metadata.id);
+        assert_eq!(
+            f.db.connection
+                .query_row(
+                    "SELECT COUNT(*) FROM rt_user_channels WHERE uid=?1 AND channel_id=?2",
+                    params![f.member.uid, restricted.metadata.id.0.as_slice()],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn inbox_page_scans_past_inaccessible_rows() {
+        let mut f = Fixture::new();
+        f.db.rt_create_channel(&f.owner, &f.create, 100).unwrap();
+        let mut second = f.create.clone();
+        second.metadata.id = RtChannelId([2; 16]);
+        second.metadata.updated_at = 2;
+        second.set_version = 2;
+        f.db.rt_create_channel(&f.owner, &second, 200).unwrap();
+        let mut hidden = f.create.metadata.clone();
+        hidden.roles = RtRolePair {
+            read: Role::ADMIN,
+            write: Role::ADMIN,
+        };
+        hidden.description.as_mut().unwrap().key.role = Role::ADMIN;
+        f.db.connection
+            .execute(
+                "UPDATE rt_channels SET metadata=?2 WHERE channel_id=?1",
+                params![hidden.id.0.as_slice(), hidden.encoded().unwrap()],
+            )
+            .unwrap();
+        let delta = f
+            .reader()
+            .snapshot()
+            .unwrap()
+            .rt_changed_threads(
+                &f.member,
+                &RtGetChangedThreadsArgument {
+                    query: RtChangedThreads {
+                        app: RtAppId::Chat,
+                        since: 0,
+                        maximum: 1,
+                    },
+                },
+                300,
+            )
+            .unwrap();
+        assert_eq!(delta.channels.len(), 1);
+        assert_eq!(delta.channels[0].metadata.id, second.metadata.id);
+        assert_eq!(delta.channels[0].inbox_version, 2);
+    }
+
     #[test]
     fn response_byte_limits_fail_explicitly_without_truncating_history() {
         let mut f = Fixture::new();

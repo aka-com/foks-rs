@@ -73,6 +73,7 @@ pub(super) trait Operations {
         principal: &Principal,
     ) -> Result<(), RpcStatus>;
     fn team_config(&self, argument: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus>;
+    fn realtime_membership_changed(&self);
 }
 
 impl Operations for ServerData {
@@ -346,6 +347,10 @@ impl Operations for ServerData {
         let database = self.read_database()?;
         crate::services::team_admin::config(argument, principal, &database)
     }
+
+    fn realtime_membership_changed(&self) {
+        self.realtime.membership_changed();
+    }
 }
 
 pub(super) fn response(
@@ -396,10 +401,14 @@ pub(super) fn response(
             )?;
             None
         }
-        RouteId::TeamAdminEditTeam => Some(operations.edit(
-            call.call.argument(),
-            principal.ok_or_else(permission_denied)?,
-        )?),
+        RouteId::TeamAdminEditTeam => {
+            let response = operations.edit(
+                call.call.argument(),
+                principal.ok_or_else(permission_denied)?,
+            )?;
+            operations.realtime_membership_changed();
+            Some(response)
+        }
         RouteId::TeamAdminMakeInertTeamBearerToken => Some(operations.make_inert_token(
             call.call.argument(),
             principal.ok_or_else(permission_denied)?,
@@ -420,6 +429,7 @@ pub(super) fn response(
                 call.call.argument(),
                 principal.ok_or_else(permission_denied)?,
             )?;
+            operations.realtime_membership_changed();
             None
         }
         RouteId::TeamAdminGetTeamConfig => Some(operations.team_config(
