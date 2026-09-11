@@ -104,8 +104,6 @@ const FIRST_RUN_STATES = [
   'phrase',
   'waiting',
   'added',
-  'create-group',
-  'done',
   'checklist-invited',
   'checklist-own',
 ];
@@ -566,10 +564,10 @@ async function firstRunWalk(context, origin) {
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await reloadAt('Select a server address');
     await page
-      .getByRole('button', { name: 'Check the server', exact: true })
+      .getByRole('button', { name: 'Use this server', exact: true })
       .click();
-    await page.locator('.pane', { hasText: 'Pinned on this Mac' }).waitFor();
-    await reloadAt('Pinned on this Mac');
+    await page.locator('.pane', { hasText: 'verified' }).waitFor();
+    await reloadAt('verified');
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await page.locator('.pane', { hasText: 'Create an account' }).waitFor();
     await reloadAt('Create an account');

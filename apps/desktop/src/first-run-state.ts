@@ -15,8 +15,6 @@ export const FIRST_RUN_STATES = [
   'phrase',
   'waiting',
   'added',
-  'create-group',
-  'done',
   'local-done',
   'checklist-invited',
   'checklist-own',
@@ -50,7 +48,6 @@ export interface FirstRunCheckpoint {
   readonly backupCommitted: boolean;
   readonly protectSkipped: boolean;
   readonly group?: FirstRunGroupIdentity;
-  readonly groupSkipped: boolean;
   readonly added: boolean;
   readonly returning: boolean;
 }
@@ -65,6 +62,7 @@ export type FirstRunEvent =
       returning?: boolean;
     }
   | { type: 'go'; state: FirstRunStateName }
+  | { type: 'server-edited'; address: string }
   | {
       type: 'profile-checked';
       address: string;
@@ -80,8 +78,6 @@ export type FirstRunEvent =
   | { type: 'backup-committed' }
   | { type: 'skip-protect' }
   | { type: 'finish-local'; skipped: boolean }
-  | { type: 'group-complete'; group: FirstRunGroupIdentity }
-  | { type: 'skip-group' }
   | { type: 'group-discovered'; group: FirstRunGroupIdentity }
   | { type: 'reenter' };
 
@@ -98,7 +94,6 @@ export function initialFirstRun(
     passphraseSet: false,
     backupCommitted: false,
     protectSkipped: false,
-    groupSkipped: false,
     added: false,
     returning: false,
   };
@@ -137,6 +132,13 @@ export function transitionFirstRun(
       };
     case 'go':
       return { ...state, state: event.state };
+    case 'server-edited':
+      return {
+        ...initialFirstRun(state.path, 'address'),
+        initialized: state.initialized,
+        returning: state.returning,
+        serverAddress: event.address,
+      };
     case 'profile-checked':
       return {
         ...state,
@@ -177,19 +179,6 @@ export function transitionFirstRun(
         protectSkipped:
           event.skipped && !state.passphraseSet && !state.backupCommitted,
       };
-    case 'group-complete':
-      return {
-        ...state,
-        state: 'done',
-        group: event.group,
-        groupSkipped: false,
-      };
-    case 'skip-group':
-      return {
-        ...state,
-        state: 'checklist-own',
-        groupSkipped: state.group === undefined,
-      };
     case 'group-discovered':
       return { ...state, state: 'added', added: true, group: event.group };
     case 'reenter':
@@ -216,7 +205,6 @@ const ROOT_KEYS = new Set([
   'backupCommitted',
   'protectSkipped',
   'group',
-  'groupSkipped',
   'added',
   'returning',
 ]);
@@ -280,7 +268,6 @@ export function encodeFirstRunCheckpoint(state: FirstRunCheckpoint): string {
     backupCommitted: state.backupCommitted,
     protectSkipped: state.protectSkipped,
     group: state.group,
-    groupSkipped: state.groupSkipped,
     added: state.added,
     returning: state.returning,
   });
@@ -378,7 +365,6 @@ export function decodeFirstRunCheckpoint(
       item.passphraseSet,
       item.backupCommitted,
       item.protectSkipped,
-      item.groupSkipped,
       item.added,
       item.returning,
     ];
@@ -401,8 +387,6 @@ export function decodeFirstRunCheckpoint(
       'protect',
       'waiting',
       'added',
-      'create-group',
-      'done',
       'local-done',
       'checklist-invited',
       'checklist-own',
@@ -418,7 +402,6 @@ export function decodeFirstRunCheckpoint(
         item.backupCommitted === true ||
         item.protectSkipped === true ||
         group ||
-        item.groupSkipped === true ||
         item.added === true) &&
       !account
     )
@@ -429,8 +412,6 @@ export function decodeFirstRunCheckpoint(
       (item.passphraseSet === true || item.backupCommitted === true)
     )
       return null;
-    if (item.groupSkipped === true && (group || item.added === true))
-      return null;
     if (item.returning === true && item.path !== 'own') return null;
     if (item.managedLocal === true && item.path !== 'own') return null;
     if (
@@ -438,7 +419,6 @@ export function decodeFirstRunCheckpoint(
       item.managedLocal !== true
     )
       return null;
-    if (state === 'done' && (!group || item.path !== 'own')) return null;
     if (
       state === 'added' &&
       (item.added !== true || item.path !== 'invited' || !group)
@@ -447,8 +427,7 @@ export function decodeFirstRunCheckpoint(
     if (item.added === true && item.path !== 'invited') return null;
     if (item.path === 'invited' && Boolean(group) !== (item.added === true))
       return null;
-    if (item.path === 'own' && item.added === true) return null;
-    if (item.groupSkipped === true && item.path !== 'own') return null;
+    if (item.path === 'own' && (group || item.added === true)) return null;
     return {
       ...base,
       initialized: item.initialized as boolean,
@@ -461,7 +440,6 @@ export function decodeFirstRunCheckpoint(
       backupCommitted: item.backupCommitted as boolean,
       protectSkipped: item.protectSkipped as boolean,
       group,
-      groupSkipped: item.groupSkipped as boolean,
       added: item.added as boolean,
       returning: item.returning as boolean,
     };
@@ -476,8 +454,13 @@ export function completedFirstRunSteps(state: FirstRunCheckpoint): number {
   let count = state.initialized ? 1 : 0;
   if (state.profile) count += 1;
   if (state.account) count += 1;
-  // Skipped safeguards or groups do not count toward completed steps.
+  // Skipped recovery does not count toward completed steps.
   if (state.passphraseSet || state.backupCommitted) count += 1;
-  if (state.added || state.group) count += 1;
+  if (state.path === 'invited' && state.added) count += 1;
   return count;
+}
+
+/** Personal setup ends after account recovery; invitees also join their group. */
+export function firstRunStepCount(state: FirstRunCheckpoint): number {
+  return state.path === 'invited' ? 5 : 4;
 }

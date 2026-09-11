@@ -366,11 +366,8 @@ test('path-specific first-run review states keep the path the mock defines', () 
     step: 'waiting',
     path: 'invited',
   });
-  assert.deepEqual(decodeLocation('?state=create-group&path=invited'), {
-    kind: 'first-run',
-    step: 'create-group',
-    path: 'own',
-  });
+  assert.equal(decodeLocation('?state=create-group&path=invited'), null);
+  assert.equal(decodeLocation('?state=done&path=own'), null);
 });
 
 test('unrecognized state parameter values decode to null', () => {

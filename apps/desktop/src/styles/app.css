@@ -1106,34 +1106,6 @@ body {
   border-width: 5.5px;
 }
 
-/* Requirement badge for setup options */
-.need {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-  padding: 3px 9px 3px 7px;
-  border-radius: var(--radius-pill);
-  background: var(--chip-bg);
-  color: var(--chip-ink);
-  font-size: 12.5px;
-  font-weight: 500;
-}
-
-.need svg {
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.opt.on .need {
-  background: var(--accent-wash);
-  color: var(--accent-ink);
-}
-
-.opt.on .need svg {
-  color: var(--accent-ink);
-}
-
 /* Selected option summary container */
 .next {
   display: grid;
@@ -1713,4 +1685,52 @@ body {
 
 .sheet .band + .inset {
   margin-top: 10px;
+}
+
+.go-account-options {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.go-account-option {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  cursor: pointer;
+}
+.go-account-option + .go-account-option {
+  border-top: 1px solid var(--line);
+}
+.go-account-option:has(input:checked) {
+  background: var(--accent-wash);
+}
+.go-account-option:has(input:disabled) {
+  opacity: 0.6;
+  cursor: default;
+}
+.go-account-option input[type='radio'] {
+  flex: none;
+  accent-color: var(--accent);
+}
+.go-account-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.go-account-detail {
+  flex: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.go-account-detail small {
+  display: block;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.first-run-main .official-server {
+  margin-top: 16px;
+}
+.first-run-main .copy-device {
+  align-self: flex-start;
 }

@@ -23,6 +23,85 @@ use tauri_plugin_dialog::{DialogExt as _, MessageDialogKind};
 use agent::AgentHandle;
 use commands::{AppState, MAIN};
 
+#[cfg(target_os = "macos")]
+const NEW_WINDOW_MENU_ID: &str = "new-main-window";
+#[cfg(target_os = "macos")]
+const SETTINGS_MENU_ID: &str = "open-settings";
+#[cfg(target_os = "macos")]
+const OPEN_SETTINGS_EVENT: &str = "foks://open-settings";
+
+#[cfg(target_os = "macos")]
+fn open_main_window(app: &tauri::AppHandle, settings: bool) -> Result<(), String> {
+    use tauri::Emitter as _;
+
+    if let Some(window) = app.get_webview_window(MAIN) {
+        window.unminimize().map_err(|error| error.to_string())?;
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        if settings {
+            window
+                .emit(OPEN_SETTINGS_EVENT, ())
+                .map_err(|error| error.to_string())?;
+        }
+        return Ok(());
+    }
+
+    let mut config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|config| config.label == MAIN)
+        .cloned()
+        .ok_or_else(|| format!("{MAIN} window configuration not found"))?;
+    if settings {
+        config.url = tauri::WebviewUrl::App("index.html?state=settings".into());
+    }
+    let window = tauri::WebviewWindowBuilder::from_config(app, &config)
+        .map_err(|error| error.to_string())?
+        .build()
+        .map_err(|error| error.to_string())?;
+    dragdrop::observe(&window);
+    window_state::observe(&window);
+    window.set_focus().map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem};
+
+    let menu = Menu::default(app.handle())?;
+    let settings = MenuItemBuilder::with_id(SETTINGS_MENU_ID, "Settings…")
+        .accelerator("CmdOrCtrl+,")
+        .build(app)?;
+    let new_window = MenuItemBuilder::with_id(NEW_WINDOW_MENU_ID, "New Window")
+        .accelerator("CmdOrCtrl+N")
+        .build(app)?;
+    let items = menu.items()?;
+    if let Some(application) = items.first().and_then(|item| item.as_submenu()) {
+        application.insert(&settings, 2)?;
+        application.insert(&PredefinedMenuItem::separator(app)?, 3)?;
+    }
+    if let Some(file) = items
+        .iter()
+        .filter_map(|item| item.as_submenu())
+        .find(|submenu| submenu.text().is_ok_and(|text| text == "File"))
+    {
+        file.prepend(&PredefinedMenuItem::separator(app)?)?;
+        file.prepend(&new_window)?;
+    }
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| {
+        let settings = event.id() == SETTINGS_MENU_ID;
+        if settings || event.id() == NEW_WINDOW_MENU_ID {
+            if let Err(error) = open_main_window(app, settings) {
+                tracing::error!(%error, "Failed to open main window from application menu");
+            }
+        }
+    });
+    Ok(())
+}
+
 pub fn run() {
     if std::env::args_os().nth(1).as_deref()
         == Some(std::ffi::OsStr::new("--smoke-test-packaged-startup"))
@@ -193,6 +272,8 @@ pub fn run() {
             applock::unlock_app,
         ])
         .setup(move |app| {
+            #[cfg(target_os = "macos")]
+            install_macos_menu(app)?;
             // Verify agent reachability before handling requests; exit with a dialog if unreachable.
             startup::require_agent(app, &agent);
             if let Some(window) = app.get_webview_window(MAIN) {

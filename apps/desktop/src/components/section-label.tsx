@@ -22,7 +22,7 @@ export function SectionLabel({
   return (
     <div className={['sec', className ?? ''].filter(Boolean).join(' ')}>
       {children}
-      {action}
+      {action ? <span className="right">{action}</span> : null}
     </div>
   );
 }

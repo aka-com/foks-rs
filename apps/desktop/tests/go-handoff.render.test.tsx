@@ -86,16 +86,14 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
     ),
   );
   await ui.waitFor(() =>
-    assert.ok(rendered.getByText('FOKS is already set up on this Mac')),
+    assert.ok(rendered.getByText('Select an FOKS account')),
   );
   assert.ok(
     scans >= 2,
     'Strict Mode replays discovery after cancelling its first effect',
   );
-  ui.fireEvent.click(rendered.getByRole('button', { name: /cli-owner/ }));
-  ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Connect selected account' }),
-  );
+  ui.fireEvent.click(rendered.getByRole('radio', { name: /cli-owner/ }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Continue' }));
   ui.fireEvent.click(
     rendered.getByRole('button', { name: 'Use the official FOKS server' }),
   );
@@ -103,9 +101,7 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
     (rendered.getByLabelText('Server address') as HTMLInputElement).value,
     'foks.app:4430',
   );
-  ui.fireEvent.click(
-    rendered.getByRole('button', { name: /Check the server/ }),
-  );
+  ui.fireEvent.click(rendered.getByRole('button', { name: /Use this server/ }));
   await ui.waitFor(() => assert.equal(checks.length, 1));
   assert.equal(checks[0][0], candidate.candidateId);
   assert.equal(checks[0][1], candidate.hostId);
@@ -154,9 +150,9 @@ test('disables account selection and dialog dismissal while server verification 
     }),
   );
   await ui.waitFor(() =>
-    assert.ok(rendered.getByRole('button', { name: /cli-owner/ })),
+    assert.ok(rendered.getByRole('radio', { name: /cli-owner/ })),
   );
-  ui.fireEvent.click(rendered.getByRole('button', { name: /cli-owner/ }));
+  ui.fireEvent.click(rendered.getByRole('radio', { name: /cli-owner/ }));
   ui.fireEvent.click(
     rendered.getByRole('button', { name: 'Use official FOKS server' }),
   );
@@ -197,13 +193,18 @@ test('disables account selection and dialog dismissal while server verification 
 
 for (const refreshFails of [false, true]) {
   test(`reconciles uncertain initialization before profile selection (refresh fails: ${refreshFails})`, async () => {
-    const { FirstRunExperience } = await vite.ssrLoadModule(
+    const { FirstRunExperience } = (await vite.ssrLoadModule(
       '/src/screens/first-run-screen.tsx',
-    );
-    const { ToastProvider, ToastController } =
-      await vite.ssrLoadModule('/kit/toasts.tsx');
-    const { FIXTURE } = await vite.ssrLoadModule('/src/fixture.ts');
-    const { mockBridge } = await vite.ssrLoadModule('/src/mock-bridge.ts');
+    )) as typeof import('../src/screens/first-run-screen.tsx');
+    const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
+      '/kit/toasts.tsx',
+    )) as typeof import('../kit/toasts.tsx');
+    const { FIXTURE } = (await vite.ssrLoadModule(
+      '/src/fixture.ts',
+    )) as typeof import('../src/fixture.ts');
+    const { mockBridge } = (await vite.ssrLoadModule(
+      '/src/mock-bridge.ts',
+    )) as typeof import('../src/mock-bridge.ts');
     let refreshes = 0;
     let pendingReads = 0;
     const bridge: Bridge = {
@@ -262,3 +263,190 @@ for (const refreshFails of [false, true]) {
       assert.equal(rendered.queryByText(/FOKS refreshed the vault/), null);
   });
 }
+
+test('first-run account navigation, server edits, and connection errors stay scoped', async () => {
+  const { FirstRunExperience } = (await vite.ssrLoadModule(
+    '/src/screens/first-run-screen.tsx',
+  )) as typeof import('../src/screens/first-run-screen.tsx');
+  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
+    '/kit/toasts.tsx',
+  )) as typeof import('../kit/toasts.tsx');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture.ts');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge.ts');
+  const failure = (message: string) => ({
+    code: 'invalid-request',
+    message,
+    fatal: false,
+    ambiguous: false,
+    retryable: false,
+  });
+  const navigations: unknown[] = [];
+  const bridge: Bridge = {
+    ...mockBridge(),
+    native: true,
+    discoverGoProfiles: async () => ({
+      installed: true,
+      candidates: [candidate],
+    }),
+    checkAndAddGoProfile: async (_candidate, _host, profile, address) => ({
+      profile,
+      hostId: candidate.hostId,
+      lookupName: address,
+      canonicalName: 'foks.app',
+      acceptance: 'unchanged',
+      chain: 1,
+      epoch: 1,
+    }),
+    copyGoProfileDevice: async () => {
+      throw failure('Copy failed');
+    },
+    resumeGoProfilePairing: async () => {
+      throw failure(
+        'Refresh the setup status before resuming this operation.',
+      );
+    },
+    recoverOwnerAccount: async () => {
+      throw failure('Recovery failed');
+    },
+  };
+  const view = ui.render(
+    createElement(ToastProvider, {
+      controller: new ToastController(),
+      children: createElement(FirstRunExperience, {
+        bridge,
+        world: FIXTURE,
+        location: { kind: 'first-run', path: 'own', step: 'who' },
+        concealSignal: 0,
+        onNavigate: (location: unknown) => {
+          navigations.push(location);
+        },
+        onRefreshWorld: async () => FIXTURE,
+      }),
+    }),
+  );
+  await view.findByRole('radio', { name: /cli-owner/ });
+  ui.fireEvent.click(
+    view.getByRole('button', { name: 'Create a new account' }),
+  );
+  assert.ok(view.queryByText(/Already using FOKS/) === null);
+  assert.ok(view.queryByText(/You’ll need/) === null);
+  ui.fireEvent.click(view.getByRole('button', { name: 'Back' }));
+  ui.fireEvent.click(view.getByRole('radio', { name: /cli-owner/ }));
+  ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
+  ui.fireEvent.click(
+    view.getByRole('button', { name: 'Use the official FOKS server' }),
+  );
+  ui.fireEvent.click(view.getByRole('button', { name: 'Use this server' }));
+  await view.findByRole('button', { name: 'Details' });
+  assert.ok(view.queryByText('Pinned on this Mac') === null);
+  const addressField = view.getByLabelText('Server address');
+  addressField.focus();
+  ui.fireEvent.change(addressField, { target: { value: 'changed.example' } });
+  assert.equal(document.activeElement, view.getByLabelText('Server address'));
+  assert.ok(view.queryByRole('button', { name: 'Details' }) === null);
+  assert.ok(view.queryByRole('button', { name: 'Continue' }) === null);
+  ui.fireEvent.click(view.getByRole('button', { name: 'Use this server' }));
+  await view.findByRole('button', { name: 'Continue' });
+  ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
+  const titles = [...view.container.querySelectorAll('.pcard h3')].map(
+    (el) => el.textContent,
+  );
+  assert.deepEqual(titles, [
+    'Recover with your backup phrase',
+    'Copy this Mac’s CLI device',
+    'Use the CLI to approve this as a new device',
+  ]);
+  ui.fireEvent.click(
+    view.getByRole('button', { name: 'Copy existing device' }),
+  );
+  const copyError = await view.findByText('Copy failed');
+  assert.equal(
+    copyError.closest('.pcard')?.querySelector('h3')?.textContent,
+    'Copy this Mac’s CLI device',
+  );
+  ui.fireEvent.click(view.getByRole('button', { name: 'Resume pairing' }));
+  const pairError = await view.findByText(
+    'Refresh the setup status before resuming this operation.',
+  );
+  assert.equal(
+    pairError.closest('.pcard')?.querySelector('h3')?.textContent,
+    'Use the CLI to approve this as a new device',
+  );
+  ui.fireEvent.change(view.getByLabelText('Backup phrase'), {
+    target: { value: 'one two three' },
+  });
+  ui.fireEvent.click(view.getByRole('button', { name: 'Recover' }));
+  const recoverError = await view.findByText('Recovery failed');
+  assert.equal(
+    recoverError.closest('.pcard')?.querySelector('h3')?.textContent,
+    'Recover with your backup phrase',
+  );
+  ui.fireEvent.click(
+    view.getByRole('button', { name: 'Create a new account' }),
+  );
+  assert.ok(view.getByPlaceholderText('yourname'));
+  assert.ok(view.getByPlaceholderText('Your Mac'));
+  ui.fireEvent.click(view.getByRole('button', { name: 'Back' }));
+  assert.ok(view.getByText('Add this Mac to your account'));
+  ui.fireEvent.click(view.getByRole('button', { name: 'Leave setup' }));
+  assert.deepEqual(navigations.at(-1), { kind: 'all' });
+});
+
+test('personal recovery puts backup first and completes without creating a group', async () => {
+  const { FirstRunExperience } = (await vite.ssrLoadModule(
+    '/src/screens/first-run-screen.tsx',
+  )) as typeof import('../src/screens/first-run-screen');
+  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
+    '/kit/toasts.tsx',
+  )) as typeof import('../kit/toasts');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  window.history.replaceState(null, '', '/?state=protect&path=own');
+  let creations = 0;
+  const bridge: Bridge = {
+    ...mockBridge(),
+    createGroup: async () => {
+      creations++;
+      throw new Error('Onboarding must not create groups');
+    },
+  };
+  const view = ui.render(
+    createElement(ToastProvider, {
+      controller: new ToastController(),
+      children: createElement(FirstRunExperience, {
+        bridge,
+        world: FIXTURE,
+        location: { kind: 'first-run', path: 'own', step: 'protect' },
+        onNavigate: () => {},
+        onRefreshWorld: async () => FIXTURE,
+        concealSignal: 0,
+      }),
+    }),
+  );
+  assert.deepEqual(
+    [...view.container.querySelectorAll('.pcard h3')].map(
+      (el) => el.textContent,
+    ),
+    ['Backup phrase', 'Passphrase'],
+  );
+  assert.ok(view.queryByText(/YubiKey/) === null);
+  assert.ok(view.queryByText('Create a group') === null);
+  ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
+  await view.findByRole('button', { name: 'Open Personal' });
+  assert.ok(view.queryByText('Create a group') === null);
+  assert.equal(creations, 0);
+  const checkpoint = JSON.parse(
+    window.localStorage.getItem('foks.first-run.v1') ?? '{}',
+  ) as { state?: string; group?: unknown };
+  assert.equal(checkpoint.state, 'checklist-own');
+  assert.equal(checkpoint.group, undefined);
+  window.history.replaceState(null, '', '/');
+});

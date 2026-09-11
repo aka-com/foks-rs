@@ -735,6 +735,7 @@ export interface Bridge {
   onDropHover(listener: (event: DropHoverEvent) => void): Promise<Unlisten>;
   onDropPaths(listener: (paths: string[]) => void): Promise<Unlisten>;
   onWindowState(listener: (event: WindowStateEvent) => void): Promise<Unlisten>;
+  onOpenSettings(listener: () => void): Promise<Unlisten>;
 }
 
 const pendingServerStatuses = new WeakMap<
@@ -1777,6 +1778,20 @@ export function normalizeCommandError(value: unknown): CommandError {
   }
 }
 
+function isHardStateSchemaFailure(message: string): boolean {
+  return /system store is out of date \(v\d+\), could not auto-update to current version \(v\d+\)/.test(
+    message,
+  );
+}
+
+function resetInstruction(profile: string): string {
+  return `Go to Settings → Servers → ${profile} → Reset, and clear your data to proceed.`;
+}
+
+export function shouldReportPassiveServerStatusError(error: unknown): boolean {
+  return !isHardStateSchemaFailure(normalizeCommandError(error).message);
+}
+
 function notificationsOf(
   catalog: CatalogDto,
   servers: readonly Server[],
@@ -1824,7 +1839,9 @@ function notificationsOf(
         failure.scope === 'store'
           ? `Could not load vault on ${failure.profile}`
           : `Could not load ${failure.source} on ${failure.profile}`,
-      detail: failure.error.message,
+      detail: isHardStateSchemaFailure(failure.error.message)
+        ? `${failure.error.message} ${resetInstruction(failure.profile)}`
+        : failure.error.message,
       action: failure.error.retryable ? 'Retry' : 'Inspect',
     });
   }
@@ -2212,6 +2229,7 @@ export const tauriBridge: Bridge = {
     listen<unknown>('foks://window-state', (event) => {
       listener(decodeWindowState(event.payload));
     }),
+  onOpenSettings: async (listener) => listen('foks://open-settings', listener),
 };
 
 export function isNativeHost(): boolean {
@@ -2383,6 +2401,11 @@ export async function loadWorld(
     statusResults.flatMap((result) =>
       result.error ? [[result.profile, result.error] as const] : [],
     ),
+  );
+  const incompatibleSchemaProfiles = new Set(
+    response.failures
+      .filter((failure) => isHardStateSchemaFailure(failure.error.message))
+      .map((failure) => failure.profile),
   );
   const servers = listedServers.map((server) => {
     if (!bridge.native) return server;
@@ -2615,7 +2638,11 @@ export async function loadWorld(
         id: `status-unavailable-${profile}`,
         severity: 'crit' as const,
         title: `Status for ${profile} is unavailable`,
-        detail: `${message} Server contents are unavailable until the connection status is verified.`,
+        detail: `${message} Server contents are unavailable until the connection status is verified.${
+          incompatibleSchemaProfiles.has(profile)
+            ? ` ${resetInstruction(profile)}`
+            : ''
+        }`,
         action: 'Inspect',
       })),
       ...groupDetailFailures.map((failure) => ({

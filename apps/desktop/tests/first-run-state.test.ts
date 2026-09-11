@@ -161,7 +161,6 @@ test('skipped steps are excluded from completed step count', () => {
     serverAddress: 'foks.example',
     account: { alias: 'personal', username: 'rae', deviceName: 'Rae Mac' },
     protectSkipped: true,
-    groupSkipped: true,
   };
   assert.equal(completedFirstRunSteps(base), 3);
 });
@@ -179,22 +178,6 @@ test('skipping protection step does not clear an already completed passphrase', 
   assert.equal(after.passphraseSet, true);
   assert.equal(after.protectSkipped, false);
   assert.equal(completedFirstRunSteps(after), 4);
-});
-
-test('skipping group step retains existing group configuration', () => {
-  const completed = {
-    ...initialFirstRun('own', 'create-group'),
-    initialized: true,
-    profile: checked,
-    serverAddress: 'foks.example',
-    account: { alias: 'personal', username: 'rae', deviceName: 'Rae Mac' },
-    passphraseSet: true,
-    group: namedGroup,
-  };
-  const after = transitionFirstRun(completed, { type: 'skip-group' });
-  assert.deepEqual(after.group, namedGroup);
-  assert.equal(after.groupSkipped, false);
-  assert.equal(completedFirstRunSteps(after), 5);
 });
 
 test('checkpoint decoding rejects invalid versions and malformed profile fields', () => {
@@ -247,7 +230,7 @@ test('checkpoint decoding rejects invalid versions and malformed profile fields'
   );
   assert.equal(
     decodeFirstRunCheckpoint(
-      encodeFirstRunCheckpoint(initialFirstRun('own', 'done')),
+      encodeFirstRunCheckpoint(initialFirstRun('invited', 'added')),
     ),
     null,
   );
@@ -289,11 +272,12 @@ test('checkpoint decoding rejects invalid entity kinds, nulls, and conflicting c
   const account = { alias: 'personal', username: 'rae', deviceName: 'Mac' };
   const coherent = parsedCheckpoint(
     encodeFirstRunCheckpoint({
-      ...initialFirstRun('own', 'done'),
+      ...initialFirstRun('invited', 'added'),
       profile: checked,
       serverAddress: 'foks.example',
       account,
       group: namedGroup,
+      added: true,
     }),
   );
   assert.ok(decodeFirstRunCheckpoint(JSON.stringify(coherent)));
@@ -325,7 +309,6 @@ test('checkpoint decoding rejects invalid entity kinds, nulls, and conflicting c
     { backupCommitted: true },
     { protectSkipped: true },
     { group: namedGroup },
-    { groupSkipped: true },
     { added: true },
   ]) {
     assert.equal(
@@ -340,12 +323,6 @@ test('checkpoint decoding rejects invalid entity kinds, nulls, and conflicting c
       null,
     );
   }
-  assert.equal(
-    decodeFirstRunCheckpoint(
-      JSON.stringify({ ...coherent, groupSkipped: true }),
-    ),
-    null,
-  );
   assert.equal(
     decodeFirstRunCheckpoint(
       JSON.stringify({
@@ -384,27 +361,12 @@ test('invited and own paths transition to distinct completion states', () => {
     { state: 'added', added: true },
   );
 
-  const own = transitionFirstRun(initialFirstRun('own', 'create-group'), {
-    type: 'group-complete',
-    group: {
-      name: 'Household',
-      kind: 'adhoc',
-      alias: 'household',
-      teamIdHex: `14${'4'.repeat(64)}`,
-    },
+  const own = transitionFirstRun(initialFirstRun('own', 'protect'), {
+    type: 'go',
+    state: 'checklist-own',
   });
-  assert.deepEqual(
-    { state: own.state, group: own.group },
-    {
-      state: 'done',
-      group: {
-        name: 'Household',
-        kind: 'adhoc',
-        alias: 'household',
-        teamIdHex: `14${'4'.repeat(64)}`,
-      },
-    },
-  );
+  assert.equal(own.state, 'checklist-own');
+  assert.equal(own.group, undefined);
 });
 
 test('setting a passphrase after skipping produces a valid decodable checkpoint', () => {
@@ -445,4 +407,25 @@ test('setting a passphrase after skipping produces a valid decodable checkpoint'
   viaBackup = transitionFirstRun(viaBackup, { type: 'backup-committed' });
   assert.equal(viaBackup.protectSkipped, false);
   assert.ok(decodeFirstRunCheckpoint(encodeFirstRunCheckpoint(viaBackup)));
+});
+
+test('editing a checked server clears verification and downstream setup state', () => {
+  const state = transitionFirstRun(
+    {
+      ...initialFirstRun('own', 'checked'),
+      returning: true,
+      profile: checked,
+      serverAddress: 'foks.example',
+    },
+    { type: 'server-edited', address: 'different.example' },
+  );
+  assert.equal(state.state, 'address');
+  assert.equal(state.profile, undefined);
+  assert.equal(state.serverAddress, 'different.example');
+  assert.equal(state.returning, true);
+  const restored = decodeFirstRunCheckpoint(encodeFirstRunCheckpoint(state));
+  assert.ok(restored);
+  assert.equal(restored.state, 'address');
+  assert.equal(restored.profile, undefined);
+  assert.equal(restored.serverAddress, 'different.example');
 });

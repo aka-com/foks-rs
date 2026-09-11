@@ -18,6 +18,13 @@ import {
 import type { AppLockState, Bridge } from './bridge';
 import { Button } from './components';
 import {
+  FIRST_RUN_CHECKPOINT_KEY,
+  completedFirstRunSteps,
+  decodeFirstRunCheckpoint,
+  firstRunStepCount,
+} from './first-run-state';
+import type { FirstRunCheckpoint } from './first-run-state';
+import {
   LocationStore,
   decodeScene,
   sceneHref,
@@ -45,7 +52,10 @@ import { DetailsPanel } from './screens/details-panel';
 import { ItemsScreen } from './screens/items-screen';
 import { ChatScreen } from './screens/chat-screen';
 import { GroupSettingsScreen } from './screens/groups-screen';
-import { FirstRunExperience } from './screens/first-run-screen';
+import {
+  FirstRunChecklistStatus,
+  FirstRunExperience,
+} from './screens/first-run-screen';
 import { PlaceholderScreen } from './screens/placeholder-screen';
 import { SettingsScreen } from './screens/settings-screen';
 import { listsItems } from './screens/scope';
@@ -63,6 +73,21 @@ export const APP_NAME = 'FOKS';
 function initialScene(): Scene {
   if (typeof window === 'undefined') return INITIAL_SCENE;
   return decodeScene(window.location.search);
+}
+
+function incompleteFirstRunCheckpoint(): FirstRunCheckpoint | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const checkpoint = decodeFirstRunCheckpoint(
+      window.localStorage.getItem(FIRST_RUN_CHECKPOINT_KEY),
+    );
+    return checkpoint &&
+      completedFirstRunSteps(checkpoint) < firstRunStepCount(checkpoint)
+      ? checkpoint
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface AppProps {
@@ -373,6 +398,26 @@ function VaultShell({
     if (!bridge.native) return;
     let disposed = false;
     let stop: (() => void) | undefined;
+    void bridge
+      .onOpenSettings(() => locations.navigate({ kind: 'settings' }))
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        stop = unlisten;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, [bridge, locations]);
+
+  useEffect(() => {
+    if (!bridge.native) return;
+    let disposed = false;
+    let stop: (() => void) | undefined;
     const apply = ({
       maximized,
       fullscreen,
@@ -543,6 +588,7 @@ function VaultShell({
   }, [locations]);
 
   const here = state.location;
+  const pendingFirstRun = incompleteFirstRunCheckpoint();
   // Captured once, the way SettingsScreen captures its
   // scene: the effect below rewrites the address bar to the canonical scene
   // on the first commit, so fixture-only sheet intent must retain its name.
@@ -701,6 +747,14 @@ function VaultShell({
               onNavigate={(location) => {
                 locations.navigate(location);
               }}
+              status={
+                pendingFirstRun ? (
+                  <FirstRunChecklistStatus
+                    checkpoint={pendingFirstRun}
+                    onNavigate={(location) => locations.navigate(location)}
+                  />
+                ) : undefined
+              }
             />
             <main className="main">{screen}</main>
           </>

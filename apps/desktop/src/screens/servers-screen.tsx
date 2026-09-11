@@ -9,6 +9,7 @@ import {
   enqueueProfileWork,
   normalizeCommandError,
   sharedServerStatus,
+  shouldReportPassiveServerStatusError,
 } from '../bridge';
 import type {
   Bridge,
@@ -247,7 +248,8 @@ export function ServersSection({
           rows.set(server.id, status);
         } catch (error) {
           failures.add(server.id);
-          if (alive) onError(error);
+          if (alive && shouldReportPassiveServerStatusError(error))
+            onError(error);
         }
       }
       if (alive) {
@@ -1259,8 +1261,8 @@ function ResetSheet({
       }
     >
       <p>
-        This permanently deletes local account keys for this server. Server
-        data is not deleted, but you can permanently lose access to it without
+        This permanently deletes local account keys for this server. Server data
+        is not deleted, but you can permanently lose access to it without
         another enrolled device, a saved recovery phrase for an enrolled backup,
         or a usable external backup of your local state. Your account passphrase
         alone cannot restore the deleted keys.
@@ -1274,8 +1276,8 @@ function ResetSheet({
           Pending local changes not yet uploaded to the server will be lost.
         </InsetRow>
         <InsetRow label="Recovery required">
-          Verify the server again and recover or pair an account before using
-          it on this device. Saving a recovery phrase here is not part of this
+          Verify the server again and recover or pair an account before using it
+          on this device. Saving a recovery phrase here is not part of this
           operation.
         </InsetRow>
         <InsetRow label="Unaffected">

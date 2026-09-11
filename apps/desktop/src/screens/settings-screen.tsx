@@ -5,6 +5,7 @@ import {
   enqueueProfileWork,
   normalizeCommandError,
   sharedServerStatus,
+  shouldReportPassiveServerStatusError,
 } from '../bridge';
 import type {
   AccountDevice,
@@ -29,7 +30,6 @@ import {
   SegmentedControl,
   SheetDialog,
   Stack,
-  Toggle,
 } from '../components';
 import type { Location, SettingsSection } from '../location';
 import {
@@ -470,7 +470,8 @@ export function SettingsScreen({
         } catch (error) {
           // Mark as loaded so UI status gates resolve even if the server probe fails.
           loaded.add(candidate);
-          if (alive) onError(error);
+          if (alive && shouldReportPassiveServerStatusError(error))
+            onError(error);
         }
       }
       if (alive) {
@@ -1815,9 +1816,6 @@ function AgentSection({
             : 'Reconnect to the local agent. Incomplete operations will need to be restarted.'}
         </InsetRow>
       </Inset>
-      <Toggle label="View agent diagnostics">
-        <pre>{JSON.stringify(world.agent, null, 2)}</pre>
-      </Toggle>
     </>
   );
 }
@@ -1866,8 +1864,8 @@ function AboutSection({
           }
         >
           <small>
-            Require your operating-system credentials before FOKS can read
-            vault data again.
+            Require your operating-system credentials before FOKS can read vault
+            data again.
           </small>
         </InsetRow>
       </Inset>

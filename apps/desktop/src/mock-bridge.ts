@@ -1178,5 +1178,6 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       return () => pathListeners.delete(listener);
     },
     onWindowState: async () => () => {},
+    onOpenSettings: async () => () => {},
   };
 }

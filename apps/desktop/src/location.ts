@@ -354,8 +354,6 @@ const FIRST_RUN_STATE_NAMES = [
   'phrase',
   'waiting',
   'added',
-  'create-group',
-  'done',
   'local-done',
   'checklist-invited',
   'checklist-own',
@@ -439,8 +437,6 @@ export function decodeLocation(search: string): Location | null {
         ? 'invited'
         : state === 'local' ||
             state === 'local-done' ||
-            state === 'create-group' ||
-            state === 'done' ||
             state === 'checklist-own'
           ? 'own'
           : undefined;
