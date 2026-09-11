@@ -34,12 +34,13 @@ npm run bundle:macos
 npm run bundle:deb
 ```
 
-The macOS application is written under `target/release/bundle/macos/`.
-`scripts/sign-macos-app.sh` signs the managed helper and outer application with
-`APPLE_SIGNING_IDENTITY`; if it is unset, the script accepts exactly one
-installed Developer ID Application identity. `scripts/notarize-macos-app.sh`
-submits, staples, validates, and archives the signed application using
-`APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_PASSWORD`.
+The macOS application and DMG are written under `target/release/bundle/macos/`
+and `target/release/bundle/dmg/`, respectively. `scripts/sign-macos-app.sh`
+signs the managed helper and outer application with `APPLE_SIGNING_IDENTITY`;
+if it is unset, the script accepts exactly one installed Developer ID
+Application identity. `scripts/notarize-macos-app.sh` creates a DMG containing
+the signed application, signs the disk image, then submits, staples, and
+validates it using `APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_PASSWORD`.
 
 Linux packaging requires `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`,
 `libpcsclite-dev`, and `librsvg2-bin`. See `linux/README.md` for the installed

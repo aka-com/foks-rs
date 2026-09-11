@@ -48,11 +48,11 @@ jobs:
           npm run test:rust:full -- --release
           cargo clippy --locked --release -p foks-desktop -p foks-desktop-app --all-targets -- -D warnings
           cargo fmt -p foks-desktop -p foks-desktop-app -- --check
-      - name: Assemble unsigned application
+      - name: Assemble unsigned DMG
         run: npm run bundle:macos
       - name: Smoke test packaged production startup
         run: npm run test:foks-desktop:packaged
-      - name: Validate application layout
+      - name: Validate package layout
         run: |
           set -euo pipefail
           app=target/release/bundle/macos/foks-desktop.app
@@ -60,6 +60,9 @@ jobs:
           test -x "$app/Contents/MacOS/foks-agent"
           test "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" = org.foks.desktop
           test -f "$app/Contents/Resources/icon.icns"
+          dmgs=(target/release/bundle/dmg/*.dmg)
+          test "${#dmgs[@]}" -eq 1
+          hdiutil imageinfo "${dmgs[0]}" >/dev/null
       - name: Run the real managed-agent desktop transcript
         run: npm run test:foks-desktop:real-agent
 
@@ -91,7 +94,7 @@ jobs:
         run: npm run test:foks-desktop:real-agent
 
   macos:
-    name: macOS arm64 signed and notarized ZIP
+    name: macOS arm64 signed and notarized DMG
     if: startsWith(github.ref, 'refs/tags/')
     needs: [validate-macos, validate-linux]
     runs-on: macos-15
@@ -110,7 +113,7 @@ jobs:
         run: |
           workspace_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
           test "${GITHUB_REF_NAME#foks-desktop-v}" = "$workspace_version"
-      - name: Assemble application
+      - name: Assemble DMG
         run: npm run bundle:macos
       - name: Import signing identity
         env:
@@ -133,7 +136,7 @@ jobs:
           echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
       - name: Sign application
         run: npm run sign:macos
-      - name: Notarize and archive application
+      - name: Create, sign, and notarize DMG
         env:
           APPLE_ID: ${{ secrets.FOKS_APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.FOKS_APPLE_TEAM_ID }}
@@ -143,11 +146,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/foks-release"
           scripts/notarize-macos-app.sh \
             target/release/bundle/macos/foks-desktop.app \
-            "$RUNNER_TEMP/foks-release/foks-desktop-$version-macos-arm64.zip"
+            "$RUNNER_TEMP/foks-release/foks-desktop-$version-macos-arm64.dmg"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: foks-desktop-macos
-          path: ${{ runner.temp }}/foks-release/*.zip
+          path: ${{ runner.temp }}/foks-release/*.dmg
           if-no-files-found: error
 
   linux:
@@ -215,12 +218,12 @@ jobs:
           merge-multiple: true
       - name: Create checksum manifest
         working-directory: ${{ runner.temp }}/foks-release
-        run: LC_ALL=C sha256sum *.zip *.deb > SHA256SUMS
+        run: LC_ALL=C sha256sum *.dmg *.deb > SHA256SUMS
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: |
-            ${{ runner.temp }}/foks-release/*.zip
+            ${{ runner.temp }}/foks-release/*.dmg
             ${{ runner.temp }}/foks-release/*.deb
             ${{ runner.temp }}/foks-release/SHA256SUMS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -245,7 +248,7 @@ jobs:
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           files: |
-            ${{ runner.temp }}/foks-release/*.zip
+            ${{ runner.temp }}/foks-release/*.dmg
             ${{ runner.temp }}/foks-release/*.deb
             ${{ runner.temp }}/foks-release/SHA256SUMS
           fail_on_unmatched_files: true

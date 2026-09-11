@@ -3,10 +3,10 @@
 FOKS desktop is a Tauri application with a managed `foks-agent` and an
 independent release train.
 
-- macOS releases are arm64 application ZIPs. `npm run bundle:macos`
-  assembles the application and embeds the agent. The helper and outer bundle
-  are signed with hardened runtime and a secure timestamp, then the application
-  is notarized and stapled before the final ZIP is created.
+- macOS releases are arm64 DMGs. `npm run bundle:macos` assembles the disk
+  image and embeds the agent in the application. The helper and application are
+  signed with hardened runtime and a secure timestamp, then a signed DMG is
+  created, notarized, and stapled.
 - Linux releases are x86_64 Debian packages made by
   `npm run bundle:deb`. They install `foks-desktop`, `foks-agent`, the
   polkit action, one desktop entry, and AppStream metadata.
