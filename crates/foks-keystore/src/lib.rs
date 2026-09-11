@@ -96,6 +96,7 @@ impl NativeCredentialStore {
 #[cfg(target_os = "macos")]
 mod native {
     use super::{Error, Result};
+    use security_framework::item::{update_item, ItemClass, ItemSearchOptions, ItemUpdateOptions};
     use security_framework::passwords::{
         delete_generic_password, get_generic_password, set_generic_password,
     };
@@ -106,19 +107,61 @@ mod native {
         format!("org.foks.client.{namespace}")
     }
 
+    pub(super) fn label(key: &str) -> String {
+        if key == "master-key-v1" {
+            return "FOKS master key".to_owned();
+        }
+        if key == "state-root-v1" {
+            return "FOKS state root binding".to_owned();
+        }
+        if let Some(profile) = key.strip_prefix("rollback.") {
+            return format!("FOKS rollback checkpoint — {profile}");
+        }
+        if let Some(database) = key
+            .strip_prefix("database.")
+            .and_then(|key| key.strip_suffix(".profile-v1"))
+        {
+            return format!(
+                "FOKS database ownership — {}",
+                &database[..8.min(database.len())]
+            );
+        }
+        if let Some(profile) = key.strip_prefix("profile-publication.") {
+            return format!("FOKS profile publication — {profile}");
+        }
+        "FOKS protected record".to_owned()
+    }
+
+    fn update_label(service: &str, key: &str) -> security_framework::base::Result<()> {
+        let mut search = ItemSearchOptions::new();
+        search
+            .class(ItemClass::generic_password())
+            .service(service)
+            .account(key);
+        let mut update = ItemUpdateOptions::new();
+        update.set_label(label(key));
+        update_item(&search, &update)
+    }
+
     pub(super) fn put(namespace: &str, key: &str, value: &[u8]) -> Result<()> {
-        set_generic_password(&service(namespace), key, value)
-            .map_err(|error| Error::Native(error.to_string()))
+        let service = service(namespace);
+        set_generic_password(&service, key, value)
+            .map_err(|error| Error::Native(error.to_string()))?;
+        let _ = update_label(&service, key);
+        Ok(())
     }
 
     pub(super) fn get(namespace: &str, key: &str) -> Result<Vec<u8>> {
-        get_generic_password(&service(namespace), key).map_err(|error| {
+        let service = service(namespace);
+        let value = get_generic_password(&service, key).map_err(|error| {
             if error.code() == ITEM_NOT_FOUND {
                 Error::Missing
             } else {
                 Error::Native(error.to_string())
             }
-        })
+        })?;
+        let _ = update_label(&service, key);
+        Ok(value)
     }
 
     pub(super) fn remove(namespace: &str, key: &str) -> Result<bool> {
@@ -555,6 +598,25 @@ mod tests {
 
     fn key(byte: u8) -> Zeroizing<[u8; 32]> {
         Zeroizing::new([byte; 32])
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_record_labels_distinguish_keychain_purposes() {
+        assert_eq!(native::label("master-key-v1"), "FOKS master key");
+        assert_eq!(native::label("state-root-v1"), "FOKS state root binding");
+        assert_eq!(
+            native::label("rollback.work.example"),
+            "FOKS rollback checkpoint — work.example"
+        );
+        assert_eq!(
+            native::label("database.0123456789abcdef.profile-v1"),
+            "FOKS database ownership — 01234567"
+        );
+        assert_eq!(
+            native::label("profile-publication.work.example"),
+            "FOKS profile publication — work.example"
+        );
     }
 
     #[test]

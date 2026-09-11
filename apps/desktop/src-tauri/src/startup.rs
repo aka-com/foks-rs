@@ -50,6 +50,15 @@ fn missing_socket(socket: &Path) -> String {
 }
 
 fn unreachable_agent(socket: &Path, error: &AgentError) -> String {
+    if error.code == "version-mismatch" {
+        return format!(
+            "Failed to connect to agent at {}.\n\n{}\n\nThe local background \
+             service is from a different FOKS version. Stop that foks-agent \
+             process and relaunch this application.",
+            socket.display(),
+            error.message
+        );
+    }
     format!(
         "Failed to connect to agent at {}.\n\n{}\n\nVerify that the \
          agent is running and try again.",
@@ -92,5 +101,18 @@ mod tests {
         let message = unreachable_agent(Path::new("/tmp/agent.sock"), &error);
         assert!(message.contains("/tmp/agent.sock"));
         assert!(message.contains("connection refused"));
+    }
+
+    #[test]
+    fn version_mismatch_names_the_stale_background_service() {
+        let error = AgentError::from_agent(
+            foks_agent_proto::ErrorCode::VersionMismatch,
+            "Desktop and agent protocol versions do not match".to_owned(),
+        );
+        let message = unreachable_agent(Path::new("/tmp/agent.sock"), &error);
+        assert!(message.contains("/tmp/agent.sock"));
+        assert!(message.contains("Desktop and agent protocol versions do not match"));
+        assert!(message.contains("different FOKS version"));
+        assert!(message.contains("foks-agent"));
     }
 }

@@ -63,7 +63,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .nav .stack .av:nth-child(1){left:auto;right:10px}
 .nav .stack .av:nth-child(2){left:auto;right:0}
 .nav .stack .av:only-child{right:0}
-.side .fn{font-size:11px;color:var(--faint);line-height:1.45;padding:12px 10px 4px}
+.side .fn{font-size:11px;color:var(--faint);line-height:1.25;margin:0;padding:1px 10px 4px}
 .side .fn code{font:10.5px var(--mono)}
 .side .foot{margin-top:auto;padding-top:10px;border-top:1px solid var(--line-soft)}
 .side .foot .nav{font-size:13px}

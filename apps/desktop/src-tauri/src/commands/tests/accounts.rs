@@ -6,7 +6,7 @@ use crate::commands::context::AppState;
 use crate::commands::execution::execute_read_profile_operation;
 use crate::commands::tests::support::{account_ref, phase_four_state, test_profile_value};
 use crate::commands::vault::store_id;
-use foks_agent_proto::Operation;
+use foks_agent_proto::{Operation, ProfileOverview, ResponseResult};
 use foks_desktop::{CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary};
 use std::sync::{Arc, Mutex};
 
@@ -282,6 +282,47 @@ impl foks_desktop::AgentTransport for MixedAccountsTransport {
             other => panic!("unexpected account operation {other:?}"),
         }
     }
+}
+
+#[test]
+fn account_projection_reuses_the_catalog_profile_overview() {
+    let catalog = CatalogSnapshot {
+        profiles: vec!["work.example".to_owned()],
+        stores: vec![CatalogStoreSummary::Account {
+            store: account_ref("work.example", "personal"),
+        }],
+        profile_overviews: vec![ProfileOverview {
+            profile: "work.example".to_owned(),
+            accounts: ResponseResult::Success {
+                value: serde_json::json!([{
+                    "profile":"work.example",
+                    "alias":"personal",
+                    "username":"rae.chen"
+                }]),
+            },
+            teams: ResponseResult::Success {
+                value: serde_json::json!([]),
+            },
+            server_status: ResponseResult::Success {
+                value: serde_json::json!({
+                    "profile":"work.example",
+                    "configured_probe":"work.example",
+                    "host":null,
+                    "lease_required":false,
+                    "lease_expires_at":null
+                }),
+            },
+        }],
+        ..CatalogSnapshot::default()
+    };
+    let transport = AccountsTransport {
+        calls: Mutex::new(Vec::new()),
+        response: serde_json::Value::Null,
+    };
+
+    let accounts = load_accounts(&transport, &catalog).unwrap();
+    assert_eq!(accounts[0].username, "rae.chen");
+    assert!(transport.calls.lock().unwrap().is_empty());
 }
 
 #[test]

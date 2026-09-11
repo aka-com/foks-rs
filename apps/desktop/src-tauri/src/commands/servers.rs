@@ -974,14 +974,42 @@ pub async fn describe_server_status(
     require_main_window(&webview)?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let expected = profile.clone();
+    let cached = state
+        .catalog
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .and_then(|catalog| {
+            catalog
+                .profile_overviews
+                .iter()
+                .find(|overview| overview.profile == profile)
+                .map(|overview| overview.server_status.clone())
+        });
     let transport = state.agent.transport();
     tauri::async_runtime::spawn_blocking(move || {
         let configured = transport_profile(transport.as_ref(), &profile)?;
-        let value = transport
-            .call(Operation::DescribeServerStatus {
-                profile: profile.clone(),
-            })
-            .map_err(AgentError::from_desktop)?;
+        let value = match cached {
+            Some(foks_agent_proto::ResponseResult::Success { value }) => value,
+            Some(foks_agent_proto::ResponseResult::Error {
+                code,
+                message,
+                fields,
+            }) => {
+                return Err(AgentError::from_desktop(
+                    foks_desktop::AgentError::Protocol {
+                        code,
+                        message,
+                        fields,
+                    },
+                ));
+            }
+            None => transport
+                .call(Operation::DescribeServerStatus {
+                    profile: profile.clone(),
+                })
+                .map_err(AgentError::from_desktop)?,
+        };
         let lease_required = !matches!(configured.protocol, ProfileProtocolSummary::V019);
         server_status_response(value, &expected, &configured.probe, lease_required)
     })

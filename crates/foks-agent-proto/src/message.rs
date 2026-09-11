@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -106,6 +106,24 @@ pub struct AccountSummary {
     pub profile: String,
     pub alias: String,
     pub username: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TeamSummary {
+    pub alias: String,
+    pub account_alias: String,
+    pub team_id_hex: String,
+    pub kind: String,
+    pub name: Option<String>,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ProfileOverview {
+    pub profile: String,
+    pub accounts: ResponseResult,
+    pub teams: ResponseResult,
+    pub server_status: ResponseResult,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -430,6 +448,9 @@ pub enum Operation {
         profile: String,
     },
     ListKnownStores {
+        profile: String,
+    },
+    ListProfileOverview {
         profile: String,
     },
     ListAccounts {
@@ -898,6 +919,7 @@ impl Operation {
                 | Self::Probe { .. }
                 | Self::PrepareOwnerBackup { .. }
                 | Self::ListKnownStores { .. }
+                | Self::ListProfileOverview { .. }
                 | Self::ListAccounts { .. }
                 | Self::ListPendingOperations { .. }
                 | Self::ListDevices { .. }
@@ -996,6 +1018,10 @@ impl std::fmt::Debug for Operation {
                 .finish(),
             Self::ListKnownStores { profile } => formatter
                 .debug_struct("ListKnownStores")
+                .field("profile", profile)
+                .finish(),
+            Self::ListProfileOverview { profile } => formatter
+                .debug_struct("ListProfileOverview")
                 .field("profile", profile)
                 .finish(),
             Self::ListAccounts { profile } => formatter

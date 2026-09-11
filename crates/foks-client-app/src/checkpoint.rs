@@ -219,7 +219,6 @@ impl ClientCredentials {
     pub fn master_key(&self) -> Result<Zeroizing<[u8; 32]>> {
         match self.backend {
             CredentialBackend::Native => {
-                self.verify_native_root_binding()?;
                 let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
                 let bytes = native.get(MASTER_KEY_RECORD)?;
                 if bytes.len() != 32 {

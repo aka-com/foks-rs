@@ -84,6 +84,10 @@ impl AgentError {
             Error::Io(error) => {
                 Self::new("io", format!("Failed to connect to agent: {error}"), true)
             }
+            Error::Protocol(foks_agent_proto::Error::Version) => Self::from_agent(
+                ErrorCode::VersionMismatch,
+                "Desktop and agent protocol versions do not match".to_owned(),
+            ),
             Error::Protocol(error) => Self::new(
                 "protocol",
                 format!("Unexpected agent protocol response: {error}"),
@@ -316,9 +320,14 @@ impl AgentHandle {
     }
 
     pub fn ensure_started_blocking(&self) -> Result<Response, AgentError> {
-        if let Ok(response) = self.call_blocking(Operation::AgentStatus) {
-            self.clear_connection_failure();
-            return Ok(response);
+        let mut incompatible = false;
+        match self.call_blocking(Operation::AgentStatus) {
+            Ok(response) => {
+                self.clear_connection_failure();
+                return Ok(response);
+            }
+            Err(error) if error.code == "version-mismatch" => incompatible = true,
+            Err(_) => {}
         }
         let Some(binary) = managed_agent_binary(&self.socket) else {
             return self.call_blocking(Operation::AgentStatus);
@@ -328,11 +337,28 @@ impl AgentHandle {
         })?;
         prepare_state_directory(state_dir)?;
         let spawn_lock = acquire_spawn_lock(&self.socket)?;
-        if let Ok(response) = self.call_blocking(Operation::AgentStatus) {
-            drop(spawn_lock);
-            self.clear_connection_failure();
-            return Ok(response);
+        match self.call_blocking(Operation::AgentStatus) {
+            Ok(response) => {
+                drop(spawn_lock);
+                self.clear_connection_failure();
+                return Ok(response);
+            }
+            Err(error) if error.code == "version-mismatch" => incompatible = true,
+            Err(_) => {}
         }
+        // A previous FOKS build's resident agent can still own this socket
+        // after a protocol bump; it must be stopped before this binary can bind.
+        #[cfg(unix)]
+        if incompatible {
+            stop_incompatible_agent(&self.socket)?;
+            if let Ok(response) = self.call_blocking(Operation::AgentStatus) {
+                drop(spawn_lock);
+                self.clear_connection_failure();
+                return Ok(response);
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = incompatible;
         launch_agent(&binary, state_dir, &self.socket)?;
         let mut last_error = None;
         for _ in 0..50 {
@@ -661,6 +687,236 @@ pub fn terminate_managed_agent() {
     }
 }
 
+#[cfg(unix)]
+fn stop_incompatible_agent(socket: &Path) -> Result<(), AgentError> {
+    use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
+    use std::os::unix::net::UnixStream;
+
+    let metadata = match std::fs::symlink_metadata(socket) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(AgentError::new(
+                "version-mismatch",
+                format!("Failed to inspect the incompatible agent socket: {error}"),
+                false,
+            ));
+        }
+    };
+    if !metadata.file_type().is_socket()
+        || metadata.permissions().mode() & 0o077 != 0
+        || metadata.uid() != unsafe { libc::geteuid() }
+    {
+        return Err(AgentError::new(
+            "unsafe-socket",
+            "The agent socket is not private to this user account and cannot be used.",
+            false,
+        ));
+    }
+    let stream = match UnixStream::connect(socket) {
+        Ok(stream) => stream,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+            ) =>
+        {
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(AgentError::new(
+                "version-mismatch",
+                format!("Failed to reconnect to the incompatible agent: {error}"),
+                true,
+            ));
+        }
+    };
+    let pid = unix_peer_pid(&stream).map_err(|error| {
+        AgentError::new(
+            "version-mismatch",
+            format!("Failed to identify the incompatible agent process: {error}"),
+            false,
+        )
+    })?;
+    drop(stream);
+    if !is_replaceable_agent_process(pid) {
+        let mut error = AgentError::new(
+            "version-mismatch",
+            "Desktop and agent protocol versions do not match, and the running process is not a replaceable foks-agent.",
+            false,
+        );
+        error.fatal = true;
+        return Err(error);
+    }
+    {
+        let mut guard = MANAGED_AGENT_PID
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *guard == Some(pid) {
+            *guard = None;
+        }
+    }
+    let signaled = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    if signaled != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        return Err(AgentError::new(
+            "version-mismatch",
+            format!("Failed to stop the incompatible agent: {error}"),
+            true,
+        ));
+    }
+    for _ in 0..50 {
+        std::thread::sleep(Duration::from_millis(100));
+        if incompatible_listener_is_gone(socket, pid) {
+            return Ok(());
+        }
+    }
+    Err(AgentError::new(
+        "version-mismatch",
+        "The incompatible local agent did not exit after SIGTERM.",
+        true,
+    ))
+}
+
+#[cfg(unix)]
+fn process_has_exited(pid: u32) -> bool {
+    let alive = unsafe { libc::kill(pid as i32, 0) };
+    alive != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+#[cfg(unix)]
+fn incompatible_listener_is_gone(socket: &Path, pid: u32) -> bool {
+    use std::os::unix::net::UnixStream;
+
+    if process_has_exited(pid) {
+        return true;
+    }
+    match UnixStream::connect(socket) {
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+            ) =>
+        {
+            true
+        }
+        Ok(stream) => unix_peer_pid(&stream).ok() != Some(pid),
+        Err(_) => false,
+    }
+}
+
+#[cfg(unix)]
+fn unix_peer_pid(stream: &std::os::unix::net::UnixStream) -> std::io::Result<u32> {
+    use std::os::unix::io::AsRawFd;
+
+    let mut pid: libc::pid_t = 0;
+    #[cfg(target_os = "macos")]
+    {
+        let mut length = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+        let result = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_LOCAL,
+                libc::LOCAL_PEERPID,
+                (&raw mut pid).cast(),
+                &mut length,
+            )
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let mut credential = libc::ucred {
+            pid: 0,
+            uid: 0,
+            gid: 0,
+        };
+        let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        let result = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&raw mut credential).cast(),
+                &mut length,
+            )
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        pid = credential.pid;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+    {
+        let _ = stream;
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "agent peer pid is unavailable on this platform",
+        ));
+    }
+    if pid <= 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "agent peer pid is invalid",
+        ));
+    }
+    Ok(pid as u32)
+}
+
+#[cfg(unix)]
+fn process_executable_path(pid: u32) -> std::io::Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStringExt as _;
+        let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        let length = unsafe {
+            libc::proc_pidpath(
+                pid as libc::c_int,
+                buffer.as_mut_ptr().cast(),
+                buffer.len() as u32,
+            )
+        };
+        if length <= 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        buffer.truncate(length as usize);
+        Ok(PathBuf::from(std::ffi::OsString::from_vec(buffer)))
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        std::fs::read_link(format!("/proc/{pid}/exe"))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+    {
+        let _ = pid;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "agent process path is unavailable on this platform",
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn is_foks_agent_executable(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    name == "foks-agent" || name.starts_with("foks-agent (deleted)")
+}
+
+#[cfg(unix)]
+fn is_replaceable_agent_process(pid: u32) -> bool {
+    if pid <= 1 || pid == std::process::id() {
+        return false;
+    }
+    process_executable_path(pid).is_ok_and(|path| is_foks_agent_executable(&path))
+}
+
 pub fn success_value(response: Response) -> Result<Value, AgentError> {
     match response.result {
         ResponseResult::Success { value } => Ok(value),
@@ -905,5 +1161,122 @@ mod tests {
         let ambiguous =
             AgentError::from_client(&foks_agent_client::Error::Ambiguous("write".to_owned()));
         assert!(ambiguous.ambiguous && !ambiguous.retryable);
+        let protocol_version = AgentError::from_client(&foks_agent_client::Error::Protocol(
+            foks_agent_proto::Error::Version,
+        ));
+        assert_eq!(protocol_version.code, "version-mismatch");
+        assert!(protocol_version.fatal && !protocol_version.retryable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_named_foks_agent_processes_are_replaceable() {
+        assert!(is_foks_agent_executable(Path::new(
+            "/Applications/FOKS.app/Contents/MacOS/foks-agent"
+        )));
+        assert!(is_foks_agent_executable(Path::new(
+            "/tmp/foks-agent (deleted)"
+        )));
+        assert!(!is_foks_agent_executable(Path::new(
+            "/Applications/FOKS.app/Contents/MacOS/foks-desktop"
+        )));
+        assert!(!is_replaceable_agent_process(0));
+        assert!(!is_replaceable_agent_process(1));
+        assert!(!is_replaceable_agent_process(std::process::id()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_peer_pid_identifies_the_same_process_listener() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::os::unix::net::{UnixListener, UnixStream};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let socket = temporary.path().join("agent.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let server = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+        });
+        let stream = UnixStream::connect(&socket).unwrap();
+        assert_eq!(unix_peer_pid(&stream).unwrap(), std::process::id());
+        drop(stream);
+        server.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_incompatible_agent_terminates_a_named_listener() {
+        use std::os::unix::process::ExitStatusExt as _;
+        use std::process::{Command, Stdio};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let socket = temporary.path().join("agent.sock");
+        let ready = temporary.path().join("ready");
+        let source = temporary.path().join("agent.c");
+        let binary = temporary.path().join("foks-agent");
+        std::fs::write(
+            &source,
+            r#"
+#include <fcntl.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    int server = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un address;
+    memset(&address, 0, sizeof address);
+    address.sun_family = AF_UNIX;
+    strncpy(address.sun_path, argv[1], sizeof address.sun_path - 1);
+    unlink(argv[1]);
+    if (server < 0 || bind(server, (struct sockaddr *)&address, sizeof address) != 0
+        || chmod(argv[1], 0600) != 0 || listen(server, 8) != 0) {
+        return 1;
+    }
+    int marker = open(argv[2], O_CREAT | O_WRONLY, 0600);
+    if (marker >= 0) {
+        close(marker);
+    }
+    for (;;) {
+        int client = accept(server, 0, 0);
+        if (client >= 0) {
+            close(client);
+        }
+    }
+}
+"#,
+        )
+        .unwrap();
+        let compiled = Command::new("cc")
+            .args(["-o"])
+            .arg(&binary)
+            .arg(&source)
+            .status()
+            .expect("cc is required to build the dummy agent");
+        assert!(compiled.success(), "cc failed to build the dummy agent");
+        let mut child = Command::new(&binary)
+            .args([&socket, &ready])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+        while !ready.exists() {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("dummy foks-agent exited early: {status}");
+            }
+            if started.elapsed() > Duration::from_secs(5) {
+                let _ = child.kill();
+                panic!("dummy foks-agent did not bind");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        stop_incompatible_agent(&socket).unwrap();
+        let status = child.wait().unwrap();
+        assert_eq!(status.signal(), Some(libc::SIGTERM));
     }
 }

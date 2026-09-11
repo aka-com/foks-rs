@@ -14,8 +14,9 @@ use foks_agent_client::AgentClient;
 use foks_agent_proto::{
     AccountStoreRef, AccountSummary, ErrorCode, ErrorFields, FederationRole, KnownStoreSummary,
     KvChunkResult, KvEntryMetadata, KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef,
-    KvUploadHeader, Operation, ProfileProtocol, ProfileTrust, ResponseResult, SecretString,
-    TeamKind, TeamRole, TeamStoreRef, YubiRetryConfiguration,
+    KvUploadHeader, Operation, ProfileOverview, ProfileProtocol, ProfileTrust, ResponseResult,
+    SecretString, ServerStatusSnapshot, TeamKind, TeamRole, TeamStoreRef, TeamSummary,
+    YubiRetryConfiguration,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -268,20 +269,25 @@ fn agent_client_error(error: foks_agent_client::Error) -> AgentError {
     }
 }
 
+fn response_value(result: ResponseResult) -> Result<Value, AgentError> {
+    match result {
+        ResponseResult::Success { value } => Ok(value),
+        ResponseResult::Error {
+            code,
+            message,
+            fields,
+        } => Err(AgentError::Protocol {
+            code,
+            message,
+            fields,
+        }),
+    }
+}
+
 /// Strongly typed response models deserialized from background service payloads.
 #[derive(serde::Deserialize)]
 struct ProfileSummary {
     name: String,
-}
-
-#[derive(Clone, Debug, serde::Deserialize)]
-struct TeamSummaryResponse {
-    alias: String,
-    account_alias: String,
-    team_id_hex: String,
-    kind: String,
-    name: Option<String>,
-    active: bool,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -413,12 +419,13 @@ pub struct CatalogInventoryState {
     pub teams_complete: bool,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct CatalogSnapshot {
     pub profiles: Vec<String>,
     pub stores: Vec<CatalogStoreSummary>,
     pub known_stores: Vec<CatalogStoreSummary>,
     pub inventory: Vec<CatalogInventoryState>,
+    pub profile_overviews: Vec<ProfileOverview>,
     pub items: Vec<CatalogItem>,
     pub failures: Vec<CatalogFailure>,
     pub blocked_profiles: Vec<String>,
@@ -492,6 +499,7 @@ fn load_catalog_with_token(
         snapshot.stores.extend(loaded.stores);
         snapshot.known_stores.extend(loaded.known_stores);
         snapshot.inventory.extend(loaded.inventory);
+        snapshot.profile_overviews.extend(loaded.profile_overviews);
         snapshot.items.extend(loaded.items);
         snapshot.failures.extend(loaded.failures);
         snapshot.blocked_profiles.extend(loaded.blocked_profiles);
@@ -555,64 +563,59 @@ fn load_profile_catalog(
     }
     let mut accounts_complete = false;
     let mut teams_complete = false;
-    for job in [
-        CatalogDiscovery::Accounts(profile.clone()),
-        CatalogDiscovery::Teams(profile.clone()),
-    ] {
-        token.check()?;
-        let operation = match &job {
-            CatalogDiscovery::Accounts(profile) => Operation::ListAccounts {
-                profile: profile.clone(),
-            },
-            CatalogDiscovery::Teams(profile) => Operation::ListTeams {
-                profile: profile.clone(),
-            },
-        };
-        let result = transport.call(operation);
-        match (job, result) {
-            (CatalogDiscovery::Accounts(job_profile), Ok(value)) => {
-                match decode_agent_value::<Vec<AccountSummary>>(value) {
-                    Ok(accounts)
-                        if accounts
-                            .iter()
-                            .all(|account| account.profile == job_profile) =>
-                    {
+    token.check()?;
+    let overview = transport.call(Operation::ListProfileOverview {
+        profile: profile.clone(),
+    });
+    token.check()?;
+    match overview {
+        Ok(value) => match decode_agent_value::<ProfileOverview>(value) {
+            Ok(overview) if overview.profile == profile => {
+                match response_value(overview.accounts.clone())
+                    .and_then(decode_agent_value::<Vec<AccountSummary>>)
+                {
+                    Ok(accounts) if accounts.iter().all(|account| account.profile == profile) => {
                         accounts_complete = true;
                         snapshot.stores.extend(accounts.into_iter().map(|account| {
                             CatalogStoreSummary::Account {
                                 store: AccountStoreRef {
-                                    profile: job_profile.clone(),
+                                    profile: profile.clone(),
                                     account_alias: account.alias,
                                 },
                             }
-                        }))
+                        }));
                     }
                     Ok(_) => snapshot.failures.push(CatalogFailure {
                         scope: CatalogFailureScope::Profile {
-                            profile: job_profile,
+                            profile: profile.clone(),
                             source: "account stores".to_owned(),
                         },
                         error: AgentError::Transport(
                             "agent returned accounts for a different profile".to_owned(),
                         ),
                     }),
-                    Err(error) => snapshot.failures.push(CatalogFailure {
-                        scope: CatalogFailureScope::Profile {
-                            profile: job_profile,
-                            source: "account stores".to_owned(),
-                        },
-                        error,
-                    }),
+                    Err(error) => {
+                        if error_blocks_profile_catalog(&error) {
+                            snapshot.blocked_profiles.push(profile.clone());
+                        }
+                        snapshot.failures.push(CatalogFailure {
+                            scope: CatalogFailureScope::Profile {
+                                profile: profile.clone(),
+                                source: "account stores".to_owned(),
+                            },
+                            error,
+                        });
+                    }
                 }
-            }
-            (CatalogDiscovery::Teams(job_profile), Ok(value)) => {
-                match decode_agent_value::<Vec<TeamSummaryResponse>>(value) {
+                match response_value(overview.teams.clone())
+                    .and_then(decode_agent_value::<Vec<TeamSummary>>)
+                {
                     Ok(teams) => {
                         teams_complete = true;
                         snapshot.stores.extend(teams.into_iter().map(|team| {
                             CatalogStoreSummary::Team {
                                 store: TeamStoreRef {
-                                    profile: job_profile.clone(),
+                                    profile: profile.clone(),
                                     account_alias: team.account_alias,
                                     team_alias: team.alias,
                                     team_id: team.team_id_hex,
@@ -623,27 +626,64 @@ fn load_profile_catalog(
                             }
                         }));
                     }
-                    Err(error) => snapshot.failures.push(CatalogFailure {
-                        scope: CatalogFailureScope::Profile {
-                            profile: job_profile,
-                            source: "team stores".to_owned(),
-                        },
-                        error,
-                    }),
+                    Err(error) => {
+                        if error_blocks_profile_catalog(&error) {
+                            snapshot.blocked_profiles.push(profile.clone());
+                        }
+                        snapshot.failures.push(CatalogFailure {
+                            scope: CatalogFailureScope::Profile {
+                                profile: profile.clone(),
+                                source: "team stores".to_owned(),
+                            },
+                            error,
+                        });
+                    }
                 }
-            }
-            (job, Err(error)) => {
-                if error_blocks_profile_catalog(&error) {
-                    snapshot.blocked_profiles.push(profile.clone());
+                if let Ok(status) = response_value(overview.server_status.clone())
+                    .and_then(decode_agent_value::<ServerStatusSnapshot>)
+                {
+                    if status.profile != profile {
+                        snapshot.failures.push(CatalogFailure {
+                            scope: CatalogFailureScope::Profile {
+                                profile: profile.clone(),
+                                source: "server status".to_owned(),
+                            },
+                            error: AgentError::Transport(
+                                "agent returned server status for a different profile".to_owned(),
+                            ),
+                        });
+                    }
                 }
-                snapshot.failures.push(CatalogFailure {
-                    scope: CatalogFailureScope::Profile {
-                        profile: job.profile().to_owned(),
-                        source: job.source().to_owned(),
-                    },
-                    error,
-                });
+                snapshot.profile_overviews.push(overview);
             }
+            Ok(_) => snapshot.failures.push(CatalogFailure {
+                scope: CatalogFailureScope::Profile {
+                    profile: profile.clone(),
+                    source: "profile overview".to_owned(),
+                },
+                error: AgentError::Transport(
+                    "agent returned an overview for a different profile".to_owned(),
+                ),
+            }),
+            Err(error) => snapshot.failures.push(CatalogFailure {
+                scope: CatalogFailureScope::Profile {
+                    profile: profile.clone(),
+                    source: "profile overview".to_owned(),
+                },
+                error,
+            }),
+        },
+        Err(error) => {
+            if error_blocks_profile_catalog(&error) {
+                snapshot.blocked_profiles.push(profile.clone());
+            }
+            snapshot.failures.push(CatalogFailure {
+                scope: CatalogFailureScope::Profile {
+                    profile: profile.clone(),
+                    source: "profile overview".to_owned(),
+                },
+                error,
+            });
         }
     }
     if accounts_complete {
@@ -1119,27 +1159,6 @@ fn known_catalog_store(profile: &str, store: KnownStoreSummary) -> CatalogStoreS
             name,
             active,
         },
-    }
-}
-
-#[derive(Clone)]
-enum CatalogDiscovery {
-    Accounts(String),
-    Teams(String),
-}
-
-impl CatalogDiscovery {
-    fn profile(&self) -> &str {
-        match self {
-            Self::Accounts(profile) | Self::Teams(profile) => profile,
-        }
-    }
-
-    fn source(&self) -> &str {
-        match self {
-            Self::Accounts(_) => "account stores",
-            Self::Teams(_) => "team stores",
-        }
     }
 }
 
@@ -2455,6 +2474,28 @@ mod tests {
         }
     }
 
+    fn profile_overview(profile: &str, accounts: ResponseResult, teams: ResponseResult) -> Value {
+        serde_json::to_value(ProfileOverview {
+            profile: profile.to_owned(),
+            accounts,
+            teams,
+            server_status: ResponseResult::Success {
+                value: serde_json::json!({
+                    "profile": profile,
+                    "configured_probe": "localhost:4430",
+                    "host": null,
+                    "lease_required": false,
+                    "lease_expires_at": null
+                }),
+            },
+        })
+        .unwrap()
+    }
+
+    fn success(value: Value) -> ResponseResult {
+        ResponseResult::Success { value }
+    }
+
     struct CatalogTransport;
 
     impl AgentTransport for CatalogTransport {
@@ -2462,24 +2503,24 @@ mod tests {
             match operation {
                 Operation::ListProfiles => Ok(serde_json::json!([{"name": "local"}])),
                 Operation::ListKnownStores { .. } => Ok(serde_json::json!([])),
-                Operation::ListAccounts { profile } => {
+                Operation::ListProfileOverview { profile } => {
                     assert_eq!(profile, "local");
-                    Ok(serde_json::json!([{
-                        "profile": "local",
-                        "alias": "personal",
-                        "username": "alice"
-                    }]))
-                }
-                Operation::ListTeams { profile } => {
-                    assert_eq!(profile, "local");
-                    Ok(serde_json::json!([{
-                        "alias": "eng",
-                        "account_alias": "personal",
-                        "team_id_hex": "aa",
-                        "kind": "named",
-                        "name": "engineering",
-                        "active": true
-                    }]))
+                    Ok(profile_overview(
+                        &profile,
+                        success(serde_json::json!([{
+                            "profile": "local",
+                            "alias": "personal",
+                            "username": "alice"
+                        }])),
+                        success(serde_json::json!([{
+                            "alias": "eng",
+                            "account_alias": "personal",
+                            "team_id_hex": "aa",
+                            "kind": "named",
+                            "name": "engineering",
+                            "active": true
+                        }])),
+                    ))
                 }
                 Operation::ListKv { cursor, .. } => {
                     let (path, next_cursor) = if cursor.is_none() {
@@ -2547,8 +2588,15 @@ mod tests {
                     "active": true,
                     "last_seen_at": 11
                 }])),
-                Operation::ListAccounts { .. } => Ok(serde_json::json!([])),
-                Operation::ListTeams { .. } => Err(AgentError::Transport("offline".to_owned())),
+                Operation::ListProfileOverview { profile } => Ok(profile_overview(
+                    &profile,
+                    success(serde_json::json!([])),
+                    ResponseResult::Error {
+                        code: ErrorCode::OperationFailed,
+                        message: "offline".to_owned(),
+                        fields: ErrorFields::default(),
+                    },
+                )),
                 operation => panic!("unexpected partial catalog operation: {operation:?}"),
             }
         }
@@ -2580,12 +2628,15 @@ mod tests {
             match operation {
                 Operation::ListProfiles => Ok(serde_json::json!([{"name": "local"}])),
                 Operation::ListKnownStores { .. } => Ok(serde_json::json!([])),
-                Operation::ListAccounts { .. } => Ok(serde_json::json!([{
-                    "profile": "local",
-                    "alias": "personal",
-                    "username": "alice"
-                }])),
-                Operation::ListTeams { .. } => Ok(serde_json::json!([])),
+                Operation::ListProfileOverview { profile } => Ok(profile_overview(
+                    &profile,
+                    success(serde_json::json!([{
+                        "profile": "local",
+                        "alias": "personal",
+                        "username": "alice"
+                    }])),
+                    success(serde_json::json!([])),
+                )),
                 Operation::ListKv { cursor, .. } => {
                     let (path, next_cursor) = if cursor.is_none() {
                         ("/first", Some("next"))
@@ -2730,13 +2781,12 @@ mod tests {
 
     impl AgentTransport for LockAwareCatalogTransport {
         fn call(&self, operation: Operation) -> Result<Value, AgentError> {
-            let profile = match operation {
+            let (profile, overview) = match operation {
                 Operation::ListProfiles => {
                     return Ok(serde_json::json!([{"name": "one"}, {"name": "two"}]))
                 }
-                Operation::ListKnownStores { profile }
-                | Operation::ListAccounts { profile }
-                | Operation::ListTeams { profile } => profile,
+                Operation::ListKnownStores { profile } => (profile, false),
+                Operation::ListProfileOverview { profile } => (profile, true),
                 operation => panic!("unexpected lock-aware operation: {operation:?}"),
             };
             {
@@ -2759,7 +2809,15 @@ mod tests {
             self.active
                 .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             self.active_profiles.lock().unwrap().remove(&profile);
-            Ok(serde_json::json!([]))
+            Ok(if overview {
+                profile_overview(
+                    &profile,
+                    success(serde_json::json!([])),
+                    success(serde_json::json!([])),
+                )
+            } else {
+                serde_json::json!([])
+            })
         }
     }
 
@@ -2782,9 +2840,13 @@ mod tests {
             match operation {
                 Operation::ListProfiles => Ok(serde_json::json!([{"name": "local"}])),
                 Operation::ListKnownStores { .. } => Ok(serde_json::json!([])),
-                Operation::ListAccounts { .. } => {
+                Operation::ListProfileOverview { profile } => {
                     self.0.cancel();
-                    Ok(serde_json::json!([]))
+                    Ok(profile_overview(
+                        &profile,
+                        success(serde_json::json!([])),
+                        success(serde_json::json!([])),
+                    ))
                 }
                 operation => panic!("canceled catalog launched another call: {operation:?}"),
             }

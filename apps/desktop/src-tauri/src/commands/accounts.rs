@@ -420,14 +420,38 @@ pub(super) fn load_accounts(
     profiles.dedup();
     let mut accounts = Vec::with_capacity(expected.len());
     for profile in profiles {
-        let value = transport
-            .call(Operation::ListAccounts {
-                profile: profile.clone(),
-            })
-            .map_err(AgentError::from_desktop)?;
-        require_response_row_cap(&value, "account identities")?;
-        let rows: Vec<AccountResponse> =
-            serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
+        let rows: Vec<AccountResponse> = if let Some(overview) = catalog
+            .profile_overviews
+            .iter()
+            .find(|overview| overview.profile == profile)
+        {
+            let value = match overview.accounts.clone() {
+                foks_agent_proto::ResponseResult::Success { value } => value,
+                foks_agent_proto::ResponseResult::Error {
+                    code,
+                    message,
+                    fields,
+                } => {
+                    return Err(AgentError::from_desktop(
+                        foks_desktop::AgentError::Protocol {
+                            code,
+                            message,
+                            fields,
+                        },
+                    ));
+                }
+            };
+            require_response_row_cap(&value, "account identities")?;
+            serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?
+        } else {
+            let value = transport
+                .call(Operation::ListAccounts {
+                    profile: profile.clone(),
+                })
+                .map_err(AgentError::from_desktop)?;
+            require_response_row_cap(&value, "account identities")?;
+            serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?
+        };
         for row in rows {
             if row.profile != profile
                 || !valid_local_name(&row.alias)

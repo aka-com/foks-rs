@@ -15,10 +15,10 @@ pub use message::{
     DeviceSummary, ErrorCode, ErrorFields, FederationRole, GoProfileCandidate, GoProfileDiscovery,
     KnownStoreSummary, KvChunkResult, KvEntryMetadata, KvPage, KvPrecondition, KvReadResult,
     KvRole, KvStoreRef, KvUploadFrame, KvUploadHeader, KvUploadPayload, Operation,
-    PendingOperationKind, PendingOperationSummary, ProfileProtocol, ProfileTrust, Request,
-    ResetArtifactKind, ResetArtifactSummary, ResetStatePreview, Response, ResponseResult,
+    PendingOperationKind, PendingOperationSummary, ProfileOverview, ProfileProtocol, ProfileTrust,
+    Request, ResetArtifactKind, ResetArtifactSummary, ResetStatePreview, Response, ResponseResult,
     SecretString, ServerStatusSnapshot, StoredHostStatus, TeamDetailsSummary, TeamKind, TeamRole,
-    TeamStoreRef, YubiFederationUnlockInput, YubiRetryConfiguration, PROTOCOL_VERSION,
+    TeamStoreRef, TeamSummary, YubiFederationUnlockInput, YubiRetryConfiguration, PROTOCOL_VERSION,
 };
 
 #[cfg(test)]
@@ -49,9 +49,31 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 8,
+                "version": 9,
                 "id": 8,
                 "operation": { "operation": "discover-go-profiles" }
+            })
+        );
+    }
+
+    #[test]
+    fn profile_overview_is_read_only_and_profile_bound() {
+        let request = Request::new(
+            9,
+            Operation::ListProfileOverview {
+                profile: "hosted".to_owned(),
+            },
+        );
+        assert!(!request.operation.is_mutation());
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "version": 9,
+                "id": 9,
+                "operation": {
+                    "operation": "list-profile-overview",
+                    "profile": "hosted"
+                }
             })
         );
     }
@@ -174,7 +196,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 8,
+                "version": 9,
                 "id": 9,
                 "operation": {
                     "operation": "sync-team",
@@ -186,7 +208,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Response::error(9, ErrorCode::Busy, "locked")).unwrap(),
             serde_json::json!({
-                "version": 8,
+                "version": 9,
                 "id": 9,
                 "status": "error",
                 "code": "busy",
@@ -219,7 +241,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&admission).unwrap(),
             serde_json::json!({
-                "version": 8,
+                "version": 9,
                 "id": 13,
                 "operation": {
                     "operation": "admit-federated-team",
@@ -258,7 +280,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&expulsion).unwrap(),
             serde_json::json!({
-                "version": 8,
+                "version": 9,
                 "id": 15,
                 "operation": {
                     "operation": "expel-federated-team",
@@ -511,7 +533,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 8,
+                "version": 9,
                 "id": 25,
                 "operation": {
                     "operation": "demote-team-member",
@@ -534,7 +556,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 8,
+                "version": 9,
                 "id": 26,
                 "operation": {
                     "operation": "remove-team-member",

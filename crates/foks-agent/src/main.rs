@@ -16,11 +16,12 @@ use foks_agent_proto::{
     GoProfileDiscovery as WireGoProfileDiscovery, KnownStoreSummary as WireKnownStoreSummary,
     KvChunkResult, KvEntryMetadata, KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef,
     KvUploadHeader, Operation, PendingOperationKind as WirePendingOperationKind,
-    PendingOperationSummary as WirePendingOperationSummary, ProfileProtocol, ProfileTrust, Request,
-    ResetArtifactKind as WireResetArtifactKind, ResetArtifactSummary as WireResetArtifactSummary,
-    ResetStatePreview as WireResetStatePreview, Response, ResponseResult,
-    ServerStatusSnapshot as WireServerStatusSnapshot, StoredHostStatus as WireStoredHostStatus,
-    TeamDetailsSummary, TeamKind, TeamRole, TeamStoreRef, MAXIMUM_MESSAGE_BYTES,
+    PendingOperationSummary as WirePendingOperationSummary, ProfileOverview, ProfileProtocol,
+    ProfileTrust, Request, ResetArtifactKind as WireResetArtifactKind,
+    ResetArtifactSummary as WireResetArtifactSummary, ResetStatePreview as WireResetStatePreview,
+    Response, ResponseResult, ServerStatusSnapshot as WireServerStatusSnapshot,
+    StoredHostStatus as WireStoredHostStatus, TeamDetailsSummary, TeamKind, TeamRole, TeamStoreRef,
+    TeamSummary as WireTeamSummary, MAXIMUM_MESSAGE_BYTES,
 };
 use foks_client_app::{
     derive_vault_key, AccountVault, CancellationToken, Capability, CheckedProfileSession,
@@ -2383,6 +2384,71 @@ fn dispatch_result(
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(serde_json::to_value(stores)?)
         }
+        Operation::ListProfileOverview { profile } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                let accounts = (|| -> Result<_, Box<dyn std::error::Error>> {
+                    let mut accounts = Vec::new();
+                    for alias in vault.aliases()? {
+                        let loaded = vault.account(&alias)?;
+                        accounts.push(AccountSummary {
+                            profile: profile.clone(),
+                            alias,
+                            username: loaded.username,
+                        });
+                    }
+                    let aliases = accounts
+                        .iter()
+                        .map(|account| account.alias.clone())
+                        .collect::<Vec<_>>();
+                    retain_known_accounts(session, &profile, &aliases);
+                    Ok(accounts)
+                })();
+                let teams = (|| -> Result<_, Box<dyn std::error::Error>> {
+                    let teams = session.list_teams(vault)?;
+                    let known = teams
+                        .iter()
+                        .map(|team| KnownTeamStore {
+                            account_alias: team.account_alias.clone(),
+                            team_alias: team.alias.clone(),
+                            team_id_hex: team.team_id_hex.clone(),
+                            team_kind: team.kind.clone(),
+                            display_name: team.name.clone(),
+                            active: team.active,
+                        })
+                        .collect::<Vec<_>>();
+                    retain_known_teams(session, &profile, &known);
+                    Ok(teams
+                        .into_iter()
+                        .map(|team| WireTeamSummary {
+                            alias: team.alias,
+                            account_alias: team.account_alias,
+                            team_id_hex: team.team_id_hex,
+                            kind: team.kind,
+                            name: team.name,
+                            active: team.active,
+                        })
+                        .collect::<Vec<_>>())
+                })();
+                let server_status = session
+                    .server_status()
+                    .map(wire_server_status)
+                    .map_err(|error| Box::new(error) as Box<dyn std::error::Error>);
+                Ok(serde_json::to_value(ProfileOverview {
+                    profile,
+                    accounts: wire_read_result(
+                        accounts.and_then(|value| Ok(serde_json::to_value(value)?)),
+                    ),
+                    teams: wire_read_result(
+                        teams.and_then(|value| Ok(serde_json::to_value(value)?)),
+                    ),
+                    server_status: wire_read_result(
+                        server_status.and_then(|value| Ok(serde_json::to_value(value)?)),
+                    ),
+                })?)
+            })
+        }
         Operation::ListAccounts { profile } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
@@ -2517,19 +2583,7 @@ fn dispatch_result(
             } else {
                 session.server_status_without_pinned_host()?
             };
-            Ok(serde_json::to_value(WireServerStatusSnapshot {
-                profile: status.profile,
-                configured_probe: status.configured_probe,
-                host: status.host.map(|host| WireStoredHostStatus {
-                    lookup_name: host.lookup_name,
-                    canonical_name: host.canonical_name,
-                    host_id_hex: host.host_id_hex,
-                    host_chain_sequence: host.host_chain_sequence,
-                    merkle_epoch: host.merkle_epoch,
-                }),
-                lease_required: status.lease_required,
-                lease_expires_at: status.lease_expires_at,
-            })?)
+            Ok(serde_json::to_value(wire_server_status(status))?)
         }
         Operation::RemoveDevice {
             profile,
@@ -4127,6 +4181,31 @@ fn retain_known_teams(
     }
 }
 
+fn wire_read_result(
+    result: Result<serde_json::Value, Box<dyn std::error::Error>>,
+) -> ResponseResult {
+    match result {
+        Ok(value) => ResponseResult::Success { value },
+        Err(error) => dispatch_error_response(0, error.as_ref()).result,
+    }
+}
+
+fn wire_server_status(status: foks_client_app::ServerStatusSnapshot) -> WireServerStatusSnapshot {
+    WireServerStatusSnapshot {
+        profile: status.profile,
+        configured_probe: status.configured_probe,
+        host: status.host.map(|host| WireStoredHostStatus {
+            lookup_name: host.lookup_name,
+            canonical_name: host.canonical_name,
+            host_id_hex: host.host_id_hex,
+            host_chain_sequence: host.host_chain_sequence,
+            merkle_epoch: host.merkle_epoch,
+        }),
+        lease_required: status.lease_required,
+        lease_expires_at: status.lease_expires_at,
+    }
+}
+
 fn wire_known_store(
     store: KnownStore,
 ) -> Result<WireKnownStoreSummary, Box<dyn std::error::Error>> {
@@ -4690,6 +4769,49 @@ mod tests {
         assert!(matches!(
             profiles.result,
             foks_agent_proto::ResponseResult::Success { .. }
+        ));
+    }
+
+    #[test]
+    fn profile_overview_combines_startup_reads() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("state");
+        ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&state).unwrap();
+        registry
+            .add(Profile {
+                name: "local".to_owned(),
+                probe: "foks.app".to_owned(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+        let response = dispatch(
+            &state,
+            Request::new(
+                3,
+                Operation::ListProfileOverview {
+                    profile: "local".to_owned(),
+                },
+            ),
+        );
+        let ResponseResult::Success { value } = response.result else {
+            panic!("profile overview failed")
+        };
+        let overview: ProfileOverview = serde_json::from_value(value).unwrap();
+        assert_eq!(overview.profile, "local");
+        assert!(matches!(
+            overview.accounts,
+            ResponseResult::Success { value } if value == serde_json::json!([])
+        ));
+        assert!(matches!(
+            overview.teams,
+            ResponseResult::Success { value } if value == serde_json::json!([])
+        ));
+        assert!(matches!(
+            overview.server_status,
+            ResponseResult::Success { value }
+                if value["profile"] == "local" && value["host"].is_null()
         ));
     }
 
