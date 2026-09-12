@@ -156,6 +156,13 @@ protocol_id = 0x4f58e7d4
 argument_header = true
 result_header = true
 
+[[protocol]]
+name = "Identity"
+upstream = ""
+protocol_id = 0xf04b0001
+argument_header = true
+result_header = true
+
 [[service]]
 name = "registration"
 service_type = 1
@@ -2282,3 +2289,54 @@ statuses = ["ok", "bad_args", "permission_denied", "not_found", "quota_exceeded"
 max_request_bytes = 32768
 supported = true
 coverage = ["team_remote_invitations"]
+
+[[route]]
+protocol = "Identity"
+protocol_id = 0xf04b0001
+method = "fennecCapabilities"
+position = 65536
+listeners = ["public_services"]
+authentication = "public"
+request = "void"
+result = "IdentityCapabilities"
+upstream_result = "<local-extension>"
+argument_header = true
+result_header = true
+statuses = ["ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
+max_request_bytes = 16384
+supported = true
+coverage = ["oidc_identity"]
+
+[[route]]
+protocol = "Identity"
+protocol_id = 0xf04b0001
+method = "fennecChallenge"
+position = 65537
+listeners = ["public_services"]
+authentication = "public"
+request = "IdentityClaim"
+result = "IdentityChallenge"
+upstream_result = "<local-extension>"
+argument_header = true
+result_header = true
+statuses = ["ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
+max_request_bytes = 16384
+supported = true
+coverage = ["oidc_identity"]
+
+[[route]]
+protocol = "Identity"
+protocol_id = 0xf04b0001
+method = "fennecProve"
+position = 65538
+listeners = ["public_services"]
+authentication = "public"
+request = "IdentityProof"
+result = "IdentityStatus"
+upstream_result = "<local-extension>"
+argument_header = true
+result_header = true
+statuses = ["ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
+max_request_bytes = 16384
+supported = true
+coverage = ["oidc_identity"]

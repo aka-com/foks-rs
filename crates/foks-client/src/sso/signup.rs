@@ -1,4 +1,5 @@
 use super::*;
+#[derive(Clone, Copy)]
 pub enum SsoSigningKey<'a> {
     Software(&'a foks_proto::SecretSeed),
     Yubi(&'a dyn foks_crypto::YubiDevice),
@@ -25,7 +26,7 @@ impl SsoSignupAuthorization {
         let flow = HardStateStore::open(&host.database_path)?
             .sso_flow(&self.flow_id)?
             .ok_or(Error::Sso("unknown signup flow"))?;
-        if flow.for_login
+        if flow.purpose.is_existing()
             || flow.state != SsoFlowState::Ready
             || flow.uid != self.uid.as_bytes()
             || flow.device != self.device.as_bytes()
@@ -47,7 +48,7 @@ impl FoksClient {
         store: &mut impl ProtectedMutationStore,
     ) -> Result<SsoSignupAuthorization> {
         let (flow, m) = load(host, &id, store)?;
-        if flow.for_login || flow.state != SsoFlowState::Ready {
+        if flow.purpose.is_existing() || flow.state != SsoFlowState::Ready {
             return Err(Error::Sso("signup flow is not ready"));
         }
         let device = match key {
@@ -100,6 +101,8 @@ impl FoksClient {
             }
             Err(_) => return Err(Error::Sso("protected binding unavailable")),
         };
+        let commitment = foks_crypto::prefixed_hash(0x68b3_c398_ea5f_d71e, &args.encoded()?);
+        HardStateStore::open(&host.database_path)?.sso_set_commitment(&id, &commitment)?;
         Ok(SsoSignupAuthorization {
             flow_id: id,
             args,
@@ -123,7 +126,9 @@ impl FoksClient {
         store: &mut impl ProtectedMutationStore,
     ) -> Result<crate::CreatedSoftwareAccount> {
         let flow = public_flow(host, &id)?;
-        if flow.for_login || !matches!(flow.state, SsoFlowState::Binding | SsoFlowState::Complete) {
+        if flow.purpose.is_existing()
+            || !matches!(flow.state, SsoFlowState::Binding | SsoFlowState::Complete)
+        {
             return Err(Error::Sso("flow has no resumable signup"));
         }
         let operation = flow
@@ -142,7 +147,7 @@ impl FoksClient {
         store: &mut impl ProtectedMutationStore,
     ) -> Result<crate::CreatedYubiAccount<'a>> {
         let flow = public_flow(host, &id)?;
-        if flow.for_login
+        if flow.purpose.is_existing()
             || flow.device != parent.entity_id().as_bytes()
             || !matches!(flow.state, SsoFlowState::Binding | SsoFlowState::Complete)
         {

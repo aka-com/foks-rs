@@ -43,4 +43,4 @@ pub use standalone::{
     backup_standalone_installation, restore_backup, start_standalone, BackupArtifacts,
     BackupSchedule, RunningStandaloneServer, StandaloneConfig,
 };
-pub use writer::{Writer, WriterHandle, WriterMetrics};
+pub use writer::{DatabaseWriterGuard, GuardedDatabase, Writer, WriterHandle, WriterMetrics};

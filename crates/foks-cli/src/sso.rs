@@ -28,6 +28,20 @@ pub enum SsoCommand {
     },
     /// Begin or resume browser authentication for an existing account.
     Login(Scope),
+    /// Link an eligible existing account using its owner device.
+    Link {
+        #[command(flatten)]
+        scope: Scope,
+        #[arg(long)]
+        pin_file: Option<PathBuf>,
+    },
+    /// Prove owner identity and read rollout/linkage status without a client certificate.
+    AccountStatus {
+        #[command(flatten)]
+        scope: Scope,
+        #[arg(long)]
+        pin_file: Option<PathBuf>,
+    },
     /// Begin enrollment; the provider supplies the account username and email.
     Signup(Scope),
     /// Read the original flow without repeating a mutation.
@@ -99,8 +113,41 @@ pub fn run(state: &Path, command: SsoCommand) -> Result<(), Box<dyn std::error::
                 pin: SecretString::new(super::read_pin(&pin_file)?.expose()),
             },
         ),
-        SsoCommand::Login(scope) => (scope, SsoAction::Begin { for_login: true }),
-        SsoCommand::Signup(scope) => (scope, SsoAction::Begin { for_login: false }),
+        SsoCommand::Link { scope, pin_file } => (
+            scope,
+            SsoAction::Begin {
+                purpose: foks_agent_proto::sso::SsoPurpose::LinkExisting,
+                pin: pin_file
+                    .as_deref()
+                    .map(super::read_pin)
+                    .transpose()?
+                    .map(|p| SecretString::new(p.expose())),
+            },
+        ),
+        SsoCommand::AccountStatus { scope, pin_file } => (
+            scope,
+            SsoAction::AccountStatus {
+                pin: pin_file
+                    .as_deref()
+                    .map(super::read_pin)
+                    .transpose()?
+                    .map(|p| SecretString::new(p.expose())),
+            },
+        ),
+        SsoCommand::Login(scope) => (
+            scope,
+            SsoAction::Begin {
+                purpose: foks_agent_proto::sso::SsoPurpose::Reauthenticate,
+                pin: None,
+            },
+        ),
+        SsoCommand::Signup(scope) => (
+            scope,
+            SsoAction::Begin {
+                purpose: foks_agent_proto::sso::SsoPurpose::Signup,
+                pin: None,
+            },
+        ),
         SsoCommand::Status(f) => (
             f.scope,
             SsoAction::Status {

@@ -231,7 +231,27 @@ pub fn load_or_bootstrap(
         generation.encrypted_file_name == "capability.key"
             && generation.state != foks_server_db::CapabilityKeyGenerationState::Revoked
     });
-    manifest.validate_existing(provider, require_genesis_host, require_genesis_capability)?;
+    let host: [u8; 33] = stored
+        .host_id
+        .as_slice()
+        .try_into()
+        .map_err(|_| crate::Error::Config("invalid stored host ID"))?;
+    let activated = database.sso_policy(&host)?.is_some();
+    let recovery_invalid = provider
+        .load_existing(KeyPurpose::Recovery)
+        .map_or(true, |key| {
+            Some(key.generation()) != manifest.generation(KeyPurpose::Recovery)
+        });
+    let allow_fenced_recovery = activated && recovery_invalid;
+    if allow_fenced_recovery {
+        database.sso_fence_policy(&host, foks_server_db::SsoProviderFence::KeyUnavailable)?;
+    }
+    manifest.validate_existing(
+        provider,
+        require_genesis_host,
+        require_genesis_capability,
+        allow_fenced_recovery,
+    )?;
     super::rotation::validate_host_key_generations(database, provider)?;
     crate::keys::validate_capability_key_generations(database, provider)?;
     let verified = foks_verify::verify_public_host(&input.canonical_name, &stored.probe_response)?;

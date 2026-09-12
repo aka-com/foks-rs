@@ -190,6 +190,17 @@ impl SsoService {
             }
             Ok((old, sequence))
         })?;
+        let purpose = if signup.is_some() {
+            foks_proto::SsoPurpose::Signup
+        } else if old.is_some() {
+            foks_proto::SsoPurpose::Reauthenticate
+        } else {
+            foks_proto::SsoPurpose::LinkExisting
+        };
+        let authorization_generation = old
+            .as_ref()
+            .map_or(Some(1), |old| old.authorization_generation.checked_add(1))
+            .ok_or(Error::Sso("authorization generation overflow"))?;
         let revision = if let Some((device, username, email, reservation)) = signup {
             if binding.key != *device
                 || username != material.username.as_bytes()
@@ -209,14 +220,18 @@ impl SsoService {
                 return Err(Error::Sso("signup reservation mismatch"));
             }
             1
-        } else {
-            let old = old.ok_or(Error::Sso("account has no established provider identity"))?;
+        } else if let Some(old) = old {
             if old.issuer != material.issuer || old.subject != material.subject {
                 return Err(Error::Sso("provider subject mismatch"));
             }
             old.revision
                 .checked_add(1)
                 .ok_or(Error::Sso("access revision overflow"))?
+        } else {
+            if sequence.is_none() {
+                return Err(Error::Sso("account has no active owner"));
+            }
+            1
         };
         material.binding_hash = Some(hash);
         material.bound_uid = Some(uid_bytes.to_vec());
@@ -234,12 +249,17 @@ impl SsoService {
             subject: material.subject.clone(),
             config_hash: self.config_hash,
             revision,
+            authorization_epoch: row.authorization_epoch,
+            authorization_generation,
+            interrupted: false,
             state: SsoAccessState::Active,
             expires_at_ms: material.expires_at_ms,
             ciphertext: Vec::new(),
         };
         access.ciphertext = self.seal_access(&access, &material)?;
         Ok(Some(SsoAccountBinding {
+            purpose,
+            commitment: hash,
             flow: row,
             completed_ciphertext,
             access,

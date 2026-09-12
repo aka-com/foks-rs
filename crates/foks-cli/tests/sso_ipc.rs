@@ -66,7 +66,7 @@ fn cli_and_resident_agent_recover_and_cancel_the_original_protected_flow() {
             )?;
             s.begin_account_sso(
                 "work",
-                false,
+                foks_agent_proto::sso::SsoPurpose::Signup,
                 &mut AccountVault::new(&mut secrets),
                 &key,
                 &foks_oidc::ProviderHttp::new(foks_oidc::NetworkPolicy::loopback_test()).unwrap(),
@@ -91,7 +91,12 @@ fn cli_and_resident_agent_recover_and_cancel_the_original_protected_flow() {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(20));
     }
-    let read = cli(&state, "status", "work", &start.operation_id);
+    let read = cli(
+        &state,
+        "status",
+        "work",
+        start.operation_id.as_deref().unwrap(),
+    );
     assert!(
         read.status.success(),
         "{}",
@@ -99,12 +104,25 @@ fn cli_and_resident_agent_recover_and_cancel_the_original_protected_flow() {
     );
     let progress: serde_json::Value = serde_json::from_slice(&read.stdout).unwrap();
     assert_eq!(progress["state"], "waiting");
-    assert_eq!(progress["operation_id"], start.operation_id);
-    assert!(!cli(&state, "status", "other", &start.operation_id)
-        .status
-        .success());
+    assert_eq!(
+        progress["operation_id"],
+        start.operation_id.as_deref().unwrap()
+    );
+    assert!(!cli(
+        &state,
+        "status",
+        "other",
+        start.operation_id.as_deref().unwrap()
+    )
+    .status
+    .success());
     for _ in 0..2 {
-        let result = cli(&state, "cancel", "work", &start.operation_id);
+        let result = cli(
+            &state,
+            "cancel",
+            "work",
+            start.operation_id.as_deref().unwrap(),
+        );
         assert!(
             result.status.success(),
             "{}",

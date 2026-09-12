@@ -59,7 +59,7 @@ fn signup_and_reauthentication_against_go_with_strict_idp() {
             foks_client::SsoIntent {
                 uid: uid.clone(),
                 device: device_id.clone(),
-                for_login: false,
+                purpose: foks_proto::SsoPurpose::Signup,
             },
             &http,
             &mut protected,
@@ -138,7 +138,7 @@ fn signup_and_reauthentication_against_go_with_strict_idp() {
             foks_client::SsoIntent {
                 uid: uid.clone(),
                 device: device_id,
-                for_login: true,
+                purpose: foks_proto::SsoPurpose::Reauthenticate,
             },
             &http,
             &mut protected,
@@ -204,7 +204,7 @@ fn signup_and_reauthentication_against_go_with_strict_idp() {
             foks_client::SsoIntent {
                 uid: yub_uid.clone(),
                 device: parent.entity_id().clone(),
-                for_login: false,
+                purpose: foks_proto::SsoPurpose::Signup,
             },
             &http,
             &mut protected,
@@ -261,7 +261,7 @@ fn signup_and_reauthentication_against_go_with_strict_idp() {
             foks_client::SsoIntent {
                 uid: yub_uid,
                 device: parent.entity_id().clone(),
-                for_login: true,
+                purpose: foks_proto::SsoPurpose::Reauthenticate,
             },
             &http,
             &mut protected,

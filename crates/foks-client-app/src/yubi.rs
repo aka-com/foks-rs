@@ -2283,7 +2283,7 @@ impl AccountVault<'_> {
         Ok(foks_client::SsoIntent {
             uid: EntityId::from_bytes(uid)?,
             device,
-            for_login: false,
+            purpose: foks_proto::SsoPurpose::Signup,
         })
     }
 }
@@ -2383,7 +2383,7 @@ impl CheckedProfileSession<'_> {
     ) -> Result<crate::SsoReport> {
         let flow = self.checked_sso_flow(alias, id, vault)?;
         self.profile.require(Capability::DeviceAdministration)?;
-        if flow.for_login {
+        if flow.purpose.is_existing() {
             return Err(Error::InvalidAccount("login flow cannot create an account"));
         }
         let host = self.pinned_host()?;
@@ -2448,7 +2448,7 @@ impl CheckedProfileSession<'_> {
         }
         let mut report = crate::sso::report(
             alias,
-            false,
+            foks_proto::SsoPurpose::Signup,
             self.client.sso_progress(&host, id, &mut protected)?,
         );
         // resume_yubi_account verified authenticated service access above.

@@ -373,7 +373,14 @@ fn validate_unique_contract_entries(contract: &Contract) {
     for protocol in &contract.protocol {
         assert!(protocol_names.insert(&protocol.name));
         assert!(protocol_ids.insert(protocol.protocol_id));
-        assert!(!protocol.upstream.is_empty());
+        if (0xf04b0000..=0xf04bffff).contains(&protocol.protocol_id) {
+            assert!(
+                protocol.upstream.is_empty(),
+                "local protocol must not impersonate an upstream protocol"
+            );
+        } else {
+            assert!(!protocol.upstream.is_empty());
+        }
     }
     let mut service_names = BTreeSet::new();
     let mut service_types = BTreeSet::new();

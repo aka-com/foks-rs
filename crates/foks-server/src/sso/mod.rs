@@ -5,10 +5,11 @@ mod config;
 mod envelope;
 mod http;
 mod material;
+pub mod operator;
 use crate::{keys::HostKeyProvider, Entropy, Error, Result, WriterHandle};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 pub(crate) use binding::status;
-pub use config::OidcOperatorConfig;
+pub use config::{OidcOperatorConfig, OidcRolloutMode};
 use foks_oidc::{NetworkPolicy, Provider, ProviderClient, ProviderHttp};
 use foks_proto::{InitOAuth2SessionArgument, OAuth2SessionId};
 use foks_server_db::{SsoSession, SsoSessionState};
@@ -51,27 +52,64 @@ impl SsoService {
         entropy: Arc<dyn Entropy>,
     ) -> Result<Arc<Self>> {
         config.validate(policy)?;
-        let raw = crate::keys::read_secret_file(&config.client_secret_file, 4096)?;
-        let secret = Zeroizing::new(
-            std::str::from_utf8(&raw)
-                .map_err(|_| Error::Config("OIDC secret must be UTF-8"))?
-                .to_owned(),
-        );
-        if secret.contains(['\r', '\n', '\0']) {
-            return Err(Error::Config(
-                "OIDC secret must have no trailing newline or NUL",
-            ));
-        }
+        let secret = config.load_secret()?;
         let config_hash = config.fingerprint(&secret)?;
         let http = ProviderHttp::new(policy)?;
-        let provider = Provider::discover(&http, &config.discovery_uri, &config.client_id)?;
-        if provider.metadata.issuer().as_str() != config.issuer {
-            return Err(Error::Config("OIDC discovery issuer mismatch"));
+        let existing = writer.call(move |db| Ok(db.sso_policy(&host)?))?;
+        if let Some(existing) = &existing {
+            if existing.config_hash != config_hash
+                || existing.issuer != config.issuer
+                || existing.rollout_id != config.rollout_id
+                || existing.mode != config.rollout_mode.into()
+            {
+                writer.call(move |db| {
+                    db.sso_fence_policy(
+                        &host,
+                        foks_server_db::SsoProviderFence::ConfigurationMismatch,
+                    )?;
+                    Ok(())
+                })?;
+                return Err(Error::Sso(
+                    "configuration disagrees with durable rollout policy",
+                ));
+            }
         }
-        // Check the independent secret facility before writing policy or accepting sessions.
-        keys.load_existing(crate::keys::KeyPurpose::Recovery)?;
+        let key_result = keys.load_existing(crate::keys::KeyPurpose::Recovery);
+        if key_result.is_err() && existing.is_some() {
+            writer.call(move |db| {
+                db.sso_fence_policy(&host, foks_server_db::SsoProviderFence::KeyUnavailable)?;
+                Ok(())
+            })?;
+        } else {
+            key_result?;
+        }
+        let discovered = Provider::discover(&http, &config.discovery_uri, &config.client_id);
+        let provider = match discovered {
+            Ok(provider) if provider.metadata.issuer().as_str() == config.issuer => {
+                Some((Instant::now(), Arc::new(provider)))
+            }
+            Ok(_) => {
+                if existing.is_some() {
+                    writer.call(move |db| {
+                        db.sso_fence_policy(
+                            &host,
+                            foks_server_db::SsoProviderFence::ConfigurationMismatch,
+                        )?;
+                        Ok(())
+                    })?;
+                }
+                return Err(Error::Config("OIDC discovery issuer mismatch"));
+            }
+            Err(_) if existing.is_some() => None, // Expiring linked access can still be checked locally.
+            Err(error) => return Err(error.into()),
+        };
+        let rollout_id = config.rollout_id;
+        let rollout_mode = config.rollout_mode.into();
+        let issuer = config.issuer.clone();
         writer.call(move |db| {
-            db.sso_set_policy(&host, &config_hash, true)?;
+            if existing.is_none() {
+                db.sso_activate(&host, &rollout_id, &config_hash, &issuer, rollout_mode)?;
+            }
             db.sso_abandon_exchanges(&host)?;
             db.sso_abandon_refreshes()?;
             Ok(())
@@ -86,7 +124,7 @@ impl SsoService {
             clock,
             entropy,
             http,
-            provider: Mutex::new(Some((Instant::now(), Arc::new(provider)))),
+            provider: Mutex::new(provider),
             polling: Arc::new(tokio::sync::Semaphore::new(32)),
             changed: Arc::new(tokio::sync::Notify::new()),
             http_starts: Arc::new(tokio::sync::Semaphore::new(8)),
@@ -177,8 +215,17 @@ impl SsoService {
                     .map_err(|_| Error::Sso("invalid UID"))
             })
             .transpose()?;
+        let host = self.host;
+        let epoch = self.writer.call(move |db| {
+            Ok(db
+                .sso_policy(&host)?
+                .ok_or(Error::Sso("OIDC policy missing"))?
+                .authorization_epoch)
+        })?;
         let mut row = SsoSession {
             host: self.host,
+            authorization_epoch: epoch,
+            interrupted: false,
             session_hash: session_hash(&arg.id),
             config_hash: self.config_hash,
             admission_hash: foks_crypto::prefixed_hash(0x13f6_7bc0_b832_a770, admission_identity),
@@ -215,10 +262,17 @@ impl SsoService {
             .writer
             .call(move |db| {
                 db.sso_require_policy(&host, &config_hash)?;
-                Ok(db.sso_session(&host, &hash)?)
+                let row = db.sso_session(&host, &hash)?;
+                if let Some(row) = &row {
+                    db.sso_require_policy_epoch(&host, &config_hash, row.authorization_epoch)?;
+                }
+                Ok(row)
             })?
             .ok_or(Error::Sso("unknown session"))?;
-        if row.config_hash != self.config_hash || row.expires_at_ms <= self.now_ms()? {
+        if row.interrupted
+            || row.config_hash != self.config_hash
+            || row.expires_at_ms <= self.now_ms()?
+        {
             return Err(Error::Sso("expired or replaced session"));
         }
         Ok(row)

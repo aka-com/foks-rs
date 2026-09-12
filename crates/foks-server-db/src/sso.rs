@@ -48,6 +48,8 @@ pub struct SsoSession {
     pub uid: Option<[u8; 33]>,
     pub state: SsoSessionState,
     pub revision: u64,
+    pub authorization_epoch: u64,
+    pub interrupted: bool,
     pub expires_at_ms: u64,
     pub ciphertext: Vec<u8>,
 }
@@ -63,6 +65,14 @@ impl Database {
     pub fn sso_require_policy(&self, host: &[u8; 33], hash: &[u8; 32]) -> Result<()> {
         policy_matches(&self.connection, host, hash)
     }
+    pub fn sso_require_policy_epoch(
+        &self,
+        host: &[u8; 33],
+        hash: &[u8; 32],
+        epoch: u64,
+    ) -> Result<()> {
+        policy_epoch_matches(&self.connection, host, hash, epoch)
+    }
     pub fn sso_store_poll(
         &mut self,
         old: &SsoSession,
@@ -76,8 +86,11 @@ impl Database {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        policy_matches(&tx, &old.host, &old.config_hash)?;
-        let changed=tx.execute("UPDATE sso_sessions SET revision=revision+1,ciphertext=?1 WHERE host=?2 AND session_hash=?3 AND state=2 AND revision=?4 AND config_hash=?5 AND expires_at_ms>?6",params![ciphertext,old.host,old.session_hash,sql_integer(old.revision)?,old.config_hash,sql_integer(now_ms)?])?;
+        policy_epoch_matches(&tx, &old.host, &old.config_hash, old.authorization_epoch)?;
+        if old.interrupted {
+            return Err(Error::AuthorizationChanged);
+        }
+        let changed=tx.execute("UPDATE sso_sessions SET revision=revision+1,ciphertext=?1 WHERE host=?2 AND session_hash=?3 AND state=2 AND revision=?4 AND config_hash=?5 AND expires_at_ms>?6 AND interrupted=0",params![ciphertext,old.host,old.session_hash,sql_integer(old.revision)?,old.config_hash,sql_integer(now_ms)?])?;
         if changed != 1 {
             return Err(Error::AuthorizationChanged);
         }
@@ -101,15 +114,6 @@ impl Database {
         tx.commit()?;
         Ok(())
     }
-    pub fn sso_set_policy(
-        &mut self,
-        host: &[u8; 33],
-        hash: &[u8; 32],
-        enabled: bool,
-    ) -> Result<()> {
-        self.connection.execute("INSERT INTO sso_policy(host,config_hash,enabled) VALUES(?1,?2,?3) ON CONFLICT(host) DO UPDATE SET config_hash=excluded.config_hash, enabled=excluded.enabled",params![host,hash,enabled])?;
-        Ok(())
-    }
     pub fn sso_session(&self, host: &[u8; 33], id: &[u8; 32]) -> Result<Option<SsoSession>> {
         read_session(&self.connection, host, id)
     }
@@ -124,10 +128,13 @@ impl Database {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        policy_matches(&tx, &row.host, &row.config_hash)?;
+        policy_epoch_matches(&tx, &row.host, &row.config_hash, row.authorization_epoch)?;
+        if row.interrupted {
+            return Err(Error::AuthorizationChanged);
+        }
         // All records count until expiry, including denied sessions, to bound disk and churn.
         tx.execute(
-            "DELETE FROM sso_sessions WHERE host=?1 AND expires_at_ms<=?2",
+            "DELETE FROM sso_sessions WHERE rowid IN (SELECT rowid FROM sso_sessions WHERE host=?1 AND expires_at_ms<=?2 ORDER BY expires_at_ms LIMIT 128)",
             params![row.host, sql_integer(now_ms)?],
         )?;
         let (host_count, identity_count): (i64, i64) = tx.query_row(
@@ -138,7 +145,7 @@ impl Database {
         if host_count >= 1000 || identity_count >= 4 {
             return Err(Error::Capacity("SSO sessions"));
         }
-        tx.execute("INSERT INTO sso_sessions(host,session_hash,config_hash,admission_hash,uid,state,revision,expires_at_ms,ciphertext) VALUES(?1,?2,?3,?4,?5,0,1,?6,?7)",params![row.host,row.session_hash,row.config_hash,row.admission_hash,row.uid,sql_integer(row.expires_at_ms)?,row.ciphertext])?;
+        tx.execute("INSERT INTO sso_sessions(host,session_hash,config_hash,admission_hash,uid,state,revision,expires_at_ms,ciphertext,authorization_epoch) VALUES(?1,?2,?3,?4,?5,0,1,?6,?7,?8)",params![row.host,row.session_hash,row.config_hash,row.admission_hash,row.uid,sql_integer(row.expires_at_ms)?,row.ciphertext,sql_integer(row.authorization_epoch)?])?;
         tx.commit()?;
         Ok(())
     }
@@ -156,8 +163,11 @@ impl Database {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        policy_matches(&tx, &old.host, &old.config_hash)?;
-        let changed=tx.execute("UPDATE sso_sessions SET state=?1,revision=revision+1,ciphertext=?2 WHERE host=?3 AND session_hash=?4 AND config_hash=?5 AND state=?6 AND revision=?7 AND expires_at_ms>?8",params![next as u8,ciphertext,old.host,old.session_hash,old.config_hash,old.state as u8,sql_integer(old.revision)?,sql_integer(now_ms)?])?;
+        policy_epoch_matches(&tx, &old.host, &old.config_hash, old.authorization_epoch)?;
+        if old.interrupted {
+            return Err(Error::AuthorizationChanged);
+        }
+        let changed=tx.execute("UPDATE sso_sessions SET state=?1,revision=revision+1,ciphertext=?2 WHERE host=?3 AND session_hash=?4 AND config_hash=?5 AND state=?6 AND revision=?7 AND expires_at_ms>?8 AND interrupted=0",params![next as u8,ciphertext,old.host,old.session_hash,old.config_hash,old.state as u8,sql_integer(old.revision)?,sql_integer(now_ms)?])?;
         if changed != 1 {
             return Err(Error::AuthorizationChanged);
         }
@@ -166,10 +176,9 @@ impl Database {
     }
     /// Startup fences exchanges interrupted by a process exit. No authorization code replay.
     pub fn sso_abandon_exchanges(&mut self, host: &[u8; 33]) -> Result<usize> {
-        // Keep ciphertext unchanged for forensic cleanup, but it cannot decrypt under the new
-        // state/revision AAD and must never be opened or used to grant authority.
+        // Preserve authenticated bytes and set an independent fail-closed interruption flag.
         Ok(self.connection.execute(
-            "UPDATE sso_sessions SET state=5,revision=revision+1 WHERE host=?1 AND state=1",
+            "UPDATE sso_sessions SET interrupted=1 WHERE host=?1 AND state=1 AND interrupted=0",
             [host],
         )?)
     }
@@ -185,7 +194,7 @@ pub(crate) fn policy_matches(
     hash: &[u8; 32],
 ) -> Result<()> {
     let valid: bool = c.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sso_policy WHERE host=?1 AND config_hash=?2 AND enabled=1)",
+        "SELECT EXISTS(SELECT 1 FROM sso_policy WHERE host=?1 AND config_hash=?2 AND fence IS NULL)",
         params![host, hash],
         |r| r.get(0),
     )?;
@@ -200,5 +209,23 @@ fn read_session(
     host: &[u8; 33],
     id: &[u8; 32],
 ) -> Result<Option<SsoSession>> {
-    Ok(c.query_row("SELECT config_hash,admission_hash,uid,state,revision,expires_at_ms,ciphertext FROM sso_sessions WHERE host=?1 AND session_hash=?2",params![host,id],|r|Ok(SsoSession{host:*host,session_hash:*id,config_hash:r.get(0)?,admission_hash:r.get(1)?,uid:r.get(2)?,state:SsoSessionState::decode(r.get(3)?)?,revision:r.get::<_,i64>(4)? as u64,expires_at_ms:r.get::<_,i64>(5)? as u64,ciphertext:r.get(6)?})).optional()?)
+    Ok(c.query_row("SELECT config_hash,admission_hash,uid,state,revision,expires_at_ms,ciphertext,authorization_epoch,interrupted FROM sso_sessions WHERE host=?1 AND session_hash=?2",params![host,id],|r|Ok(SsoSession{host:*host,session_hash:*id,config_hash:r.get(0)?,admission_hash:r.get(1)?,uid:r.get(2)?,state:SsoSessionState::decode(r.get(3)?)?,revision:r.get::<_,i64>(4)? as u64,expires_at_ms:r.get::<_,i64>(5)? as u64,ciphertext:r.get(6)?,authorization_epoch:r.get::<_,i64>(7)? as u64,interrupted:r.get(8)?})).optional()?)
+}
+
+pub(crate) fn policy_epoch_matches(
+    c: &rusqlite::Connection,
+    host: &[u8; 33],
+    hash: &[u8; 32],
+    epoch: u64,
+) -> Result<()> {
+    policy_matches(c, host, hash)?;
+    let current: i64 = c.query_row(
+        "SELECT authorization_epoch FROM sso_policy WHERE host=?1",
+        [host],
+        |r| r.get(0),
+    )?;
+    if current != sql_integer(epoch)? {
+        return Err(Error::AuthorizationChanged);
+    }
+    Ok(())
 }

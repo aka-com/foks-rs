@@ -728,7 +728,8 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
             .as_bytes()
             .try_into()
             .map_err(|_| crate::Error::Config("invalid OIDC host"))?;
-        Some(crate::sso::SsoService::open(
+        let activated = writer_handle.call(move |db| Ok(db.sso_policy(&host)?.is_some()))?;
+        match crate::sso::SsoService::open(
             operator,
             policy,
             host,
@@ -736,7 +737,25 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
             keys.clone(),
             config.clock.clone(),
             config.entropy.clone(),
-        )?)
+        ) {
+            Ok(service) => Some(service),
+            Err(_) if activated => {
+                writer_handle.call(move |db| {
+                    let policy = db
+                        .sso_policy(&host)?
+                        .ok_or(crate::Error::Sso("OIDC policy missing"))?;
+                    if policy.fence.is_none() {
+                        db.sso_fence_policy(
+                            &host,
+                            foks_server_db::SsoProviderFence::ConfigurationMismatch,
+                        )?;
+                    }
+                    Ok(())
+                })?;
+                None // Owner proof/status routes depend only on host identity and the database.
+            }
+            Err(error) => return Err(error),
+        }
     } else {
         writer_handle.call(|db| {
             db.sso_disable_policy()?;

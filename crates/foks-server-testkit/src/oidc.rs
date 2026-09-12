@@ -89,6 +89,8 @@ impl TestOidcProvider {
         std::fs::write(&secret_file, b"test-secret").unwrap();
         std::fs::set_permissions(&secret_file, std::fs::Permissions::from_mode(0o600)).unwrap();
         foks_server::sso::OidcOperatorConfig {
+            rollout_id: [1; 16],
+            rollout_mode: foks_server::sso::OidcRolloutMode::Migration,
             config_id: [50; 17],
             issuer: self.url.clone(),
             discovery_uri: format!("{}/discovery", self.url),

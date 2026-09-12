@@ -308,6 +308,11 @@ impl TestEnvironment {
 
     pub fn arm_fault(&self, fault: TestFault) -> u64 {
         let (point, protocol, method) = match fault {
+            TestFault::SsoAfterCommitBeforeResponse => (
+                foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
+                "Reg",
+                "ssoLogin",
+            ),
             TestFault::RevokeAfterCommitBeforeResponse => (
                 foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
                 "User",
@@ -419,6 +424,7 @@ impl TestEnvironment {
 
 #[derive(Clone, Copy, Debug)]
 pub enum TestFault {
+    SsoAfterCommitBeforeResponse,
     RevokeAfterCommitBeforeResponse,
     ProvisionAfterCommitBeforeResponse,
     RenameAfterCommitBeforeResponse,

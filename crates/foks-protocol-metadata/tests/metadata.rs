@@ -218,3 +218,23 @@ fn rejects_unimplemented_local_result_labels() {
         Err(MetadataError::Invalid(_))
     ));
 }
+
+#[test]
+fn standalone_local_protocol_has_explicit_id_and_cannot_alias_upstream() {
+    let artifact = parse_artifact(ARTIFACT).unwrap();
+    let mut policy = local_policy();
+    policy.routes.remove(0);
+    policy.protocols[0].upstream.clear();
+    policy.protocols[0].local_id = Some(0xf04b0001);
+    let merged = merge(&artifact, &policy).unwrap();
+    assert_eq!(merged.routes[0].protocol_id, 0xf04b0001);
+    assert!(render_protocol_ids(&merged).contains("0xf04b0001"));
+    assert!(foks_protocol_metadata::render_contract(&merged).contains("protocol_id = 0xf04b0001"));
+    for id in [0, 1, 0xf04c0001] {
+        policy.protocols[0].local_id = Some(id);
+        assert!(merge(&artifact, &policy).is_err());
+    }
+    policy.protocols[0].local_id = Some(0xf04b0001);
+    policy.protocols[0].upstream = "Probe".into();
+    assert!(merge(&artifact, &policy).is_err());
+}

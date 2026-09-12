@@ -62,8 +62,32 @@ pub(super) fn handle(
                 &master,
                 &http,
             )?,
-            SsoAction::Begin { for_login } => {
-                session.begin_account_sso(alias, for_login, &mut vault, &master, &http)?
+            SsoAction::Begin { purpose, pin } => {
+                if let Some(pin) = pin {
+                    let loaded = vault.yubi_account(alias)?;
+                    let parent = HardwareYubiProvider::new()
+                        .open(&loaded.locator, Some(&Pin::new(pin.expose())?))?;
+                    session.begin_yubi_existing_sso(
+                        alias,
+                        purpose,
+                        parent.as_ref(),
+                        &mut vault,
+                        &master,
+                        &http,
+                    )?
+                } else {
+                    session.begin_account_sso(alias, purpose, &mut vault, &master, &http)?
+                }
+            }
+            SsoAction::AccountStatus { pin } => {
+                if let Some(pin) = pin {
+                    let loaded = vault.yubi_account(alias)?;
+                    let parent = HardwareYubiProvider::new()
+                        .open(&loaded.locator, Some(&Pin::new(pin.expose())?))?;
+                    session.account_identity_status(alias, Some(parent.as_ref()), &mut vault)?
+                } else {
+                    session.account_identity_status(alias, None, &mut vault)?
+                }
             }
             SsoAction::Status { operation_id } => session.account_sso(
                 alias,

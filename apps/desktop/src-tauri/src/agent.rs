@@ -112,6 +112,11 @@ impl AgentError {
 
     pub fn from_agent(code: ErrorCode, message: String) -> Self {
         let (slug, retryable) = match code {
+            ErrorCode::RetentionFull => ("retention-full", false),
+            ErrorCode::ClockUntrusted => ("clock-untrusted", false),
+            ErrorCode::SubmissionActiveFull => ("submission-active-full", false),
+            ErrorCode::SubmissionIdentityConflict => ("submission-identity-conflict", false),
+            ErrorCode::SubmissionFuture => ("submission-future", false),
             ErrorCode::WebAdminUnsupported => ("web-admin-unsupported", false),
             ErrorCode::WebAdminExpired => ("web-admin-expired", true),
             ErrorCode::WebAdminWrongAccount => ("web-admin-wrong-account", false),
@@ -827,7 +832,10 @@ fn incompatible_listener_is_gone(socket: &Path, pid: u32) -> bool {
 fn unix_peer_pid(stream: &std::os::unix::net::UnixStream) -> std::io::Result<u32> {
     use std::os::unix::io::AsRawFd;
 
+    #[cfg(target_os = "macos")]
     let mut pid: libc::pid_t = 0;
+    #[cfg(not(target_os = "macos"))]
+    let pid: libc::pid_t;
     #[cfg(target_os = "macos")]
     {
         let mut length = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;

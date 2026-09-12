@@ -124,26 +124,11 @@ impl Writer {
         if maximum_pending == 0 {
             return Err(Error::Config("zero writer queue limit"));
         }
-        let database_identity = DatabasePathIdentity::prepare(&database_path)?;
-        let database_path = database_identity.path().to_path_buf();
-        let mut lock_path = database_path.as_os_str().to_os_string();
-        lock_path.push(".writer-lock");
-        let mut lock_options = std::fs::OpenOptions::new();
-        lock_options
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            lock_options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-        }
-        let process_lock = lock_options.open(std::path::PathBuf::from(lock_path))?;
-        process_lock
-            .try_lock()
-            .map_err(|_| Error::Config("database writer is already active"))?;
-        database_identity.recheck()?;
+        let guard = DatabaseWriterGuard::acquire(&database_path)?;
+        let DatabaseWriterGuard {
+            database_identity,
+            process_lock,
+        } = guard;
         let (sender, receiver) = mpsc::sync_channel(maximum_pending);
         let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
         let thread = thread::spawn(move || {
@@ -357,6 +342,67 @@ fn observe_duration(
     maximum.fetch_max(microseconds, Ordering::Relaxed);
 }
 
+/// Shared exclusive mutation guard for the server and offline operator commands.
+/// The canonical path and no-follow lock handling are identical for both callers.
+pub struct DatabaseWriterGuard {
+    database_identity: DatabasePathIdentity,
+    process_lock: std::fs::File,
+}
+impl DatabaseWriterGuard {
+    pub fn acquire(database_path: &std::path::Path) -> Result<Self> {
+        let database_identity = DatabasePathIdentity::prepare(database_path)?;
+        let database_path = database_identity.path().to_path_buf();
+        let mut lock_path = database_path.as_os_str().to_os_string();
+        lock_path.push(".writer-lock");
+        let mut lock_options = std::fs::OpenOptions::new();
+        lock_options
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            lock_options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        let process_lock = lock_options.open(std::path::PathBuf::from(lock_path))?;
+        process_lock
+            .try_lock()
+            .map_err(|_| Error::Config("database writer is already active"))?;
+        database_identity.recheck()?;
+        Ok(Self {
+            database_identity,
+            process_lock,
+        })
+    }
+    pub fn open_database(&self, config: foks_server_db::Config) -> Result<GuardedDatabase<'_>> {
+        self.database_identity.recheck()?;
+        let db = Database::open(self.database_identity.path(), config)?;
+        self.database_identity.recheck()?;
+        Ok(GuardedDatabase {
+            database: db,
+            _guard: self,
+        })
+    }
+}
+
+/// A writable database cannot outlive its process-level exclusion guard.
+pub struct GuardedDatabase<'a> {
+    database: Database,
+    _guard: &'a DatabaseWriterGuard,
+}
+impl std::ops::Deref for GuardedDatabase<'_> {
+    type Target = Database;
+    fn deref(&self) -> &Database {
+        &self.database
+    }
+}
+impl std::ops::DerefMut for GuardedDatabase<'_> {
+    fn deref_mut(&mut self) -> &mut Database {
+        &mut self.database
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,6 +413,24 @@ mod tests {
         fn now_micros(&self) -> foks_server_db::Result<u64> {
             Ok(self.0.load(Ordering::Acquire))
         }
+    }
+
+    #[test]
+    fn offline_guard_and_running_writer_exclude_each_other() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("server.sqlite");
+        {
+            let guard = DatabaseWriterGuard::acquire(&path).unwrap();
+            let _database = guard
+                .open_database(foks_server_db::Config::default())
+                .unwrap();
+            assert!(Writer::start(path.clone(), foks_server_db::Config::default(), 2).is_err());
+            assert!(DatabaseWriterGuard::acquire(&path).is_err());
+        }
+        let writer = Writer::start(path.clone(), foks_server_db::Config::default(), 2).unwrap();
+        assert!(DatabaseWriterGuard::acquire(&path).is_err());
+        writer.shutdown().unwrap();
+        assert!(DatabaseWriterGuard::acquire(&path).is_ok());
     }
 
     #[test]

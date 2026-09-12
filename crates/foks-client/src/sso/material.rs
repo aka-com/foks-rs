@@ -1,5 +1,6 @@
 use super::*;
 pub(super) struct Material {
+    pub(super) purpose: foks_proto::SsoPurpose,
     pub(super) device: EntityId,
     pub(super) expires_at_ms: u64,
     pub(super) config: SsoConfig,
@@ -16,6 +17,7 @@ impl Material {
             Value::Text(self.issuer.as_bytes().to_vec()),
             Value::Binary(self.device.as_bytes().to_vec()),
             Value::Unsigned(self.expires_at_ms),
+            Value::Unsigned(self.purpose as u64),
         ]))?))
     }
     pub(super) fn decode(bytes: &[u8]) -> Result<Self> {
@@ -23,12 +25,15 @@ impl Material {
         let Value::Array(f) = v else {
             return Err(Error::Sso("invalid protected session"));
         };
-        let [Value::Binary(config), Value::Binary(binding), Value::Binary(init), Value::Text(issuer), Value::Binary(device), Value::Unsigned(expires_at_ms)] =
+        let [Value::Binary(config), Value::Binary(binding), Value::Binary(init), Value::Text(issuer), Value::Binary(device), Value::Unsigned(expires_at_ms), Value::Unsigned(purpose)] =
             f.as_slice()
         else {
             return Err(Error::Sso("invalid protected session fields"));
         };
         Ok(Self {
+            purpose: foks_proto::SsoPurpose::from_code(
+                u8::try_from(*purpose).map_err(|_| Error::Sso("invalid purpose"))?,
+            )?,
             device: EntityId::from_bytes(device.clone())?,
             expires_at_ms: *expires_at_ms,
             config: SsoConfig::decode(config)?,
@@ -103,18 +108,85 @@ pub(super) fn load(
         return Err(Error::Sso("protected session fingerprint mismatch"));
     }
     let m = Material::decode(&bytes)?;
-    if m.binding.uid.as_bytes() != flow.uid
+    if m.purpose != flow.purpose
+        || m.binding.uid.as_bytes() != flow.uid
         || m.binding.host != *host.host_id()
         || m.device.as_bytes() != flow.device
         || m.expires_at_ms != flow.expires_at_ms
         || config_hash(&m.config)? != flow.config_hash
         || m.init.uid.as_ref().map(EntityId::as_bytes)
-            != flow.for_login.then_some(flow.uid.as_slice())
+            != flow.purpose.is_existing().then_some(flow.uid.as_slice())
         || foks_crypto::oauth2_binding_nonce(&m.binding)? != m.init.nonce.expose()
     {
         return Err(Error::Sso("protected session scope mismatch"));
     }
     Ok((flow, m))
+}
+
+/// Local validation for typed protected inventory/export; never contacts a provider.
+pub(crate) fn validate_inventory_stage(flow: &SsoFlow, stage: u8, bytes: &[u8]) -> Result<()> {
+    match stage {
+        0 => {
+            if foks_crypto::prefixed_hash(MATERIAL_HASH, bytes) != flow.material_hash {
+                return Err(Error::Sso("protected session fingerprint mismatch"));
+            }
+            let m = Material::decode(bytes)?;
+            if m.purpose != flow.purpose
+                || m.binding.uid.as_bytes() != flow.uid
+                || m.binding.host.as_bytes() != flow.host
+                || m.device.as_bytes() != flow.device
+                || m.expires_at_ms != flow.expires_at_ms
+                || config_hash(&m.config)? != flow.config_hash
+                || m.init.uid.as_ref().map(EntityId::as_bytes)
+                    != flow.purpose.is_existing().then_some(flow.uid.as_slice())
+                || foks_crypto::oauth2_binding_nonce(&m.binding)? != m.init.nonce.expose()
+            {
+                return Err(Error::Sso("protected session scope mismatch"));
+            }
+        }
+        1 => {
+            let text = std::str::from_utf8(bytes).map_err(|_| Error::Sso("invalid browser URL"))?;
+            url::Url::parse(text).map_err(|_| Error::Sso("invalid browser URL"))?;
+        }
+        2 => {
+            OAuth2PollResult::decode(bytes)?;
+        }
+        3 => {
+            let args = if flow.purpose.is_existing() {
+                let mut framed = std::io::Cursor::new(bytes);
+                let call = foks_rpc::read_call(&mut framed, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)?;
+                if framed.position() != bytes.len() as u64
+                    || call.protocol_id() != foks_rpc::REG_PROTOCOL_ID
+                    || call.method_position() != foks_rpc::REG_SSO_LOGIN_METHOD_POSITION
+                {
+                    return Err(Error::Sso("stored login frame differs"));
+                }
+                let argument = SsoLoginArgument::decode(call.argument())?;
+                if argument.uid.as_bytes() != flow.uid {
+                    return Err(Error::Sso("stored login UID differs"));
+                }
+                argument.args
+            } else {
+                RegSsoArgs::decode(bytes)?
+            };
+            let commitment = foks_crypto::prefixed_hash(0x68b3_c398_ea5f_d71e, &args.encoded()?);
+            if flow.commitment.is_some_and(|stored| stored != commitment) {
+                return Err(Error::Sso("stored binding commitment differs"));
+            }
+            let RegSsoArgs::Oauth2 { binding, .. } = args else {
+                return Err(Error::Sso("missing stored binding"));
+            };
+            let payload = foks_crypto::verify_oauth2_binding(&binding)?;
+            if binding.key.as_bytes() != flow.device
+                || payload.binding.uid.as_bytes() != flow.uid
+                || payload.binding.host.as_bytes() != flow.host
+            {
+                return Err(Error::Sso("stored binding scope differs"));
+            }
+        }
+        _ => return Err(Error::Sso("unknown protected stage")),
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -151,6 +223,7 @@ mod tests {
             .unwrap()
             .key;
         let m = Material {
+            purpose: foks_proto::SsoPurpose::Signup,
             config: SsoConfig::decode(&fixture("public-config")).unwrap(),
             binding,
             init,
@@ -170,7 +243,8 @@ mod tests {
             host: host.host_id().as_bytes().to_vec(),
             uid: m.binding.uid.as_bytes().to_vec(),
             device: m.device.as_bytes().to_vec(),
-            for_login: false,
+            purpose: foks_proto::SsoPurpose::Signup,
+            commitment: None,
             state: SsoFlowState::Prepared,
             material_hash: foks_crypto::prefixed_hash(MATERIAL_HASH, &bytes),
             config_hash: config_hash(&m.config).unwrap(),
@@ -184,7 +258,7 @@ mod tests {
         let sql = rusqlite::Connection::open(&path).unwrap();
         for (change, restore) in [
             ("expires_at=2", "expires_at=1"),
-            ("for_login=1", "for_login=0"),
+            ("purpose=1", "purpose=0"),
             ("device_id=zeroblob(33)", "device_id=?2"),
             ("config_hash=zeroblob(32)", "config_hash=?2"),
         ] {
@@ -242,65 +316,4 @@ mod tests {
         };
         assert!(!format!("{progress:?}").contains("secret-session"));
     }
-}
-
-/// Local validation for typed protected inventory/export; never contacts a provider.
-pub(crate) fn validate_inventory_stage(flow: &SsoFlow, stage: u8, bytes: &[u8]) -> Result<()> {
-    match stage {
-        0 => {
-            if foks_crypto::prefixed_hash(MATERIAL_HASH, bytes) != flow.material_hash {
-                return Err(Error::Sso("protected session fingerprint mismatch"));
-            }
-            let m = Material::decode(bytes)?;
-            if m.binding.uid.as_bytes() != flow.uid
-                || m.binding.host.as_bytes() != flow.host
-                || m.device.as_bytes() != flow.device
-                || m.expires_at_ms != flow.expires_at_ms
-                || config_hash(&m.config)? != flow.config_hash
-                || m.init.uid.as_ref().map(EntityId::as_bytes)
-                    != flow.for_login.then_some(flow.uid.as_slice())
-                || foks_crypto::oauth2_binding_nonce(&m.binding)? != m.init.nonce.expose()
-            {
-                return Err(Error::Sso("protected session scope mismatch"));
-            }
-        }
-        1 => {
-            let text = std::str::from_utf8(bytes).map_err(|_| Error::Sso("invalid browser URL"))?;
-            url::Url::parse(text).map_err(|_| Error::Sso("invalid browser URL"))?;
-        }
-        2 => {
-            OAuth2PollResult::decode(bytes)?;
-        }
-        3 => {
-            let args = if flow.for_login {
-                let mut framed = std::io::Cursor::new(bytes);
-                let call = foks_rpc::read_call(&mut framed, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)?;
-                if framed.position() != bytes.len() as u64
-                    || call.protocol_id() != foks_rpc::REG_PROTOCOL_ID
-                    || call.method_position() != foks_rpc::REG_SSO_LOGIN_METHOD_POSITION
-                {
-                    return Err(Error::Sso("stored login frame differs"));
-                }
-                let argument = SsoLoginArgument::decode(call.argument())?;
-                if argument.uid.as_bytes() != flow.uid {
-                    return Err(Error::Sso("stored login UID differs"));
-                }
-                argument.args
-            } else {
-                RegSsoArgs::decode(bytes)?
-            };
-            let RegSsoArgs::Oauth2 { binding, .. } = args else {
-                return Err(Error::Sso("missing stored binding"));
-            };
-            let payload = foks_crypto::verify_oauth2_binding(&binding)?;
-            if binding.key.as_bytes() != flow.device
-                || payload.binding.uid.as_bytes() != flow.uid
-                || payload.binding.host.as_bytes() != flow.host
-            {
-                return Err(Error::Sso("stored binding scope differs"));
-            }
-        }
-        _ => return Err(Error::Sso("unknown protected stage")),
-    }
-    Ok(())
 }

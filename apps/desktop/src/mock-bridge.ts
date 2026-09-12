@@ -34,7 +34,7 @@ export class VersionMismatchError extends Error {
 }
 
 export function mockBridge(world: World = FIXTURE): Bridge {
-  const ssoModes = new Map<string, boolean>();
+  const ssoModes = new Map<string, import('./sso-contract').SsoPurpose>();
   const stores: Store[] = world.stores.map((store) => ({ ...store }));
   const servers = world.servers.map((server) => ({ ...server }));
   const accounts = world.accounts.map((account) => ({ ...account }));
@@ -800,20 +800,37 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       const begins =
         action.action === 'begin' || action.action === 'begin-yubi-signup';
       if (begins)
-        ssoModes.set(key, action.action === 'begin' && action.for_login);
+        ssoModes.set(
+          key,
+          action.action === 'begin' ? action.purpose : 'signup',
+        );
       return {
-        operationId: '1'.repeat(32),
+        operationId: action.action === 'account-status' ? null : '1'.repeat(32),
         accountAlias,
-        forLogin: ssoModes.get(key) ?? true,
-        state: begins
-          ? 'waiting'
-          : action.action === 'poll'
-            ? 'ready'
-            : action.action === 'cancel'
-              ? 'cancelled'
-              : action.action.startsWith('finish-')
-                ? 'complete'
-                : 'waiting',
+        purpose: ssoModes.get(key) ?? 'reauthenticate',
+        accountStatus:
+          action.action === 'account-status'
+            ? {
+                state: 'linked',
+                rolloutMode: 1,
+                providerFence: 0,
+                issuer: 'https://identity.example',
+                authorizationEpoch: 1,
+                authorizationGeneration: 1,
+              }
+            : null,
+        state:
+          action.action === 'account-status'
+            ? 'linked'
+            : begins
+              ? 'waiting'
+              : action.action === 'poll'
+                ? 'ready'
+                : action.action === 'cancel'
+                  ? 'cancelled'
+                  : action.action.startsWith('finish-')
+                    ? 'complete'
+                    : 'waiting',
         browserAvailable: begins || action.action === 'status',
         expiresAtMs: Date.now() + 600000,
         serviceAccess: action.action.startsWith('finish-'),

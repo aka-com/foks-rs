@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 35;
+pub(crate) const VERSION: u32 = 36;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -41,14 +41,22 @@ CREATE TABLE sso_flows (
     host_id BLOB NOT NULL CHECK(length(host_id)=33),
     uid BLOB NOT NULL CHECK(length(uid)=33),
     device_id BLOB NOT NULL CHECK(length(device_id) IN (33,34)),
-    for_login INTEGER NOT NULL CHECK(for_login IN (0,1)),
+    purpose INTEGER NOT NULL CHECK(purpose IN (0,1,2)),
     state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 9),
     material_hash BLOB NOT NULL CHECK(length(material_hash)=32),
     config_hash BLOB NOT NULL CHECK(length(config_hash)=32),
     expires_at INTEGER NOT NULL CHECK(expires_at>=0),
     final_operation BLOB REFERENCES mutation_operations(operation_id),
-    CHECK(final_operation IS NULL OR for_login=0)
+    commitment BLOB CHECK(commitment IS NULL OR length(commitment)=32),
+    CHECK(final_operation IS NULL OR purpose=0),
+    CHECK(state NOT IN (3,4,7) OR commitment IS NOT NULL)
 ) STRICT, WITHOUT ROWID;
+CREATE TRIGGER sso_binding_requires_evidence BEFORE UPDATE OF state ON sso_flows
+WHEN NEW.state IN (3,4,7) AND NEW.commitment IS NULL
+BEGIN SELECT RAISE(ABORT,'SSO binding requires retained commitment'); END;
+CREATE TRIGGER sso_commitment_immutable BEFORE UPDATE OF commitment ON sso_flows
+WHEN OLD.commitment IS NOT NULL AND (NEW.commitment IS NULL OR NEW.commitment != OLD.commitment)
+BEGIN SELECT RAISE(ABORT,'immutable SSO binding commitment'); END;
 CREATE INDEX sso_flows_by_account ON sso_flows(host_id,uid,state);
 CREATE TABLE chat_operations (
     operation_id BLOB PRIMARY KEY CHECK(length(operation_id)=16),

@@ -71,6 +71,143 @@ enum Command {
     },
     #[command(subcommand)]
     Invite(InviteCommand),
+    #[command(subcommand)]
+    Oidc(OidcCommand),
+}
+
+#[derive(clap::Subcommand)]
+enum OidcCommand {
+    MigrationStatus {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    MigrationStart {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        confirm_host: String,
+    },
+    MigrationEnforce {
+        #[command(flatten)]
+        expected: OidcExpected,
+        #[arg(long)]
+        expected_unlinked: u64,
+        #[arg(long)]
+        accept_lockout: bool,
+    },
+    ProviderReenable(OidcExpected),
+    ProviderReplace {
+        #[command(flatten)]
+        expected: OidcExpected,
+        #[arg(long)]
+        accept_provider_hash: String,
+    },
+}
+#[derive(clap::Args)]
+struct OidcExpected {
+    #[arg(long)]
+    config: PathBuf,
+    #[arg(long)]
+    confirm_host: String,
+    #[arg(long)]
+    expected_rollout_id: String,
+    #[arg(long)]
+    expected_provider_hash: String,
+    #[arg(long)]
+    expected_policy_revision: u64,
+    #[arg(long)]
+    expected_authorization_epoch: u64,
+}
+fn oidc_hex<const N: usize>(value: &str) -> Result<[u8; N], Box<dyn std::error::Error>> {
+    if value.len() != N * 2
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err("expected canonical lowercase hex".into());
+    }
+    let mut out = [0; N];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[i * 2..i * 2 + 2], 16)?;
+    }
+    Ok(out)
+}
+fn oidc_command(command: OidcCommand) -> Result<(), Box<dyn std::error::Error>> {
+    use foks_server::sso::operator;
+    use foks_server_db::SsoPolicyTransition as T;
+    let (expected, transition) = match command {
+        OidcCommand::MigrationStatus { config } => {
+            let config = foks_server::installation::load_config(config)?;
+            if let Some(status) = operator::status(&config)? {
+                print_oidc_policy(&status.policy);
+                println!(
+                    "cohort={} linked={} unlinked={}",
+                    status.cohort, status.linked, status.unlinked
+                );
+            } else {
+                println!("policy=never-activated");
+            }
+            return Ok(());
+        }
+        OidcCommand::MigrationStart {
+            config,
+            confirm_host,
+        } => {
+            let config = foks_server::installation::load_config(config)?;
+            print_oidc_policy(&operator::start(&config, &oidc_hex(&confirm_host)?)?);
+            return Ok(());
+        }
+        OidcCommand::MigrationEnforce {
+            expected,
+            expected_unlinked,
+            accept_lockout,
+        } => (
+            expected,
+            T::Enforce {
+                expected_unlinked,
+                accept_lockout,
+            },
+        ),
+        OidcCommand::ProviderReenable(expected) => (expected, T::Reenable),
+        OidcCommand::ProviderReplace {
+            expected,
+            accept_provider_hash,
+        } => {
+            let hash = oidc_hex(&accept_provider_hash)?;
+            (
+                expected,
+                T::ReplaceProvider {
+                    config_hash: hash,
+                    issuer: String::new(),
+                },
+            )
+        }
+    };
+    let config = foks_server::installation::load_config(&expected.config)?;
+    let mut observed = operator::status(&config)?
+        .ok_or("OIDC policy has not been activated")?
+        .policy;
+    if observed.host != oidc_hex::<33>(&expected.confirm_host)?
+        || observed.rollout_id != oidc_hex::<16>(&expected.expected_rollout_id)?
+        || observed.config_hash != oidc_hex::<32>(&expected.expected_provider_hash)?
+        || observed.revision != expected.expected_policy_revision
+        || observed.authorization_epoch != expected.expected_authorization_epoch
+    {
+        return Err("OIDC policy changed; obtain a fresh status and approval".into());
+    }
+    let transition = match transition {
+        T::ReplaceProvider { config_hash, .. } => T::ReplaceProvider {
+            config_hash,
+            issuer: observed.issuer.clone(),
+        },
+        other => other,
+    };
+    observed = operator::transition(&config, &observed, &transition)?;
+    print_oidc_policy(&observed);
+    Ok(())
+}
+fn print_oidc_policy(p: &foks_server_db::SsoPolicy) {
+    println!("host={} rollout_id={} provider_hash={} mode={:?} fence={:?} policy_revision={} authorization_epoch={}",encode_hex(&p.host),encode_hex(&p.rollout_id),encode_hex(&p.config_hash),p.mode,p.fence,p.revision,p.authorization_epoch);
 }
 
 #[derive(clap::Subcommand)]
@@ -253,6 +390,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::RotateCapabilityKey { config } => rotate_capability_key(config),
         Command::RetireCapabilityKeys { config } => retire_capability_keys(config),
         Command::Invite(command) => invite_command(command),
+        Command::Oidc(command) => oidc_command(command),
     }
 }
 
@@ -413,6 +551,12 @@ fn config_check(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let config = foks_server::installation::load_config(path)?;
     foks_server::installation::validate_artifacts(&config)?;
     println!("FOKS server configuration and artifacts are valid");
+    if let Some(oidc) = &config.oidc {
+        println!(
+            "configured_provider_hash={}",
+            encode_hex(&oidc.configured_fingerprint()?)
+        );
+    }
     Ok(())
 }
 

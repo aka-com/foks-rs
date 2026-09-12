@@ -90,7 +90,9 @@ pub struct Policy {
 #[serde(deny_unknown_fields)]
 pub struct ProtocolPolicy {
     pub name: String,
+    #[serde(default)]
     pub upstream: String,
+    pub local_id: Option<u64>,
     pub id_constant: String,
 }
 
@@ -309,6 +311,7 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
         .collect::<BTreeMap<_, _>>();
 
     let mut local_protocols = BTreeMap::new();
+    let mut local_ids = BTreeSet::new();
     let mut constants = BTreeSet::new();
     for protocol in &policy.protocols {
         if local_protocols
@@ -317,7 +320,18 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
         {
             return invalid(format!("duplicate local protocol {}", protocol.name));
         }
-        if !upstream_protocols.contains_key(protocol.upstream.as_str()) {
+        if let Some(id) = protocol.local_id {
+            if !protocol.upstream.is_empty()
+                || !(0xf04b0000..=0xf04bffff).contains(&id)
+                || artifact.protocols.iter().any(|p| p.unique_id == id)
+                || !local_ids.insert(id)
+            {
+                return invalid(format!(
+                    "invalid or colliding local protocol {}",
+                    protocol.name
+                ));
+            }
+        } else if !upstream_protocols.contains_key(protocol.upstream.as_str()) {
             return invalid(format!("unknown upstream protocol {}", protocol.upstream));
         }
         validate_constant(&protocol.id_constant)?;
@@ -370,7 +384,12 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
             .ok_or_else(|| {
                 MetadataError::Invalid(format!("unknown local protocol {}", route.protocol))
             })?;
-        let protocol = upstream_protocols[protocol_policy.upstream.as_str()];
+        let protocol = upstream_protocols
+            .get(protocol_policy.upstream.as_str())
+            .copied();
+        let protocol_id = protocol_policy
+            .local_id
+            .unwrap_or_else(|| protocol.expect("validated upstream protocol").unique_id);
         let (position, upstream_result) = if let Some(position) = route.local_position {
             if route.upstream_method.is_some()
                 || !(65536..=131071).contains(&position)
@@ -381,19 +400,25 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric())
                 || route.position_constant.is_none()
-                || protocol
-                    .methods
-                    .iter()
-                    .any(|method| method.position == position || method.name == route.method)
+                || protocol.is_some_and(|p| {
+                    p.methods
+                        .iter()
+                        .any(|method| method.position == position || method.name == route.method)
+                })
             {
                 return invalid(format!(
                     "invalid or colliding local extension {}.{}",
-                    protocol.name, route.method
+                    protocol_policy.name, route.method
                 ));
             }
             (position, "<local-extension>")
         } else {
             let upstream_method = route.upstream_method.as_deref().unwrap_or(&route.method);
+            let protocol = protocol.ok_or_else(|| {
+                MetadataError::Invalid(
+                    "local protocols require explicit local method positions".into(),
+                )
+            })?;
             let method = protocol
                 .methods
                 .iter()
@@ -407,7 +432,7 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
             (method.position, method.result_type.as_str())
         };
         if !local_routes.insert((route.protocol.as_str(), route.method.as_str()))
-            || !dispatch.insert((protocol.unique_id, position))
+            || !dispatch.insert((protocol_id, position))
         {
             return invalid(format!(
                 "duplicate route {}.{} or dispatch key",
@@ -503,11 +528,11 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
         }
         routes.push(MergedRoute {
             policy: route,
-            protocol_id: protocol.unique_id,
+            protocol_id,
             position,
             upstream_result,
-            argument_header: protocol.argument_header,
-            result_header: protocol.result_header,
+            argument_header: protocol.is_none_or(|p| p.argument_header),
+            result_header: protocol.is_none_or(|p| p.result_header),
         });
     }
     Ok(Merged {
@@ -625,6 +650,9 @@ fn validate_route_result(value: &str) -> Result<(), MetadataError> {
             | "UserChain"
             | "UsernameReservation"
             | "Void"
+            | "IdentityCapabilities"
+            | "IdentityChallenge"
+            | "IdentityStatus"
             | "WaitListID"
             | "YubiEncryptedManagementKey"
             | "YubiEncryptedManagementKeyList"
@@ -648,11 +676,13 @@ pub fn render_protocol_ids(merged: &Merged<'_>) -> String {
         .map(|protocol| (protocol.name.as_str(), protocol))
         .collect::<BTreeMap<_, _>>();
     for policy in &merged.policy.protocols {
-        let protocol = protocols[policy.upstream.as_str()];
+        let protocol_id = policy
+            .local_id
+            .unwrap_or_else(|| protocols[policy.upstream.as_str()].unique_id);
         writeln!(
             output,
             "pub const {}: u64 = {:#010x};",
-            policy.id_constant, protocol.unique_id
+            policy.id_constant, protocol_id
         )
         .expect("write String");
         for route in merged
@@ -903,14 +933,26 @@ pub fn render_contract(merged: &Merged<'_>) -> String {
             .artifact
             .protocols
             .iter()
-            .find(|protocol| protocol.name == policy.upstream)
-            .expect("validated protocol");
+            .find(|protocol| protocol.name == policy.upstream);
+        let protocol_id = policy
+            .local_id
+            .unwrap_or_else(|| protocol.expect("validated upstream protocol").unique_id);
         output.push_str("\n[[protocol]]\n");
         writeln!(output, "name = {}", toml_string(&policy.name)).expect("write String");
         writeln!(output, "upstream = {}", toml_string(&policy.upstream)).expect("write String");
-        writeln!(output, "protocol_id = {:#010x}", protocol.unique_id).expect("write String");
-        writeln!(output, "argument_header = {}", protocol.argument_header).expect("write String");
-        writeln!(output, "result_header = {}", protocol.result_header).expect("write String");
+        writeln!(output, "protocol_id = {:#010x}", protocol_id).expect("write String");
+        writeln!(
+            output,
+            "argument_header = {}",
+            protocol.is_none_or(|p| p.argument_header)
+        )
+        .expect("write String");
+        writeln!(
+            output,
+            "result_header = {}",
+            protocol.is_none_or(|p| p.result_header)
+        )
+        .expect("write String");
     }
     for service in &merged.services {
         output.push_str("\n[[service]]\n");

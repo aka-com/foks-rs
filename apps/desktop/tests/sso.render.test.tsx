@@ -25,7 +25,8 @@ test.after(async () => vite.close());
 const progress: SsoProgress = {
   operationId: '1'.repeat(32),
   accountAlias: 'work',
-  forLogin: true,
+  purpose: 'reauthenticate',
+  accountStatus: null,
   state: 'waiting',
   browserAvailable: true,
   expiresAtMs: 1700000000000,
@@ -123,4 +124,64 @@ test('a response for another account never updates the displayed flow', async ()
   ui.fireEvent.click(r.getByText('Continue with organization'));
   await ui.waitFor(() => assert.ok(r.getByRole('alert')));
   assert.equal(r.queryByText('Open sign-in browser'), null);
+});
+
+test('account linkage status chooses explicit first-link action and preserves lockout messaging', async () => {
+  const { SsoPanel } = (await vite.ssrLoadModule(
+    '/src/components/sso-panel.tsx',
+  )) as typeof import('../src/components/sso-panel');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const actions: import('../src/sso-contract').SsoAction[] = [];
+  const bridge = {
+    ...mockBridge(),
+    sso: async (
+      _p: string,
+      _a: string,
+      action: import('../src/sso-contract').SsoAction,
+    ): Promise<SsoProgress> => {
+      actions.push(action);
+      if (action.action === 'account-status')
+        return {
+          ...progress,
+          operationId: null,
+          purpose: 'link-existing',
+          state: 'locked-out',
+          browserAvailable: false,
+          accountStatus: {
+            state: 'locked-out',
+            rolloutMode: 2,
+            providerFence: 0,
+            issuer: 'https://identity.example',
+            authorizationEpoch: 1,
+            authorizationGeneration: 0,
+          },
+        };
+      return { ...progress, purpose: 'link-existing' };
+    },
+  };
+  const r = ui.render(
+    createElement(SsoPanel, {
+      bridge,
+      profile: 'host',
+      account: 'work',
+      login: true,
+      onComplete: () => {},
+    }),
+  );
+  ui.fireEvent.click(r.getByText('Check account linkage'));
+  await ui.waitFor(() =>
+    assert.ok(r.getByText(/Organization sign-in is enforced/)),
+  );
+  ui.fireEvent.click(r.getByText('Link existing account'));
+  await ui.waitFor(() => assert.ok(r.getByText('Open sign-in browser')));
+  assert.deepEqual(
+    actions.map((a) => a.action),
+    ['account-status', 'begin'],
+  );
+  assert.equal(
+    actions[1].action === 'begin' && actions[1].purpose,
+    'link-existing',
+  );
 });

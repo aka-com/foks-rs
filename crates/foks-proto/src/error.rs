@@ -4,6 +4,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("invalid protocol value: {0}")]
+    Invalid(&'static str),
     #[error("invalid canonical Snowpack: {0}")]
     Snowpack(#[from] foks_snowpack::Error),
     #[error("expected {expected}, found {found}")]

@@ -113,6 +113,8 @@ impl Fixture {
         let writer =
             crate::Writer::start(dir.path().join("server.sqlite"), Default::default(), 32).unwrap();
         let config = OidcOperatorConfig {
+            rollout_id: [1; 16],
+            rollout_mode: OidcRolloutMode::Migration,
             config_id: [50; 17],
             issuer: "https://idp.example".into(),
             discovery_uri: format!("{}/discovery", idp.url),
@@ -261,19 +263,24 @@ fn interrupted_exchange_is_fenced_on_restart_and_policy_rotation_fences_old_owne
         .unwrap();
     drop(service);
     let service = fixture.open();
-    assert_eq!(
-        service.session_state(&arg.id).unwrap(),
-        SsoSessionState::ExchangeUnknown
-    );
+    assert!(service.session_state(&arg.id).is_err());
     assert!(service
         .callback(&state(&arg), Some("valid"), false)
         .is_err());
     let arg = init(2);
     service.init(&arg, b"peer").unwrap();
     fixture.config.config_id[1] = 42;
-    let replacement = fixture.open();
+    assert!(SsoService::open(
+        fixture.config.clone(),
+        NetworkPolicy::loopback_test(),
+        [1; 33],
+        fixture.writer.handle(),
+        fixture.keys.clone(),
+        fixture.clock.clone(),
+        Arc::new(crate::OsEntropy)
+    )
+    .is_err());
     assert!(service.browser_start(&state(&arg)).is_err());
-    assert!(replacement.browser_start(&state(&arg)).is_err());
     assert_eq!(fixture.idp.calls.load(Ordering::SeqCst), 0);
 }
 #[test]
@@ -330,6 +337,8 @@ fn envelope_survives_operator_root_rotation_and_rejects_missing_or_wrong_keys() 
     let keys = DirectoryKeyProvider::open(&path, [7; 32]).unwrap();
     keys.load_or_create(KeyPurpose::Recovery).unwrap();
     let mut row = SsoSession {
+        authorization_epoch: 1,
+        interrupted: false,
         host: [1; 33],
         session_hash: [2; 32],
         config_hash: [3; 32],
@@ -403,8 +412,16 @@ fn operator_settings_require_public_https_and_do_not_publish_secrets() {
     let arg = init(1);
     service.init(&arg, b"peer").unwrap();
     std::fs::write(&fixture.config.client_secret_file, b"rotated-client-secret").unwrap();
-    let replacement = fixture.open();
-    assert_ne!(service.config_hash, replacement.config_hash);
+    assert!(SsoService::open(
+        fixture.config.clone(),
+        NetworkPolicy::loopback_test(),
+        [1; 33],
+        fixture.writer.handle(),
+        fixture.keys.clone(),
+        fixture.clock.clone(),
+        Arc::new(crate::OsEntropy)
+    )
+    .is_err());
     assert!(service.browser_start(&state(&arg)).is_err());
 }
 
@@ -424,4 +441,46 @@ fn signing_key_rotation_refreshes_jwks_without_reexchanging_code() {
     );
     assert_eq!(fixture.idp.calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.idp.stale_keys.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn provider_projection_excludes_operational_paths_but_binds_security_settings() {
+    let fixture = Fixture::new();
+    let hash = fixture.config.fingerprint("secret").unwrap();
+    let mut config = fixture.config.clone();
+    config.client_secret_file = "/another/secret".into();
+    config.listen = "127.0.0.1:9001".parse().unwrap();
+    config.rollout_id = [9; 16];
+    config.rollout_mode = OidcRolloutMode::Enforced;
+    assert_eq!(config.fingerprint("secret").unwrap(), hash);
+    assert_ne!(config.fingerprint("changed").unwrap(), hash);
+    config.client_secret_post = !config.client_secret_post;
+    assert_ne!(config.fingerprint("secret").unwrap(), hash);
+    config.client_secret_post = !config.client_secret_post;
+    config.config_id[1] ^= 1;
+    assert_ne!(config.fingerprint("secret").unwrap(), hash);
+}
+
+#[test]
+fn fence_epoch_is_authenticated_in_session_envelopes() {
+    let fixture = Fixture::new();
+    let service = fixture.open();
+    let arg = init(1);
+    service.init(&arg, b"epoch-test").unwrap();
+    let row = service.row(&arg.id).unwrap();
+    let mut altered = row.clone();
+    altered.authorization_epoch += 1;
+    assert!(envelope::open(fixture.keys.as_ref(), &altered).is_err());
+    let hash = service.config_hash;
+    fixture
+        .writer
+        .call(move |db| {
+            db.sso_fence_policy(&[1; 33], foks_server_db::SsoProviderFence::Operator)?;
+            let p = db.sso_policy(&[1; 33])?.unwrap();
+            db.sso_transition_policy(&p, &foks_server_db::SsoPolicyTransition::Reenable)?;
+            assert!(db.sso_require_policy_epoch(&[1; 33], &hash, 1).is_err());
+            Ok(())
+        })
+        .unwrap();
+    assert!(service.browser_start(&state(&arg)).is_err());
 }

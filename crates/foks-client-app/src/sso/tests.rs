@@ -65,7 +65,7 @@ fn id(p: &SsoReport) -> [u8; 16] {
     let mut out = [0; 16];
     for (o, p) in out
         .iter_mut()
-        .zip(p.operation_id.as_bytes().chunks_exact(2))
+        .zip(p.operation_id.as_ref().unwrap().as_bytes().chunks_exact(2))
     {
         *o = u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap();
     }
@@ -75,12 +75,13 @@ fn id(p: &SsoReport) -> [u8; 16] {
 fn software_browser_flow_survives_reopen_and_uses_provider_identity() {
     let idp = TestOidcProvider::start();
     let f = Fixture::start(&idp);
-    let start = f.run(|s, v, k| s.begin_account_sso("work", false, v, k, &f.http));
+    let start =
+        f.run(|s, v, k| s.begin_account_sso("work", foks_proto::SsoPurpose::Signup, v, k, &f.http));
     let handle = id(&start);
     assert_eq!(start.state, "waiting");
     let again = f.run(|s, v, k| {
         assert!(s.resume_account("work", v, k).is_err());
-        s.begin_account_sso("work", false, v, k, &f.http)
+        s.begin_account_sso("work", foks_proto::SsoPurpose::Signup, v, k, &f.http)
     });
     assert_eq!(again.operation_id, start.operation_id);
     assert_eq!(again.browser_url, start.browser_url);
@@ -122,14 +123,30 @@ fn software_browser_flow_survives_reopen_and_uses_provider_identity() {
         assert_eq!(v.account("work")?.username, "ssoalice");
         Ok(())
     });
-    let login = f.run(|s, v, k| s.begin_account_sso("work", true, v, k, &f.http));
+    let login = f.run(|s, v, k| {
+        s.begin_account_sso(
+            "work",
+            foks_proto::SsoPurpose::Reauthenticate,
+            v,
+            k,
+            &f.http,
+        )
+    });
     idp.complete(login.browser_url.as_ref().unwrap());
     f.run(|s, v, k| s.account_sso("work", id(&login), SsoAction::Poll, v, k, &f.http));
     assert!(
         f.run(|s, v, k| s.account_sso("work", id(&login), SsoAction::FinishLogin, v, k, &f.http))
             .service_access
     );
-    let cancelled = f.run(|s, v, k| s.begin_account_sso("work", true, v, k, &f.http));
+    let cancelled = f.run(|s, v, k| {
+        s.begin_account_sso(
+            "work",
+            foks_proto::SsoPurpose::Reauthenticate,
+            v,
+            k,
+            &f.http,
+        )
+    });
     for _ in 0..2 {
         assert_eq!(
             f.run(|s, v, k| s.account_sso(
@@ -201,7 +218,9 @@ fn hardware_browser_signup_reuses_prepared_slots_and_finishes_existing_lifecycle
     });
     assert!(done.service_access);
     assert_eq!(done.state, "complete");
-    let login = f.run(|s, v, k| s.begin_account_sso("key", true, v, k, &f.http));
+    let login = f.run(|s, v, k| {
+        s.begin_account_sso("key", foks_proto::SsoPurpose::Reauthenticate, v, k, &f.http)
+    });
     idp.complete(login.browser_url.as_ref().unwrap());
     f.run(|s, v, k| s.account_sso("key", id(&login), SsoAction::Poll, v, k, &f.http));
     f.run(|s, v, k| {
@@ -218,7 +237,8 @@ fn hardware_browser_signup_reuses_prepared_slots_and_finishes_existing_lifecycle
 fn denied_browser_result_remains_denied_after_resume() {
     let idp = TestOidcProvider::start();
     let f = Fixture::start(&idp);
-    let start = f.run(|s, v, k| s.begin_account_sso("work", false, v, k, &f.http));
+    let start =
+        f.run(|s, v, k| s.begin_account_sso("work", foks_proto::SsoPurpose::Signup, v, k, &f.http));
     idp.set_denied(true);
     idp.complete(start.browser_url.as_ref().unwrap());
     for action in [SsoAction::Poll, SsoAction::Status, SsoAction::Cancel] {
@@ -227,7 +247,7 @@ fn denied_browser_result_remains_denied_after_resume() {
         assert!(p.browser_url.is_none());
     }
     assert_ne!(
-        f.run(|s, v, k| s.begin_account_sso("work", false, v, k, &f.http))
+        f.run(|s, v, k| s.begin_account_sso("work", foks_proto::SsoPurpose::Signup, v, k, &f.http))
             .operation_id,
         start.operation_id
     );

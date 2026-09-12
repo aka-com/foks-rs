@@ -64,7 +64,7 @@ pub(super) fn validate(
 ) -> Result<AdapterClockState> {
     sample_in_range(sample)?;
     let Some(old) = old else {
-        return Ok(reanchor(None, sample)?);
+        return reanchor(None, sample);
     };
     if sample.process_id == old.process_id {
         let elapsed = sample

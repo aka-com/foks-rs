@@ -1,5 +1,6 @@
 //! Local OAuth handles and progress. Provider tokens never cross this boundary.
 use crate::SecretString;
+pub use foks_proto::{SsoAccountStatusView, SsoPurpose};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
@@ -17,7 +18,11 @@ pub enum SsoAction {
         pin: SecretString,
     },
     Begin {
-        for_login: bool,
+        purpose: foks_proto::SsoPurpose,
+        pin: Option<SecretString>,
+    },
+    AccountStatus {
+        pin: Option<SecretString>,
     },
     Status {
         operation_id: String,
@@ -42,9 +47,10 @@ pub enum SsoAction {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SsoProgress {
-    pub operation_id: String,
+    pub operation_id: Option<String>,
     pub account_alias: String,
-    pub for_login: bool,
+    pub purpose: foks_proto::SsoPurpose,
+    pub account_status: Option<foks_proto::SsoAccountStatusView>,
     pub state: String,
     pub browser_url: Option<String>,
     pub expires_at_ms: u64,
@@ -66,7 +72,9 @@ impl SsoAction {
                     .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
         }
         match self {
-            Self::Begin { .. } => true,
+            Self::Begin { pin, .. } | Self::AccountStatus { pin } => {
+                pin.as_ref().is_none_or(|p| p.expose().len() <= 32)
+            }
             Self::BeginYubiSignup {
                 card_serial,
                 signing_slot,

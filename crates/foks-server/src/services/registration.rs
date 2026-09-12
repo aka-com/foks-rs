@@ -176,7 +176,7 @@ fn issue_recovery_challenge(
     entropy: &dyn Entropy,
 ) -> Result<Vec<u8>, RpcStatus> {
     let key = keys
-        .load_or_create(KeyPurpose::Recovery)
+        .load_existing(KeyPurpose::Recovery)
         .map_err(|_| RpcStatus::TransactionRetry)?;
     let now = clock
         .now_micros()
@@ -240,7 +240,7 @@ pub(crate) fn load_subkey_box(
         return Err(permission_denied());
     }
     let key = keys
-        .load_or_create(KeyPurpose::Recovery)
+        .load_existing(KeyPurpose::Recovery)
         .map_err(|_| RpcStatus::TransactionRetry)?;
     if request.challenge.payload.hmac_key_id != key.generation().as_bytes() {
         return Err(RpcStatus::Expired);
@@ -299,7 +299,7 @@ pub(crate) fn issue_login_challenge(
         .require_type(foks_proto::ENTITY_USER)
         .map_err(bad_arguments)?;
     let key = keys
-        .load_or_create(KeyPurpose::Recovery)
+        .load_existing(KeyPurpose::Recovery)
         .map_err(|_| RpcStatus::TransactionRetry)?;
     let now = clock
         .now_micros()
@@ -362,7 +362,7 @@ pub(crate) fn passphrase_login(
         return Err(RpcStatus::BadPassphrase);
     }
     let key = keys
-        .load_or_create(KeyPurpose::Recovery)
+        .load_existing(KeyPurpose::Recovery)
         .map_err(|_| RpcStatus::TransactionRetry)?;
     if request.challenge.payload.hmac_key_id != key.generation().as_bytes() {
         return Err(RpcStatus::BadPassphrase);
@@ -468,7 +468,7 @@ pub(crate) fn lookup_uid_by_device(
         return Err(lookup_failed());
     }
     let key = keys
-        .load_or_create(KeyPurpose::Recovery)
+        .load_existing(KeyPurpose::Recovery)
         .map_err(|_| RpcStatus::TransactionRetry)?;
     if request.challenge.payload.hmac_key_id != key.generation().as_bytes() {
         return Err(lookup_failed());

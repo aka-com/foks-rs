@@ -13,9 +13,10 @@ use tauri::{Manager as _, State};
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
-    operation_id: String,
+    operation_id: Option<String>,
     account_alias: String,
-    for_login: bool,
+    purpose: foks_agent_proto::sso::SsoPurpose,
+    account_status: Option<foks_agent_proto::sso::SsoAccountStatusView>,
     state: String,
     browser_available: bool,
     expires_at_ms: u64,
@@ -23,10 +24,14 @@ pub struct Progress {
 }
 fn validate(p: &SsoProgress, alias: &str) -> Result<(), AgentError> {
     if p.account_alias != alias
-        || !(SsoAction::Status {
-            operation_id: p.operation_id.clone(),
+        || p.operation_id.as_ref().is_some_and(|id| {
+            !(SsoAction::Status {
+                operation_id: id.clone(),
+            })
+            .validate()
         })
-        .validate()
+        || p.operation_id.is_none() != p.account_status.is_some()
+        || (p.operation_id.is_none() && p.browser_url.is_some())
         || !matches!(
             p.state.as_str(),
             "prepared"
@@ -43,6 +48,11 @@ fn validate(p: &SsoProgress, alias: &str) -> Result<(), AgentError> {
                 | "reauthentication-required"
                 | "hardware-verification-required"
                 | "service-unavailable"
+                | "device-only"
+                | "link-needed"
+                | "locked-out"
+                | "linked"
+                | "not-eligible"
         )
         || p.browser_url.as_ref().is_some_and(|s| s.len() > 8192)
     {
@@ -54,7 +64,8 @@ fn public_progress(result: SsoProgress) -> Progress {
     Progress {
         operation_id: result.operation_id,
         account_alias: result.account_alias,
-        for_login: result.for_login,
+        purpose: result.purpose,
+        account_status: result.account_status,
         state: result.state,
         browser_available: result.browser_url.is_some(),
         expires_at_ms: result.expires_at_ms,
@@ -85,7 +96,9 @@ pub async fn sso_request(
         state.invalidate_catalog();
     }
     let expected_id = match &action {
-        SsoAction::Begin { .. } | SsoAction::BeginYubiSignup { .. } => None,
+        SsoAction::Begin { .. }
+        | SsoAction::AccountStatus { .. }
+        | SsoAction::BeginYubiSignup { .. } => None,
         SsoAction::FinishYubiSignup { operation_id, .. }
         | SsoAction::Status { operation_id }
         | SsoAction::Poll { operation_id }
@@ -105,7 +118,7 @@ pub async fn sso_request(
         let p: SsoProgress = serde_json::from_value(value)
             .map_err(|_| invalid_response("Invalid authentication response."))?;
         validate(&p, &expected)?;
-        if expected_id.is_some_and(|id| id != p.operation_id) {
+        if expected_id.is_some_and(|id| Some(id) != p.operation_id) {
             return Err(invalid_response("Authentication handle changed."));
         }
         Ok::<_, AgentError>(p)
@@ -148,7 +161,7 @@ pub async fn open_sso_browser(
     let p: SsoProgress = serde_json::from_value(value)
         .map_err(|_| invalid_response("Invalid authentication response."))?;
     validate(&p, &expected)?;
-    if p.operation_id != operation_id || p.state != "waiting" {
+    if p.operation_id.as_deref() != Some(operation_id.as_str()) || p.state != "waiting" {
         return Err(invalid_request("This browser flow is no longer waiting."));
     }
     let url = p.browser_url.ok_or_else(|| {
@@ -164,9 +177,10 @@ mod tests {
     #[test]
     fn native_progress_removes_browser_bearer_and_rejects_wrong_account() {
         let p = SsoProgress {
-            operation_id: "a".repeat(32),
+            operation_id: Some("a".repeat(32)),
             account_alias: "work".into(),
-            for_login: true,
+            purpose: foks_agent_proto::sso::SsoPurpose::Reauthenticate,
+            account_status: None,
             state: "waiting".into(),
             browser_url: Some("https://host.example/oauth2/start?state=secret".into()),
             expires_at_ms: 100,

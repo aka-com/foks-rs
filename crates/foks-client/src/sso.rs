@@ -35,8 +35,9 @@ impl std::fmt::Debug for SsoProgress {
 pub struct SsoIntent {
     pub uid: EntityId,
     pub device: EntityId,
-    pub for_login: bool,
+    pub purpose: foks_proto::SsoPurpose,
 }
+mod identity;
 mod material;
 pub(crate) use material::validate_inventory_stage;
 use material::*;
@@ -56,7 +57,7 @@ impl FoksClient {
         let SsoIntent {
             uid,
             device,
-            for_login,
+            purpose,
         } = intent;
         uid.clone().require_type(foks_proto::ENTITY_USER)?;
         if !matches!(
@@ -97,12 +98,13 @@ impl FoksClient {
             id: foks_crypto::oauth2_session_id()?,
             pkce_verifier: foks_crypto::oauth2_pkce_verifier()?,
             nonce: OAuth2Secret::new(foks_crypto::oauth2_binding_nonce(&binding)?),
-            uid: for_login.then_some(uid.clone()),
+            uid: purpose.is_existing().then_some(uid.clone()),
         };
         let expires_at_ms = now
             .checked_add(foks_oidc::SESSION_LIFETIME_MS)
             .ok_or(Error::Sso("session expiration overflow"))?;
         let material = Material {
+            purpose,
             device: device.clone(),
             expires_at_ms,
             config: config.clone(),
@@ -117,12 +119,13 @@ impl FoksClient {
             host: host.host_id().as_bytes().to_vec(),
             uid: uid.as_bytes().to_vec(),
             device: device.as_bytes().to_vec(),
-            for_login,
+            purpose,
             state: SsoFlowState::Prepared,
             material_hash: foks_crypto::prefixed_hash(MATERIAL_HASH, &encoded),
             config_hash: config_hash(&config)?,
             expires_at_ms,
             final_operation: None,
+            commitment: None,
         };
         HardStateStore::open(&host.database_path)?.sso_record_with_material::<Error>(
             &flow,
@@ -298,7 +301,7 @@ impl FoksClient {
         let request = PollOAuth2SessionArgument {
             id: m.init.id.clone(),
             wait_duration_ms: wait_ms,
-            for_login: flow.for_login,
+            for_login: flow.purpose.is_existing(),
         };
         let client = self.isolated_with_timeout(std::time::Duration::from_millis(wait_ms + 5000));
         let response = match client.call_after_vhost_selection(
@@ -365,7 +368,7 @@ impl FoksClient {
             m.init.nonce.expose(),
             crate::now_milliseconds()?,
         )?;
-        if !flow.for_login
+        if !flow.purpose.is_existing()
             && (identity.username != result.tokens.username
                 || result.reservation.sequence == 0
                 || result.reservation.expires_at <= crate::now_milliseconds()?)
@@ -388,12 +391,49 @@ impl FoksClient {
         let flow = public_flow(host, &id)?;
         if flow.uid != credential.uid().as_bytes()
             || flow.device != credential.device_id()?.as_bytes()
-            || !flow.for_login
+            || !flow.purpose.is_existing()
         {
             return Err(Error::Sso("login signer or purpose mismatch"));
         }
+        if matches!(flow.state, SsoFlowState::Binding | SsoFlowState::Unknown) {
+            let key = match credential {
+                FederationCredential::Software(c) => SsoSigningKey::Software(&c.seed),
+                FederationCredential::Yubi(c) => SsoSigningKey::Yubi(c.parent),
+            };
+            return self.reconcile_sso_binding(host, id, key, store);
+        }
         if flow.state != SsoFlowState::Ready {
             return self.sso_progress(host, id, store);
+        }
+        let key = match credential {
+            FederationCredential::Software(c) => SsoSigningKey::Software(&c.seed),
+            FederationCredential::Yubi(c) => SsoSigningKey::Yubi(c.parent),
+        };
+        match self.identity_status(host, credential.uid(), key, None) {
+            Ok(status) => {
+                let matches = match flow.purpose {
+                    foks_proto::SsoPurpose::LinkExisting => matches!(
+                        status.account_state,
+                        foks_proto::SsoAccountState::MigrationEligible
+                            | foks_proto::SsoAccountState::LockedOut
+                    ),
+                    foks_proto::SsoPurpose::Reauthenticate => {
+                        status.account_state == foks_proto::SsoAccountState::Linked
+                    }
+                    foks_proto::SsoPurpose::Signup => false,
+                };
+                if !matches || status.provider_fence != 0 {
+                    return Err(Error::Sso(
+                        "account linkage state differs from requested authentication purpose",
+                    ));
+                }
+            }
+            // Existing Go reauthentication keeps its original wire path. First linkage
+            // requires the Fennec extension and cannot fall back to implicit linking.
+            Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: 211 | 1020, ..
+            })) if flow.purpose == foks_proto::SsoPurpose::Reauthenticate => {}
+            Err(error) => return Err(error),
         }
         let (_, m) = load(host, &id, store)?;
         let result = OAuth2PollResult::decode(&get(store, &id, 2)?)?;
@@ -451,6 +491,11 @@ impl FoksClient {
             }
             Err(_) => return Err(Error::Sso("protected login binding unavailable")),
         };
+        let mut input = std::io::Cursor::new(request.as_slice());
+        let call = foks_rpc::read_call(&mut input, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)?;
+        let args = SsoLoginArgument::decode(call.argument())?;
+        let commitment = foks_crypto::prefixed_hash(0x68b3_c398_ea5f_d71e, &args.args.encoded()?);
+        HardStateStore::open(&host.database_path)?.sso_set_commitment(&id, &commitment)?;
         HardStateStore::open(&host.database_path)?.sso_transition(
             &id,
             SsoFlowState::Ready,

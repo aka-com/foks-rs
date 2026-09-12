@@ -1,3 +1,17 @@
+export type SsoPurpose = 'signup' | 'link-existing' | 'reauthenticate';
+export interface SsoAccountStatus {
+  state:
+    | 'device-only'
+    | 'migration-eligible'
+    | 'linked'
+    | 'locked-out'
+    | 'not-eligible';
+  rolloutMode: number;
+  providerFence: number;
+  issuer: string;
+  authorizationEpoch: number;
+  authorizationGeneration: number;
+}
 export type SsoAction =
   | {
       action: 'begin-yubi-signup';
@@ -9,7 +23,8 @@ export type SsoAction =
       invite: string;
     }
   | { action: 'finish-yubi-signup'; operation_id: string; pin: string }
-  | { action: 'begin'; for_login: boolean }
+  | { action: 'begin'; purpose: SsoPurpose; pin: string | null }
+  | { action: 'account-status'; pin: string | null }
   | { action: 'status' | 'poll' | 'cancel'; operation_id: string }
   | { action: 'finish-login'; operation_id: string; pin: string | null }
   | {
@@ -20,6 +35,11 @@ export type SsoAction =
       passphrase: string | null;
     };
 export const ssoStates = [
+  'device-only',
+  'link-needed',
+  'locked-out',
+  'linked',
+  'not-eligible',
   'prepared',
   'waiting',
   'ready',
@@ -36,9 +56,10 @@ export const ssoStates = [
   'service-unavailable',
 ] as const;
 export interface SsoProgress {
-  operationId: string;
+  operationId: string | null;
   accountAlias: string;
-  forLogin: boolean;
+  purpose: SsoPurpose;
+  accountStatus: SsoAccountStatus | null;
   state: (typeof ssoStates)[number];
   browserAvailable: boolean;
   expiresAtMs: number;
@@ -51,7 +72,8 @@ export function decodeSsoProgress(value: unknown): SsoProgress {
   const keys = [
     'operationId',
     'accountAlias',
-    'forLogin',
+    'purpose',
+    'accountStatus',
     'state',
     'browserAvailable',
     'expiresAtMs',
@@ -60,11 +82,17 @@ export function decodeSsoProgress(value: unknown): SsoProgress {
   if (
     Object.keys(v).some((k) => !keys.includes(k)) ||
     Object.keys(v).length !== keys.length ||
-    typeof v.operationId !== 'string' ||
-    !/^[a-f0-9]{32}$/.test(v.operationId) ||
+    (v.operationId !== null &&
+      (typeof v.operationId !== 'string' ||
+        !/^[a-f0-9]{32}$/.test(v.operationId))) ||
+    (v.operationId === null) !== (v.accountStatus !== null) ||
+    (v.operationId === null && v.browserAvailable !== false) ||
     typeof v.accountAlias !== 'string' ||
     !/^[a-zA-Z0-9_-]{1,64}$/.test(v.accountAlias) ||
-    typeof v.forLogin !== 'boolean' ||
+    !['signup', 'link-existing', 'reauthenticate'].includes(
+      String(v.purpose),
+    ) ||
+    !validAccountStatus(v.accountStatus) ||
     typeof v.state !== 'string' ||
     !(ssoStates as readonly string[]).includes(v.state) ||
     typeof v.browserAvailable !== 'boolean' ||
@@ -74,4 +102,41 @@ export function decodeSsoProgress(value: unknown): SsoProgress {
   )
     throw new Error('Invalid authentication progress');
   return v as unknown as SsoProgress;
+}
+
+function validAccountStatus(value: unknown): boolean {
+  if (value === null) return true;
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  const keys = [
+    'state',
+    'rolloutMode',
+    'providerFence',
+    'issuer',
+    'authorizationEpoch',
+    'authorizationGeneration',
+  ];
+  return (
+    Object.keys(v).length === keys.length &&
+    Object.keys(v).every((k) => keys.includes(k)) &&
+    [
+      'device-only',
+      'migration-eligible',
+      'linked',
+      'locked-out',
+      'not-eligible',
+    ].includes(String(v.state)) &&
+    Number.isInteger(v.rolloutMode) &&
+    Number(v.rolloutMode) >= 0 &&
+    Number(v.rolloutMode) <= 2 &&
+    Number.isInteger(v.providerFence) &&
+    Number(v.providerFence) >= 0 &&
+    Number(v.providerFence) <= 4 &&
+    typeof v.issuer === 'string' &&
+    v.issuer.length <= 4096 &&
+    Number.isSafeInteger(v.authorizationEpoch) &&
+    Number(v.authorizationEpoch) >= 0 &&
+    Number.isSafeInteger(v.authorizationGeneration) &&
+    Number(v.authorizationGeneration) >= 0
+  );
 }

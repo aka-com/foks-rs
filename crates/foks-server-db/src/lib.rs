@@ -29,6 +29,8 @@ mod recovery;
 mod schema;
 mod sso;
 mod sso_access;
+mod sso_identity;
+mod sso_policy;
 mod team;
 mod team_invitations;
 pub use team_invitations::{
@@ -91,6 +93,10 @@ pub use recovery::RecoveryCredentialSnapshot;
 pub use schema::{APPLICATION_ID, SCHEMA_VERSION};
 pub use sso::{SsoSession, SsoSessionState};
 pub use sso_access::{SsoAccess, SsoAccessState, SsoAccountBinding};
+pub use sso_policy::{
+    SsoAccessDecision, SsoAuthorizationStamp, SsoPolicy, SsoPolicyTransition, SsoProviderFence,
+    SsoRolloutMode, SsoRolloutStatus,
+};
 pub use team::{
     TeamHeader, TeamLocalViewPermissionMutation, TeamMemberMutation, TeamMutation,
     TeamMutationFailurePoint, TeamParcelMutation, TeamRemoteMemberViewTokenMutation,

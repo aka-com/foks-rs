@@ -136,6 +136,11 @@ pub const RT_POLL_INBOX_METHOD_POSITION: u64 = 8;
 pub const RT_SELECT_VHOST_METHOD_POSITION: u64 = 9;
 pub const RT_RECENTS_METHOD_POSITION: u64 = 10;
 
+pub const IDENTITY_PROTOCOL_ID: u64 = 0xf04b0001;
+pub const IDENTITY_CAPABILITIES_POSITION: u64 = 65536;
+pub const IDENTITY_CHALLENGE_POSITION: u64 = 65537;
+pub const IDENTITY_PROVE_POSITION: u64 = 65538;
+
 /// Reports whether this protocol omits its argument header.
 pub const fn is_headerless_argument_protocol(protocol_id: u64) -> bool {
     matches!(

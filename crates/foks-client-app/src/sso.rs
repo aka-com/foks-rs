@@ -14,9 +14,10 @@ pub enum SsoAction {
 }
 #[derive(Clone, Serialize)]
 pub struct SsoReport {
-    pub operation_id: String,
+    pub operation_id: Option<String>,
     pub account_alias: String,
-    pub for_login: bool,
+    pub purpose: foks_proto::SsoPurpose,
+    pub account_status: Option<foks_proto::SsoAccountStatusView>,
     pub state: &'static str,
     pub browser_url: Option<String>,
     pub expires_at_ms: u64,
@@ -40,12 +41,13 @@ impl Drop for SsoSignupInput {
         self.invite.zeroize();
     }
 }
-pub(super) fn report(alias: &str, for_login: bool, p: SsoProgress) -> SsoReport {
+pub(super) fn report(alias: &str, purpose: foks_proto::SsoPurpose, p: SsoProgress) -> SsoReport {
     use SsoFlowState::*;
     SsoReport {
-        operation_id: hex(&p.operation_id),
+        operation_id: Some(hex(&p.operation_id)),
         account_alias: alias.into(),
-        for_login,
+        purpose,
+        account_status: None,
         state: match p.state {
             Prepared => "prepared",
             AwaitingBrowser => "waiting",
@@ -79,7 +81,7 @@ fn pending_intent(p: &PendingSignup) -> Result<SsoIntent> {
     Ok(SsoIntent {
         uid: EntityId::from_bytes(uid)?,
         device: derive_device_public(&SecretSeed::new(p.device_seed))?.id,
-        for_login: false,
+        purpose: foks_proto::SsoPurpose::Signup,
     })
 }
 impl CheckedProfileSession<'_> {
@@ -95,7 +97,7 @@ impl CheckedProfileSession<'_> {
                 Ok(a) => Ok(SsoIntent {
                     uid: a.credential.uid.clone(),
                     device: a.credential.public_material()?.id,
-                    for_login: true,
+                    purpose: foks_proto::SsoPurpose::Reauthenticate,
                 }),
                 Err(Error::AccountMissing) => {
                     let a = vault.yubi_account(alias)?;
@@ -108,7 +110,7 @@ impl CheckedProfileSession<'_> {
                             ]
                             .concat(),
                         )?,
-                        for_login: true,
+                        purpose: foks_proto::SsoPurpose::Reauthenticate,
                     })
                 }
                 Err(e) => Err(e),
@@ -132,8 +134,8 @@ impl CheckedProfileSession<'_> {
             .sso_flow(&id)?
             .ok_or(Error::InvalidAccount("authentication flow is missing"))?;
         // After signup commits, its account credential replaces the pending seeds.
-        let intent = match self.sso_identity(alias, flow.for_login, vault) {
-            Err(Error::AccountMissing) if !flow.for_login => {
+        let intent = match self.sso_identity(alias, flow.purpose.is_existing(), vault) {
+            Err(Error::AccountMissing) if !flow.purpose.is_existing() => {
                 self.sso_identity(alias, true, vault)?
             }
             value => value?,
@@ -146,7 +148,7 @@ impl CheckedProfileSession<'_> {
                 "authentication flow belongs to another account or device",
             ));
         }
-        self.profile.require(if flow.for_login {
+        self.profile.require(if flow.purpose.is_existing() {
             Capability::UserSync
         } else {
             Capability::Signup
@@ -156,12 +158,13 @@ impl CheckedProfileSession<'_> {
     pub fn begin_account_sso(
         &self,
         alias: &str,
-        login: bool,
+        purpose: foks_proto::SsoPurpose,
         vault: &mut AccountVault<'_>,
         master: &[u8; 32],
         http: &ProviderHttp,
     ) -> Result<SsoReport> {
         validate_name(alias)?;
+        let login = purpose.is_existing();
         self.profile.require(if login {
             Capability::UserSync
         } else {
@@ -191,7 +194,18 @@ impl CheckedProfileSession<'_> {
                 Err(e) => return Err(e),
             }
         }
-        let intent = self.sso_identity(alias, login, vault)?;
+        let mut intent = self.sso_identity(alias, login, vault)?;
+        intent.purpose = purpose;
+        if purpose == foks_proto::SsoPurpose::LinkExisting {
+            let loaded = vault.account(alias)?;
+            let status = self.client.identity_status(
+                &host,
+                &loaded.credential.uid,
+                SsoSigningKey::Software(&loaded.credential.seed),
+                None,
+            )?;
+            require_linkable(&status)?;
+        }
         self.begin_bound_sso(alias, intent, master, http)
     }
     pub(super) fn begin_bound_sso(
@@ -201,14 +215,14 @@ impl CheckedProfileSession<'_> {
         master: &[u8; 32],
         http: &ProviderHttp,
     ) -> Result<SsoReport> {
-        let login = intent.for_login;
+        let purpose = intent.purpose;
         let host = self.pinned_host()?;
         let mut protected = self.mutation_store(master)?;
         // Reopening a browser flow never sends init again, even when its reply was lost.
         for flow in HardStateStore::open(&self.paths.hard_database)?
             .sso_flows(host.host_id().as_bytes(), intent.uid.as_bytes())?
         {
-            if flow.device == intent.device.as_bytes() && flow.for_login == login {
+            if flow.device == intent.device.as_bytes() && flow.purpose == purpose {
                 let p = self.client.sso_progress(&host, flow.id, &mut protected)?;
                 if matches!(
                     p.state,
@@ -217,13 +231,13 @@ impl CheckedProfileSession<'_> {
                         | SsoFlowState::Ready
                         | SsoFlowState::Binding
                 ) {
-                    return Ok(report(alias, login, p));
+                    return Ok(report(alias, purpose, p));
                 }
             }
         }
         Ok(report(
             alias,
-            login,
+            purpose,
             self.client.begin_sso(&host, intent, http, &mut protected)?,
         ))
     }
@@ -256,7 +270,7 @@ impl CheckedProfileSession<'_> {
             }
         };
         let mut result = match result {
-            Ok(p) => report(alias, flow.for_login, p),
+            Ok(p) => report(alias, flow.purpose, p),
             Err(e) => {
                 let state = match &e {
                     foks_client::Error::Oidc(foks_oidc::Error::ProviderUnavailable) => {
@@ -282,7 +296,7 @@ impl CheckedProfileSession<'_> {
                 };
                 let mut p = report(
                     alias,
-                    flow.for_login,
+                    flow.purpose,
                     self.client.sso_progress(&host, id, &mut protected)?,
                 );
                 p.state = state;
@@ -290,7 +304,7 @@ impl CheckedProfileSession<'_> {
                 return Ok(p);
             }
         };
-        if result.state == "complete" && flow.for_login {
+        if result.state == "complete" && flow.purpose.is_existing() {
             match vault.account(alias) {
                 Ok(loaded) => {
                     apply_service_result(&mut result, self.client.ping(&host, &loaded.credential));
@@ -313,7 +327,7 @@ impl CheckedProfileSession<'_> {
         http: &ProviderHttp,
     ) -> Result<SsoReport> {
         let flow = self.checked_sso_flow(alias, id, vault)?;
-        if !flow.for_login || flow.device != parent.entity_id().as_bytes() {
+        if !flow.purpose.is_existing() || flow.device != parent.entity_id().as_bytes() {
             return Err(Error::InvalidAccount(
                 "hardware authentication binding differs",
             ));
@@ -329,7 +343,7 @@ impl CheckedProfileSession<'_> {
             http,
             &mut protected,
         )?;
-        let mut result = report(alias, true, p);
+        let mut result = report(alias, flow.purpose, p);
         if result.state == "complete" {
             apply_service_result(
                 &mut result,
@@ -348,7 +362,7 @@ impl CheckedProfileSession<'_> {
         http: &ProviderHttp,
     ) -> Result<SsoReport> {
         let flow = self.checked_sso_flow(alias, id, vault)?;
-        if flow.for_login {
+        if flow.purpose.is_existing() {
             return Err(Error::InvalidAccount("login flow cannot create an account"));
         }
         let host = self.pinned_host()?;
@@ -391,7 +405,7 @@ impl CheckedProfileSession<'_> {
         }
         let mut result = report(
             alias,
-            false,
+            foks_proto::SsoPurpose::Signup,
             self.client.sso_progress(&host, id, &mut protected)?,
         );
         apply_service_result(
@@ -403,3 +417,106 @@ impl CheckedProfileSession<'_> {
 }
 #[cfg(test)]
 mod tests;
+
+fn require_linkable(status: &foks_proto::IdentityStatus) -> Result<()> {
+    if status.provider_fence != 0 {
+        return Err(Error::InvalidAccount(
+            "identity provider is fenced; contact the host operator",
+        ));
+    }
+    if !matches!(
+        status.account_state,
+        foks_proto::SsoAccountState::MigrationEligible | foks_proto::SsoAccountState::LockedOut
+    ) {
+        return Err(Error::InvalidAccount(
+            "account is not eligible for first linkage",
+        ));
+    }
+    Ok(())
+}
+impl CheckedProfileSession<'_> {
+    pub fn account_identity_status(
+        &self,
+        alias: &str,
+        parent: Option<&dyn foks_crypto::YubiDevice>,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<SsoReport> {
+        validate_name(alias)?;
+        self.profile.require(Capability::UserSync)?;
+        let host = self.pinned_host()?;
+        let status = if let Some(parent) = parent {
+            let loaded = vault.yubi_account(alias)?;
+            if self.sso_identity(alias, true, vault)?.device != *parent.entity_id() {
+                return Err(Error::InvalidAccount("hardware identity differs"));
+            }
+            self.client
+                .identity_status(&host, &loaded.uid, SsoSigningKey::Yubi(parent), None)?
+        } else {
+            let loaded = vault.account(alias)?;
+            self.client.identity_status(
+                &host,
+                &loaded.credential.uid,
+                SsoSigningKey::Software(&loaded.credential.seed),
+                None,
+            )?
+        };
+        let state = if status.provider_fence != 0 {
+            "provider-unavailable"
+        } else {
+            match status.account_state {
+                foks_proto::SsoAccountState::DeviceOnly => "device-only",
+                foks_proto::SsoAccountState::MigrationEligible => "link-needed",
+                foks_proto::SsoAccountState::LockedOut => "locked-out",
+                foks_proto::SsoAccountState::Linked if status.access_available => "linked",
+                foks_proto::SsoAccountState::Linked => "reauthentication-required",
+                foks_proto::SsoAccountState::NotEligible => "not-eligible",
+            }
+        };
+        Ok(SsoReport {
+            operation_id: None,
+            account_alias: alias.into(),
+            purpose: if matches!(
+                status.account_state,
+                foks_proto::SsoAccountState::MigrationEligible
+                    | foks_proto::SsoAccountState::LockedOut
+            ) {
+                foks_proto::SsoPurpose::LinkExisting
+            } else {
+                foks_proto::SsoPurpose::Reauthenticate
+            },
+            state,
+            browser_url: None,
+            expires_at_ms: 0,
+            service_access: status.access_available,
+            account_status: Some((&status).into()),
+        })
+    }
+    pub fn begin_yubi_existing_sso(
+        &self,
+        alias: &str,
+        purpose: foks_proto::SsoPurpose,
+        parent: &dyn foks_crypto::YubiDevice,
+        vault: &mut AccountVault<'_>,
+        master: &[u8; 32],
+        http: &ProviderHttp,
+    ) -> Result<SsoReport> {
+        self.profile.require(Capability::UserSync)?;
+        if !purpose.is_existing() {
+            return Err(Error::InvalidAccount("existing hardware account required"));
+        }
+        let mut intent = self.sso_identity(alias, true, vault)?;
+        if intent.device != *parent.entity_id() {
+            return Err(Error::InvalidAccount("hardware identity differs"));
+        }
+        if purpose == foks_proto::SsoPurpose::LinkExisting {
+            require_linkable(&self.client.identity_status(
+                &self.pinned_host()?,
+                &intent.uid,
+                SsoSigningKey::Yubi(parent),
+                None,
+            )?)?;
+        }
+        intent.purpose = purpose;
+        self.begin_bound_sso(alias, intent, master, http)
+    }
+}

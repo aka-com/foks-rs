@@ -50,11 +50,12 @@ pub struct SsoFlow {
     pub host: Vec<u8>,
     pub uid: Vec<u8>,
     pub device: Vec<u8>,
-    pub for_login: bool,
+    pub purpose: foks_proto::SsoPurpose,
     pub state: SsoFlowState,
     pub material_hash: [u8; 32],
     pub config_hash: [u8; 32],
     pub expires_at_ms: u64,
+    pub commitment: Option<[u8; 32]>,
     pub final_operation: Option<[u8; 16]>,
 }
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SsoFlow> {
@@ -63,7 +64,9 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SsoFlow> {
         host: r.get(1)?,
         uid: r.get(2)?,
         device: r.get(3)?,
-        for_login: r.get(4)?,
+        purpose: foks_proto::SsoPurpose::from_code(r.get(4)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        commitment: r.get(10)?,
         state: SsoFlowState::parse(r.get(5)?)?,
         material_hash: r.get(6)?,
         config_hash: r.get(7)?,
@@ -71,7 +74,7 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SsoFlow> {
         final_operation: r.get(9)?,
     })
 }
-const SELECT: &str = "SELECT operation_id,host_id,uid,device_id,for_login,state,material_hash,config_hash,expires_at,final_operation FROM sso_flows";
+const SELECT: &str = "SELECT operation_id,host_id,uid,device_id,purpose,state,material_hash,config_hash,expires_at,final_operation,commitment FROM sso_flows";
 impl HardStateStore {
     pub fn sso_flow(&self, id: &[u8; 16]) -> Result<Option<SsoFlow>> {
         Ok(self
@@ -100,6 +103,7 @@ impl HardStateStore {
     ) -> std::result::Result<(), E> {
         if flow.state != SsoFlowState::Prepared
             || flow.final_operation.is_some()
+            || flow.commitment.is_some()
             || flow.expires_at_ms <= now_ms
         {
             return Err(Error::SsoState("invalid new flow").into());
@@ -111,9 +115,21 @@ impl HardStateStore {
         if active >= 4 || total >= 4096 {
             return Err(Error::SsoState("flow capacity exhausted").into());
         }
-        tx.execute("INSERT INTO sso_flows(operation_id,host_id,uid,device_id,for_login,state,material_hash,config_hash,expires_at,final_operation) VALUES (?1,?2,?3,?4,?5,0,?6,?7,?8,NULL)",params![flow.id.as_slice(),flow.host,flow.uid,flow.device,flow.for_login,flow.material_hash.as_slice(),flow.config_hash.as_slice(),expiry]).map_err(Error::from)?;
+        tx.execute("INSERT INTO sso_flows(operation_id,host_id,uid,device_id,purpose,state,material_hash,config_hash,expires_at,final_operation) VALUES (?1,?2,?3,?4,?5,0,?6,?7,?8,NULL)",params![flow.id.as_slice(),flow.host,flow.uid,flow.device,flow.purpose as u8,flow.material_hash.as_slice(),flow.config_hash.as_slice(),expiry]).map_err(Error::from)?;
         persist()?;
         tx.commit().map_err(Error::from)?;
+        Ok(())
+    }
+    /// Write once, before delivery. Nonsecret evidence survives protected-material erasure.
+    pub fn sso_set_commitment(&mut self, id: &[u8; 16], commitment: &[u8; 32]) -> Result<()> {
+        let tx = self.write_transaction()?;
+        let changed=tx.execute("UPDATE sso_flows SET commitment=?2 WHERE operation_id=?1 AND state=2 AND (commitment IS NULL OR commitment=?2)",params![id,commitment])?;
+        if changed != 1 {
+            return Err(Error::SsoState(
+                "binding commitment changed or flow is not ready",
+            ));
+        }
+        tx.commit()?;
         Ok(())
     }
     pub fn sso_transition(
@@ -164,7 +180,8 @@ mod tests {
             host: verified.snapshot.host_id().to_vec(),
             uid: vec![1; 33],
             device: vec![4; 33],
-            for_login: false,
+            purpose: foks_proto::SsoPurpose::Signup,
+            commitment: None,
             state: SsoFlowState::Prepared,
             material_hash: [5; 32],
             config_hash: [6; 32],
@@ -225,6 +242,7 @@ mod tests {
             SsoFlowState::Ready
         );
         op.subject_id = flow.uid.clone();
+        db.sso_set_commitment(&flow.id, &[99; 32]).unwrap();
         db.record_sso_signup(&op, &flow.id).unwrap();
         assert_eq!(
             db.sso_flow(&flow.id).unwrap().unwrap().final_operation,

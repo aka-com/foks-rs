@@ -21,9 +21,9 @@ impl HardStateStore {
             return Err(Error::SsoState("flow child is not a prepared signup"));
         }
         let tx = self.write_transaction()?;
-        let (host, uid, device, state, login): (Vec<u8>, Vec<u8>, Vec<u8>, u8, bool) = tx
+        let (host, uid, device, state, purpose): (Vec<u8>, Vec<u8>, Vec<u8>, u8, u8) = tx
             .query_row(
-                "SELECT host_id,uid,device_id,state,for_login FROM sso_flows WHERE operation_id=?1",
+                "SELECT host_id,uid,device_id,state,purpose FROM sso_flows WHERE operation_id=?1",
                 [flow_id.as_slice()],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )?;
@@ -31,7 +31,7 @@ impl HardStateStore {
             || uid != operation.subject_id
             || device != operation.scope_id
             || state != crate::SsoFlowState::Ready as u8
-            || login
+            || purpose != 0
         {
             return Err(Error::SsoState("signup does not match ready flow"));
         }

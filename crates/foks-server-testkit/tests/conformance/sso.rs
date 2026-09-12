@@ -31,7 +31,7 @@ fn signup(
             SsoIntent {
                 uid: uid.clone(),
                 device: device_id,
-                for_login: false,
+                purpose: foks_proto::SsoPurpose::Signup,
             },
             &http,
             &mut protected,
@@ -96,7 +96,7 @@ pub(crate) fn sso_signup_login_and_expiry_enforcement() {
                 device: foks_crypto::derive_device_public(&created.credential.seed)
                     .unwrap()
                     .id,
-                for_login: true,
+                purpose: foks_proto::SsoPurpose::Reauthenticate,
             },
             &http,
             &mut protected,
@@ -164,7 +164,7 @@ fn provider_subject_cannot_retarget_a_foks_account() {
                 device: foks_crypto::derive_device_public(&created.credential.seed)
                     .unwrap()
                     .id,
-                for_login: true,
+                purpose: foks_proto::SsoPurpose::Reauthenticate,
             },
             &http,
             &mut protected,
@@ -283,7 +283,7 @@ fn every_authenticated_route_is_gated_and_public_reauthentication_remains_reacha
                 device: foks_crypto::derive_device_public(&created.credential.seed)
                     .unwrap()
                     .id,
-                for_login: true
+                purpose: foks_proto::SsoPurpose::Reauthenticate
             },
             &http,
             &mut protected
@@ -412,7 +412,7 @@ fn hardware_signup_and_reauthentication_use_the_same_provider_binding() {
             SsoIntent {
                 uid: uid.clone(),
                 device: parent.entity_id().clone(),
-                for_login: false,
+                purpose: foks_proto::SsoPurpose::Signup,
             },
             &http,
             &mut protected,
@@ -458,7 +458,7 @@ fn hardware_signup_and_reauthentication_use_the_same_provider_binding() {
             SsoIntent {
                 uid,
                 device: parent.entity_id().clone(),
-                for_login: true,
+                purpose: foks_proto::SsoPurpose::Reauthenticate,
             },
             &http,
             &mut protected,
@@ -513,7 +513,7 @@ fn a_provider_subject_cannot_create_two_accounts_and_failed_signup_is_atomic() {
             SsoIntent {
                 uid: uid.clone(),
                 device: device_id,
-                for_login: false,
+                purpose: foks_proto::SsoPurpose::Signup,
             },
             &http,
             &mut protected,
@@ -628,7 +628,8 @@ fn refresh_claims_fence_races_revocation_policy_changes_and_crashes() {
         .sso_access(created.credential.uid.as_bytes())
         .unwrap()
         .unwrap();
-    assert_eq!(row.state, SsoAccessState::ReauthenticationRequired);
+    assert_eq!(row.state, SsoAccessState::Refreshing);
+    assert!(row.interrupted);
     assert_eq!(provider.refreshes(), 0);
     assert!(client
         .foks()
@@ -688,7 +689,7 @@ fn bot_enrollment_after_lost_reply_stays_bound_across_sso_reauthentication() {
             SsoIntent {
                 uid: created.credential.uid.clone(),
                 device: created.credential.public_material().unwrap().id,
-                for_login: true,
+                purpose: foks_proto::SsoPurpose::Reauthenticate,
             },
             &http,
             &mut protected,
@@ -708,4 +709,289 @@ fn bot_enrollment_after_lost_reply_stays_bound_across_sso_reauthentication() {
     provider.set_invalid_grant(true);
     environment.advance_clock(301_000_000);
     assert!(foks.ping(&host, &bot).is_err());
+}
+
+#[test]
+fn migration_two_accounts_owner_proofs_late_link_and_erased_token_receipt() {
+    use foks_proto::{SsoAccountState as A, SsoPurpose as P};
+    use foks_server_db::{SsoPolicyTransition as T, SsoRolloutMode as M};
+    use foks_yubi::{MockYubiProvider, Pin, PivPolicy, SlotId, YubiProvider as _};
+    let environment = TestEnvironment::new().unwrap();
+    let server = environment.start_server().unwrap();
+    let alice = TestClient::new(&environment, "migration-alice").unwrap();
+    let host = alice.probe_and_pin().unwrap().pinned;
+    let alice_account = alice
+        .create_account(
+            &host,
+            &foks_server_testkit::TestAccountSpec::new("nativealice", 81),
+        )
+        .unwrap();
+    let bob = TestClient::new(&environment, "migration-bob").unwrap();
+    let bob_host = bob.probe_and_pin().unwrap().pinned;
+    let mut bob_store = bob.open_protected_store().unwrap();
+    let pin = Pin::new("654321").unwrap();
+    let cards = MockYubiProvider::with_card("migration-yubi", 73002, &pin).unwrap();
+    let card = cards.cards().unwrap().remove(0);
+    let hardware = cards
+        .prepare(
+            &card,
+            SlotId::new(0x82).unwrap(),
+            SlotId::new(0x83).unwrap(),
+            &pin,
+            None,
+            PivPolicy::Once,
+            PivPolicy::Never,
+        )
+        .unwrap();
+    let parent = hardware.device.as_ref();
+    let bob_account = bob
+        .foks()
+        .create_yubi_account(
+            &bob_host,
+            parent,
+            foks_client::YubiAccountRequest {
+                username_utf8: "nativebob".into(),
+                device_name: "owner key".into(),
+                invite_code: InviteCode::Empty,
+                email: "nativebob@example.test".into(),
+                passphrase: None,
+                pq_hint: foks_proto::YubiSlotAndPqKeyId {
+                    slot: 0x83,
+                    id: hardware.locator.pq_key_id,
+                },
+            },
+            foks_client::YubiAccountSecrets::new(
+                SecretSeed::new([91; 32]),
+                SecretSeed::new([92; 32]),
+                [93; 17],
+            ),
+            bob.soft_state_path(),
+            &mut bob_store,
+        )
+        .unwrap();
+    let before = alice
+        .foks()
+        .identity_status(
+            &host,
+            &alice_account.credential.uid,
+            SsoSigningKey::Software(&alice_account.credential.seed),
+            None,
+        )
+        .unwrap();
+    assert_eq!(before.account_state, A::DeviceOnly);
+    server.shutdown().unwrap();
+    let idp = TestOidcProvider::start();
+    let mut config = idp.config(environment.client_path("oidc", "migration-secret").unwrap());
+    let server = environment.start_oidc_server(config.clone()).unwrap();
+    let status = alice
+        .foks()
+        .identity_status(
+            &host,
+            &alice_account.credential.uid,
+            SsoSigningKey::Software(&alice_account.credential.seed),
+            None,
+        )
+        .unwrap();
+    assert_eq!(status.account_state, A::MigrationEligible);
+    assert!(status.access_available);
+    alice.foks().ping(&host, &alice_account.credential).unwrap();
+    let http = ProviderHttp::new(NetworkPolicy::loopback_test()).unwrap();
+    let mut store = alice.open_protected_store().unwrap();
+    idp.identity("aliceprovider", "alice-migration-subject");
+    let flow = alice
+        .foks()
+        .begin_sso(
+            &host,
+            SsoIntent {
+                uid: alice_account.credential.uid.clone(),
+                device: foks_crypto::derive_device_public(&alice_account.credential.seed)
+                    .unwrap()
+                    .id,
+                purpose: P::LinkExisting,
+            },
+            &http,
+            &mut store,
+        )
+        .unwrap();
+    idp.complete(flow.browser_url.as_ref().unwrap());
+    alice
+        .foks()
+        .poll_sso(&host, flow.operation_id, 1000, &http, &mut store)
+        .unwrap();
+    environment.arm_fault(foks_server_testkit::TestFault::SsoAfterCommitBeforeResponse);
+    assert!(alice
+        .foks()
+        .finish_sso_login(
+            &host,
+            flow.operation_id,
+            FederationCredential::Software(&alice_account.credential),
+            &http,
+            &mut store
+        )
+        .is_err());
+    assert_eq!(environment.fault_hits(), 1);
+    let sql = rusqlite::Connection::open(alice.hard_state_path()).unwrap();
+    sql.execute(
+        "UPDATE sso_flows SET expires_at=0 WHERE operation_id=?1",
+        [flow.operation_id],
+    )
+    .unwrap();
+    let uncertain = alice
+        .foks()
+        .sso_progress(&host, flow.operation_id, &mut store)
+        .unwrap();
+    assert_eq!(uncertain.state, SsoFlowState::Unknown);
+    let retained = foks_client_db::HardStateStore::open(alice.hard_state_path())
+        .unwrap()
+        .sso_flow(&flow.operation_id)
+        .unwrap()
+        .unwrap();
+    let commitment = retained.commitment.unwrap();
+    assert_eq!(
+        alice
+            .foks()
+            .finish_sso_login(
+                &host,
+                flow.operation_id,
+                FederationCredential::Software(&alice_account.credential),
+                &http,
+                &mut store
+            )
+            .unwrap()
+            .state,
+        SsoFlowState::Complete
+    );
+    let host_id: [u8; 33] = host.host_id().as_bytes().try_into().unwrap();
+    server
+        .writer_handle()
+        .call(move |db| {
+            let p = db.sso_rollout_status(&host_id)?.unwrap();
+            assert_eq!((p.cohort, p.linked, p.unlinked), (2, 1, 1));
+            db.sso_transition_policy(
+                &p.policy,
+                &T::Enforce {
+                    expected_unlinked: 1,
+                    accept_lockout: true,
+                },
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    server.shutdown().unwrap();
+    config.rollout_mode = foks_server::sso::OidcRolloutMode::Enforced;
+    let server = environment.start_oidc_server(config).unwrap();
+    let status = bob
+        .foks()
+        .identity_status(
+            &bob_host,
+            &bob_account.credential.uid,
+            SsoSigningKey::Yubi(parent),
+            None,
+        )
+        .unwrap();
+    assert_eq!(status.account_state, A::LockedOut);
+    assert!(!status.access_available);
+    assert!(bob
+        .foks()
+        .authenticate_yubi_and_pin(&bob_host, &bob_account.credential)
+        .is_err());
+    idp.identity("bobprovider", "bob-migration-subject");
+    let flow = bob
+        .foks()
+        .begin_sso(
+            &bob_host,
+            SsoIntent {
+                uid: bob_account.credential.uid.clone(),
+                device: parent.entity_id().clone(),
+                purpose: P::LinkExisting,
+            },
+            &http,
+            &mut bob_store,
+        )
+        .unwrap();
+    idp.complete(flow.browser_url.as_ref().unwrap());
+    bob.foks()
+        .poll_sso(&bob_host, flow.operation_id, 1000, &http, &mut bob_store)
+        .unwrap();
+    bob.foks()
+        .finish_sso_login(
+            &bob_host,
+            flow.operation_id,
+            FederationCredential::Yubi(&bob_account.credential),
+            &http,
+            &mut bob_store,
+        )
+        .unwrap();
+    bob.foks()
+        .authenticate_yubi_and_pin(&bob_host, &bob_account.credential)
+        .unwrap();
+    let status = bob
+        .foks()
+        .identity_status(
+            &bob_host,
+            &bob_account.credential.uid,
+            SsoSigningKey::Yubi(parent),
+            None,
+        )
+        .unwrap();
+    assert_eq!(status.account_state, A::Linked);
+    assert!(status.access_available);
+    server.shutdown().unwrap();
+    // Removing provider configuration preserves enforced rollout and old committed evidence.
+    let server = environment.start_server().unwrap();
+    let status = alice
+        .foks()
+        .identity_status(
+            &host,
+            &alice_account.credential.uid,
+            SsoSigningKey::Software(&alice_account.credential.seed),
+            Some(commitment),
+        )
+        .unwrap();
+    assert_eq!(status.committed_receipt, Some(commitment));
+    assert!(!status.access_available);
+    assert_ne!(status.provider_fence, 0);
+    assert_eq!(
+        environment
+            .read_database()
+            .unwrap()
+            .sso_policy(&host_id)
+            .unwrap()
+            .unwrap()
+            .mode,
+        M::Enforced
+    );
+    assert!(alice.foks().ping(&host, &alice_account.credential).is_err());
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn activated_host_with_missing_recovery_key_keeps_owner_status_without_regeneration() {
+    let provider = TestOidcProvider::start();
+    let environment = TestEnvironment::new().unwrap();
+    let config = provider.config(environment.client_path("oidc", "lost-key-secret").unwrap());
+    let server = environment.start_oidc_server(config.clone()).unwrap();
+    let client = TestClient::new(&environment, "oidc-key-loss").unwrap();
+    let created = signup(&environment, &client, &provider);
+    let host = client.pinned_host().unwrap();
+    server.shutdown().unwrap();
+    let key = environment.root().join("keys/recovery.key");
+    assert!(key.is_file());
+    std::fs::remove_file(&key).unwrap();
+    let server = environment.start_oidc_server(config).unwrap();
+    let status = client
+        .foks()
+        .identity_status(
+            &host,
+            &created.credential.uid,
+            SsoSigningKey::Software(&created.credential.seed),
+            None,
+        )
+        .unwrap();
+    assert_eq!(status.account_state, foks_proto::SsoAccountState::Linked);
+    assert_eq!(status.provider_fence, 3);
+    assert!(!status.access_available);
+    assert!(client.foks().ping(&host, &created.credential).is_err());
+    assert!(!key.exists());
+    server.shutdown().unwrap();
 }

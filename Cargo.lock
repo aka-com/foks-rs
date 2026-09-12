@@ -2053,6 +2053,7 @@ name = "foks-proto"
 version = "0.3.0"
 dependencies = [
  "foks-snowpack",
+ "serde",
  "thiserror 2.0.20",
  "zeroize",
 ]

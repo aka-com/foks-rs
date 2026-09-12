@@ -21,6 +21,7 @@ fn aad(row: &SsoSession) -> Vec<u8> {
     }
     out.push(row.state as u8);
     out.extend_from_slice(&row.revision.to_be_bytes());
+    out.extend_from_slice(&row.authorization_epoch.to_be_bytes());
     out.extend_from_slice(&row.expires_at_ms.to_be_bytes());
     out
 }

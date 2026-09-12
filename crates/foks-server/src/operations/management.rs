@@ -282,7 +282,7 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
     };
     let metrics = metrics.snapshot();
     let writer = writer.metrics();
-    format!(
+    let mut output = format!(
         concat!(
             "# TYPE foks_requests_started_total counter\n",
             "foks_requests_started_total {}\n",
@@ -409,7 +409,49 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
             metrics.maintenance_consecutive_failures >= 3
                 || metrics.upload_cleanup_deferred_passes >= 60
         ),
-    )
+    );
+    // Independent read snapshot; metrics never enqueue a policy mutation.
+    let sample = (|| -> crate::Result<Option<foks_server_db::SsoRolloutStatus>> {
+        let db = foks_server_db::ReadDatabase::open(database_path, Default::default())?;
+        let Some(host) = db.host_bootstrap()? else {
+            return Ok(None);
+        };
+        let host = host
+            .host_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| crate::Error::Config("invalid host ID"))?;
+        let snapshot = db.snapshot()?;
+        Ok(snapshot.sso_rollout_status(host)?)
+    })();
+    if let Ok(Some(s)) = sample {
+        use std::fmt::Write as _;
+        for (name, value) in [
+            ("foks_oidc_rollout_mode", s.policy.mode as u64 + 1),
+            (
+                "foks_oidc_provider_fenced",
+                u64::from(s.policy.fence.is_some()),
+            ),
+            (
+                "foks_oidc_authorization_epoch",
+                s.policy.authorization_epoch,
+            ),
+            ("foks_oidc_cohort_accounts", s.cohort),
+            ("foks_oidc_cohort_linked", s.linked),
+            ("foks_oidc_cohort_unlinked", s.unlinked),
+            (
+                "foks_oidc_cohort_locked_out",
+                if s.policy.mode == foks_server_db::SsoRolloutMode::Enforced {
+                    s.unlinked
+                } else {
+                    0
+                },
+            ),
+        ] {
+            let _ = writeln!(output, "# TYPE {name} gauge\n{name} {value}");
+        }
+    }
+    output
 }
 
 fn seconds(microseconds: u64) -> f64 {

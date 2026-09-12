@@ -1,6 +1,7 @@
 //! Typed RPC family dispatch over narrow operation ports.
 
 mod beacon;
+mod identity;
 mod kex;
 mod kv;
 mod logsend;
@@ -25,6 +26,9 @@ pub(super) fn response(
     use RouteId::*;
 
     match call.route.id {
+        IdentityFennecCapabilities | IdentityFennecChallenge | IdentityFennecProve => {
+            identity::response(data, call)
+        }
         RegPollOAuth2SessionCompletion => Err(RpcStatus::Unsupported),
         ProbeProbe
         | MerkleQueryLookup

@@ -25,6 +25,25 @@ impl SsoService {
     pub fn ensure_access(&self, uid: &[u8], credential: &[u8]) -> Result<()> {
         let uid = uid.to_vec();
         let credential = credential.to_vec();
+        let (decision, refreshable) = self.writer.call_with_current_time(self.clock.clone(), {
+            let uid = uid.clone();
+            let credential = credential.clone();
+            move |db, now| {
+                if db.active_credential_owner(&uid, &credential)?.is_none() {
+                    return Err(Error::Sso("credential was revoked"));
+                }
+                Ok((
+                    db.sso_access_decision(&uid, now / 1000)?,
+                    db.sso_refresh_eligible(&uid, now / 1000)?,
+                ))
+            }
+        })?;
+        if decision.permits_native() {
+            return Ok(());
+        }
+        if !refreshable {
+            return Err(Error::Sso("reauthentication required or provider fenced"));
+        }
         let (row, sequence) = self.writer.call({
             let uid = uid.clone();
             let credential = credential.clone();
@@ -42,7 +61,7 @@ impl SsoService {
                 Ok((row, sequence))
             }
         })?;
-        if row.config_hash != self.config_hash || row.host != self.host {
+        if row.interrupted || row.config_hash != self.config_hash || row.host != self.host {
             return Err(Error::Sso(
                 "provider configuration changed; reauthentication required",
             ));
@@ -177,6 +196,8 @@ fn aad(row: &SsoAccess) -> Vec<u8> {
     out.extend_from_slice(&row.uid);
     out.extend_from_slice(&row.config_hash);
     out.extend_from_slice(&row.revision.to_be_bytes());
+    out.extend_from_slice(&row.authorization_epoch.to_be_bytes());
+    out.extend_from_slice(&row.authorization_generation.to_be_bytes());
     out.push(row.state as u8);
     out.extend_from_slice(&row.expires_at_ms.to_be_bytes());
     out.extend_from_slice(&(row.issuer.len() as u64).to_be_bytes());

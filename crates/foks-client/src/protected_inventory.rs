@@ -349,7 +349,7 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO sso_flows VALUES (?1,?2,?3,?4,1,7,?5,?5,100,NULL)",
+            "INSERT INTO sso_flows(operation_id,host_id,uid,device_id,purpose,state,material_hash,config_hash,expires_at,final_operation,commitment) VALUES (?1,?2,?3,?4,1,7,?5,?5,100,NULL,?5)",
             params![[3u8; 16], host, vec![1u8; 33], vec![2u8; 33], [0u8; 32]],
         )
         .unwrap();

@@ -21,7 +21,7 @@ KV. KV covers roots, directories, optimistic dirent writes,
 small files, symlinks, chunked files, pagination, cache checks, and expiring
 locks. It also supports durable local and remote invitation requests and
 decisions, invitation certificates and scoped view grants, committed removal
-delivery, atomic username changes, OIDC signup and reauthentication with ongoing
+delivery, atomic username changes, OIDC signup, existing-account migration, and reauthentication with ongoing
 access enforcement, and Basic encrypted realtime chat for named teams.
 Public-client tests exercise these paths without server test hooks.
 

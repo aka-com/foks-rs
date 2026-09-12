@@ -4,6 +4,13 @@ import { normalizeCommandError } from '../bridge';
 import type { SsoAction, SsoProgress } from '../sso-contract';
 import { Button } from './index';
 const messages: Record<SsoProgress['state'], string> = {
+  'device-only': 'This host has not enabled organization sign-in.',
+  'link-needed':
+    'Link your existing account to your organization. Device access remains available during migration.',
+  'locked-out':
+    'Organization sign-in is enforced. Link this account with its owner device to restore access.',
+  linked: 'This account is linked to your organization.',
+  'not-eligible': 'This account is not eligible for existing-account linkage.',
   prepared:
     'Authentication was interrupted before the browser was opened. Cancel and begin again.',
   waiting: 'Complete sign-in in your browser, then check for completion.',
@@ -68,9 +75,10 @@ export function SsoPanel({
       if (active.current !== owner) return;
       if (
         p.accountAlias !== account ||
-        p.forLogin !== login ||
+        (p.purpose !== 'signup') !== login ||
         (action.action !== 'begin' &&
           action.action !== 'begin-yubi-signup' &&
+          action.action !== 'account-status' &&
           p.operationId !== action.operation_id)
       )
         throw new Error('Authentication belongs to a different account.');
@@ -99,7 +107,7 @@ export function SsoPanel({
       </p>
       {progress && (
         <p role="status">
-          {progress.serviceAccess
+          {progress.serviceAccess && !progress.accountStatus
             ? 'Account authentication and service access verified.'
             : messages[progress.state]}
         </p>
@@ -108,6 +116,32 @@ export function SsoPanel({
         <p role="alert" className="crit">
           {error}
         </p>
+      )}
+      {login && (
+        <>
+          <label>
+            Security key PIN (for an enrolled key)
+            <input
+              type="password"
+              autoComplete="off"
+              value={pin}
+              onChange={(e) => setPin(e.target.value)}
+            />
+          </label>
+          <Button
+            disabled={blocked}
+            onClick={() => {
+              const action: SsoAction = {
+                action: 'account-status',
+                pin: pin || null,
+              };
+              setPin('');
+              void run(action);
+            }}
+          >
+            Check account linkage
+          </Button>
+        </>
       )}
       {!login && (
         <label>
@@ -162,19 +196,29 @@ export function SsoPanel({
                   device_name: deviceName,
                   invite,
                 }
-              : { action: 'begin', for_login: login };
+              : {
+                  action: 'begin',
+                  purpose: !login
+                    ? 'signup'
+                    : (progress?.purpose ?? 'reauthenticate'),
+                  pin: login ? pin || null : null,
+                };
           setPin('');
           void run(action);
         }}
       >
-        {progress ? 'Begin or resume sign-in' : 'Continue with organization'}
+        {progress?.purpose === 'link-existing'
+          ? 'Link existing account'
+          : progress
+            ? 'Begin or resume sign-in'
+            : 'Continue with organization'}
       </Button>
       {progress?.browserAvailable && (
         <Button
           disabled={blocked}
           onClick={() =>
             void bridge
-              .openSsoBrowser(profile, account, progress.operationId)
+              .openSsoBrowser(profile, account, progress.operationId!)
               .catch((e) => setError(normalizeCommandError(e).message))
           }
         >
@@ -182,20 +226,26 @@ export function SsoPanel({
         </Button>
       )}
       {progress &&
-        ['waiting', 'provider-unavailable'].includes(progress.state) && (
+        !progress.accountStatus &&
+        ['waiting', 'provider-unavailable'].includes(progress.state) &&
+        !progress.accountStatus && (
           <Button
             disabled={blocked}
             onClick={() =>
-              void run({ action: 'poll', operation_id: progress.operationId })
+              void run({ action: 'poll', operation_id: progress.operationId! })
             }
           >
             Check sign-in
           </Button>
         )}
       {progress &&
-        ['ready', 'submitting', 'hardware-verification-required'].includes(
-          progress.state,
-        ) && (
+        !progress.accountStatus &&
+        [
+          'ready',
+          'submitting',
+          'submission-unknown',
+          'hardware-verification-required',
+        ].includes(progress.state) && (
           <>
             {login && (
               <label>
@@ -215,18 +265,18 @@ export function SsoPanel({
                   !login && hardware
                     ? {
                         action: 'finish-yubi-signup',
-                        operation_id: progress.operationId,
+                        operation_id: progress.operationId!,
                         pin,
                       }
                     : login
                       ? {
                           action: 'finish-login',
-                          operation_id: progress.operationId,
+                          operation_id: progress.operationId!,
                           pin: pin || null,
                         }
                       : {
                           action: 'finish-signup',
-                          operation_id: progress.operationId,
+                          operation_id: progress.operationId!,
                           device_name: deviceName,
                           invite,
                           passphrase: null,
@@ -240,6 +290,7 @@ export function SsoPanel({
           </>
         )}
       {progress &&
+        !progress.accountStatus &&
         [
           'prepared',
           'waiting',
@@ -250,17 +301,20 @@ export function SsoPanel({
           <Button
             disabled={blocked}
             onClick={() =>
-              void run({ action: 'cancel', operation_id: progress.operationId })
+              void run({
+                action: 'cancel',
+                operation_id: progress.operationId!,
+              })
             }
           >
             Cancel sign-in
           </Button>
         )}
-      {progress && (
+      {progress && !progress.accountStatus && (
         <Button
           disabled={blocked}
           onClick={() =>
-            void run({ action: 'status', operation_id: progress.operationId })
+            void run({ action: 'status', operation_id: progress.operationId! })
           }
         >
           Refresh status

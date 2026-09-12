@@ -6,6 +6,7 @@ license.workspace = true
 description = "Exact FOKS v0.1.9 protocol types"
 
 [dependencies]
+serde = { workspace = true }
 foks-snowpack = { workspace = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true }

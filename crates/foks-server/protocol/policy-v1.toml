@@ -1861,3 +1861,52 @@ statuses = ["ok", "bad_args", "permission_denied", "not_found", "quota_exceeded"
 max_request_bytes = 32768
 supported = true
 coverage = ["team_remote_invitations"]
+
+
+# Fennec-owned protocol namespace; no upstream dispatch identity is changed.
+[[protocol]]
+name = "Identity"
+local_id = 0xf04b0001
+id_constant = "IDENTITY_PROTOCOL_ID"
+
+[[route]]
+protocol = "Identity"
+method = "fennecCapabilities"
+local_position = 65536
+position_constant = "IDENTITY_CAPABILITIES_POSITION"
+listeners = ["public_services"]
+authentication = "public"
+request = "void"
+result = "IdentityCapabilities"
+statuses = ["ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
+max_request_bytes = 16384
+supported = true
+coverage = ["oidc_identity"]
+
+[[route]]
+protocol = "Identity"
+method = "fennecChallenge"
+local_position = 65537
+position_constant = "IDENTITY_CHALLENGE_POSITION"
+listeners = ["public_services"]
+authentication = "public"
+request = "IdentityClaim"
+result = "IdentityChallenge"
+statuses = ["ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
+max_request_bytes = 16384
+supported = true
+coverage = ["oidc_identity"]
+
+[[route]]
+protocol = "Identity"
+method = "fennecProve"
+local_position = 65538
+position_constant = "IDENTITY_PROVE_POSITION"
+listeners = ["public_services"]
+authentication = "public"
+request = "IdentityProof"
+result = "IdentityStatus"
+statuses = ["ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
+max_request_bytes = 16384
+supported = true
+coverage = ["oidc_identity"]

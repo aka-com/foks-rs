@@ -74,6 +74,49 @@ pub fn verify_oauth2_binding(
     Ok(OAuth2IdTokenBindingPayload::decode(&binding.inner)?)
 }
 
+pub fn sign_identity_proof(
+    seed: &SecretSeed,
+    challenge: foks_proto::IdentityChallenge,
+) -> Result<foks_proto::IdentityProof> {
+    if challenge.claim.signer != crate::derive_device_public(seed)?.id {
+        return Err(crate::Error::Verification);
+    }
+    let signing_seed = crate::derive_key(seed, 0, None)?;
+    let signature = crate::sign_ed25519_blob(
+        signing_seed.as_bytes(),
+        foks_proto::IDENTITY_PROOF_TYPE_ID,
+        &challenge.encoded()?,
+    )?;
+    Ok(foks_proto::IdentityProof {
+        challenge,
+        signature,
+    })
+}
+pub fn sign_yubi_identity_proof(
+    signer: &dyn YubiDevice,
+    challenge: foks_proto::IdentityChallenge,
+) -> Result<foks_proto::IdentityProof> {
+    if &challenge.claim.signer != signer.entity_id() {
+        return Err(crate::Error::Verification);
+    }
+    let inner = challenge.encoded()?;
+    foks_snowpack::validate_signable(&inner)?;
+    let blob = foks_snowpack::encode(&foks_snowpack::Value::Binary(inner))?;
+    let signature = crate::sign_yubi_typed(signer, foks_proto::IDENTITY_PROOF_TYPE_ID, &blob)?;
+    Ok(foks_proto::IdentityProof {
+        challenge,
+        signature,
+    })
+}
+pub fn verify_identity_proof(proof: &foks_proto::IdentityProof) -> Result<()> {
+    crate::verify_blob(
+        &proof.challenge.claim.signer,
+        &proof.signature,
+        foks_proto::IDENTITY_PROOF_TYPE_ID,
+        &proof.challenge.encoded()?,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
