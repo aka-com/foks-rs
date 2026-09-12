@@ -56,3 +56,6 @@ mod account;
 
 #[path = "conformance/bot_token.rs"]
 mod bot_token;
+
+#[path = "conformance/team_invitations.rs"]
+mod team_invitations;

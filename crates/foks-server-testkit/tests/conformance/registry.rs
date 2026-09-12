@@ -24,6 +24,17 @@ struct DeclaredRoute {
 
 const COVERAGE: &[Coverage] = &[
     Coverage {
+        name: "team_invitation_certificates",
+        run: crate::team_invitations::team_invitation_certificates,
+        routes: &[
+            ("TeamAdmin", "putTeamCert"),
+            ("TeamAdmin", "getCurrentTeamCerts"),
+            ("TeamGuest", "lookupTeamCertByHash"),
+            ("TeamMember", "grantLocalViewPermissionForTeam"),
+            ("User", "grantLocalViewPermissionForUser"),
+        ],
+    },
+    Coverage {
         name: "account_conveniences",
         run: crate::account::account_conveniences,
         routes: &[
@@ -224,8 +235,6 @@ const COVERAGE: &[Coverage] = &[
         name: "unsupported_team_routes",
         run: crate::authorization::unsupported_team_routes_return_typed_status,
         routes: &[
-            ("TeamAdmin", "putTeamCert"),
-            ("TeamAdmin", "getCurrentTeamCerts"),
             ("TeamAdmin", "loadTeamRemoteJoinReq"),
             ("TeamAdmin", "postTeamRemoval"),
             ("TeamAdmin", "loadTeamRawInbox"),

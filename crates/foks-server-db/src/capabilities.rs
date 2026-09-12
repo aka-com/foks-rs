@@ -497,7 +497,7 @@ fn admin_authority_query(
     }))
 }
 
-fn admin_token_query(
+pub(crate) fn admin_token_query(
     connection: &rusqlite::Connection,
     token_hash: &[u8; 32],
     now: u64,

@@ -1,6 +1,8 @@
 //! Team loading, PTK recovery, ad-hoc creation, and reconciliation.
 
 mod bearer;
+mod invitations;
+pub use invitations::*;
 mod membership;
 mod metadata;
 mod named;

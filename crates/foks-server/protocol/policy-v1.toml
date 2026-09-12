@@ -90,6 +90,11 @@ upstream = "TeamAdmin"
 id_constant = "TEAM_ADMIN_PROTOCOL_ID"
 
 [[protocol]]
+name = "TeamGuest"
+upstream = "TeamGuest"
+id_constant = "TEAM_GUEST_PROTOCOL_ID"
+
+[[protocol]]
 name = "TeamMember"
 upstream = "TeamMember"
 id_constant = "TEAM_MEMBER_PROTOCOL_ID"
@@ -1018,12 +1023,12 @@ protocol = "TeamAdmin"
 method = "putTeamCert"
 listeners = ["authenticated"]
 authentication = "active_team_admin_token"
-request = "Unsupported"
-result = "Unsupported"
-statuses = ["unsupported"]
-max_request_bytes = 4096
-supported = false
-coverage = ["unsupported_team_routes"]
+request = "InvitationCertificateArgument"
+result = "Void"
+statuses = ["oauth2_auth", "ok", "bad_args", "permission_denied", "team_cert", "quota_exceeded", "rate_limited", "tx_retry"]
+max_request_bytes = 32768
+supported = true
+coverage = ["team_invitation_certificates"]
 
 
 [[route]]
@@ -1031,12 +1036,12 @@ protocol = "TeamAdmin"
 method = "getCurrentTeamCerts"
 listeners = ["authenticated"]
 authentication = "active_team_admin_token"
-request = "Unsupported"
-result = "Unsupported"
-statuses = ["unsupported"]
-max_request_bytes = 4096
-supported = false
-coverage = ["unsupported_team_routes"]
+request = "InvitationCertificateArgument"
+result = "TeamCertificateList"
+statuses = ["oauth2_auth", "ok", "bad_args", "permission_denied", "team_cert", "quota_exceeded", "rate_limited", "tx_retry"]
+max_request_bytes = 32768
+supported = true
+coverage = ["team_invitation_certificates"]
 
 
 [[route]]
@@ -1792,3 +1797,42 @@ statuses = ["ok", "bad_args", "tx_retry"]
 max_request_bytes = 1024
 supported = true
 coverage = ["account_conveniences"]
+
+
+[[route]]
+protocol = "TeamGuest"
+method = "lookupTeamCertByHash"
+listeners = ["public_services"]
+authentication = "delegated_tls"
+request = "TeamInvite"
+result = "TeamCertificateAndMetadata"
+statuses = ["oauth2_auth", "ok", "bad_args", "not_found", "permission_denied", "quota_exceeded", "rate_limited", "tx_retry"]
+max_request_bytes = 32768
+supported = true
+coverage = ["team_invitation_certificates"]
+
+
+[[route]]
+protocol = "TeamMember"
+method = "grantLocalViewPermissionForTeam"
+listeners = ["authenticated"]
+authentication = "current_team_shared_key_signature"
+request = "LocalViewPermissionPayload"
+result = "PermissionToken"
+statuses = ["oauth2_auth", "ok", "bad_args", "not_found", "permission_denied", "quota_exceeded", "rate_limited", "tx_retry"]
+max_request_bytes = 32768
+supported = true
+coverage = ["team_invitation_certificates"]
+
+
+[[route]]
+protocol = "User"
+method = "grantLocalViewPermissionForUser"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "LocalViewPermissionPayload"
+result = "PermissionToken"
+statuses = ["oauth2_auth", "ok", "bad_args", "not_found", "permission_denied", "quota_exceeded", "rate_limited", "tx_retry"]
+max_request_bytes = 32768
+supported = true
+coverage = ["team_invitation_certificates"]

@@ -84,6 +84,7 @@ pub(super) fn response(
         | UserPostGenericLink
         | UserLoadGenericChain
         | UserGetTeamListServerTrust
+        | UserGrantLocalViewPermissionForUser
         | UserGrantRemoteViewPermissionForUser => user::response(data, call, principal),
         TeamLoaderGetTeamVOBearerTokenChallenge
         | TeamLoaderActivateTeamVOBearerToken
@@ -103,6 +104,10 @@ pub(super) fn response(
         | TeamAdminLoadRemovalKeyBoxForTeamAdmin
         | TeamAdminPostTeamMembershipLink
         | TeamAdminGetTeamConfig
+        | TeamAdminPutTeamCert
+        | TeamAdminGetCurrentTeamCerts
+        | TeamGuestLookupTeamCertByHash
+        | TeamMemberGrantLocalViewPermissionForTeam
         | TeamAdminCreateTeamAdHoc => team::response(data, call, principal),
         KvStoreMkdir
         | KvStorePut
@@ -136,8 +141,6 @@ pub(super) fn response(
         | RealTimeRtSelectVHost
         | RealTimeRtGetThreadRecents => realtime::response(data, call, principal),
         RealTimeRtGetChannel
-        | TeamAdminPutTeamCert
-        | TeamAdminGetCurrentTeamCerts
         | TeamAdminLoadTeamRemoteJoinReq
         | TeamAdminPostTeamRemoval
         | TeamAdminLoadTeamRawInbox

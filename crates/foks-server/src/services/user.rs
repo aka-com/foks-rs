@@ -28,19 +28,20 @@ pub(crate) fn resolve_username(
     }
     let principal = principal.ok_or_else(permission_denied)?;
     authorize(database, principal)?;
-    match request.authorization {
-        // The Go server requires a local_view_permissions grant for
-        // AsLocalUser. This server does not implement that grant route yet,
-        // so only the advertised open-viewership form is authorized.
-        foks_rpc::arguments::ResolveUsernameAuthorization::OpenHost
-            if crate::services::registration::USER_VIEWERSHIP
-                == foks_proto::ViewershipMode::Open => {}
-        _ => return Err(permission_denied()),
-    }
     let uid = database
         .uid_by_normalized_name(&request.name)
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or_else(permission_denied)?;
+    match request.authorization {
+        foks_rpc::arguments::ResolveUsernameAuthorization::OpenHost
+            if crate::services::registration::USER_VIEWERSHIP
+                == foks_proto::ViewershipMode::Open => {}
+        foks_rpc::arguments::ResolveUsernameAuthorization::LocalUser
+            if database
+                .local_user_view_permission(principal.uid(), &uid)
+                .map_err(|_| RpcStatus::TransactionRetry)? => {}
+        _ => return Err(permission_denied()),
+    }
     EntityId::from_bytes(uid.clone())
         .and_then(|entity| entity.require_type(foks_proto::ENTITY_USER))
         .map_err(|_| RpcStatus::TransactionRetry)?;
@@ -405,7 +406,17 @@ fn authorize_user_chain_load(
             Ok(())
         }
         Authorization::OpenHost | Authorization::OpenHostOrLocalUser => Ok(()),
-        Authorization::LocalUser | Authorization::RemoteToken(_) => Err(permission_denied()),
+        Authorization::LocalUser => {
+            if database
+                .local_user_view_permission(principal.uid(), request.uid.as_bytes())
+                .map_err(|_| RpcStatus::TransactionRetry)?
+            {
+                Ok(())
+            } else {
+                Err(permission_denied())
+            }
+        }
+        Authorization::RemoteToken(_) => Err(permission_denied()),
     }
 }
 

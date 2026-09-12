@@ -6,6 +6,11 @@ use crate::rpc::{RouteId, RoutedCall};
 use super::super::{permission_denied, ServerData};
 
 pub(super) trait Operations {
+    fn grant_local_view(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus>;
     fn change_username(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus>;
     fn reserve_username_for_change(
         &self,
@@ -74,6 +79,23 @@ pub(super) trait Operations {
 }
 
 impl Operations for ServerData {
+    fn grant_local_view(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        let host = self.host()?;
+        crate::services::team_invitations::InvitationService {
+            host: &host,
+            reader: &database,
+            writer: self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+            clock: &self.clock,
+            entropy: self.entropy.as_ref(),
+        }
+        .grant_local_view(argument, principal, false)
+    }
+
     fn reserve_username_for_change(
         &self,
         argument: &[u8],
@@ -535,6 +557,11 @@ pub(super) fn response(
         .map_err(|_| RpcStatus::Unsupported),
         RouteId::UserGetAllYubiManagementKeys => encode_success_response_at(
             &operations.get_all_yubi_management_keys(call.call.argument(), principal)?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::Unsupported),
+        RouteId::UserGrantLocalViewPermissionForUser => encode_success_response_at(
+            &operations.grant_local_view(call.call.argument(), principal)?,
             sequence,
         )
         .map_err(|_| RpcStatus::Unsupported),

@@ -6,6 +6,12 @@ use crate::rpc::{RouteId, RoutedCall};
 use super::super::{permission_denied, ServerData};
 
 pub(super) trait Operations {
+    fn invitation(
+        &self,
+        route: RouteId,
+        argument: &[u8],
+        principal: Option<&Principal>,
+    ) -> Result<Option<Vec<u8>>, RpcStatus>;
     fn loader_server_config(
         &self,
         argument: &[u8],
@@ -77,6 +83,39 @@ pub(super) trait Operations {
 }
 
 impl Operations for ServerData {
+    fn invitation(
+        &self,
+        route: RouteId,
+        argument: &[u8],
+        principal: Option<&Principal>,
+    ) -> Result<Option<Vec<u8>>, RpcStatus> {
+        let database = self.read_database()?;
+        let host = self.host()?;
+        let service = crate::services::team_invitations::InvitationService {
+            host: &host,
+            reader: &database,
+            writer: self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
+            clock: &self.clock,
+            entropy: self.entropy.as_ref(),
+        };
+        match route {
+            RouteId::TeamGuestLookupTeamCertByHash => {
+                service.certificate_lookup(argument).map(Some)
+            }
+            RouteId::TeamAdminPutTeamCert => {
+                service.certificate_put(argument, principal.ok_or_else(permission_denied)?)?;
+                Ok(None)
+            }
+            RouteId::TeamAdminGetCurrentTeamCerts => service
+                .certificate_list(argument, principal.ok_or_else(permission_denied)?)
+                .map(Some),
+            RouteId::TeamMemberGrantLocalViewPermissionForTeam => service
+                .grant_local_view(argument, principal.ok_or_else(permission_denied)?, true)
+                .map(Some),
+            _ => Err(RpcStatus::Unsupported),
+        }
+    }
+
     fn loader_server_config(
         &self,
         argument: &[u8],
@@ -368,6 +407,12 @@ pub(super) fn response(
             call.call.argument(),
             principal.ok_or_else(permission_denied)?,
         )?),
+        RouteId::TeamGuestLookupTeamCertByHash
+        | RouteId::TeamAdminPutTeamCert
+        | RouteId::TeamAdminGetCurrentTeamCerts
+        | RouteId::TeamMemberGrantLocalViewPermissionForTeam => {
+            operations.invitation(call.route.id, call.call.argument(), principal)?
+        }
         RouteId::TeamLoaderActivateTeamVOBearerToken => Some(operations.activate_loader(
             call.call.argument(),
             principal.ok_or_else(permission_denied)?,

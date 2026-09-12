@@ -30,6 +30,8 @@ mod schema;
 mod sso;
 mod sso_access;
 mod team;
+mod team_invitations;
+pub use team_invitations::{CertificateUpload, InvitationActor};
 mod team_names;
 mod transaction;
 mod user_mutation;

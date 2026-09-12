@@ -5,6 +5,7 @@ pub(crate) mod peripheral;
 pub(crate) mod realtime;
 pub(crate) mod registration;
 pub(crate) mod team_admin;
+pub(crate) mod team_invitations;
 pub(crate) mod team_loader;
 pub(crate) mod user;
 

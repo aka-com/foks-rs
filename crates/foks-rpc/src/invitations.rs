@@ -1,4 +1,5 @@
 //! Exact headerless team invitation calls; no request-status extension.
+use crate::TEAM_GUEST_PROTOCOL_ID;
 use crate::{
     encode_call, Result, TEAM_ADMIN_PROTOCOL_ID, TEAM_MEMBER_PROTOCOL_ID, USER_PROTOCOL_ID,
 };
@@ -7,7 +8,6 @@ use foks_proto::{
     Signature, TeamCertificate, TeamInvite, TeamRsvp,
 };
 use foks_snowpack::{decode, encode, Value};
-pub const TEAM_GUEST_PROTOCOL_ID: u64 = 0xf6d7585c;
 fn call(protocol: u64, method: u64, fields: Vec<Value>) -> Result<Vec<u8>> {
     encode_call(protocol, method, &encode(&Value::Array(fields))?, 0)
 }
