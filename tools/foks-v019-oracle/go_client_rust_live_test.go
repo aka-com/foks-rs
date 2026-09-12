@@ -85,16 +85,17 @@ func TestGoClientAgainstRustServer(t *testing.T) {
 	}
 
 	user := liveSignup(t, ctx, &regClient, &merkleClient, host)
-	if _, err := regClient.ResolveUsername(ctx, rem.ResolveUsernameArg{
-		N: "gocompat", Auth: rem.NewLoadUserChainAuthWithAslocaluser(),
-	}); err == nil {
-		t.Fatal("public username resolution accepted local-user authorization without a principal")
-	}
-	resolved, err := regClient.ResolveUsername(ctx, rem.ResolveUsernameArg{
-		N: "gocompat", Auth: rem.NewLoadUserChainAuthWithOpenvhost(),
-	})
-	if err != nil || !resolved.Eq(user.uid) {
-		t.Fatalf("resolve signed-up user: uid=%v err=%v", resolved, err)
+	// The pinned Go registration endpoint rejects resolution even on an open
+	// host. Open viewership is used through an authenticated user connection.
+	for _, auth := range []rem.LoadUserChainAuth{
+		rem.NewLoadUserChainAuthWithAslocaluser(),
+		rem.NewLoadUserChainAuthWithOpenvhost(),
+	} {
+		if _, err := regClient.ResolveUsername(ctx, rem.ResolveUsernameArg{
+			N: "gocompat", Auth: auth,
+		}); !core.IsPermissionError(err) {
+			t.Fatalf("public username resolution should deny a request without a principal: %v", err)
+		}
 	}
 	deviceID, err := user.device.EntityID()
 	if err != nil {
@@ -117,6 +118,13 @@ func TestGoClientAgainstRustServer(t *testing.T) {
 	uid, err := userClient.Ping(ctx)
 	if err != nil || !uid.Eq(user.uid) {
 		t.Fatalf("activate user ping: uid=%v err=%v", uid, err)
+	}
+
+	resolved, err := userClient.ResolveUsername(ctx, rem.ResolveUsernameArg{
+		N: "gocompat", Auth: rem.NewLoadUserChainAuthWithOpenvhost(),
+	})
+	if err != nil || !resolved.Eq(user.uid) {
+		t.Fatalf("resolve signed-up user: uid=%v err=%v", resolved, err)
 	}
 
 	liveProvision(t, ctx, &userClient, &regClient, &merkleClient, &user)
