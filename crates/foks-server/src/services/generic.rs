@@ -79,6 +79,35 @@ pub(crate) fn commit_for_entity(
     hostchain_tail: &foks_proto::HostchainTail,
     passphrase: Option<PassphraseCompanion>,
 ) -> Result<(), RpcStatus> {
+    commit_for_entity_with_invitation(
+        argument,
+        principal,
+        entity,
+        authorized_signer,
+        host,
+        writer,
+        keys,
+        clock,
+        hostchain_tail,
+        passphrase,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn commit_for_entity_with_invitation(
+    argument: PostGenericLinkArgument,
+    principal: &Principal,
+    entity: &EntityId,
+    authorized_signer: Option<&[u8]>,
+    host: &EntityId,
+    writer: &WriterHandle,
+    keys: &Arc<dyn HostKeyProvider>,
+    clock: &Arc<dyn foks_server_db::Clock>,
+    hostchain_tail: &foks_proto::HostchainTail,
+    passphrase: Option<PassphraseCompanion>,
+    invitation: Option<foks_server_db::LocalInvitationAdmission>,
+) -> Result<(), RpcStatus> {
     let decoded = argument.link.decode_generic().map_err(bad_arguments)?;
     if decoded.entity != *entity
         || decoded.host != *host
@@ -236,6 +265,7 @@ pub(crate) fn commit_for_entity(
                 }
             });
             database.commit_generic_mutation(&foks_server_db::GenericMutation {
+                invitation: invitation.as_ref(),
                 link: foks_server_db::GenericLinkMutation {
                     entity_id: &entity_id,
                     chain_type,
@@ -437,6 +467,10 @@ fn map_write_error(error: crate::Error) -> RpcStatus {
     }
     match error {
         crate::Error::WriterQueue => RpcStatus::RateLimited,
+        crate::Error::Database(foks_server_db::Error::InvitationAlreadyPending) => {
+            RpcStatus::TeamInviteAlreadyAccepted
+        }
+        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
         crate::Error::Database(foks_server_db::Error::StaleRoot) => RpcStatus::StaleRoot,
         crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
         crate::Error::Database(foks_server_db::Error::PassphraseNotFound) => {

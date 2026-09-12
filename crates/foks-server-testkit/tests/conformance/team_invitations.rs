@@ -296,3 +296,175 @@ fn old_invitation_survives_admin_rotation_and_current_listing_changes() {
         )
         .is_err());
 }
+
+#[test]
+pub(crate) fn team_local_invitations() {
+    let f = Fixture::start("local-invitations");
+    let owner = f
+        .client
+        .create_account(f.host(), &TestAccountSpec::new("localinviteowner", 71))
+        .unwrap();
+    let jc = TestClient::new(&f.environment, "local-invitation-joiner").unwrap();
+    let joiner = jc
+        .create_account(f.host(), &TestAccountSpec::new("localinvitejoiner", 72))
+        .unwrap();
+    let owner_cred = FederationCredential::Software(&owner.credential);
+    let joiner_cred = FederationCredential::Software(&joiner.credential);
+    let secrets = NamedTeamSecrets {
+        member_min: SecretSeed::new([81; 32]),
+        member: SecretSeed::new([82; 32]),
+        admin: SecretSeed::new([83; 32]),
+        owner: SecretSeed::new([84; 32]),
+        removal_key: SecretSeed::new([85; 32]),
+        team_name_commitment_key: [86; 16],
+    };
+    let created = f
+        .client
+        .foks()
+        .create_single_owner_named_team(f.host(), &owner.credential, "localinviteteam", &secrets)
+        .unwrap();
+    let invitation = f
+        .client
+        .foks()
+        .prepare_team_invitation(f.host(), owner_cred, &created.team)
+        .unwrap();
+    f.client
+        .foks()
+        .upload_team_invitation(f.host(), owner_cred, &invitation)
+        .unwrap();
+    assert!(f
+        .client
+        .foks()
+        .prepare_local_invitation_acceptance(f.host(), owner_cred, &invitation.invite)
+        .is_err());
+    let prepared = jc
+        .foks()
+        .prepare_local_invitation_acceptance(f.host(), joiner_cred, &invitation.invite)
+        .unwrap();
+    let receipt = jc
+        .foks()
+        .submit_local_invitation_acceptance(f.host(), joiner_cred, &prepared)
+        .unwrap();
+    assert!(!receipt.is_remote());
+    assert!(matches!(
+        jc.foks()
+            .submit_local_invitation_acceptance(f.host(), joiner_cred, &prepared),
+        Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+            code: 7015,
+            ..
+        }))
+    ));
+    let requested_user = jc
+        .foks()
+        .authenticate_credential_and_pin(f.host(), joiner_cred)
+        .unwrap();
+    let memberships = jc
+        .foks()
+        .authenticated_user_team_memberships(f.host(), &joiner.credential, &requested_user.verified)
+        .unwrap();
+    assert!(memberships
+        .current
+        .iter()
+        .any(|e| e.membership.team == created.team
+            && e.membership.state == foks_proto::TeamMembershipState::Requested));
+    let inbox = f
+        .client
+        .foks()
+        .team_invitation_inbox(f.host(), owner_cred, &created.team, None)
+        .unwrap();
+    assert_eq!(inbox.len(), 1);
+    assert_eq!(inbox[0].receipt, receipt);
+    assert!(jc
+        .foks()
+        .team_invitation_inbox(f.host(), joiner_cred, &created.team, None)
+        .is_err());
+    let target = f
+        .client
+        .foks()
+        .load_local_invitation_joiner(f.host(), owner_cred, &created.team, &inbox[0])
+        .unwrap();
+    assert_eq!(target.uid(), &joiner.credential.uid);
+    // Rejection is repeatable and a later fresh request may rejoin.
+    f.client
+        .foks()
+        .reject_team_invitation(f.host(), owner_cred, &created.team, &receipt)
+        .unwrap();
+    f.client
+        .foks()
+        .reject_team_invitation(f.host(), owner_cred, &created.team, &receipt)
+        .unwrap();
+    assert!(f
+        .client
+        .foks()
+        .team_invitation_inbox(f.host(), owner_cred, &created.team, None)
+        .unwrap()
+        .is_empty());
+    let again = jc
+        .foks()
+        .prepare_local_invitation_acceptance(f.host(), joiner_cred, &invitation.invite)
+        .unwrap();
+    let receipt2 = jc
+        .foks()
+        .submit_local_invitation_acceptance(f.host(), joiner_cred, &again)
+        .unwrap();
+    assert_ne!(receipt, receipt2);
+    let inbox = f
+        .client
+        .foks()
+        .team_invitation_inbox(f.host(), owner_cred, &created.team, None)
+        .unwrap();
+    let target = f
+        .client
+        .foks()
+        .load_local_invitation_joiner(f.host(), owner_cred, &created.team, &inbox[0])
+        .unwrap();
+    let added = f
+        .client
+        .foks()
+        .add_local_user_to_named_team(
+            f.host(),
+            &owner.credential,
+            &created.team,
+            &foks_client::AddLocalTeamMemberRequest {
+                target_user: &target,
+                destination_role: Role::member(0),
+                removal_key: &SecretSeed::new([87; 32]),
+            },
+        )
+        .unwrap();
+    assert_eq!(added.authenticated.verified.members().len(), 2);
+    assert!(f
+        .client
+        .foks()
+        .team_invitation_inbox(f.host(), owner_cred, &created.team, None)
+        .unwrap()
+        .is_empty());
+    assert!(matches!(
+        f.client
+            .foks()
+            .reject_team_invitation(f.host(), owner_cred, &created.team, &receipt2),
+        Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+            code: 7002,
+            ..
+        }))
+    ));
+    let user = jc
+        .foks()
+        .authenticate_credential_and_pin(f.host(), joiner_cred)
+        .unwrap();
+    let member = jc
+        .foks()
+        .load_and_pin_team_with_credential(
+            f.host(),
+            joiner_cred,
+            &user.verified,
+            &user.puks,
+            &created.team,
+        )
+        .unwrap();
+    assert_eq!(member.ptks.len(), 2);
+    assert!(jc
+        .foks()
+        .prepare_local_invitation_acceptance(f.host(), joiner_cred, &invitation.invite)
+        .is_err());
+}

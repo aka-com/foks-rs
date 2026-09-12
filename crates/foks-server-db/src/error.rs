@@ -28,6 +28,10 @@ pub enum Error {
     PassphraseRateLimited,
     #[error("authenticated credential is no longer active")]
     AuthorizationChanged,
+    #[error("team invitation already has a pending request")]
+    InvitationAlreadyPending,
+    #[error("opposing invitation decision already committed")]
+    InvitationDecisionConflict,
     #[error("idempotency identity was reused with different request bytes")]
     ReceiptConflict,
     #[error("idempotency receipt expired")]

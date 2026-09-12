@@ -4,6 +4,7 @@ mod bot_token;
 mod chat;
 mod chat_poll;
 mod data;
+mod invitations;
 mod sso;
 #[cfg(test)]
 use chat_poll::ActiveChatPollGuard;
@@ -2405,6 +2406,21 @@ fn dispatch_result(
                 )?)
             })
         }
+        Operation::Invitations {
+            profile,
+            account_alias,
+            action,
+            pin,
+        } => invitations::run(
+            state_dir,
+            &registry,
+            &profile,
+            &account_alias,
+            action,
+            pin,
+            timeout,
+            cancellation,
+        ),
         Operation::RenameAccount {
             profile,
             account_alias,

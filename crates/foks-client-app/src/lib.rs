@@ -202,7 +202,9 @@ pub use bot_token::{
 pub use web_admin::AdminHandoff;
 mod account;
 mod account_conveniences;
+mod invitations;
 pub use account_conveniences::{RenameAction, RenameReport};
+pub use invitations::InvitationAction;
 mod sso;
 pub use sso::{SsoAction, SsoReport, SsoSignupInput};
 mod chat;

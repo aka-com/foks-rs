@@ -413,6 +413,15 @@ impl ChatSession<'_> {
     }
 }
 
+// Only transport loss is optional. Shared integrity and permission failures
+// propagate; channel content failures are explicitly quarantined by hydration.
+fn optional_network_failure(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Connect(_) | Error::DeadlineExceeded | Error::Rpc(foks_rpc::Error::Io(_))
+    )
+}
+
 #[cfg(test)]
 mod poll_validation_tests {
     use super::*;
@@ -424,13 +433,4 @@ mod poll_validation_tests {
         assert!(ChatPollResult::checked(false, 6, 5).is_err());
         assert!(ChatPollResult::checked(true, u64::MAX, 5).is_err());
     }
-}
-
-// Only transport loss is optional. Shared integrity and permission failures
-// propagate; channel content failures are explicitly quarantined by hydration.
-fn optional_network_failure(error: &Error) -> bool {
-    matches!(
-        error,
-        Error::Connect(_) | Error::DeadlineExceeded | Error::Rpc(foks_rpc::Error::Io(_))
-    )
 }

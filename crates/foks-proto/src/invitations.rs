@@ -308,24 +308,27 @@ pub struct RemoteJoinPayload {
 }
 impl RemoteJoinPayload {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let v = bounded(bytes)?;
+        if bytes.len() > 16384 {
+            return Err(Error::IntegerRange("invitation material limit"));
+        }
+        let v = foks_snowpack::decode_sensitive(bytes)?;
         let f = array(&v, 5)?;
         Ok(Self {
             joiner: crate::FqParty::decode(&encode(&f[0])?)?,
-            permission: crate::PermissionToken::decode(&encode(&f[1])?)?,
+            permission: crate::PermissionToken::decode(&zeroize::Zeroizing::new(encode(&f[1])?))?,
             time: unsigned(&f[2])?,
             source_role: Role::decode(&encode(&f[3])?)?,
             visible: RemoteJoinVisible::from_value(&f[4])?,
         })
     }
     pub fn encoded(&self) -> Result<Vec<u8>> {
-        Ok(encode(&Value::Array(vec![
+        Ok(encode(&zeroize::Zeroizing::new(Value::Array(vec![
             self.joiner.to_value(),
             self.permission.to_value(),
             Value::Unsigned(self.time),
             self.source_role.to_value(),
             self.visible.to_value()?,
-        ]))?)
+        ])))?)
     }
 }
 /// Stable opaque receipt; its kind is distinct from operation identity.
@@ -512,4 +515,48 @@ pub fn encode_team_inbox(rows: &[RawInboxRow]) -> Result<Vec<u8>> {
     }]))?;
     decode_team_inbox(&b)?;
     Ok(b)
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct LocalInviteAcceptance {
+    pub invite: TeamInvite,
+    pub source_role: Role,
+    pub source_token: Option<[u8; 16]>,
+    pub membership_link: Option<crate::PostGenericLinkArgument>,
+}
+impl LocalInviteAcceptance {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > 16384 {
+            return Err(Error::IntegerRange("invitation material limit"));
+        }
+        let v = foks_snowpack::decode_sensitive(bytes)?;
+        let f = array(&v, 4)?;
+        Ok(Self {
+            invite: TeamInvite::decode(&encode(&f[0])?)?,
+            source_role: Role::decode(&encode(&f[1])?)?,
+            source_token: option(&f[2], |v| fixed_blob(v, "source team token"))?,
+            membership_link: option(&f[3], |v| {
+                crate::PostGenericLinkArgument::decode(&encode(v)?)
+            })?,
+        })
+    }
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&zeroize::Zeroizing::new(Value::Array(vec![
+            self.invite.to_value(),
+            self.source_role.to_value(),
+            self.source_token
+                .map_or(Value::Null, |t| Value::Binary(t.to_vec())),
+            match &self.membership_link {
+                Some(l) => decode(&l.encoded()?)?,
+                None => Value::Null,
+            },
+        ])))?)
+    }
+}
+
+impl Drop for LocalInviteAcceptance {
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        self.source_token.zeroize();
+    }
 }

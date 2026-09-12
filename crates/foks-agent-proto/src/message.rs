@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -404,6 +404,12 @@ impl Request {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "operation", rename_all = "kebab-case")]
 pub enum Operation {
+    Invitations {
+        profile: String,
+        account_alias: String,
+        action: crate::invitations::InvitationAction,
+        pin: Option<SecretString>,
+    },
     WebAdmin {
         profile: String,
         account_alias: String,
@@ -1013,6 +1019,7 @@ impl std::fmt::Debug for Operation {
                 .finish(),
             Self::BotAccount { .. } => formatter.write_str("BotAccount { [REDACTED] }"),
             Self::ListAccountRenames { .. } => formatter.write_str("ListAccountRenames { .. }"),
+            Self::Invitations { .. } => formatter.write_str("Invitations { [REDACTED] }"),
             Self::RenameAccount { .. } => formatter.write_str("RenameAccount { [REDACTED] }"),
             Self::Sso { .. } => formatter.write_str("Sso { [REDACTED] }"),
             Self::Chat { store, action } => formatter

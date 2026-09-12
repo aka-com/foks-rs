@@ -456,6 +456,31 @@ pub(super) fn dispatch(
     Ok(serde_json::to_value(ChatReply { scope, result })?)
 }
 
+/// Preserve chat-specific policy outcomes without changing generic RPC mapping.
+pub(super) fn contextual_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error> {
+    let mut source = Some(error.as_ref());
+    while let Some(cause) = source {
+        if matches!(
+            cause.downcast_ref::<foks_rpc::Error>(),
+            Some(foks_rpc::Error::RemoteStatus { code: 1013, .. })
+        ) {
+            return Box::new(foks_client::Error::ChatAccessDenied(
+                "server denied this chat action",
+            ));
+        }
+        if matches!(
+            cause.downcast_ref::<foks_client::Error>(),
+            Some(foks_client::Error::Crypto(_))
+        ) {
+            return Box::new(foks_client::Error::ChatIntegrity(
+                "chat cryptographic verification failed",
+            ));
+        }
+        source = cause.source();
+    }
+    error
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,29 +507,4 @@ mod tests {
         assert!(preview.len() <= CHAT_SNIPPET_BYTES);
         assert!(preview.ends_with('…'));
     }
-}
-
-/// Preserve chat-specific policy outcomes without changing generic RPC mapping.
-pub(super) fn contextual_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error> {
-    let mut source = Some(error.as_ref());
-    while let Some(cause) = source {
-        if matches!(
-            cause.downcast_ref::<foks_rpc::Error>(),
-            Some(foks_rpc::Error::RemoteStatus { code: 1013, .. })
-        ) {
-            return Box::new(foks_client::Error::ChatAccessDenied(
-                "server denied this chat action",
-            ));
-        }
-        if matches!(
-            cause.downcast_ref::<foks_client::Error>(),
-            Some(foks_client::Error::Crypto(_))
-        ) {
-            return Box::new(foks_client::Error::ChatIntegrity(
-                "chat cryptographic verification failed",
-            ));
-        }
-        source = cause.source();
-    }
-    error
 }

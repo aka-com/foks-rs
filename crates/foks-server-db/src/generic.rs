@@ -36,6 +36,7 @@ pub enum GenericPassphraseAction<'a> {
 }
 
 pub struct GenericMutation<'a> {
+    pub invitation: Option<&'a crate::LocalInvitationAdmission>,
     pub link: GenericLinkMutation<'a>,
     pub passphrase: Option<GenericPassphraseAction<'a>>,
     pub expected_root_epoch: u64,
@@ -91,6 +92,18 @@ impl Database {
                     *passphrase,
                 )?,
             }
+        }
+        if let Some(invitation) = mutation.invitation {
+            if mutation.link.entity_id != invitation.joiner.as_bytes()
+                || mutation.link.chain_type != foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP
+            {
+                return Err(Error::Invalid("invitation membership link"));
+            }
+            crate::team_invitations::insert_local_admission(
+                &transaction,
+                invitation,
+                mutation.now,
+            )?;
         }
         insert_generic_link(
             &transaction,

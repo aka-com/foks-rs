@@ -31,7 +31,7 @@ mod sso;
 mod sso_access;
 mod team;
 mod team_invitations;
-pub use team_invitations::{CertificateUpload, InvitationActor};
+pub use team_invitations::{CertificateUpload, InvitationActor, LocalInvitationAdmission};
 mod team_names;
 mod transaction;
 mod user_mutation;

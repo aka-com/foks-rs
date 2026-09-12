@@ -249,6 +249,7 @@ fn revocation_rejects_generic_links_signed_after_its_cited_root() {
     fixture
         .database
         .commit_generic_mutation(&GenericMutation {
+            invitation: None,
             link: GenericLinkMutation {
                 entity_id: uid.as_bytes(),
                 chain_type: foks_proto::CHAIN_TYPE_USER_SETTINGS,

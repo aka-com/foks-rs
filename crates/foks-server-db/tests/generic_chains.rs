@@ -34,6 +34,7 @@ fn generic_links_advance_from_the_derived_seed_location() {
     fixture
         .database
         .commit_generic_mutation(&GenericMutation {
+            invitation: None,
             link: GenericLinkMutation {
                 entity_id: uid.as_bytes(),
                 chain_type: foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP,

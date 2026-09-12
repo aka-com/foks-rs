@@ -24,6 +24,15 @@ struct DeclaredRoute {
 
 const COVERAGE: &[Coverage] = &[
     Coverage {
+        name: "team_local_invitations",
+        run: crate::team_invitations::team_local_invitations,
+        routes: &[
+            ("TeamMember", "acceptInviteLocal"),
+            ("TeamAdmin", "loadTeamRawInbox"),
+            ("TeamAdmin", "rejectJoinReq"),
+        ],
+    },
+    Coverage {
         name: "team_invitation_certificates",
         run: crate::team_invitations::team_invitation_certificates,
         routes: &[
@@ -237,8 +246,6 @@ const COVERAGE: &[Coverage] = &[
         routes: &[
             ("TeamAdmin", "loadTeamRemoteJoinReq"),
             ("TeamAdmin", "postTeamRemoval"),
-            ("TeamAdmin", "loadTeamRawInbox"),
-            ("TeamAdmin", "rejectJoinReq"),
         ],
     },
     Coverage {

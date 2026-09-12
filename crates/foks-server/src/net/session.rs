@@ -1924,6 +1924,30 @@ fn endpoint_host(endpoint: &str) -> Option<&str> {
     }
 }
 
+impl ServerData {
+    fn authorize_principal(&self, principal: &Principal) -> std::result::Result<(), RpcStatus> {
+        let reader = self.read_database()?;
+        let now = self
+            .clock
+            .now_micros()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        if reader
+            .sso_require_access(principal.uid(), now / 1000)
+            .is_ok()
+        {
+            return Ok(());
+        }
+        drop(reader);
+        let sso = self.sso.as_ref().ok_or_else(|| {
+            RpcStatus::OAuth2Auth(Box::new(RpcStatus::OAuth2(
+                "provider disabled; service access remains locked".into(),
+            )))
+        })?;
+        sso.ensure_access(principal.uid(), principal.device_id())
+            .map_err(|e| RpcStatus::OAuth2Auth(Box::new(crate::sso::status(e))))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2169,29 +2193,5 @@ mod tests {
             foks_rpc::InboundMessage::Call(call) => assert_eq!(call.argument(), argument),
             foks_rpc::InboundMessage::Control => panic!("expected a CALL_V2 request"),
         }
-    }
-}
-
-impl ServerData {
-    fn authorize_principal(&self, principal: &Principal) -> std::result::Result<(), RpcStatus> {
-        let reader = self.read_database()?;
-        let now = self
-            .clock
-            .now_micros()
-            .map_err(|_| RpcStatus::TransactionRetry)?;
-        if reader
-            .sso_require_access(principal.uid(), now / 1000)
-            .is_ok()
-        {
-            return Ok(());
-        }
-        drop(reader);
-        let sso = self.sso.as_ref().ok_or_else(|| {
-            RpcStatus::OAuth2Auth(Box::new(RpcStatus::OAuth2(
-                "provider disabled; service access remains locked".into(),
-            )))
-        })?;
-        sso.ensure_access(principal.uid(), principal.device_id())
-            .map_err(|e| RpcStatus::OAuth2Auth(Box::new(crate::sso::status(e))))
     }
 }

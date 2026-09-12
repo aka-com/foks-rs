@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 foks-agent-proto = { workspace = true }
 thiserror = { workspace = true }
-rustix = { workspace = true }
+rustix = { workspace = true, features = ["fs"] }
 zeroize = { workspace = true }
 
 [dev-dependencies]

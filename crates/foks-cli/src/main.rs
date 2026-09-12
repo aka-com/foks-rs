@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 mod account_conveniences;
 mod bot_token;
+mod invitations;
 mod mcp;
 mod sso;
 mod web_admin;
@@ -305,6 +306,8 @@ enum RecoveryCommand {
 
 #[derive(clap::Subcommand)]
 enum TeamCommand {
+    #[command(subcommand)]
+    Invite(invitations::InvitationCommand),
     List {
         profile: String,
     },
@@ -1683,6 +1686,7 @@ fn team_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let registry = ProfileRegistry::open(state_dir)?;
     match command {
+        TeamCommand::Invite(command) => invitations::run(state_dir, command),
         TeamCommand::List { profile } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, _| {

@@ -99,6 +99,21 @@ impl Operations for ServerData {
             entropy: self.entropy.as_ref(),
         };
         match route {
+            RouteId::TeamMemberAcceptInviteLocal => service
+                .accept_local(
+                    argument,
+                    principal.ok_or_else(permission_denied)?,
+                    self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?,
+                    &self.hostchain_tail,
+                )
+                .map(Some),
+            RouteId::TeamAdminLoadTeamRawInbox => service
+                .inbox(argument, principal.ok_or_else(permission_denied)?)
+                .map(Some),
+            RouteId::TeamAdminRejectJoinReq => {
+                service.reject(argument, principal.ok_or_else(permission_denied)?)?;
+                Ok(None)
+            }
             RouteId::TeamGuestLookupTeamCertByHash => {
                 service.certificate_lookup(argument).map(Some)
             }
@@ -407,7 +422,10 @@ pub(super) fn response(
             call.call.argument(),
             principal.ok_or_else(permission_denied)?,
         )?),
-        RouteId::TeamGuestLookupTeamCertByHash
+        RouteId::TeamMemberAcceptInviteLocal
+        | RouteId::TeamAdminLoadTeamRawInbox
+        | RouteId::TeamAdminRejectJoinReq
+        | RouteId::TeamGuestLookupTeamCertByHash
         | RouteId::TeamAdminPutTeamCert
         | RouteId::TeamAdminGetCurrentTeamCerts
         | RouteId::TeamMemberGrantLocalViewPermissionForTeam => {

@@ -107,6 +107,9 @@ pub(super) fn response(
         | TeamAdminPutTeamCert
         | TeamAdminGetCurrentTeamCerts
         | TeamGuestLookupTeamCertByHash
+        | TeamMemberAcceptInviteLocal
+        | TeamAdminLoadTeamRawInbox
+        | TeamAdminRejectJoinReq
         | TeamMemberGrantLocalViewPermissionForTeam
         | TeamAdminCreateTeamAdHoc => team::response(data, call, principal),
         KvStoreMkdir
@@ -140,11 +143,9 @@ pub(super) fn response(
         | RealTimeRtPollInbox
         | RealTimeRtSelectVHost
         | RealTimeRtGetThreadRecents => realtime::response(data, call, principal),
-        RealTimeRtGetChannel
-        | TeamAdminLoadTeamRemoteJoinReq
-        | TeamAdminPostTeamRemoval
-        | TeamAdminLoadTeamRawInbox
-        | TeamAdminRejectJoinReq => Err(RpcStatus::Unsupported),
+        RealTimeRtGetChannel | TeamAdminLoadTeamRemoteJoinReq | TeamAdminPostTeamRemoval => {
+            Err(RpcStatus::Unsupported)
+        }
     }
 }
 

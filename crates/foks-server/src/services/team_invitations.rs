@@ -27,6 +27,12 @@ fn denied() -> RpcStatus {
 fn write_error(e: crate::Error) -> RpcStatus {
     crate::error::mutation_failure_status(&e).unwrap_or(match e {
         crate::Error::WriterQueue => RpcStatus::RateLimited,
+        crate::Error::Database(foks_server_db::Error::InvitationAlreadyPending) => {
+            RpcStatus::TeamInviteAlreadyAccepted
+        }
+        crate::Error::Database(foks_server_db::Error::InvitationDecisionConflict) => {
+            RpcStatus::TeamRace("invitation decision conflict".into())
+        }
         crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
         _ => RpcStatus::TransactionRetry,
     })
@@ -246,5 +252,222 @@ impl InvitationService<'_> {
         foks_proto::PermissionToken::new(tok)
             .encoded()
             .map_err(internal)
+    }
+}
+
+impl InvitationService<'_> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn accept_local(
+        &self,
+        bytes: &[u8],
+        principal: &Principal,
+        keys: &Arc<dyn crate::keys::HostKeyProvider>,
+        tail: &foks_proto::HostchainTail,
+    ) -> Result<Vec<u8>, RpcStatus> {
+        principal.require_ordinary_device()?;
+        let f = fields(bytes, 4)?;
+        let invite = TeamInvite::decode(&encode(&f[0]).map_err(bad)?).map_err(bad)?;
+        if invite.host != *self.host {
+            return Err(denied());
+        }
+        let role = Role::decode(&encode(&f[1]).map_err(bad)?).map_err(bad)?;
+        let token = if f[2] == Value::Null {
+            None
+        } else {
+            Some(token(&f[2])?)
+        };
+        let link = if f[3] == Value::Null {
+            None
+        } else {
+            Some(
+                foks_proto::PostGenericLinkArgument::decode(&encode(&f[3]).map_err(bad)?)
+                    .map_err(bad)?,
+            )
+        };
+        let snapshot = self.reader.snapshot().map_err(internal)?;
+        let exact = snapshot
+            .invitation_certificate(&invite.hash)
+            .map_err(internal)?
+            .ok_or_else(|| RpcStatus::NotFound("team certificate".into()))?;
+        let cert = TeamCertificate::decode(&exact).map_err(internal)?;
+        let advertised = TeamCertificatePayload::decode(&cert.payload).map_err(internal)?;
+        let now = self.clock.now_micros().map_err(internal)?;
+        let source_admin = token.as_ref().map(crate::auth::team::admin_token_hash);
+        let (joiner, source_head, destination_head, authorized_signer) = if let Some(hash) =
+            source_admin
+        {
+            let authority = snapshot
+                .resolve_team_admin_token(&hash, now)
+                .map_err(internal)?
+                .ok_or_else(denied)?;
+            if authority.holder_id != principal.uid() {
+                return Err(denied());
+            }
+            let source = snapshot
+                .team(&authority.team_id)
+                .map_err(internal)?
+                .ok_or_else(denied)?;
+            let destination = snapshot
+                .team(advertised.team.team.as_bytes())
+                .map_err(internal)?
+                .ok_or_else(denied)?;
+            let range =
+                |t: &foks_server_db::TeamSnapshot| -> Result<foks_proto::RationalRange, RpcStatus> {
+                    let links = t
+                        .links
+                        .iter()
+                        .map(|l| foks_proto::UserLink::decode(&l.exact_link))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(internal)?;
+                    foks_verify::persisted_team_index_range(&links).map_err(internal)
+                };
+            if !foks_verify::rational_range_strictly_before(&range(&source)?, &range(&destination)?)
+                .map_err(internal)?
+            {
+                return Err(RpcStatus::TeamRoster(
+                    "joining team index ranges overlap".into(),
+                ));
+            }
+            let head = |t: &foks_server_db::TeamSnapshot| -> Result<[u8; 32], RpcStatus> {
+                let last = t.links.last().ok_or_else(denied)?;
+                Ok(foks_crypto::prefixed_hash(
+                    foks_proto::LINK_OUTER_TYPE_ID,
+                    &last.exact_link,
+                ))
+            };
+            (
+                EntityId::from_bytes(authority.team_id).map_err(internal)?,
+                Some(head(&source)?),
+                Some(head(&destination)?),
+                Some(authority.ptk_verify_key),
+            )
+        } else {
+            if role != Role::OWNER {
+                return Err(denied());
+            }
+            (
+                EntityId::from_bytes(principal.uid().to_vec()).map_err(internal)?,
+                None,
+                None,
+                None,
+            )
+        };
+        let mut receipt = [0; 17];
+        self.entropy.fill(&mut receipt).map_err(internal)?;
+        receipt[0] = 57;
+        let mut permission = [0; 17];
+        self.entropy.fill(&mut permission).map_err(internal)?;
+        permission[0] = 54;
+        let admission = foks_server_db::LocalInvitationAdmission {
+            uid: principal.uid().to_vec(),
+            credential: principal.device_id().to_vec(),
+            certificate_hash: invite.hash,
+            destination: advertised.team.team.as_bytes().to_vec(),
+            joiner: joiner.clone(),
+            source_role: role,
+            source_admin,
+            source_head,
+            destination_head,
+            receipt,
+            permission,
+        };
+        drop(snapshot);
+        if let Some(link) = link {
+            let decoded = link.link.decode_generic().map_err(bad)?;
+            let foks_proto::GenericLinkPayload::TeamMembership(m) = decoded.payload else {
+                return Err(bad("requested membership"));
+            };
+            if m.team != advertised.team.team
+                || m.team_host != *self.host
+                || m.source_role != role
+                || m.state != foks_proto::TeamMembershipState::Requested
+            {
+                return Err(bad("requested membership binding"));
+            }
+            super::generic::commit_for_entity_with_invitation(
+                link,
+                principal,
+                &joiner,
+                authorized_signer.as_deref(),
+                self.host,
+                self.writer,
+                keys,
+                self.clock,
+                tail,
+                None,
+                Some(admission),
+            )?;
+        } else {
+            self.writer
+                .call_with_current_time(Arc::clone(self.clock), move |db, time| {
+                    db.accept_local_invitation(&admission, time)?;
+                    Ok(())
+                })
+                .map_err(write_error)?;
+        }
+        foks_proto::TeamRsvp::new(receipt)
+            .map_err(internal)?
+            .encoded()
+            .map_err(internal)
+    }
+    pub fn inbox(&self, bytes: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus> {
+        principal.require_ordinary_device()?;
+        let f = fields(bytes, 2)?;
+        let tok = token(&f[0])?;
+        let pagination = if f[1] == Value::Null {
+            foks_proto::InboxPagination {
+                start: 0,
+                end: 0,
+                limit: 100,
+            }
+        } else {
+            foks_proto::InboxPagination::decode(&encode(&f[1]).map_err(bad)?).map_err(bad)?
+        };
+        let now = self.clock.now_micros().map_err(internal)?;
+        let snapshot = self.reader.snapshot().map_err(internal)?;
+        let authority = snapshot
+            .resolve_team_admin_token(&crate::auth::team::admin_token_hash(&tok), now)
+            .map_err(internal)?
+            .ok_or_else(denied)?;
+        if authority.holder_id != principal.uid()
+            || snapshot
+                .active_credential_owner(principal.uid(), principal.device_id())
+                .map_err(internal)?
+                .is_none()
+        {
+            return Err(denied());
+        }
+        snapshot
+            .sso_require_access(principal.uid(), now / 1000)
+            .map_err(|e| write_error(e.into()))?;
+        let rows = snapshot
+            .local_invitation_inbox(&authority.team_id, pagination)
+            .map_err(internal)?;
+        foks_proto::encode_team_inbox(&rows).map_err(internal)
+    }
+    pub fn reject(&self, bytes: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
+        principal.require_ordinary_device()?;
+        let f = fields(bytes, 2)?;
+        let token = crate::auth::team::admin_token_hash(&token(&f[0])?);
+        let receipt = foks_proto::TeamRsvp::decode(&encode(&f[1]).map_err(bad)?).map_err(bad)?;
+        if receipt.is_remote() {
+            return Err(RpcStatus::Unsupported);
+        }
+        let uid = principal.uid().to_vec();
+        let credential = principal.device_id().to_vec();
+        self.writer
+            .call_with_current_time(Arc::clone(self.clock), move |db, time| {
+                db.reject_local_invitation(
+                    InvitationActor {
+                        uid: &uid,
+                        credential: &credential,
+                    },
+                    &token,
+                    receipt.expose(),
+                    time,
+                )?;
+                Ok(())
+            })
+            .map_err(write_error)
     }
 }

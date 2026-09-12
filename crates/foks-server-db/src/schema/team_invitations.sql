@@ -11,3 +11,19 @@ CREATE TABLE user_local_view_permissions (
     target_id BLOB NOT NULL CHECK(length(target_id)=33),
     PRIMARY KEY(viewer_uid,target_id)
 ) STRICT, WITHOUT ROWID;
+CREATE TABLE team_local_join_requests (
+    receipt BLOB PRIMARY KEY CHECK(length(receipt)=17),
+    team_id BLOB NOT NULL REFERENCES teams(team_id),
+    joiner_id BLOB NOT NULL CHECK(length(joiner_id)=33),
+    source_role_type INTEGER NOT NULL CHECK(source_role_type BETWEEN 1 AND 3),
+    source_visibility INTEGER NOT NULL,
+    state INTEGER NOT NULL CHECK(state IN(0,1,2,3)),
+    permission BLOB NOT NULL CHECK(length(permission)=17),
+    created_ms INTEGER NOT NULL CHECK(created_ms>=0),
+    decision_ms INTEGER,
+    decision_sequence INTEGER,
+    decision_link_hash BLOB CHECK(decision_link_hash IS NULL OR length(decision_link_hash)=32)
+) STRICT;
+CREATE UNIQUE INDEX team_local_join_pending ON team_local_join_requests(team_id,joiner_id,source_role_type,source_visibility) WHERE state=0;
+CREATE INDEX team_local_join_inbox ON team_local_join_requests(team_id,state,created_ms DESC,receipt);
+CREATE INDEX team_local_join_joiner ON team_local_join_requests(joiner_id,state);

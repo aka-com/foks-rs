@@ -225,3 +225,253 @@ pub(crate) fn insert_local_permission(
     }
     Ok(())
 }
+
+/// Prepared local acceptance, rechecked together with the optional Requested link.
+/// Opaque tokens deliberately have no Debug representation.
+pub struct LocalInvitationAdmission {
+    pub uid: Vec<u8>,
+    pub credential: Vec<u8>,
+    pub certificate_hash: [u8; 32],
+    pub destination: Vec<u8>,
+    pub joiner: foks_proto::EntityId,
+    pub source_role: foks_proto::Role,
+    pub source_admin: Option<[u8; 32]>,
+    pub source_head: Option<[u8; 32]>,
+    pub destination_head: Option<[u8; 32]>,
+    pub receipt: [u8; 17],
+    pub permission: [u8; 17],
+}
+pub(crate) fn insert_local_admission(
+    c: &Connection,
+    a: &LocalInvitationAdmission,
+    now: u64,
+) -> Result<()> {
+    let actor = InvitationActor {
+        uid: &a.uid,
+        credential: &a.credential,
+    };
+    require_actor(c, &actor, now)?;
+    let destination: Option<Vec<u8>> = c
+        .query_row(
+            "SELECT team_id FROM team_invitation_certificates WHERE certificate_hash=?1",
+            [a.certificate_hash],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if destination.as_deref() != Some(a.destination.as_slice())
+        || a.receipt[0] != 57
+        || a.permission[0] != 54
+    {
+        return Err(Error::AuthorizationChanged);
+    }
+    let role = a.source_role.protocol_value();
+    let visibility = i64::from(a.source_role.visibility().unwrap_or_default());
+    if role == 0 {
+        return Err(Error::Invalid("joiner source role"));
+    }
+    if let Some(token) = a.source_admin {
+        let authority = require_admin(c, &actor, &token, now)?;
+        if authority.team_id != a.joiner.as_bytes() {
+            return Err(Error::AuthorizationChanged);
+        }
+        for (team, expected) in [
+            (a.joiner.as_bytes(), a.source_head),
+            (a.destination.as_slice(), a.destination_head),
+        ] {
+            let head: Vec<u8> = c.query_row(
+                "SELECT link_hash FROM team_chain_heads WHERE team_id=?1",
+                [team],
+                |r| r.get(0),
+            )?;
+            if expected.as_ref().map(|h| h.as_slice()) != Some(head.as_slice()) {
+                return Err(Error::AuthorizationChanged);
+            }
+        }
+    } else if a.joiner.as_bytes() != a.uid || a.source_role != foks_proto::Role::OWNER {
+        return Err(Error::AuthorizationChanged);
+    }
+    let pending:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM team_local_join_requests WHERE team_id=?1 AND joiner_id=?2 AND source_role_type=?3 AND source_visibility=?4 AND state=0)",params![a.destination,a.joiner.as_bytes(),sql_integer(role)?,visibility],|r|r.get(0))?;
+    if pending {
+        return Err(Error::InvitationAlreadyPending);
+    }
+    let team_count: i64 = c.query_row(
+        "SELECT count(*) FROM team_local_join_requests WHERE team_id=?1 AND state=0",
+        [&a.destination],
+        |r| r.get(0),
+    )?;
+    let joiner_count: i64 = c.query_row(
+        "SELECT count(*) FROM team_local_join_requests WHERE joiner_id=?1 AND state=0",
+        [a.joiner.as_bytes()],
+        |r| r.get(0),
+    )?;
+    let total: i64 = c.query_row("SELECT count(*) FROM team_local_join_requests", [], |r| {
+        r.get(0)
+    })?;
+    if team_count >= 1000 || joiner_count >= 100 || total >= 1_000_000 {
+        return Err(Error::QuotaExceeded);
+    }
+    let (floor, visibility): (i64, i64) = c.query_row(
+        "SELECT member_load_floor_type,member_load_floor_visibility FROM teams WHERE team_id=?1",
+        [&a.destination],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let floor = stored_role(crate::error::unsigned(floor)?, visibility)?;
+    insert_local_permission(
+        c,
+        &foks_proto::LocalViewPermissionPayload {
+            viewee: a.joiner.clone(),
+            viewer: foks_proto::EntityId::from_bytes(a.destination.clone())
+                .map_err(|_| Error::Invalid("destination team"))?,
+            time: now / 1000,
+            viewer_role: Some(floor),
+        },
+    )?;
+    c.execute("INSERT INTO team_local_join_requests(receipt,team_id,joiner_id,source_role_type,source_visibility,state,permission,created_ms) VALUES(?1,?2,?3,?4,?5,0,?6,?7)",params![a.receipt,a.destination,a.joiner.as_bytes(),sql_integer(role)?,i64::from(a.source_role.visibility().unwrap_or_default()),a.permission,sql_integer(now/1000)?])?;
+    Ok(())
+}
+fn stored_role(kind: u64, visibility: i64) -> Result<foks_proto::Role> {
+    match kind {
+        1 => Ok(foks_proto::Role::member(
+            visibility
+                .try_into()
+                .map_err(|_| Error::Invalid("role visibility"))?,
+        )),
+        2 if visibility == 0 => Ok(foks_proto::Role::ADMIN),
+        3 if visibility == 0 => Ok(foks_proto::Role::OWNER),
+        _ => Err(Error::Invalid("source role")),
+    }
+}
+impl Database {
+    pub fn accept_local_invitation(
+        &mut self,
+        admission: &LocalInvitationAdmission,
+        now: u64,
+    ) -> Result<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        insert_local_admission(&tx, admission, now)?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn reject_local_invitation(
+        &mut self,
+        actor: InvitationActor<'_>,
+        admin_hash: &[u8; 32],
+        receipt: &[u8; 17],
+        now: u64,
+    ) -> Result<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let authority = require_admin(&tx, &actor, admin_hash, now)?;
+        let state: Option<i64> = tx
+            .query_row(
+                "SELECT state FROM team_local_join_requests WHERE receipt=?1 AND team_id=?2",
+                params![receipt, authority.team_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match state {
+            Some(0) => {
+                tx.execute("UPDATE team_local_join_requests SET state=2,decision_ms=?2 WHERE receipt=?1 AND state=0",params![receipt,sql_integer(now/1000)?])?;
+            }
+            Some(2) => {}
+            Some(_) => return Err(Error::InvitationDecisionConflict),
+            None => return Err(Error::AuthorizationChanged),
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+fn local_inbox(
+    c: &Connection,
+    team: &[u8],
+    p: foks_proto::InboxPagination,
+) -> Result<Vec<foks_proto::RawInboxRow>> {
+    let limit = if p.limit == 0 { 100 } else { p.limit.min(1000) };
+    let mut q=c.prepare("SELECT receipt,joiner_id,source_role_type,source_visibility,permission,created_ms FROM team_local_join_requests WHERE team_id=?1 AND state=0 AND (?2=0 OR created_ms>=?2) AND (?3=0 OR created_ms<=?3) ORDER BY created_ms DESC,receipt LIMIT ?4")?;
+    let rows = q
+        .query_map(
+            params![
+                team,
+                sql_integer(p.start)?,
+                sql_integer(p.end)?,
+                sql_integer(limit)?
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, Vec<u8>>(0)?,
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, Vec<u8>>(4)?,
+                    r.get::<_, i64>(5)?,
+                ))
+            },
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|(receipt, joiner, role, visibility, permission, time)| {
+            Ok(foks_proto::RawInboxRow {
+                time: crate::error::unsigned(time)?,
+                state: foks_proto::JoinRequestState::Pending,
+                receipt: foks_proto::TeamRsvp::new(
+                    receipt.try_into().map_err(|_| Error::Invalid("receipt"))?,
+                )
+                .map_err(|_| Error::Invalid("receipt"))?,
+                request: foks_proto::RawInboxRequest::Local {
+                    joiner: foks_proto::EntityId::from_bytes(joiner)
+                        .map_err(|_| Error::Invalid("joiner"))?,
+                    source_role: stored_role(crate::error::unsigned(role)?, visibility)?,
+                    permission: foks_proto::PermissionToken::new(
+                        permission
+                            .try_into()
+                            .map_err(|_| Error::Invalid("permission"))?,
+                    ),
+                },
+            })
+        })
+        .collect()
+}
+impl ReadSnapshot<'_> {
+    pub fn local_invitation_inbox(
+        &self,
+        team: &[u8],
+        pagination: foks_proto::InboxPagination,
+    ) -> Result<Vec<foks_proto::RawInboxRow>> {
+        local_inbox(self.connection(), team, pagination)
+    }
+}
+
+/// Called before replacing the roster, so metadata-only edits cannot approve
+/// an existing member's self-invite. The chain remains admission authority.
+pub(crate) fn approve_local_additions(
+    c: &Connection,
+    m: &crate::TeamMutation<'_>,
+) -> Result<Vec<(foks_proto::EntityId, foks_proto::Role)>> {
+    let mut approved = vec![];
+    let host: Vec<u8> = c.query_row(
+        "SELECT host_id FROM teams WHERE team_id=?1",
+        [m.team_id],
+        |r| r.get(0),
+    )?;
+    for member in m.members {
+        if member.scoped_host_id.is_some_and(|h| h != host) {
+            continue;
+        }
+        let present:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM team_members WHERE team_id=?1 AND party_id=?2 AND source_role_type=?3 AND source_visibility=?4)",params![m.team_id,member.party_id,sql_integer(member.source_role_type)?,member.source_visibility],|r|r.get(0))?;
+        if present {
+            continue;
+        }
+        let changed=c.execute("UPDATE team_local_join_requests SET state=1,decision_ms=?5,decision_sequence=?6,decision_link_hash=?7 WHERE team_id=?1 AND joiner_id=?2 AND source_role_type=?3 AND source_visibility=?4 AND state=0",params![m.team_id,member.party_id,sql_integer(member.source_role_type)?,member.source_visibility,sql_integer(m.now/1000)?,sql_integer(m.expected_sequence)?,m.link_hash])?;
+        if changed > 0 {
+            approved.push((
+                foks_proto::EntityId::from_bytes(member.party_id.to_vec())
+                    .map_err(|_| Error::Invalid("invitee party"))?,
+                stored_role(member.source_role_type, member.source_visibility)?,
+            ));
+        }
+    }
+    Ok(approved)
+}

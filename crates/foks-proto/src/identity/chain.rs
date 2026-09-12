@@ -576,13 +576,60 @@ impl UnsignedUserLink {
                 ))),
             ]),
         ]);
+        Self::membership_generic(
+            &RequestedMembershipLinkPublic {
+                joiner: input.user,
+                host: input.host,
+                signer: input.signer,
+                sequence: input.sequence,
+                previous: input.previous,
+                root: input.root,
+                time: input.time,
+                next_location_commitment: input.next_location_commitment,
+                team: &crate::FqTeam {
+                    team: input.team.clone(),
+                    host: input.host.clone(),
+                },
+                source_role: input.source_role,
+            },
+            membership,
+        )
+    }
+
+    pub fn requested_membership(input: &RequestedMembershipLinkPublic<'_>) -> Result<Self> {
+        require_party(input.joiner)?;
+        input.host.clone().require_type(ENTITY_HOST)?;
+        input.team.host.clone().require_type(ENTITY_HOST)?;
+        if input.sequence == 0
+            || (input.sequence == 1) != input.previous.is_none()
+            || !matches!(
+                input.signer.entity_type(),
+                ENTITY_DEVICE | ENTITY_YUBI | ENTITY_PTK_VERIFY | crate::ENTITY_BOT_TOKEN_KEY
+            )
+        {
+            return Err(Error::IntegerRange(
+                "requested membership signer or sequence",
+            ));
+        }
+        let membership = Value::Array(vec![
+            input.team.to_value(),
+            input.source_role.to_value(),
+            Value::Array(vec![Value::Unsigned(1), Value::Variant(None)]),
+        ]);
+        Self::membership_generic(input, membership)
+    }
+
+    fn membership_generic(
+        input: &RequestedMembershipLinkPublic<'_>,
+        membership: Value,
+    ) -> Result<Self> {
         let generic = Value::Array(vec![
             Value::Array(vec![
                 Value::Array(vec![
                     Value::Unsigned(input.sequence),
                     input
                         .previous
-                        .map_or(Value::Null, |hash| Value::Binary(hash.to_vec())),
+                        .map_or(Value::Null, |h| Value::Binary(h.to_vec())),
                     Value::Array(vec![
                         Value::Unsigned(input.root.epoch),
                         Value::Binary(input.root.hash.to_vec()),
@@ -592,7 +639,7 @@ impl UnsignedUserLink {
                 Value::Binary(input.next_location_commitment.to_vec()),
             ]),
             Value::Array(vec![
-                Value::Binary(input.user.as_bytes().to_vec()),
+                Value::Binary(input.joiner.as_bytes().to_vec()),
                 Value::Binary(input.host.as_bytes().to_vec()),
             ]),
             Value::Array(vec![
@@ -1653,4 +1700,17 @@ impl RationalRange {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         rational_range(&decode(bytes)?)
     }
+}
+
+pub struct RequestedMembershipLinkPublic<'a> {
+    pub joiner: &'a EntityId,
+    pub host: &'a EntityId,
+    pub signer: &'a EntityId,
+    pub sequence: u64,
+    pub previous: Option<[u8; 32]>,
+    pub root: &'a TreeRoot,
+    pub time: u64,
+    pub next_location_commitment: [u8; 32],
+    pub team: &'a crate::FqTeam,
+    pub source_role: Role,
 }

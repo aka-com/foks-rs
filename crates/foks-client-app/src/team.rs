@@ -364,6 +364,30 @@ impl CheckedProfileSession<'_> {
         master_key: &[u8; 32],
     ) -> Result<TeamMemberMutationReport> {
         self.profile.require(Capability::Teams)?;
+        let context = self.load_local_team_context(team_alias, vault)?;
+        let uid = self.client.resolve_username(
+            &context.host,
+            &context.account.credential,
+            username,
+            true,
+        )?;
+        let target = self.client.load_and_pin_open_local_user(
+            &context.host,
+            &context.account.credential,
+            &uid,
+        )?;
+        self.add_verified_local_team_member(team_alias, &target, destination, vault, master_key)
+    }
+
+    pub(super) fn add_verified_local_team_member(
+        &self,
+        team_alias: &str,
+        target: &foks_verify::VerifiedUserState,
+        destination: TeamMemberRole,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<TeamMemberMutationReport> {
+        self.profile.require(Capability::Teams)?;
         let mut stored = vault.team(team_alias)?;
         require_named_active_team(&stored)?;
         if stored.local_members.iter().any(|member| !member.active)
@@ -375,30 +399,20 @@ impl CheckedProfileSession<'_> {
             ));
         }
         let context = self.load_local_team_context(team_alias, vault)?;
-        let uid = self.client.resolve_username(
-            &context.host,
-            &context.account.credential,
-            username,
-            true,
-        )?;
-        if uid == context.account.credential.uid
+        if target.host() != context.host.host_id()
+            || target.uid() == &context.account.credential.uid
             || context
                 .team
                 .verified
                 .members()
                 .iter()
-                .any(|member| member.party == uid)
+                .any(|m| &m.party == target.uid() && m.source_role == Role::OWNER)
         {
             return Err(foks_client::Error::TeamRequest(
-                "target user is the actor or is already a team member",
+                "target is already a member or belongs to another host",
             )
             .into());
         }
-        let target = self.client.load_and_pin_open_local_user(
-            &context.host,
-            &context.account.credential,
-            &uid,
-        )?;
         if target.tree_root() != context.team.verified.tree_root() {
             return Err(foks_client::Error::TeamRequest(
                 "team addition snapshot does not match the latest authenticated Merkle root",
@@ -409,7 +423,7 @@ impl CheckedProfileSession<'_> {
             .map_err(|_| Error::InvalidAccount("authenticated username is not UTF-8"))?;
         let removal_key = SecretSeed::new(random_array()?);
         let request = foks_client::AddLocalTeamMemberRequest {
-            target_user: &target,
+            target_user: target,
             destination_role: destination.role(),
             removal_key: &removal_key,
         };

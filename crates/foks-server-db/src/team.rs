@@ -416,6 +416,16 @@ impl Database {
             }
         }
 
+        let invitees = crate::team_invitations::approve_local_additions(&transaction, mutation)?;
+        let response = if invitees.is_empty() {
+            mutation.response.to_vec()
+        } else {
+            foks_proto::TeamEditResult {
+                local_invitees: invitees,
+            }
+            .encoded()
+            .map_err(|_| Error::Invalid("invite approval response"))?
+        };
         transaction.execute(
             "DELETE FROM team_members WHERE team_id = ?1",
             [mutation.team_id],
@@ -639,13 +649,13 @@ impl Database {
             &transaction,
             mutation.idempotency_key,
             mutation.request_hash,
-            mutation.response,
+            &response,
             mutation.now,
             mutation.receipt_expires_at,
         )?;
         inject(failure, TeamMutationFailurePoint::Receipt)?;
         transaction.commit()?;
-        Ok(mutation.response.to_vec())
+        Ok(response)
     }
 }
 

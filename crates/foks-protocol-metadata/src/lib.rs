@@ -541,6 +541,8 @@ fn validate_route_result(value: &str) -> Result<(), MetadataError> {
     if matches!(
         value,
         "URLString"
+            | "TeamRawInbox"
+            | "TeamRSVPLocal"
             | "TeamCertificateList"
             | "TeamCertificateAndMetadata"
             | "OAuth2PollResult"

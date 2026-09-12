@@ -1,7 +1,9 @@
 //! Team loading, PTK recovery, ad-hoc creation, and reconciliation.
 
 mod bearer;
+mod invitation_operations;
 mod invitations;
+pub use invitation_operations::*;
 pub use invitations::*;
 mod membership;
 mod metadata;

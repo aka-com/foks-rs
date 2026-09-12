@@ -4,6 +4,7 @@ version = 1
 baseline = "foks-v0.1.9"
 
 [status_aliases]
+team_invite_pending = "TEAM_INVITE_ALREADY_ACCEPTED_ERROR"
 no_change = "NO_CHANGE_ERROR"
 oauth2 = "OAUTH2_ERROR"
 oauth2_auth = "OAUTH2_AUTH_ERROR"
@@ -1103,12 +1104,12 @@ protocol = "TeamAdmin"
 method = "loadTeamRawInbox"
 listeners = ["authenticated"]
 authentication = "active_team_admin_token"
-request = "Unsupported"
-result = "Unsupported"
-statuses = ["unsupported"]
+request = "TeamInvitationInboxArgument"
+result = "TeamRawInbox"
+statuses = ["oauth2_auth", "ok", "bad_args", "permission_denied", "team_race", "rate_limited", "tx_retry"]
 max_request_bytes = 4096
-supported = false
-coverage = ["unsupported_team_routes"]
+supported = true
+coverage = ["team_local_invitations"]
 
 
 [[route]]
@@ -1116,12 +1117,12 @@ protocol = "TeamAdmin"
 method = "rejectJoinReq"
 listeners = ["authenticated"]
 authentication = "active_team_admin_token"
-request = "Unsupported"
-result = "Unsupported"
-statuses = ["unsupported"]
+request = "TeamInvitationInboxArgument"
+result = "Void"
+statuses = ["oauth2_auth", "ok", "bad_args", "permission_denied", "team_race", "rate_limited", "tx_retry"]
 max_request_bytes = 4096
-supported = false
-coverage = ["unsupported_team_routes"]
+supported = true
+coverage = ["team_local_invitations"]
 
 
 [[route]]
@@ -1836,3 +1837,15 @@ statuses = ["oauth2_auth", "ok", "bad_args", "not_found", "permission_denied", "
 max_request_bytes = 32768
 supported = true
 coverage = ["team_invitation_certificates"]
+
+[[route]]
+protocol = "TeamMember"
+method = "acceptInviteLocal"
+listeners = ["authenticated"]
+authentication = "active_device_and_optional_source_team_bearer"
+request = "LocalInviteAcceptance"
+result = "TeamRSVPLocal"
+statuses = ["oauth2_auth", "ok", "bad_args", "permission_denied", "team_invite_pending", "team_roster", "quota_exceeded", "not_found", "rate_limited", "tx_retry"]
+max_request_bytes = 32768
+supported = true
+coverage = ["team_local_invitations"]

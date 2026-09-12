@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 32;
+pub(crate) const VERSION: u32 = 33;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -348,7 +348,7 @@ WHERE state IN (1, 2, 3, 4, 5);
 -- protected material store; it is never written to this hard-state database.
 CREATE TABLE mutation_operations (
     operation_id BLOB PRIMARY KEY CHECK (length(operation_id) = 16),
-    operation_kind INTEGER NOT NULL CHECK (operation_kind BETWEEN 1 AND 10),
+    operation_kind INTEGER NOT NULL CHECK (operation_kind BETWEEN 1 AND 11),
     host_id BLOB NOT NULL REFERENCES hosts(host_id) ON DELETE RESTRICT,
     scope_id BLOB NOT NULL CHECK (length(scope_id) IN (0, 16, 33, 34)),
     subject_id BLOB NOT NULL CHECK (length(subject_id) IN (0, 16, 33, 34)),
@@ -391,10 +391,10 @@ ON mutation_operations(host_id,scope_id) WHERE operation_kind=10 AND state IN (1
 
 -- Bounds survive concurrent processes. Unknown submissions are never evicted.
 CREATE TRIGGER account_convenience_capacity BEFORE INSERT ON mutation_operations
-WHEN NEW.operation_kind IN (9,10) BEGIN
-    SELECT CASE WHEN (SELECT count(*) FROM mutation_operations WHERE host_id=NEW.host_id AND scope_id=NEW.scope_id AND operation_kind IN (9,10) AND state IN (1,2,3,4)) >= 32
+WHEN NEW.operation_kind IN (9,10,11) BEGIN
+    SELECT CASE WHEN (SELECT count(*) FROM mutation_operations WHERE host_id=NEW.host_id AND scope_id=NEW.scope_id AND operation_kind IN (9,10,11) AND state IN (1,2,3,4)) >= 32
         THEN RAISE(ABORT, 'account pending operation capacity') END;
-    SELECT CASE WHEN (SELECT count(*) FROM mutation_operations WHERE host_id=NEW.host_id AND scope_id=NEW.scope_id AND operation_kind IN (9,10)) >= 4096
+    SELECT CASE WHEN (SELECT count(*) FROM mutation_operations WHERE host_id=NEW.host_id AND scope_id=NEW.scope_id AND operation_kind IN (9,10,11)) >= 4096
         THEN RAISE(ABORT, 'account retained operation capacity') END;
 END;
 
