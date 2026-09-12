@@ -383,6 +383,11 @@ impl TestEnvironment {
                 "KvStore",
                 "put",
             ),
+            TestFault::UploadInitAfterCommitBeforeResponse => (
+                foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
+                "KvStore",
+                "fileUploadInit",
+            ),
             TestFault::BetweenLargeFileChunks => (
                 foks_server::SessionFaultPoint::BetweenLargeFileChunks,
                 "KvStore",
@@ -429,6 +434,7 @@ pub enum TestFault {
     FederationGrantTeamAfterCommitBeforeResponse,
     FederationTeamEditAfterCommitBeforeResponse,
     BetweenLargeFileChunks,
+    UploadInitAfterCommitBeforeResponse,
     KvPutAfterCommitBeforeResponse,
 }
 

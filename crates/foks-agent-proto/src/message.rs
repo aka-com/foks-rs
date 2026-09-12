@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -462,6 +462,7 @@ pub enum Operation {
     },
     Ping,
     AgentStatus,
+    RetentionStatus,
     DiscoverGoProfiles,
     InitializeState {
         backend: CredentialBackend,
@@ -972,6 +973,7 @@ impl Operation {
             self,
             Self::Ping
                 | Self::AgentStatus
+                | Self::RetentionStatus
                 | Self::DiscoverGoProfiles
                 | Self::BindDataAccount { .. }
                 | Self::ReadData { .. }
@@ -1029,6 +1031,7 @@ impl std::fmt::Debug for Operation {
                 .finish(),
             Self::Ping => formatter.write_str("Ping"),
             Self::AgentStatus => formatter.write_str("AgentStatus"),
+            Self::RetentionStatus => formatter.write_str("RetentionStatus"),
             Self::DiscoverGoProfiles => formatter.write_str("DiscoverGoProfiles"),
             Self::InitializeState { backend } => formatter
                 .debug_struct("InitializeState")
@@ -1944,6 +1947,12 @@ impl std::fmt::Debug for ResponseResult {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorCode {
+    RetentionFull,
+    ClockUntrusted,
+    SubmissionActiveFull,
+    SubmissionIdentityConflict,
+    SubmissionFuture,
+
     WebAdminUnsupported,
     WebAdminExpired,
     WebAdminWrongAccount,

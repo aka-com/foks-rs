@@ -29,6 +29,22 @@ pub struct EncryptedFileMutationStore {
     master_key: Zeroizing<[u8; 32]>,
 }
 
+/// Private maintenance cursor. Each pass must hold the profile operation lock;
+/// callers must discard it when relocating or replacing the protected directory.
+pub struct ProtectedTemporaryScan {
+    directory: PathBuf,
+    entries: fs::ReadDir,
+    identity: fs::Metadata,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProtectedTemporaryReport {
+    pub examined: u64,
+    pub removed: u64,
+    pub final_removed: u64,
+    pub complete: bool,
+}
+
 impl EncryptedFileMutationStore {
     pub fn open(
         directory: impl AsRef<Path>,
@@ -41,18 +57,146 @@ impl EncryptedFileMutationStore {
         })
     }
 
-    fn record_path(&self, key: &[u8]) -> Result<PathBuf, ProtectedStoreError> {
+    /// Enumerates only while the embedding application holds writer exclusion.
+    pub fn temporary_scan(&self) -> Result<ProtectedTemporaryScan, ProtectedStoreError> {
+        Ok(ProtectedTemporaryScan {
+            directory: self.directory.clone(),
+            entries: fs::read_dir(&self.directory).map_err(io_backend)?,
+            identity: fs::symlink_metadata(&self.directory).map_err(io_backend)?,
+        })
+    }
+
+    pub fn cleanup_temporary_batch(
+        &self,
+        scan: &mut ProtectedTemporaryScan,
+    ) -> Result<ProtectedTemporaryReport, ProtectedStoreError> {
+        self.cleanup_temporary_until(
+            scan,
+            std::time::Instant::now() + std::time::Duration::from_millis(25),
+        )
+    }
+
+    pub fn cleanup_temporary_until(
+        &self,
+        scan: &mut ProtectedTemporaryScan,
+        deadline: std::time::Instant,
+    ) -> Result<ProtectedTemporaryReport, ProtectedStoreError> {
+        self.cleanup_batch(scan, deadline, None)
+    }
+
+    /// A complete, current inventory is the only authority for final-file absence.
+    /// Caller holds checked-profile exclusion across revision lookup and deletion.
+    pub fn reconcile_unowned_until(
+        &self,
+        scan: &mut ProtectedTemporaryScan,
+        inventory: &crate::ProtectedRecordInventory,
+        revision: foks_client_db::HardStateMetadata,
+        deadline: std::time::Instant,
+    ) -> Result<ProtectedTemporaryReport, ProtectedStoreError> {
+        self.cleanup_batch(scan, deadline, Some(inventory.records(revision)?))
+    }
+
+    fn cleanup_batch(
+        &self,
+        scan: &mut ProtectedTemporaryScan,
+        deadline: std::time::Instant,
+        owners: Option<&std::collections::BTreeMap<String, crate::ProtectedRecordDescriptor>>,
+    ) -> Result<ProtectedTemporaryReport, ProtectedStoreError> {
+        if scan.directory != self.directory {
+            return Err(backend("protected scan directory changed"));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let current = fs::symlink_metadata(&self.directory).map_err(io_backend)?;
+            if !current.is_dir()
+                || current.dev() != scan.identity.dev()
+                || current.ino() != scan.identity.ino()
+            {
+                return Err(backend("protected scan directory identity changed"));
+            }
+        }
+        let mut report = ProtectedTemporaryReport::default();
+        let result = (|| {
+            while report.examined < 256 && std::time::Instant::now() < deadline {
+                let Some(entry) = scan.entries.next() else {
+                    report.complete = true;
+                    break;
+                };
+                let entry = entry.map_err(io_backend)?;
+                report.examined += 1;
+                let name = entry.file_name();
+                let name = name
+                    .to_str()
+                    .ok_or_else(|| backend("invalid protected filename"))?;
+                let lower_hex =
+                    |value: &str| value.bytes().all(|b| matches!(b,b'0'..=b'9'|b'a'..=b'f'));
+                let temporary = name
+                    .strip_prefix(".tmp-")
+                    .is_some_and(|suffix| suffix.len() == 32 && lower_hex(suffix));
+                let final_record = name
+                    .strip_suffix(".pms")
+                    .is_some_and(|prefix| prefix.len() == 64 && lower_hex(prefix));
+                if !temporary && !final_record {
+                    return Err(backend("invalid protected filename"));
+                }
+                if !entry.file_type().map_err(io_backend)?.is_file() {
+                    return Err(backend("protected entry is not a regular file"));
+                }
+                if temporary || owners.is_some_and(|owners| !owners.contains_key(name)) {
+                    // Revalidate the candidate itself immediately before unlinking;
+                    // do not trust a cached directory entry across lock reacquisition.
+                    let identity = fs::symlink_metadata(entry.path()).map_err(io_backend)?;
+                    if !identity.is_file() {
+                        return Err(backend("protected candidate identity changed"));
+                    }
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::{DirEntryExt, MetadataExt};
+                        if identity.ino() != entry.ino() || identity.dev() != scan.identity.dev() {
+                            return Err(backend("protected candidate identity changed"));
+                        }
+                    }
+                    match fs::remove_file(entry.path()) {
+                        Ok(()) => {
+                            report.removed += 1;
+                            if final_record {
+                                report.final_removed += 1;
+                            }
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                        Err(error) => return Err(io_backend(error)),
+                    }
+                }
+            }
+            Ok(report)
+        })();
+        // Persist partial progress even if a later malformed entry blocked the pass.
+        self.sync()?;
+        result
+    }
+
+    /// Completes durable erasure even when an idempotent removal found no file.
+    pub fn sync(&self) -> Result<(), ProtectedStoreError> {
+        sync_directory(&self.directory)
+    }
+
+    pub fn record_filename(key: &[u8]) -> Result<String, ProtectedStoreError> {
         if key.is_empty() {
             return Err(backend("protected material key is empty"));
         }
         let digest = prefixed_hash(KEY_NAME_TYPE_ID, key);
-        let mut name = String::with_capacity(digest.len() * 2 + 4);
+        use std::fmt::Write as _;
+        let mut name = String::with_capacity(68);
         for byte in digest {
-            use std::fmt::Write as _;
-            write!(&mut name, "{byte:02x}").expect("writing to String cannot fail");
+            write!(&mut name, "{byte:02x}").expect("String writing cannot fail");
         }
         name.push_str(".pms");
-        Ok(self.directory.join(name))
+        Ok(name)
+    }
+
+    fn record_path(&self, key: &[u8]) -> Result<PathBuf, ProtectedStoreError> {
+        Ok(self.directory.join(Self::record_filename(key)?))
     }
 
     fn encrypt(&self, key: &[u8], material: &[u8]) -> Result<Vec<u8>, ProtectedStoreError> {
@@ -150,7 +294,7 @@ impl ProtectedMutationStore for EncryptedFileMutationStore {
     fn put_if_absent(&mut self, key: &[u8], material: &[u8]) -> Result<(), ProtectedStoreError> {
         let path = self.record_path(key)?;
         match self.read_record(&path, key) {
-            Ok(existing) if existing.as_slice() == material => return Ok(()),
+            Ok(existing) if existing.as_slice() == material => return self.sync(),
             Ok(_) => return Err(ProtectedStoreError::Conflict),
             Err(ProtectedStoreError::Missing) => {}
             Err(error) => return Err(error),
@@ -174,7 +318,7 @@ impl ProtectedMutationStore for EncryptedFileMutationStore {
             Err(ProtectedStoreError::Backend(_)) if path.exists() => {
                 let existing = self.read_record(&path, key)?;
                 if existing.as_slice() == material {
-                    Ok(())
+                    self.sync()
                 } else {
                     Err(ProtectedStoreError::Conflict)
                 }
@@ -265,7 +409,14 @@ fn open_record_for_read(path: &Path) -> Result<File, ProtectedStoreError> {
     }
 }
 
+#[cfg(test)]
+thread_local! {static FAIL_NEXT_DIRECTORY_SYNC: std::cell::Cell<bool> = const {std::cell::Cell::new(false)};}
+
 fn sync_directory(path: &Path) -> Result<(), ProtectedStoreError> {
+    #[cfg(test)]
+    if FAIL_NEXT_DIRECTORY_SYNC.replace(false) {
+        return Err(backend("injected directory sync failure"));
+    }
     File::open(path)
         .map_err(io_backend)?
         .sync_all()
@@ -286,6 +437,102 @@ mod tests {
 
     fn store(path: &Path, byte: u8) -> EncryptedFileMutationStore {
         EncryptedFileMutationStore::open(path, Zeroizing::new([byte; 32])).unwrap()
+    }
+
+    #[test]
+    fn temporary_cleanup_is_bounded_preserves_final_records_and_resumes() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut protected = store(directory.path(), 7);
+        protected
+            .put_if_absent(b"live", b"retained evidence")
+            .unwrap();
+        for n in 0..600 {
+            fs::write(
+                directory.path().join(format!(".tmp-{n:032x}")),
+                b"interrupted",
+            )
+            .unwrap();
+        }
+        let mut scan = protected.temporary_scan().unwrap();
+        let mut removed = 0;
+        loop {
+            let report = protected.cleanup_temporary_batch(&mut scan).unwrap();
+            assert!(report.examined <= 256);
+            assert!(report.removed <= 256);
+            removed += report.removed;
+            if report.complete {
+                break;
+            }
+        }
+        assert_eq!(removed, 600);
+        assert_eq!(
+            protected.get(b"live").unwrap().as_slice(),
+            b"retained evidence"
+        );
+        let mut scan = protected.temporary_scan().unwrap();
+        assert_eq!(
+            protected
+                .cleanup_temporary_batch(&mut scan)
+                .unwrap()
+                .removed,
+            0
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temporary_cleanup_refuses_symlinks_and_malformed_names() {
+        let directory = tempfile::tempdir().unwrap();
+        let protected = store(directory.path(), 7);
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        let name = directory.path().join(format!(".tmp-{:032x}", 1));
+        std::os::unix::fs::symlink(outside.path(), &name).unwrap();
+        assert!(protected
+            .cleanup_temporary_batch(&mut protected.temporary_scan().unwrap())
+            .is_err());
+        assert!(outside.path().exists());
+        fs::remove_file(name).unwrap();
+        fs::write(directory.path().join(".tmp-bad"), b"bad").unwrap();
+        assert!(protected
+            .cleanup_temporary_batch(&mut protected.temporary_scan().unwrap())
+            .is_err());
+    }
+
+    #[test]
+    fn idempotent_install_reestablishes_directory_durability() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut protected = store(directory.path(), 7);
+        protected
+            .put_if_absent(b"operation", b"exact bytes")
+            .unwrap();
+        FAIL_NEXT_DIRECTORY_SYNC.set(true);
+        assert!(protected
+            .put_if_absent(b"operation", b"exact bytes")
+            .is_err());
+        protected
+            .put_if_absent(b"operation", b"exact bytes")
+            .unwrap();
+        assert_eq!(&*protected.get(b"operation").unwrap(), b"exact bytes");
+    }
+
+    #[test]
+    fn interrupted_directory_sync_is_retryable_without_forgetting_ownership() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut protected = store(directory.path(), 7);
+        protected.put_if_absent(b"live", b"retained").unwrap();
+        let temporary = directory.path().join(format!(".tmp-{:032x}", 1));
+        fs::write(&temporary, b"abandoned").unwrap();
+        FAIL_NEXT_DIRECTORY_SYNC.set(true);
+        assert!(protected
+            .cleanup_temporary_batch(&mut protected.temporary_scan().unwrap())
+            .is_err());
+        // The unlink may have happened, but no successful durable-cleanup report
+        // was returned. A retry syncs even when the file is already absent.
+        let mut scan = protected.temporary_scan().unwrap();
+        let retry = protected.cleanup_temporary_batch(&mut scan).unwrap();
+        assert!(retry.complete);
+        assert!(!temporary.exists());
+        assert_eq!(&*protected.get(b"live").unwrap(), b"retained");
     }
 
     #[test]

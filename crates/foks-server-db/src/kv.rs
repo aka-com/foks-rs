@@ -481,12 +481,12 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let upload: Option<(Vec<u8>, i64)> = transaction
+        let upload: Option<(Vec<u8>, i64, bool)> = transaction
             .query_row(
-                "SELECT exact_metadata, complete FROM kv_file_uploads
+                "SELECT exact_metadata, complete, reclaiming FROM kv_file_uploads
                  WHERE uid = ?1 AND file_id = ?2",
                 params![mutation.uid, mutation.file_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
         let upload_complete = match (upload, mutation.exact_metadata) {
@@ -505,10 +505,11 @@ impl Database {
                 0
             }
             (None, None) => return Err(Error::KvConflict),
-            (Some((stored, _)), Some(metadata)) if stored != metadata => {
+            (Some((_, _, true)), _) => return Err(Error::KvConflict),
+            (Some((stored, _, false)), Some(metadata)) if stored != metadata => {
                 return Err(Error::KvConflict)
             }
-            (Some((_, complete)), _) => complete,
+            (Some((_, complete, false)), _) => complete,
         };
         let existing: Option<Vec<u8>> = transaction
             .query_row(
@@ -917,7 +918,7 @@ fn kv_file(
     connection
         .query_row(
             "SELECT exact_metadata FROM kv_file_uploads
-             WHERE uid = ?1 AND file_id = ?2 AND complete = 1",
+             WHERE uid = ?1 AND file_id = ?2 AND complete = 1 AND reclaiming = 0",
             params![uid, id],
             |row| {
                 Ok(StoredKvFile {
@@ -940,7 +941,7 @@ fn kv_file_chunk(
             "SELECT c.ciphertext, c.final_chunk FROM kv_file_chunks c
              JOIN kv_file_uploads f ON f.uid = c.uid AND f.file_id = c.file_id
              WHERE c.uid = ?1 AND c.file_id = ?2 AND c.clear_offset = ?3
-               AND f.complete = 1",
+               AND f.complete = 1 AND f.reclaiming = 0",
             params![uid, id, sql_integer(offset)?],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -1098,7 +1099,7 @@ fn node_reference_exists(
         2 => Ok(connection
             .query_row(
                 "SELECT 1 FROM kv_file_uploads
-                 WHERE uid = ?1 AND file_id = ?2",
+                 WHERE uid = ?1 AND file_id = ?2 AND reclaiming = 0",
                 params![uid, &node[1..]],
                 |_| Ok(()),
             )

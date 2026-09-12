@@ -220,7 +220,7 @@ impl ToolSet {
             for key in strings { properties.insert((*key).to_owned(), json!({"type":"string"})); }
             for key in flags { properties.insert((*key).to_owned(), json!({"type":"boolean", "default":false})); }
             let writes = matches!(*name, "put" | "mkdir" | "rm" | "mv");
-            if writes { properties.insert("fennec_submission_id".into(), json!({"type":"string", "pattern":"^[0-9a-f]{32}$"})); }
+            if writes { properties.insert("fennec_submission_id".into(), json!({"type":"string", "pattern":"^v1-[0-9a-f]{16}-[0-9a-f]{32}$"})); }
             serde_json::from_value(json!({
                 "name": name,
                 "description": format!("FOKS {} {name} in the selected account", if self == Self::Kv {"KV"} else {"team"}),

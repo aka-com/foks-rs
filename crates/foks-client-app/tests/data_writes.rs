@@ -7,6 +7,12 @@ use foks_server_testkit::TestEnvironment;
 
 #[test]
 fn adapter_writes_are_bound_durable_and_never_replayed() {
+    let issued_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let handle = |byte| foks_client_app::SubmissionHandle::new(issued_at, [byte; 16]);
+
     let environment = TestEnvironment::new().unwrap();
     let _server = environment.start_server().unwrap();
     let temp = tempfile::tempdir().unwrap();
@@ -67,7 +73,7 @@ fn adapter_writes_are_bound_durable_and_never_replayed() {
             put.mkdir_p = true;
             assert_eq!(
                 session
-                    .prepare_data_write("owner", [1; 16], put.clone(), &mut vault, &master)?
+                    .prepare_data_write("owner", handle(1), put.clone(), &mut vault, &master)?
                     .status,
                 Status::Prepared
             );
@@ -76,7 +82,7 @@ fn adapter_writes_are_bound_durable_and_never_replayed() {
             assert!(session
                 .execute_data_write(
                     "owner",
-                    [1; 16],
+                    handle(1),
                     &mut b"wrong".as_slice(),
                     &mut vault,
                     &master
@@ -84,13 +90,13 @@ fn adapter_writes_are_bound_durable_and_never_replayed() {
                 .is_err());
             assert_eq!(
                 session
-                    .data_write_status("owner", [1; 16], &mut vault, &master)?
+                    .data_write_status("owner", handle(1), &mut vault, &master)?
                     .status,
                 Status::Prepared
             );
             let result = session.execute_data_write(
                 "owner",
-                [1; 16],
+                handle(1),
                 &mut bytes.as_slice(),
                 &mut vault,
                 &master,
@@ -100,7 +106,7 @@ fn adapter_writes_are_bound_durable_and_never_replayed() {
             // Lost final reply followed by prepare and execute with the same ID.
             assert_eq!(
                 session
-                    .prepare_data_write("owner", [1; 16], put.clone(), &mut vault, &master)?
+                    .prepare_data_write("owner", handle(1), put.clone(), &mut vault, &master)?
                     .status,
                 Status::Committed
             );
@@ -108,7 +114,7 @@ fn adapter_writes_are_bound_durable_and_never_replayed() {
                 session
                     .execute_data_write(
                         "owner",
-                        [1; 16],
+                        handle(1),
                         &mut std::io::empty(),
                         &mut vault,
                         &master
@@ -124,21 +130,29 @@ fn adapter_writes_are_bound_durable_and_never_replayed() {
             );
             put.path = "/different".into();
             assert!(session
-                .prepare_data_write("owner", [1; 16], put, &mut vault, &master)
+                .prepare_data_write("owner", handle(1), put, &mut vault, &master)
                 .is_err());
             let hard = foks_client_db::HardStateStore::open(&session.paths().hard_database)?;
-            let children = hard.mutation_children(&[1; 16])?;
-            assert!(children.iter().any(|(_, last)| !last));
-            assert_eq!(children.iter().filter(|(_, last)| *last).count(), 1);
-            assert_eq!(hard.mutation(&[1; 16])?.unwrap().attempt_count, 1);
+            let retained = hard.adapter_submission(handle(1))?.unwrap();
+            assert_eq!(
+                retained.state,
+                foks_client_db::AdapterLedgerState::Committed
+            );
+            assert!(retained.internal_id.is_none());
+            assert_eq!(
+                retained
+                    .node_id
+                    .map(|id| id.iter().map(|b| format!("{b:02x}")).collect::<String>()),
+                result.node_id
+            );
             let mut mv = spec(Kind::Move, "/parents/file", &[]);
             mv.destination = Some("/parents/moved".into());
-            session.prepare_data_write("owner", [2; 16], mv, &mut vault, &master)?;
+            session.prepare_data_write("owner", handle(2), mv, &mut vault, &master)?;
             assert_eq!(
                 session
                     .execute_data_write(
                         "owner",
-                        [2; 16],
+                        handle(2),
                         &mut std::io::empty(),
                         &mut vault,
                         &master
@@ -149,7 +163,7 @@ fn adapter_writes_are_bound_durable_and_never_replayed() {
             // Namespace response loss can be reconciled by the exact created dirent.
             session.prepare_data_write(
                 "owner",
-                [3; 16],
+                handle(3),
                 spec(Kind::Put, "/lost", b"lost"),
                 &mut vault,
                 &master,
@@ -158,7 +172,7 @@ fn adapter_writes_are_bound_durable_and_never_replayed() {
                 .arm_fault(foks_server_testkit::TestFault::KvPutAfterCommitBeforeResponse);
             let first = session.execute_data_write(
                 "owner",
-                [3; 16],
+                handle(3),
                 &mut b"lost".as_slice(),
                 &mut vault,
                 &master,
@@ -169,14 +183,14 @@ fn adapter_writes_are_bound_durable_and_never_replayed() {
             ));
             assert_eq!(
                 session
-                    .data_write_status("owner", [3; 16], &mut vault, &master)?
+                    .data_write_status("owner", handle(3), &mut vault, &master)?
                     .status,
                 Status::Committed
             );
             assert_eq!(environment.fault_hits(), hits + 1);
             session.prepare_data_write(
                 "owner",
-                [4; 16],
+                handle(4),
                 spec(Kind::Remove, "/lost", &[]),
                 &mut vault,
                 &master,
@@ -186,7 +200,7 @@ fn adapter_writes_are_bound_durable_and_never_replayed() {
                 session
                     .execute_data_write(
                         "owner",
-                        [4; 16],
+                        handle(4),
                         &mut std::io::empty(),
                         &mut vault,
                         &master
@@ -197,20 +211,31 @@ fn adapter_writes_are_bound_durable_and_never_replayed() {
             // Current absence cannot identify which unlink committed.
             assert_eq!(
                 session
-                    .data_write_status("owner", [4; 16], &mut vault, &master)?
+                    .data_write_status("owner", handle(4), &mut vault, &master)?
                     .status,
                 Status::SubmissionUnknown
             );
-            assert_eq!(hard.mutation(&[4; 16])?.unwrap().attempt_count, 1);
+            assert_eq!(
+                hard.mutation(
+                    &hard
+                        .adapter_submission(handle(4))?
+                        .unwrap()
+                        .internal_id
+                        .unwrap()
+                )?
+                .unwrap()
+                .attempt_count,
+                1
+            );
             // An existing-directory mkdir -p is an explicit successful no-op.
             let mut mkdir = spec(Kind::Mkdir, "/parents", &[]);
             mkdir.mkdir_p = true;
-            session.prepare_data_write("owner", [5; 16], mkdir, &mut vault, &master)?;
+            session.prepare_data_write("owner", handle(5), mkdir, &mut vault, &master)?;
             assert_eq!(
                 session
                     .execute_data_write(
                         "owner",
-                        [5; 16],
+                        handle(5),
                         &mut std::io::empty(),
                         &mut vault,
                         &master

@@ -2,21 +2,14 @@
 use super::*;
 use foks_agent_proto::data::{DataCatalog, DataCatalogEntry, DataRead, DataScope, DataUsage};
 
-fn submission_id(input: &str) -> Result<[u8; 16], Box<dyn std::error::Error>> {
-    if input.len() != 32
-        || !input
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-    {
-        return Err(Box::new(AgentRequestError(
-            "submission ID must be 32 lowercase hex characters",
-        )));
-    }
-    let mut id = [0; 16];
-    for (out, pair) in id.iter_mut().zip(input.as_bytes().chunks_exact(2)) {
-        *out = u8::from_str_radix(std::str::from_utf8(pair)?, 16)?;
-    }
-    Ok(id)
+fn submission_id(
+    input: &str,
+) -> Result<foks_agent_proto::data::SubmissionHandle, Box<dyn std::error::Error>> {
+    input.parse().map_err(|_| {
+        Box::new(AgentRequestError(
+            "submission handle must be v1-<16 lowercase hex seconds>-<32 lowercase random hex>",
+        )) as Box<dyn std::error::Error>
+    })
 }
 
 pub(super) fn write_control(

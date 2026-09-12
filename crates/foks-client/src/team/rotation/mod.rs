@@ -3071,18 +3071,14 @@ fn refresh_binding_from_request(
 }
 
 fn team_rekey_material_key(operation_id: &[u8; 16]) -> Vec<u8> {
-    let mut key = b"team-clkr-request-v1:".to_vec();
-    key.extend_from_slice(operation_id);
-    key
+    crate::ProtectedRecordKey::TeamRekey(operation_id).encoded()
 }
 
 fn team_rotation_material_key(operation_id: &[u8; 16]) -> Vec<u8> {
-    let mut key = b"team-rotation-request-v1:".to_vec();
-    key.extend_from_slice(operation_id);
-    key
+    crate::ProtectedRecordKey::TeamRotation(operation_id).encoded()
 }
 
-fn decode_protected_team_edit_request(
+pub(super) fn decode_protected_team_edit_request(
     request: &[u8],
 ) -> Result<foks_proto::DecodedTeamEditArgument> {
     let mut framed = std::io::Cursor::new(request);

@@ -1778,6 +1778,7 @@ dependencies = [
 name = "foks-agent-proto"
 version = "0.3.0"
 dependencies = [
+ "foks-proto",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -1869,6 +1870,7 @@ dependencies = [
 name = "foks-client-db"
 version = "0.3.0"
 dependencies = [
+ "foks-crypto",
  "foks-proto",
  "foks-snowpack",
  "foks-verify",

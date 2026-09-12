@@ -47,6 +47,19 @@ pub struct MutationDraft {
     pub request_hash: [u8; 32],
 }
 
+enum JournalOwner {
+    Unowned,
+    AdapterChild {
+        parent: [u8; 16],
+        completion: bool,
+    },
+    SsoSignup([u8; 16]),
+    AdapterSubmission(
+        foks_proto::SubmissionHandle,
+        foks_client_db::AdapterTimeSample,
+    ),
+}
+
 /// Coordinates the required ordering between two durability domains:
 /// protected material first, then SQLite WAL. Remote verification remains
 /// nonterminal until the application acknowledges its own durable commit;
@@ -79,7 +92,14 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
         material: Zeroizing<Vec<u8>>,
         parent: Option<([u8; 16], bool)>,
     ) -> Result<MutationOperation> {
-        self.prepare_linked(draft, material, parent, None)
+        self.prepare_linked(
+            draft,
+            material,
+            match parent {
+                Some((parent, completion)) => JournalOwner::AdapterChild { parent, completion },
+                None => JournalOwner::Unowned,
+            },
+        )
     }
 
     pub(crate) fn prepare_sso_signup(
@@ -88,17 +108,30 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
         material: Zeroizing<Vec<u8>>,
         flow: [u8; 16],
     ) -> Result<MutationOperation> {
-        self.prepare_linked(draft, material, None, Some(flow))
+        self.prepare_linked(draft, material, JournalOwner::SsoSignup(flow))
+    }
+
+    pub fn prepare_adapter_submission(
+        &mut self,
+        draft: MutationDraft,
+        material: Zeroizing<Vec<u8>>,
+        handle: foks_proto::SubmissionHandle,
+        sample: foks_client_db::AdapterTimeSample,
+    ) -> Result<MutationOperation> {
+        self.prepare_linked(
+            draft,
+            material,
+            JournalOwner::AdapterSubmission(handle, sample),
+        )
     }
 
     fn prepare_linked(
         &mut self,
         draft: MutationDraft,
         material: Zeroizing<Vec<u8>>,
-        parent: Option<([u8; 16], bool)>,
-        sso: Option<[u8; 16]>,
+        owner: JournalOwner,
     ) -> Result<MutationOperation> {
-        let material_ref = draft.operation_id.to_vec();
+        let material_ref = crate::ProtectedRecordKey::Mutation(&draft.operation_id).encoded();
         let now = now_microseconds()?;
         let operation = MutationOperation {
             operation_id: draft.operation_id,
@@ -124,14 +157,15 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
         self.protected
             .put_if_absent(&material_ref, &material)
             .map_err(material_error)?;
-        let recorded = match parent {
-            Some((parent, completion)) => {
+        let recorded = match owner {
+            JournalOwner::AdapterChild { parent, completion } => {
                 hard_store.record_child_mutation(&operation, &parent, completion)
             }
-            None => match sso {
-                Some(flow) => hard_store.record_sso_signup(&operation, &flow),
-                None => hard_store.record_mutation(&operation),
-            },
+            JournalOwner::SsoSignup(flow) => hard_store.record_sso_signup(&operation, &flow),
+            JournalOwner::AdapterSubmission(handle, sample) => {
+                hard_store.record_adapter_submission(handle, &operation, sample)
+            }
+            JournalOwner::Unowned => hard_store.record_mutation(&operation),
         };
         if let Err(error) = recorded {
             // If another writer did not claim this exact operation ID, there
@@ -189,8 +223,8 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
             MutationState::Finalized,
             now_microseconds()?,
         )?;
-        // A crash or backend failure here leaves only an unreferenced protected
-        // record. The authoritative journal is already terminal.
+        // A crash or backend failure leaves a terminal-owned protected record.
+        // Its journal remains authoritative until owning-workflow cleanup succeeds.
         remove_terminal_material(self.protected, &operation.material_ref)
     }
 
@@ -223,11 +257,7 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
             .protected
             .get(&operation.material_ref)
             .map_err(material_error)?;
-        if prefixed_hash(MATERIAL_HASH_TYPE_ID, &material) != operation.material_hash {
-            return Err(Error::OperationBinding(
-                "protected mutation material fingerprint changed",
-            ));
-        }
+        validate_material(operation, &material)?;
         Ok(material)
     }
 
@@ -238,6 +268,15 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
                 "mutation operation is not recorded",
             ))
     }
+}
+
+pub(crate) fn validate_material(operation: &MutationOperation, bytes: &[u8]) -> Result<()> {
+    if prefixed_hash(MATERIAL_HASH_TYPE_ID, bytes) != operation.material_hash {
+        return Err(Error::OperationBinding(
+            "protected mutation material fingerprint changed",
+        ));
+    }
+    Ok(())
 }
 
 fn material_error(error: ProtectedStoreError) -> Error {

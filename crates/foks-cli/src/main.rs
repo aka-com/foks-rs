@@ -3,6 +3,7 @@ mod account_conveniences;
 mod bot_token;
 mod invitations;
 mod mcp;
+mod retention;
 mod sso;
 mod web_admin;
 
@@ -39,6 +40,8 @@ struct Arguments {
 enum Command {
     #[command(subcommand)]
     Mcp(mcp::McpCommand),
+    #[command(subcommand)]
+    Retention(retention::RetentionCommand),
     #[command(subcommand)]
     Sso(sso::SsoCommand),
     /// Initialize FOKS client state.
@@ -627,6 +630,7 @@ fn main() {
 fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     match arguments.command {
         Command::Mcp(command) => mcp::run(&arguments.state_dir, command),
+        Command::Retention(command) => retention::run(&arguments.state_dir, command),
         Command::Sso(command) => sso::run(&arguments.state_dir, command),
         Command::Init(init) => initialize(
             &arguments.state_dir,

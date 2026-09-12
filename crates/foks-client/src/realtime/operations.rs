@@ -1,5 +1,5 @@
 use super::history::anchor;
-use super::policy::{ChatLimits, PROTECTED_MATERIAL_DOMAIN, REQUEST_HASH_DOMAIN};
+use super::policy::{ChatLimits, REQUEST_HASH_DOMAIN};
 use super::session::{floor, random_id, ChatSession, ChatTransport};
 use crate::{Error, ProtectedMutationStore, Result};
 use foks_client_db::{
@@ -16,6 +16,7 @@ use zeroize::Zeroizing;
 
 mod attempt;
 mod material;
+pub(crate) use material::decode_material as validate_inventory_material;
 mod prepare;
 mod recovery;
 pub use prepare::normalize_chat_name;

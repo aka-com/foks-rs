@@ -177,7 +177,7 @@ fn remove_terminal_material(
     }
 }
 
-fn decode_material(op: &ChatOperation, bytes: &[u8]) -> Result<RealtimeRequest> {
+pub(crate) fn decode_material(op: &ChatOperation, bytes: &[u8]) -> Result<RealtimeRequest> {
     if foks_crypto::prefixed_hash(REQUEST_HASH_DOMAIN, bytes) != op.request_hash {
         return Err(Error::ChatIntegrity("pending request changed"));
     }
@@ -189,13 +189,7 @@ fn decode_material(op: &ChatOperation, bytes: &[u8]) -> Result<RealtimeRequest> 
 }
 
 fn material_key(op: &ChatOperation) -> Vec<u8> {
-    let mut key = PROTECTED_MATERIAL_DOMAIN.to_vec();
-    key.extend_from_slice(&op.scope.host);
-    key.extend_from_slice(&op.scope.uid);
-    key.extend_from_slice(&op.scope.team);
-    key.extend_from_slice(&op.scope.channel);
-    key.extend_from_slice(&op.id);
-    key
+    crate::ProtectedRecordKey::Chat(op).encoded()
 }
 
 #[cfg(test)]

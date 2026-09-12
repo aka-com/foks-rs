@@ -240,11 +240,30 @@ behavior over write parallelism. A future partition can move opaque chunks
 first and then independent KV namespaces; identity/name publication and the
 global Merkle log still require one leader or a consensus protocol.
 
-The only background job is a bounded in-process maintenance loop. Once per
-minute it submits one ordinary writer task that removes expired user/team
-reservations, receipts, recovery challenges, team-view and TeamAdmin
-capabilities, and locks; reclaims uploads not referenced by a current
-directory entry after 24 idle hours; and requests a truncating WAL checkpoint.
+The in-process maintenance loop runs once per minute through the ordinary writer.
+It removes expired user/team reservations, receipts, recovery challenges, and
+team-view and TeamAdmin capabilities, then requests a truncating WAL checkpoint.
+Lock expiry is enforced by the next acquirer rather than background deletion.
+Uploads become eligible for reclamation after 24 idle hours only if no retained
+directory-entry version references them. Overwritten, unlinked historical files
+and linked incomplete uploads remain protected. Reclamation marks an upload
+unavailable to reads, chunk writes and publication, removes bounded chunk batches,
+and deletes the empty upload record last. It resumes after restart.
+
+Each upload pass examines at most 128 age candidates and visits at most 128
+reclaiming objects, removes at most 16 chunks and 32 MiB of stored chunk payload,
+and checks a 50 ms work budget between SQL operations. Individual SQL operations,
+commit/fsync and the other maintenance domains can take longer. The durable age
+cursor advances even through entirely live history. Eligibility is not a promise
+of deletion exactly at 24 hours; backlog, contention or failures can delay it.
+
+Management metrics expose maintenance attempts, successes, failures, last-success
+time, reclaimed upload/chunk/byte totals, and consecutive deferred passes without
+object identifiers. `foks_maintenance_warning` becomes 1 after three consecutive
+failures or 60 consecutive deferred upload passes. Alert on that gauge and on
+unexpected growth in `foks_reclaimed_uploads_total`; metrics delivery never gates
+cleanup. Counters reset on server restart. Pinned Go hosts retain their own upload
+lifecycle policy; these guarantees apply to the Rust host.
 Foreground expiry, current-device, current-roster, role, and key-generation
 checks enforce correctness even if this job never runs. There is no durable
 general-purpose job queue, retry farm, cron dependency, or multi-process lease system.

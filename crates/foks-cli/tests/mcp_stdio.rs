@@ -276,7 +276,11 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
         .contains("mcpteam"));
     team.eof();
     let mut writes = Process::start_mode(&state, "kv", false);
-    let id = "12".repeat(16);
+    let issued = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let id = foks_agent_proto::data::SubmissionHandle::new(issued, [0x12; 16]).to_string();
     let body = "x".repeat(300 * 1024);
     let args =
         json!({"path":"/written/file", "content":body, "mkdir_p":true, "fennec_submission_id":id});
@@ -350,6 +354,90 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
         removed["result"]["structuredContent"]["status"], "committed",
         "{removed}"
     );
+    let fresh = foks_agent_proto::data::SubmissionHandle::new(issued, [0x81; 16]).to_string();
+    let fresh_status = writes.call("fennec_status", json!({"fennec_submission_id":fresh}));
+    assert_eq!(
+        fresh_status["result"]["structuredContent"]["status"], "not-recorded",
+        "{fresh_status}"
+    );
+    let stale =
+        foks_agent_proto::data::SubmissionHandle::new(issued - 86_401, [0x82; 16]).to_string();
+    let expired = writes.call("fennec_status", json!({"fennec_submission_id":stale}));
+    assert_eq!(
+        expired["result"]["structuredContent"]["status"], "expired",
+        "{expired}"
+    );
+    let expired_write = writes.call(
+        "put",
+        json!({"path":"/must-not-execute","content":"stale","fennec_submission_id":stale}),
+    );
+    assert_eq!(
+        expired_write["result"]["structuredContent"]["status"], "expired",
+        "{expired_write}"
+    );
+    let legacy=writes.call("put",json!({"path":"/must-not-execute","content":"legacy","fennec_submission_id":"12".repeat(16)}));
+    assert_eq!(legacy["result"]["isError"], true, "{legacy}");
+    // Local status has reserved worker capacity and contains counters only.
+    let retention = foks_agent_client::AgentClient::new(state.join("foks-rs.sock"))
+        .call(foks_agent_proto::Operation::RetentionStatus)
+        .unwrap();
+    let foks_agent_proto::ResponseResult::Success { value } = retention.result else {
+        panic!("retention status failed");
+    };
+    assert!(value["attempts"].is_u64());
+    assert!(value["inventory_saturated"].is_u64());
+    if let (Some(environment), Some(server)) = (&environment, &_server) {
+        // A 300 KiB put is a large file whose only (final) chunk is carried in
+        // UploadInit. Drop that response after commit, before namespace linking.
+        let hits = environment
+            .arm_fault(foks_server_testkit::TestFault::UploadInitAfterCommitBeforeResponse);
+        let uncertain_id =
+            foks_agent_proto::data::SubmissionHandle::new(issued, [0x91; 16]).to_string();
+        let uncertain = writes.call(
+            "put",
+            json!({
+                "path":"/abandoned-upload", "content":"z".repeat(300 * 1024),
+                "fennec_submission_id":uncertain_id,
+            }),
+        );
+        assert_eq!(environment.fault_hits(), hits + 1);
+        assert_eq!(
+            uncertain["result"]["structuredContent"]["status"], "submission-unknown",
+            "{uncertain}"
+        );
+        assert_eq!(server.run_maintenance().unwrap().0.uploads, 0);
+        environment.advance_clock(24 * 60 * 60 * 1_000_000 + 1);
+        let mut reclaimed = 0;
+        for _ in 0..100 {
+            let report = server.run_maintenance().unwrap().0;
+            reclaimed += report.uploads;
+            if !report.upload_cleanup_deferred {
+                break;
+            }
+        }
+        assert_eq!(reclaimed, 1);
+        assert_eq!(server.metrics().reclaimed_uploads, 1);
+        let status = writes.call(
+            "fennec_status",
+            json!({"fennec_submission_id":uncertain_id}),
+        );
+        assert_eq!(
+            status["result"]["structuredContent"]["status"], "submission-unknown",
+            "{status}"
+        );
+        // Reclamation cannot turn the uncertain intent into permission to retry.
+        let replay = writes.call(
+            "put",
+            json!({
+                "path":"/abandoned-upload", "content":"z".repeat(300 * 1024),
+                "fennec_submission_id":uncertain_id,
+            }),
+        );
+        assert_eq!(
+            replay["result"]["structuredContent"]["status"], "submission-unknown",
+            "{replay}"
+        );
+    }
     writes.eof();
     if let Ok(oracle) = std::env::var("FOKS_GO_MCP_ORACLE") {
         let status = Command::new("go")

@@ -2217,9 +2217,7 @@ fn validate_local_addition_plan(
 }
 
 pub(crate) fn remote_addition_material_key(operation_id: &[u8; 16]) -> Vec<u8> {
-    let mut key = b"federation-remote-team-addition-v1:".to_vec();
-    key.extend_from_slice(operation_id);
-    key
+    crate::ProtectedRecordKey::RemoteAddition(operation_id).encoded()
 }
 
 fn protected_material_error(error: ProtectedStoreError) -> Error {

@@ -502,14 +502,11 @@ impl RunningStandaloneServer {
         foks_server_db::MaintenanceReport,
         foks_server_db::CheckpointReport,
     )> {
-        self.writer
-            .handle()
-            .call_with_current_time(Arc::clone(&self.clock), |database, now| {
-                let cutoff = now.saturating_sub(crate::maintenance::ABANDONED_UPLOAD_AGE_MICROS);
-                let maintenance = database.run_maintenance(now, cutoff)?;
-                let checkpoint = database.checkpoint()?;
-                Ok((maintenance, checkpoint))
-            })
+        crate::maintenance::run(
+            &self.writer.handle(),
+            Arc::clone(&self.clock),
+            Arc::clone(&self.metrics),
+        )
     }
 
     #[doc(hidden)]
@@ -717,8 +714,12 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     // fail closed rather than leave replacement material behind.
     let tls = build_host_tls(keys.as_ref(), &input.canonical_name)?;
     let writer_handle = writer.handle();
-    let maintenance = Maintenance::start(writer_handle.clone(), Arc::clone(&config.clock));
     let metrics = Arc::new(crate::ServerMetrics::default());
+    let maintenance = Maintenance::start(
+        writer_handle.clone(),
+        Arc::clone(&config.clock),
+        Arc::clone(&metrics),
+    );
     let backup_schedule = config.backup;
 
     let sso = if let Some((operator, policy)) = config.oidc {

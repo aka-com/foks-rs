@@ -31,12 +31,24 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
         "foks_rate_limited_requests_total",
         "foks_backup_successes_total",
         "foks_backup_duration_seconds_count",
+        "foks_maintenance_attempts_total",
+        "foks_maintenance_successes_total",
+        "foks_maintenance_failures_total",
+        "foks_reclaimed_uploads_total",
+        "foks_maintenance_warning",
     ] {
         assert!(metrics.contains(name));
     }
     assert!(metric(&metrics, "foks_database_bytes") > 0.0);
     assert_eq!(metric(&metrics, "foks_storage_sample_failures_total"), 0.0);
     assert!(!metrics.contains(environment.root().to_string_lossy().as_ref()));
+    server.run_maintenance().unwrap();
+    let after = get(address, "/metrics");
+    assert_eq!(metric(&after, "foks_maintenance_attempts_total"), 1.0);
+    assert_eq!(metric(&after, "foks_maintenance_successes_total"), 1.0);
+    assert_eq!(metric(&after, "foks_maintenance_failures_total"), 0.0);
+    assert_eq!(metric(&after, "foks_maintenance_warning"), 0.0);
+    assert!(metric(&after, "foks_last_maintenance_success_unixtime") > 0.0);
     assert!(get(address, "/missing").starts_with("HTTP/1.1 404 Not Found\r\n"));
     server.shutdown().unwrap();
 }

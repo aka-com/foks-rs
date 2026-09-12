@@ -38,6 +38,7 @@ pub struct SsoIntent {
     pub for_login: bool,
 }
 mod material;
+pub(crate) use material::validate_inventory_stage;
 use material::*;
 mod signup;
 pub use signup::{SsoSigningKey, SsoSignupAuthorization};

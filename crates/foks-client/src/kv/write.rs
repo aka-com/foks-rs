@@ -759,7 +759,15 @@ impl KvWriteSession<'_> {
             ));
         }
         MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
-            .remote_verified_and_finalize(&operation.operation_id)?;
+            .remote_verified(&operation.operation_id)?;
+        let verified = HardStateStore::open(&self.host.database_path)?
+            .mutation(&operation.operation_id)?
+            .ok_or(Error::OperationBinding("verified KV operation disappeared"))?;
+        finalize_verified_material(
+            &self.host.database_path,
+            &mut *self.protected_store,
+            &verified,
+        )?;
         Ok(tree)
     }
 
@@ -861,7 +869,15 @@ impl KvWriteSession<'_> {
             }
         }
         MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
-            .remote_verified_and_finalize(&operation.operation_id)?;
+            .remote_verified(&operation.operation_id)?;
+        let verified = HardStateStore::open(&self.host.database_path)?
+            .mutation(&operation.operation_id)?
+            .ok_or(Error::OperationBinding("verified KV operation disappeared"))?;
+        finalize_verified_material(
+            &self.host.database_path,
+            &mut *self.protected_store,
+            &verified,
+        )?;
         Ok(tree)
     }
 
@@ -1146,4 +1162,43 @@ mod outbox_tests {
 
         assert!(decode_namespace_material(&[0xc0]).is_err());
     }
+}
+
+/// Resume the local tail of a KV operation whose authenticated projection was
+/// committed before `RemoteVerified`. This never sends a request or repeats sync.
+pub(crate) fn finalize_verified_material<S: crate::ProtectedMutationStore + ?Sized>(
+    database: &std::path::Path,
+    protected: &mut S,
+    operation: &MutationOperation,
+) -> Result<()> {
+    if !matches!(
+        operation.kind,
+        MutationKind::KvRoot | MutationKind::KvNamespace
+    ) || operation.state != MutationState::RemoteVerified
+    {
+        return Err(Error::OperationBinding(
+            "KV operation is not locally finalizable",
+        ));
+    }
+    let mut coordinator = MutationCoordinator::new(database, protected);
+    let material = coordinator.load_bound_material(operation)?;
+    let node = if operation.kind == MutationKind::KvNamespace {
+        let (precondition, dirents) = decode_namespace_material(&material)?;
+        validate_namespace_operation_binding(operation, &precondition, &dirents)?;
+        if foks_crypto::prefixed_hash(KV_NAMESPACE_REQUEST_HASH_TYPE_ID, &material)
+            != operation.request_hash
+        {
+            return Err(Error::OperationBinding(
+                "verified namespace fingerprint changed",
+            ));
+        }
+        dirents
+            .last()
+            .map(|dirent| dirent.value.0)
+            .filter(|node| *node != [0; 17])
+    } else {
+        None
+    };
+    HardStateStore::open(database)?.record_verified_adapter_child(&operation.operation_id, node)?;
+    coordinator.finalize(&operation.operation_id)
 }

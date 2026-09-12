@@ -2,7 +2,8 @@
 //! paths and arguments live only in the existing protected mutation store.
 use super::*;
 use foks_client::MutationDraft;
-use foks_client_db::MutationOperation;
+use foks_client::ProtectedMutationStore as _;
+use foks_client_db::{AdapterLedgerState, AdapterSubmission, MutationOperation};
 
 mod apply;
 use apply::apply_write;
@@ -40,6 +41,8 @@ pub enum DataWriteStatus {
     Committed,
     Rejected,
     SubmissionUnknown,
+    Expired,
+    NotRecorded,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -56,7 +59,7 @@ impl CheckedProfileSession<'_> {
     pub fn prepare_data_write(
         &self,
         alias: &str,
-        id: [u8; 16],
+        handle: SubmissionHandle,
         spec: DataWriteSpec,
         vault: &mut AccountVault<'_>,
         master: &[u8; 32],
@@ -68,35 +71,57 @@ impl CheckedProfileSession<'_> {
         let user = entity_id_from_hex(&user_id)?;
         let bytes = Zeroizing::new(serde_json::to_vec(&spec)?);
         let hash = prefixed_hash(INTENT_HASH, &bytes);
-        let hard = HardStateStore::open(&self.paths.hard_database)?;
-        if let Some(existing) = hard.mutation(&id)? {
-            check_actor(&existing, host.as_bytes(), user.as_bytes())?;
-            if existing.request_hash != hash {
-                return Err(Error::InvalidAccount(
-                    "submission ID is bound to different inputs",
-                ));
+        let mut hard = HardStateStore::open(&self.paths.hard_database)?;
+        if let Some(existing) = hard.adapter_submission(handle)? {
+            check_binding(&existing, host.as_bytes(), user.as_bytes())?;
+            if existing.input_hash != hash {
+                return Err(foks_client_db::Error::AdapterIdentityConflict.into());
             }
             return outcome(&hard, &existing);
         }
-        let all = hard.adapter_mutations(host.as_bytes(), user.as_bytes())?;
-        if all.len() >= 4096
-            || all
-                .iter()
-                .filter(|op| {
-                    matches!(
-                        op.state,
-                        MutationState::Prepared
-                            | MutationState::Submitting
-                            | MutationState::SubmissionUnknown
-                            | MutationState::RemoteVerified
-                    )
-                })
-                .count()
-                >= 64
-        {
-            return Err(Error::InvalidAccount(
-                "adapter submission inventory is full",
-            ));
+        let sample = self.adapter_clock.sample()?;
+        match hard.check_adapter_admission(host.as_bytes(), user.as_bytes(), handle, sample) {
+            Err(foks_client_db::Error::AdapterExpired) => {
+                return Ok(absent_outcome(handle, DataWriteStatus::Expired))
+            }
+            result => result?,
+        }
+        // One bounded local cleanup batch can release eligible capacity. Any
+        // failed erasure preserves full ownership and the reserved ledger slot.
+        let deadline = std::time::Instant::now() + Duration::from_millis(50);
+        for entry in hard.adapter_submission_batch(host.as_bytes(), user.as_bytes(), false)? {
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            if entry.terminal_at.is_none() {
+                hard.finish_adapter_submission(
+                    entry.handle,
+                    entry.state == AdapterLedgerState::Committed,
+                    entry.ancillary_committed,
+                    entry.node_id,
+                    Some(sample),
+                )?;
+            }
+            match self.compact_data_write(&mut hard, &entry, master, deadline) {
+                Ok(())
+                | Err(Error::ProtectedStore(_))
+                | Err(Error::ClientDatabase(foks_client_db::Error::AdapterCleanupDeferred)) => (),
+                Err(error) => return Err(error),
+            }
+        }
+        // Live and cleanup-deferred entries cannot match pruning eligibility.
+        hard.prune_adapter_submissions(host.as_bytes(), user.as_bytes(), sample)?;
+        let mut id = [0; 16];
+        let mut allocated = false;
+        for _ in 0..32 {
+            getrandom::fill(&mut id).map_err(|_| Error::Randomness)?;
+            if hard.mutation(&id)?.is_none() {
+                allocated = true;
+                break;
+            }
+        }
+        if !allocated {
+            return Err(Error::Randomness);
         }
         let team = spec
             .team_selector
@@ -107,19 +132,35 @@ impl CheckedProfileSession<'_> {
             })
             .transpose()?;
         let mut protected = self.data_mutations(master)?;
-        let op = MutationCoordinator::new(&self.paths.hard_database, &mut protected).prepare(
-            MutationDraft {
-                operation_id: id,
-                kind: MutationKind::KvAdapter,
-                host_id: host.as_bytes().to_vec(),
-                scope_id: user.as_bytes().to_vec(),
-                subject_id: team.map(|id| id.as_bytes().to_vec()).unwrap_or_default(),
-                expected_version: None,
-                request_hash: hash,
-            },
-            bytes,
-        )?;
-        outcome(&hard, &op)
+        let admission = MutationCoordinator::new(&self.paths.hard_database, &mut protected)
+            .prepare_adapter_submission(
+                MutationDraft {
+                    operation_id: id,
+                    kind: MutationKind::KvAdapter,
+                    host_id: host.as_bytes().to_vec(),
+                    scope_id: user.as_bytes().to_vec(),
+                    subject_id: team.map(|id| id.as_bytes().to_vec()).unwrap_or_default(),
+                    expected_version: None,
+                    request_hash: hash,
+                },
+                bytes,
+                handle,
+                sample,
+            );
+        match admission {
+            Err(foks_client::Error::Database(foks_client_db::Error::AdapterExpired)) => {
+                return Ok(absent_outcome(handle, DataWriteStatus::Expired));
+            }
+            result => {
+                result?;
+            }
+        }
+        outcome(
+            &hard,
+            &hard
+                .adapter_submission(handle)?
+                .ok_or(foks_client_db::Error::AdapterIdentityConflict)?,
+        )
     }
 
     pub fn pending_data_writes(
@@ -129,13 +170,13 @@ impl CheckedProfileSession<'_> {
     ) -> Result<Vec<DataWriteOutcome>> {
         let (host, user) = self.data_identity(alias, vault)?;
         let hard = HardStateStore::open(&self.paths.hard_database)?;
-        hard.adapter_mutations(
+        hard.adapter_submission_batch(
             entity_id_from_hex(&host)?.as_bytes(),
             entity_id_from_hex(&user)?.as_bytes(),
+            true,
         )?
         .iter()
-        .filter(|op| !matches!(op.state, MutationState::Finalized | MutationState::Rejected))
-        .map(|op| outcome(&hard, op))
+        .map(|entry| outcome(&hard, entry))
         .collect()
     }
 
@@ -143,19 +184,30 @@ impl CheckedProfileSession<'_> {
     pub fn data_write_status(
         &self,
         alias: &str,
-        id: [u8; 16],
+        handle: SubmissionHandle,
         vault: &mut AccountVault<'_>,
         master: &[u8; 32],
     ) -> Result<DataWriteOutcome> {
-        let op = self.data_operation(alias, id, vault)?;
+        let Some(entry) = self.data_operation(alias, handle, vault)? else {
+            return self.unseen_data_status(alias, handle, vault);
+        };
         let hard = HardStateStore::open(&self.paths.hard_database)?;
+        if entry.state != AdapterLedgerState::Live {
+            return outcome(&hard, &entry);
+        }
+        let id = entry
+            .internal_id
+            .ok_or(foks_client_db::Error::AdapterIdentityConflict)?;
+        let op = hard
+            .mutation(&id)?
+            .ok_or(foks_client_db::Error::AdapterIdentityConflict)?;
         if !matches!(
             op.state,
             MutationState::Submitting
                 | MutationState::SubmissionUnknown
                 | MutationState::RemoteVerified
         ) {
-            return outcome(&hard, &op);
+            return outcome(&hard, &entry);
         }
         let children = hard.mutation_children(&id)?;
         let team = (!op.subject_id.is_empty()).then(|| hex(&op.subject_id));
@@ -202,11 +254,12 @@ impl CheckedProfileSession<'_> {
                 }
             }
         }
-        let current = outcome(&hard, &op)?;
+        let entry = hard
+            .adapter_submission(handle)?
+            .ok_or(foks_client_db::Error::AdapterIdentityConflict)?;
+        let current = outcome(&hard, &entry)?;
         if current.status == DataWriteStatus::Committed {
-            let mut protected = self.data_mutations(master)?;
-            MutationCoordinator::new(&self.paths.hard_database, &mut protected)
-                .remote_verified_and_finalize(&id)?;
+            self.finish_data_write(handle, true, current.partial, entry.node_id, master)?;
         }
         Ok(current)
     }
@@ -216,16 +269,34 @@ impl CheckedProfileSession<'_> {
     pub fn execute_data_write<R: Read>(
         &self,
         alias: &str,
-        id: [u8; 16],
+        handle: SubmissionHandle,
         reader: &mut R,
         vault: &mut AccountVault<'_>,
         master: &[u8; 32],
     ) -> Result<DataWriteOutcome> {
         self.profile.require(Capability::Kv)?;
-        let op = self.data_operation(alias, id, vault)?;
+        let Some(entry) = self.data_operation(alias, handle, vault)? else {
+            let absent = self.unseen_data_status(alias, handle, vault)?;
+            return if absent.status == DataWriteStatus::Expired {
+                Ok(absent)
+            } else {
+                Err(Error::InvalidAccount(
+                    "submission is not recorded; prepare before execution",
+                ))
+            };
+        };
         let hard = HardStateStore::open(&self.paths.hard_database)?;
+        if entry.state != AdapterLedgerState::Live {
+            return outcome(&hard, &entry);
+        }
+        let id = entry
+            .internal_id
+            .ok_or(foks_client_db::Error::AdapterIdentityConflict)?;
+        let op = hard
+            .mutation(&id)?
+            .ok_or(foks_client_db::Error::AdapterIdentityConflict)?;
         if op.state != MutationState::Prepared {
-            return outcome(&hard, &op);
+            return outcome(&hard, &entry);
         }
         let mut protected = self.data_mutations(master)?;
         let material = MutationCoordinator::new(&self.paths.hard_database, &mut protected)
@@ -278,51 +349,133 @@ impl CheckedProfileSession<'_> {
                 &mut remote_possible,
             )
         })();
-        let mut coordinator = MutationCoordinator::new(&self.paths.hard_database, &mut protected);
         match result {
             Ok(node_id) => {
-                coordinator.remote_verified_and_finalize(&id)?;
-                Ok(DataWriteOutcome {
-                    submission_id: hex(&id),
-                    status: DataWriteStatus::Committed,
-                    partial: false,
-                    node_id,
-                })
+                let node_id = node_id.as_deref().map(parse_node_id).transpose()?;
+                self.finish_data_write(handle, true, false, node_id, master)?;
             }
             Err(_) => {
-                // Even a local failure may follow root creation or an uploaded
-                // object. Retain the handle; never reinterpret it as safe replay.
+                // Remote ambiguity is permanent until exact authenticated proof.
                 if remote_possible {
-                    coordinator.submission_unknown(&id)?;
+                    MutationCoordinator::new(&self.paths.hard_database, &mut protected)
+                        .submission_unknown(&id)?;
                 } else {
-                    coordinator.rejected(&id)?;
+                    self.finish_data_write(handle, false, false, None, master)?;
                 }
-                outcome(
-                    &hard,
-                    &hard
-                        .mutation(&id)?
-                        .ok_or(Error::InvalidAccount("missing adapter intent"))?,
-                )
             }
         }
+        outcome(
+            &hard,
+            &hard
+                .adapter_submission(handle)?
+                .ok_or(foks_client_db::Error::AdapterIdentityConflict)?,
+        )
     }
 
     fn data_operation(
         &self,
         alias: &str,
-        id: [u8; 16],
+        handle: SubmissionHandle,
         vault: &mut AccountVault<'_>,
-    ) -> Result<MutationOperation> {
+    ) -> Result<Option<AdapterSubmission>> {
         let (host, user) = self.data_identity(alias, vault)?;
-        let op = HardStateStore::open(&self.paths.hard_database)?
-            .mutation(&id)?
-            .ok_or(Error::InvalidAccount("unknown submission ID"))?;
-        check_actor(
-            &op,
+        let entry = HardStateStore::open(&self.paths.hard_database)?.adapter_submission(handle)?;
+        if let Some(entry) = &entry {
+            check_binding(
+                entry,
+                entity_id_from_hex(&host)?.as_bytes(),
+                entity_id_from_hex(&user)?.as_bytes(),
+            )?;
+        }
+        Ok(entry)
+    }
+
+    fn unseen_data_status(
+        &self,
+        alias: &str,
+        handle: SubmissionHandle,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<DataWriteOutcome> {
+        let (host, user) = self.data_identity(alias, vault)?;
+        let status = match HardStateStore::open(&self.paths.hard_database)?.check_adapter_admission(
             entity_id_from_hex(&host)?.as_bytes(),
             entity_id_from_hex(&user)?.as_bytes(),
+            handle,
+            self.adapter_clock.sample()?,
+        ) {
+            Ok(()) => DataWriteStatus::NotRecorded,
+            Err(foks_client_db::Error::AdapterExpired) => DataWriteStatus::Expired,
+            Err(error) => return Err(error.into()),
+        };
+        Ok(absent_outcome(handle, status))
+    }
+
+    fn finish_data_write(
+        &self,
+        handle: SubmissionHandle,
+        committed: bool,
+        ancillary: bool,
+        node_id: Option<[u8; 17]>,
+        master: &[u8; 32],
+    ) -> Result<()> {
+        let mut hard = HardStateStore::open(&self.paths.hard_database)?;
+        hard.finish_adapter_submission(
+            handle,
+            committed,
+            ancillary,
+            node_id,
+            self.adapter_clock.sample().ok(),
         )?;
-        Ok(op)
+        // A failed erasure retains terminal ownership and its reserved ledger slot.
+        // Returning the committed outcome remains safe; maintenance retries cleanup.
+        let entry = hard
+            .adapter_submission(handle)?
+            .ok_or(foks_client_db::Error::AdapterIdentityConflict)?;
+        match self.compact_data_write(
+            &mut hard,
+            &entry,
+            master,
+            std::time::Instant::now() + Duration::from_millis(50),
+        ) {
+            Ok(())
+            | Err(Error::ProtectedStore(_))
+            | Err(Error::ClientDatabase(foks_client_db::Error::AdapterCleanupDeferred)) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) fn compact_data_write(
+        &self,
+        hard: &mut HardStateStore,
+        entry: &AdapterSubmission,
+        master: &[u8; 32],
+        deadline: std::time::Instant,
+    ) -> Result<()> {
+        let Some(id) = entry.internal_id else {
+            return Ok(());
+        };
+        let parent = hard
+            .mutation(&id)?
+            .ok_or(foks_client_db::Error::AdapterIdentityConflict)?;
+        let children = hard.mutation_children(&id)?;
+        if !parent.state.is_terminal()
+            || children.iter().any(|(child, _)| !child.state.is_terminal())
+        {
+            return Err(foks_client_db::Error::AdapterCleanupDeferred.into());
+        }
+        let mut protected = self.data_mutations(master)?;
+        for operation in std::iter::once(&parent).chain(children.iter().map(|(child, _)| child)) {
+            if std::time::Instant::now() >= deadline {
+                return Err(foks_client_db::Error::AdapterCleanupDeferred.into());
+            }
+            match protected.remove(&operation.material_ref) {
+                Ok(()) | Err(foks_client::ProtectedStoreError::Missing) => (),
+                Err(error) => return Err(error.into()),
+            }
+        }
+        protected.sync()?;
+        hard.compact_adapter_submission(entry.handle)?;
+        Ok(())
     }
 
     fn data_mutations(&self, master: &[u8; 32]) -> Result<EncryptedFileMutationStore> {
@@ -333,41 +486,83 @@ impl CheckedProfileSession<'_> {
     }
 }
 
-fn check_actor(op: &MutationOperation, host: &[u8], user: &[u8]) -> Result<()> {
-    if op.kind != MutationKind::KvAdapter || op.host_id != host || op.scope_id != user {
-        return Err(Error::InvalidAccount(
-            "submission belongs to another account",
-        ));
+fn check_binding(entry: &AdapterSubmission, host: &[u8], user: &[u8]) -> Result<()> {
+    if entry.host_id != host || entry.user_id != user {
+        return Err(foks_client_db::Error::AdapterIdentityConflict.into());
     }
     Ok(())
 }
 
-fn outcome(hard: &HardStateStore, op: &MutationOperation) -> Result<DataWriteOutcome> {
-    let children = hard.mutation_children(&op.operation_id)?;
-    let committed = |child: &MutationOperation| {
-        matches!(
-            child.state,
-            MutationState::RemoteVerified | MutationState::Finalized
-        )
-    };
-    let status = match op.state {
-        MutationState::Prepared => DataWriteStatus::Prepared,
-        MutationState::RemoteVerified | MutationState::Finalized => DataWriteStatus::Committed,
-        MutationState::Rejected => DataWriteStatus::Rejected,
-        _ if children
-            .iter()
-            .any(|(child, last)| *last && committed(child)) =>
-        {
-            DataWriteStatus::Committed
+fn absent_outcome(handle: SubmissionHandle, status: DataWriteStatus) -> DataWriteOutcome {
+    DataWriteOutcome {
+        submission_id: handle.to_string(),
+        status,
+        partial: false,
+        node_id: None,
+    }
+}
+
+fn parse_node_id(input: &str) -> Result<[u8; 17]> {
+    if input.len() != 34 || !input.bytes().all(|b| matches!(b,b'0'..=b'9'|b'a'..=b'f')) {
+        return Err(Error::InvalidAccount("invalid proven adapter node ID"));
+    }
+    let mut node = [0; 17];
+    for (index, byte) in node.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&input[index * 2..index * 2 + 2], 16)
+            .map_err(|_| Error::InvalidAccount("invalid proven adapter node ID"))?;
+    }
+    Ok(node)
+}
+
+fn outcome(hard: &HardStateStore, entry: &AdapterSubmission) -> Result<DataWriteOutcome> {
+    let (status, partial) = match entry.state {
+        AdapterLedgerState::Committed => (DataWriteStatus::Committed, false),
+        AdapterLedgerState::Rejected => (DataWriteStatus::Rejected, entry.ancillary_committed),
+        AdapterLedgerState::Live => {
+            let id = entry
+                .internal_id
+                .ok_or(foks_client_db::Error::AdapterIdentityConflict)?;
+            let op = hard
+                .mutation(&id)?
+                .ok_or(foks_client_db::Error::AdapterIdentityConflict)?;
+            if op.kind != MutationKind::KvAdapter
+                || op.host_id != entry.host_id
+                || op.scope_id != entry.user_id
+                || op.subject_id != entry.team_id
+                || op.request_hash != entry.input_hash
+            {
+                return Err(foks_client_db::Error::AdapterIdentityConflict.into());
+            }
+            let children = hard.mutation_children(&id)?;
+            let proven = |op: &MutationOperation| {
+                matches!(
+                    op.state,
+                    MutationState::RemoteVerified | MutationState::Finalized
+                )
+            };
+            let status = match op.state {
+                MutationState::Prepared => DataWriteStatus::Prepared,
+                MutationState::Finalized | MutationState::RemoteVerified => {
+                    DataWriteStatus::Committed
+                }
+                MutationState::Rejected => DataWriteStatus::Rejected,
+                _ if children.iter().any(|(child, last)| *last && proven(child)) => {
+                    DataWriteStatus::Committed
+                }
+                _ => DataWriteStatus::SubmissionUnknown,
+            };
+            (
+                status,
+                status == DataWriteStatus::SubmissionUnknown
+                    && children.iter().any(|(child, _)| proven(child)),
+            )
         }
-        _ => DataWriteStatus::SubmissionUnknown,
     };
     Ok(DataWriteOutcome {
-        submission_id: hex(&op.operation_id),
+        submission_id: entry.handle.to_string(),
         status,
-        partial: status == DataWriteStatus::SubmissionUnknown
-            && children.iter().any(|(child, _)| committed(child)),
-        node_id: None,
+        partial,
+        node_id: entry.node_id.as_ref().map(|id| hex(id)),
     })
 }
 

@@ -97,3 +97,15 @@ pub struct KvFetchedChunk {
     pub content: Vec<u8>,
     pub eof: bool,
 }
+
+impl crate::FoksClient {
+    /// Complete only the local tail of an already verified KV journal.
+    pub fn finalize_verified_kv_material<S: crate::ProtectedMutationStore + ?Sized>(
+        &self,
+        database: &std::path::Path,
+        protected: &mut S,
+        operation: &foks_client_db::MutationOperation,
+    ) -> crate::Result<()> {
+        write::finalize_verified_material(database, protected, operation)
+    }
+}

@@ -6,6 +6,13 @@
 
 #![forbid(unsafe_code)]
 
+mod adapter_maintenance;
+pub use adapter_maintenance::{AdapterMaintenanceCursor, AdapterMaintenanceReport};
+mod adapter_clock;
+pub use adapter_clock::{
+    AdapterClock, AdapterClockPreview, AdapterClockRepair, SystemAdapterClock,
+};
+pub use foks_proto::SubmissionHandle;
 mod federation;
 mod runtime;
 mod yubi;

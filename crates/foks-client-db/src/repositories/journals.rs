@@ -102,12 +102,17 @@ impl HardStateStore {
         &self,
         parent_id: &[u8; 16],
     ) -> Result<Vec<(MutationOperation, bool)>> {
-        let mut statement = self.connection.prepare("SELECT child_id,completion FROM mutation_children WHERE parent_id=?1 ORDER BY child_id")?;
+        let mut statement = self.connection.prepare("SELECT child_id,completion FROM mutation_children WHERE parent_id=?1 ORDER BY child_id LIMIT 257")?;
         let ids = statement
             .query_map([parent_id.as_slice()], |row| {
                 Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, bool>(1)?))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        if ids.len() > 256 {
+            return Err(Error::InvalidMutationOperation(
+                "adapter child limit exceeded",
+            ));
+        }
         ids.into_iter()
             .map(|(id, completion)| {
                 let id: [u8; 16] = id
@@ -117,23 +122,6 @@ impl HardStateStore {
                     .mutation(&id)?
                     .ok_or(Error::InvalidMutationOperation("missing mutation child"))?;
                 Ok((operation, completion))
-            })
-            .collect()
-    }
-
-    /// Bounded recovery inventory. Terminal IDs remain as replay tombstones.
-    pub fn adapter_mutations(&self, host: &[u8], actor: &[u8]) -> Result<Vec<MutationOperation>> {
-        let mut statement = self.connection.prepare("SELECT operation_id FROM mutation_operations WHERE operation_kind=8 AND host_id=?1 AND scope_id=?2 ORDER BY created_at DESC,operation_id LIMIT 4097")?;
-        let ids = statement
-            .query_map(params![host, actor], |row| row.get::<_, Vec<u8>>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        ids.into_iter()
-            .map(|id| {
-                let id = id
-                    .try_into()
-                    .map_err(|_| Error::InvalidMutationOperation("invalid adapter ID"))?;
-                self.mutation(&id)?
-                    .ok_or(Error::InvalidMutationOperation("missing adapter intent"))
             })
             .collect()
     }
@@ -969,7 +957,7 @@ pub(crate) fn team_mutation_from_connection(
         .transpose()
 }
 
-fn record_mutation_on(
+pub(super) fn record_mutation_on(
     connection: &rusqlite::Connection,
     operation: &MutationOperation,
 ) -> Result<()> {

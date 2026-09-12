@@ -3,7 +3,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 pub const APPLICATION_ID: i64 = 0x464f_4b53;
-pub const SCHEMA_VERSION: i64 = 40;
+pub const SCHEMA_VERSION: i64 = 41;
 
 const SCHEMA: &str = concat!(
     include_str!("schema/core.sql"),

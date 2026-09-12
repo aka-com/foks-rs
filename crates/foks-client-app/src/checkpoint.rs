@@ -1882,6 +1882,14 @@ pub(super) enum CheckpointReconciliation {
 }
 
 impl RollbackCheckpoint {
+    /// Stable non-secret digest of the published checkpoint fields.
+    pub fn digest(&self) -> Result<[u8; 32]> {
+        Ok(prefixed_hash(
+            0x6c18_37e9_5d04_afe2,
+            &serde_json::to_vec(self)?,
+        ))
+    }
+
     pub fn verify_descends_from(&self, previous: &Self) -> Result<()> {
         self.reconciliation(previous).map(|_| ())
     }

@@ -1,4 +1,5 @@
 //! Immutable context for read adapters. These values are bindings, not authority.
+pub use foks_proto::SubmissionHandle;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
@@ -163,6 +164,8 @@ pub enum DataWriteStatus {
     Committed,
     Rejected,
     SubmissionUnknown,
+    Expired,
+    NotRecorded,
 }
 
 #[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]

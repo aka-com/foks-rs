@@ -3374,3 +3374,25 @@ mod parcel_sender_tests {
         );
     }
 }
+
+/// Validate a retained team frame against its durable operation fingerprint/scope.
+pub(crate) fn validate_inventory_request(
+    op: &foks_client_db::TeamMutationOperation,
+    bytes: &[u8],
+) -> Result<()> {
+    if foks_crypto::prefixed_hash(crate::TEAM_MUTATION_REQUEST_HASH_TYPE_ID, bytes)
+        != op.request_hash
+    {
+        return Err(Error::OperationBinding(
+            "protected team request fingerprint differs",
+        ));
+    }
+    let decoded = rotation::decode_protected_team_edit_request(bytes)?;
+    let change = decoded.link.decode_team_group_change()?;
+    if change.team.as_bytes() != op.team_id {
+        return Err(Error::OperationBinding(
+            "protected team request scope differs",
+        ));
+    }
+    Ok(())
+}

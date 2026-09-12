@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 34;
+pub(crate) const VERSION: u32 = 35;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -20,6 +20,8 @@ pub(crate) const REVISION_TABLES: &[&str] = &[
     "team_mutation_operations",
     "mutation_operations",
     "mutation_children",
+    "kv_adapter_submissions",
+    "kv_adapter_clocks",
     "invitation_delivery_steps",
     "federation_saga_operations",
     "scheduled_jobs",
@@ -367,6 +369,92 @@ CREATE TABLE mutation_operations (
     updated_at INTEGER NOT NULL CHECK (updated_at >= created_at)
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE kv_adapter_clocks (
+    host_id BLOB NOT NULL REFERENCES hosts(host_id),
+    user_id BLOB NOT NULL CHECK(length(user_id)=33),
+    process_id BLOB NOT NULL CHECK(length(process_id)=16),
+    anchor_wall INTEGER NOT NULL CHECK(anchor_wall>=0),
+    anchor_monotonic INTEGER NOT NULL CHECK(anchor_monotonic>=0),
+    admission_floor INTEGER NOT NULL CHECK(admission_floor>=0),
+    reject_issued_before INTEGER NOT NULL CHECK(reject_issued_before>=0),
+    PRIMARY KEY(host_id,user_id)
+) STRICT, WITHOUT ROWID;
+CREATE TRIGGER kv_adapter_clock_irreversible BEFORE UPDATE ON kv_adapter_clocks
+WHEN NEW.reject_issued_before < OLD.reject_issued_before
+BEGIN SELECT RAISE(ABORT, 'adapter replay watermark cannot decrease'); END;
+
+CREATE TABLE kv_adapter_submissions (
+    handle_hash BLOB PRIMARY KEY CHECK(length(handle_hash)=32),
+    handle TEXT NOT NULL UNIQUE CHECK(length(handle)=52),
+    handle_version INTEGER NOT NULL CHECK(handle_version=1),
+    schema_version INTEGER NOT NULL CHECK(schema_version=1),
+    host_id BLOB NOT NULL REFERENCES hosts(host_id),
+    user_id BLOB NOT NULL CHECK(length(user_id)=33),
+    team_id BLOB NOT NULL CHECK(length(team_id) IN (0,33)),
+    input_hash BLOB NOT NULL CHECK(length(input_hash)=32),
+    internal_id BLOB UNIQUE REFERENCES mutation_operations(operation_id)
+        DEFERRABLE INITIALLY DEFERRED,
+    state INTEGER NOT NULL CHECK(state IN (0,1,2)),
+    ancillary_committed INTEGER NOT NULL DEFAULT 0 CHECK(ancillary_committed IN (0,1)),
+    node_id BLOB CHECK(node_id IS NULL OR length(node_id)=17),
+    issued_at INTEGER NOT NULL CHECK(issued_at>=0),
+    created_at INTEGER NOT NULL CHECK(created_at>=0),
+    terminal_at INTEGER CHECK(terminal_at IS NULL OR terminal_at>=0),
+    expires_at INTEGER CHECK(expires_at IS NULL OR expires_at>=terminal_at),
+    CHECK(state != 0 OR (internal_id IS NOT NULL AND terminal_at IS NULL)),
+    CHECK((terminal_at IS NULL) = (expires_at IS NULL)),
+    CHECK(internal_id IS NOT NULL OR state IN (1,2))
+) STRICT, WITHOUT ROWID;
+CREATE INDEX kv_adapter_account ON kv_adapter_submissions(host_id,user_id,state);
+CREATE INDEX kv_adapter_expiry ON kv_adapter_submissions(host_id,user_id,expires_at,handle_hash)
+    WHERE internal_id IS NULL AND state IN (1,2);
+CREATE INDEX kv_adapter_live ON kv_adapter_submissions(host_id,user_id,internal_id)
+    WHERE internal_id IS NOT NULL;
+CREATE INDEX kv_adapter_maintenance ON kv_adapter_submissions(handle_hash)
+    WHERE internal_id IS NOT NULL OR terminal_at IS NULL;
+CREATE INDEX kv_adapter_account_maintenance ON kv_adapter_submissions(host_id,user_id,handle_hash)
+    WHERE internal_id IS NOT NULL OR terminal_at IS NULL;
+CREATE TRIGGER kv_adapter_capacity BEFORE INSERT ON kv_adapter_submissions
+BEGIN
+    SELECT CASE WHEN (SELECT count(*) FROM kv_adapter_submissions
+        WHERE host_id=NEW.host_id AND user_id=NEW.user_id) >= 65536
+        THEN RAISE(ABORT, 'adapter retention-full') END;
+    SELECT CASE WHEN (SELECT count(*) FROM kv_adapter_submissions
+        WHERE host_id=NEW.host_id AND user_id=NEW.user_id AND state=0) >= 64
+        THEN RAISE(ABORT, 'adapter active-full') END;
+END;
+
+CREATE TRIGGER kv_adapter_immutable_binding BEFORE UPDATE ON kv_adapter_submissions
+WHEN NEW.handle_hash!=OLD.handle_hash OR NEW.handle!=OLD.handle
+ OR NEW.handle_version!=OLD.handle_version OR NEW.schema_version!=OLD.schema_version
+ OR NEW.host_id!=OLD.host_id OR NEW.user_id!=OLD.user_id OR NEW.team_id!=OLD.team_id
+ OR NEW.input_hash!=OLD.input_hash OR NEW.issued_at!=OLD.issued_at OR NEW.created_at!=OLD.created_at
+ OR (NEW.internal_id IS NOT OLD.internal_id AND NEW.internal_id IS NOT NULL)
+ OR (OLD.state!=0 AND NEW.state!=OLD.state)
+ OR NEW.ancillary_committed<OLD.ancillary_committed
+ OR (OLD.node_id IS NOT NULL AND NEW.node_id IS NOT OLD.node_id)
+ OR (OLD.terminal_at IS NOT NULL AND NEW.terminal_at IS NOT OLD.terminal_at)
+ OR (OLD.expires_at IS NOT NULL AND NEW.expires_at IS NOT OLD.expires_at)
+BEGIN
+    SELECT RAISE(ABORT, 'immutable adapter evidence changed');
+END;
+
+-- Alternate writers cannot create an adapter parent without its reserved ledger slot.
+CREATE TRIGGER kv_adapter_parent_binding BEFORE INSERT ON mutation_operations
+WHEN NEW.operation_kind=8
+BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM kv_adapter_submissions
+        WHERE internal_id=NEW.operation_id AND host_id=NEW.host_id AND user_id=NEW.scope_id
+          AND team_id=NEW.subject_id AND input_hash=NEW.request_hash AND state=0)
+        THEN RAISE(ABORT, 'adapter parent requires bound ledger admission') END;
+END;
+CREATE TRIGGER kv_adapter_terminal_evidence AFTER UPDATE OF state ON mutation_operations
+WHEN NEW.operation_kind=8 AND NEW.state IN (5,6)
+BEGIN
+    UPDATE kv_adapter_submissions SET state=CASE NEW.state WHEN 6 THEN 1 ELSE 2 END
+      WHERE internal_id=NEW.operation_id AND state=0;
+END;
+
 -- A high-level adapter intent owns the lower-level KV records it caused.
 -- Completion labels identify final namespace attempts, including rejected CAS retries.
 CREATE TABLE mutation_children (
@@ -376,6 +464,19 @@ CREATE TABLE mutation_children (
     CHECK (parent_id != child_id)
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX mutation_children_parent ON mutation_children(parent_id);
+CREATE TRIGGER mutation_children_immutable BEFORE UPDATE ON mutation_children
+BEGIN SELECT RAISE(ABORT, 'adapter child binding is immutable'); END;
+CREATE TRIGGER mutation_children_capacity BEFORE INSERT ON mutation_children
+BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM mutation_operations p JOIN mutation_operations c
+        ON c.operation_id=NEW.child_id WHERE p.operation_id=NEW.parent_id AND p.operation_kind=8 AND p.state=2
+        AND c.operation_kind IN (5,6,7) AND c.state=1 AND c.host_id=p.host_id
+        AND c.scope_id=CASE WHEN length(p.subject_id)=0 THEN p.scope_id ELSE p.subject_id END
+        AND (NEW.completion=0 OR c.operation_kind=5))
+        THEN RAISE(ABORT, 'adapter child scope or state mismatch') END;
+    SELECT CASE WHEN (SELECT count(*) FROM mutation_children WHERE parent_id=NEW.parent_id)>=256
+        THEN RAISE(ABORT, 'adapter child limit exceeded') END;
+END;
 
 CREATE INDEX mutation_operations_pending
 ON mutation_operations (host_id, state, updated_at)

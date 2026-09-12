@@ -1,4 +1,6 @@
-use rusqlite::{params, TransactionBehavior};
+use rusqlite::TransactionBehavior;
+
+mod uploads;
 
 use crate::{error::sql_integer, Database, Error, Result};
 
@@ -13,6 +15,11 @@ pub struct MaintenanceReport {
     pub receipts: u64,
     pub locks: u64,
     pub uploads: u64,
+    pub upload_candidates_examined: u64,
+    pub uploads_marked_reclaiming: u64,
+    pub upload_chunks: u64,
+    pub upload_bytes: u64,
+    pub upload_cleanup_deferred: bool,
     pub log_sends: u64,
     pub federation_user_permissions: u64,
     pub federation_team_permissions: u64,
@@ -75,23 +82,7 @@ impl Database {
         // Lock expiry is evaluated against the timeout supplied by the next
         // acquirer, matching go-foks. There is no absolute expiry to reap.
         let locks = 0;
-        let uploads = transaction.execute(
-            "DELETE FROM kv_file_uploads
-             WHERE updated_at <= ?1
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM kv_dirent_heads h
-                   JOIN kv_dirents d
-                     ON d.uid = h.uid
-                    AND d.parent_id = h.parent_id
-                    AND d.dirent_id = h.dirent_id
-                    AND d.version = h.version
-                   WHERE d.uid = kv_file_uploads.uid
-                     AND substr(d.node_id, 1, 1) = X'02'
-                     AND substr(d.node_id, 2, 16) = kv_file_uploads.file_id
-               )",
-            params![sql_integer(abandon_uploads_before)?],
-        )?;
+        let uploads = uploads::reclaim(&transaction, abandon_uploads_before)?;
         let log_sends = transaction.execute(
             "DELETE FROM log_sends WHERE created_at <= ?1",
             [sql_integer(now.saturating_sub(24 * 60 * 60 * 1_000_000))?],
@@ -112,7 +103,12 @@ impl Database {
             reservations: u64::try_from(reservations).map_err(|_| Error::IntegerRange)?,
             receipts: u64::try_from(receipts).map_err(|_| Error::IntegerRange)?,
             locks: u64::try_from(locks).map_err(|_| Error::IntegerRange)?,
-            uploads: u64::try_from(uploads).map_err(|_| Error::IntegerRange)?,
+            uploads: uploads.uploads,
+            upload_candidates_examined: uploads.examined,
+            uploads_marked_reclaiming: uploads.marked,
+            upload_chunks: uploads.chunks,
+            upload_bytes: uploads.bytes,
+            upload_cleanup_deferred: uploads.deferred,
             log_sends: u64::try_from(log_sends).map_err(|_| Error::IntegerRange)?,
             federation_user_permissions: u64::try_from(federation_user_permissions)
                 .map_err(|_| Error::IntegerRange)?,

@@ -9,17 +9,22 @@ use rmcp::{
     transport::{async_rw::JsonRpcMessageCodec, Transport},
     RoleServer,
 };
-use std::{collections::HashSet, future::Future, io, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, io, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    sync::Mutex,
+    sync::{Mutex, Semaphore},
 };
 use tokio_util::codec::{FramedRead, FramedWrite};
+
+enum PendingRequest {
+    Running,
+    Publishing(Arc<Semaphore>),
+}
 
 pub struct BoundedTransport<R, W> {
     reader: FramedRead<R, JsonRpcMessageCodec<RxJsonRpcMessage<RoleServer>>>,
     writer: Arc<Mutex<FramedWrite<W, JsonRpcMessageCodec<TxJsonRpcMessage<RoleServer>>>>>,
-    pending: Arc<std::sync::Mutex<HashSet<RequestId>>>,
+    pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
     stopped: bool,
     lifetime: tokio_util::sync::CancellationToken,
 }
@@ -74,22 +79,32 @@ where
                 JsonRpcMessage::Error(e) => e.id.clone(),
                 _ => None,
             };
+            // A peer may see all response bytes before flush completes. Mark
+            // that ID as publishing so legitimate reuse waits for its completion.
+            // Other IDs and cancellation notifications must remain readable even
+            // when stdout is blocked; never hold the admission mutex across I/O.
+            let completion = Arc::new(Semaphore::new(0));
             tokio::time::timeout(Duration::from_secs(30), async {
+                if let Some(id) = &id {
+                    pending
+                        .lock()
+                        .await
+                        .insert(id.clone(), PendingRequest::Publishing(completion.clone()));
+                }
                 writer
                     .lock()
                     .await
                     .send(item)
                     .await
-                    .map_err(|_| io::Error::other("MCP output failed"))
+                    .map_err(|_| io::Error::other("MCP output failed"))?;
+                if let Some(id) = &id {
+                    pending.lock().await.remove(id);
+                }
+                completion.close();
+                Ok::<(), io::Error>(())
             })
             .await
             .map_err(|_| io::Error::other("MCP output stalled"))??;
-            if let Some(id) = id {
-                pending
-                    .lock()
-                    .map_err(|_| io::Error::other("MCP admission unavailable"))?
-                    .remove(&id);
-            }
             guard.disarm();
             Ok(())
         }
@@ -110,13 +125,28 @@ where
                 self.lifetime.cancel();
                 return None;
             }
-            let mut pending = self.pending.lock().ok()?;
-            if pending.len() >= ACTIVE_CALLS + QUEUED_CALLS || !pending.insert(request.id.clone()) {
-                // Closing rejects abusive pipelining without queuing unbounded busy responses.
-                // Cancellation notifications do not consume a request slot.
-                self.stopped = true;
-                self.lifetime.cancel();
-                return None;
+            loop {
+                let mut pending = self.pending.lock().await;
+                match pending.get(&request.id) {
+                    Some(PendingRequest::Publishing(completion)) => {
+                        let completion = completion.clone();
+                        drop(pending);
+                        tokio::select! {
+                            _ = completion.acquire() => (),
+                            _ = self.lifetime.cancelled() => {self.stopped=true;return None;}
+                        }
+                    }
+                    None if pending.len() < ACTIVE_CALLS + QUEUED_CALLS => {
+                        pending.insert(request.id.clone(), PendingRequest::Running);
+                        break;
+                    }
+                    _ => {
+                        // Bound pipelining without queuing unbounded busy replies.
+                        self.stopped = true;
+                        self.lifetime.cancel();
+                        return None;
+                    }
+                }
             }
         }
         Some(message)
@@ -144,6 +174,85 @@ impl<R, W> Drop for BoundedTransport<R, W> {
 mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt as _;
+
+    #[derive(Default)]
+    struct FlushGate {
+        written: tokio::sync::Notify,
+        released: std::sync::atomic::AtomicBool,
+        waker: futures_util::task::AtomicWaker,
+    }
+    struct PublishedBeforeFlush(Arc<FlushGate>);
+    impl AsyncWrite for PublishedBeforeFlush {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            bytes: &[u8],
+        ) -> std::task::Poll<io::Result<usize>> {
+            self.0.written.notify_one();
+            std::task::Poll::Ready(Ok(bytes.len()))
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            self.0.waker.register(cx.waker());
+            if self.0.released.load(std::sync::atomic::Ordering::Acquire) {
+                std::task::Poll::Ready(Ok(()))
+            } else {
+                std::task::Poll::Pending
+            }
+        }
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn request_id_reuse_waits_for_response_publication_to_finish() {
+        let (mut input, reader) = tokio::io::duplex(1024);
+        let gate = Arc::new(FlushGate::default());
+        let mut transport = BoundedTransport::new(reader, PublishedBeforeFlush(gate.clone()));
+        let request = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n";
+        input.write_all(request).await.unwrap();
+        assert!(transport.receive().await.is_some());
+        let response = serde_json::from_str(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#).unwrap();
+        let send = tokio::spawn(transport.send(response));
+        gate.written.notified().await;
+        // Unrelated requests and cancellation remain readable during blocked output.
+        input
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}\n")
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), transport.receive())
+                .await
+                .unwrap()
+                .is_some()
+        );
+        input.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":2}}\n").await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), transport.receive())
+                .await
+                .unwrap()
+                .is_some()
+        );
+        input.write_all(request).await.unwrap();
+        let receive = transport.receive();
+        tokio::pin!(receive);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut receive)
+                .await
+                .is_err()
+        );
+        gate.released
+            .store(true, std::sync::atomic::Ordering::Release);
+        gate.waker.wake();
+        send.await.unwrap().unwrap();
+        assert!(receive.await.is_some());
+    }
 
     #[tokio::test]
     async fn oversized_and_duplicate_requests_close_without_dispatch() {

@@ -219,7 +219,7 @@ impl FoksClient {
             ));
         }
         // A durable acknowledgement survives a crash before RemoteVerified.
-        let receipt_key = [id.as_slice(), b"/invitation-ack"].concat();
+        let receipt_key = crate::ProtectedRecordKey::InvitationAck(&id).encoded();
         let ack = match protected.get(&receipt_key) {
             Ok(bytes) => Some(bytes),
             Err(ProtectedStoreError::Missing) => None,

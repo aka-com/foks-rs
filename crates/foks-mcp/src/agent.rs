@@ -29,14 +29,10 @@ pub struct AgentBackend {
 impl AgentBackend {
     pub fn connect(socket: &Path, profile: String, account_alias: String) -> Result<Self, String> {
         let client = AgentClient::new(socket);
-        let account: DataScope = call(
-            &client,
-            Operation::BindDataAccount {
-                profile: profile.clone(),
-                account_alias: account_alias.clone(),
-            },
-            &CancellationToken::new(),
-        )?;
+        // Agent startup can briefly hold the checked profile for local recovery.
+        // Only this read-only binding retries explicit contention; write requests
+        // and ambiguous transport failures retain their existing no-replay rules.
+        let account = bind_account(socket, &profile, &account_alias)?;
         if account.profile != profile
             || account.account_alias != account_alias
             || account.team_id.is_some()
@@ -486,6 +482,56 @@ impl Backend for AgentBackend {
     }
 }
 
+fn bind_account(socket: &Path, profile: &str, alias: &str) -> Result<DataScope, String> {
+    use std::time::{Duration, Instant};
+    let mut client = AgentClient::new(socket);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(
+                "selected profile remains busy; wait for local recovery and reconnect".into(),
+            );
+        }
+        client
+            .set_timeout(remaining)
+            .map_err(|_| "invalid binding timeout")?;
+        let response = client
+            .call(Operation::BindDataAccount {
+                profile: profile.to_owned(),
+                account_alias: alias.to_owned(),
+            })
+            .map_err(|_| {
+                "authenticated local agent unavailable; start or unlock the selected account"
+            })?;
+        match response.result {
+            ResponseResult::Success { value } => {
+                return serde_json::from_value(value)
+                    .map_err(|_| "invalid typed agent response".into())
+            }
+            ResponseResult::Error {
+                code: foks_agent_proto::ErrorCode::ProfileBusy,
+                ..
+            } => {
+                std::thread::sleep(
+                    Duration::from_millis(25)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+            ResponseResult::Error { code, message, .. } => {
+                return Err(format!("{}: {message}", error_code_name(code)))
+            }
+        }
+    }
+}
+
+fn error_code_name(code: foks_agent_proto::ErrorCode) -> String {
+    match serde_json::to_value(code) {
+        Ok(serde_json::Value::String(name)) => name,
+        _ => "agent-error".to_owned(),
+    }
+}
+
 fn call<T: DeserializeOwned>(
     client: &AgentClient,
     operation: Operation,
@@ -495,7 +541,8 @@ fn call<T: DeserializeOwned>(
         .call_cancellable(operation, &|| cancelled.is_cancelled())
         .map_err(|error| match error {
             foks_agent_client::Error::Ambiguous(_) => {
-                "submission outcome unknown; check operation status before retrying".to_owned()
+                "submission outcome unknown; inspect status; do not repeat with a new submission ID"
+                    .to_owned()
             }
             _ => "authenticated local agent unavailable; start or unlock the selected account"
                 .to_owned(),
@@ -504,7 +551,9 @@ fn call<T: DeserializeOwned>(
         ResponseResult::Success { value } => {
             serde_json::from_value(value).map_err(|_| "invalid typed agent response".to_owned())
         }
-        ResponseResult::Error { code, message, .. } => Err(format!("{code:?}: {message}")),
+        ResponseResult::Error { code, message, .. } => {
+            Err(format!("{}: {message}", error_code_name(code)))
+        }
     }
 }
 

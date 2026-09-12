@@ -342,7 +342,27 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
             "foks_backup_duration_seconds_count {}\n",
             "foks_backup_duration_seconds_sum {:.6}\n",
             "# TYPE foks_backup_duration_seconds_max gauge\n",
-            "foks_backup_duration_seconds_max {:.6}\n"
+            "foks_backup_duration_seconds_max {:.6}\n",
+            "# TYPE foks_maintenance_attempts_total counter\n",
+            "foks_maintenance_attempts_total {}\n",
+            "# TYPE foks_maintenance_successes_total counter\n",
+            "foks_maintenance_successes_total {}\n",
+            "# TYPE foks_maintenance_failures_total counter\n",
+            "foks_maintenance_failures_total {}\n",
+            "# TYPE foks_maintenance_consecutive_failures gauge\n",
+            "foks_maintenance_consecutive_failures {}\n",
+            "# TYPE foks_last_maintenance_success_unixtime gauge\n",
+            "foks_last_maintenance_success_unixtime {}\n",
+            "# TYPE foks_reclaimed_uploads_total counter\n",
+            "foks_reclaimed_uploads_total {}\n",
+            "# TYPE foks_reclaimed_upload_chunks_total counter\n",
+            "foks_reclaimed_upload_chunks_total {}\n",
+            "# TYPE foks_reclaimed_upload_bytes_total counter\n",
+            "foks_reclaimed_upload_bytes_total {}\n",
+            "# TYPE foks_upload_cleanup_deferred_passes gauge\n",
+            "foks_upload_cleanup_deferred_passes {}\n",
+            "# TYPE foks_maintenance_warning gauge\n",
+            "foks_maintenance_warning {}\n"
         ),
         metrics.requests_started,
         metrics.responses_completed,
@@ -376,6 +396,19 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
         metrics.backup_duration_observations,
         seconds(metrics.backup_duration_microseconds_total),
         seconds(metrics.backup_duration_microseconds_max),
+        metrics.maintenance_attempts,
+        metrics.maintenance_successes,
+        metrics.maintenance_failures,
+        metrics.maintenance_consecutive_failures,
+        metrics.last_maintenance_success_unixtime,
+        metrics.reclaimed_uploads,
+        metrics.reclaimed_upload_chunks,
+        metrics.reclaimed_upload_bytes,
+        metrics.upload_cleanup_deferred_passes,
+        u8::from(
+            metrics.maintenance_consecutive_failures >= 3
+                || metrics.upload_cleanup_deferred_passes >= 60
+        ),
     )
 }
 

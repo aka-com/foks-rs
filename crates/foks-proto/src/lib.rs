@@ -92,6 +92,7 @@ mod realtime_extension;
 mod role;
 mod service;
 mod sso;
+mod submission;
 mod yubi;
 
 pub use chat_context::*;
@@ -110,6 +111,7 @@ pub use realtime_extension::*;
 pub use role::*;
 pub use service::*;
 pub use sso::*;
+pub use submission::{InvalidSubmissionHandle, SubmissionHandle};
 pub use yubi::*;
 
 pub(crate) use codec::{

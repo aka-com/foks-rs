@@ -85,16 +85,36 @@ CREATE TABLE kv_dirent_heads (
 CREATE INDEX kv_dirent_listing
     ON kv_dirents(uid, parent_id, name_mac, dirent_id, version);
 
+-- All retained versions protect their file objects, including overwritten names.
+CREATE INDEX kv_dirent_file_reference
+    ON kv_dirents(uid, substr(node_id, 2, 16))
+    WHERE substr(node_id, 1, 1) = X'02';
+
 CREATE TABLE kv_file_uploads (
     uid BLOB NOT NULL REFERENCES kv_namespaces(namespace_id) ON DELETE CASCADE,
     file_id BLOB NOT NULL CHECK (length(file_id) = 16),
     exact_metadata BLOB NOT NULL,
     complete INTEGER NOT NULL DEFAULT 0 CHECK (complete IN (0, 1)),
+    reclaiming INTEGER NOT NULL DEFAULT 0 CHECK (reclaiming IN (0, 1)),
     encrypted_size INTEGER CHECK (encrypted_size IS NULL OR encrypted_size >= 1),
     created_at INTEGER NOT NULL CHECK (created_at >= 0),
     updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
     PRIMARY KEY (uid, file_id)
 ) STRICT;
+
+CREATE INDEX kv_upload_age ON kv_file_uploads(updated_at, uid, file_id)
+    WHERE reclaiming = 0;
+CREATE INDEX kv_upload_reclaiming ON kv_file_uploads(updated_at, uid, file_id)
+    WHERE reclaiming = 1;
+
+-- A durable keyset cursor bounds examination even when every old upload is live.
+CREATE TABLE kv_upload_maintenance (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
+    uid BLOB NOT NULL CHECK (length(uid) IN (0, 33)),
+    file_id BLOB NOT NULL CHECK (length(file_id) IN (0, 16))
+) STRICT;
+INSERT INTO kv_upload_maintenance VALUES (1, 0, X'', X'');
 
 CREATE TABLE kv_file_chunks (
     uid BLOB NOT NULL,

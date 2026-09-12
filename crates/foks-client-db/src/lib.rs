@@ -12,6 +12,8 @@ mod schema;
 mod soft;
 mod soft_schema;
 
+pub use repositories::protected::{ProtectedOwnerCursor, ProtectedRecordOwner};
+
 pub use repositories::sso::{SsoFlow, SsoFlowState};
 
 pub use repositories::chat::{
@@ -34,6 +36,11 @@ use foks_verify::{
 use rusqlite::{params, Connection, OptionalExtension as _, Transaction, TransactionBehavior};
 use thiserror::Error;
 
+pub use foks_proto::SubmissionHandle;
+pub use repositories::adapter::{
+    adapter_handle_hash, AdapterClockState, AdapterLedgerState, AdapterSubmission,
+    AdapterTimeSample, ADMISSION_AGE_SECONDS, TERMINAL_RETENTION_SECONDS,
+};
 use schema::{APPLICATION_ID, INITIAL as SCHEMA, VERSION as SCHEMA_VERSION};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -550,6 +557,21 @@ pub struct FederationSagaOperation {
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("submission handle is expired; a new explicit write requires a new handle")]
+    AdapterExpired,
+    #[error("adapter clock is untrusted; use local clock re-anchoring before new writes")]
+    AdapterClockUntrusted,
+    #[error("submission handle is too far in the future")]
+    AdapterFutureHandle,
+    #[error("adapter retention-full; retained evidence cannot be discarded to admit a write")]
+    AdapterRetentionFull,
+    #[error("adapter active submission capacity is full; recover existing work first")]
+    AdapterActiveFull,
+    #[error("submission handle is bound to different inputs or authority")]
+    AdapterIdentityConflict,
+    #[error("adapter cleanup is deferred while protected material or child evidence remains")]
+    AdapterCleanupDeferred,
+
     #[error("OIDC flow state: {0}")]
     SsoState(&'static str),
     #[error("chat state conflict: {0}")]
@@ -2364,7 +2386,13 @@ mod tests {
             created_at: 100,
             updated_at: 100,
         };
-        store.record_mutation(&parent).unwrap();
+        store
+            .record_adapter_submission(
+                SubmissionHandle::new(200_000, [41; 16]),
+                &parent,
+                adapter_time(200_000, 0),
+            )
+            .unwrap();
         let mut child = parent.clone();
         child.operation_id = [42; 16];
         child.kind = MutationKind::KvNamespace;
@@ -3046,6 +3074,8 @@ mod tests {
             .unwrap()
             .is_empty());
     }
+
+    include!("adapter_tests.rs");
 
     fn snapshot() -> TestHostSnapshot {
         TestHostSnapshot {

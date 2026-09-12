@@ -19,8 +19,6 @@ use crate::{
     TEAM_MUTATION_REQUEST_HASH_TYPE_ID,
 };
 
-const RANGE_MATERIAL_PREFIX: &[u8] = b"team-index-range:";
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TeamIndexRangeDirection {
     Lower,
@@ -675,7 +673,7 @@ fn rational_value(value: &Rational) -> Value {
 }
 
 fn team_index_range_material_key(operation_id: &[u8; 16]) -> Vec<u8> {
-    [RANGE_MATERIAL_PREFIX, operation_id].concat()
+    crate::ProtectedRecordKey::TeamMetadata(operation_id).encoded()
 }
 
 fn remove_team_index_range_material(

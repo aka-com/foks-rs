@@ -11,21 +11,18 @@ impl AgentBackend {
     ) -> Result<CallToolResult, String> {
         use foks_agent_proto::data::{DataSubmission, DataWriteOutcome, DataWriteStatus};
         let id = match input {
-            Some(id)
-                if id.len() == 32
-                    && id
-                        .bytes()
-                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) =>
-            {
-                id.to_owned()
-            }
-            Some(_) => {
-                return Err("fennec_submission_id must be 32 lowercase hex characters".into())
-            }
+            Some(id) => id
+                .parse::<foks_agent_proto::data::SubmissionHandle>()
+                .map_err(|error| error.to_string())?
+                .to_string(),
             None => {
-                let mut bytes = [0; 16];
-                getrandom::fill(&mut bytes).map_err(|_| "randomness unavailable")?;
-                bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+                let mut random = [0; 16];
+                getrandom::fill(&mut random).map_err(|_| "randomness unavailable")?;
+                let issued = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|_| "clock-untrusted")?
+                    .as_secs();
+                foks_agent_proto::data::SubmissionHandle::new(issued, random).to_string()
             }
         };
         let prepared: DataWriteOutcome = call(
@@ -76,7 +73,10 @@ impl AgentBackend {
                     serde_json::from_value(value).map_err(|_| "invalid write outcome")?
                 }
                 ResponseResult::Error { code, .. } => {
-                    return Err(format!("{code:?}; inspect submission_id={id}"))
+                    return Err(format!(
+                        "{}; inspect submission_id={id}",
+                        error_code_name(code)
+                    ))
                 }
             }
         } else {
@@ -154,12 +154,36 @@ pub(super) fn write_result(
     result: foks_agent_proto::data::DataWriteOutcome,
 ) -> Result<CallToolResult, String> {
     let value = serde_json::to_value(&result).map_err(|_| "invalid write outcome")?;
-    let mut response = text_result(value.to_string());
+    use foks_agent_proto::data::DataWriteStatus;
+    let guidance=match result.status {
+        DataWriteStatus::Expired => " This handle cannot execute; a new explicit write needs a newly issued handle.",
+        DataWriteStatus::Rejected => " This handle cannot execute; correct the request before making a new explicit write with a new handle.",
+        DataWriteStatus::SubmissionUnknown => " Inspect status; do not repeat this write with a new handle.",
+        _ => "",
+    };
+    let mut response = text_result(format!("{value}{guidance}"));
     response.structured_content = Some(value);
     response.is_error = Some(matches!(
         result.status,
         foks_agent_proto::data::DataWriteStatus::Rejected
             | foks_agent_proto::data::DataWriteStatus::SubmissionUnknown
+            | foks_agent_proto::data::DataWriteStatus::Expired
     ));
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn retention_admission_errors_keep_their_wire_names() {
+        assert_eq!(
+            error_code_name(foks_agent_proto::ErrorCode::RetentionFull),
+            "retention-full"
+        );
+        assert_eq!(
+            error_code_name(foks_agent_proto::ErrorCode::ClockUntrusted),
+            "clock-untrusted"
+        );
+    }
 }

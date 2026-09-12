@@ -204,7 +204,7 @@ impl FoksClient {
         if destination.host_id() != &p.invite.host {
             return Err(Error::OperationBinding("remote acceptance destination"));
         }
-        let ack_key = [id.as_slice(), b"/invitation-ack"].concat();
+        let ack_key = crate::ProtectedRecordKey::InvitationAck(&id).encoded();
         match protected.get(&ack_key) {
             Ok(ack) => {
                 let receipt = TeamRsvp::decode(&ack)?;

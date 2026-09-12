@@ -494,6 +494,7 @@ impl ProfileRegistry {
                 profile: profile.clone(),
                 paths,
                 client,
+                adapter_clock: std::sync::Arc::new(crate::SystemAdapterClock),
             };
             let probe = session.probe_and_pin_unchecked()?;
             if expected_host.is_some_and(|host| probe.host_id_hex != hex(host)) {
@@ -1099,6 +1100,7 @@ pub struct ProfileSession {
     pub(super) profile: Profile,
     pub(super) paths: ProfilePaths,
     pub(super) client: FoksClient,
+    pub(super) adapter_clock: std::sync::Arc<dyn crate::AdapterClock>,
 }
 
 impl ProfileSession {
@@ -1110,7 +1112,14 @@ impl ProfileSession {
             profile,
             paths,
             client,
+            adapter_clock: std::sync::Arc::new(crate::SystemAdapterClock),
         })
+    }
+
+    /// Inject both clocks together; retention never reads wall time directly.
+    pub fn with_adapter_clock(mut self, clock: std::sync::Arc<dyn crate::AdapterClock>) -> Self {
+        self.adapter_clock = clock;
+        self
     }
 
     pub fn open_with_control(
@@ -1146,6 +1155,7 @@ impl ProfileSession {
             profile,
             paths,
             client: self.client.clone(),
+            adapter_clock: std::sync::Arc::clone(&self.adapter_clock),
         })
     }
 

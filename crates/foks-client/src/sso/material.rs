@@ -39,7 +39,7 @@ impl Material {
     }
 }
 pub(super) fn material_key(id: &[u8; 16], stage: u8) -> Vec<u8> {
-    [b"foks-client-sso-v1".as_slice(), id, &[stage]].concat()
+    crate::ProtectedRecordKey::Sso(id, stage).encoded()
 }
 pub(super) fn config_hash(config: &SsoConfig) -> Result<[u8; 32]> {
     Ok(foks_crypto::prefixed_hash(
@@ -180,6 +180,7 @@ mod tests {
         db.sso_record_with_material::<Error>(&flow, 0, || put(&mut store, &id, 0, &bytes))
             .unwrap();
         load(&host, &id, &mut store).unwrap();
+        validate_inventory_stage(&flow, 0, &bytes).unwrap();
         let sql = rusqlite::Connection::open(&path).unwrap();
         for (change, restore) in [
             ("expires_at=2", "expires_at=1"),
@@ -193,6 +194,10 @@ mod tests {
             )
             .unwrap();
             assert!(load(&host, &id, &mut store).is_err(), "{change}");
+            assert!(
+                validate_inventory_stage(&db.sso_flow(&id).unwrap().unwrap(), 0, &bytes).is_err(),
+                "{change}"
+            );
             if restore.contains("?2") {
                 let original = if change.starts_with("device") {
                     flow.device.as_slice()
@@ -237,4 +242,65 @@ mod tests {
         };
         assert!(!format!("{progress:?}").contains("secret-session"));
     }
+}
+
+/// Local validation for typed protected inventory/export; never contacts a provider.
+pub(crate) fn validate_inventory_stage(flow: &SsoFlow, stage: u8, bytes: &[u8]) -> Result<()> {
+    match stage {
+        0 => {
+            if foks_crypto::prefixed_hash(MATERIAL_HASH, bytes) != flow.material_hash {
+                return Err(Error::Sso("protected session fingerprint mismatch"));
+            }
+            let m = Material::decode(bytes)?;
+            if m.binding.uid.as_bytes() != flow.uid
+                || m.binding.host.as_bytes() != flow.host
+                || m.device.as_bytes() != flow.device
+                || m.expires_at_ms != flow.expires_at_ms
+                || config_hash(&m.config)? != flow.config_hash
+                || m.init.uid.as_ref().map(EntityId::as_bytes)
+                    != flow.for_login.then_some(flow.uid.as_slice())
+                || foks_crypto::oauth2_binding_nonce(&m.binding)? != m.init.nonce.expose()
+            {
+                return Err(Error::Sso("protected session scope mismatch"));
+            }
+        }
+        1 => {
+            let text = std::str::from_utf8(bytes).map_err(|_| Error::Sso("invalid browser URL"))?;
+            url::Url::parse(text).map_err(|_| Error::Sso("invalid browser URL"))?;
+        }
+        2 => {
+            OAuth2PollResult::decode(bytes)?;
+        }
+        3 => {
+            let args = if flow.for_login {
+                let mut framed = std::io::Cursor::new(bytes);
+                let call = foks_rpc::read_call(&mut framed, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)?;
+                if framed.position() != bytes.len() as u64
+                    || call.protocol_id() != foks_rpc::REG_PROTOCOL_ID
+                    || call.method_position() != foks_rpc::REG_SSO_LOGIN_METHOD_POSITION
+                {
+                    return Err(Error::Sso("stored login frame differs"));
+                }
+                let argument = SsoLoginArgument::decode(call.argument())?;
+                if argument.uid.as_bytes() != flow.uid {
+                    return Err(Error::Sso("stored login UID differs"));
+                }
+                argument.args
+            } else {
+                RegSsoArgs::decode(bytes)?
+            };
+            let RegSsoArgs::Oauth2 { binding, .. } = args else {
+                return Err(Error::Sso("missing stored binding"));
+            };
+            let payload = foks_crypto::verify_oauth2_binding(&binding)?;
+            if binding.key.as_bytes() != flow.device
+                || payload.binding.uid.as_bytes() != flow.uid
+                || payload.binding.host.as_bytes() != flow.host
+            {
+                return Err(Error::Sso("stored binding scope differs"));
+            }
+        }
+        _ => return Err(Error::Sso("unknown protected stage")),
+    }
+    Ok(())
 }

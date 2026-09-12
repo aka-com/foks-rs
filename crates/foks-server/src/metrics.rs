@@ -59,6 +59,15 @@ pub struct ServerMetricsSnapshot {
     pub backup_duration_microseconds_total: u64,
     pub backup_duration_microseconds_max: u64,
     pub storage_sample_failures: u64,
+    pub maintenance_attempts: u64,
+    pub maintenance_successes: u64,
+    pub maintenance_failures: u64,
+    pub maintenance_consecutive_failures: u64,
+    pub last_maintenance_success_unixtime: u64,
+    pub reclaimed_uploads: u64,
+    pub reclaimed_upload_chunks: u64,
+    pub reclaimed_upload_bytes: u64,
+    pub upload_cleanup_deferred_passes: u64,
 }
 
 #[derive(Default)]
@@ -79,6 +88,15 @@ pub struct ServerMetrics {
     last_backup_success_unixtime: AtomicU64,
     backup_duration: DurationMetric,
     storage_sample_failures: AtomicU64,
+    maintenance_attempts: AtomicU64,
+    maintenance_successes: AtomicU64,
+    maintenance_failures: AtomicU64,
+    maintenance_consecutive_failures: AtomicU64,
+    last_maintenance_success_unixtime: AtomicU64,
+    reclaimed_uploads: AtomicU64,
+    reclaimed_upload_chunks: AtomicU64,
+    reclaimed_upload_bytes: AtomicU64,
+    upload_cleanup_deferred_passes: AtomicU64,
 }
 
 impl ServerMetrics {
@@ -109,6 +127,21 @@ impl ServerMetrics {
             backup_duration_microseconds_total: backup_duration.microseconds_total,
             backup_duration_microseconds_max: backup_duration.microseconds_max,
             storage_sample_failures: self.storage_sample_failures.load(Ordering::Relaxed),
+            maintenance_attempts: self.maintenance_attempts.load(Ordering::Relaxed),
+            maintenance_successes: self.maintenance_successes.load(Ordering::Relaxed),
+            maintenance_failures: self.maintenance_failures.load(Ordering::Relaxed),
+            maintenance_consecutive_failures: self
+                .maintenance_consecutive_failures
+                .load(Ordering::Relaxed),
+            last_maintenance_success_unixtime: self
+                .last_maintenance_success_unixtime
+                .load(Ordering::Relaxed),
+            reclaimed_uploads: self.reclaimed_uploads.load(Ordering::Relaxed),
+            reclaimed_upload_chunks: self.reclaimed_upload_chunks.load(Ordering::Relaxed),
+            reclaimed_upload_bytes: self.reclaimed_upload_bytes.load(Ordering::Relaxed),
+            upload_cleanup_deferred_passes: self
+                .upload_cleanup_deferred_passes
+                .load(Ordering::Relaxed),
         }
     }
 
@@ -180,6 +213,42 @@ impl ServerMetrics {
     pub(crate) fn backup_failed(&self, duration: Duration) {
         self.backup_duration.observe(duration);
         self.backup_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn maintenance_attempted(&self) {
+        self.maintenance_attempts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    // Called only after the reclamation transaction commits, even when a later
+    // checkpoint fails. Committed work must not disappear from the counters.
+    pub(crate) fn uploads_reclaimed(&self, report: &foks_server_db::MaintenanceReport) {
+        self.reclaimed_uploads
+            .fetch_add(report.uploads, Ordering::Relaxed);
+        self.reclaimed_upload_chunks
+            .fetch_add(report.upload_chunks, Ordering::Relaxed);
+        self.reclaimed_upload_bytes
+            .fetch_add(report.upload_bytes, Ordering::Relaxed);
+        if report.upload_cleanup_deferred {
+            self.upload_cleanup_deferred_passes
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.upload_cleanup_deferred_passes
+                .store(0, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn maintenance_succeeded(&self, unixtime: u64) {
+        self.last_maintenance_success_unixtime
+            .store(unixtime, Ordering::Relaxed);
+        self.maintenance_successes.fetch_add(1, Ordering::Relaxed);
+        self.maintenance_consecutive_failures
+            .store(0, Ordering::Relaxed);
+    }
+
+    pub(crate) fn maintenance_failed(&self) {
+        self.maintenance_failures.fetch_add(1, Ordering::Relaxed);
+        self.maintenance_consecutive_failures
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn storage_sample_failed(&self) {

@@ -5,6 +5,7 @@ mod chat;
 mod chat_poll;
 mod data;
 mod invitations;
+mod retention;
 mod sso;
 #[cfg(test)]
 use chat_poll::ActiveChatPollGuard;
@@ -208,6 +209,9 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let chat_polling = Arc::new(Semaphore::new(arguments.chat_poll_workers));
     let active_chat_polls = Arc::new(Mutex::new(std::collections::HashSet::new()));
     let mutations = Arc::new(Semaphore::new(1));
+    let retention_gate = Arc::new(Semaphore::new(1));
+    let mut retention_timer = tokio::time::interval(Duration::from_secs(60));
+    retention_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let scheduler_gate = Arc::new(Semaphore::new(1));
     let compatibility_gate = Arc::new(Semaphore::new(1));
     let timeout = Duration::from_secs(arguments.request_timeout_seconds);
@@ -275,6 +279,15 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                     ).await {
                         eprintln!("foks-agent connection failed: {error}");
                     }
+                });
+            }
+            _ = retention_timer.tick() => {
+                if !ready.load(Ordering::Acquire) { continue; }
+                let Ok(permit) = retention_gate.clone().try_acquire_owned() else { continue; };
+                let state=state_dir.clone();
+                tokio::task::spawn_blocking(move || {
+                    let _permit=permit;
+                    retention::run_one_profile(&state);
                 });
             }
             _ = scheduler.tick() => {
@@ -694,7 +707,9 @@ async fn handle_connection(
         };
         let worker_pool = if matches!(
             request.operation,
-            Operation::DataWriteStatus { .. } | Operation::PendingDataWrites { .. }
+            Operation::DataWriteStatus { .. }
+                | Operation::PendingDataWrites { .. }
+                | Operation::RetentionStatus
         ) {
             capacity.recovery.clone()
         } else {
@@ -1241,6 +1256,22 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
             };
             if let Some(code) = code {
                 return Response::error(id, code, chat.to_string());
+            }
+        }
+        if let Some(retention) = candidate.downcast_ref::<foks_client_db::Error>() {
+            let code = match retention {
+                foks_client_db::Error::AdapterRetentionFull => Some(ErrorCode::RetentionFull),
+                foks_client_db::Error::AdapterClockUntrusted => Some(ErrorCode::ClockUntrusted),
+                foks_client_db::Error::AdapterActiveFull => Some(ErrorCode::SubmissionActiveFull),
+                foks_client_db::Error::AdapterIdentityConflict => {
+                    Some(ErrorCode::SubmissionIdentityConflict)
+                }
+                foks_client_db::Error::AdapterFutureHandle => Some(ErrorCode::SubmissionFuture),
+                _ => None,
+            };
+            if let Some(code) = code {
+                retention::rejected(code);
+                return Response::error(id, code, retention.to_string());
             }
         }
         if let Some(chat) = candidate.downcast_ref::<foks_client_db::Error>() {
@@ -2046,6 +2077,7 @@ fn dispatch_result(
         Operation::ReadData { scope, query } => {
             data::read(state_dir, &registry, scope, query, timeout, cancellation)
         }
+        Operation::RetentionStatus => Ok(retention::snapshot()),
         Operation::Ping => Ok(serde_json::json!({ "ready": true })),
         Operation::AgentStatus => Ok(serde_json::to_value(if ready {
             AgentStatus::Ready
