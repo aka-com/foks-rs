@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 mod chat;
 mod chat_poll;
+mod data;
 #[cfg(test)]
 use chat_poll::ActiveChatPollGuard;
 use chat_poll::{handle_chat_poll, ChatPollKey};
@@ -1956,6 +1957,20 @@ fn dispatch_result(
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let mut registry = ProfileRegistry::open(state_dir)?;
     match operation {
+        Operation::BindDataAccount {
+            profile,
+            account_alias,
+        } => data::bind_account(
+            state_dir,
+            &registry,
+            profile,
+            account_alias,
+            timeout,
+            cancellation,
+        ),
+        Operation::ReadData { scope, query } => {
+            data::read(state_dir, &registry, scope, query, timeout, cancellation)
+        }
         Operation::Ping => Ok(serde_json::json!({ "ready": true })),
         Operation::AgentStatus => Ok(serde_json::to_value(if ready {
             AgentStatus::Ready

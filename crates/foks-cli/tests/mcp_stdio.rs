@@ -1,0 +1,225 @@
+#![cfg(unix)]
+use foks_client_app::{
+    derive_vault_key, AccountVault, ClientCredentials, CredentialBackend, KvMutationPrecondition,
+    KvRoleSummary, Profile, ProfileRegistry, ProfileSession, ProtocolPolicy, TrustRoot,
+};
+use foks_keystore::EncryptedFileSecretStore;
+use foks_server_testkit::TestEnvironment;
+use serde_json::{json, Value};
+use std::{
+    io::{BufRead, BufReader, Write},
+    path::{Path, PathBuf},
+    process::{Child, ChildStdin, Command, Stdio},
+    sync::mpsc::{self, Receiver},
+    time::Duration,
+};
+
+struct Process {
+    child: Child,
+    stdin: Option<ChildStdin>,
+    output: Receiver<String>,
+}
+impl Process {
+    fn start(state: &Path, set: &str) -> Self {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_foks-rs"))
+            .args(["--state-dir"])
+            .arg(state)
+            .args([
+                "mcp",
+                set,
+                "--profile",
+                "local",
+                "--account",
+                "owner",
+                "--read-only",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, output) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if tx.send(line.unwrap()).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut process = Self {
+            child,
+            stdin,
+            output,
+        };
+        process.send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"independent-process-test","version":"1"}}}));
+        let reply = process.receive();
+        assert_eq!(reply["result"]["protocolVersion"], "2025-11-25");
+        process.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+        process
+    }
+    fn send(&mut self, value: Value) {
+        let input = self.stdin.as_mut().unwrap();
+        writeln!(input, "{value}").unwrap();
+        input.flush().unwrap();
+    }
+    fn receive(&self) -> Value {
+        let line = self
+            .output
+            .recv_timeout(Duration::from_secs(30))
+            .expect("MCP response timeout/EOF");
+        serde_json::from_str(&line).expect("stdout must contain only MCP JSON")
+    }
+    fn call(&mut self, name: &str, arguments: Value) -> Value {
+        self.send(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":name,"arguments":arguments}}));
+        let result = self.receive();
+        assert_eq!(result["id"], 2);
+        result
+    }
+    fn eof(mut self) {
+        self.stdin.take();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                assert!(status.success());
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "MCP did not exit on EOF"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+impl Drop for Process {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+struct Agent(Child);
+impl Drop for Agent {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof() {
+    let environment = TestEnvironment::new().unwrap();
+    let _server = environment.start_server().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let root = state.join("root.der");
+    environment.write_probe_root(&root).unwrap();
+    ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
+    let mut registry = ProfileRegistry::open(&state).unwrap();
+    registry
+        .add(Profile {
+            name: "local".into(),
+            probe: format!(
+                "localhost:{}",
+                environment.addresses().unwrap().probe.port()
+            ),
+            protocol: ProtocolPolicy::V019,
+            trust: TrustRoot::CertificateDer { path: root },
+        })
+        .unwrap();
+    let session = ProfileSession::open(&registry, "local").unwrap();
+    let credentials = ClientCredentials::open(&state).unwrap();
+    credentials
+        .with_checked_session(&session, |session| {
+            session.probe_and_pin()?;
+            let master = credentials.master_key()?;
+            let mut store = EncryptedFileSecretStore::open(
+                &session.paths().credential_store,
+                derive_vault_key(&master),
+            )?;
+            let mut vault = AccountVault::new(&mut store);
+            session.create_account(
+                "owner",
+                "mcpowner",
+                "device",
+                "owner@example.test",
+                "",
+                None,
+                &mut vault,
+                &master,
+            )?;
+            session.put_kv_file_checked(
+                "owner",
+                "/hello",
+                &mut b"hello MCP\n".as_slice(),
+                KvMutationPrecondition::Create,
+                KvRoleSummary::Owner,
+                KvRoleSummary::Owner,
+                false,
+                &mut vault,
+                &master,
+            )?;
+            session.create_named_team("owner", "group", "mcpteam", &mut vault, &master)?;
+            Ok::<_, foks_client_app::Error>(())
+        })
+        .unwrap();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_foks-rs")).with_file_name("foks-agent");
+    assert!(
+        binary.exists(),
+        "build foks-agent before running MCP process tests"
+    );
+    let mut agent = Agent(
+        Command::new(binary)
+            .arg("--state-dir")
+            .arg(&state)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap(),
+    );
+    let client = foks_agent_client::AgentClient::new(state.join("foks-rs.sock"));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while client.call(foks_agent_proto::Operation::Ping).is_err() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut kv = Process::start(&state, "kv");
+    kv.send(json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
+    assert_eq!(kv.receive()["result"]["tools"].as_array().unwrap().len(), 4);
+    let listed = kv.call("list", json!({"path":""}));
+    assert!(listed["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("hello\tSmallFile\t"));
+    let got = kv.call("get", json!({"path":"hello"}));
+    assert_eq!(got["result"]["content"][0]["text"], "hello MCP\n");
+    let usage = kv.call("usage", json!({}));
+    assert!(usage["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("Num Files:"));
+    let stat = kv.call("stat", json!({"path":"/hello"}));
+    let metadata: Value =
+        serde_json::from_str(stat["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata["size"], 10);
+    let rejected = kv.call("put", json!({"path":"/hello","content":"overwrite"}));
+    assert!(rejected.get("error").is_some() || rejected["result"]["isError"] == true);
+    kv.eof();
+    assert!(agent.0.try_wait().unwrap().is_none());
+    let mut team = Process::start(&state, "team");
+    let roster = team.call("list", json!({"team":"mcpteam"}));
+    assert!(roster["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("mcpowner\t-\to\to\t"));
+    let memberships = team.call("list-memberships", json!({}));
+    assert_eq!(memberships["result"]["structuredContent"]["complete"], true);
+    assert!(memberships["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("mcpteam"));
+    team.eof();
+}

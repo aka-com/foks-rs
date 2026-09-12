@@ -12,6 +12,10 @@ path = "src/main.rs"
 [dependencies]
 clap = { workspace = true }
 foks-client-app = { workspace = true }
+foks-agent-client = { workspace = true }
+foks-agent-proto = { workspace = true }
+foks-mcp = { workspace = true }
+tokio = { workspace = true }
 foks-compat-artifact = { workspace = true }
 foks-keystore = { workspace = true }
 foks-yubi = { workspace = true, features = ["hardware"] }

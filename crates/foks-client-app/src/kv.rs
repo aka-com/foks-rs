@@ -1,5 +1,8 @@
 use super::*;
 
+mod data;
+pub use data::*;
+
 impl CheckedProfileSession<'_> {
     pub fn list_kv(&self, alias: &str, vault: &mut AccountVault<'_>) -> Result<KvListReport> {
         self.profile.require(Capability::Kv)?;

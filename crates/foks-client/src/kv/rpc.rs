@@ -11,7 +11,7 @@ use foks_rpc::{
     encode_kv_get_root_request_at, encode_kv_list_request_at, encode_kv_lock_acquire_request_at,
     encode_kv_lock_release_request_at, encode_kv_mkdir_request_at, encode_kv_put_request_at,
     encode_kv_put_root_request_at, encode_kv_put_small_file_or_symlink_request_at,
-    encode_kv_select_vhost_request, KvAuth, KvListCursor,
+    encode_kv_select_vhost_request, encode_kv_usage_request_at, KvAuth, KvListCursor,
 };
 
 use crate::{FoksClient, PinnedHost, PooledConnection, Result};
@@ -19,6 +19,7 @@ use crate::{FoksClient, PinnedHost, PooledConnection, Result};
 #[derive(Clone, Debug)]
 pub(crate) enum KvRequest {
     Root,
+    Usage,
     Directory([u8; 16]),
     List {
         directory: [u8; 16],
@@ -71,6 +72,7 @@ impl KvRequest {
     pub(crate) fn encode(&self, auth: KvAuth<'_>, sequence: u64) -> Result<Vec<u8>> {
         match self {
             Self::Root => Ok(encode_kv_get_root_request_at(auth, sequence)?),
+            Self::Usage => Ok(encode_kv_usage_request_at(auth, sequence)?),
             Self::Directory(directory) => {
                 Ok(encode_kv_get_dir_request_at(auth, directory, sequence)?)
             }

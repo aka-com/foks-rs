@@ -26,6 +26,27 @@ use crate::{
 };
 
 impl FoksClient {
+    /// Read server accounting without initializing a KV root or uploading data.
+    pub fn kv_usage(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team: Option<&AuthenticatedTeamOutcome>,
+    ) -> Result<foks_proto::KvUsage> {
+        if team.is_some_and(|t| t.verified.host() != host.host_id()) {
+            return Err(Error::TeamBinding("KV usage team belongs to another host"));
+        }
+        let mut connection = self.kv_connection_with_material(
+            host,
+            &credential.seed,
+            &credential.certificate_chain,
+        )?;
+        let auth = team.map_or(KvAuth::User, |t| KvAuth::Team(&t.view_token));
+        Ok(foks_proto::KvUsage::decode(
+            &connection.call(auth, &KvRequest::Usage)?,
+        )?)
+    }
+
     /// Fetches and decrypts exactly one node in a personal KV namespace.
     /// Unlike [`Self::sync_user_kv`], this does not stage plaintext.
     pub fn read_user_kv_node(

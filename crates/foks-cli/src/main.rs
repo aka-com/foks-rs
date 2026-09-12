@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+mod mcp;
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Write as _};
@@ -31,6 +32,8 @@ struct Arguments {
 
 #[derive(clap::Subcommand)]
 enum Command {
+    #[command(subcommand)]
+    Mcp(mcp::McpCommand),
     /// Initialize FOKS client state.
     Init(InitArguments),
     #[command(subcommand)]
@@ -600,6 +603,7 @@ fn main() {
 
 fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     match arguments.command {
+        Command::Mcp(command) => mcp::run(&arguments.state_dir, command),
         Command::Init(init) => initialize(
             &arguments.state_dir,
             arguments.json,

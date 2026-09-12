@@ -402,6 +402,14 @@ impl Request {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "operation", rename_all = "kebab-case")]
 pub enum Operation {
+    BindDataAccount {
+        profile: String,
+        account_alias: String,
+    },
+    ReadData {
+        scope: crate::data::DataScope,
+        query: crate::data::DataRead,
+    },
     Chat {
         store: TeamStoreRef,
         action: crate::chat::ChatAction,
@@ -915,6 +923,8 @@ impl Operation {
             Self::Ping
                 | Self::AgentStatus
                 | Self::DiscoverGoProfiles
+                | Self::BindDataAccount { .. }
+                | Self::ReadData { .. }
                 | Self::ListProfiles
                 | Self::DescribeResetHardState { .. }
                 | Self::Probe { .. }
@@ -1008,6 +1018,8 @@ impl std::fmt::Debug for Operation {
                 .field("profile", profile)
                 .field("token", &"<redacted>")
                 .finish(),
+            Self::BindDataAccount { .. } => formatter.write_str("BindDataAccount"),
+            Self::ReadData { .. } => formatter.write_str("ReadData"),
             Self::ListProfiles => formatter.write_str("ListProfiles"),
             Self::Probe { profile } => formatter
                 .debug_struct("Probe")
