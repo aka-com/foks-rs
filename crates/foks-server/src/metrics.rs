@@ -42,6 +42,7 @@ pub struct ServerMetricsSnapshot {
     pub connections_accepted: u64,
     pub connections_rejected: u64,
     pub active_connections: u64,
+    pub active_realtime_polls: u64,
     pub rate_limited_connections: u64,
     pub rate_limited_requests: u64,
     pub request_duration_observations: u64,
@@ -67,6 +68,7 @@ pub struct ServerMetrics {
     connections_accepted: AtomicU64,
     connections_rejected: AtomicU64,
     active_connections: AtomicU64,
+    active_realtime_polls: AtomicU64,
     rate_limited_connections: AtomicU64,
     rate_limited_requests: AtomicU64,
     request_duration: DurationMetric,
@@ -90,6 +92,7 @@ impl ServerMetrics {
             connections_accepted: self.connections_accepted.load(Ordering::Relaxed),
             connections_rejected: self.connections_rejected.load(Ordering::Relaxed),
             active_connections: self.active_connections.load(Ordering::Relaxed),
+            active_realtime_polls: self.active_realtime_polls.load(Ordering::Relaxed),
             rate_limited_connections: self.rate_limited_connections.load(Ordering::Relaxed),
             rate_limited_requests: self.rate_limited_requests.load(Ordering::Relaxed),
             request_duration_observations: request_duration.observations,
@@ -147,6 +150,13 @@ impl ServerMetrics {
         self.active_connections.fetch_sub(1, Ordering::Relaxed);
     }
 
+    pub(crate) fn realtime_poll_guard(metrics: Arc<Self>) -> RealtimePollGuard {
+        metrics
+            .active_realtime_polls
+            .fetch_add(1, Ordering::Relaxed);
+        RealtimePollGuard { metrics }
+    }
+
     pub(crate) fn connection_rate_limited(&self) {
         self.rate_limited_connections
             .fetch_add(1, Ordering::Relaxed);
@@ -174,6 +184,18 @@ impl ServerMetrics {
 
     pub(crate) fn storage_sample_failed(&self) {
         self.storage_sample_failures.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+pub(crate) struct RealtimePollGuard {
+    metrics: Arc<ServerMetrics>,
+}
+
+impl Drop for RealtimePollGuard {
+    fn drop(&mut self) {
+        self.metrics
+            .active_realtime_polls
+            .fetch_sub(1, Ordering::Relaxed);
     }
 }
 

@@ -71,6 +71,12 @@
 .chat-channel.on.unread .chat-channel-name {
   color: var(--accent-ink);
 }
+.chat-channel .chat-preview {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .chat-unread {
   flex: none;
   min-width: 20px;
@@ -192,6 +198,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.chat-thread-title p {
+  margin: 2px 0;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+}
 .chat-thread-title small {
   display: block;
   font-size: 12px;
@@ -246,7 +257,7 @@
 .chat-sender.you {
   color: var(--accent-ink);
 }
-.chat-message header small {
+.chat-message header time {
   flex: none;
   font: 11px var(--mono);
   color: var(--faint);

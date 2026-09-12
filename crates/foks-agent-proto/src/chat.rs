@@ -13,7 +13,11 @@ pub enum ChatAction {
         before: Option<String>,
     },
     Inbox,
-    SyncInbox,
+    SyncInbox {
+        /// Volatile channel quarantines owned by this unlocked desktop lifetime.
+        #[serde(default)]
+        blocked_channels: Vec<String>,
+    },
     MarkRead {
         channel: String,
         sequence: String,
@@ -53,7 +57,7 @@ impl ChatAction {
             Self::Channels
                 | Self::History { .. }
                 | Self::Inbox
-                | Self::SyncInbox
+                | Self::SyncInbox { .. }
                 | Self::PollInbox { .. }
                 | Self::Pending
                 | Self::Status { .. }
@@ -94,7 +98,16 @@ impl ChatAction {
             | Self::Attempt { operation }
             | Self::Cancel { operation }
             | Self::Finalize { operation } => valid_chat_id(operation),
-            Self::Channels | Self::Inbox | Self::SyncInbox | Self::Pending => true,
+            Self::SyncInbox { blocked_channels } => {
+                blocked_channels.len() <= CHAT_CHANNEL_ROWS
+                    && blocked_channels.iter().all(|id| valid_chat_id(id))
+                    && blocked_channels
+                        .iter()
+                        .collect::<std::collections::HashSet<_>>()
+                        .len()
+                        == blocked_channels.len()
+            }
+            Self::Channels | Self::Inbox | Self::Pending => true,
         }
     }
 }
@@ -121,8 +134,10 @@ pub struct ChatScope {
 pub struct ChatChannel {
     pub id: String,
     pub name: SecretString,
+    pub description: Option<SecretString>,
     pub admin: bool,
     pub readable: bool,
+    pub writable: bool,
     pub read_role: String,
     pub write_role: String,
 }
@@ -139,6 +154,16 @@ pub struct ChatMessage {
     pub id: String,
     pub sequence: String,
     pub sender: Option<String>,
+    pub send_time: String,
+    pub insert_time: String,
+    pub content: ChatContent,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatPreview {
+    pub sender: Option<String>,
+    pub send_time: String,
+    pub insert_time: String,
     pub content: ChatContent,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -160,6 +185,7 @@ pub struct ChatConversation {
     pub unread: String,
     pub hidden: bool,
     pub muted: bool,
+    pub preview: Option<ChatPreview>,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -185,6 +211,10 @@ pub enum ChatResult {
         missing_predecessors: Vec<String>,
     },
     Inbox {
+        channels: Vec<ChatChannel>,
+        read_retry_pending: bool,
+        previews_incomplete: bool,
+        blocked_channels: Vec<String>,
         cursor: String,
         head: String,
         degraded: bool,
@@ -215,6 +245,27 @@ pub struct ChatReply {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn quarantined_preview_requests_are_bounded_and_canonical() {
+        let id = "ab".repeat(16);
+        assert!(ChatAction::SyncInbox {
+            blocked_channels: vec![id.clone()]
+        }
+        .validate());
+        assert!(!ChatAction::SyncInbox {
+            blocked_channels: vec![id.clone(), id]
+        }
+        .validate());
+        assert!(!ChatAction::SyncInbox {
+            blocked_channels: vec!["invalid".into()]
+        }
+        .validate());
+        let legacy: ChatAction = serde_json::from_str(r#"{"action":"sync-inbox"}"#).unwrap();
+        assert!(
+            matches!(legacy, ChatAction::SyncInbox { blocked_channels } if blocked_channels.is_empty())
+        );
+    }
+
     #[test]
     fn submissions_are_bounded_redacted_and_classified() {
         let action = ChatAction::PrepareMessage {
@@ -250,6 +301,9 @@ mod tests {
             sequence: "1".into(),
         }
         .is_mutation());
-        assert!(!ChatAction::SyncInbox.is_mutation());
+        assert!(!ChatAction::SyncInbox {
+            blocked_channels: Vec::new()
+        }
+        .is_mutation());
     }
 }

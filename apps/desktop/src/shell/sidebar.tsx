@@ -1,3 +1,5 @@
+import { useSidebarInbox } from '../chat/inbox-provider';
+import { teamUnread } from '../chat/unread';
 /**
  * Primary sidebar navigation component.
  *
@@ -17,15 +19,23 @@ import type { Store, World } from '../model';
 import { sameLocation } from '../location';
 import type { Location } from '../location';
 
+function chatAvailable(world: World, store: Store): boolean {
+  return (
+    store.kind === 'team' &&
+    store.team_kind === 'named' &&
+    store.active !== false &&
+    world.servers.find((server) => server.id === store.server)
+      ?.chat_available === true
+  );
+}
+
 /** Places Control-Tab walks, in sidebar order. The footer is not included. */
 export function sidebarCycleLocations(world: World): Location[] {
   return [
     { kind: 'all' },
     ...storeNavigationOrder(world).flatMap((store): Location[] => [
       { kind: 'store', ref: store.id },
-      ...(store.kind === 'team' &&
-      store.team_kind === 'named' &&
-      store.active !== false
+      ...(chatAvailable(world, store)
         ? [{ kind: 'team-chat' as const, ref: store.id }]
         : []),
     ]),
@@ -51,6 +61,7 @@ export interface NavRowProps {
   caption?: string;
   /** Dimmed: this row is unavailable in the current application state. */
   dimmed?: boolean;
+  disabled?: boolean;
   title?: string;
   tail?: ReactNode;
   onSelect: () => void;
@@ -62,6 +73,7 @@ export function NavRow({
   name,
   caption,
   dimmed = false,
+  disabled = false,
   title,
   tail,
   onSelect,
@@ -75,6 +87,7 @@ export function NavRow({
       className={className}
       title={title}
       aria-current={active ? 'page' : undefined}
+      disabled={disabled}
       onClick={onSelect}
     >
       {glyph}
@@ -113,6 +126,19 @@ export function Sidebar({
   status,
   onReenter,
 }: SidebarProps): ReactNode {
+  const chatInbox = useSidebarInbox();
+  const chatTail = (id: string) => {
+    const unread = teamUnread(chatInbox.get(id));
+    return unread ? (
+      <span
+        className="chat-unread"
+        aria-label={unread.description}
+        title={unread.description}
+      >
+        {unread.label}
+      </span>
+    ) : null;
+  };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (
@@ -209,6 +235,21 @@ export function Sidebar({
                     location.kind === 'team-chat' && location.ref === store.id
                   }
                   name={`${store.name} chat`}
+                  tail={
+                    chatAvailable(world, store) ? chatTail(store.id) : undefined
+                  }
+                  caption={
+                    chatAvailable(world, store)
+                      ? undefined
+                      : 'Chat unavailable for this server'
+                  }
+                  dimmed={!chatAvailable(world, store)}
+                  disabled={!chatAvailable(world, store)}
+                  title={
+                    chatAvailable(world, store)
+                      ? undefined
+                      : 'The current server compatibility grant does not enable chat.'
+                  }
                   onSelect={() =>
                     onNavigate({ kind: 'team-chat', ref: store.id })
                   }

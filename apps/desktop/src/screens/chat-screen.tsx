@@ -1,9 +1,11 @@
-import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { ChatThread } from '../chat/chat-thread';
+import { PendingRow } from '../chat/pending-row';
+import { channelTitle } from '../chat/presentation';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Band,
   Button,
-  Chip,
   Icon,
   Inset,
   InsetRow,
@@ -14,35 +16,19 @@ import {
   SheetDialog,
 } from '../components';
 import type { Bridge } from '../bridge';
-import { CHAT_TEXT_BYTES } from '../chat-contract';
 import type {
   ChatAction,
   ChatChannel,
   ChatConversation,
-  ChatOperation,
   ChatReply,
 } from '../chat-contract';
-import { shortId, storeOf } from '../model';
+import { partiesOf, shortId, storeOf } from '../model';
 import type { World } from '../model';
 import type { Location } from '../location';
 import { PageHeader } from '../shell/page-header';
 import { failure, preparationCanChange, submissionId } from '../chat/actions';
 import { useChatConversation } from '../chat/use-chat-conversation';
-import { useChatHistory } from '../chat/use-chat-history';
 import './chat.css';
-
-const TEXT_LIMIT_LABEL = `${CHAT_TEXT_BYTES / 1024} KiB`;
-
-function channelTitle(channel: ChatChannel): string {
-  return `# ${channel.name || 'general'}`;
-}
-
-function accessSummary(channel: ChatChannel): string {
-  if (!channel.readable) return 'Read access required';
-  if (channel.read_role === channel.write_role)
-    return `${channel.read_role} can read and write`;
-  return `Read ${channel.read_role} · Write ${channel.write_role}`;
-}
 
 function conversationMeta(
   channel: ChatChannel,
@@ -78,12 +64,16 @@ export function ChatScreen({
     degraded,
     loading,
     blocked,
+    blockedChannels,
     revision,
     actor,
     request,
     refresh,
     refreshPending,
     markRead,
+    acceptHistory,
+    history,
+    blockHistory,
   } = useChatConversation(bridge, store?.server ?? '', location.ref);
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<string | null>(null);
@@ -115,6 +105,16 @@ export function ChatScreen({
     listed.map(({ channel }) => [channel.id, channelTitle(channel)]),
   );
   const storeId = store?.id ?? '';
+  const senderNames = new Map(
+    store
+      ? partiesOf(world, store.id)
+          .filter((party) => party.party_kind === 'user')
+          .map((party) => [
+            party.party_id_hex,
+            party.username ?? party.label ?? shortId(party.party_id_hex),
+          ])
+      : [],
+  );
   useEffect(() => {
     if (!created || !storeId) return;
     if (!channels.some((channel) => channel.id === created)) return;
@@ -132,8 +132,8 @@ export function ChatScreen({
           <Notice severity="crit" title="Chat stopped">
             <p role="alert">{blocked}</p>
             <p>
-              Check the account and server, then reopen the conversation from
-              the sidebar.
+              Check the account and server, then lock and unlock the desktop to
+              start a fresh chat session.
             </p>
           </Notice>
         </div>
@@ -252,8 +252,24 @@ export function ChatScreen({
                       {channelTitle(listedChannel)}
                     </span>
                     <small>
-                      {conversationMeta(listedChannel, conversation)}
+                      {blockedChannels.has(listedChannel.id)
+                        ? 'Verification stopped'
+                        : conversationMeta(listedChannel, conversation)}
                     </small>
+                    {conversation?.preview && (
+                      <small className="chat-preview">
+                        {conversation.preview.sender === actor
+                          ? 'You'
+                          : conversation.preview.sender
+                            ? (senderNames.get(conversation.preview.sender) ??
+                              shortId(conversation.preview.sender))
+                            : 'Team member'}
+                        {': '}
+                        {conversation.preview.content.kind === 'text'
+                          ? conversation.preview.content.text
+                          : 'Unsupported message'}
+                      </small>
+                    )}
                   </span>
                   {conversation && unread && (
                     <span
@@ -277,22 +293,34 @@ export function ChatScreen({
               No channels yet. Create the first one to start talking.
             </p>
           )}
-          {pending.length > 0 && (
+          {pending.some(
+            (op) =>
+              !op.observed &&
+              (op.create || op.channel !== channel?.id || !channel?.readable),
+          ) && (
             <section className="chat-recovery" aria-label="Needs attention">
               <SectionLabel>Needs attention</SectionLabel>
               <p className="chat-quiet">
                 Saved work that has not finished. Nothing here is sent twice
                 without your say-so.
               </p>
-              {pending.map((op) => (
-                <PendingRow
-                  key={op.id}
-                  operation={op}
-                  channelName={channelNames.get(op.channel)}
-                  request={request}
-                  onChange={() => void refresh()}
-                />
-              ))}
+              {pending
+                .filter(
+                  (op) =>
+                    !op.observed &&
+                    (op.create ||
+                      op.channel !== channel?.id ||
+                      !channel?.readable),
+                )
+                .map((op) => (
+                  <PendingRow
+                    key={op.id}
+                    operation={op}
+                    channelName={channelNames.get(op.channel)}
+                    request={request}
+                    onChange={() => void refresh()}
+                  />
+                ))}
             </section>
           )}
         </aside>
@@ -313,16 +341,35 @@ export function ChatScreen({
               <span role="alert">{error}</span>
             </Band>
           )}
-          {channel ? (
+          {channel && blockedChannels.has(channel.id) ? (
+            <div className="empty">
+              <h2>Channel stopped</h2>
+              <p role="alert">
+                Content in this channel could not be verified. Other channels
+                remain available.
+              </p>
+              <p>
+                Check the account and server, then lock and unlock the desktop
+                to revalidate this channel.
+              </p>
+            </div>
+          ) : channel ? (
             <ChatThread
-              key={channel.id}
+              key={`${channel.id}:${channel.readable}`}
               channel={channel}
               actor={actor}
+              senderNames={senderNames}
               request={request}
               refreshPending={refreshPending}
               revision={revision}
               readThrough={activeConversation?.read_through ?? null}
               markRead={markRead}
+              history={history}
+              acceptHistory={acceptHistory}
+              blockHistory={blockHistory}
+              pending={pending.filter(
+                (op) => !op.create && !op.observed && op.channel === channel.id,
+              )}
             />
           ) : loading ? (
             <div className="empty" aria-busy="true">
@@ -527,484 +574,5 @@ function ChannelCreateSheet({
         )}
       </form>
     </SheetDialog>
-  );
-}
-
-const PENDING_STATE: Record<ChatOperation['state'], string> = {
-  prepared: 'prepared',
-  uncertain: 'Checking delivery',
-  confirmed: 'confirmed',
-  rejected: 'rejected',
-  cancelled: 'cancelled',
-};
-
-function pendingExplanation(op: ChatOperation): string {
-  switch (op.state) {
-    case 'prepared':
-      return 'Saved on this device and not sent yet.';
-    case 'uncertain':
-      return 'The server may already have it. Check delivery before sending anything again.';
-    case 'confirmed':
-      return 'Delivered. Finish cleanup to remove it from this list.';
-    case 'cancelled':
-      return 'Cancelled before it was sent.';
-    case 'rejected':
-      return `The server rejected this operation${
-        op.rejection_code !== null ? ` (${op.rejection_code})` : ''
-      }. Prepare a new message after resolving the error.`;
-  }
-}
-
-function PendingRow({
-  operation,
-  channelName,
-  request,
-  onChange,
-}: {
-  operation: ChatOperation;
-  channelName: string | undefined;
-  request: (a: ChatAction) => Promise<ChatReply>;
-  onChange: () => void;
-}): ReactNode {
-  const op = operation;
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const active = useRef(true);
-  const running = useRef(false);
-  useEffect(() => {
-    active.current = true;
-    return () => {
-      active.current = false;
-    };
-  }, []);
-  const run = async (action: 'attempt' | 'cancel' | 'finalize') => {
-    if (running.current) return;
-    running.current = true;
-    setBusy(true);
-    setError('');
-    try {
-      const reply = await request({ action, operation: op.id });
-      if (active.current && reply.result.kind === 'operation') {
-        onChange();
-      }
-    } catch (e) {
-      if (active.current) {
-        setError(failure(e));
-        try {
-          await request({ action: 'status', operation: op.id });
-        } catch {
-          /* Retain the last known operation when status is unavailable. */
-        }
-      }
-    } finally {
-      running.current = false;
-      if (active.current) setBusy(false);
-    }
-  };
-  return (
-    <div className="chat-pending" data-operation={op.id}>
-      <span className="chat-pending-title">
-        {op.create ? 'Channel' : 'Message'} · {PENDING_STATE[op.state]}
-      </span>
-      <small>
-        {channelName ? `${channelName} · ` : ''}
-        <span title={op.id}>{shortId(op.id)}</span>
-      </small>
-      <p>{pendingExplanation(op)}</p>
-      <div className="chat-pending-actions">
-        {(op.state === 'prepared' || op.state === 'uncertain') && (
-          <Button size="sm" disabled={busy} onClick={() => void run('attempt')}>
-            {op.state === 'uncertain' ? 'Check delivery' : 'Send prepared'}
-          </Button>
-        )}
-        {op.state === 'prepared' && (
-          <Button size="sm" disabled={busy} onClick={() => void run('cancel')}>
-            Cancel preparation
-          </Button>
-        )}
-        {['confirmed', 'rejected', 'cancelled'].includes(op.state) && (
-          <Button
-            size="sm"
-            disabled={busy}
-            onClick={() => void run('finalize')}
-          >
-            Finish cleanup
-          </Button>
-        )}
-      </div>
-      {error && (
-        <p role="alert" className="action-error">
-          {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function ChatThread({
-  channel,
-  actor,
-  request,
-  refreshPending,
-  revision,
-  readThrough,
-  markRead,
-}: {
-  channel: ChatChannel;
-  actor: string | null;
-  request: (a: ChatAction) => Promise<ChatReply>;
-  refreshPending: () => Promise<void>;
-  revision: number;
-  readThrough: string | null;
-  markRead: (channel: string, sequence: string) => Promise<void>;
-}): ReactNode {
-  const {
-    messages,
-    before,
-    missing,
-    error,
-    setError,
-    busy,
-    load,
-    scroller,
-    active,
-    atBottom,
-    onScroll,
-  } = useChatHistory(channel, request, revision);
-  const [draft, setDraft] = useState('');
-  const [sending, setSending] = useState(false);
-  const [sendError, setSendError] = useState('');
-  const [newFrom, setNewFrom] = useState<string | null>(null);
-  const hintId = useId();
-  const submission = useRef<Extract<
-    ChatAction,
-    { action: 'prepare-message' }
-  > | null>(null);
-  const sendGuard = useRef(false);
-  const readMark = readThrough ?? '0';
-  const markedThrough = useRef(readMark);
-  const markingThrough = useRef('0');
-  const draftBytes = useMemo(
-    () => new TextEncoder().encode(draft).length,
-    [draft],
-  );
-  useEffect(
-    () => () => {
-      submission.current = null;
-    },
-    [],
-  );
-  useEffect(() => {
-    if (readThrough !== null) setNewFrom((old) => old ?? readThrough);
-  }, [readThrough]);
-  useEffect(() => {
-    if (BigInt(readMark) > BigInt(markedThrough.current))
-      markedThrough.current = readMark;
-  }, [readMark]);
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const schedule = () => {
-      if (timer) clearTimeout(timer);
-      const latest = messages.at(-1)?.sequence;
-      if (
-        !latest ||
-        !atBottom ||
-        document.visibilityState === 'hidden' ||
-        !document.hasFocus() ||
-        BigInt(latest) <= BigInt(markedThrough.current) ||
-        BigInt(latest) <= BigInt(markingThrough.current)
-      )
-        return;
-      timer = setTimeout(() => {
-        if (
-          !atBottom ||
-          document.visibilityState === 'hidden' ||
-          !document.hasFocus() ||
-          BigInt(latest) <= BigInt(markedThrough.current) ||
-          BigInt(latest) <= BigInt(markingThrough.current)
-        )
-          return;
-        markingThrough.current = latest;
-        void markRead(channel.id, latest)
-          .then(() => {
-            markedThrough.current = latest;
-          })
-          .catch((cause) => setError(failure(cause)))
-          .finally(() => {
-            if (markingThrough.current === latest) markingThrough.current = '0';
-          });
-      }, 300);
-    };
-    schedule();
-    window.addEventListener('focus', schedule);
-    window.addEventListener('blur', schedule);
-    document.addEventListener('visibilitychange', schedule);
-    return () => {
-      if (timer) clearTimeout(timer);
-      window.removeEventListener('focus', schedule);
-      window.removeEventListener('blur', schedule);
-      document.removeEventListener('visibilitychange', schedule);
-    };
-  }, [atBottom, channel.id, markRead, messages, setError]);
-  const jumpToLatest = () => {
-    const element = scroller.current;
-    if (!element) return;
-    element.scrollTop = element.scrollHeight;
-    onScroll();
-  };
-  const send = async () => {
-    if (sendGuard.current || (!submission.current && !draft.trim())) return;
-    if (draftBytes > CHAT_TEXT_BYTES) {
-      setSendError(
-        `Messages can contain up to ${TEXT_LIMIT_LABEL} of UTF-8 text.`,
-      );
-      return;
-    }
-    sendGuard.current = true;
-    setSending(true);
-    setSendError('');
-    submission.current ??= {
-      action: 'prepare-message',
-      submission: submissionId(),
-      channel: channel.id,
-      text: draft,
-    };
-    let preparedId: string | null = null;
-    try {
-      const reply = await request(submission.current);
-      if (!active.current) return;
-      if (reply.result.kind !== 'operation')
-        throw new Error('Invalid message preparation.');
-      preparedId = reply.result.operation.id;
-      submission.current = null;
-      setDraft('');
-      await refreshPending();
-      if (!active.current) return;
-      await request({
-        action: 'attempt',
-        operation: preparedId,
-      });
-      if (!active.current) return;
-      await refreshPending();
-      await load();
-    } catch (e) {
-      if (active.current) {
-        if (submission.current && preparationCanChange(e))
-          submission.current = null;
-        setSendError(failure(e));
-        if (preparedId) {
-          try {
-            await request({ action: 'status', operation: preparedId });
-          } catch {
-            /* Keep the durable identity visible if status is unavailable. */
-          }
-        }
-        void refreshPending().catch(() => {});
-      }
-    } finally {
-      sendGuard.current = false;
-      if (active.current) setSending(false);
-    }
-  };
-  const overLimit = draftBytes > CHAT_TEXT_BYTES;
-  const nearLimit = draftBytes > CHAT_TEXT_BYTES * 0.75;
-  const title = channelTitle(channel);
-  return (
-    <>
-      <div className="chat-thread-header">
-        <div className="chat-thread-title">
-          <h2>{title}</h2>
-          <small>{accessSummary(channel)}</small>
-        </div>
-        {channel.admin && <Chip>Admins</Chip>}
-        {!channel.readable && <Chip tone="warn">Restricted</Chip>}
-        <Button
-          size="sm"
-          icon="again"
-          disabled={busy}
-          onClick={() => {
-            void load();
-            void refreshPending().catch((e) => setError(failure(e)));
-          }}
-        >
-          Refresh messages
-        </Button>
-      </div>
-      {!channel.readable ? (
-        <div className="empty">
-          <span className="big">
-            <Icon name="shield" />
-          </span>
-          <h2>Read access required</h2>
-          <p>Your current role cannot read this channel.</p>
-          <p>Ask a team admin to raise your role if you need to take part.</p>
-        </div>
-      ) : (
-        <>
-          {error && (
-            <Band severity="crit">
-              <span role="alert">{error}</span>
-            </Band>
-          )}
-          {missing && (
-            <Band>
-              Some earlier messages could not be checked. This history has
-              incomplete verification.
-            </Band>
-          )}
-          <div className="chat-messages-wrap">
-            <div
-              className="chat-messages"
-              ref={scroller}
-              onScroll={onScroll}
-              aria-label="Message history"
-              aria-busy={busy}
-            >
-              <div className="chat-history-edge">
-                {before ? (
-                  <Button
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => void load(before)}
-                  >
-                    Load older messages
-                  </Button>
-                ) : messages.length > 0 ? (
-                  <small>Beginning of the conversation</small>
-                ) : null}
-              </div>
-              {!messages.length && !busy && !error && (
-                <p className="chat-quiet chat-messages-empty">
-                  No messages yet. Say hello to start the conversation.
-                </p>
-              )}
-              {messages.map((m, index) => {
-                const own = actor !== null && m.sender === actor;
-                const isNew =
-                  newFrom !== null &&
-                  !own &&
-                  BigInt(m.sequence) > BigInt(newFrom) &&
-                  (index === 0 ||
-                    BigInt(messages[index - 1].sequence) <= BigInt(newFrom));
-                return (
-                  <Fragment key={m.id}>
-                    {isNew && (
-                      <div
-                        className="chat-divider"
-                        role="separator"
-                        aria-label="New messages"
-                      >
-                        <span>New</span>
-                      </div>
-                    )}
-                    <article className="chat-message" data-message={m.id}>
-                      <header>
-                        <span
-                          className={own ? 'chat-sender you' : 'chat-sender'}
-                          title={m.sender ?? undefined}
-                        >
-                          {own
-                            ? 'You'
-                            : m.sender
-                              ? shortId(m.sender)
-                              : 'Team member'}
-                        </span>
-                        <small title={`Message ${m.sequence}`}>
-                          #{m.sequence}
-                        </small>
-                      </header>
-                      <p
-                        className={
-                          m.content.kind === 'text'
-                            ? undefined
-                            : 'chat-unsupported'
-                        }
-                      >
-                        {m.content.kind === 'text'
-                          ? m.content.text
-                          : m.content.kind === 'oversized'
-                            ? 'This message exceeds the desktop display limit.'
-                            : 'This message type is not supported yet.'}
-                      </p>
-                    </article>
-                  </Fragment>
-                );
-              })}
-            </div>
-            {!atBottom && messages.length > 0 && (
-              <Button
-                size="sm"
-                icon="chev"
-                className="chat-jump"
-                onClick={jumpToLatest}
-              >
-                Jump to latest
-              </Button>
-            )}
-          </div>
-          <form
-            className="chat-composer"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void send();
-            }}
-          >
-            {sendError && (
-              <Band severity="crit">
-                <span role="alert">{sendError}</span>
-              </Band>
-            )}
-            <textarea
-              aria-label="Message"
-              aria-describedby={hintId}
-              value={draft}
-              disabled={sending || submission.current !== null}
-              placeholder={`Message ${title}`}
-              rows={2}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (
-                  e.key === 'Enter' &&
-                  !e.shiftKey &&
-                  !e.nativeEvent.isComposing &&
-                  e.keyCode !== 229
-                ) {
-                  e.preventDefault();
-                  void send();
-                }
-              }}
-            />
-            <div className="chat-composer-row">
-              <small id={hintId}>
-                {submission.current
-                  ? 'The reply to this message was lost. Recover it to send the same text once.'
-                  : 'Enter to send · Shift+Enter for a new line'}
-              </small>
-              {nearLimit && (
-                <small
-                  className={overLimit ? 'chat-meter over' : 'chat-meter'}
-                  aria-live="polite"
-                >
-                  {Math.ceil(draftBytes / 1024)} KiB of {TEXT_LIMIT_LABEL}
-                </small>
-              )}
-              <Button
-                variant="primary"
-                type="submit"
-                disabled={
-                  sending || overLimit || (!draft.trim() && !submission.current)
-                }
-              >
-                {sending
-                  ? 'Sending…'
-                  : submission.current
-                    ? 'Recover preparation'
-                    : 'Send'}
-              </Button>
-            </div>
-          </form>
-        </>
-      )}
-    </>
   );
 }

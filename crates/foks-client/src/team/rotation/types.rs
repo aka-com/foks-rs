@@ -13,6 +13,12 @@ pub struct TeamPtkRotationSeed<'a> {
     pub seed: &'a SecretSeed,
 }
 
+pub struct TeamMutationRecovery<'a> {
+    pub team: &'a EntityId,
+    pub expected_seqno: u64,
+    pub expected_operation_id: &'a [u8; 16],
+}
+
 /// Inputs retained by the caller's encrypted secret store before submission.
 ///
 /// `remaining_users` supplies authenticated PUK material for every remaining

@@ -139,6 +139,7 @@ export interface Server {
   lease: Lease | null;
   accounts: string[];
   state: ServerState;
+  chat_available: boolean;
 }
 
 export interface Account {

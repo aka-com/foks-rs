@@ -2340,22 +2340,23 @@ mod tests {
             let mut store =
                 EncryptedFileSecretStore::open(temporary.path(), Zeroizing::new(master_key))
                     .unwrap();
-            let mut vault = AccountVault::new(&mut store);
-            vault.put_pending_yubi(&pending).unwrap();
-            let encoded = std::fs::read(&record_path).unwrap();
-            assert!(!contains_bytes(&encoded, b"pin-42"));
-            assert!(!contains_bytes(&encoded, b"puk-42"));
+            {
+                let mut vault = AccountVault::new(&mut store);
+                vault.put_pending_yubi(&pending).unwrap();
+                let encoded = std::fs::read(&record_path).unwrap();
+                assert!(!contains_bytes(&encoded, b"pin-42"));
+                assert!(!contains_bytes(&encoded, b"puk-42"));
 
-            provider.fail_after_next(&card, failpoint).unwrap();
-            assert!(
-                vault
-                    .prepare_pending_yubi(&mut pending, &Pin::new("pin-42").unwrap(), &provider)
-                    .is_err(),
-                "the post-mutation failpoint must interrupt preparation"
-            );
-            assert_eq!(provider.generated_key_count(&card).unwrap(), expected_keys);
-            drop(pending);
-            drop(vault);
+                provider.fail_after_next(&card, failpoint).unwrap();
+                assert!(
+                    vault
+                        .prepare_pending_yubi(&mut pending, &Pin::new("pin-42").unwrap(), &provider)
+                        .is_err(),
+                    "the post-mutation failpoint must interrupt preparation"
+                );
+                assert_eq!(provider.generated_key_count(&card).unwrap(), expected_keys);
+                drop(pending);
+            }
             drop(store);
 
             let encoded = std::fs::read(&record_path).unwrap();
@@ -2365,23 +2366,24 @@ mod tests {
             let mut store =
                 EncryptedFileSecretStore::open(temporary.path(), Zeroizing::new(master_key))
                     .unwrap();
-            let mut vault = AccountVault::new(&mut store);
-            let mut pending = vault.pending_yubi("hardware-pending").unwrap();
-            let prepared = vault
-                .prepare_pending_yubi(&mut pending, &Pin::new("pin-42").unwrap(), &provider)
-                .unwrap();
-            assert_eq!(provider.generated_key_count(&card).unwrap(), 2);
-            assert_eq!(&prepared.locator, pending.locator().unwrap());
-            assert_eq!(prepared.device.pin_retries().unwrap().remaining, 3);
-            prepared
-                .device
-                .unblock_pin(&Pin::new("puk-42").unwrap(), &Pin::new("new-42").unwrap())
-                .expect("the intended PUK must be restored before key generation");
-            provider
-                .open(&prepared.locator, Some(&Pin::new("new-42").unwrap()))
-                .expect("the resumed card must use the restored credential");
-            drop(pending);
-            drop(vault);
+            {
+                let mut vault = AccountVault::new(&mut store);
+                let mut pending = vault.pending_yubi("hardware-pending").unwrap();
+                let prepared = vault
+                    .prepare_pending_yubi(&mut pending, &Pin::new("pin-42").unwrap(), &provider)
+                    .unwrap();
+                assert_eq!(provider.generated_key_count(&card).unwrap(), 2);
+                assert_eq!(&prepared.locator, pending.locator().unwrap());
+                assert_eq!(prepared.device.pin_retries().unwrap().remaining, 3);
+                prepared
+                    .device
+                    .unblock_pin(&Pin::new("puk-42").unwrap(), &Pin::new("new-42").unwrap())
+                    .expect("the intended PUK must be restored before key generation");
+                provider
+                    .open(&prepared.locator, Some(&Pin::new("new-42").unwrap()))
+                    .expect("the resumed card must use the restored credential");
+                drop(pending);
+            }
 
             let completed = store.get(&key).unwrap();
             assert!(!contains_bytes(&completed, b"pin-42"));
@@ -2453,24 +2455,25 @@ mod tests {
         )
         .unwrap();
         let mut store = MemorySecretStore::default();
-        let mut vault = AccountVault::new(&mut store);
-        vault.put_stored_yubi(&stored).unwrap();
-        vault.put_pending_yubi(&pending).unwrap();
-        assert_eq!(
-            vault.yubi_accounts().unwrap(),
-            vec![
-                YubiAccountSummary {
-                    alias: "hardware".to_owned(),
-                    state: YubiEnrollmentState::Complete,
-                },
-                YubiAccountSummary {
-                    alias: "hardware-pending".to_owned(),
-                    state: YubiEnrollmentState::Pending,
-                },
-            ]
-        );
+        {
+            let mut vault = AccountVault::new(&mut store);
+            vault.put_stored_yubi(&stored).unwrap();
+            vault.put_pending_yubi(&pending).unwrap();
+            assert_eq!(
+                vault.yubi_accounts().unwrap(),
+                vec![
+                    YubiAccountSummary {
+                        alias: "hardware".to_owned(),
+                        state: YubiEnrollmentState::Complete,
+                    },
+                    YubiAccountSummary {
+                        alias: "hardware-pending".to_owned(),
+                        state: YubiEnrollmentState::Pending,
+                    },
+                ]
+            );
+        }
 
-        drop(vault);
         store
             .put(&pending_yubi_key("broken"), b"authenticated but malformed")
             .unwrap();

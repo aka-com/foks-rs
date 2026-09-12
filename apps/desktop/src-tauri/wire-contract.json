@@ -194,7 +194,8 @@
       "epoch": 42
     },
     "leaseRequired": true,
-    "leaseExpiresAt": 1900000000
+    "leaseExpiresAt": 1900000000,
+    "chatAvailable": true
   },
   "addedServer": {
     "profile": "partner",

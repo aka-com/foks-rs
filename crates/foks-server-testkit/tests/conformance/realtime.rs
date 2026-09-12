@@ -35,6 +35,25 @@ impl ChatTransport for CountChangedThreads<'_> {
     }
 }
 
+struct PreviewFault<'a> {
+    connection: &'a mut RealtimeConnection,
+    corrupt: bool,
+    requests: usize,
+}
+impl ChatTransport for PreviewFault<'_> {
+    fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
+        self.requests += 1;
+        if matches!(request, Request::GetThread(_)) {
+            return Err(if self.corrupt {
+                foks_client::Error::ChatIntegrity("injected corrupt preview")
+            } else {
+                foks_client::Error::DeadlineExceeded
+            });
+        }
+        self.connection.call(request)
+    }
+}
+
 struct FailedRead<'a>(&'a mut RealtimeConnection);
 impl ChatTransport for FailedRead<'_> {
     fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
@@ -65,6 +84,16 @@ pub(crate) fn realtime_poll_capacity_is_separate_and_bounded() {
                 .unwrap(),
         );
     }
+    let mut ordinary = fixture
+        .client
+        .foks()
+        .realtime_connection(&fixture.probe.pinned, &account.credential)
+        .unwrap();
+    let mut overflow = fixture
+        .client
+        .foks()
+        .realtime_connection(&fixture.probe.pinned, &account.credential)
+        .unwrap();
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(33));
     let waiting = pollers
         .into_iter()
@@ -76,19 +105,21 @@ pub(crate) fn realtime_poll_capacity_is_separate_and_bounded() {
                     poll: RtPollInbox {
                         app: RtAppId::Chat,
                         since: 0,
-                        timeout_milliseconds: 2_000,
+                        timeout_milliseconds: 3_000,
                     },
                 }))
             })
         })
         .collect::<Vec<_>>();
     barrier.wait();
-    std::thread::sleep(std::time::Duration::from_millis(750));
-    let mut ordinary = fixture
-        .client
-        .foks()
-        .realtime_connection(&fixture.probe.pinned, &account.credential)
-        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while fixture.server.metrics().active_realtime_polls != 32 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "all realtime poll permits were not acquired before the readiness deadline"
+        );
+        std::thread::yield_now();
+    }
     assert_eq!(
         ordinary
             .call(&Request::GetInboxVersion(RtGetInboxVersionArgument {
@@ -97,11 +128,6 @@ pub(crate) fn realtime_poll_capacity_is_separate_and_bounded() {
             .unwrap(),
         Response::InboxVersion(0)
     );
-    let mut overflow = fixture
-        .client
-        .foks()
-        .realtime_connection(&fixture.probe.pinned, &account.credential)
-        .unwrap();
     let overflow_result = overflow.call(&Request::PollInbox(RtPollInboxArgument {
         poll: RtPollInbox {
             app: RtAppId::Chat,
@@ -125,6 +151,7 @@ pub(crate) fn realtime_poll_capacity_is_separate_and_bounded() {
         };
         assert!(!result.bumped);
     }
+    assert_eq!(fixture.server.metrics().active_realtime_polls, 0);
 }
 
 #[test]
@@ -348,13 +375,15 @@ pub(crate) fn realtime_text() {
         .client_path("realtime-member", "chat-soft.sqlite3")
         .unwrap();
     let mut soft = foks_client_db::SoftStateStore::open(&soft_path).unwrap();
-    let mut fallback = EmptyFirstInboxPage {
-        connection: &mut reader,
-        injected: false,
+    let synced = {
+        let mut fallback = EmptyFirstInboxPage {
+            connection: &mut reader,
+            injected: false,
+        };
+        let synced = member_chat.sync_inbox(&mut fallback, &mut soft).unwrap();
+        assert!(fallback.injected);
+        synced
     };
-    let synced = member_chat.sync_inbox(&mut fallback, &mut soft).unwrap();
-    assert!(fallback.injected);
-    drop(fallback);
     assert_eq!(
         synced
             .inbox
@@ -365,6 +394,25 @@ pub(crate) fn realtime_text() {
             .unread,
         1
     );
+    let mut preview_fault = PreviewFault {
+        connection: &mut reader,
+        corrupt: false,
+        requests: 0,
+    };
+    let partial_preview = member_chat
+        .sync_inbox(&mut preview_fault, &mut soft)
+        .unwrap();
+    assert!(partial_preview.inbox.previews_incomplete);
+    assert_eq!(partial_preview.inbox.conversations[0].unread, 1);
+    assert!(
+        preview_fault.requests <= 5,
+        "one-channel refresh must remain bounded"
+    );
+    preview_fault.corrupt = true;
+    assert!(matches!(
+        member_chat.sync_inbox(&mut preview_fault, &mut soft),
+        Err(foks_client::Error::ChatIntegrity(_))
+    ));
     assert!(member_chat
         .mark_read(&mut FailedRead(&mut reader), &mut soft, md.id, 1)
         .is_err());
@@ -377,6 +425,16 @@ pub(crate) fn realtime_text() {
         soft.pending_chat_reads(&inbox_scope).unwrap(),
         vec![(md.id, 1)]
     );
+    let partial = member_chat
+        .sync_inbox(&mut FailedRead(&mut reader), &mut soft)
+        .unwrap();
+    assert!(partial.inbox.read_retry_pending);
+    assert!(!partial.inbox.channels.is_empty());
+    assert!(partial
+        .inbox
+        .conversations
+        .iter()
+        .any(|c| c.channel.metadata.id == md.id));
     assert_eq!(
         member_chat
             .retry_pending_reads(&mut reader, &mut soft)
@@ -1151,5 +1209,211 @@ fn client_chat_recovers_original_operations_after_lost_responses() {
             .unwrap()
             .state,
         State::Cancelled
+    );
+}
+
+#[test]
+pub(crate) fn client_chat_multi_team_refresh_budget() {
+    struct Count<'a> {
+        connection: &'a mut RealtimeConnection,
+        calls: usize,
+    }
+    impl ChatTransport for Count<'_> {
+        fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
+            self.calls += 1;
+            self.connection.call(request)
+        }
+    }
+    let fixture = Fixture::start("chat-refresh-budget");
+    let account = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("budgetowner", 0x39))
+        .unwrap();
+    let mut protected = fixture.client.open_protected_store().unwrap();
+    let path = fixture
+        .environment
+        .client_path("chat-refresh-budget", "inbox.sqlite3")
+        .unwrap();
+    let mut soft = foks_client_db::SoftStateStore::open(&path).unwrap();
+    let mut sessions = Vec::new();
+    for index in 0..2u8 {
+        let secrets = NamedTeamSecrets {
+            member_min: SecretSeed::new([0x51 + index; 32]),
+            member: SecretSeed::new([0x61 + index; 32]),
+            admin: SecretSeed::new([0x71 + index; 32]),
+            owner: SecretSeed::new([0x81 + index; 32]),
+            removal_key: SecretSeed::new([0x91 + index; 32]),
+            team_name_commitment_key: [0xa1 + index; 16],
+        };
+        let team = fixture
+            .client
+            .foks()
+            .create_single_owner_named_team(
+                fixture.host(),
+                &account.credential,
+                &format!("budgetteam{index}"),
+                &secrets,
+            )
+            .unwrap();
+        let mut chat = fixture
+            .client
+            .foks()
+            .chat_session(fixture.host(), &account.credential, &team.team)
+            .unwrap();
+        let mut connection = chat.connection().unwrap();
+        for channel_index in 0..3 {
+            let prepared = chat
+                .prepare_channel(
+                    &mut connection,
+                    &mut protected,
+                    &format!("channel{channel_index}"),
+                    "",
+                    RtChannelTier::Bottom,
+                )
+                .unwrap();
+            let channel = RtChannelId(prepared.scope.channel);
+            chat.attempt_operation(&mut connection, &mut protected, &prepared.id)
+                .unwrap();
+            for _ in 0..2 {
+                let message = chat
+                    .prepare_send(
+                        &mut connection,
+                        &mut protected,
+                        channel,
+                        "bounded preview fixture",
+                    )
+                    .unwrap();
+                chat.attempt_operation(&mut connection, &mut protected, &message.id)
+                    .unwrap();
+            }
+        }
+        sessions.push((chat, connection));
+    }
+    for pass in 0..2 {
+        let started = std::time::Instant::now();
+        let mut calls = 0;
+        for (chat, connection) in &mut sessions {
+            let mut counted = Count {
+                connection,
+                calls: 0,
+            };
+            let inbox = chat.sync_inbox(&mut counted, &mut soft).unwrap().inbox;
+            assert_eq!(
+                inbox
+                    .conversations
+                    .iter()
+                    .filter(|c| c.preview.is_some())
+                    .count(),
+                3
+            );
+            assert!(
+                counted.calls <= 12,
+                "refresh exceeded its RPC budget: {}",
+                counted.calls
+            );
+            calls += counted.calls;
+            let foreground = std::time::Instant::now();
+            assert_eq!(
+                chat.list_channels(counted.connection)
+                    .unwrap()
+                    .channels
+                    .len(),
+                3
+            );
+            eprintln!(
+                "chat budget: foreground channel list {:?}",
+                foreground.elapsed()
+            );
+        }
+        eprintln!("chat budget: pass {pass}, two teams, six populated previews, {calls} realtime RPCs, {:?}", started.elapsed());
+    }
+    // Corrupt one channel's encrypted content after otherwise valid RPC decoding.
+    // Sibling previews and the other team's account-scoped inbox remain usable.
+    struct CorruptChannel<'a> {
+        connection: &'a mut RealtimeConnection,
+        channel: RtChannelId,
+        reads: usize,
+    }
+    impl ChatTransport for CorruptChannel<'_> {
+        fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
+            let corrupt = match request {
+                Request::GetThread(arg) => arg.query.channel == self.channel,
+                Request::Recents(arg) => arg.channel == self.channel,
+                _ => false,
+            };
+            let mut response = self.connection.call(request)?;
+            if corrupt {
+                self.reads += 1;
+                let damage = |message: &mut RtMessage| {
+                    if let RtMessageWrapper::Encrypted(boxed) = &mut message.wrapper {
+                        *boxed.ciphertext.0.last_mut().unwrap() ^= 1;
+                    }
+                };
+                match &mut response {
+                    Response::Messages(page) => page.messages.iter_mut().for_each(damage),
+                    Response::Thread(page) => {
+                        for range in &mut page.ranges {
+                            range.messages.iter_mut().for_each(damage);
+                        }
+                        page.sequences.iter_mut().for_each(damage);
+                    }
+                    _ => panic!("unexpected content response"),
+                }
+            }
+            Ok(response)
+        }
+    }
+    let (chat, connection) = &mut sessions[0];
+    let bad = chat.list_channels(connection).unwrap().channels[0]
+        .metadata
+        .id;
+    let mut corrupt = CorruptChannel {
+        connection,
+        channel: bad,
+        reads: 0,
+    };
+    assert!(matches!(
+        chat.read_recent(&mut corrupt, bad, 10),
+        Err(foks_client::Error::ChatChannelIntegrity(_))
+    ));
+    let inbox = chat.sync_inbox(&mut corrupt, &mut soft).unwrap().inbox;
+    assert_eq!(inbox.blocked_channels, vec![bad]);
+    assert_eq!(inbox.conversations.len(), 3);
+    assert_eq!(
+        inbox
+            .conversations
+            .iter()
+            .filter(|c| c.preview.is_some())
+            .count(),
+        2
+    );
+    assert!(inbox
+        .conversations
+        .iter()
+        .find(|c| c.channel.metadata.id == bad)
+        .unwrap()
+        .preview
+        .is_none());
+    let attempts = corrupt.reads;
+    let next = chat
+        .sync_inbox_excluding_previews(&mut corrupt, &mut soft, &[bad])
+        .unwrap()
+        .inbox;
+    assert_eq!(
+        corrupt.reads, attempts,
+        "quarantined previews are not retried"
+    );
+    assert_eq!(next.blocked_channels, vec![bad]);
+    let (other, connection) = &mut sessions[1];
+    assert_eq!(
+        other
+            .sync_inbox(connection, &mut soft)
+            .unwrap()
+            .inbox
+            .conversations
+            .iter()
+            .filter(|c| c.preview.is_some())
+            .count(),
+        3
     );
 }

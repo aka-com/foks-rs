@@ -293,6 +293,7 @@ pub(super) fn server_status_response(
         host,
         lease_required: report.lease_required,
         lease_expires_at: report.lease_expires_at,
+        chat_available: report.chat_available,
     })
 }
 
@@ -422,6 +423,7 @@ pub struct ServerDto {
     pub lease: Option<serde_json::Value>,
     pub accounts: Vec<String>,
     pub state: &'static str,
+    pub chat_available: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -449,6 +451,7 @@ pub struct ServerStatusSnapshotDto {
     pub host: Option<StoredHostDto>,
     pub lease_required: bool,
     pub lease_expires_at: Option<u64>,
+    pub chat_available: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -512,6 +515,7 @@ struct ServerStatusResponse {
     host: Option<StoredHostResponse>,
     lease_required: bool,
     lease_expires_at: Option<u64>,
+    chat_available: bool,
 }
 
 #[derive(Deserialize)]
@@ -1157,6 +1161,7 @@ pub async fn list_servers(
                     lease: None,
                     accounts,
                     state: if blocked { "blocked" } else { "never-probed" },
+                    chat_available: false,
                 }
             })
             .collect())

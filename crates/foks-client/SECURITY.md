@@ -32,16 +32,17 @@ Trust assumptions:
 
 SQLite is durable security state, but it is not the only rollback boundary.
 Native standalone profiles publish the database's random identity, monotonic
-hard-state revision, and per-revision random write token to macOS Keychain or
-Linux Secret Service. Every checked profile operation holds both a
-cross-process profile lock and a client-root-local lock keyed by database ID,
-compares that external watermark before use, and republishes it after the
-operation even when the operation reports an error. The native namespace also
-claims each database ID for exactly one profile. A database behind the external
-revision, with a different identity, with a conflicting profile claim, or with
-a different token at the same revision is rejected. A database ahead of the
-external checkpoint with a fresh token represents a crash after SQLite commit
-and is repaired by advancing the external checkpoint.
+hard-state revision, and per-revision random write token in one versioned
+manifest in macOS Keychain or Linux Secret Service. Every checked profile
+operation holds both a cross-process profile lock and a client-root-local lock
+keyed by database ID, compares that external watermark before use, and
+republishes it after the operation even when the operation reports an error.
+The native namespace also claims each database ID for exactly one profile. A
+database behind the external revision, with a different identity, with a
+conflicting profile claim, or with a different token at the same revision is
+rejected. A database ahead of the external checkpoint with a fresh token
+represents a crash after SQLite commit and is repaired by advancing the
+external checkpoint.
 
 The native credential namespace is also bound to the canonical client-state
 root path. Copying a state root therefore cannot create a second set of
@@ -49,7 +50,9 @@ path-local lock files that shares the same master key and rollback watermark;
 the copied root is rejected before either credential or checkpoint use. A
 native state root is deliberately immovable. Export/import is not implemented.
 The database-ID locks and claims deliberately coordinate only profiles below
-that one client root; there is no machine-global or cross-root lock registry.
+that one client root. A root-wide manifest lock serializes cross-profile
+read-modify-write updates; there is no machine-global or cross-root lock
+registry.
 
 The explicit private-file credential backend provides neither an external
 rollback checkpoint nor copied-database detection. Copying or restoring its

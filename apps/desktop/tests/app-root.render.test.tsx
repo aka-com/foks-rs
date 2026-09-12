@@ -38,7 +38,10 @@ test.after(async () => {
 });
 
 test('renders shell frame with application brand name', () => {
-  assert.ok(document.querySelector('.window'), 'window container element should exist');
+  assert.ok(
+    document.querySelector('.window'),
+    'window container element should exist',
+  );
   assert.equal(document.querySelector('.titlebar .brand')?.textContent, 'FOKS');
   assert.equal(
     document.querySelectorAll('.web-mock-window .lights .light').length,
@@ -63,6 +66,19 @@ test('the sidebar lists configured vaults and groups', () => {
     captions.some((text) => text?.includes('5 people · 1 group')),
     `Engineering's roster summary is on the row: ${captions.join(' | ')}`,
   );
+});
+
+test('chat navigation follows the server capability grant', () => {
+  const rows = [...document.querySelectorAll<HTMLButtonElement>('.side .nav')];
+  const engineering = rows.find((row) =>
+    row.textContent?.includes('Engineering chat'),
+  );
+  const household = rows.find((row) =>
+    row.textContent?.includes('Household chat'),
+  );
+  assert.equal(engineering?.disabled, true);
+  assert.match(engineering?.title ?? '', /does not enable chat/);
+  assert.equal(household?.disabled, false);
 });
 
 test('displays active warning badge count in navigation', () => {

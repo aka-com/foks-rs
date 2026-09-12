@@ -30,26 +30,31 @@ test.after(async () => {
 
 for (const kind of ['team-member-addition', 'team-member-edit'] as const) {
   test(`exposes and completes ${kind} after an interrupted change without reopening settings`, async () => {
-    const { GroupSettingsScreen } = await vite.ssrLoadModule(
+    const { GroupSettingsScreen } = (await vite.ssrLoadModule(
       '/src/screens/groups-screen.tsx',
-    );
-    const { ToastProvider, ToastController } =
-      await vite.ssrLoadModule('/kit/toasts.tsx');
-    const { OverlayProvider } = await vite.ssrLoadModule(
+    )) as typeof import('../src/screens/groups-screen');
+    const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
+      '/kit/toasts.tsx',
+    )) as typeof import('../kit/toasts');
+    const { OverlayProvider } = (await vite.ssrLoadModule(
       '/kit/overlay-primitives.tsx',
-    );
-    const { FIXTURE } = await vite.ssrLoadModule('/src/fixture.ts');
-    const { mockBridge } = await vite.ssrLoadModule('/src/mock-bridge.ts');
+    )) as typeof import('../kit/overlay-primitives');
+    const { FIXTURE } = (await vite.ssrLoadModule(
+      '/src/fixture.ts',
+    )) as typeof import('../src/fixture');
+    const { mockBridge } = (await vite.ssrLoadModule(
+      '/src/mock-bridge.ts',
+    )) as typeof import('../src/mock-bridge');
     const addition = kind === 'team-member-addition';
     window.history.replaceState(
       null,
       '',
       addition ? '/?state=add' : '/?state=demote',
     );
-    const store = FIXTURE.stores.find(
-      (entry: { id: string }) => entry.id === 'team:eng',
-    );
-    assert.ok(store);
+    const store = FIXTURE.stores.find((entry) => entry.id === 'team:eng');
+    assert.ok(store?.kind === 'team');
+    const portalRoot = document.getElementById('overlays');
+    assert.ok(portalRoot);
     let pending: PendingOperation[] = [];
     let reads = 0;
     let reconciled = false;
@@ -95,7 +100,7 @@ for (const kind of ['team-member-addition', 'team-member-edit'] as const) {
     const rendered = ui.render(
       createElement(OverlayProvider, {
         backgroundRef: { current: null },
-        portalRoot: document.getElementById('overlays'),
+        portalRoot,
         children: createElement(ToastProvider, {
           controller: new ToastController(),
           children: createElement(GroupSettingsScreen, {

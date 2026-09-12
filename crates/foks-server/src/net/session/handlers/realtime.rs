@@ -105,7 +105,11 @@ pub(super) async fn poll_response(
             return poll_result(sequence, head, true);
         }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() || tokio::time::timeout(remaining, notified).await.is_err() {
+        if remaining.is_zero() {
+            return poll_result(sequence, head, false);
+        }
+        let _active_poll = crate::ServerMetrics::realtime_poll_guard(Arc::clone(&data.metrics));
+        if tokio::time::timeout(remaining, notified).await.is_err() {
             return poll_result(sequence, head, false);
         }
     }

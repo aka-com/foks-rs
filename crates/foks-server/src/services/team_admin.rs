@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use foks_proto::{EntityId, MerkleRoot, SignedBlob, UsernameReservation};
 use foks_rpc::RpcStatus;
+use foks_server_db::{TeamAdminTokenActivation, TeamAdminTokenBinding, TeamAdminTokenIssue};
 use foks_snowpack::Value;
 
 use crate::auth::Principal;
@@ -108,15 +109,17 @@ pub(crate) fn make_inert_token(
     let ptk_generation = request.generation;
     writer
         .call_with_current_time(Arc::clone(clock), move |database, current_time| {
-            database.issue_team_admin_token(
-                &token_hash,
-                &team_id,
-                &holder_id,
-                role_type,
-                ptk_generation,
+            database.issue_team_admin_token(TeamAdminTokenIssue {
+                token_hash: &token_hash,
+                binding: TeamAdminTokenBinding {
+                    team_id: &team_id,
+                    holder_id: &holder_id,
+                    ptk_role_type: role_type,
+                    ptk_generation,
+                },
                 expires_at,
-                current_time,
-            )?;
+                now: current_time,
+            })?;
             Ok(())
         })
         .map_err(map_write_error)?;
@@ -179,15 +182,19 @@ pub(crate) fn activate_token(
     let ptk_generation = challenge.generation;
     writer
         .call_with_current_time(Arc::clone(clock), move |database, current_time| {
-            Ok(database.activate_team_admin_token(
-                &token_hash,
-                &activation_hash,
-                current_time,
-                &team_id,
-                &holder_id,
-                role_type,
-                ptk_generation,
-            )?)
+            Ok(
+                database.activate_team_admin_token(TeamAdminTokenActivation {
+                    token_hash: &token_hash,
+                    activation_hash: &activation_hash,
+                    binding: TeamAdminTokenBinding {
+                        team_id: &team_id,
+                        holder_id: &holder_id,
+                        ptk_role_type: role_type,
+                        ptk_generation,
+                    },
+                    now: current_time,
+                })?,
+            )
         })
         .map_err(map_write_error)?
         .ok_or(RpcStatus::Expired)?;
@@ -327,13 +334,13 @@ pub(crate) fn create(
 ) -> Result<(), RpcStatus> {
     principal.require_ordinary_device()?;
     let decoded = if named {
-        Argument::Named(
+        Argument::Named(Box::new(
             foks_rpc::arguments::decode_named_team_create(argument).map_err(bad_arguments)?,
-        )
+        ))
     } else {
-        Argument::AdHoc(
+        Argument::AdHoc(Box::new(
             foks_rpc::arguments::decode_adhoc_team_create(argument).map_err(bad_arguments)?,
-        )
+        ))
     };
     let exact_link = match &decoded {
         Argument::Named(argument) => argument.edit.link.encoded(),
@@ -726,7 +733,7 @@ pub(crate) fn edit(
                 return Err(crate::Error::Signup("system clock moved backwards"));
             }
             let change = decoded.link.decode_team_group_change()?;
-            let team_bearer_token = decoded.team_bearer_token.clone();
+            let team_bearer_token = decoded.team_bearer_token;
             let team_id = change.team.clone();
             let signer_owner = change.signer_owner.clone();
             let team = database

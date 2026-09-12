@@ -678,9 +678,11 @@ impl CheckedProfileSession<'_> {
             self.client.finish_recorded_team_member_change(
                 &context.host,
                 &context.account.credential,
-                &context.team_id,
-                pending.expected_seqno,
-                &pending.operation_id,
+                foks_client::TeamMutationRecovery {
+                    team: &context.team_id,
+                    expected_seqno: pending.expected_seqno,
+                    expected_operation_id: &pending.operation_id,
+                },
                 pending.removal_key_commitment,
                 &rotations,
                 &mut mutations,
@@ -729,9 +731,11 @@ impl CheckedProfileSession<'_> {
                 self.client.resume_change_team_member_and_rotate_ptks(
                     &context.host,
                     &context.account.credential,
-                    &context.team_id,
-                    pending.expected_seqno,
-                    &pending.operation_id,
+                    foks_client::TeamMutationRecovery {
+                        team: &context.team_id,
+                        expected_seqno: pending.expected_seqno,
+                        expected_operation_id: &pending.operation_id,
+                    },
                     &request,
                     &mut mutations,
                 )

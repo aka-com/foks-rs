@@ -41,6 +41,27 @@ pub struct TeamAdminAuthoritySnapshot {
     pub expires_at: Option<u64>,
 }
 
+pub struct TeamAdminTokenBinding<'a> {
+    pub team_id: &'a [u8],
+    pub holder_id: &'a [u8],
+    pub ptk_role_type: u64,
+    pub ptk_generation: u64,
+}
+
+pub struct TeamAdminTokenIssue<'a> {
+    pub token_hash: &'a [u8; 32],
+    pub binding: TeamAdminTokenBinding<'a>,
+    pub expires_at: u64,
+    pub now: u64,
+}
+
+pub struct TeamAdminTokenActivation<'a> {
+    pub token_hash: &'a [u8; 32],
+    pub activation_hash: &'a [u8; 32],
+    pub binding: TeamAdminTokenBinding<'a>,
+    pub now: u64,
+}
+
 impl Database {
     pub fn resolve_team_admin_token(
         &self,
@@ -224,27 +245,18 @@ impl Database {
         }))
     }
 
-    pub fn issue_team_admin_token(
-        &mut self,
-        token_hash: &[u8; 32],
-        team_id: &[u8],
-        holder_id: &[u8],
-        ptk_role_type: u64,
-        ptk_generation: u64,
-        expires_at: u64,
-        now: u64,
-    ) -> Result<()> {
+    pub fn issue_team_admin_token(&mut self, issue: TeamAdminTokenIssue<'_>) -> Result<()> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        reclaim(&transaction, now)?;
+        reclaim(&transaction, issue.now)?;
         let global: i64 =
             transaction.query_row("SELECT count(*) FROM team_admin_tokens", [], |row| {
                 row.get(0)
             })?;
         let scoped: i64 = transaction.query_row(
             "SELECT count(*) FROM team_admin_tokens WHERE team_id = ?1 AND holder_id = ?2",
-            params![team_id, holder_id],
+            params![issue.binding.team_id, issue.binding.holder_id],
             |row| row.get(0),
         )?;
         if usize::try_from(global).unwrap_or(usize::MAX)
@@ -260,12 +272,12 @@ impl Database {
               ptk_generation, expires_at, activation_hash)
              VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, NULL)",
             params![
-                token_hash,
-                team_id,
-                holder_id,
-                sql_integer(ptk_role_type)?,
-                sql_integer(ptk_generation)?,
-                sql_integer(expires_at)?
+                issue.token_hash,
+                issue.binding.team_id,
+                issue.binding.holder_id,
+                sql_integer(issue.binding.ptk_role_type)?,
+                sql_integer(issue.binding.ptk_generation)?,
+                sql_integer(issue.expires_at)?
             ],
         )?;
         transaction.commit()?;
@@ -274,34 +286,30 @@ impl Database {
 
     pub fn activate_team_admin_token(
         &mut self,
-        token_hash: &[u8; 32],
-        activation_hash: &[u8; 32],
-        now: u64,
-        expected_team_id: &[u8],
-        expected_holder_id: &[u8],
-        expected_ptk_role_type: u64,
-        expected_ptk_generation: u64,
+        activation: TeamAdminTokenActivation<'_>,
     ) -> Result<Option<TeamAdminAuthoritySnapshot>> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let Some(authority) = admin_token_query(&transaction, token_hash, now, false)? else {
+        let Some(authority) =
+            admin_token_query(&transaction, activation.token_hash, activation.now, false)?
+        else {
             return Ok(None);
         };
-        if authority.team_id != expected_team_id
-            || authority.holder_id != expected_holder_id
-            || authority.ptk_role_type != expected_ptk_role_type
-            || authority.ptk_generation != expected_ptk_generation
+        if authority.team_id != activation.binding.team_id
+            || authority.holder_id != activation.binding.holder_id
+            || authority.ptk_role_type != activation.binding.ptk_role_type
+            || authority.ptk_generation != activation.binding.ptk_generation
         {
             return Ok(None);
         }
         let stored: Option<Vec<u8>> = transaction.query_row(
             "SELECT activation_hash FROM team_admin_tokens WHERE token_hash = ?1",
-            [token_hash],
+            [activation.token_hash],
             |row| row.get(0),
         )?;
         if let Some(stored) = stored {
-            if stored.as_slice() == activation_hash {
+            if stored.as_slice() == activation.activation_hash {
                 return Ok(Some(authority));
             }
             return Err(Error::ReceiptConflict);
@@ -309,7 +317,7 @@ impl Database {
         let updated = transaction.execute(
             "UPDATE team_admin_tokens SET activation_hash = ?2
              WHERE token_hash = ?1 AND activation_hash IS NULL",
-            params![token_hash, activation_hash],
+            params![activation.token_hash, activation.activation_hash],
         )?;
         if updated != 1 {
             return Err(Error::Invalid(

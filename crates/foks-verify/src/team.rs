@@ -1969,12 +1969,12 @@ mod transition_tests {
         .is_err());
 
         let boundary = rational(
-            &vec![1; super::MAX_RATIONAL_BASE_LENGTH],
+            &[1; super::MAX_RATIONAL_BASE_LENGTH],
             super::MAX_RATIONAL_EXPONENT_MAGNITUDE,
         );
         assert!(validate_rational_range(&range(boundary.clone(), boundary)).is_ok());
         assert!(validate_rational_range(&range(
-            rational(&vec![1; super::MAX_RATIONAL_BASE_LENGTH + 1], 0),
+            rational(&[1; super::MAX_RATIONAL_BASE_LENGTH + 1], 0),
             foks_proto::Rational {
                 infinity: true,
                 base: Vec::new(),

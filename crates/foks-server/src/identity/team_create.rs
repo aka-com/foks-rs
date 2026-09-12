@@ -75,8 +75,8 @@ pub(crate) struct Command {
 }
 
 pub(crate) enum Argument {
-    Named(foks_proto::DecodedNamedTeamCreateArgument),
-    AdHoc(foks_proto::DecodedAdHocTeamCreateArgument),
+    Named(Box<foks_proto::DecodedNamedTeamCreateArgument>),
+    AdHoc(Box<foks_proto::DecodedAdHocTeamCreateArgument>),
 }
 
 pub(crate) fn validate(

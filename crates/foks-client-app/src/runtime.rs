@@ -26,6 +26,7 @@ const DEFAULT_USER_REFRESH_INTERVAL_MICROS: u64 = 15 * 60 * 1_000_000;
 const DEFAULT_TEAM_REFRESH_INTERVAL_MICROS: u64 = 17 * 60 * 1_000_000;
 const OPERATION_LOCK_FILE: &str = ".profile-operation.lock";
 const SCHEDULER_LOCK_FILE: &str = ".scheduler-run.lock";
+const NATIVE_MANIFEST_LOCK_FILE: &str = ".native-manifest.lock";
 const DATABASE_LOCK_DIRECTORY: &str = ".database-operation-locks";
 
 pub(crate) struct ProfileLock {
@@ -33,6 +34,10 @@ pub(crate) struct ProfileLock {
 }
 
 pub(crate) struct DatabaseLock {
+    file: File,
+}
+
+pub(crate) struct NativeManifestLock {
     file: File,
 }
 
@@ -61,6 +66,28 @@ impl ProfileLock {
 
     fn try_acquire(paths: &ProfilePaths, name: &str) -> Result<Option<Self>> {
         let file = open_lock(paths, name)?;
+        match file.try_lock_exclusive() {
+            Ok(()) => Ok(Some(Self { file })),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub(crate) fn release(self) -> Result<()> {
+        self.file.unlock()?;
+        Ok(())
+    }
+}
+
+impl NativeManifestLock {
+    pub(crate) fn acquire(root: &std::path::Path) -> Result<Self> {
+        let file = open_root_lock(root, NATIVE_MANIFEST_LOCK_FILE)?;
+        file.lock_exclusive()?;
+        Ok(Self { file })
+    }
+
+    pub(crate) fn try_acquire(root: &std::path::Path) -> Result<Option<Self>> {
+        let file = open_root_lock(root, NATIVE_MANIFEST_LOCK_FILE)?;
         match file.try_lock_exclusive() {
             Ok(()) => Ok(Some(Self { file })),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
@@ -108,6 +135,17 @@ fn open_lock(paths: &ProfilePaths, name: &str) -> Result<File> {
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
     options.open(paths.directory.join(name)).map_err(Into::into)
+}
+
+fn open_root_lock(root: &std::path::Path, name: &str) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    options.open(root.join(name)).map_err(Into::into)
 }
 
 fn open_database_lock(root: &std::path::Path, database_id: &[u8; 16]) -> Result<File> {
@@ -272,6 +310,22 @@ pub(super) enum TeamRefreshActor<'a> {
         authenticated: &'a AuthenticatedTeamOutcome,
         recipient: Option<&'a VerifiedTeamRecipient>,
     },
+}
+
+struct LocalTeamRefreshTarget<'a> {
+    team_alias: &'a str,
+    team_id: &'a foks_proto::EntityId,
+    actor: TeamRefreshActor<'a>,
+    team: &'a AuthenticatedTeamOutcome,
+    supplied_parties: &'a std::collections::BTreeMap<TeamRefreshPartyKey, TeamRefreshParty>,
+}
+
+struct StoredTeamRekeyTarget<'a> {
+    actor: TeamRefreshActor<'a>,
+    team_id: &'a foks_proto::EntityId,
+    team: &'a AuthenticatedTeamOutcome,
+    party_states: &'a std::collections::BTreeMap<TeamRefreshPartyKey, TeamRefreshParty>,
+    pending: &'a StoredTeamRekey,
 }
 
 impl TeamRefreshActor<'_> {
@@ -589,11 +643,13 @@ impl CheckedProfileSession<'_> {
                     match self.refresh_local_team_member_keys(
                         host,
                         credential,
-                        &alias,
-                        &team_id,
-                        actor,
-                        &team,
-                        &std::collections::BTreeMap::new(),
+                        LocalTeamRefreshTarget {
+                            team_alias: &alias,
+                            team_id: &team_id,
+                            actor,
+                            team: &team,
+                            supplied_parties: &std::collections::BTreeMap::new(),
+                        },
                         vault,
                         protected_store,
                     )? {
@@ -765,11 +821,13 @@ impl CheckedProfileSession<'_> {
                     self.refresh_local_team_member_keys(
                         host,
                         credential,
-                        &alias,
-                        &team_id,
-                        TeamRefreshActor::User(&user),
-                        &team,
-                        &parties,
+                        LocalTeamRefreshTarget {
+                            team_alias: &alias,
+                            team_id: &team_id,
+                            actor: TeamRefreshActor::User(&user),
+                            team: &team,
+                            supplied_parties: &parties,
+                        },
                         vault,
                         protected_store,
                     )?
@@ -788,15 +846,17 @@ impl CheckedProfileSession<'_> {
                     self.refresh_local_team_member_keys(
                         host,
                         credential,
-                        &alias,
-                        &team_id,
-                        TeamRefreshActor::LocalTeam {
-                            transport_user: &user,
-                            authenticated: actor_team,
-                            recipient: Some(actor_recipient),
+                        LocalTeamRefreshTarget {
+                            team_alias: &alias,
+                            team_id: &team_id,
+                            actor: TeamRefreshActor::LocalTeam {
+                                transport_user: &user,
+                                authenticated: actor_team,
+                                recipient: Some(actor_recipient),
+                            },
+                            team: &team,
+                            supplied_parties: &parties,
                         },
-                        &team,
-                        &parties,
                         vault,
                         protected_store,
                     )?
@@ -1501,11 +1561,13 @@ impl CheckedProfileSession<'_> {
                         match self.refresh_local_team_member_keys(
                             &host,
                             TeamRefreshCredential::Software(credential),
-                            &team_alias,
-                            &team_id,
-                            TeamRefreshActor::User(&user),
-                            &team,
-                            &std::collections::BTreeMap::new(),
+                            LocalTeamRefreshTarget {
+                                team_alias: &team_alias,
+                                team_id: &team_id,
+                                actor: TeamRefreshActor::User(&user),
+                                team: &team,
+                                supplied_parties: &std::collections::BTreeMap::new(),
+                            },
                             vault,
                             &mut mutations,
                         ) {
@@ -1673,11 +1735,13 @@ impl CheckedProfileSession<'_> {
                     match self.refresh_local_team_member_keys(
                         host,
                         TeamRefreshCredential::Yubi(credential),
-                        &team_alias,
-                        &team_id,
-                        TeamRefreshActor::User(&actor),
-                        &team,
-                        &std::collections::BTreeMap::new(),
+                        LocalTeamRefreshTarget {
+                            team_alias: &team_alias,
+                            team_id: &team_id,
+                            actor: TeamRefreshActor::User(&actor),
+                            team: &team,
+                            supplied_parties: &std::collections::BTreeMap::new(),
+                        },
                         vault,
                         &mut mutations,
                     ) {
@@ -1717,18 +1781,21 @@ impl CheckedProfileSession<'_> {
         Ok(actor)
     }
 
-    pub(super) fn refresh_local_team_member_keys(
+    fn refresh_local_team_member_keys(
         &self,
         host: &foks_client::PinnedHost,
         credential: TeamRefreshCredential<'_, '_>,
-        team_alias: &str,
-        team_id: &foks_proto::EntityId,
-        actor: TeamRefreshActor<'_>,
-        team: &AuthenticatedTeamOutcome,
-        supplied_parties: &std::collections::BTreeMap<TeamRefreshPartyKey, TeamRefreshParty>,
+        target: LocalTeamRefreshTarget<'_>,
         vault: &mut AccountVault<'_>,
         protected_store: &mut EncryptedFileMutationStore,
     ) -> Result<TeamRefreshAttempt> {
+        let LocalTeamRefreshTarget {
+            team_alias,
+            team_id,
+            actor,
+            team,
+            supplied_parties,
+        } = target;
         if team_id.entity_type() == foks_proto::ENTITY_AD_HOC_TEAM {
             return Ok(TeamRefreshAttempt::Complete);
         }
@@ -1790,11 +1857,13 @@ impl CheckedProfileSession<'_> {
                 match self.resume_stored_team_rekey(
                     host,
                     credential,
-                    actor,
-                    team_id,
-                    &team,
-                    &empty,
-                    &pending,
+                    StoredTeamRekeyTarget {
+                        actor,
+                        team_id,
+                        team,
+                        party_states: &empty,
+                        pending: &pending,
+                    },
                     protected_store,
                 ) {
                     Ok(outcome) => {
@@ -1965,11 +2034,11 @@ impl CheckedProfileSession<'_> {
                         vault.put_team_rekey(&pending)?;
                     }
                     let identity_matches = self
-                        .stored_team_rekey_operation_id(actor, team_id, &team, &parties, &pending)
+                        .stored_team_rekey_operation_id(actor, team_id, team, &parties, &pending)
                         .is_ok_and(|operation_id| operation_id == pending.operation_id);
                     if !identity_matches
                         || !stored_team_rekey_matches_current_plan(
-                            &team,
+                            team,
                             &parties,
                             actor_member,
                             &pending,
@@ -1979,7 +2048,7 @@ impl CheckedProfileSession<'_> {
                             host,
                             actor,
                             team_id,
-                            &team,
+                            team,
                             &pending,
                             protected_store,
                         )?;
@@ -1990,11 +2059,13 @@ impl CheckedProfileSession<'_> {
                         let result = self.submit_stored_team_rekey(
                             host,
                             credential,
-                            actor,
-                            team_id,
-                            &team,
-                            &parties,
-                            &pending,
+                            StoredTeamRekeyTarget {
+                                actor,
+                                team_id,
+                                team,
+                                party_states: &parties,
+                                pending: &pending,
+                            },
                             protected_store,
                         );
                         if result.is_ok() {
@@ -2109,10 +2180,12 @@ impl CheckedProfileSession<'_> {
                                 self.client.replay_recorded_team_rekey(
                                     host,
                                     credential,
-                                    team_id,
-                                    pending.expected_seqno,
-                                    &pending.operation_id,
-                                    &team,
+                                    foks_client::TeamMutationRecovery {
+                                        team: team_id,
+                                        expected_seqno: pending.expected_seqno,
+                                        expected_operation_id: &pending.operation_id,
+                                    },
+                                    team,
                                     &current_parties,
                                     protected_store,
                                 )
@@ -2121,10 +2194,12 @@ impl CheckedProfileSession<'_> {
                                 self.client.replay_recorded_team_rekey_yubi(
                                     host,
                                     credential,
-                                    team_id,
-                                    pending.expected_seqno,
-                                    &pending.operation_id,
-                                    &team,
+                                    foks_client::TeamMutationRecovery {
+                                        team: team_id,
+                                        expected_seqno: pending.expected_seqno,
+                                        expected_operation_id: &pending.operation_id,
+                                    },
+                                    team,
                                     &current_parties,
                                     protected_store,
                                 )
@@ -2139,7 +2214,7 @@ impl CheckedProfileSession<'_> {
                                 team_id,
                                 pending.expected_seqno,
                                 &pending.operation_id,
-                                &team,
+                                team,
                                 &current_parties,
                                 protected_store,
                             ),
@@ -2151,7 +2226,7 @@ impl CheckedProfileSession<'_> {
                                     team_id,
                                     pending.expected_seqno,
                                     &pending.operation_id,
-                                    &team,
+                                    team,
                                     &current_parties,
                                     protected_store,
                                 )
@@ -2212,11 +2287,13 @@ impl CheckedProfileSession<'_> {
                         let outcome = self.resume_stored_team_rekey(
                             host,
                             credential,
-                            actor,
-                            team_id,
-                            &observed,
-                            &empty,
-                            &pending,
+                            StoredTeamRekeyTarget {
+                                actor,
+                                team_id,
+                                team: &observed,
+                                party_states: &empty,
+                                pending: &pending,
+                            },
                             protected_store,
                         )?;
                         vault.remove_team_rekey(team_alias)?;
@@ -2300,10 +2377,8 @@ impl CheckedProfileSession<'_> {
                 )
                 .into());
             }
-            if key.generation > member.generation {
-                if member.role <= actor_member.role {
-                    stale.push((member, key));
-                }
+            if key.generation > member.generation && member.role <= actor_member.role {
+                stale.push((member, key));
             }
         }
         if has_public_only_team_recipient && !stale.is_empty() {
@@ -2399,16 +2474,18 @@ impl CheckedProfileSession<'_> {
                 .collect::<Result<Vec<_>>>()?,
         };
         pending.operation_id =
-            self.stored_team_rekey_operation_id(actor, team_id, &team, &parties, &pending)?;
+            self.stored_team_rekey_operation_id(actor, team_id, team, &parties, &pending)?;
         vault.put_team_rekey(&pending)?;
         let result = self.submit_stored_team_rekey(
             host,
             credential,
-            actor,
-            team_id,
-            &team,
-            &parties,
-            &pending,
+            StoredTeamRekeyTarget {
+                actor,
+                team_id,
+                team,
+                party_states: &parties,
+                pending: &pending,
+            },
             protected_store,
         );
         if result.is_ok() {
@@ -2490,21 +2567,17 @@ impl CheckedProfileSession<'_> {
         &self,
         host: &foks_client::PinnedHost,
         credential: TeamRefreshCredential<'_, '_>,
-        actor: TeamRefreshActor<'_>,
-        team_id: &foks_proto::EntityId,
-        team: &AuthenticatedTeamOutcome,
-        party_states: &std::collections::BTreeMap<TeamRefreshPartyKey, TeamRefreshParty>,
-        pending: &StoredTeamRekey,
+        target: StoredTeamRekeyTarget<'_>,
         protected_store: &mut EncryptedFileMutationStore,
     ) -> Result<AuthenticatedTeamOutcome> {
         self.execute_stored_team_rekey(
             host,
             credential,
-            actor,
-            team_id,
-            Some(team),
-            party_states,
-            pending,
+            target.actor,
+            target.team_id,
+            Some(target.team),
+            target.party_states,
+            target.pending,
             false,
             false,
             protected_store,
@@ -2689,24 +2762,20 @@ impl CheckedProfileSession<'_> {
         &self,
         host: &foks_client::PinnedHost,
         credential: TeamRefreshCredential<'_, '_>,
-        actor: TeamRefreshActor<'_>,
-        team_id: &foks_proto::EntityId,
-        observed: &AuthenticatedTeamOutcome,
-        party_states: &std::collections::BTreeMap<TeamRefreshPartyKey, TeamRefreshParty>,
-        pending: &StoredTeamRekey,
+        target: StoredTeamRekeyTarget<'_>,
         protected_store: &mut EncryptedFileMutationStore,
     ) -> Result<AuthenticatedTeamOutcome> {
-        let expected_actor = foks_proto::EntityId::from_bytes(pending.actor_uid.clone())?;
+        let expected_actor = foks_proto::EntityId::from_bytes(target.pending.actor_uid.clone())?;
         let observe_as_transport = expected_actor != *credential.uid()
-            && transport_can_observe_team_rekey(&observed.verified, credential.uid());
+            && transport_can_observe_team_rekey(&target.team.verified, credential.uid());
         self.execute_stored_team_rekey(
             host,
             credential,
-            actor,
-            team_id,
+            target.actor,
+            target.team_id,
             None,
-            party_states,
-            pending,
+            target.party_states,
+            target.pending,
             true,
             observe_as_transport,
             protected_store,
@@ -2838,9 +2907,12 @@ impl CheckedProfileSession<'_> {
                     .resume_refresh_team_member_keys_and_rotate_ptks(
                         host,
                         credential,
-                        team_id,
+                        foks_client::TeamMutationRecovery {
+                            team: team_id,
+                            expected_seqno: pending.expected_seqno,
+                            expected_operation_id: &pending.operation_id,
+                        },
                         &request,
-                        &pending.operation_id,
                         &expected_actor,
                         protected_store,
                     )?
@@ -2852,9 +2924,12 @@ impl CheckedProfileSession<'_> {
                     .resume_refresh_team_member_keys_and_rotate_ptks_yubi(
                         host,
                         credential,
-                        team_id,
+                        foks_client::TeamMutationRecovery {
+                            team: team_id,
+                            expected_seqno: pending.expected_seqno,
+                            expected_operation_id: &pending.operation_id,
+                        },
                         &request,
-                        &pending.operation_id,
                         &expected_actor,
                         protected_store,
                     )?
@@ -3106,6 +3181,8 @@ mod tests {
     use foks_keystore::{EncryptedFileSecretStore, MemorySecretStore};
     use foks_server_testkit::TestEnvironment;
     use foks_yubi::{MockYubiProvider, Pin, SlotId, YubiProvider as _};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
 
     fn paths(root: &std::path::Path, name: &str) -> ProfilePaths {
         let directory = root.join(name);
@@ -3956,6 +4033,53 @@ mod tests {
 
         let store = HardStateStore::open(&session.paths.hard_database).unwrap();
         assert_eq!(store.next_scheduled_run().unwrap(), None);
+    }
+
+    #[test]
+    fn native_manifest_lock_serializes_root_wide_updates() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let first = NativeManifestLock::acquire(root).unwrap();
+        assert!(NativeManifestLock::try_acquire(root).unwrap().is_none());
+        first.release().unwrap();
+        let second = NativeManifestLock::try_acquire(root).unwrap().unwrap();
+        second.release().unwrap();
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(root.join(NATIVE_MANIFEST_LOCK_FILE))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn native_manifest_locks_contend_across_processes() {
+        const ROOT_ENV: &str = "FOKS_NATIVE_MANIFEST_LOCK_TEST_ROOT";
+        const CHILD_ENV: &str = "FOKS_NATIVE_MANIFEST_LOCK_TEST_CHILD";
+
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let root = std::path::PathBuf::from(std::env::var_os(ROOT_ENV).unwrap());
+            assert!(NativeManifestLock::try_acquire(&root).unwrap().is_none());
+            return;
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        let lock = NativeManifestLock::acquire(temporary.path()).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "runtime::tests::native_manifest_locks_contend_across_processes",
+                "--nocapture",
+            ])
+            .env(ROOT_ENV, temporary.path())
+            .env(CHILD_ENV, "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        lock.release().unwrap();
     }
 
     #[test]

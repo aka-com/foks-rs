@@ -46,7 +46,7 @@ const MUTATION_KEY_TYPE_ID: u64 = 0x5e4b_52ca_d668_dd1d;
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_CERTIFICATES: usize = 8;
 const MAX_CERTIFICATE_BYTES: usize = 1024 * 1024;
-const STATE_CONFIG_VERSION: u32 = 2;
+const STATE_CONFIG_VERSION: u32 = 3;
 const STATE_CONFIG_FILE: &str = "client-state.toml";
 const MASTER_KEY_RECORD: &str = "master-key-v1";
 const STATE_ROOT_RECORD: &str = "state-root-v1";
@@ -629,6 +629,9 @@ mod tests {
         let initialized =
             ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
         assert!(ClientCredentials::is_initialized(&root).unwrap());
+        assert!(fs::read_to_string(root.join(STATE_CONFIG_FILE))
+            .unwrap()
+            .contains("version = 3"));
         let expected = initialized.master_key().unwrap();
         drop(initialized);
         let reopened = ClientCredentials::open(&root).unwrap();
@@ -637,6 +640,43 @@ mod tests {
         assert!(matches!(
             ClientCredentials::initialize(&root, CredentialBackend::PrivateFile),
             Err(Error::InvalidConfig("client state is already initialized"))
+        ));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
+    fn native_initialization_uses_one_physical_manifest_record() {
+        let temporary = tempfile::tempdir().unwrap();
+        let credentials =
+            ClientCredentials::initialize(temporary.path(), CredentialBackend::Native).unwrap();
+        let mut native = foks_keystore::NativeCredentialStore::open(&credentials.state_id).unwrap();
+        let manifest = native.get(checkpoint::NATIVE_MANIFEST_RECORD);
+        let legacy_master = native.get(MASTER_KEY_RECORD);
+        let legacy_root = native.get(STATE_ROOT_RECORD);
+        let cleanup = native.remove(checkpoint::NATIVE_MANIFEST_RECORD);
+
+        assert!(manifest.is_ok());
+        assert!(matches!(legacy_master, Err(foks_keystore::Error::Missing)));
+        assert!(matches!(legacy_root, Err(foks_keystore::Error::Missing)));
+        assert!(matches!(cleanup, Ok(true)));
+    }
+
+    #[test]
+    fn legacy_native_record_storage_is_rejected_before_keychain_access() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = prepare_private_directory(&temporary.path().join("state")).unwrap();
+        create_private_config(
+            &root.join(STATE_CONFIG_FILE),
+            b"version = 2\nstate_id = \"legacy\"\ncredential_backend = \"native\"\n",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            ClientCredentials::open(&root),
+            Err(Error::InvalidConfig(
+                "native client state uses unsupported per-record credential storage"
+            ))
         ));
     }
 

@@ -65,7 +65,9 @@ mod inbox;
 mod operations;
 mod session;
 pub use history::{ChatContent, ChatHistory, ChatMessage};
-pub use inbox::{ChatConversation, ChatInbox, ChatPollResult, ChatSyncResult};
+pub use inbox::{
+    ChatConversation, ChatInbox, ChatPollResult, ChatPreview, ChatPreviewContent, ChatSyncResult,
+};
 pub use operations::normalize_chat_name;
 pub use session::{ChatChannel, ChatChannels, ChatSession, ChatTransport};
 

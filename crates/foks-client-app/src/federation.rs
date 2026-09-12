@@ -83,6 +83,15 @@ struct LocalFederatedActor<'a, 'device> {
     edges: Vec<(EntityId, EntityId)>,
 }
 
+type FederatedGraphRecipients<'a, 'device> = (
+    LocalFederatedActor<'a, 'device>,
+    std::collections::BTreeMap<
+        Vec<u8>,
+        std::collections::BTreeMap<TeamRefreshPartyKey, TeamRefreshParty>,
+    >,
+    std::collections::BTreeSet<Vec<u8>>,
+);
+
 impl LocalFederatedActor<'_, '_> {
     fn team(&self, team: &EntityId) -> Option<&foks_client::AuthenticatedTeamOutcome> {
         if self.target.verified.team() == team {
@@ -789,9 +798,11 @@ impl CheckedProfileSession<'_> {
             self.client.finish_recorded_team_member_change(
                 &context.host,
                 &context.account.credential,
-                &context.team_id,
-                pending.expected_seqno,
-                &pending.operation_id,
+                foks_client::TeamMutationRecovery {
+                    team: &context.team_id,
+                    expected_seqno: pending.expected_seqno,
+                    expected_operation_id: &pending.operation_id,
+                },
                 pending.removal_key_commitment,
                 &rotations,
                 &mut protected,
@@ -844,9 +855,11 @@ impl CheckedProfileSession<'_> {
                 self.client.resume_retained_team_member_removal(
                     &context.host,
                     &context.account.credential,
-                    &context.team_id,
-                    pending.expected_seqno,
-                    &pending.operation_id,
+                    foks_client::TeamMutationRecovery {
+                        team: &context.team_id,
+                        expected_seqno: pending.expected_seqno,
+                        expected_operation_id: &pending.operation_id,
+                    },
                     &request,
                     &mut protected,
                 )
@@ -1448,9 +1461,7 @@ impl CheckedProfileSession<'_> {
                 let recorded_team_is_current = graph.team(&recorded).is_some_and(|actor| {
                     local_team_can_observe_team_rekey(&target.verified, actor)
                 });
-                if recorded == *credential.uid() && direct_admin {
-                    recorded
-                } else if recorded_team_is_current {
+                if (recorded == *credential.uid() && direct_admin) || recorded_team_is_current {
                     recorded
                 } else if target.verified.chain_seqno() >= pending.expected_seqno && direct_admin {
                     credential.uid().clone()
@@ -1606,14 +1617,7 @@ impl CheckedProfileSession<'_> {
         credentials: &ClientCredentials,
         master_key: &[u8; 32],
         cascade: &mut FederationCascade,
-    ) -> Result<(
-        LocalFederatedActor<'a, 'device>,
-        std::collections::BTreeMap<
-            Vec<u8>,
-            std::collections::BTreeMap<TeamRefreshPartyKey, TeamRefreshParty>,
-        >,
-        std::collections::BTreeSet<Vec<u8>>,
-    )> {
+    ) -> Result<FederatedGraphRecipients<'a, 'device>> {
         let host = self.pinned_host()?;
         let root = self.select_local_federated_admin(root_team_alias, unlocked, local_vault)?;
         let graph = self.client.discover_local_team_graph_with_credential(

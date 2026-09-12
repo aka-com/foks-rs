@@ -5,10 +5,11 @@ use std::io::Cursor;
 use std::path::PathBuf;
 
 use foks_client::{
-    FoksClient, KexProvisionOffer, KvWriteOptions, ProbeTarget, ProtectedMutationStore,
-    ProtectedStoreError, SoftwareAccountRequest, SoftwareAccountSecrets,
+    ChatContent, FoksClient, KexProvisionOffer, KvWriteOptions, NamedTeamSecrets, ProbeTarget,
+    ProtectedMutationStore, ProtectedStoreError, SoftwareAccountRequest, SoftwareAccountSecrets,
 };
-use foks_proto::{InviteCode, Role, SecretSeed};
+use foks_client_db::SoftStateStore;
+use foks_proto::{InviteCode, RealtimeWire, Role, RtChannelId, RtChannelTier, SecretSeed};
 use rustls::pki_types::CertificateDer;
 use zeroize::Zeroizing;
 
@@ -53,6 +54,127 @@ fn argument(name: &str) -> Result<String, String> {
         }
     }
     Err(format!("missing required argument {name}"))
+}
+
+fn verify_realtime(
+    client: &FoksClient,
+    host: &foks_client::PinnedHost,
+    credential: &foks_client::DeviceCredential,
+    username: &str,
+    soft_database: &std::path::Path,
+    protected: &mut impl ProtectedMutationStore,
+) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("live compatibility: creating a named team for realtime chat");
+    let team = client.create_single_owner_named_team(
+        host,
+        credential,
+        &format!("{username}team"),
+        &NamedTeamSecrets {
+            member_min: SecretSeed::new([0x71; 32]),
+            member: SecretSeed::new([0x72; 32]),
+            admin: SecretSeed::new([0x73; 32]),
+            owner: SecretSeed::new([0x74; 32]),
+            removal_key: SecretSeed::new([0x75; 32]),
+            team_name_commitment_key: [0x76; 16],
+        },
+    )?;
+    let mut chat = client.chat_session(host, credential, &team.team)?;
+    let mut realtime = chat.connection()?;
+    let prepared_channel = chat.prepare_channel(
+        &mut realtime,
+        protected,
+        "",
+        "Rust client against the Go realtime server",
+        RtChannelTier::Bottom,
+    )?;
+    let channel = RtChannelId(prepared_channel.scope.channel);
+    let confirmed_channel =
+        chat.attempt_operation(&mut realtime, protected, &prepared_channel.id)?;
+    if !confirmed_channel.state.is_terminal()
+        || chat
+            .list_channels(&mut realtime)?
+            .channels
+            .iter()
+            .all(|candidate| candidate.metadata.id != channel)
+    {
+        return Err("Rust-created realtime channel is absent from the Go server".into());
+    }
+    let text = "encrypted by Rust and stored by Go";
+    let prepared_message = chat.prepare_send(&mut realtime, protected, channel, text)?;
+    let confirmed_message =
+        chat.attempt_operation(&mut realtime, protected, &prepared_message.id)?;
+    let sequence = confirmed_message
+        .receipt
+        .as_deref()
+        .map(foks_proto::RtSendResult::decode)
+        .transpose()?
+        .ok_or("Go realtime send returned no durable receipt")?
+        .sequence;
+    let history = chat.read_recent(&mut realtime, channel, 10)?;
+    if !matches!(history.messages.as_slice(), [message] if message.message.sequence == sequence && matches!(&message.content, ChatContent::Text(body) if body.as_str() == text))
+    {
+        return Err("Rust client could not decrypt its message from the Go server".into());
+    }
+    let mut soft = SoftStateStore::open(soft_database)?;
+    let synced = chat.sync_inbox(&mut realtime, &mut soft)?;
+    let conversation = synced
+        .inbox
+        .conversations
+        .iter()
+        .find(|conversation| conversation.channel.metadata.id == channel)
+        .ok_or("Go realtime inbox omitted the Rust-created channel")?;
+    if conversation.read_through != sequence
+        || !matches!(conversation.preview.as_ref().map(|preview| &preview.content), Some(foks_client::ChatPreviewContent::Text(body)) if body.as_str() == text)
+    {
+        return Err("Go realtime inbox did not preserve read state and preview content".into());
+    }
+    chat.mark_read(&mut realtime, &mut soft, channel, sequence)?;
+    let poll = chat.poll_inbox(&mut realtime, synced.inbox.head, 1)?;
+    if poll.bumped || poll.inbox_version != synced.inbox.head {
+        return Err("Go realtime poll returned an inconsistent unchanged head".into());
+    }
+    if let Ok(directory) = std::env::var("FOKS_LIVE_FILTERED_DIR") {
+        for stage in ["persistent", "recoverable"] {
+            let directory = std::path::Path::new(&directory);
+            std::fs::write(directory.join(format!("{stage}.request")), [])?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !directory.join(format!("{stage}.ready")).exists() {
+                if std::time::Instant::now() >= deadline {
+                    return Err("filtered inbox seed timed out".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            let mut filtered_soft =
+                SoftStateStore::open(&directory.join(format!("{stage}.sqlite3")))?;
+            let filtered = chat.sync_inbox(&mut realtime, &mut filtered_soft)?;
+            if stage == "persistent" {
+                if !filtered.inbox.degraded || filtered.inbox.cursor >= filtered.inbox.head {
+                    return Err(
+                        "maximum filtered Go page did not preserve unresolved cursor".into(),
+                    );
+                }
+                if !filtered
+                    .inbox
+                    .channels
+                    .iter()
+                    .any(|c| c.metadata.id == channel)
+                {
+                    return Err("degraded Go sync lost direct channel discovery".into());
+                }
+                let repeated = chat.sync_inbox(&mut realtime, &mut filtered_soft)?;
+                if !repeated.inbox.degraded || repeated.inbox.cursor != filtered.inbox.cursor {
+                    return Err("persistent filtered Go page fabricated progress".into());
+                }
+                if chat.read_recent(&mut realtime, channel, 10)?.messages.len() != 1 {
+                    return Err("degraded Go sync lost usable history".into());
+                }
+            } else if filtered.inbox.degraded || filtered.inbox.cursor != filtered.inbox.head {
+                return Err("larger Go page failed to recover accessible row".into());
+            }
+            eprintln!("live compatibility: verified {stage} filtered Go inbox page");
+        }
+    }
+    Ok(())
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -106,6 +228,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if created.authenticated.current_puk().is_none() {
         return Err("created account has no current PUK".into());
     }
+    if env::var_os("FOKS_RUST_LIVE_CHAT").is_some() {
+        verify_realtime(
+            &client,
+            &host,
+            &created.credential,
+            &username,
+            &soft_database,
+            &mut protected,
+        )?;
+        println!(
+            "verified FOKS v0.1.9 live account {username}, named team, and realtime chat round trip"
+        );
+        return Ok(());
+    }
     let root = created
         .kv_projection
         .first()
@@ -141,6 +277,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if file.content.as_deref() != Some(expected.as_slice()) {
         return Err("written file content differs after incremental synchronization".into());
     }
+
+    verify_realtime(
+        &client,
+        &host,
+        &created.credential,
+        &username,
+        &soft_database,
+        &mut protected,
+    )?;
 
     eprintln!("live compatibility: pairing a second Rust device through the Go KEX relay");
     let paired_database = state_directory.join("paired-hard.sqlite3");
@@ -185,7 +330,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!(
-        "verified FOKS v0.1.9 live account {username}, user chain, PUK, KV, and KEX round trip"
+        "verified FOKS v0.1.9 live account {username}, user chain, PUK, KV, realtime chat, and KEX round trip"
     );
     Ok(())
 }

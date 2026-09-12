@@ -271,6 +271,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         }),
         lease_required: true,
         lease_expires_at: Some(1_900_000_000),
+        chat_available: true,
     };
     assert_eq!(
         serde_json::to_value(status).unwrap(),
@@ -526,7 +527,8 @@ fn phase_six_wire_responses_are_exact_bounded_and_request_bound() {
                 "merkle_epoch":8
             },
             "lease_required":true,
-            "lease_expires_at":1_900_000_000u64
+            "lease_expires_at":1_900_000_000u64,
+            "chat_available":true
         }),
         "work",
         "foks.example",
@@ -541,7 +543,8 @@ fn phase_six_wire_responses_are_exact_bounded_and_request_bound() {
                 "configured_probe":"foks.example",
                 "host":null,
                 "lease_required":false,
-                "lease_expires_at":null
+                "lease_expires_at":null,
+                "chat_available":false
             }),
             "work",
             "foks.example",
@@ -640,14 +643,16 @@ fn phase_six_wire_responses_are_exact_bounded_and_request_bound() {
             "configured_probe":"foks.example",
             "host":null,
             "lease_required":false,
-            "lease_expires_at":null
+            "lease_expires_at":null,
+                "chat_available":false
         }),
         serde_json::json!({
             "profile":"work",
             "configured_probe":"foks.example",
             "host":null,
             "lease_required":false,
-            "lease_expires_at":1
+            "lease_expires_at":1,
+            "chat_available":false
         }),
         serde_json::json!({
             "profile":"work",
@@ -655,6 +660,7 @@ fn phase_six_wire_responses_are_exact_bounded_and_request_bound() {
             "host":null,
             "lease_required":false,
             "lease_expires_at":null,
+            "chat_available":false,
             "invented":true
         }),
         serde_json::json!({
@@ -668,7 +674,8 @@ fn phase_six_wire_responses_are_exact_bounded_and_request_bound() {
                 "merkle_epoch":0
             },
             "lease_required":false,
-            "lease_expires_at":null
+            "lease_expires_at":null,
+                "chat_available":false
         }),
     ] {
         assert_eq!(

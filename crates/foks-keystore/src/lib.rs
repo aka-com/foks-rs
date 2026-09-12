@@ -108,6 +108,9 @@ mod native {
     }
 
     pub(super) fn label(key: &str) -> String {
+        if key == "native-state-v1" {
+            return "FOKS protected client state".to_owned();
+        }
         if key == "master-key-v1" {
             return "FOKS master key".to_owned();
         }
@@ -603,6 +606,10 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn native_record_labels_distinguish_keychain_purposes() {
+        assert_eq!(
+            native::label("native-state-v1"),
+            "FOKS protected client state"
+        );
         assert_eq!(native::label("master-key-v1"), "FOKS master key");
         assert_eq!(native::label("state-root-v1"), "FOKS state root binding");
         assert_eq!(

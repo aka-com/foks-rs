@@ -20,6 +20,7 @@ const RAW: World = {
       lease: { state: 'fresh', expires_in: '6 d' },
       accounts: ['personal'],
       state: 'ok',
+      chat_available: true,
     },
     {
       id: 'acme',
@@ -31,6 +32,7 @@ const RAW: World = {
       lease: { state: 'lapsed', expires_in: null },
       accounts: ['work'],
       state: 'lease-lapsed',
+      chat_available: false,
     },
     {
       id: 'partner',
@@ -42,6 +44,7 @@ const RAW: World = {
       lease: null,
       accounts: [],
       state: 'never-probed',
+      chat_available: false,
     },
   ],
   // `store` is the exact identity and matches the `stores` entry below; the

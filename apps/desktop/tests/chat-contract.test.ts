@@ -45,6 +45,8 @@ test('chat decoding preserves large sequences and rejects wrong identity and con
     id: 'cd'.repeat(16),
     sequence: '9007199254740993',
     sender: null,
+    send_time: '1700000000000',
+    insert_time: '1700000000001',
     content: { kind: 'text', text: '<script>hostile</script>' },
   };
   const reply = {
@@ -102,8 +104,10 @@ test('inbox, read, and poll results retain exact decimal state', () => {
     channel: {
       id: channel,
       name: '',
+      description: 'Team updates',
       admin: false,
       readable: true,
+      writable: true,
       read_role: 'Member (0)',
       write_role: 'Member (0)',
     },
@@ -113,11 +117,21 @@ test('inbox, read, and poll results retain exact decimal state', () => {
     unread: '9007199254740992',
     hidden: false,
     muted: false,
+    preview: {
+      sender: '01' + 'cd'.repeat(32),
+      send_time: '1700000000000',
+      insert_time: '1700000000001',
+      content: { kind: 'text', text: 'Latest update' },
+    },
   };
   const inbox = {
     scope,
     result: {
       kind: 'inbox',
+      channels: [],
+      read_retry_pending: false,
+      previews_incomplete: false,
+      blocked_channels: [],
       cursor: '9007199254740993',
       head: '9007199254740993',
       degraded: false,

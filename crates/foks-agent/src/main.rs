@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
 mod chat;
+mod chat_poll;
+#[cfg(test)]
+use chat_poll::ActiveChatPollGuard;
+use chat_poll::{handle_chat_poll, ChatPollKey};
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -731,192 +735,6 @@ async fn handle_connection(
     Ok(())
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct ChatPollKey {
-    profile: String,
-    account: String,
-}
-impl From<&TeamStoreRef> for ChatPollKey {
-    fn from(store: &TeamStoreRef) -> Self {
-        Self {
-            profile: store.profile.clone(),
-            account: store.account_alias.clone(),
-        }
-    }
-}
-struct ActiveChatPollGuard {
-    polls: Arc<Mutex<std::collections::HashSet<ChatPollKey>>>,
-    key: ChatPollKey,
-}
-impl Drop for ActiveChatPollGuard {
-    fn drop(&mut self) {
-        if let Ok(mut polls) = self.polls.lock() {
-            polls.remove(&self.key);
-        }
-    }
-}
-
-#[cfg(unix)]
-async fn handle_chat_poll(
-    stream: &mut tokio::net::UnixStream,
-    state_dir: PathBuf,
-    polling: Arc<Semaphore>,
-    active: Arc<Mutex<std::collections::HashSet<ChatPollKey>>>,
-    timeout: Duration,
-    request: Request,
-) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    let Operation::Chat { store, action } = &request.operation else {
-        return Err("chat poll dispatch received another operation".into());
-    };
-    if !action.validate() {
-        write_response(
-            stream,
-            &Response::error(
-                request.id,
-                ErrorCode::InvalidRequest,
-                "invalid chat poll request",
-            ),
-            timeout,
-        )
-        .await?;
-        return Ok(false);
-    }
-    let foks_agent_proto::chat::ChatAction::PollInbox {
-        since,
-        timeout_milliseconds,
-    } = action
-    else {
-        return Err("chat poll dispatch received another action".into());
-    };
-    let since =
-        foks_agent_proto::chat::chat_sequence(since).ok_or("chat poll cursor is invalid")?;
-    let poll_timeout = *timeout_milliseconds;
-    let key = ChatPollKey::from(store);
-    let inserted = active
-        .lock()
-        .map_err(|_| "chat poll registry is unavailable")?
-        .insert(key.clone());
-    if !inserted {
-        write_response(
-            stream,
-            &Response::error(
-                request.id,
-                ErrorCode::Busy,
-                "chat synchronization is already active for this team",
-            ),
-            timeout,
-        )
-        .await?;
-        return Ok(false);
-    }
-    let guard = ActiveChatPollGuard { polls: active, key };
-    let permit = match tokio::time::timeout(timeout, polling.acquire_owned()).await {
-        Ok(Ok(permit)) => permit,
-        Ok(Err(_)) => return Err("agent chat poll pool closed".into()),
-        Err(_) => {
-            write_response(
-                stream,
-                &Response::error(
-                    request.id,
-                    ErrorCode::Busy,
-                    "agent chat poll pool is saturated",
-                ),
-                timeout,
-            )
-            .await?;
-            return Ok(false);
-        }
-    };
-    let cancellation = CancellationToken::new();
-    let worker_cancellation = cancellation.clone();
-    let store = store.clone();
-    let id = request.id;
-    let mut task = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let _guard = guard;
-        match run_chat_poll(
-            &state_dir,
-            store,
-            since,
-            poll_timeout,
-            timeout,
-            worker_cancellation,
-        ) {
-            Ok(value) => Response::success(id, value),
-            Err(error) => dispatch_error_response(id, error.as_ref()),
-        }
-    });
-    let deadline = tokio::time::Instant::now() + CHAT_POLL_TIMEOUT;
-    let (response, close) = loop {
-        tokio::select! {
-            result = &mut task => {
-                let response = result.unwrap_or_else(|error| Response::error(
-                    id,
-                    ErrorCode::OperationFailed,
-                    format!("agent chat poll worker failed: {error}"),
-                ));
-                break (response, false);
-            }
-            _ = tokio::time::sleep_until(deadline) => {
-                cancellation.cancel();
-                let _ = tokio::time::timeout(CANCELLATION_GRACE, &mut task).await;
-                break (Response::error(
-                    id,
-                    ErrorCode::DeadlineExceeded,
-                    "chat poll operation deadline exceeded",
-                ), true);
-            }
-            result = stream.readable() => {
-                result?;
-                let mut byte = [0; 1];
-                match stream.try_read(&mut byte) {
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
-                    Ok(_) | Err(_) => {
-                        cancellation.cancel();
-                        let _ = tokio::time::timeout(CANCELLATION_GRACE, &mut task).await;
-                        return Ok(true);
-                    }
-                }
-            }
-        }
-    };
-    write_response(stream, &response, timeout).await?;
-    Ok(close)
-}
-
-fn run_chat_poll(
-    state_dir: &Path,
-    store: TeamStoreRef,
-    since: u64,
-    timeout_milliseconds: u64,
-    timeout: Duration,
-    cancellation: CancellationToken,
-) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let registry = ProfileRegistry::open(state_dir)?;
-    let session = ProfileSession::open_with_control(
-        &registry,
-        &store.profile,
-        timeout,
-        cancellation.clone(),
-    )?;
-    let context = with_vault(state_dir, &session, |session, vault| {
-        chat::prepare_poll(session, vault, &store)
-    })?;
-    drop(session);
-    drop(registry);
-    let reply = chat::poll(context, since, timeout_milliseconds)?;
-    let registry = ProfileRegistry::open(state_dir)?;
-    let session =
-        ProfileSession::open_with_control(&registry, &store.profile, timeout, cancellation)?;
-    let (_, current_scope) = with_vault(state_dir, &session, |session, vault| {
-        chat::resolve_scope(session, vault, &store)
-    })?;
-    if current_scope != reply.scope {
-        return Err(foks_client::Error::ChatIntegrity("chat poll scope changed").into());
-    }
-    Ok(serde_json::to_value(reply)?)
-}
-
 enum UploadMessage {
     Chunk(Zeroizing<Vec<u8>>),
     Commit,
@@ -1359,6 +1177,9 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
                 foks_client::Error::ChatOperationState(..) => Some(ErrorCode::ChatOperationState),
                 foks_client::Error::ChatNameConflict(..) => Some(ErrorCode::ChatNameConflict),
                 foks_client::Error::ChatRandomness(..) => Some(ErrorCode::ChatRandomness),
+                foks_client::Error::ChatChannelIntegrity(..) => {
+                    Some(ErrorCode::ChatChannelIntegrity)
+                }
                 foks_client::Error::ChatIntegrity(..) => Some(ErrorCode::ChatIntegrity),
                 _ => None,
             };
@@ -1368,6 +1189,7 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
         }
         if let Some(chat) = candidate.downcast_ref::<foks_client_db::Error>() {
             let code = match chat {
+                foks_client_db::Error::InvalidChatInbox(..) => Some(ErrorCode::ChatIntegrity),
                 foks_client_db::Error::ChatConflict(..) => Some(ErrorCode::Conflict),
                 foks_client_db::Error::ChatOperationState(..) => {
                     Some(ErrorCode::ChatOperationState)
@@ -3667,6 +3489,7 @@ fn dispatch_result(
             )?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 chat::dispatch(state_dir, session, vault, master, store, action)
+                    .map_err(chat::contextual_error)
             })
         }
         Operation::ListTeams { profile } => {
@@ -4203,6 +4026,7 @@ fn wire_server_status(status: foks_client_app::ServerStatusSnapshot) -> WireServ
         }),
         lease_required: status.lease_required,
         lease_expires_at: status.lease_expires_at,
+        chat_available: status.chat_available,
     }
 }
 

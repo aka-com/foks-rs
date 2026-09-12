@@ -92,7 +92,7 @@ mod tests {
         assert!(message.contains(
             "FOKS could not connect to the local background service at /run/user/1000/foks-rs/agent.sock"
         ));
-        assert!(message.contains("verify that foks-agent is running"));
+        assert!(message.contains("Verify that foks-agent is running"));
     }
 
     #[test]

@@ -718,7 +718,12 @@ fn exercise_chat(socket: &Path, team_id: &str, probe: &str, certificate: &Path) 
         };
         assert!(operations.is_empty());
     }
-    let R::Inbox { conversations, .. } = chat(&owner, A::SyncInbox) else {
+    let R::Inbox { conversations, .. } = chat(
+        &owner,
+        A::SyncInbox {
+            blocked_channels: Vec::new(),
+        },
+    ) else {
         panic!("expected inbox")
     };
     assert_eq!(conversations.len(), 1);
@@ -742,7 +747,12 @@ fn exercise_chat(socket: &Path, team_id: &str, probe: &str, certificate: &Path) 
         head,
         conversations,
         ..
-    } = chat(&owner, A::SyncInbox)
+    } = chat(
+        &owner,
+        A::SyncInbox {
+            blocked_channels: Vec::new(),
+        },
+    )
     else {
         panic!("expected inbox")
     };
@@ -806,10 +816,11 @@ fn exercise_chat(socket: &Path, team_id: &str, probe: &str, certificate: &Path) 
             },
             &|| cancel_flag.load(std::sync::atomic::Ordering::Acquire),
         )
+        .is_err()
     });
     std::thread::sleep(Duration::from_millis(100));
     cancelled.store(true, std::sync::atomic::Ordering::Release);
-    assert!(cancelling.join().unwrap().is_err());
+    assert!(cancelling.join().unwrap());
     std::thread::sleep(Duration::from_millis(1_100));
     let R::Poll { bumped, .. } = chat(
         &owner,

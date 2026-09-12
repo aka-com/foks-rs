@@ -29,6 +29,7 @@ pub struct ChatSession<'a> {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChatChannel {
+    pub writable: bool,
     pub metadata: RtChannelMetadata,
     pub name: RtText,
     pub description: Option<RtText>,
@@ -193,6 +194,7 @@ impl ChatSession<'_> {
             md.unreadable = true;
         }
         Ok(ChatChannel {
+            writable: readable && self.role >= md.roles.write,
             metadata: md,
             name,
             description,

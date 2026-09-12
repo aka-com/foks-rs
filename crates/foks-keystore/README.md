@@ -10,8 +10,9 @@ XChaCha20-Poly1305, rejects symlinks and unsafe names, uses private permissions,
 and publishes writes by atomic rename.
 
 `NativeCredentialStore` keeps the wrapping key and hard-state rollback
-checkpoint outside the application directory: generic-password records in the
-macOS Keychain and encrypted-session items in the Linux Secret Service default
+checkpoint outside the application directory. The standalone client combines
+its logical records in one versioned generic-password item in the macOS
+Keychain or one encrypted-session item in the Linux Secret Service default
 collection. The raw 32-byte master-key file helpers remain an explicit
 development/test fallback and do not provide an external rollback boundary.
 Windows is intentionally outside the current platform scope.

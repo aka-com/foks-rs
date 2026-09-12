@@ -123,6 +123,7 @@ impl AgentError {
             ErrorCode::ChatOperationState => ("chat-operation-state", false),
             ErrorCode::ChatNameConflict => ("chat-name-conflict", false),
             ErrorCode::ChatRandomness => ("chat-randomness", true),
+            ErrorCode::ChatChannelIntegrity => ("chat-channel-integrity", false),
             ErrorCode::ChatIntegrity => ("chat-integrity", false),
             ErrorCode::InvalidRequest => ("invalid-request", false),
             ErrorCode::VersionMismatch => ("version-mismatch", false),
@@ -140,7 +141,10 @@ impl AgentError {
         };
         let mut mapped = Self::new(slug, message, retryable);
         mapped.ambiguous = code == ErrorCode::DeadlineExceeded;
-        mapped.fatal = matches!(code, ErrorCode::VersionMismatch | ErrorCode::ChatIntegrity);
+        mapped.fatal = matches!(
+            code,
+            ErrorCode::VersionMismatch | ErrorCode::ChatIntegrity | ErrorCode::ChatChannelIntegrity
+        );
         mapped
     }
 
@@ -200,11 +204,14 @@ impl AgentTransport for ObservedTransport {
         operation: Operation,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Value, DesktopAgentError> {
-        let result = self
+        let result = match self
             .client
             .call_cancellable(operation, cancelled)
             .map_err(client_to_desktop)
-            .and_then(|response| response_result(response.result));
+        {
+            Ok(response) => response_result(response.result),
+            Err(error) => Err(error),
+        };
         self.record(&result);
         result
     }

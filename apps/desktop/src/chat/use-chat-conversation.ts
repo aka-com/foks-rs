@@ -1,221 +1,310 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { enqueueProfileWork, normalizeCommandError } from '../bridge';
+import { normalizeCommandError } from '../bridge';
 import type { Bridge } from '../bridge';
 import type {
   ChatAction,
-  ChatChannel,
-  ChatConversation,
-  ChatOperation,
   ChatReply,
+  ChatResult,
   ChatScope,
 } from '../chat-contract';
-import { failure, submissionId } from './actions';
-import { reconcileOperations } from './operations';
+import { CHAT_PENDING_ROWS } from '../chat-limits';
+import {
+  chatClient,
+  cancelled,
+  sameScope,
+  integrity,
+  channelIntegrity,
+} from './client';
+import { conversationResult, emptyConversation } from './conversation-model';
+import type { TrackedOperation } from './operations';
+import { useChatInbox } from './inbox-provider';
 
-const wait = (milliseconds: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
-const backoff = (milliseconds: number) =>
-  Math.min(
-    5_000,
-    milliseconds + Math.floor(Math.random() * Math.max(1, milliseconds / 4)),
-  );
-
-/** Owns one mounted team's request lifetime and durable operation projection. */
+/** Foreground operation owner. Account synchronization belongs to the shell. */
 export function useChatConversation(
   bridge: Bridge,
   profile: string,
   storeId: string,
 ) {
-  const [channels, setChannels] = useState<ChatChannel[]>([]);
-  const [conversations, setConversations] = useState<ChatConversation[]>([]);
-  const [pending, setPending] = useState<ChatOperation[]>([]);
+  const { service, snapshot } = useChatInbox();
+  const inbox = snapshot.get(storeId);
+  const [model, setModel] = useState(emptyConversation);
+  const current = useRef(model);
+  const setOperations = useCallback((operations: TrackedOperation[]) => {
+    current.current = { ...current.current, operations };
+    setModel(current.current);
+  }, []);
   const [error, setError] = useState('');
-  const [syncError, setSyncError] = useState('');
-  const [degraded, setDegraded] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [blocked, setBlocked] = useState('');
-  const [revision, setRevision] = useState(0);
-  const [actor, setActor] = useState<string | null>(null);
-  const blockedRef = useRef('');
-  const alive = useRef(false);
-  const generation = useRef(0);
-  const view = useRef(submissionId());
-  const scope = useRef<ChatScope | null>(null);
-  const head = useRef('0');
-  const syncing = useRef<Promise<ChatReply> | null>(null);
-  const accept = useCallback(
-    (reply: ChatReply, action: ChatAction, epoch: number) => {
-      if (!alive.current || generation.current !== epoch)
-        throw new Error('Conversation closed.');
-      if (
-        scope.current &&
-        JSON.stringify(scope.current) !== JSON.stringify(reply.scope)
-      ) {
-        const message = 'The chat identity changed. Reopen this conversation.';
-        blockedRef.current = message;
-        setBlocked(message);
-        setChannels([]);
-        setConversations([]);
-        setPending([]);
-        throw new Error(message);
-      }
-      if (!scope.current) setActor(reply.scope.actor);
-      scope.current = reply.scope;
-      setPending((old) => reconcileOperations(old, action, reply.result));
-      if (reply.result.kind === 'inbox') {
-        head.current = reply.result.head;
-        setConversations(reply.result.conversations);
-        setDegraded(reply.result.degraded);
-        setRevision((value) => value + 1);
-        setSyncError('');
-      }
-      return reply;
-    },
-    [],
+  const fatal = useRef('');
+  const owner = useRef<ReturnType<typeof chatClient> | null>(null);
+  const resolvedScope = useRef<ChatScope | null>(null);
+  const historyClients = useRef(
+    new Map<ReturnType<typeof chatClient>, string>(),
   );
-  const handleFailure = useCallback((cause: unknown, epoch: number) => {
-    const normalized = normalizeCommandError(cause);
-    if (alive.current && generation.current === epoch && normalized.fatal) {
-      blockedRef.current = normalized.message;
-      setBlocked(normalized.message);
-      setChannels([]);
-      setConversations([]);
-      setPending([]);
+  const cancelHistory = useCallback((channel?: string) => {
+    for (const [client, id] of historyClients.current) {
+      if (channel === undefined || id === channel) {
+        client.dispose();
+        historyClients.current.delete(client);
+      }
     }
-    return normalized;
+  }, []);
+  const update = useCallback((action: ChatAction, result: ChatResult) => {
+    current.current = conversationResult(current.current, action, result);
+    setModel(current.current);
   }, []);
   const request = useCallback(
     async (action: ChatAction): Promise<ChatReply> => {
-      const epoch = generation.current;
-      const viewId = view.current;
-      return enqueueProfileWork(bridge, profile, async () => {
-        if (!alive.current || generation.current !== epoch)
-          throw new Error('Conversation closed.');
-        if (blockedRef.current) throw new Error(blockedRef.current);
-        try {
-          return accept(
-            await bridge.chat(storeId, action, viewId),
-            action,
-            epoch,
-          );
-        } catch (cause) {
-          handleFailure(cause, epoch);
-          throw cause;
-        }
-      });
-    },
-    [accept, bridge, handleFailure, profile, storeId],
-  );
-  const syncInbox = useCallback((): Promise<ChatReply> => {
-    if (syncing.current) return syncing.current;
-    const run = request({ action: 'sync-inbox' });
-    syncing.current = run;
-    void run.then(
-      () => {
-        if (syncing.current === run) syncing.current = null;
-      },
-      () => {
-        if (syncing.current === run) syncing.current = null;
-      },
-    );
-    return run;
-  }, [request]);
-  const refreshPending = useCallback(async () => {
-    await request({ action: 'pending' });
-  }, [request]);
-  const refresh = useCallback(async () => {
-    const epoch = generation.current;
-    setLoading(true);
-    setError('');
-    try {
-      // Local recovery remains available when remote channel discovery fails.
-      await refreshPending();
-      const reply = await request({ action: 'channels' });
-      if (reply.result.kind === 'channels') setChannels(reply.result.channels);
-      await syncInbox();
-    } catch (cause) {
-      if (alive.current && generation.current === epoch)
-        setError(failure(cause));
-    } finally {
-      if (alive.current && generation.current === epoch) setLoading(false);
-    }
-  }, [request, refreshPending, syncInbox]);
-  const markRead = useCallback(
-    async (channel: string, sequence: string) => {
-      await request({ action: 'mark-read', channel, sequence });
-      await syncInbox();
-    },
-    [request, syncInbox],
-  );
-  const poll = useCallback(
-    async (epoch: number, viewId: string) => {
-      let retry = 250;
-      while (alive.current && generation.current === epoch) {
-        const action: ChatAction = {
-          action: 'poll-inbox',
-          since: head.current,
-          timeout_milliseconds: 25_000,
+      const client = owner.current;
+      const channel =
+        'channel' in action
+          ? action.channel
+          : action.action === 'attempt'
+            ? current.current.operations.find(
+                (op) => op.id === action.operation,
+              )?.channel
+            : undefined;
+      const checkChannel = () => {
+        if (channel && service.isChannelBlocked(storeId, channel))
+          throw channelIntegrity();
+      };
+      checkChannel();
+      if (fatal.current) throw integrity(fatal.current);
+      if (!client) throw cancelled();
+      if (
+        (action.action === 'prepare-message' ||
+          action.action === 'prepare-channel') &&
+        current.current.operations.length >= CHAT_PENDING_ROWS
+      )
+        throw {
+          code: 'chat-limit',
+          message: 'Finish saved operations before preparing more.',
+          fatal: false,
+          ambiguous: false,
+          retryable: false,
         };
-        try {
-          const reply = accept(
-            await bridge.chat(storeId, action, viewId),
-            action,
-            epoch,
-          );
-          if (reply.result.kind === 'poll' && reply.result.bumped) {
-            await syncInbox();
-            if (BigInt(head.current) <= BigInt(action.since)) {
-              setSyncError(
-                'Live updates did not advance. Retrying more slowly.',
-              );
-              await wait(backoff(retry));
-              retry = Math.min(retry * 2, 5_000);
-              continue;
-            }
-          }
-          retry = 250;
-          setSyncError('');
-        } catch (cause) {
-          if (!alive.current || generation.current !== epoch) return;
-          const normalized = handleFailure(cause, epoch);
-          if (normalized.fatal) return;
-          setSyncError(normalized.message);
-          await wait(backoff(retry));
-          retry = Math.min(retry * 2, 5_000);
+      let historyClient: ReturnType<typeof chatClient> | undefined;
+      try {
+        let transport = client;
+        if (action.action === 'history') {
+          historyClient = chatClient(bridge, profile, storeId);
+          transport = historyClient;
+          historyClients.current.set(historyClient, action.channel);
         }
+        const reply = await transport.request(action);
+        if (owner.current !== client) throw cancelled();
+        const trusted = service.getSnapshot().get(storeId)?.scope;
+        if (
+          (trusted && !sameScope(trusted, reply.scope)) ||
+          (resolvedScope.current &&
+            !sameScope(resolvedScope.current, reply.scope))
+        ) {
+          service.block(storeId, 'The chat identity changed.');
+          throw integrity();
+        }
+        resolvedScope.current = reply.scope;
+        checkChannel();
+        // History acknowledgment happens only after the history model accepts a page.
+        if (reply.result.kind !== 'history') {
+          update(action, reply.result);
+          const channels = service.getSnapshot().get(storeId)?.data?.channels;
+          if (channels)
+            setOperations(
+              current.current.operations.map((op) =>
+                channels.some((c) => c.id === op.channel && c.readable) &&
+                !service.isChannelBlocked(storeId, op.channel)
+                  ? op
+                  : { ...op, text: undefined },
+              ),
+            );
+        }
+        return reply;
+      } catch (cause) {
+        if (owner.current === client) {
+          const typed = normalizeCommandError(cause);
+          if (typed.code === 'chat-channel-integrity' && channel) {
+            service.blockChannel(storeId, channel);
+            cancelHistory(channel);
+          } else if (typed.fatal) {
+            client.dispose();
+            cancelHistory();
+            owner.current = null;
+            fatal.current = typed.message;
+            setBlocked(typed.message);
+            current.current = emptyConversation();
+            setOperations([]);
+          }
+          if (!typed.fatal && action.action === 'attempt')
+            setOperations(
+              current.current.operations.map((op) =>
+                op.id === action.operation
+                  ? { ...op, statusUnknown: true }
+                  : op,
+              ),
+            );
+          if (typed.code === 'chat-access-denied') service.invalidate(storeId);
+        }
+        throw cause;
+      } finally {
+        historyClient?.dispose();
+        if (historyClient) historyClients.current.delete(historyClient);
       }
     },
-    [accept, bridge, handleFailure, storeId, syncInbox],
+    [bridge, profile, storeId, service, update, setOperations, cancelHistory],
+  );
+  const recovery = useRef<Promise<void> | null>(null);
+  const refreshPending = useCallback(() => {
+    if (recovery.current) return recovery.current;
+    const work = (async () => {
+      await request({ action: 'pending' });
+      // Bound automatic status recovery; remaining rows retain explicit controls.
+      for (const op of current.current.operations
+        .filter((op) => op.statusUnknown && !op.observed)
+        .slice(0, 16)) {
+        try {
+          await request({ action: 'status', operation: op.id });
+        } catch (cause) {
+          if (
+            normalizeCommandError(cause).fatal ||
+            normalizeCommandError(cause).code === 'cancelled'
+          )
+            break;
+        }
+      }
+    })();
+    recovery.current = work;
+    void work
+      .finally(() => {
+        if (recovery.current === work) recovery.current = null;
+      })
+      .catch(() => {});
+    return work;
+  }, [request]);
+  const syncInbox = useCallback(async () => {
+    service.invalidate(storeId);
+  }, [service, storeId]);
+  const refresh = useCallback(async () => {
+    const client = owner.current;
+    setError('');
+    service.invalidate(storeId);
+    try {
+      await refreshPending();
+    } catch (cause) {
+      if (
+        owner.current === client &&
+        normalizeCommandError(cause).code !== 'cancelled'
+      )
+        setError(normalizeCommandError(cause).message);
+    }
+  }, [refreshPending, service, storeId]);
+  const markRead = useCallback(
+    async (channel: string, sequence: string) => {
+      try {
+        await request({ action: 'mark-read', channel, sequence });
+      } finally {
+        service.invalidate(storeId);
+      }
+    },
+    [request, service, storeId],
+  );
+  const blockHistory = useCallback(
+    (channel: string) => {
+      service.blockChannel(storeId, channel);
+      cancelHistory(channel);
+    },
+    [service, storeId, cancelHistory],
+  );
+  const acceptHistory = useCallback(
+    (
+      result: Extract<ChatResult, { kind: 'history' }>,
+      before: string | null,
+    ) => {
+      update({ action: 'history', channel: result.channel, before }, result);
+    },
+    [update],
   );
   useEffect(() => {
-    alive.current = true;
-    view.current = submissionId();
-    const viewId = view.current;
-    const epoch = generation.current;
-    void refresh().then(() => poll(epoch, viewId));
+    const client = chatClient(bridge, profile, storeId);
+    owner.current = client;
+    void refresh();
     return () => {
-      alive.current = false;
-      generation.current = epoch + 1;
-      scope.current = null;
-      syncing.current = null;
-      void bridge.cancelChat(viewId).catch(() => {});
+      owner.current = null;
+      client.dispose();
+      cancelHistory();
+      current.current = emptyConversation();
+      recovery.current = null;
+      resolvedScope.current = null;
     };
-  }, [refresh, poll, bridge]);
+  }, [bridge, profile, storeId, refresh, cancelHistory]);
+  useEffect(() => {
+    if (inbox?.data) {
+      for (const channel of inbox.blockedChannels) cancelHistory(channel);
+      const readable = new Set(
+        inbox.data.channels
+          .filter((c) => c.readable && !inbox.blockedChannels.has(c.id))
+          .map((c) => c.id),
+      );
+      current.current = {
+        ...current.current,
+        operations: current.current.operations.map((op) =>
+          readable.has(op.channel) ? op : { ...op, text: undefined },
+        ),
+        history:
+          current.current.history &&
+          readable.has(current.current.history.channel)
+            ? current.current.history
+            : null,
+      };
+      update(
+        { action: 'channels' },
+        { kind: 'channels', channels: inbox.data.channels, version: '0' },
+      );
+    }
+  }, [inbox?.data, inbox?.blockedChannels, update, cancelHistory]);
+  useEffect(() => {
+    if (inbox?.state === 'blocked') {
+      owner.current?.dispose();
+      owner.current = null;
+      cancelHistory();
+      fatal.current = inbox.error;
+      setBlocked(inbox.error);
+      current.current = emptyConversation();
+      setOperations([]);
+    }
+    if (inbox?.state === 'unavailable' || inbox?.state === 'loading') {
+      current.current = { ...current.current, history: null };
+      current.current.operations = current.current.operations.map((op) => ({
+        ...op,
+        text: undefined,
+      }));
+      setOperations(current.current.operations);
+    }
+  }, [inbox?.state, inbox?.error, setOperations, cancelHistory]);
   return {
-    channels,
-    conversations,
-    pending,
-    error,
-    syncError,
-    degraded,
-    loading,
+    channels: inbox?.data?.channels ?? [],
+    conversations: inbox?.data?.conversations ?? [],
+    pending: model.operations,
+    history: model.history,
+    error:
+      error ||
+      (!inbox?.data || inbox?.state === 'unavailable'
+        ? (inbox?.error ?? '')
+        : ''),
+    syncError: inbox?.data ? inbox.error : '',
+    degraded: inbox?.data?.degraded ?? false,
+    loading: !inbox || (inbox.state === 'loading' && !inbox.error),
     blocked,
-    revision,
-    actor,
+    blockedChannels: inbox?.blockedChannels ?? EMPTY_BLOCKED,
+    revision: inbox?.revision ?? 0,
+    actor: inbox?.scope?.actor ?? null,
     request,
     refresh,
     refreshPending,
     syncInbox,
     markRead,
+    acceptHistory,
+    blockHistory,
   };
 }
+
+const EMPTY_BLOCKED: ReadonlySet<string> = new Set();

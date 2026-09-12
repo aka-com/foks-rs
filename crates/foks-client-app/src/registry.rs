@@ -1065,6 +1065,7 @@ pub struct ServerStatusSnapshot {
     pub host: Option<StoredHostStatus>,
     pub lease_required: bool,
     pub lease_expires_at: Option<u64>,
+    pub chat_available: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1306,6 +1307,7 @@ fn server_status_snapshot(
             .protocol
             .last_artifact()
             .map(|artifact| artifact.artifact.expires_at),
+        chat_available: profile.require(Capability::Chat).is_ok(),
     })
 }
 
@@ -1443,9 +1445,11 @@ mod tests {
         let v019_status = server_status_snapshot(&v019, None).unwrap();
         assert!(!v019_status.lease_required);
         assert!(v019_status.lease_expires_at.is_none());
+        assert!(v019_status.chat_available);
         let current_status = server_status_snapshot(&current, None).unwrap();
         assert!(current_status.lease_required);
         assert!(current_status.lease_expires_at.is_none());
+        assert!(!current_status.chat_available);
     }
 
     fn assert_no_pending_publication(registry: &ProfileRegistry, name: &str) {

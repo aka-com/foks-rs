@@ -4,6 +4,8 @@ import {
   CHAT_PAGE_ROWS,
   CHAT_CHANNEL_ROWS,
   CHAT_NAME_BYTES,
+  CHAT_DESCRIPTION_BYTES,
+  CHAT_SNIPPET_BYTES,
   CHAT_LABEL_BYTES,
   CHAT_MISSING_PREDECESSORS,
   CHAT_PENDING_ROWS,
@@ -15,7 +17,7 @@ export type ChatAction =
   | { action: 'channels' }
   | { action: 'pending' }
   | { action: 'inbox' }
-  | { action: 'sync-inbox' }
+  | { action: 'sync-inbox'; blocked_channels?: string[] }
   | { action: 'mark-read'; channel: string; sequence: string }
   | { action: 'poll-inbox'; since: string; timeout_milliseconds: number }
   | { action: 'history'; channel: string; before: string | null }
@@ -45,8 +47,10 @@ export interface ChatScope {
 export interface ChatChannel {
   id: string;
   name: string;
+  description: string | null;
   admin: boolean;
   readable: boolean;
+  writable: boolean;
   read_role: string;
   write_role: string;
 }
@@ -54,6 +58,15 @@ export interface ChatMessage {
   id: string;
   sequence: string;
   sender: string | null;
+  send_time: string;
+  insert_time: string;
+  content:
+    { kind: 'text'; text: string } | { kind: 'unsupported' | 'oversized' };
+}
+export interface ChatPreview {
+  sender: string | null;
+  send_time: string;
+  insert_time: string;
   content:
     { kind: 'text'; text: string } | { kind: 'unsupported' | 'oversized' };
 }
@@ -65,6 +78,7 @@ export interface ChatConversation {
   unread: string;
   hidden: boolean;
   muted: boolean;
+  preview: ChatPreview | null;
 }
 export interface ChatOperation {
   id: string;
@@ -85,6 +99,10 @@ export type ChatResult =
     }
   | {
       kind: 'inbox';
+      channels: ChatChannel[];
+      read_retry_pending: boolean;
+      previews_incomplete: boolean;
+      blocked_channels: string[];
       cursor: string;
       head: string;
       degraded: boolean;
@@ -150,19 +168,36 @@ function channel(value: unknown): ChatChannel {
   const c = object(value, [
     'id',
     'name',
+    'description',
     'admin',
     'readable',
+    'writable',
     'read_role',
     'write_role',
   ]);
+  if (bool(c.writable) && !bool(c.readable)) return fail();
   return {
     id: chatId(c.id),
     name: text(c.name, CHAT_NAME_BYTES),
+    description:
+      c.description === null
+        ? null
+        : text(c.description, CHAT_DESCRIPTION_BYTES),
     admin: bool(c.admin),
     readable: bool(c.readable),
+    writable: bool(c.writable),
     read_role: text(c.read_role),
     write_role: text(c.write_role),
   };
+}
+function content(value: unknown, maximum: number): ChatMessage['content'] {
+  const c = object(value);
+  object(c, c.kind === 'text' ? ['kind', 'text'] : ['kind']);
+  return c.kind === 'text'
+    ? { kind: 'text', text: text(c.text, maximum) }
+    : c.kind === 'unsupported' || c.kind === 'oversized'
+      ? { kind: c.kind }
+      : fail();
 }
 function operation(value: unknown): ChatOperation {
   const v = object(value, [
@@ -258,15 +293,14 @@ export function decodeChatReply(
     const channel = chatId(r.channel);
     if (channel !== action.channel) return fail();
     const messages = array(r.messages, CHAT_PAGE_ROWS, (value): ChatMessage => {
-      const m = object(value, ['id', 'sequence', 'sender', 'content']);
-      const c = object(m.content);
-      object(c, c.kind === 'text' ? ['kind', 'text'] : ['kind']);
-      const content: ChatMessage['content'] =
-        c.kind === 'text'
-          ? { kind: 'text', text: text(c.text, CHAT_TEXT_BYTES) }
-          : c.kind === 'unsupported' || c.kind === 'oversized'
-            ? { kind: c.kind }
-            : fail();
+      const m = object(value, [
+        'id',
+        'sequence',
+        'sender',
+        'send_time',
+        'insert_time',
+        'content',
+      ]);
       const seq = sequence(m.sequence);
       if (
         seq === '0' ||
@@ -277,7 +311,9 @@ export function decodeChatReply(
         id: chatId(m.id),
         sequence: seq,
         sender: m.sender === null ? null : entity(m.sender, '01'),
-        content,
+        send_time: sequence(m.send_time),
+        insert_time: sequence(m.insert_time),
+        content: content(m.content, CHAT_TEXT_BYTES),
       };
     });
     if (
@@ -311,7 +347,17 @@ export function decodeChatReply(
     r.kind === 'inbox' &&
     (action.action === 'inbox' || action.action === 'sync-inbox')
   ) {
-    object(r, ['kind', 'cursor', 'head', 'degraded', 'conversations']);
+    object(r, [
+      'kind',
+      'cursor',
+      'head',
+      'degraded',
+      'conversations',
+      'channels',
+      'read_retry_pending',
+      'previews_incomplete',
+      'blocked_channels',
+    ]);
     const cursor = sequence(r.cursor);
     const head = sequence(r.head);
     const degraded = bool(r.degraded);
@@ -329,10 +375,28 @@ export function decodeChatReply(
           'unread',
           'hidden',
           'muted',
+          'preview',
         ]);
         const inboxVersion = sequence(c.inbox_version);
         const pendingRead =
           c.pending_read === null ? null : sequence(c.pending_read);
+        const preview =
+          c.preview === null
+            ? null
+            : (() => {
+                const p = object(c.preview, [
+                  'sender',
+                  'send_time',
+                  'insert_time',
+                  'content',
+                ]);
+                return {
+                  sender: p.sender === null ? null : entity(p.sender, '01'),
+                  send_time: sequence(p.send_time),
+                  insert_time: sequence(p.insert_time),
+                  content: content(p.content, CHAT_SNIPPET_BYTES),
+                };
+              })();
         const decoded = {
           channel: channel(c.channel),
           inbox_version: inboxVersion,
@@ -341,6 +405,7 @@ export function decodeChatReply(
           unread: sequence(c.unread),
           hidden: bool(c.hidden),
           muted: bool(c.muted),
+          preview,
         };
         if (
           inboxVersion === '0' ||
@@ -359,7 +424,29 @@ export function decodeChatReply(
         conversations.length
     )
       return fail();
-    result = { kind: 'inbox', cursor, head, degraded, conversations };
+    const discovered = array(r.channels, CHAT_CHANNEL_ROWS, channel);
+    if (new Set(discovered.map((c) => c.id)).size !== discovered.length)
+      return fail();
+    const blocked = array(r.blocked_channels, CHAT_CHANNEL_ROWS, chatId);
+    if (
+      new Set(blocked).size !== blocked.length ||
+      blocked.some((id) => !discovered.some((c) => c.id === id)) ||
+      conversations.some(
+        (c) => blocked.includes(c.channel.id) && c.preview !== null,
+      )
+    )
+      return fail();
+    result = {
+      kind: 'inbox',
+      blocked_channels: blocked,
+      cursor,
+      head,
+      degraded,
+      conversations,
+      channels: discovered,
+      read_retry_pending: bool(r.read_retry_pending),
+      previews_incomplete: bool(r.previews_incomplete),
+    };
   } else if (r.kind === 'read' && action.action === 'mark-read') {
     object(r, ['kind', 'channel', 'sequence']);
     const channel = chatId(r.channel);

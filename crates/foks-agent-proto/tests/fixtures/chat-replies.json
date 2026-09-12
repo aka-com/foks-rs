@@ -33,6 +33,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -71,6 +73,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": null,
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "unsupported"
               }
@@ -108,6 +112,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "oversized"
               }
@@ -145,6 +151,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -183,6 +191,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -221,6 +231,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "03abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -259,6 +271,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -266,9 +280,7 @@
             }
           ],
           "before": "9007199254740993",
-          "missing_predecessors": [
-            "0"
-          ]
+          "missing_predecessors": ["0"]
         }
       }
     },
@@ -299,6 +311,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -306,9 +320,7 @@
             }
           ],
           "before": "9007199254740993",
-          "missing_predecessors": [
-            "01"
-          ]
+          "missing_predecessors": ["01"]
         }
       }
     },
@@ -339,6 +351,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -428,6 +442,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -518,6 +534,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -527,6 +545,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -565,6 +585,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -574,6 +596,8 @@
               "id": "efefefefefefefefefefefefefefefef",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -612,6 +636,8 @@
               "id": "00000000000000000000000000000000",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -650,6 +676,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9223372036854775808",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -688,6 +716,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -726,6 +756,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -764,6 +796,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -988,6 +1022,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -1028,6 +1064,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -1066,6 +1104,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -1105,6 +1145,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>"
@@ -1144,6 +1186,8 @@
               "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
               "sequence": "9007199254740993",
               "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
               "content": {
                 "kind": "text",
                 "text": "<script>plain text</script>",
@@ -1179,11 +1223,13 @@
           "channels": [
             {
               "id": "abababababababababababababababab",
+              "description": null,
               "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
               "admin": false,
               "readable": true,
               "read_role": "Member (0)",
-              "write_role": "Member (0)"
+              "write_role": "Member (0)",
+              "writable": true
             }
           ]
         }
@@ -1212,13 +1258,559 @@
           "channels": [
             {
               "id": "abababababababababababababababab",
+              "description": null,
               "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9x",
               "admin": false,
               "readable": true,
               "read_role": "Member (0)",
-              "write_role": "Member (0)"
+              "write_role": "Member (0)",
+              "writable": true
             }
           ]
+        }
+      }
+    },
+    {
+      "name": "writable unreadable discovery",
+      "valid": false,
+      "action": {
+        "action": "channels"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "channels",
+          "version": "1",
+          "channels": [
+            {
+              "id": "abababababababababababababababab",
+              "description": null,
+              "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+              "admin": false,
+              "readable": false,
+              "read_role": "Member (0)",
+              "write_role": "Member (0)",
+              "writable": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "combined inbox snapshot",
+      "valid": true,
+      "action": {
+        "action": "sync-inbox"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "inbox",
+          "channels": [
+            {
+              "id": "abababababababababababababababab",
+              "description": null,
+              "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+              "admin": false,
+              "readable": true,
+              "read_role": "Member (0)",
+              "write_role": "Member (0)",
+              "writable": true
+            }
+          ],
+          "conversations": [
+            {
+              "channel": {
+                "id": "abababababababababababababababab",
+                "description": null,
+                "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+                "admin": false,
+                "readable": true,
+                "read_role": "Member (0)",
+                "write_role": "Member (0)",
+                "writable": true
+              },
+              "inbox_version": "1",
+              "read_through": "0",
+              "pending_read": null,
+              "unread": "0",
+              "hidden": false,
+              "muted": false,
+              "preview": null
+            }
+          ],
+          "head": "1",
+          "cursor": "1",
+          "degraded": false,
+          "read_retry_pending": false,
+          "previews_incomplete": false,
+          "blocked_channels": []
+        }
+      }
+    },
+    {
+      "name": "unreadable inbox conversation",
+      "valid": false,
+      "action": {
+        "action": "sync-inbox"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "inbox",
+          "channels": [
+            {
+              "id": "abababababababababababababababab",
+              "description": null,
+              "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+              "admin": false,
+              "readable": false,
+              "read_role": "Member (0)",
+              "write_role": "Member (0)",
+              "writable": false
+            }
+          ],
+          "conversations": [
+            {
+              "channel": {
+                "id": "abababababababababababababababab",
+                "description": null,
+                "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+                "admin": false,
+                "readable": false,
+                "read_role": "Member (0)",
+                "write_role": "Member (0)",
+                "writable": false
+              },
+              "inbox_version": "1",
+              "read_through": "0",
+              "pending_read": null,
+              "unread": "0",
+              "hidden": false,
+              "muted": false,
+              "preview": null
+            }
+          ],
+          "head": "1",
+          "cursor": "1",
+          "degraded": false,
+          "read_retry_pending": false,
+          "previews_incomplete": false,
+          "blocked_channels": []
+        }
+      }
+    },
+    {
+      "name": "duplicate discovered channel",
+      "valid": false,
+      "action": {
+        "action": "sync-inbox"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "inbox",
+          "channels": [
+            {
+              "id": "abababababababababababababababab",
+              "description": null,
+              "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+              "admin": false,
+              "readable": true,
+              "read_role": "Member (0)",
+              "write_role": "Member (0)",
+              "writable": true
+            },
+            {
+              "id": "abababababababababababababababab",
+              "description": null,
+              "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+              "admin": false,
+              "readable": true,
+              "read_role": "Member (0)",
+              "write_role": "Member (0)",
+              "writable": true
+            }
+          ],
+          "conversations": [
+            {
+              "channel": {
+                "id": "abababababababababababababababab",
+                "description": null,
+                "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+                "admin": false,
+                "readable": true,
+                "read_role": "Member (0)",
+                "write_role": "Member (0)",
+                "writable": true
+              },
+              "inbox_version": "1",
+              "read_through": "0",
+              "pending_read": null,
+              "unread": "0",
+              "hidden": false,
+              "muted": false,
+              "preview": null
+            }
+          ],
+          "head": "1",
+          "cursor": "1",
+          "degraded": false,
+          "read_retry_pending": false,
+          "previews_incomplete": false,
+          "blocked_channels": []
+        }
+      }
+    },
+    {
+      "name": "writable unreadable nested channel",
+      "valid": false,
+      "action": {
+        "action": "sync-inbox"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "inbox",
+          "channels": [
+            {
+              "id": "abababababababababababababababab",
+              "description": null,
+              "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+              "admin": false,
+              "readable": false,
+              "read_role": "Member (0)",
+              "write_role": "Member (0)",
+              "writable": true
+            }
+          ],
+          "conversations": [
+            {
+              "channel": {
+                "id": "abababababababababababababababab",
+                "description": null,
+                "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+                "admin": false,
+                "readable": false,
+                "read_role": "Member (0)",
+                "write_role": "Member (0)",
+                "writable": true
+              },
+              "inbox_version": "1",
+              "read_through": "0",
+              "pending_read": null,
+              "unread": "0",
+              "hidden": false,
+              "muted": false,
+              "preview": null
+            }
+          ],
+          "head": "1",
+          "cursor": "1",
+          "degraded": false,
+          "read_retry_pending": false,
+          "previews_incomplete": false,
+          "blocked_channels": []
+        }
+      }
+    },
+    {
+      "name": "quarantined channel snapshot",
+      "valid": true,
+      "action": {
+        "action": "sync-inbox"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "inbox",
+          "channels": [
+            {
+              "id": "abababababababababababababababab",
+              "description": null,
+              "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+              "admin": false,
+              "readable": true,
+              "read_role": "Member (0)",
+              "write_role": "Member (0)",
+              "writable": true
+            }
+          ],
+          "conversations": [
+            {
+              "channel": {
+                "id": "abababababababababababababababab",
+                "description": null,
+                "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+                "admin": false,
+                "readable": true,
+                "read_role": "Member (0)",
+                "write_role": "Member (0)",
+                "writable": true
+              },
+              "inbox_version": "1",
+              "read_through": "0",
+              "pending_read": null,
+              "unread": "0",
+              "hidden": false,
+              "muted": false,
+              "preview": null
+            }
+          ],
+          "head": "1",
+          "cursor": "1",
+          "degraded": false,
+          "read_retry_pending": false,
+          "previews_incomplete": false,
+          "blocked_channels": ["abababababababababababababababab"]
+        }
+      }
+    },
+    {
+      "name": "duplicate quarantine",
+      "valid": false,
+      "action": {
+        "action": "sync-inbox"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "inbox",
+          "channels": [
+            {
+              "id": "abababababababababababababababab",
+              "description": null,
+              "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+              "admin": false,
+              "readable": true,
+              "read_role": "Member (0)",
+              "write_role": "Member (0)",
+              "writable": true
+            }
+          ],
+          "conversations": [
+            {
+              "channel": {
+                "id": "abababababababababababababababab",
+                "description": null,
+                "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+                "admin": false,
+                "readable": true,
+                "read_role": "Member (0)",
+                "write_role": "Member (0)",
+                "writable": true
+              },
+              "inbox_version": "1",
+              "read_through": "0",
+              "pending_read": null,
+              "unread": "0",
+              "hidden": false,
+              "muted": false,
+              "preview": null
+            }
+          ],
+          "head": "1",
+          "cursor": "1",
+          "degraded": false,
+          "read_retry_pending": false,
+          "previews_incomplete": false,
+          "blocked_channels": [
+            "abababababababababababababababab",
+            "abababababababababababababababab"
+          ]
+        }
+      }
+    },
+    {
+      "name": "unknown quarantined channel",
+      "valid": false,
+      "action": {
+        "action": "sync-inbox"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "inbox",
+          "channels": [
+            {
+              "id": "abababababababababababababababab",
+              "description": null,
+              "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+              "admin": false,
+              "readable": true,
+              "read_role": "Member (0)",
+              "write_role": "Member (0)",
+              "writable": true
+            }
+          ],
+          "conversations": [
+            {
+              "channel": {
+                "id": "abababababababababababababababab",
+                "description": null,
+                "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+                "admin": false,
+                "readable": true,
+                "read_role": "Member (0)",
+                "write_role": "Member (0)",
+                "writable": true
+              },
+              "inbox_version": "1",
+              "read_through": "0",
+              "pending_read": null,
+              "unread": "0",
+              "hidden": false,
+              "muted": false,
+              "preview": null
+            }
+          ],
+          "head": "1",
+          "cursor": "1",
+          "degraded": false,
+          "read_retry_pending": false,
+          "previews_incomplete": false,
+          "blocked_channels": ["cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"]
+        }
+      }
+    },
+    {
+      "name": "quarantined preview leaked",
+      "valid": false,
+      "action": {
+        "action": "sync-inbox"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "inbox",
+          "channels": [
+            {
+              "id": "abababababababababababababababab",
+              "description": null,
+              "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+              "admin": false,
+              "readable": true,
+              "read_role": "Member (0)",
+              "write_role": "Member (0)",
+              "writable": true
+            }
+          ],
+          "conversations": [
+            {
+              "channel": {
+                "id": "abababababababababababababababab",
+                "description": null,
+                "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+                "admin": false,
+                "readable": true,
+                "read_role": "Member (0)",
+                "write_role": "Member (0)",
+                "writable": true
+              },
+              "inbox_version": "1",
+              "read_through": "0",
+              "pending_read": null,
+              "unread": "0",
+              "hidden": false,
+              "muted": false,
+              "preview": {
+                "sender": null,
+                "send_time": "1",
+                "insert_time": "1",
+                "content": {
+                  "kind": "text",
+                  "text": "must not be published"
+                }
+              }
+            }
+          ],
+          "head": "1",
+          "cursor": "1",
+          "degraded": false,
+          "read_retry_pending": false,
+          "previews_incomplete": false,
+          "blocked_channels": ["abababababababababababababababab"]
         }
       }
     }

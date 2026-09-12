@@ -1,3 +1,5 @@
+import type { World } from './model';
+import { cancelled } from './chat/client';
 import { CHAT_PAGE_ROWS } from './chat-limits';
 import type {
   ChatAction,
@@ -8,7 +10,25 @@ import type {
   ChatResult,
 } from './chat-contract';
 /** In-memory demo only; native chat never writes browser storage. */
-export function mockChat() {
+export function mockChat(world?: World) {
+  const accounts = new Map<
+    string,
+    { version: bigint; waiters: Set<() => void>; polling: boolean }
+  >();
+  const views = new Map<string, Set<() => void>>();
+  const accountFor = (storeId: string) => {
+    const store = world?.stores.find((s) => s.id === storeId);
+    const key = JSON.stringify([
+      store?.server ?? 'demo',
+      store?.account ?? 'me',
+    ]);
+    let account = accounts.get(key);
+    if (!account) {
+      account = { version: 1n, waiters: new Set(), polling: false };
+      accounts.set(key, account);
+    }
+    return { account, store };
+  };
   const teams = new Map<
     string,
     {
@@ -23,7 +43,12 @@ export function mockChat() {
     }
   >();
   let counter = 10;
-  return async (storeId: string, action: ChatAction): Promise<ChatReply> => {
+  const chat = async (
+    storeId: string,
+    action: ChatAction,
+    viewId = '',
+  ): Promise<ChatReply> => {
+    const { account, store } = accountFor(storeId);
     let team = teams.get(storeId);
     if (!team) {
       const id = 'ab'.repeat(16);
@@ -32,8 +57,10 @@ export function mockChat() {
           {
             id,
             name: '',
+            description: 'A place for the whole team.',
             admin: false,
             readable: true,
+            writable: true,
             read_role: 'Member (0)',
             write_role: 'Member (0)',
           },
@@ -46,6 +73,8 @@ export function mockChat() {
                 id: 'cd'.repeat(16),
                 sequence: '1',
                 sender: null,
+                send_time: '1700000000000',
+                insert_time: '1700000000001',
                 content: { kind: 'text', text: 'Team chat is ready.' },
               },
             ],
@@ -61,10 +90,11 @@ export function mockChat() {
       teams.set(storeId, team);
     }
     const bump = (channel: string) => {
-      team.inboxVersion += 1n;
-      team.versions.set(channel, team.inboxVersion);
-      for (const wake of team.waiters) wake();
-      team.waiters.clear();
+      account.version += 1n;
+      team.inboxVersion = account.version;
+      team.versions.set(channel, account.version);
+      for (const wake of account.waiters) wake();
+      account.waiters.clear();
     };
     let result: ChatResult;
     if (action.action === 'channels')
@@ -92,11 +122,23 @@ export function mockChat() {
     } else if (action.action === 'inbox' || action.action === 'sync-inbox') {
       result = {
         kind: 'inbox',
-        cursor: String(team.inboxVersion),
-        head: String(team.inboxVersion),
+        channels: [...team.channels],
+        read_retry_pending: false,
+        previews_incomplete: false,
+        blocked_channels:
+          action.action === 'sync-inbox'
+            ? (action.blocked_channels ?? []).filter((id) =>
+                team.channels.some((c) => c.id === id),
+              )
+            : [],
+        cursor: String(account.version),
+        head: String(account.version),
         degraded: false,
         conversations: team.channels.map((channel) => {
           const rows = team.messages.get(channel.id) ?? [];
+          const blocked =
+            action.action === 'sync-inbox' &&
+            action.blocked_channels?.includes(channel.id);
           const last = rows.at(-1);
           const readThrough = team.reads.get(channel.id) ?? 0n;
           const lastSequence = last ? BigInt(last.sequence) : 0n;
@@ -110,6 +152,23 @@ export function mockChat() {
             ),
             hidden: false,
             muted: false,
+            preview:
+              last && !blocked
+                ? {
+                    sender: last.sender,
+                    send_time: last.send_time,
+                    insert_time: last.insert_time,
+                    content:
+                      last.content.kind === 'text'
+                        ? {
+                            kind: 'text',
+                            text: last.content.text
+                              .split(/[\r\n]/, 1)[0]
+                              .slice(0, 512),
+                          }
+                        : last.content,
+                  }
+                : null,
           };
         }),
       };
@@ -126,29 +185,51 @@ export function mockChat() {
         sequence: action.sequence,
       };
     } else if (action.action === 'poll-inbox') {
+      if (account.polling)
+        throw {
+          code: 'busy',
+          message: 'Account already polling.',
+          fatal: false,
+          retryable: true,
+          ambiguous: false,
+        };
+      account.polling = true;
       const since = BigInt(action.since);
-      if (team.inboxVersion <= since) {
-        let wake!: () => void;
-        const changed = new Promise<void>((resolve) => {
-          wake = resolve;
-          team.waiters.add(wake);
-        });
-        await Promise.race([
-          changed,
-          new Promise<void>((resolve) =>
-            setTimeout(
-              resolve,
+      try {
+        if (account.version <= since) {
+          await new Promise<void>((resolve, reject) => {
+            const cleanup = () => {
+              clearTimeout(timer);
+              account.waiters.delete(wake);
+              views.get(viewId)?.delete(cancel);
+              if (!views.get(viewId)?.size) views.delete(viewId);
+            };
+            const wake = () => {
+              cleanup();
+              resolve();
+            };
+            const cancel = () => {
+              cleanup();
+              reject(cancelled());
+            };
+            const timer = setTimeout(
+              wake,
               Math.min(action.timeout_milliseconds || 250, 250),
-            ),
-          ),
-        ]);
-        team.waiters.delete(wake);
+            );
+            account.waiters.add(wake);
+            const owned = views.get(viewId) ?? new Set();
+            owned.add(cancel);
+            views.set(viewId, owned);
+          });
+        }
+        result = {
+          kind: 'poll',
+          bumped: account.version > since,
+          inbox_version: String(account.version),
+        };
+      } finally {
+        account.polling = false;
       }
-      result = {
-        kind: 'poll',
-        bumped: team.inboxVersion > since,
-        inbox_version: String(team.inboxVersion),
-      };
     } else if (action.action === 'pending')
       result = {
         kind: 'pending',
@@ -190,8 +271,10 @@ export function mockChat() {
           team.channels.push({
             id: op.channel,
             name: submitted.name,
+            description: null,
             admin: submitted.admin,
             readable: true,
+            writable: true,
             read_role: submitted.admin ? 'Admin' : 'Member (0)',
             write_role: submitted.admin ? 'Admin' : 'Member (0)',
           });
@@ -206,6 +289,8 @@ export function mockChat() {
             id: op.id,
             sequence: op.sequence,
             sender: '01' + 'ab'.repeat(32),
+            send_time: String(Date.now()),
+            insert_time: String(Date.now()),
             content: { kind: 'text', text: submitted.text },
           });
           team.messages.set(op.channel, rows);
@@ -219,10 +304,11 @@ export function mockChat() {
     return {
       scope: {
         store: {
-          profile: 'demo',
-          account_alias: 'me',
-          team_alias: storeId,
-          team_id: '03' + 'ab'.repeat(32),
+          profile: store?.server ?? 'demo',
+          account_alias: store?.account ?? 'me',
+          team_alias: store?.kind === 'team' ? store.alias : storeId,
+          team_id:
+            store?.kind === 'team' ? store.team_id_hex : '03' + 'ab'.repeat(32),
         },
         host: '02' + 'ab'.repeat(32),
         actor: '01' + 'ab'.repeat(32),
@@ -230,4 +316,9 @@ export function mockChat() {
       result,
     };
   };
+  return Object.assign(chat, {
+    cancel: async (view: string) => {
+      for (const cancel of [...(views.get(view) ?? [])]) cancel();
+    },
+  });
 }

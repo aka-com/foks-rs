@@ -242,6 +242,12 @@ fn local_team_graph_path_is_unavailable(error: &Error) -> bool {
     )
 }
 
+type AuthenticatedUserSettings = (
+    MembershipChainTail,
+    Option<PassphraseInfo>,
+    Vec<(u64, [u8; 32], PassphraseInfo)>,
+);
+
 impl FoksClient {
     pub fn load_generic_chain(
         &self,
@@ -266,11 +272,7 @@ impl FoksClient {
         host: &PinnedHost,
         credential: &DeviceCredential,
         user: &VerifiedUserState,
-    ) -> Result<(
-        MembershipChainTail,
-        Option<PassphraseInfo>,
-        Vec<(u64, [u8; 32], PassphraseInfo)>,
-    )> {
+    ) -> Result<AuthenticatedUserSettings> {
         let response = self.call(
             host,
             &host.user,
@@ -299,11 +301,7 @@ impl FoksClient {
         host: &PinnedHost,
         credential: &YubiCredential<'_>,
         user: &VerifiedUserState,
-    ) -> Result<(
-        MembershipChainTail,
-        Option<PassphraseInfo>,
-        Vec<(u64, [u8; 32], PassphraseInfo)>,
-    )> {
+    ) -> Result<AuthenticatedUserSettings> {
         let response = self.call_with_material(
             host,
             &host.user,

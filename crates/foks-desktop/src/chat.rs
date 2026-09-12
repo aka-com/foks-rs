@@ -16,10 +16,30 @@ fn entity(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 fn valid_channel(channel: &ChatChannel) -> bool {
-    valid_chat_id(&channel.id)
+    (!channel.writable || channel.readable)
+        && valid_chat_id(&channel.id)
         && channel.name.expose().len() <= CHAT_NAME_BYTES
+        && channel
+            .description
+            .as_ref()
+            .is_none_or(|description| description.expose().len() <= CHAT_DESCRIPTION_BYTES)
         && channel.read_role.len() <= CHAT_LABEL_BYTES
         && channel.write_role.len() <= CHAT_LABEL_BYTES
+}
+fn valid_content(content: &ChatContent, maximum: usize) -> bool {
+    match content {
+        ChatContent::Text { text } => text.expose().len() <= maximum,
+        ChatContent::Unsupported | ChatContent::Oversized => true,
+    }
+}
+fn valid_preview(preview: &ChatPreview) -> bool {
+    preview
+        .sender
+        .as_ref()
+        .is_none_or(|sender| entity(sender) && sender.starts_with("01"))
+        && chat_sequence(&preview.send_time).is_some()
+        && chat_sequence(&preview.insert_time).is_some()
+        && valid_content(&preview.content, CHAT_SNIPPET_BYTES)
 }
 fn valid_operation(op: &ChatOperation) -> bool {
     valid_chat_id(&op.id)
@@ -91,10 +111,9 @@ pub fn validate_chat_reply(
                         && m.sender
                             .as_ref()
                             .is_none_or(|s| entity(s) && s.starts_with("01"))
-                        && match &m.content {
-                            ChatContent::Text { text } => text.expose().len() <= CHAT_TEXT_BYTES,
-                            _ => true,
-                        }
+                        && chat_sequence(&m.send_time).is_some()
+                        && chat_sequence(&m.insert_time).is_some()
+                        && valid_content(&m.content, CHAT_TEXT_BYTES)
                 })
                 && *before
                     == messages
@@ -105,12 +124,15 @@ pub fn validate_chat_reply(
                         .map(|n| n.to_string())
         }
         (
-            ChatAction::Inbox | ChatAction::SyncInbox,
+            ChatAction::Inbox | ChatAction::SyncInbox { .. },
             ChatResult::Inbox {
+                channels,
                 cursor,
                 head,
                 degraded,
                 conversations,
+                blocked_channels,
+                ..
             },
         ) => {
             let Some(cursor) = chat_sequence(cursor) else {
@@ -121,11 +143,23 @@ pub fn validate_chat_reply(
             };
             let mut ids = HashSet::new();
             let mut versions = HashSet::new();
-            cursor <= head
+            let mut channel_ids = HashSet::new();
+            channels.len() <= CHAT_CHANNEL_ROWS
+                && channels
+                    .iter()
+                    .all(|c| valid_channel(c) && channel_ids.insert(&c.id))
+                && blocked_channels.len() <= CHAT_CHANNEL_ROWS
+                && blocked_channels.iter().collect::<HashSet<_>>().len() == blocked_channels.len()
+                && blocked_channels.iter().all(|id| channel_ids.contains(id))
+                && conversations
+                    .iter()
+                    .all(|c| !blocked_channels.contains(&c.channel.id) || c.preview.is_none())
+                && cursor <= head
                 && *degraded == (cursor < head)
                 && conversations.len() <= CHAT_INBOX_ROWS
                 && conversations.iter().all(|conversation| {
                     valid_channel(&conversation.channel)
+                        && conversation.channel.readable
                         && ids.insert(&conversation.channel.id)
                         && chat_sequence(&conversation.inbox_version)
                             .is_some_and(|version| version > 0 && version <= head)
@@ -136,6 +170,7 @@ pub fn validate_chat_reply(
                             .as_ref()
                             .is_none_or(|value| chat_sequence(value).is_some_and(|value| value > 0))
                         && chat_sequence(&conversation.unread).is_some()
+                        && conversation.preview.as_ref().is_none_or(valid_preview)
                 })
         }
         (
@@ -245,6 +280,8 @@ mod tests {
             id: "cd".repeat(16),
             sequence: "9007199254740993".into(),
             sender: None,
+            send_time: "1700000000000".into(),
+            insert_time: "1700000000001".into(),
             content: ChatContent::Unsupported,
         };
         let mut reply = ChatReply {
@@ -295,8 +332,10 @@ mod tests {
             channel: ChatChannel {
                 id: "ab".repeat(16),
                 name: foks_agent_proto::SecretString::new("general"),
+                description: Some(foks_agent_proto::SecretString::new("Team updates")),
                 admin: false,
                 readable: true,
+                writable: true,
                 read_role: "Member (0)".into(),
                 write_role: "Member (0)".into(),
             },
@@ -306,22 +345,48 @@ mod tests {
             unread: "1".into(),
             hidden: false,
             muted: false,
+            preview: Some(ChatPreview {
+                sender: Some(format!("01{}", "cd".repeat(32))),
+                send_time: "1700000000000".into(),
+                insert_time: "1700000000001".into(),
+                content: ChatContent::Text {
+                    text: foks_agent_proto::SecretString::new("Latest update"),
+                },
+            }),
         };
         let mut reply = ChatReply {
             scope: scope.clone(),
             result: ChatResult::Inbox {
+                channels: vec![conversation.channel.clone()],
+                read_retry_pending: false,
+                previews_incomplete: false,
+                blocked_channels: Vec::new(),
                 cursor: "2".into(),
                 head: "2".into(),
                 degraded: false,
                 conversations: vec![conversation],
             },
         };
-        validate_chat_reply(&store, &ChatAction::SyncInbox, &reply).unwrap();
+        validate_chat_reply(
+            &store,
+            &ChatAction::SyncInbox {
+                blocked_channels: Vec::new(),
+            },
+            &reply,
+        )
+        .unwrap();
         let ChatResult::Inbox { head, .. } = &mut reply.result else {
             panic!()
         };
         *head = "1".into();
-        assert!(validate_chat_reply(&store, &ChatAction::SyncInbox, &reply).is_err());
+        assert!(validate_chat_reply(
+            &store,
+            &ChatAction::SyncInbox {
+                blocked_channels: Vec::new()
+            },
+            &reply
+        )
+        .is_err());
         let poll = ChatReply {
             scope,
             result: ChatResult::Poll {

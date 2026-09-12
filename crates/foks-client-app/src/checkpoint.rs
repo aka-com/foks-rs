@@ -9,12 +9,131 @@ pub(super) static TEST_FAIL_AFTER_RESET_STAGING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 const PROFILE_PUBLICATION_AUTHORIZATION_PREFIX: &str = "profile-publication.";
+pub(super) const NATIVE_MANIFEST_RECORD: &str = "native-state-v1";
+const NATIVE_MANIFEST_VERSION: u32 = 1;
+const MAXIMUM_NATIVE_MANIFEST_BYTES: usize = 1024 * 1024;
+const MAXIMUM_NATIVE_MANIFEST_RECORDS: usize = 1024;
+const MAXIMUM_NATIVE_MANIFEST_VALUE_BYTES: usize = 64 * 1024;
 const RESET_CREDENTIAL_QUARANTINE: &str = ".reset-credentials";
 const RESET_MUTATION_QUARANTINE: &str = ".reset-mutations";
 
 pub(super) struct ProfilePublicationAuthorization {
     pub(super) authorized: bool,
     pub(super) nonce: [u8; 32],
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NativeManifestStore {
+    version: u32,
+    records: BTreeMap<String, Vec<u8>>,
+    #[serde(skip)]
+    dirty: bool,
+}
+
+impl NativeManifestStore {
+    fn initialized(root: &Path, master_key: &[u8; 32]) -> Self {
+        Self {
+            version: NATIVE_MANIFEST_VERSION,
+            records: BTreeMap::from([
+                (MASTER_KEY_RECORD.to_owned(), master_key.to_vec()),
+                (
+                    STATE_ROOT_RECORD.to_owned(),
+                    state_root_binding(root).to_vec(),
+                ),
+            ]),
+            dirty: true,
+        }
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > MAXIMUM_NATIVE_MANIFEST_BYTES {
+            return Err(Error::InvalidConfig("native client manifest is too large"));
+        }
+        let manifest: Self = serde_json::from_slice(bytes)
+            .map_err(|_| Error::InvalidConfig("native client manifest is invalid"))?;
+        if manifest.version != NATIVE_MANIFEST_VERSION
+            || manifest.records.len() > MAXIMUM_NATIVE_MANIFEST_RECORDS
+            || manifest.records.iter().any(|(key, value)| {
+                !valid_manifest_key(key) || value.len() > MAXIMUM_NATIVE_MANIFEST_VALUE_BYTES
+            })
+        {
+            return Err(Error::InvalidConfig("native client manifest is invalid"));
+        }
+        Ok(manifest)
+    }
+
+    fn encode(&self) -> Result<Zeroizing<Vec<u8>>> {
+        if self.records.len() > MAXIMUM_NATIVE_MANIFEST_RECORDS
+            || self.records.iter().any(|(key, value)| {
+                !valid_manifest_key(key) || value.len() > MAXIMUM_NATIVE_MANIFEST_VALUE_BYTES
+            })
+        {
+            return Err(Error::InvalidConfig("native client manifest is invalid"));
+        }
+        let bytes = Zeroizing::new(serde_json::to_vec(self)?);
+        if bytes.len() > MAXIMUM_NATIVE_MANIFEST_BYTES {
+            return Err(Error::InvalidConfig("native client manifest is too large"));
+        }
+        Ok(bytes)
+    }
+}
+
+impl Drop for NativeManifestStore {
+    fn drop(&mut self) {
+        for value in self.records.values_mut() {
+            value.zeroize();
+        }
+    }
+}
+
+impl CheckpointStore for NativeManifestStore {
+    fn put(&mut self, key: &str, value: &[u8]) -> foks_keystore::Result<()> {
+        if !valid_manifest_key(key) {
+            return Err(foks_keystore::Error::InvalidKey);
+        }
+        if value.len() > MAXIMUM_NATIVE_MANIFEST_VALUE_BYTES {
+            return Err(foks_keystore::Error::TooLarge);
+        }
+        if let Some(mut previous) = self.records.insert(key.to_owned(), value.to_vec()) {
+            previous.zeroize();
+        }
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn get(&mut self, key: &str) -> foks_keystore::Result<Zeroizing<Vec<u8>>> {
+        if !valid_manifest_key(key) {
+            return Err(foks_keystore::Error::InvalidKey);
+        }
+        self.records
+            .get(key)
+            .cloned()
+            .map(Zeroizing::new)
+            .ok_or(foks_keystore::Error::Missing)
+    }
+
+    fn remove(&mut self, key: &str) -> foks_keystore::Result<bool> {
+        if !valid_manifest_key(key) {
+            return Err(foks_keystore::Error::InvalidKey);
+        }
+        let mut removed = self.records.remove(key);
+        if let Some(value) = &mut removed {
+            value.zeroize();
+            self.dirty = true;
+        }
+        Ok(removed.is_some())
+    }
+}
+
+fn valid_manifest_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 128
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && key != "."
+        && key != ".."
 }
 
 thread_local! {
@@ -121,7 +240,7 @@ struct ClientStateFile {
 }
 
 /// Resolves the vault wrapping key and security checkpoint independently from
-/// profiles and databases. Native records remain outside the state root.
+/// profiles and databases. One versioned native manifest remains outside the state root.
 pub struct ClientCredentials {
     pub(super) root: PathBuf,
     pub(super) state_id: String,
@@ -151,17 +270,10 @@ impl ClientCredentials {
             CredentialBackend::Native => {
                 let mut master = Zeroizing::new([0u8; 32]);
                 getrandom::fill(&mut *master).map_err(|_| Error::Randomness)?;
+                let manifest = NativeManifestStore::initialized(&root, &master);
+                let bytes = manifest.encode()?;
                 let mut native = foks_keystore::NativeCredentialStore::open(&state_id)?;
-                let initialized = (|| {
-                    native.put(MASTER_KEY_RECORD, &*master)?;
-                    native.put(STATE_ROOT_RECORD, &state_root_binding(&root))?;
-                    Ok::<_, foks_keystore::Error>(())
-                })();
-                if let Err(error) = initialized {
-                    let _ = native.remove(MASTER_KEY_RECORD);
-                    let _ = native.remove(STATE_ROOT_RECORD);
-                    return Err(error.into());
-                }
+                native.put(NATIVE_MANIFEST_RECORD, &bytes)?;
             }
             CredentialBackend::PrivateFile => {
                 foks_keystore::create_master_key_file(root.join("master.key"))?;
@@ -177,8 +289,7 @@ impl ClientCredentials {
             match backend {
                 CredentialBackend::Native => {
                     if let Ok(mut native) = foks_keystore::NativeCredentialStore::open(&state_id) {
-                        let _ = native.remove(MASTER_KEY_RECORD);
-                        let _ = native.remove(STATE_ROOT_RECORD);
+                        let _ = native.remove(NATIVE_MANIFEST_RECORD);
                     }
                 }
                 CredentialBackend::PrivateFile => {
@@ -200,7 +311,13 @@ impl ClientCredentials {
             .ok_or(Error::InvalidConfig("client state is not initialized"))?;
         let state: ClientStateFile = toml::from_slice(&bytes)?;
         if state.version != STATE_CONFIG_VERSION {
-            return Err(Error::InvalidConfig("unsupported client state version"));
+            return Err(Error::InvalidConfig(
+                if state.version == 2 && state.credential_backend == CredentialBackend::Native {
+                    "native client state uses unsupported per-record credential storage"
+                } else {
+                    "unsupported client state version"
+                },
+            ));
         }
         validate_name(&state.state_id)?;
         let credentials = Self {
@@ -216,18 +333,75 @@ impl ClientCredentials {
         self.backend
     }
 
+    fn open_native_manifest(
+        &self,
+    ) -> Result<(foks_keystore::NativeCredentialStore, NativeManifestStore)> {
+        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
+        let bytes = native
+            .get(NATIVE_MANIFEST_RECORD)
+            .map_err(|error| match error {
+                foks_keystore::Error::Missing => {
+                    Error::InvalidConfig("native client manifest is missing")
+                }
+                other => Error::Keystore(other),
+            })?;
+        let manifest = NativeManifestStore::decode(&bytes)?;
+        Ok((native, manifest))
+    }
+
+    fn persist_native_manifest(
+        native: &mut foks_keystore::NativeCredentialStore,
+        manifest: &mut NativeManifestStore,
+    ) -> Result<()> {
+        if manifest.dirty {
+            let bytes = manifest.encode()?;
+            native.put(NATIVE_MANIFEST_RECORD, &bytes)?;
+            manifest.dirty = false;
+        }
+        Ok(())
+    }
+
+    fn with_native_manifest<T>(
+        &self,
+        operation: impl FnOnce(&mut NativeManifestStore) -> Result<T>,
+    ) -> Result<T> {
+        let lock = runtime::NativeManifestLock::acquire(&self.root)?;
+        let (mut native, mut manifest) = self.open_native_manifest()?;
+        let result = operation(&mut manifest);
+        let persist = Self::persist_native_manifest(&mut native, &mut manifest);
+        let release = lock.release();
+        persist?;
+        release?;
+        result
+    }
+
+    fn try_with_native_manifest<T>(
+        &self,
+        operation: impl FnOnce(&mut NativeManifestStore) -> Result<T>,
+    ) -> Result<Option<T>> {
+        let Some(lock) = runtime::NativeManifestLock::try_acquire(&self.root)? else {
+            return Ok(None);
+        };
+        let (mut native, mut manifest) = self.open_native_manifest()?;
+        let result = operation(&mut manifest);
+        let persist = Self::persist_native_manifest(&mut native, &mut manifest);
+        let release = lock.release();
+        persist?;
+        release?;
+        result.map(Some)
+    }
+
     pub fn master_key(&self) -> Result<Zeroizing<[u8; 32]>> {
         match self.backend {
-            CredentialBackend::Native => {
-                let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-                let bytes = native.get(MASTER_KEY_RECORD)?;
+            CredentialBackend::Native => self.with_native_manifest(|manifest| {
+                let bytes = manifest.get(MASTER_KEY_RECORD)?;
                 if bytes.len() != 32 {
                     return Err(foks_keystore::Error::InvalidMasterKey.into());
                 }
                 let mut key = Zeroizing::new([0u8; 32]);
                 key.copy_from_slice(&bytes);
                 Ok(key)
-            }
+            }),
             CredentialBackend::PrivateFile => {
                 foks_keystore::load_master_key_file(self.root.join("master.key"))
                     .map_err(Into::into)
@@ -238,8 +412,9 @@ impl ClientCredentials {
     pub(super) fn begin_profile_publication(&self, profile: &str) -> Result<[u8; 32]> {
         validate_name(profile)?;
         if self.backend == CredentialBackend::Native {
-            let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-            return begin_profile_publication_with_store(profile, &mut native);
+            return self.with_native_manifest(|manifest| {
+                begin_profile_publication_with_store(profile, manifest)
+            });
         }
         random_array()
     }
@@ -253,13 +428,14 @@ impl ClientCredentials {
         if self.backend != CredentialBackend::Native {
             return Ok(true);
         }
-        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-        profile_publication_is_authorized_with_store(
-            profile,
-            authorization,
-            marker_digest,
-            &mut native,
-        )
+        self.with_native_manifest(|manifest| {
+            profile_publication_is_authorized_with_store(
+                profile,
+                authorization,
+                marker_digest,
+                manifest,
+            )
+        })
     }
 
     pub(super) fn bind_profile_publication(
@@ -271,8 +447,9 @@ impl ClientCredentials {
         if self.backend != CredentialBackend::Native {
             return Ok(());
         }
-        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-        bind_profile_publication_with_store(profile, authorization, marker_digest, &mut native)
+        self.with_native_manifest(|manifest| {
+            bind_profile_publication_with_store(profile, authorization, marker_digest, manifest)
+        })
     }
 
     pub(super) fn cancel_profile_publication(
@@ -283,16 +460,16 @@ impl ClientCredentials {
         if self.backend != CredentialBackend::Native {
             return Ok(());
         }
-        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-        cancel_profile_publication_with_store(profile, authorization, &mut native)
+        self.with_native_manifest(|manifest| {
+            cancel_profile_publication_with_store(profile, authorization, manifest)
+        })
     }
 
     fn verify_native_root_binding(&self) -> Result<()> {
         if self.backend != CredentialBackend::Native {
             return Ok(());
         }
-        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-        self.verify_root_binding_with_store(&mut native)
+        self.with_native_manifest(|manifest| self.verify_root_binding_with_store(manifest))
     }
 
     pub(super) fn verify_root_binding_with_store(
@@ -493,7 +670,10 @@ impl ClientCredentials {
         }
         let pristine = !hard_state_artifacts_exist(&session.paths.hard_database)?;
         let current = session.rollback_checkpoint()?;
-        let publication = self.profile_publication_authorization(session, &current)?;
+        let Some(publication) = self.try_profile_publication_authorization(session, &current)?
+        else {
+            return Ok(None);
+        };
         let authorized = publication
             .as_ref()
             .is_some_and(|publication| publication.authorized);
@@ -501,12 +681,18 @@ impl ClientCredentials {
         else {
             return Ok(None);
         };
-        self.verify_native_checkpoint_for_use(
-            session,
-            &current,
-            pristine || authorized,
-            publication.as_ref(),
-        )?;
+        let verified = self.try_with_native_manifest(|manifest| {
+            self.verify_native_checkpoint_for_use_with_store(
+                session,
+                &current,
+                pristine || authorized,
+                publication.as_ref(),
+                manifest,
+            )
+        })?;
+        if verified.is_none() {
+            return Ok(None);
+        }
         Ok(Some(Some(lock)))
     }
 
@@ -538,27 +724,36 @@ impl ClientCredentials {
         for database_id in database_ids {
             locks.push(runtime::DatabaseLock::acquire(&self.root, &database_id)?);
         }
-        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-        self.verify_native_checkpoint_with_store(
-            first,
-            &first_current,
-            first_pristine
-                || first_publication
-                    .as_ref()
-                    .is_some_and(|publication| publication.authorized),
-            &mut native,
-        )?;
-        self.verify_native_checkpoint_with_store(
-            second,
-            &second_current,
-            second_pristine
-                || second_publication
-                    .as_ref()
-                    .is_some_and(|publication| publication.authorized),
-            &mut native,
-        )?;
-        self.finish_profile_publication(first, first_publication.as_ref())?;
-        self.finish_profile_publication(second, second_publication.as_ref())?;
+        self.with_native_manifest(|manifest| {
+            self.verify_native_checkpoint_with_store(
+                first,
+                &first_current,
+                first_pristine
+                    || first_publication
+                        .as_ref()
+                        .is_some_and(|publication| publication.authorized),
+                manifest,
+            )?;
+            self.verify_native_checkpoint_with_store(
+                second,
+                &second_current,
+                second_pristine
+                    || second_publication
+                        .as_ref()
+                        .is_some_and(|publication| publication.authorized),
+                manifest,
+            )?;
+            self.finish_profile_publication_with_store(
+                first,
+                first_publication.as_ref(),
+                manifest,
+            )?;
+            self.finish_profile_publication_with_store(
+                second,
+                second_publication.as_ref(),
+                manifest,
+            )
+        })?;
         Ok(locks)
     }
 
@@ -595,6 +790,33 @@ impl ClientCredentials {
         }))
     }
 
+    fn try_profile_publication_authorization(
+        &self,
+        session: &ProfileSession,
+        current: &RollbackCheckpoint,
+    ) -> Result<Option<Option<ProfilePublicationAuthorization>>> {
+        let Some(binding) =
+            registry::profile_publication_checkpoint_binding(&self.root, session, current)?
+        else {
+            return Ok(Some(None));
+        };
+        let Some(authorized) = self.try_with_native_manifest(|manifest| {
+            profile_publication_is_authorized_with_store(
+                &session.profile.name,
+                &binding.nonce,
+                &binding.marker_digest,
+                manifest,
+            )
+        })?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(Some(ProfilePublicationAuthorization {
+            authorized,
+            nonce: binding.nonce,
+        })))
+    }
+
     fn verify_native_checkpoint_for_use(
         &self,
         session: &ProfileSession,
@@ -602,14 +824,15 @@ impl ClientCredentials {
         allow_checkpoint_enrollment: bool,
         publication: Option<&ProfilePublicationAuthorization>,
     ) -> Result<()> {
-        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-        self.verify_native_checkpoint_for_use_with_store(
-            session,
-            current,
-            allow_checkpoint_enrollment,
-            publication,
-            &mut native,
-        )
+        self.with_native_manifest(|manifest| {
+            self.verify_native_checkpoint_for_use_with_store(
+                session,
+                current,
+                allow_checkpoint_enrollment,
+                publication,
+                manifest,
+            )
+        })
     }
 
     pub(super) fn verify_native_checkpoint_for_use_with_store(
@@ -788,8 +1011,9 @@ impl ClientCredentials {
             return Ok(());
         }
         let current = session.rollback_checkpoint()?;
-        let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-        self.verify_native_checkpoint_with_store(session, &current, false, &mut native)
+        self.with_native_manifest(|manifest| {
+            self.verify_native_checkpoint_with_store(session, &current, false, manifest)
+        })
     }
 
     /// Describes the complete profile-local reset scope without requiring a
@@ -897,19 +1121,22 @@ impl ClientCredentials {
         }
         if self.backend == CredentialBackend::Native {
             let key = rollback_record_key(&session.profile.name)?;
-            let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-            match native.get(&key) {
-                Ok(bytes) => {
-                    let checkpoint: RollbackCheckpoint = serde_json::from_slice(&bytes)?;
-                    if checkpoint.profile != session.profile.name {
-                        return Err(Error::InvalidConfig(
-                            "external checkpoint profile binding changed",
-                        ));
+            if let Some(database_id) =
+                self.with_native_manifest(|manifest| match manifest.get(&key) {
+                    Ok(bytes) => {
+                        let checkpoint: RollbackCheckpoint = serde_json::from_slice(&bytes)?;
+                        if checkpoint.profile != session.profile.name {
+                            return Err(Error::InvalidConfig(
+                                "external checkpoint profile binding changed",
+                            ));
+                        }
+                        Ok(Some(checkpoint.database_id))
                     }
-                    ids.push(checkpoint.database_id);
-                }
-                Err(foks_keystore::Error::Missing) => {}
-                Err(error) => return Err(error.into()),
+                    Err(foks_keystore::Error::Missing) => Ok(None),
+                    Err(error) => Err(error.into()),
+                })?
+            {
+                ids.push(database_id);
             }
         }
         ids.sort_unstable();
@@ -919,15 +1146,13 @@ impl ClientCredentials {
 
     fn reset_state_preview_locked(&self, session: &ProfileSession) -> Result<ResetStatePreview> {
         let master = self.master_key()?;
-        reset_state_preview(
-            session,
-            &master,
-            if self.backend == CredentialBackend::Native {
-                Some((&self.state_id, &session.profile.name))
-            } else {
-                None
-            },
-        )
+        if self.backend == CredentialBackend::Native {
+            self.with_native_manifest(|manifest| {
+                reset_state_preview(session, &master, Some((&session.profile.name, manifest)))
+            })
+        } else {
+            reset_state_preview(session, &master, None)
+        }
     }
 
     fn reset_profile_state_locked(
@@ -949,8 +1174,9 @@ impl ClientCredentials {
             return Err(Error::InvalidConfig("injected reset interruption"));
         }
         if self.backend == CredentialBackend::Native {
-            let mut native = foks_keystore::NativeCredentialStore::open(&self.state_id)?;
-            remove_external_reset_records(&mut native, &session.profile.name, database_ids)?;
+            self.with_native_manifest(|manifest| {
+                remove_external_reset_records(manifest, &session.profile.name, database_ids)
+            })?;
         }
         for path in reset_local_artifact_paths(session) {
             remove_reset_artifact(&path)?;
@@ -976,7 +1202,7 @@ fn reset_local_artifact_paths(session: &ProfileSession) -> Vec<PathBuf> {
 fn reset_state_preview(
     session: &ProfileSession,
     master_key: &[u8; 32],
-    native: Option<(&str, &str)>,
+    native: Option<(&str, &mut dyn CheckpointStore)>,
 ) -> Result<ResetStatePreview> {
     let mut digest = Sha256::new();
     digest.update(b"foks-reset-state-preview-v1\0");
@@ -1059,9 +1285,8 @@ fn reset_state_preview(
         }
     }
 
-    if let Some((state_id, profile)) = native {
-        let mut store = foks_keystore::NativeCredentialStore::open(state_id)?;
-        hash_external_reset_state(session, profile, &mut store, &mut digest, &mut artifacts)?;
+    if let Some((profile, store)) = native {
+        hash_external_reset_state(session, profile, store, &mut digest, &mut artifacts)?;
     }
 
     Ok(ResetStatePreview {
@@ -1075,7 +1300,7 @@ fn reset_state_preview(
 fn hash_external_reset_state(
     session: &ProfileSession,
     profile: &str,
-    store: &mut impl CheckpointStore,
+    store: &mut (impl CheckpointStore + ?Sized),
     digest: &mut Sha256,
     artifacts: &mut Vec<ResetArtifactSummary>,
 ) -> Result<()> {
@@ -1361,20 +1586,6 @@ pub(super) trait CheckpointStore {
     fn remove(&mut self, key: &str) -> foks_keystore::Result<bool>;
 }
 
-impl CheckpointStore for foks_keystore::NativeCredentialStore {
-    fn put(&mut self, key: &str, value: &[u8]) -> foks_keystore::Result<()> {
-        foks_keystore::NativeCredentialStore::put(self, key, value)
-    }
-
-    fn get(&mut self, key: &str) -> foks_keystore::Result<Zeroizing<Vec<u8>>> {
-        foks_keystore::NativeCredentialStore::get(self, key)
-    }
-
-    fn remove(&mut self, key: &str) -> foks_keystore::Result<bool> {
-        foks_keystore::NativeCredentialStore::remove(self, key)
-    }
-}
-
 #[cfg(test)]
 impl CheckpointStore for foks_keystore::MemorySecretStore {
     fn put(&mut self, key: &str, value: &[u8]) -> foks_keystore::Result<()> {
@@ -1570,6 +1781,76 @@ pub(super) fn hard_state_artifacts_exist(database: &Path) -> Result<bool> {
 pub(super) fn rollback_record_key(profile: &str) -> Result<String> {
     validate_name(profile)?;
     Ok(format!("rollback.{profile}"))
+}
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::*;
+
+    #[test]
+    fn native_manifest_round_trips_all_logical_records_in_one_value() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let mut manifest = NativeManifestStore::initialized(&root, &[7; 32]);
+        manifest.put("rollback.local", b"checkpoint").unwrap();
+        manifest
+            .put("database.0123456789abcdef.profile-v1", b"local")
+            .unwrap();
+
+        let encoded = manifest.encode().unwrap();
+        let mut decoded = NativeManifestStore::decode(&encoded).unwrap();
+        assert_eq!(decoded.get(MASTER_KEY_RECORD).unwrap().as_slice(), &[7; 32]);
+        assert_eq!(
+            decoded.get(STATE_ROOT_RECORD).unwrap().as_slice(),
+            state_root_binding(&root)
+        );
+        assert_eq!(
+            decoded.get("rollback.local").unwrap().as_slice(),
+            b"checkpoint"
+        );
+        assert_eq!(decoded.records.len(), 4);
+        assert!(!decoded.dirty);
+    }
+
+    #[test]
+    fn native_manifest_try_path_skips_root_wide_contention() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let credentials = ClientCredentials {
+            root: root.clone(),
+            state_id: "unused-test-state".to_owned(),
+            backend: CredentialBackend::Native,
+        };
+        let lock = runtime::NativeManifestLock::acquire(&root).unwrap();
+        assert!(credentials
+            .try_with_native_manifest(|_| Ok(()))
+            .unwrap()
+            .is_none());
+        lock.release().unwrap();
+    }
+
+    #[test]
+    fn native_manifest_rejects_unknown_versions_fields_keys_and_sizes() {
+        assert!(NativeManifestStore::decode(br#"{"version":2,"records":{}}"#).is_err());
+        assert!(
+            NativeManifestStore::decode(br#"{"version":1,"records":{},"unexpected":true}"#)
+                .is_err()
+        );
+        assert!(
+            NativeManifestStore::decode(br#"{"version":1,"records":{"../escape":[1]}}"#).is_err()
+        );
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let mut manifest = NativeManifestStore::initialized(&root, &[7; 32]);
+        assert!(matches!(
+            manifest.put(
+                "rollback.local",
+                &vec![0; MAXIMUM_NATIVE_MANIFEST_VALUE_BYTES + 1]
+            ),
+            Err(foks_keystore::Error::TooLarge)
+        ));
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

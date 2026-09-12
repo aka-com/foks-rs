@@ -58,7 +58,7 @@ fn repeated_team_views_roll_over_same_member_capabilities() {
             )
             .unwrap()
     };
-    let retained = view_tokens.iter().map(|token| stored(token)).sum::<i64>();
+    let retained = view_tokens.iter().map(&stored).sum::<i64>();
     assert!((31..=32).contains(&retained));
     assert!(
         view_tokens

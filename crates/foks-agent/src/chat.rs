@@ -30,10 +30,38 @@ fn channel(value: foks_client::ChatChannel) -> ChatChannel {
     ChatChannel {
         id: hex(&value.metadata.id.0),
         name: SecretString::new(value.name.0.as_str()),
+        description: value
+            .description
+            .map(|description| SecretString::new(description.0.as_str())),
         admin: value.metadata.tier == RtChannelTier::Admin,
         readable: !value.metadata.unreadable,
+        writable: value.writable,
         read_role: role_label(value.metadata.roles.read),
         write_role: role_label(value.metadata.roles.write),
+    }
+}
+fn preview_text(text: &str) -> String {
+    let text = text.split(['\r', '\n']).next().unwrap_or_default();
+    if text.len() <= CHAT_SNIPPET_BYTES {
+        return text.to_owned();
+    }
+    let mut end = CHAT_SNIPPET_BYTES.saturating_sub('…'.len_utf8());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+fn preview(value: foks_client::ChatPreview) -> ChatPreview {
+    ChatPreview {
+        sender: value.sender.map(|sender| hex(sender.entity().as_bytes())),
+        send_time: value.send_time.to_string(),
+        insert_time: value.insert_time.to_string(),
+        content: match value.content {
+            foks_client::ChatPreviewContent::Text(text) => ChatContent::Text {
+                text: SecretString::new(preview_text(&text)),
+            },
+            foks_client::ChatPreviewContent::Unsupported(_) => ChatContent::Unsupported,
+        },
     }
 }
 fn inbox(
@@ -48,6 +76,10 @@ fn inbox(
         return Err(foks_client::Error::ChatIntegrity("inbox response scope changed").into());
     }
     Ok(ChatResult::Inbox {
+        channels: value.channels.into_iter().map(channel).collect(),
+        read_retry_pending: value.read_retry_pending,
+        previews_incomplete: value.previews_incomplete,
+        blocked_channels: value.blocked_channels.iter().map(|id| hex(&id.0)).collect(),
         cursor: value.cursor.to_string(),
         head: value.head.to_string(),
         degraded: value.degraded,
@@ -62,6 +94,7 @@ fn inbox(
                 unread: conversation.unread.to_string(),
                 hidden: conversation.hidden,
                 muted: conversation.muted,
+                preview: conversation.preview.map(preview),
             })
             .collect(),
     })
@@ -121,12 +154,7 @@ pub(super) fn poll(
     let foks_rpc::RealtimeResponse::PollResult(result) = response else {
         return Err(foks_client::Error::ChatIntegrity("unexpected inbox poll response").into());
     };
-    if result.inbox_version > i64::MAX as u64
-        || (result.bumped && result.inbox_version <= since)
-        || (!result.bumped && result.inbox_version > since)
-    {
-        return Err(foks_client::Error::ChatIntegrity("invalid inbox poll result").into());
-    }
+    let result = foks_client::ChatPollResult::checked(result.bumped, result.inbox_version, since)?;
     Ok(ChatReply {
         scope: context.scope,
         result: ChatResult::Poll {
@@ -203,8 +231,18 @@ pub(super) fn dispatch(
                 channels: channels.channels.into_iter().map(channel).collect(),
             }
         }
-        ChatAction::Inbox | ChatAction::SyncInbox => {
-            inbox(session.sync_chat_inbox(team, vault)?.inbox, &resolved)?
+        ChatAction::Inbox => inbox(session.sync_chat_inbox(team, vault)?.inbox, &resolved)?,
+        ChatAction::SyncInbox { blocked_channels } => {
+            let blocked = blocked_channels
+                .iter()
+                .map(|channel| id(channel).map(RtChannelId))
+                .collect::<Result<Vec<_>>>()?;
+            inbox(
+                session
+                    .sync_chat_inbox_excluding_previews(team, vault, &blocked)?
+                    .inbox,
+                &resolved,
+            )?
         }
         ChatAction::MarkRead { channel, sequence } => {
             let sequence = chat_sequence(&sequence)
@@ -283,6 +321,8 @@ pub(super) fn dispatch(
                             id: hex(&row.message.metadata.id.0),
                             sequence: row.message.sequence.to_string(),
                             sender: row.message.sender.map(|s| hex(s.entity().as_bytes())),
+                            send_time: row.message.metadata.send_time.to_string(),
+                            insert_time: row.message.insert_time.to_string(),
                             content: match row.content {
                                 foks_client::ChatContent::Text(text)
                                     if text.len() <= CHAT_TEXT_BYTES =>
@@ -372,4 +412,57 @@ pub(super) fn dispatch(
         },
     };
     Ok(serde_json::to_value(ChatReply { scope, result })?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_failure_retains_channel_classification_at_dispatch() {
+        let error = contextual_error(Box::new(foks_client::Error::ChatChannelIntegrity(
+            "bad message",
+        )));
+        let response = crate::dispatch_error_response(1, error.as_ref());
+        assert!(matches!(
+            response.result,
+            foks_agent_proto::ResponseResult::Error {
+                code: foks_agent_proto::ErrorCode::ChatChannelIntegrity,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn preview_text_is_single_line_and_utf8_bounded() {
+        assert_eq!(preview_text("first\nsecond"), "first");
+        let preview = preview_text(&"💬".repeat(200));
+        assert!(preview.len() <= CHAT_SNIPPET_BYTES);
+        assert!(preview.ends_with('…'));
+    }
+}
+
+/// Preserve chat-specific policy outcomes without changing generic RPC mapping.
+pub(super) fn contextual_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error> {
+    let mut source = Some(error.as_ref());
+    while let Some(cause) = source {
+        if matches!(
+            cause.downcast_ref::<foks_rpc::Error>(),
+            Some(foks_rpc::Error::RemoteStatus { code: 1013, .. })
+        ) {
+            return Box::new(foks_client::Error::ChatAccessDenied(
+                "server denied this chat action",
+            ));
+        }
+        if matches!(
+            cause.downcast_ref::<foks_client::Error>(),
+            Some(foks_client::Error::Crypto(_))
+        ) {
+            return Box::new(foks_client::Error::ChatIntegrity(
+                "chat cryptographic verification failed",
+            ));
+        }
+        source = cause.source();
+    }
+    error
 }

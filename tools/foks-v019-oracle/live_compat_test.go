@@ -147,7 +147,19 @@ func TestRustClientHappyPath(t *testing.T) {
 		"--state-dir", stateDirectory,
 		"--username", username,
 	)
+	filteredStop := make(chan struct{})
+	filteredDone := make(chan error, 1)
+	if os.Getenv("FOKS_RUST_LIVE_CHAT") != "" {
+		command.Env = append(os.Environ(), "FOKS_LIVE_FILTERED_DIR="+stateDirectory)
+		go func() { filteredDone <- seedFilteredInbox(environment.MetaContext(), stateDirectory, filteredStop) }()
+	}
 	output, commandErr := command.CombinedOutput()
+	close(filteredStop)
+	if os.Getenv("FOKS_RUST_LIVE_CHAT") != "" {
+		if err := <-filteredDone; err != nil {
+			t.Errorf("filtered inbox fixture: %v", err)
+		}
+	}
 	close(stopPokes)
 	pokes.Wait()
 	select {

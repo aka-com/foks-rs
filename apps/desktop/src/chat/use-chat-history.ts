@@ -1,3 +1,4 @@
+import { normalizeCommandError } from '../bridge';
 import {
   useCallback,
   useEffect,
@@ -10,47 +11,38 @@ import type {
   ChatChannel,
   ChatMessage,
   ChatReply,
+  ChatResult,
 } from '../chat-contract';
 import { failure } from './actions';
-import { CHAT_HISTORY_ROWS, CHAT_HISTORY_BYTES } from '../chat-limits';
+import type { HistoryWindow } from './conversation-model';
 
-function ordered(rows: ChatMessage[]): ChatMessage[] {
-  return [...rows].sort((a, b) =>
-    BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1,
-  );
-}
-function merge(
-  existing: ChatMessage[],
-  incoming: ChatMessage[],
-): ChatMessage[] {
-  const rows = new Map(existing.map((m) => [m.id, m]));
-  for (const message of incoming) {
-    const old = rows.get(message.id);
-    if (old && JSON.stringify(old) !== JSON.stringify(message))
-      throw new Error(
-        'The message changed while refreshing. Reopen this conversation.',
-      );
-    rows.set(message.id, message);
-  }
-  return ordered([...rows.values()]);
-}
+const EMPTY_MESSAGES: ChatMessage[] = [];
+
 /** Manages history loading, page verification, and scroll position for the active channel. */
 export function useChatHistory(
   channel: ChatChannel,
   request: (action: ChatAction) => Promise<ChatReply>,
   revision = 0,
+  onAccepted?: (
+    page: Extract<ChatResult, { kind: 'history' }>,
+    before: string | null,
+  ) => void,
+  history?: HistoryWindow | null,
+  onFatal?: (channel: string) => void,
 ) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [before, setBefore] = useState<string | null>(null);
-  const [missing, setMissing] = useState(false);
+  const accepted = history?.channel === channel.id ? history : null;
+  const messages = accepted?.messages ?? EMPTY_MESSAGES;
+  const before = accepted?.before ?? null;
+  const missing = accepted
+    ? [...accepted.verification.values()].some(Boolean)
+    : false;
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const active = useRef(false);
   const reading = useRef(false);
+  const again = useRef(false);
   const scroller = useRef<HTMLDivElement>(null);
-  const currentMessages = useRef<ChatMessage[]>([]);
-  const verification = useRef(new Map<string, boolean>());
   const followBottom = useRef(true);
   const scroll = useRef<{ height: number; top: number } | null>(null);
   const seenRevision = useRef(revision);
@@ -63,7 +55,10 @@ export function useChatHistory(
   }, []);
   const load = useCallback(
     async (older: string | null = null) => {
-      if (reading.current) return;
+      if (reading.current) {
+        if (!older) again.current = true;
+        return;
+      }
       reading.current = true;
       setBusy(true);
       setError('');
@@ -89,54 +84,26 @@ export function useChatHistory(
         if (!active.current) return;
         if (reply.result.kind === 'history') {
           const page = reply.result;
-          // A latest-page refresh can jump past the retained window. Start a new
-          // window so its older cursor can reach every message in between.
-          const last = currentMessages.current.at(-1);
-          const first = ordered(page.messages)[0];
-          const reset =
-            !older &&
-            !!last &&
-            !!first &&
-            BigInt(first.sequence) > BigInt(last.sequence) + 1n;
-          const rows = merge(
-            reset ? [] : currentMessages.current,
-            page.messages,
-          );
-          if (
-            rows.length > CHAT_HISTORY_ROWS ||
-            rows.reduce(
-              (n, m) =>
-                n +
-                (m.content.kind === 'text'
-                  ? new TextEncoder().encode(m.content.text).length
-                  : 0),
-              0,
-            ) > CHAT_HISTORY_BYTES
-          )
-            throw new Error(
-              'This conversation view reached its history limit. Reopen it to load the newest messages.',
-            );
-          currentMessages.current = rows;
-          setMessages(rows);
-          setBefore((old) =>
-            reset || older || old === null ? page.before : old,
-          );
-          if (reset) verification.current.clear();
-          for (const message of page.messages)
-            verification.current.set(
-              message.id,
-              page.missing_predecessors.length > 0,
-            );
-          setMissing([...verification.current.values()].some(Boolean));
+          onAccepted?.(page, older);
         }
       } catch (e) {
-        if (active.current) setError(failure(e));
+        if (active.current) {
+          if (normalizeCommandError(e).code === 'chat-channel-integrity')
+            onFatal?.(channel.id);
+          setError(failure(e));
+        }
       } finally {
         reading.current = false;
-        if (active.current) setBusy(false);
+        if (active.current) {
+          setBusy(false);
+          if (again.current) {
+            again.current = false;
+            void load();
+          }
+        }
       }
     },
-    [request, channel.id],
+    [request, channel.id, onAccepted, onFatal],
   );
   useEffect(() => {
     active.current = true;
@@ -171,7 +138,6 @@ export function useChatHistory(
     busy,
     load,
     scroller,
-    active,
     atBottom,
     onScroll,
   };

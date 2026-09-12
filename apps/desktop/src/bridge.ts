@@ -310,6 +310,7 @@ export interface ServerStatusSnapshot {
   leaseRequired: boolean;
   /** Expiration timestamp of the signed lease in Unix seconds, or null if unleased. */
   leaseExpiresAt: number | null;
+  chatAvailable: boolean;
 }
 
 export interface AppInfo {
@@ -949,6 +950,7 @@ function decodeServer(value: unknown, at: string): Server {
     lease: null,
     accounts: array(item.accounts, `${at}.accounts`, string),
     state: state as Server['state'],
+    chat_available: bool(item.chat_available, `${at}.chat_available`),
   };
 }
 
@@ -1298,6 +1300,10 @@ export function decodeServerStatus(value: unknown): ServerStatusSnapshot {
       item.leaseExpiresAt,
       'describe_server_status.leaseExpiresAt',
       integer,
+    ),
+    chatAvailable: bool(
+      item.chatAvailable,
+      'describe_server_status.chatAvailable',
     ),
   };
   if (!status.leaseRequired && status.leaseExpiresAt !== null) {
@@ -2410,16 +2416,38 @@ export async function loadWorld(
   const servers = listedServers.map((server) => {
     if (!bridge.native) return server;
     if (server.state === 'blocked' || blockedProfiles.has(server.id))
-      return { ...server, state: 'blocked' as const };
+      return { ...server, state: 'blocked' as const, chat_available: false };
     const status = statuses.get(server.id);
     if (!status || statusFailures.has(server.id))
-      return { ...server, state: 'lease-unavailable' as const };
-    if (!status.host) return { ...server, state: 'never-probed' as const };
+      return {
+        ...server,
+        state: 'lease-unavailable' as const,
+        chat_available: false,
+      };
+    if (!status.host)
+      return {
+        ...server,
+        state: 'never-probed' as const,
+        chat_available: false,
+      };
     const lease = serverLeaseState(status, nowSeconds);
     if (lease === 'lapsed')
-      return { ...server, state: 'lease-lapsed' as const };
-    if (lease === 'fresh') return { ...server, state: 'ok' as const };
-    return { ...server, state: 'lease-unavailable' as const };
+      return {
+        ...server,
+        state: 'lease-lapsed' as const,
+        chat_available: false,
+      };
+    if (lease === 'fresh')
+      return {
+        ...server,
+        state: 'ok' as const,
+        chat_available: status.chatAvailable,
+      };
+    return {
+      ...server,
+      state: 'lease-unavailable' as const,
+      chat_available: false,
+    };
   });
   const rawAccounts = await bridge.listAccounts();
   const unavailableServers = new Set(

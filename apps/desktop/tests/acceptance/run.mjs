@@ -1,3 +1,4 @@
+/* global document, innerWidth -- browser globals inside page.evaluate */
 /**
  * Acceptance test runner for the built FOKS desktop UI in Chromium with a mocked bridge.
  *
@@ -239,7 +240,7 @@ async function personaWalks(context, origin) {
   });
   try {
     // Chat: create a channel, send text, and navigate back without vault mutation refreshes.
-    await page.goto(`${origin}/?state=team-chat&store=team%3Aeng`, {
+    await page.goto(`${origin}/?state=team-chat&store=team%3Ahousehold`, {
       waitUntil: 'load',
     });
     await page.getByText('Team chat is ready.', { exact: true }).waitFor();

@@ -2,6 +2,8 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::*;
 
+type StoredGenericChain = (i64, Option<Vec<u8>>, Vec<u8>, i64, Vec<u8>);
+
 impl HardStateStore {
     pub fn accept_verified_user_generic_chain(
         &mut self,
@@ -59,7 +61,7 @@ impl HardStateStore {
                 "generic chain is not anchored at the current Merkle head",
             ));
         }
-        let stored: Option<(i64, Option<Vec<u8>>, Vec<u8>, i64, Vec<u8>)> = transaction
+        let stored: Option<StoredGenericChain> = transaction
             .query_row(
                 "SELECT seqno, tail_hash, chain_bytes, merkle_epoch, merkle_root_hash
                  FROM user_generic_chains

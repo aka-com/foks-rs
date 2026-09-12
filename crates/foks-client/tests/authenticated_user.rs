@@ -389,7 +389,7 @@ fn realtime_timeout_closes_stream_and_rejects_subsequent_calls() {
     use foks_proto::{
         RealtimeWire, RtChannelSet, RtHostId, RtListChannelsArgument, RtSelectVhostArgument,
     };
-    use foks_rpc::{read_call, RealtimeRequest, RealtimeResponse, REAL_TIME_PROTOCOL_ID};
+    use foks_rpc::{read_call, RealtimeRequest, REAL_TIME_PROTOCOL_ID};
     let pki = test_pki();
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let target = ProbeTarget::parse(&format!(

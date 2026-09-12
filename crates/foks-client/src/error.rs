@@ -28,6 +28,9 @@ pub enum Error {
     ChatRandomness(&'static str),
     #[error("chat integrity check failed: {0}")]
     ChatIntegrity(&'static str),
+    /// Message evidence failed after account and channel metadata verification.
+    #[error("chat channel content integrity check failed: {0}")]
+    ChatChannelIntegrity(&'static str),
     #[error("invalid probe target: {0}")]
     Target(&'static str),
     #[error("DNS lookup returned no addresses for {0}")]

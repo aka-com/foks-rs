@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement, StrictMode } from 'react';
+import { createElement, StrictMode, useState } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
+import type { Location } from '../src/location';
 import type { Bridge } from '../src/bridge';
 installDom({
   url: 'http://localhost/',
@@ -27,7 +28,13 @@ async function setup(
   override?: (b: Bridge) => Bridge,
   waitForHistory = true,
   onNavigate: (location: unknown) => void = () => {},
+  showChat = true,
+  navigate = false,
 ) {
+  const { Sidebar } = await vite.ssrLoadModule('/src/shell/sidebar.tsx');
+  const { ChatInboxProvider } = await vite.ssrLoadModule(
+    '/src/chat/inbox-provider.tsx',
+  );
   const { ChatScreen } = await vite.ssrLoadModule(
     '/src/screens/chat-screen.tsx',
   );
@@ -40,25 +47,55 @@ async function setup(
   const { mockBridge } = (await vite.ssrLoadModule(
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');
-  const bridge = mockBridge(FIXTURE);
+  const enabledWorld = {
+    ...FIXTURE,
+    stores: FIXTURE.stores.filter(
+      (s) => s.kind !== 'team' || s.id === 'team:eng',
+    ),
+    servers: FIXTURE.servers.map((s) =>
+      s.id === 'acme' ? { ...s, chat_available: true } : s,
+    ),
+  };
+  const baseBridge = mockBridge(enabledWorld);
+  const bridge = override?.(baseBridge) ?? baseBridge;
   const portalRoot = document.getElementById('overlays');
   if (!portalRoot) throw new Error('missing overlay root');
-  const rendered = ui.render(
-    createElement(
+  const overlayRoot = portalRoot;
+  function Host() {
+    const [location, setLocation] = useState<Location>({
+      kind: 'team-chat',
+      ref: 'team:eng',
+    });
+    return createElement(
       StrictMode,
       null,
       createElement(OverlayProvider, {
         backgroundRef: { current: null },
-        portalRoot,
-        children: createElement(ChatScreen, {
-          world: FIXTURE,
-          bridge: override?.(bridge) ?? bridge,
-          location: { kind: 'team-chat', ref: 'team:eng' },
-          onNavigate,
+        portalRoot: overlayRoot,
+        children: createElement(ChatInboxProvider, {
+          bridge,
+          world: enabledWorld,
+          children: showChat
+            ? createElement(ChatScreen, {
+                world: enabledWorld,
+                bridge,
+                location,
+                onNavigate: (next: Location) => {
+                  onNavigate(next);
+                  if (navigate) setLocation(next);
+                },
+              })
+            : createElement(Sidebar, {
+                world: enabledWorld,
+                location: { kind: 'all' },
+                alerts: 0,
+                onNavigate,
+              }),
         }),
       }),
-    ),
-  );
+    );
+  }
+  const rendered = ui.render(createElement(Host));
   if (waitForHistory) await ui.screen.findByText('Team chat is ready.');
   return rendered;
 }
@@ -97,6 +134,17 @@ test('composer suppresses IME and repeated Enter, and renders hostile text safel
   assert.equal(document.querySelector('.chat-messages img'), null);
   assert.equal((composer as HTMLTextAreaElement).value, '');
 });
+test('renders channel descriptions, message times, and bounded inbox previews', async () => {
+  await setup();
+  await ui.screen.findByText('A place for the whole team.');
+  assert.ok(
+    ui.screen.getByText('Team member: Team chat is ready.', { exact: true }),
+  );
+  const time = document.querySelector<HTMLTimeElement>('.chat-message time');
+  assert.equal(time?.dateTime, '2023-11-14T22:13:20.001Z');
+  assert.match(time?.title ?? '', /inserted as message 1/);
+});
+
 test('conversation inbox wakes, refreshes history, and shows unread state', async () => {
   const originalFocus = document.hasFocus.bind(document);
   Object.defineProperty(document, 'hasFocus', {
@@ -152,19 +200,13 @@ test('conversation inbox wakes, refreshes history, and shows unread state', asyn
 });
 
 test('live sync backs off across repeated post-poll sync failures', async () => {
-  const random = Math.random;
-  Math.random = () => 0;
-  const polls: number[] = [];
-  let acceptedSync = false;
-  try {
-    await setup((base) => ({
-      ...base,
-      chat: async (store, action, view) => {
-        if (action.action === 'sync-inbox') {
-          if (!acceptedSync) {
-            acceptedSync = true;
-            return base.chat(store, action, view);
-          }
+  const syncs: number[] = [];
+  await setup((base) => ({
+    ...base,
+    chat: async (store, action, view) => {
+      if (action.action === 'sync-inbox') {
+        syncs.push(performance.now());
+        if (syncs.length > 1)
           throw {
             code: 'busy',
             message: 'Sync remains unavailable',
@@ -172,36 +214,13 @@ test('live sync backs off across repeated post-poll sync failures', async () => 
             retryable: true,
             ambiguous: false,
           };
-        }
-        if (action.action === 'poll-inbox') {
-          polls.push(performance.now());
-          return {
-            scope: {
-              store: {
-                profile: 'demo',
-                account_alias: 'me',
-                team_alias: store,
-                team_id: '03' + 'ab'.repeat(32),
-              },
-              host: '02' + 'ab'.repeat(32),
-              actor: '01' + 'ab'.repeat(32),
-            },
-            result: {
-              kind: 'poll',
-              bumped: true,
-              inbox_version: '9007199254740993',
-            },
-          };
-        }
-        return base.chat(store, action, view);
-      },
-    }));
-    await ui.screen.findByText('Live updates paused');
-    await ui.waitFor(() => assert.ok(polls.length >= 3), { timeout: 3_000 });
-    assert.ok(polls[2] - polls[1] >= 450);
-  } finally {
-    Math.random = random;
-  }
+      }
+      return base.chat(store, action, view);
+    },
+  }));
+  await ui.screen.findByText('Live updates paused');
+  await ui.waitFor(() => assert.ok(syncs.length >= 4), { timeout: 4_000 });
+  assert.ok(syncs[3] - syncs[2] >= 450);
 });
 
 test('read markers require focus and the newest displayed position', async () => {
@@ -439,7 +458,14 @@ test('own messages read as You and unread messages sit under a New divider', asy
     value: () => false,
   });
   const actor = '01' + 'ab'.repeat(32);
-  const other = '01' + 'cd'.repeat(32);
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const namedSender = FIXTURE.parties.find(
+    (party) => party.store === 'team:eng' && party.username,
+  );
+  assert.ok(namedSender?.username);
+  const other = namedSender.party_id_hex;
   try {
     await setup((base) => ({
       ...base,
@@ -451,18 +477,24 @@ test('own messages read as You and unread messages sit under a New divider', asy
               id: '01'.repeat(16),
               sequence: '1',
               sender: actor,
+              send_time: '1700000000000',
+              insert_time: '1700000000001',
               content: { kind: 'text', text: 'Team chat is ready.' },
             },
             {
               id: '02'.repeat(16),
               sequence: '2',
               sender: other,
+              send_time: '1700000000000',
+              insert_time: '1700000000001',
               content: { kind: 'text', text: 'Second message' },
             },
             {
               id: '03'.repeat(16),
               sequence: '3',
               sender: other,
+              send_time: '1700000000000',
+              insert_time: '1700000000001',
               content: { kind: 'text', text: 'Third message' },
             },
           ];
@@ -479,7 +511,7 @@ test('own messages read as You and unread messages sit under a New divider', asy
     }));
     await ui.screen.findByText('Third message');
     assert.equal(ui.screen.getByText('You').getAttribute('title'), actor);
-    assert.equal(ui.screen.getAllByText(/^01cdcdcdcd…cdcd$/).length, 2);
+    assert.equal(ui.screen.getAllByText(namedSender.username).length, 2);
     await ui.screen.findByRole('separator', { name: 'New messages' });
     const rows = [...document.querySelectorAll('.chat-divider, .chat-message')];
     assert.deepEqual(
@@ -529,7 +561,7 @@ test('channel listing failures offer a retry beside the message', async () => {
     (base) => ({
       ...base,
       chat: async (store, action, view) => {
-        if (action.action === 'channels' && !online) {
+        if (action.action === 'sync-inbox' && !online) {
           throw {
             code: 'offline',
             message: 'Offline',
@@ -563,6 +595,8 @@ test('prepending older messages preserves scroll position', async () => {
                   id: 'cd'.repeat(16),
                   sequence: '3',
                   sender: null,
+                  send_time: '1700000000000',
+                  insert_time: '1700000000001',
                   content: { kind: 'text', text: 'Team chat is ready.' },
                 },
               ]
@@ -571,12 +605,16 @@ test('prepending older messages preserves scroll position', async () => {
                   id: '01'.repeat(16),
                   sequence: '1',
                   sender: null,
+                  send_time: '1700000000000',
+                  insert_time: '1700000000001',
                   content: { kind: 'text', text: 'First earlier message' },
                 },
                 {
                   id: '02'.repeat(16),
                   sequence: '2',
                   sender: null,
+                  send_time: '1700000000000',
+                  insert_time: '1700000000001',
                   content: { kind: 'text', text: 'Second earlier message' },
                 },
               ];
@@ -618,6 +656,8 @@ test('refresh resets a disjoint window so older pagination reaches the gap', asy
             id: n.toString(16).padStart(32, '0'),
             sequence: String(n),
             sender: null,
+            send_time: '1700000000000',
+            insert_time: '1700000000001',
             content: {
               kind: 'text' as const,
               text: n === 100 ? 'Team chat is ready.' : `Message ${n}`,
@@ -653,12 +693,16 @@ test('verification warnings survive unrelated pages until retained rows are rech
           id: '03'.repeat(16),
           sequence: '3',
           sender: null,
+          send_time: '1700000000000',
+          insert_time: '1700000000001',
           content: { kind: 'text' as const, text: 'Team chat is ready.' },
         };
         const next = {
           id: '04'.repeat(16),
           sequence: '4',
           sender: null,
+          send_time: '1700000000000',
+          insert_time: '1700000000001',
           content: { kind: 'text' as const, text: 'Next message' },
         };
         reply.result.messages =
@@ -701,7 +745,7 @@ for (const offline of [true, false]) {
               text: 'Cancel this preparation',
             });
           }
-          if (offline && action.action === 'channels')
+          if (offline && action.action === 'sync-inbox')
             throw {
               code: 'offline',
               message: 'Offline',
@@ -710,10 +754,11 @@ for (const offline of [true, false]) {
               ambiguous: false,
             };
           const reply = await base.chat(store, action);
-          if (!offline && reply.result.kind === 'channels')
+          if (!offline && reply.result.kind === 'inbox')
             reply.result.channels = reply.result.channels.map((channel) => ({
               ...channel,
               readable: false,
+              writable: false,
             }));
           return reply;
         },
@@ -726,12 +771,11 @@ for (const offline of [true, false]) {
     ui.fireEvent.click(
       ui.screen.getByRole('button', { name: 'Cancel preparation' }),
     );
-    await ui.screen.findByText(/Message · cancelled/);
-    ui.fireEvent.click(
-      ui.screen.getByRole('button', { name: 'Finish cleanup' }),
-    );
     await ui.waitFor(() =>
-      assert.ok(ui.screen.queryByText(/Message · cancelled/) === null),
+      assert.ok(
+        ui.screen.queryByRole('button', { name: 'Cancel preparation' }) ===
+          null,
+      ),
     );
   });
 }
@@ -782,3 +826,190 @@ test('durable pending refresh replaces stale prepared state after lost delivery 
     null,
   );
 });
+
+test('sidebar receives live unread while Chat is unmounted', async () => {
+  let direct!: Bridge;
+  let unread = '1';
+  await setup(
+    (base) => {
+      direct = base;
+      return {
+        ...base,
+        chat: async (store, action, view) => {
+          const reply = await base.chat(store, action, view);
+          if (reply.result.kind === 'inbox')
+            reply.result.conversations = reply.result.conversations.map(
+              (c) => ({ ...c, unread }),
+            );
+          return reply;
+        },
+      };
+    },
+    false,
+    () => {},
+    false,
+  );
+  await ui.screen.findByLabelText('1 unread');
+  assert.ok(ui.screen.queryByLabelText('Message history') === null);
+  unread = '9007199254740993';
+  await direct.chat(
+    'team:eng',
+    { action: 'mark-read', channel: 'ab'.repeat(16), sequence: '1' },
+    'remote',
+  );
+  await ui.screen.findByLabelText('9007199254740993 unread');
+});
+
+test('read-only projection keeps history and removes composer', async () => {
+  await setup((base) => ({
+    ...base,
+    chat: async (store, action, view) => {
+      const reply = await base.chat(store, action, view);
+      if (reply.result.kind === 'inbox') {
+        reply.result.channels = reply.result.channels.map((c) => ({
+          ...c,
+          writable: false,
+        }));
+        reply.result.conversations = reply.result.conversations.map((c) => ({
+          ...c,
+          channel: { ...c.channel, writable: false },
+        }));
+      }
+      return reply;
+    },
+  }));
+  assert.ok(ui.screen.queryByRole('textbox', { name: 'Message' }) === null);
+  assert.ok(ui.screen.getByText('Team chat is ready.'));
+});
+
+test('uncertain send retains body in thread and merges once after delivery checking', async () => {
+  let lost = false;
+  let attempts = 0;
+  await setup((base) => ({
+    ...base,
+    chat: async (store, action, view) => {
+      if (action.action === 'attempt') {
+        attempts++;
+        if (!lost) {
+          lost = true;
+          throw {
+            code: 'ambiguous',
+            message: 'Receipt lost',
+            fatal: false,
+            retryable: false,
+            ambiguous: true,
+          };
+        }
+      }
+      const reply = await base.chat(store, action, view);
+      if (lost && reply.result.kind === 'pending')
+        reply.result.operations = reply.result.operations.map((op) => ({
+          ...op,
+          state: 'uncertain',
+        }));
+      if (
+        lost &&
+        action.action === 'status' &&
+        reply.result.kind === 'operation' &&
+        reply.result.operation.state === 'prepared'
+      )
+        reply.result.operation.state = 'uncertain';
+      return reply;
+    },
+  }));
+  ui.fireEvent.change(ui.screen.getByRole('textbox', { name: 'Message' }), {
+    target: { value: 'Keep this pending body' },
+  });
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Send' }));
+  await ui.screen.findByRole('button', { name: 'Check delivery' });
+  assert.ok(document.querySelector('.chat-messages [data-operation]'));
+  assert.equal(ui.screen.getAllByText('Keep this pending body').length, 1);
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Check delivery' }));
+  await ui.waitFor(() =>
+    assert.ok(
+      document.querySelector('.chat-messages [data-operation]') === null,
+    ),
+  );
+  assert.equal(ui.screen.getAllByText('Keep this pending body').length, 1);
+  assert.equal(attempts, 2);
+});
+
+for (const fault of ['history', 'preview', 'scope'] as const) {
+  test(`${fault} integrity containment preserves exactly the appropriate owner`, async () => {
+    const bad = 'ab'.repeat(16);
+    const healthy = 'ef'.repeat(16);
+    let badReads = 0;
+    let syncs = 0;
+    await setup(
+      (base) => ({
+        ...base,
+        chat: async (store, action, view) => {
+          if (action.action === 'history' && action.channel === bad) {
+            badReads++;
+            if (fault === 'history')
+              throw {
+                code: 'chat-channel-integrity',
+                message: 'Message authentication failed.',
+                fatal: true,
+                retryable: false,
+                ambiguous: false,
+              };
+          }
+          const reply = await base.chat(store, action, view);
+          if (action.action === 'sync-inbox' && reply.result.kind === 'inbox') {
+            syncs++;
+            reply.result.channels = [
+              ...reply.result.channels,
+              { ...reply.result.channels[0], id: healthy, name: 'healthy' },
+            ];
+            if (fault === 'preview') {
+              reply.result.blocked_channels = [bad];
+              reply.result.conversations = reply.result.conversations.map(
+                (c) => ({ ...c, preview: null }),
+              );
+            }
+          }
+          if (action.action === 'history' && reply.result.kind === 'history') {
+            if (action.channel === healthy)
+              reply.result.messages = [
+                {
+                  id: '12'.repeat(16),
+                  sequence: '1',
+                  sender: null,
+                  send_time: '1',
+                  insert_time: '1',
+                  content: { kind: 'text', text: 'Healthy channel content' },
+                },
+              ];
+            else if (fault === 'scope')
+              reply.scope = { ...reply.scope, actor: '01' + 'ed'.repeat(32) };
+          }
+          return reply;
+        },
+      }),
+      false,
+      () => {},
+      true,
+      true,
+    );
+    if (fault === 'scope') {
+      await ui.screen.findByRole('heading', { name: 'Chat stopped', level: 1 });
+      assert.equal(ui.screen.queryByRole('textbox', { name: 'Message' }), null);
+      return;
+    }
+    await ui.screen.findByRole('heading', { name: 'Channel stopped' });
+    assert.equal(ui.screen.queryByRole('textbox', { name: 'Message' }), null);
+    const reads = badReads;
+    ui.fireEvent.click(ui.screen.getByRole('button', { name: /# healthy/ }));
+    await ui.screen.findByText('Healthy channel content');
+    assert.ok(ui.screen.getByRole('textbox', { name: 'Message' }));
+    ui.fireEvent.click(ui.screen.getByRole('button', { name: /# general/ }));
+    await ui.screen.findByRole('heading', { name: 'Channel stopped' });
+    assert.equal(
+      badReads,
+      reads,
+      'quarantine survives channel navigation without retry',
+    );
+    assert.ok(syncs > 0);
+  });
+}

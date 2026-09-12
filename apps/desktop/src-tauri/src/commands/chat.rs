@@ -25,6 +25,7 @@ pub async fn chat_request(
     if !action.validate() || !foks_agent_proto::chat::valid_chat_id(&view_id) {
         return Err(invalid_request("Invalid chat request."));
     }
+    let mutation = action.is_mutation();
     let generation = state.catalog_generation.load(Ordering::Acquire);
     let (CatalogStoreRef::Team(store), Some(true)) = state.selected_store(&store_id)? else {
         return Err(invalid_request("Chat requires an active named team."));
@@ -64,10 +65,15 @@ pub async fn chat_request(
     })??;
     require_main_window(&webview)?;
     crate::applock::require_unlocked_generation(webview.app_handle(), unlocked)?;
-    if state.catalog_generation.load(Ordering::Acquire) != generation
-        || state.selected_store(&store_id)?.0 != CatalogStoreRef::Team(expected)
-    {
-        return Err(invalid_response("The selected chat account changed."));
+    require_catalog_generation(
+        generation,
+        state.catalog_generation.load(Ordering::Acquire),
+        mutation,
+    )?;
+    if state.selected_store(&store_id)?.0 != CatalogStoreRef::Team(expected) {
+        let mut error = invalid_response("The selected chat account changed.");
+        error.fatal = true;
+        return Err(error);
     }
     Ok(reply)
 }
@@ -89,4 +95,50 @@ pub fn cancel_chat_requests(
         token.store(true, Ordering::Release);
     }
     Ok(())
+}
+
+fn require_catalog_generation(
+    expected: u64,
+    current: u64,
+    mutation: bool,
+) -> Result<(), AgentError> {
+    if expected == current {
+        return Ok(());
+    }
+    // Never publish across catalog generations, including a reused alias.
+    let mut error = AgentError::new(
+        "chat-restart",
+        "Chat must revalidate after the catalog changed.",
+        true,
+    );
+    error.ambiguous = mutation;
+    Err(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn channel_integrity_is_a_distinct_fatal_local_outcome() {
+        let error = AgentError::from_agent(
+            foks_agent_proto::ErrorCode::ChatChannelIntegrity,
+            "bad message".into(),
+        );
+        assert_eq!(error.code, "chat-channel-integrity");
+        assert!(error.fatal);
+        assert!(!error.retryable);
+    }
+
+    #[test]
+    fn catalog_reload_restarts_reads_but_preserves_mutation_ambiguity() {
+        assert!(require_catalog_generation(7, 7, true).is_ok());
+        let read = require_catalog_generation(7, 8, false).unwrap_err();
+        assert_eq!(read.code, "chat-restart");
+        assert!(read.retryable);
+        assert!(!read.fatal);
+        assert!(!read.ambiguous);
+        let mutation = require_catalog_generation(7, 8, true).unwrap_err();
+        assert!(mutation.ambiguous);
+        assert!(!mutation.fatal);
+    }
 }

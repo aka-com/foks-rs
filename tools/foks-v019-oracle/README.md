@@ -166,13 +166,17 @@ requires the official integration environment, but never a browser.
 
 ## Live Rust compatibility test
 
-The opt-in successful-flow harness builds the Rust client, starts the unmodified
-official v0.1.9 Go integration environment with Postgres 17, and drives account
-creation, authenticated user-chain and PUK loading, personal KV initialization,
-a file write, incremental cache-check synchronization, and SQLite projection:
+The opt-in successful-flow harness builds the Rust client and starts the
+unmodified official v0.1.9 Go integration environment with Postgres 17. The
+full path drives account creation, authenticated user-chain and PUK loading,
+personal KV initialization, a file write, incremental cache-check
+synchronization, realtime chat, SQLite projection, and KEX. A focused chat path
+creates a named team and channel, sends and decrypts text, synchronizes inbox and
+read state, verifies its preview, and polls the Go realtime server:
 
 ```sh
 ./run-live-compat.sh
+./run-live-chat-compat.sh
 ```
 
 This requires a working Docker daemon because the official Go test environment

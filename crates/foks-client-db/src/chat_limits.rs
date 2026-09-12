@@ -8,6 +8,7 @@ impl ChatLimits {
     pub const RECEIPT_BYTES: usize = 256;
     pub const HISTORY_ROWS: usize = 1000;
     pub const INBOX_ROWS: usize = 1000;
+    pub const INBOX_PREVIEWS: usize = 20;
     pub const INBOX_PAGES: usize = 64;
     pub const HISTORY_BYTES: usize = 8 * 1024 * 1024;
     pub const PREDECESSORS: usize = 32;
@@ -28,6 +29,7 @@ mod tests {
             assert!(L::CHANNELS <= foks_proto::RT_MAX_COLLECTION);
             assert!(L::HISTORY_ROWS <= foks_proto::RT_MAX_COLLECTION);
             assert!(L::INBOX_ROWS <= foks_proto::RT_MAX_COLLECTION);
+            assert!(L::INBOX_PREVIEWS <= L::INBOX_ROWS);
             assert!(L::PREDECESSORS <= foks_proto::RT_MAX_COLLECTION);
             assert!(L::RECOVERY_WINDOW <= L::HISTORY_ROWS as u64);
             assert!(L::HISTORY_BYTES + 65536 < foks_proto::RT_MAX_WIRE_BYTES);

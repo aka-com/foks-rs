@@ -309,7 +309,8 @@ fn account_projection_reuses_the_catalog_profile_overview() {
                     "configured_probe":"work.example",
                     "host":null,
                     "lease_required":false,
-                    "lease_expires_at":null
+                    "lease_expires_at":null,
+                    "chat_available":true
                 }),
             },
         }],

@@ -33,8 +33,10 @@ mod transaction;
 mod user_mutation;
 mod yubi;
 
-pub use capabilities::TeamAdminAuthoritySnapshot;
-pub use capabilities::TeamViewAuthoritySnapshot;
+pub use capabilities::{
+    TeamAdminAuthoritySnapshot, TeamAdminTokenActivation, TeamAdminTokenBinding,
+    TeamAdminTokenIssue, TeamViewAuthoritySnapshot,
+};
 pub use capability_keys::{CapabilityKeyGeneration, CapabilityKeyGenerationState};
 pub use certificates::{StoredCertificate, StoredCredentialBinding};
 pub use clock::{Clock, SystemClock};

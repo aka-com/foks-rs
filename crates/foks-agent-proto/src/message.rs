@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -246,6 +246,7 @@ pub struct ServerStatusSnapshot {
     pub host: Option<StoredHostStatus>,
     pub lease_required: bool,
     pub lease_expires_at: Option<u64>,
+    pub chat_available: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1872,6 +1873,7 @@ pub enum ErrorCode {
     ChatNameConflict,
     ChatRandomness,
     ChatIntegrity,
+    ChatChannelIntegrity,
 
     InvalidRequest,
     VersionMismatch,
@@ -2179,6 +2181,7 @@ mod tests {
                 }),
                 lease_required: true,
                 lease_expires_at: Some(1_800_000_000),
+                chat_available: true,
             })
             .unwrap(),
             serde_json::json!({
@@ -2192,7 +2195,8 @@ mod tests {
                     "merkle_epoch": 4
                 },
                 "lease_required": true,
-                "lease_expires_at": 1_800_000_000_u64
+                "lease_expires_at": 1_800_000_000_u64,
+                "chat_available": true
             })
         );
         assert_eq!(

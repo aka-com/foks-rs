@@ -1,3 +1,4 @@
+import { ChatInboxProvider } from './chat/inbox-provider';
 /**
  * Root application component for the FOKS desktop vault shell.
  *
@@ -827,7 +828,13 @@ function VaultShell({
 
   const withToasts = (
     <ToastProvider controller={toasts} portalRoot={portalRoot}>
-      {shell}
+      <ChatInboxProvider
+        key={`inbox:${concealSignal}`}
+        bridge={bridge}
+        world={shown}
+      >
+        {shell}
+      </ChatInboxProvider>
     </ToastProvider>
   );
   if (!portalRoot) return withToasts;

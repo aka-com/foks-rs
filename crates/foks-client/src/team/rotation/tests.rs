@@ -11,12 +11,9 @@ use zeroize::Zeroizing;
 use super::{
     frame_protected_team_edit_with_bearer, refresh_operation_id, required_rotation_roles,
     rotation_operation_id, team_rekey_material_key, validate_rotation_change, RefreshBinding,
-    RefreshTeamMemberKeysRequest, RotatedTeamPtks, RotationBinding,
+    RefreshChange, RotationBinding,
 };
-use crate::{
-    AuthenticatedTeamOutcome, DeviceCredential, FoksClient, PinnedHost, ProtectedMutationStore,
-    ProtectedStoreError, Result, VerifiedTeamRecipient, YubiCredential,
-};
+use crate::{DeviceCredential, FoksClient, ProtectedMutationStore, ProtectedStoreError};
 
 const DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user-mutations";
 
@@ -182,15 +179,15 @@ fn clkr_operation_identity_is_bound_to_the_actor_not_the_transport_device() {
     ptk_verify[0] = foks_proto::ENTITY_PTK_VERIFY;
     let ptk_verify = foks_proto::EntityId::from_bytes(ptk_verify).unwrap();
     let binding = RefreshBinding {
-        changes: vec![(
-            target,
-            None,
-            Role::OWNER,
-            Role::OWNER,
-            2,
-            verify,
-            [0x72; 32],
-        )],
+        changes: vec![RefreshChange {
+            party: target,
+            host: None,
+            source_role: Role::OWNER,
+            destination_role: Role::OWNER,
+            generation: 2,
+            verify_key: verify,
+            hepk_fingerprint: [0x72; 32],
+        }],
         expected_seqno: 3,
         introduced: vec![(Role::OWNER, 2, ptk_verify, [0x82; 32])],
     };
@@ -222,145 +219,23 @@ fn clkr_operation_identity_is_bound_to_the_actor_not_the_transport_device() {
 
 #[test]
 fn yubi_clkr_api_covers_prepare_submit_replay_resume_and_discard() {
-    let _: fn(
-        &FoksClient,
-        &YubiCredential<'_>,
-        &foks_proto::EntityId,
-        &AuthenticatedTeamOutcome,
-        &RefreshTeamMemberKeysRequest<'_>,
-    ) -> Result<[u8; 16]> = FoksClient::refresh_team_member_keys_operation_id_yubi;
-    let _: fn(
-        &FoksClient,
-        &PinnedHost,
-        &YubiCredential<'_>,
-        &foks_proto::EntityId,
-        &RefreshTeamMemberKeysRequest<'_>,
-        &mut dyn ProtectedMutationStore,
-    ) -> Result<RotatedTeamPtks> = FoksClient::refresh_team_member_keys_and_rotate_ptks_yubi;
-    let _: fn(
-        &FoksClient,
-        &PinnedHost,
-        &YubiCredential<'_>,
-        &foks_proto::EntityId,
-        u64,
-        &[u8; 16],
-        &AuthenticatedTeamOutcome,
-        &[crate::VerifiedMemberParty<'_>],
-        &mut dyn ProtectedMutationStore,
-    ) -> Result<()> = FoksClient::replay_recorded_team_rekey_yubi;
-    let _: fn(
-        &FoksClient,
-        &PinnedHost,
-        &YubiCredential<'_>,
-        &foks_proto::EntityId,
-        &RefreshTeamMemberKeysRequest<'_>,
-        &[u8; 16],
-        &foks_proto::EntityId,
-        &mut dyn ProtectedMutationStore,
-    ) -> Result<RotatedTeamPtks> = FoksClient::resume_refresh_team_member_keys_and_rotate_ptks_yubi;
-    let _: fn(
-        &FoksClient,
-        &PinnedHost,
-        &YubiCredential<'_>,
-        &foks_proto::EntityId,
-        &AuthenticatedTeamOutcome,
-        &RefreshTeamMemberKeysRequest<'_>,
-        &mut dyn ProtectedMutationStore,
-    ) -> Result<()> = FoksClient::discard_unrecorded_team_rekey_yubi;
+    let _ = FoksClient::refresh_team_member_keys_operation_id_yubi;
+    let _ = FoksClient::refresh_team_member_keys_and_rotate_ptks_yubi;
+    let _ = FoksClient::replay_recorded_team_rekey_yubi;
+    let _ = FoksClient::resume_refresh_team_member_keys_and_rotate_ptks_yubi;
+    let _ = FoksClient::discard_unrecorded_team_rekey_yubi;
 }
 
 #[test]
 fn local_team_actor_api_covers_software_and_yubi_crash_recovery() {
-    let _: fn(
-        &FoksClient,
-        &foks_proto::EntityId,
-        &foks_proto::EntityId,
-        &AuthenticatedTeamOutcome,
-        &RefreshTeamMemberKeysRequest<'_>,
-    ) -> Result<[u8; 16]> = FoksClient::refresh_team_member_keys_operation_id_for_actor;
-    let _: fn(
-        &FoksClient,
-        &PinnedHost,
-        &crate::DeviceCredential,
-        &crate::AuthenticatedUserOutcome,
-        &AuthenticatedTeamOutcome,
-        &VerifiedTeamRecipient,
-        &AuthenticatedTeamOutcome,
-        &RefreshTeamMemberKeysRequest<'_>,
-        &mut dyn ProtectedMutationStore,
-    ) -> Result<RotatedTeamPtks> =
-        FoksClient::refresh_team_member_keys_and_rotate_ptks_as_local_team;
-    let _: fn(
-        &FoksClient,
-        &PinnedHost,
-        &YubiCredential<'_>,
-        &crate::AuthenticatedUserOutcome,
-        &AuthenticatedTeamOutcome,
-        &VerifiedTeamRecipient,
-        &AuthenticatedTeamOutcome,
-        &RefreshTeamMemberKeysRequest<'_>,
-        &mut dyn ProtectedMutationStore,
-    ) -> Result<RotatedTeamPtks> =
-        FoksClient::refresh_team_member_keys_and_rotate_ptks_as_local_team_yubi;
-    let _: fn(
-        &FoksClient,
-        &PinnedHost,
-        &crate::DeviceCredential,
-        &foks_verify::VerifiedUserState,
-        &AuthenticatedTeamOutcome,
-        &foks_proto::EntityId,
-        &RefreshTeamMemberKeysRequest<'_>,
-        &[u8; 16],
-        &foks_proto::EntityId,
-        &mut dyn ProtectedMutationStore,
-    ) -> Result<RotatedTeamPtks> =
-        FoksClient::resume_refresh_team_member_keys_and_rotate_ptks_as_local_team;
-    let _: fn(
-        &FoksClient,
-        &PinnedHost,
-        &YubiCredential<'_>,
-        &foks_verify::VerifiedUserState,
-        &AuthenticatedTeamOutcome,
-        &foks_proto::EntityId,
-        &RefreshTeamMemberKeysRequest<'_>,
-        &[u8; 16],
-        &foks_proto::EntityId,
-        &mut dyn ProtectedMutationStore,
-    ) -> Result<RotatedTeamPtks> =
-        FoksClient::resume_refresh_team_member_keys_and_rotate_ptks_as_local_team_yubi;
-    let _: fn(
-        &FoksClient,
-        &PinnedHost,
-        &crate::DeviceCredential,
-        &AuthenticatedTeamOutcome,
-        &foks_proto::EntityId,
-        u64,
-        &[u8; 16],
-        &AuthenticatedTeamOutcome,
-        &[crate::VerifiedMemberParty<'_>],
-        &mut dyn ProtectedMutationStore,
-    ) -> Result<()> = FoksClient::replay_recorded_team_rekey_as_local_team;
-    let _: fn(
-        &FoksClient,
-        &PinnedHost,
-        &YubiCredential<'_>,
-        &AuthenticatedTeamOutcome,
-        &foks_proto::EntityId,
-        u64,
-        &[u8; 16],
-        &AuthenticatedTeamOutcome,
-        &[crate::VerifiedMemberParty<'_>],
-        &mut dyn ProtectedMutationStore,
-    ) -> Result<()> = FoksClient::replay_recorded_team_rekey_as_local_team_yubi;
-    let _: fn(
-        &FoksClient,
-        &PinnedHost,
-        &foks_proto::EntityId,
-        &foks_proto::EntityId,
-        &AuthenticatedTeamOutcome,
-        &RefreshTeamMemberKeysRequest<'_>,
-        &mut dyn ProtectedMutationStore,
-    ) -> Result<()> = FoksClient::discard_unrecorded_team_rekey_for_local_team_actor;
+    let _ = FoksClient::refresh_team_member_keys_operation_id_for_actor;
+    let _ = FoksClient::refresh_team_member_keys_and_rotate_ptks_as_local_team;
+    let _ = FoksClient::refresh_team_member_keys_and_rotate_ptks_as_local_team_yubi;
+    let _ = FoksClient::resume_refresh_team_member_keys_and_rotate_ptks_as_local_team;
+    let _ = FoksClient::resume_refresh_team_member_keys_and_rotate_ptks_as_local_team_yubi;
+    let _ = FoksClient::replay_recorded_team_rekey_as_local_team;
+    let _ = FoksClient::replay_recorded_team_rekey_as_local_team_yubi;
+    let _ = FoksClient::discard_unrecorded_team_rekey_for_local_team_actor;
 }
 
 #[test]

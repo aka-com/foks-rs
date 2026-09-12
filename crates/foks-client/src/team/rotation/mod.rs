@@ -137,16 +137,18 @@ struct RotationBinding {
     introduced: Vec<(Role, u64, EntityId)>,
 }
 
+struct RefreshChange {
+    party: EntityId,
+    host: Option<EntityId>,
+    source_role: Role,
+    destination_role: Role,
+    generation: u64,
+    verify_key: EntityId,
+    hepk_fingerprint: [u8; 32],
+}
+
 struct RefreshBinding {
-    changes: Vec<(
-        EntityId,
-        Option<EntityId>,
-        Role,
-        Role,
-        u64,
-        EntityId,
-        [u8; 32],
-    )>,
+    changes: Vec<RefreshChange>,
     expected_seqno: u64,
     introduced: Vec<(Role, u64, EntityId, [u8; 32])>,
 }
@@ -1378,21 +1380,25 @@ impl FoksClient {
         &self,
         host: &PinnedHost,
         credential: &DeviceCredential,
-        team: &EntityId,
+        recovery: TeamMutationRecovery<'_>,
         request: &RefreshTeamMemberKeysRequest<'_>,
-        expected_operation_id: &[u8; 16],
         expected_actor: &EntityId,
         protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<RotatedTeamPtks> {
+        if recovery.expected_seqno != request.expected_seqno {
+            return Err(Error::OperationBinding(
+                "CLKR recovery sequence does not match the request",
+            ));
+        }
         let user = self.authenticate_and_pin(host, credential)?;
         let observed =
-            self.load_and_pin_team(host, credential, &user.verified, &user.puks, team)?;
+            self.load_and_pin_team(host, credential, &user.verified, &user.puks, recovery.team)?;
         self.resume_refresh_team_member_keys_after_load(
             host,
             &credential.uid,
-            team,
+            recovery.team,
             request,
-            expected_operation_id,
+            recovery.expected_operation_id,
             expected_actor,
             observed,
             protected_store,
@@ -1406,21 +1412,30 @@ impl FoksClient {
         &self,
         host: &PinnedHost,
         credential: &YubiCredential<'_>,
-        team: &EntityId,
+        recovery: TeamMutationRecovery<'_>,
         request: &RefreshTeamMemberKeysRequest<'_>,
-        expected_operation_id: &[u8; 16],
         expected_actor: &EntityId,
         protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<RotatedTeamPtks> {
+        if recovery.expected_seqno != request.expected_seqno {
+            return Err(Error::OperationBinding(
+                "CLKR recovery sequence does not match the request",
+            ));
+        }
         let user = self.authenticate_yubi_and_pin(host, credential)?;
-        let observed =
-            self.load_and_pin_team_yubi(host, credential, &user.verified, &user.puks, team)?;
+        let observed = self.load_and_pin_team_yubi(
+            host,
+            credential,
+            &user.verified,
+            &user.puks,
+            recovery.team,
+        )?;
         self.resume_refresh_team_member_keys_after_load(
             host,
             &credential.uid,
-            team,
+            recovery.team,
             request,
-            expected_operation_id,
+            recovery.expected_operation_id,
             expected_actor,
             observed,
             protected_store,
@@ -1510,15 +1525,15 @@ impl FoksClient {
         }
         let mut changes = Vec::with_capacity(request.changes.len());
         for request_change in request.changes {
-            changes.push((
-                request_change.target.party.clone(),
-                request_change.target.host.cloned(),
-                request_change.target.source_role,
-                request_change.destination_role,
-                request_change.replacement_generation,
-                request_change.replacement_verify_key.clone(),
-                request_change.replacement_hepk_fingerprint,
-            ));
+            changes.push(RefreshChange {
+                party: request_change.target.party.clone(),
+                host: request_change.target.host.cloned(),
+                source_role: request_change.target.source_role,
+                destination_role: request_change.destination_role,
+                generation: request_change.replacement_generation,
+                verify_key: request_change.replacement_verify_key.clone(),
+                hepk_fingerprint: request_change.replacement_hepk_fingerprint,
+            });
         }
         let mut hard_store = HardStateStore::open(&host.database_path)?;
         let operation = hard_store
@@ -1664,9 +1679,7 @@ impl FoksClient {
         &self,
         host: &PinnedHost,
         credential: &DeviceCredential,
-        team: &EntityId,
-        expected_seqno: u64,
-        expected_operation_id: &[u8; 16],
+        recovery: TeamMutationRecovery<'_>,
         authenticated_team: &AuthenticatedTeamOutcome,
         current_parties: &[VerifiedMemberParty<'_>],
         protected_store: &mut dyn ProtectedMutationStore,
@@ -1678,9 +1691,9 @@ impl FoksClient {
             None,
             &credential.seed,
             &credential.certificate_chain,
-            team,
-            expected_seqno,
-            expected_operation_id,
+            recovery.team,
+            recovery.expected_seqno,
+            recovery.expected_operation_id,
             authenticated_team,
             current_parties,
             protected_store,
@@ -1694,9 +1707,7 @@ impl FoksClient {
         &self,
         host: &PinnedHost,
         credential: &YubiCredential<'_>,
-        team: &EntityId,
-        expected_seqno: u64,
-        expected_operation_id: &[u8; 16],
+        recovery: TeamMutationRecovery<'_>,
         authenticated_team: &AuthenticatedTeamOutcome,
         current_parties: &[VerifiedMemberParty<'_>],
         protected_store: &mut dyn ProtectedMutationStore,
@@ -1708,9 +1719,9 @@ impl FoksClient {
             None,
             &credential.subkey_seed,
             &credential.certificate_chain,
-            team,
-            expected_seqno,
-            expected_operation_id,
+            recovery.team,
+            recovery.expected_seqno,
+            recovery.expected_operation_id,
             authenticated_team,
             current_parties,
             protected_store,
@@ -2075,16 +2086,14 @@ impl FoksClient {
             changes: request
                 .changes
                 .iter()
-                .map(|change| {
-                    (
-                        change.target.party.clone(),
-                        change.target.host.cloned(),
-                        change.target.source_role,
-                        change.destination_role,
-                        change.replacement_generation,
-                        change.replacement_verify_key.clone(),
-                        change.replacement_hepk_fingerprint,
-                    )
+                .map(|change| RefreshChange {
+                    party: change.target.party.clone(),
+                    host: change.target.host.cloned(),
+                    source_role: change.target.source_role,
+                    destination_role: change.destination_role,
+                    generation: change.replacement_generation,
+                    verify_key: change.replacement_verify_key.clone(),
+                    hepk_fingerprint: change.replacement_hepk_fingerprint,
                 })
                 .collect(),
             expected_seqno: request.expected_seqno,
@@ -2179,9 +2188,7 @@ impl FoksClient {
         &self,
         host: &PinnedHost,
         credential: &DeviceCredential,
-        team: &EntityId,
-        expected_seqno: u64,
-        expected_operation_id: &[u8; 16],
+        recovery: TeamMutationRecovery<'_>,
         request: &ChangeTeamMemberRequest<'_>,
         protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<RotatedTeamPtks> {
@@ -2191,7 +2198,7 @@ impl FoksClient {
             credential,
             &authenticated_user.verified,
             &authenticated_user.puks,
-            team,
+            recovery.team,
         )?;
         let actor_puk = team_actor_puk(&authenticated_user, &authenticated_team)?;
         let device_id = derive_device_public(&credential.seed)?.id;
@@ -2203,9 +2210,9 @@ impl FoksClient {
             &credential.certificate_chain,
             &authenticated_user,
             &actor_puk.seed,
-            team,
-            expected_seqno,
-            expected_operation_id,
+            recovery.team,
+            recovery.expected_seqno,
+            recovery.expected_operation_id,
             request,
             None,
             protected_store,
@@ -2218,9 +2225,7 @@ impl FoksClient {
         &self,
         host: &PinnedHost,
         credential: &DeviceCredential,
-        team: &EntityId,
-        expected_seqno: u64,
-        expected_operation_id: &[u8; 16],
+        recovery: TeamMutationRecovery<'_>,
         request: &RetainedTeamMemberRemovalRequest<'_>,
         protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<RotatedTeamPtks> {
@@ -2231,7 +2236,7 @@ impl FoksClient {
             credential,
             &authenticated_user.verified,
             &authenticated_user.puks,
-            team,
+            recovery.team,
         )?;
         let actor_puk = team_actor_puk(&authenticated_user, &authenticated_team)?;
         let device_id = derive_device_public(&credential.seed)?.id;
@@ -2250,9 +2255,9 @@ impl FoksClient {
             &credential.certificate_chain,
             &authenticated_user,
             &actor_puk.seed,
-            team,
-            expected_seqno,
-            expected_operation_id,
+            recovery.team,
+            recovery.expected_seqno,
+            recovery.expected_operation_id,
             &change,
             Some(request.removal_key),
             protected_store,
@@ -2267,9 +2272,7 @@ impl FoksClient {
         &self,
         host: &PinnedHost,
         credential: &DeviceCredential,
-        team: &EntityId,
-        expected_seqno: u64,
-        expected_operation_id: &[u8; 16],
+        recovery: TeamMutationRecovery<'_>,
         removal_key_commitment: [u8; 32],
         rotations: &[TeamPtkRotationSeed<'_>],
         protected_store: &mut dyn ProtectedMutationStore,
@@ -2280,31 +2283,41 @@ impl FoksClient {
             credential,
             &authenticated_user.verified,
             &authenticated_user.puks,
-            team,
+            recovery.team,
         )?;
-        if authenticated.verified.chain_seqno() < expected_seqno {
+        if authenticated.verified.chain_seqno() < recovery.expected_seqno {
             return Err(Error::TransitionNotObserved(
                 "team chain has not reached the recorded member edit",
             ));
         }
         let mut hard_store = HardStateStore::open(&host.database_path)?;
         let operation = hard_store
-            .team_mutation(expected_operation_id)?
+            .team_mutation(recovery.expected_operation_id)?
             .ok_or(Error::TeamRequest("team transition is not recorded"))?;
-        validate_rotation_operation(&operation, host, &credential.uid, team, expected_seqno)?;
+        validate_rotation_operation(
+            &operation,
+            host,
+            &credential.uid,
+            recovery.team,
+            recovery.expected_seqno,
+        )?;
         if matches!(
             operation.state,
             TeamMutationState::Rejected | TeamMutationState::Superseded
         ) {
             return Err(Error::OperationBinding("team transition is terminal"));
         }
-        let observed_change = authenticated.verified.group_change_at(expected_seqno)?;
+        let observed_change = authenticated
+            .verified
+            .group_change_at(recovery.expected_seqno)?;
         let [observed_member] = observed_change.changes.as_slice() else {
             return Err(Error::OperationBinding(
                 "recorded team transition differs from the authenticated chain",
             ));
         };
-        if observed_change.team != *team || rotations.len() != observed_change.shared_keys.len() {
+        if observed_change.team != *recovery.team
+            || rotations.len() != observed_change.shared_keys.len()
+        {
             return Err(Error::OperationBinding(
                 "recorded team transition differs from the authenticated chain",
             ));
@@ -2332,10 +2345,12 @@ impl FoksClient {
                 .keys
                 .as_ref()
                 .map(|keys| (keys.generation, keys.verify_key.clone())),
-            expected_seqno,
+            expected_seqno: recovery.expected_seqno,
             introduced,
         };
-        if rotation_operation_id(&credential.uid, team, &binding)? != *expected_operation_id {
+        if rotation_operation_id(&credential.uid, recovery.team, &binding)?
+            != *recovery.expected_operation_id
+        {
             return Err(Error::OperationBinding(
                 "authenticated team transition has another operation identity",
             ));
@@ -2355,14 +2370,14 @@ impl FoksClient {
                 ));
             }
         }
-        finish_team_mutation_journal(&mut hard_store, expected_operation_id)?;
+        finish_team_mutation_journal(&mut hard_store, recovery.expected_operation_id)?;
         remove_team_rekey_material(
             protected_store,
-            &team_rotation_material_key(expected_operation_id),
+            &team_rotation_material_key(recovery.expected_operation_id),
         )?;
         Ok(RotatedTeamPtks {
-            operation_id: *expected_operation_id,
-            expected_seqno,
+            operation_id: *recovery.expected_operation_id,
+            expected_seqno: recovery.expected_seqno,
             authenticated,
         })
     }
@@ -2408,9 +2423,7 @@ impl FoksClient {
         &self,
         host: &PinnedHost,
         credential: &YubiCredential<'_>,
-        team: &EntityId,
-        expected_seqno: u64,
-        expected_operation_id: &[u8; 16],
+        recovery: TeamMutationRecovery<'_>,
         request: &ChangeTeamMemberRequest<'_>,
         protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<RotatedTeamPtks> {
@@ -2420,7 +2433,7 @@ impl FoksClient {
             credential,
             &authenticated_user.verified,
             &authenticated_user.puks,
-            team,
+            recovery.team,
         )?;
         let actor_puk = team_actor_puk(&authenticated_user, &authenticated_team)?;
         self.resume_change_with_material(
@@ -2431,9 +2444,9 @@ impl FoksClient {
             &credential.certificate_chain,
             &authenticated_user,
             &actor_puk.seed,
-            team,
-            expected_seqno,
-            expected_operation_id,
+            recovery.team,
+            recovery.expected_seqno,
+            recovery.expected_operation_id,
             request,
             None,
             protected_store,
@@ -2445,9 +2458,7 @@ impl FoksClient {
         &self,
         host: &PinnedHost,
         credential: &DeviceCredential,
-        team: &EntityId,
-        expected_seqno: u64,
-        expected_operation_id: &[u8; 16],
+        recovery: TeamMutationRecovery<'_>,
         request: &RemoveLocalTeamMemberRequest<'_>,
         protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<RotatedTeamPtks> {
@@ -2457,7 +2468,7 @@ impl FoksClient {
             credential,
             &authenticated_user.verified,
             &authenticated_user.puks,
-            team,
+            recovery.team,
         )?;
         let actor_puk = team_actor_puk(&authenticated_user, &authenticated_team)?;
         let device_id = derive_device_public(&credential.seed)?.id;
@@ -2469,9 +2480,9 @@ impl FoksClient {
             &credential.certificate_chain,
             &authenticated_user,
             actor_puk,
-            team,
-            expected_seqno,
-            expected_operation_id,
+            recovery.team,
+            recovery.expected_seqno,
+            recovery.expected_operation_id,
             request,
             protected_store,
         )
@@ -2482,9 +2493,7 @@ impl FoksClient {
         &self,
         host: &PinnedHost,
         credential: &YubiCredential<'_>,
-        team: &EntityId,
-        expected_seqno: u64,
-        expected_operation_id: &[u8; 16],
+        recovery: TeamMutationRecovery<'_>,
         request: &RemoveLocalTeamMemberRequest<'_>,
         protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<RotatedTeamPtks> {
@@ -2494,7 +2503,7 @@ impl FoksClient {
             credential,
             &authenticated_user.verified,
             &authenticated_user.puks,
-            team,
+            recovery.team,
         )?;
         let actor_puk = team_actor_puk(&authenticated_user, &authenticated_team)?;
         self.resume_removal_with_material(
@@ -2505,9 +2514,9 @@ impl FoksClient {
             &credential.certificate_chain,
             &authenticated_user,
             actor_puk,
-            team,
-            expected_seqno,
-            expected_operation_id,
+            recovery.team,
+            recovery.expected_seqno,
+            recovery.expected_operation_id,
             request,
             protected_store,
         )
@@ -2991,21 +3000,20 @@ fn refresh_operation_id(
             binding
                 .changes
                 .iter()
-                .map(
-                    |(party, host, source, destination, generation, verify, hepk)| {
-                        Value::Array(vec![
-                            Value::Binary(party.as_bytes().to_vec()),
-                            host.as_ref().map_or(Value::Null, |host| {
-                                Value::Binary(host.as_bytes().to_vec())
-                            }),
-                            source.to_value(),
-                            destination.to_value(),
-                            Value::Unsigned(*generation),
-                            Value::Binary(verify.as_bytes().to_vec()),
-                            Value::Binary(hepk.to_vec()),
-                        ])
-                    },
-                )
+                .map(|change| {
+                    Value::Array(vec![
+                        Value::Binary(change.party.as_bytes().to_vec()),
+                        change
+                            .host
+                            .as_ref()
+                            .map_or(Value::Null, |host| Value::Binary(host.as_bytes().to_vec())),
+                        change.source_role.to_value(),
+                        change.destination_role.to_value(),
+                        Value::Unsigned(change.generation),
+                        Value::Binary(change.verify_key.as_bytes().to_vec()),
+                        Value::Binary(change.hepk_fingerprint.to_vec()),
+                    ])
+                })
                 .collect(),
         ),
         Value::Array(
@@ -3035,16 +3043,14 @@ fn refresh_binding_from_request(
         changes: request
             .changes
             .iter()
-            .map(|change| {
-                (
-                    change.target.party.clone(),
-                    change.target.host.cloned(),
-                    change.target.source_role,
-                    change.destination_role,
-                    change.replacement_generation,
-                    change.replacement_verify_key.clone(),
-                    change.replacement_hepk_fingerprint,
-                )
+            .map(|change| RefreshChange {
+                party: change.target.party.clone(),
+                host: change.target.host.cloned(),
+                source_role: change.target.source_role,
+                destination_role: change.destination_role,
+                generation: change.replacement_generation,
+                verify_key: change.replacement_verify_key.clone(),
+                hepk_fingerprint: change.replacement_hepk_fingerprint,
             })
             .collect(),
         expected_seqno: request.expected_seqno,
@@ -3145,14 +3151,14 @@ fn validate_refresh_transition(
             .iter()
             .zip(&binding.changes)
             .any(|(member, expected)| {
-                member.party != expected.0
-                    || member.scoped_host != expected.1
-                    || member.source_role != expected.2
-                    || member.role != expected.3
+                member.party != expected.party
+                    || member.scoped_host != expected.host
+                    || member.source_role != expected.source_role
+                    || member.role != expected.destination_role
                     || member.keys.as_ref().is_none_or(|keys| {
-                        keys.generation != expected.4
-                            || keys.verify_key != expected.5
-                            || keys.hepk_fingerprint != expected.6
+                        keys.generation != expected.generation
+                            || keys.verify_key != expected.verify_key
+                            || keys.hepk_fingerprint != expected.hepk_fingerprint
                     })
             })
         || change.shared_keys.len() != binding.introduced.len()

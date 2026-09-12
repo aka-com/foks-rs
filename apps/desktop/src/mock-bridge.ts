@@ -355,10 +355,11 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     failures: [],
     blockedProfiles: [],
   });
+  const chat = mockChat(world);
   return {
     native: false,
-    chat: mockChat(),
-    cancelChat: async () => {},
+    chat,
+    cancelChat: chat.cancel,
     fixtureWorld: world,
     firstRunFixture,
     appLockState: async () => appLockState(),
@@ -909,6 +910,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
               : serverHosts.has(server.id)
                 ? Math.floor(Date.now() / 1000) + 6 * 24 * 60 * 60
                 : null,
+        chatAvailable: server.chat_available,
       };
     },
     checkServer: async (profile) => {
@@ -954,6 +956,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
         lease: null,
         accounts: [],
         state: 'never-probed',
+        chat_available: false,
       });
       return { profile: profileName, configuredProbe: probe };
     },

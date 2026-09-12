@@ -290,6 +290,7 @@ test('decoders validate server status, member rosters, and federation entries', 
       lease: null,
       accounts: ['rae'],
       state: 'ok',
+      chat_available: true,
     },
   ]);
   assert.equal(servers[0]?.host_id, 'abc');
@@ -544,6 +545,7 @@ test('decoders reject invalid server status, malformed reset tokens, and invalid
         },
         leaseRequired: false,
         leaseExpiresAt: null,
+        chatAvailable: false,
       }),
     /canonical 02 entity id/,
   );
@@ -554,6 +556,7 @@ test('decoders reject invalid server status, malformed reset tokens, and invalid
         configuredProbe: 'x',
         host: null,
         leaseExpiresAt: null,
+        chatAvailable: false,
       }),
     /leaseRequired must be a boolean/,
   );
@@ -565,6 +568,7 @@ test('decoders reject invalid server status, malformed reset tokens, and invalid
         host: null,
         leaseRequired: false,
         leaseExpiresAt: 100,
+        chatAvailable: false,
       }),
     /protocol that does not use leases/,
   );
@@ -1011,6 +1015,7 @@ test('loadWorld makes a single catalog call and does not leak fixture data in na
         lease: null,
         accounts: ['rae'],
         state: 'never-probed',
+        chat_available: false,
       },
     ],
     describeServerStatus: async () => ({
@@ -1019,6 +1024,7 @@ test('loadWorld makes a single catalog call and does not leak fixture data in na
       host: checkedHost,
       leaseRequired: true,
       leaseExpiresAt: 2_000_000_000,
+      chatAvailable: true,
     }),
     listAccounts: async () => [
       {
@@ -1099,6 +1105,7 @@ test('loadWorld keeps known stores visible while revoking access to unavailable 
         lease: null,
         accounts: ['rae'],
         state: 'never-probed',
+        chat_available: false,
       },
     ],
     describeServerStatus: async () => ({
@@ -1107,6 +1114,7 @@ test('loadWorld keeps known stores visible while revoking access to unavailable 
       host: checkedHost,
       leaseRequired: true,
       leaseExpiresAt: 2_000_000_000,
+      chatAvailable: true,
     }),
     listAccounts: async () => [],
     listParties: async () => [],
@@ -1145,6 +1153,7 @@ test('creates a notification when a server cannot be described instead of omitti
         lease: null,
         accounts: ['rae'],
         state: 'never-probed',
+        chat_available: false,
       },
     ],
     // Verify that an unprobed server with null host raises a never-probed notification.
@@ -1154,6 +1163,7 @@ test('creates a notification when a server cannot be described instead of omitti
       host: null,
       leaseRequired: false,
       leaseExpiresAt: null,
+      chatAvailable: false,
     }),
     listAccounts: async () => [
       {
@@ -1231,6 +1241,7 @@ test('loadWorld does not fetch team rosters for blocked profiles', async () => {
         lease: null,
         accounts: [],
         state: 'blocked',
+        chat_available: false,
       },
     ],
     listAccounts: async () => [],
@@ -1310,6 +1321,7 @@ test('loadWorld does not fetch members for an inactive team', async () => {
         lease: null,
         accounts: ['rae'],
         state: 'never-probed',
+        chat_available: false,
       },
     ],
     describeServerStatus: async () => ({
@@ -1318,6 +1330,7 @@ test('loadWorld does not fetch members for an inactive team', async () => {
       host: checkedHost,
       leaseRequired: true,
       leaseExpiresAt: 2_000_000_000,
+      chatAvailable: true,
     }),
     listAccounts: async () => [
       {
@@ -1406,6 +1419,7 @@ test('loadWorld evaluates store access based on server lease validity and protoc
         lease: null,
         accounts: [profile],
         state: 'never-probed' as const,
+        chat_available: false,
       })),
     describeServerStatus: async (profile) => {
       if (profile === 'failed')
@@ -1417,6 +1431,7 @@ test('loadWorld evaluates store access based on server lease validity and protoc
         leaseRequired: profile !== 'v019',
         leaseExpiresAt:
           profile === 'fresh' ? 200 : profile === 'expired' ? 99 : null,
+        chatAvailable: profile === 'fresh' || profile === 'v019',
       };
     },
     listAccounts: async () =>
@@ -1616,6 +1631,7 @@ test('loadWorld omits rosters for lapsed servers and enriches active member and 
         ...server,
         lease: null,
         state: 'never-probed' as const,
+        chat_available: false,
       })),
     listAccounts: async () => [
       {
@@ -1640,6 +1656,7 @@ test('loadWorld omits rosters for lapsed servers and enriches active member and 
           : { ...checkedHost, lookupName: profile, canonicalName: profile },
       leaseRequired: true,
       leaseExpiresAt: profile === 'partner' ? null : 2_000_000_000,
+      chatAvailable: profile !== 'partner',
     }),
     listGroupDetails: async (storeId: string) => {
       const current = await bridge.listGroupDetails(storeId);
