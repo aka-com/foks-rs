@@ -169,6 +169,13 @@ pub(super) fn read(
                     Some(session.resolve_data_team(&scope.account_alias, &selector, vault)?);
                 serde_json::to_value(&scope)?
             }
+            DataRead::Stat { path, version } => serde_json::to_value(session.data_stat(
+                &scope.account_alias,
+                scope.team_id.as_deref(),
+                &path,
+                version,
+                vault,
+            )?)?,
             DataRead::Catalog => {
                 let report =
                     session.data_catalog(&scope.account_alias, scope.team_id.as_deref(), vault)?;

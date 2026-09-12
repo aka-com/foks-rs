@@ -3,6 +3,10 @@
 `foks-rs` is the direct, non-interactive standalone client. Every invocation
 requires `--state-dir`; it neither reads nor writes AKA state.
 
+The `mcp kv` and `mcp team` commands expose the account through the resident agent.
+See [MCP setup and recovery](../foks-mcp/README.md) for launch configuration, tool
+scope, limits and Go compatibility. Install `foks-agent` beside `foks-rs`.
+
 Start a local or hosted profile with:
 
 ```text

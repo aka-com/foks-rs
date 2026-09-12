@@ -15,8 +15,9 @@ use rmcp::model::CallToolResult;
 use serde::de::DeserializeOwned;
 use std::{collections::HashSet, path::Path};
 use tokio_util::sync::CancellationToken;
-use zeroize::{Zeroize as _, Zeroizing};
+use zeroize::Zeroizing;
 
+mod stat;
 mod writes;
 use writes::{write_result, write_spec};
 
@@ -115,10 +116,13 @@ impl AgentBackend {
         input: &str,
         follow_final: bool,
         cancelled: &CancellationToken,
-    ) -> Result<&'a DataCatalogEntry, String> {
+    ) -> Result<Option<&'a DataCatalogEntry>, String> {
         let mut path = encode_path(input)?;
         let mut seen = HashSet::new();
         for _ in 0..32 {
+            if path == "/" {
+                return Ok(None);
+            }
             if !seen.insert(path.clone()) {
                 return Err("KV symlink cycle".into());
             }
@@ -153,7 +157,7 @@ impl AgentBackend {
                     break;
                 }
                 if final_entry {
-                    return Ok(row);
+                    return Ok(Some(row));
                 }
                 if row.node_type != "directory" {
                     return Err("KV parent is not a directory".into());
@@ -229,11 +233,11 @@ impl Backend for AgentBackend {
                 let path = if path == "/" {
                     path
                 } else {
-                    let row = self.resolve(&scope, &catalog, &args.path, true, cancelled)?;
-                    if row.node_type != "directory" {
-                        return Err("list path is not a directory".into());
+                    match self.resolve(&scope, &catalog, &args.path, true, cancelled)? {
+                        None => "/".to_owned(),
+                        Some(row) if row.node_type == "directory" => row.path.clone(),
+                        _ => return Err("list path is not a directory".into()),
                     }
-                    row.path.clone()
                 };
                 let prefix = if path == "/" {
                     "/".to_owned()
@@ -255,10 +259,10 @@ impl Backend for AgentBackend {
                     .format(&time::format_description::well_known::Rfc3339)
                     .map_err(|_| "KV modification time is invalid")?;
                     let kind = match row.node_type.as_str() {
-                        "directory" => "Dir",
-                        "small-file" => "SmallFile",
-                        "file" => "File",
-                        "symlink" => "Symlink",
+                        "directory" => "dir",
+                        "small-file" => "file",
+                        "file" => "file",
+                        "symlink" => "symlink",
                         _ => return Err("unknown KV node type".into()),
                     };
                     text.push_str(&format!("{}\t{kind}\t{date}\n", decode_path(name)?));
@@ -268,23 +272,27 @@ impl Backend for AgentBackend {
             Invocation::Get(args) => {
                 let scope = self.scope(args.team.as_deref(), cancelled)?;
                 let catalog: DataCatalog = self.read(&scope, DataRead::Catalog, cancelled)?;
-                let row = self.resolve(&scope, &catalog, &args.path, true, cancelled)?;
-                let node = self.entry(&scope, &row.path, row.version, cancelled)?;
-                let size = node.size.ok_or("get requires a file")?;
-                if size > MAX_FILE_BYTES as u64 {
-                    return Err(ContractError::TooLarge.to_string());
-                }
-                let mut content = Zeroizing::new(Vec::with_capacity(size as usize));
-                if node.node_type == "small-file" {
-                    content.extend_from_slice(
-                        node.content
-                            .as_deref()
-                            .ok_or("small file content is missing")?,
-                    );
-                } else if node.node_type == "file" {
-                    while content.len() < size as usize {
+                let row = self
+                    .resolve(&scope, &catalog, &args.path, true, cancelled)?
+                    .ok_or("get requires a file")?;
+                let mut content = Zeroizing::new(Vec::new());
+                if row.node_type == "small-file" {
+                    let node = self.entry(&scope, &row.path, row.version, cancelled)?;
+                    let bytes = node
+                        .content
+                        .as_deref()
+                        .ok_or("small file content is missing")?;
+                    if bytes.len() > MAX_FILE_BYTES {
+                        return Err(ContractError::TooLarge.to_string());
+                    }
+                    content.extend_from_slice(bytes);
+                } else if row.node_type == "file" {
+                    loop {
                         let offset = content.len() as u64;
-                        let length = (size - offset).min(128 * 1024) as u32;
+                        let length = (MAX_FILE_BYTES - content.len()).min(128 * 1024) as u32;
+                        if length == 0 {
+                            return Err(ContractError::TooLarge.to_string());
+                        }
                         let chunk: DataChunk = self.read(
                             &scope,
                             DataRead::Chunk {
@@ -298,21 +306,18 @@ impl Backend for AgentBackend {
                         if chunk.path != row.path
                             || chunk.version != row.version
                             || chunk.offset != offset
-                            || chunk.content.is_empty()
+                            || (chunk.content.is_empty() && !chunk.eof)
                             || chunk.content.len() > length as usize
                         {
                             return Err("agent returned an inconsistent chunk".into());
                         }
                         content.extend_from_slice(&chunk.content);
-                        if chunk.eof != (content.len() == size as usize) {
-                            return Err("file length changed during read".into());
+                        if chunk.eof {
+                            break;
                         }
                     }
                 } else {
                     return Err("get requires a file".into());
-                }
-                if content.len() != size as usize {
-                    return Err("file length changed during read".into());
                 }
                 // Revalidate identity/access and the selected version before publishing plaintext.
                 let current: DataCatalog = self.read(&scope, DataRead::Catalog, cancelled)?;
@@ -331,23 +336,57 @@ impl Backend for AgentBackend {
             Invocation::Stat(args) => {
                 let scope = self.scope(args.team.as_deref(), cancelled)?;
                 let catalog: DataCatalog = self.read(&scope, DataRead::Catalog, cancelled)?;
-                if encode_path(&args.path)? == "/" {
-                    if catalog.root_id.is_none() {
-                        return Err("KV root does not exist".into());
+                let (path, version) = if encode_path(&args.path)? == "/" {
+                    ("/".to_owned(), None)
+                } else {
+                    match self.resolve(&scope, &catalog, &args.path, true, cancelled)? {
+                        Some(row) => (row.path.clone(), Some(row.version)),
+                        None => ("/".to_owned(), None),
                     }
-                    return Ok(text_result(serde_json::json!({"node_type":"directory", "version":catalog.snapshot_version, "node_id":catalog.root_id}).to_string()));
+                };
+                let evidence: foks_agent_proto::data::DataStat = self.read(
+                    &scope,
+                    DataRead::Stat {
+                        path: path.clone(),
+                        version,
+                    },
+                    cancelled,
+                )?;
+                if evidence.path != path || evidence.version != version {
+                    return Err("agent changed stat scope".into());
                 }
-                let row = self.resolve(&scope, &catalog, &args.path, false, cancelled)?;
-                let mut node = self.entry(&scope, &row.path, row.version, cancelled)?;
-                // Size of a small encrypted file requires opening its bounded node.
-                // Large-file stat never fetches content chunks.
-                if let Some(mut content) = node.content.take() {
-                    content.zeroize();
+                if let Some(bytes) = &evidence.dirent {
+                    let entry =
+                        foks_proto::KvDirent::decode(bytes).map_err(|_| "invalid stat dirent")?;
+                    let node_id: String = entry
+                        .value
+                        .0
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect();
+                    if !catalog.entries.iter().any(|row| {
+                        row.path == path && row.node_id == node_id && row.version == entry.version
+                    }) {
+                        return Err("stat target changed after selection".into());
+                    }
+                } else {
+                    let directory = foks_proto::KvDirectoryPair::decode(
+                        evidence.directory.as_deref().ok_or("missing stat root")?,
+                    )
+                    .map_err(|_| "invalid stat root")?;
+                    let root_id: String = directory
+                        .active
+                        .id
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect();
+                    if catalog.root_id.as_deref() != Some(root_id.as_str()) {
+                        return Err("stat root changed after selection".into());
+                    }
                 }
-                Ok(text_result(
-                    serde_json::to_string(&node).map_err(|_| "invalid entry metadata")?,
-                ))
+                Ok(text_result(stat::go_stat(evidence)?.to_string()))
             }
+
             Invocation::Put(args) => {
                 let body = crate::contract::decode_content(&args.content, args.base64)
                     .map_err(|error| error.to_string())?;

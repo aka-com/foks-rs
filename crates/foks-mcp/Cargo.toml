@@ -9,6 +9,7 @@ rust-version = "1.88"
 [dependencies]
 base64.workspace = true
 foks-crypto.workspace = true
+foks-proto.workspace = true
 getrandom.workspace = true
 foks-agent-client.workspace = true
 foks-agent-proto.workspace = true

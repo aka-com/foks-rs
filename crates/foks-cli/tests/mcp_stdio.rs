@@ -109,22 +109,43 @@ impl Drop for Agent {
 
 #[test]
 fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof() {
-    let environment = TestEnvironment::new().unwrap();
-    let _server = environment.start_server().unwrap();
+    let external_probe = std::env::var("FOKS_TEST_MCP_PROBE").ok();
+    let environment = external_probe
+        .is_none()
+        .then(|| TestEnvironment::new().unwrap());
+    let _server = environment
+        .as_ref()
+        .map(|environment| environment.start_server().unwrap());
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("state");
     std::fs::create_dir_all(&state).unwrap();
     let root = state.join("root.der");
-    environment.write_probe_root(&root).unwrap();
+    if let Some(environment) = &environment {
+        environment.write_probe_root(&root).unwrap();
+    } else {
+        std::fs::copy(
+            std::env::var("FOKS_TEST_MCP_CA").expect("external probe CA"),
+            &root,
+        )
+        .unwrap();
+    }
     ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
     let mut registry = ProfileRegistry::open(&state).unwrap();
     registry
         .add(Profile {
             name: "local".into(),
-            probe: format!(
-                "localhost:{}",
-                environment.addresses().unwrap().probe.port()
-            ),
+            probe: external_probe.unwrap_or_else(|| {
+                format!(
+                    "localhost:{}",
+                    environment
+                        .as_ref()
+                        .unwrap()
+                        .addresses()
+                        .unwrap()
+                        .probe
+                        .port()
+                )
+            }),
             protocol: ProtocolPolicy::V019,
             trust: TrustRoot::CertificateDer { path: root },
         })
@@ -154,6 +175,28 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
                 "owner",
                 "/hello",
                 &mut b"hello MCP\n".as_slice(),
+                KvMutationPrecondition::Create,
+                KvRoleSummary::Owner,
+                KvRoleSummary::Owner,
+                false,
+                &mut vault,
+                &master,
+            )?;
+            session.put_kv_symlink_checked(
+                "owner",
+                "/root-alias",
+                "/",
+                KvMutationPrecondition::Create,
+                KvRoleSummary::Owner,
+                KvRoleSummary::Owner,
+                false,
+                &mut vault,
+                &master,
+            )?;
+            session.put_kv_symlink_checked(
+                "owner",
+                "/hello-alias",
+                "/hello",
                 KvMutationPrecondition::Create,
                 KvRoleSummary::Owner,
                 KvRoleSummary::Owner,
@@ -193,9 +236,19 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
     assert!(listed["result"]["content"][0]["text"]
         .as_str()
         .unwrap()
-        .contains("hello\tSmallFile\t"));
+        .contains("hello\tfile\t"));
     let got = kv.call("get", json!({"path":"hello"}));
     assert_eq!(got["result"]["content"][0]["text"], "hello MCP\n");
+    assert_eq!(
+        kv.call("get", json!({"path":"/hello-alias"}))["result"]["content"][0]["text"],
+        "hello MCP\n"
+    );
+    assert!(
+        kv.call("list", json!({"path":"/root-alias"}))["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("hello\tfile\t")
+    );
     let usage = kv.call("usage", json!({}));
     assert!(usage["result"]["content"][0]["text"]
         .as_str()
@@ -204,7 +257,7 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
     let stat = kv.call("stat", json!({"path":"/hello"}));
     let metadata: Value =
         serde_json::from_str(stat["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(metadata["size"], 10);
+    assert_eq!(metadata["V"]["f2"]["Size"], 10);
     let rejected = kv.call("put", json!({"path":"/hello","content":"overwrite"}));
     assert!(rejected.get("error").is_some() || rejected["result"]["isError"] == true);
     kv.eof();
@@ -250,7 +303,11 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
         "{moved}"
     );
     let got = writes.call("get", json!({"path":"/written/moved"}));
-    assert_eq!(got["result"]["content"][0]["text"], body);
+    assert!(got["result"]["isError"] != true, "{got}");
+    assert!(
+        got["result"]["content"][0]["text"].as_str() == Some(body.as_str()),
+        "large file content mismatch"
+    );
     let duplicate = writes.call(
         "put",
         json!({"path":"/written/moved", "content":"different"}),
@@ -267,6 +324,22 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
         team_write["result"]["structuredContent"]["status"], "committed",
         "{team_write}"
     );
+    let linked_write = writes.call(
+        "put",
+        json!({"path":"/root-alias/through-link", "content":"linked"}),
+    );
+    assert_eq!(
+        linked_write["result"]["structuredContent"]["status"], "committed",
+        "{linked_write}"
+    );
+    assert_eq!(
+        writes.call("get", json!({"path":"/through-link"}))["result"]["content"][0]["text"],
+        "linked"
+    );
+    assert_eq!(
+        writes.call("rm", json!({"path":"/root-alias"}))["result"]["content"][0]["text"],
+        "ok"
+    );
     let mkdir = writes.call("mkdir", json!({"path":"/new-dir"}));
     assert_eq!(
         mkdir["result"]["structuredContent"]["status"], "committed",
@@ -278,4 +351,21 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
         "{removed}"
     );
     writes.eof();
+    if let Ok(oracle) = std::env::var("FOKS_GO_MCP_ORACLE") {
+        let status = Command::new("go")
+            .args([
+                "test",
+                "-C",
+                &oracle,
+                "-run",
+                "^TestGoSDKAgainstRustMCP$",
+                "-count=1",
+                "-v",
+            ])
+            .env("FOKS_MCP_STATE_DIR", &state)
+            .env("FOKS_MCP_CLI", env!("CARGO_BIN_EXE_foks-rs"))
+            .status()
+            .unwrap();
+        assert!(status.success(), "independent Go SDK comparison failed");
+    }
 }

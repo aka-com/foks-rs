@@ -396,7 +396,7 @@ impl InviteCode {
 const BASE62_ALPHABET: &[u8; 62] =
     b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-fn encode_base62_strict(input: &[u8]) -> String {
+pub fn encode_base62_strict(input: &[u8]) -> String {
     let mut encoded = Vec::with_capacity(base62_encoded_len(input.len()));
     for block in input.chunks(32) {
         let output_len = base62_encoded_len(block.len());

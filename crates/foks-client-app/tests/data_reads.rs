@@ -92,7 +92,7 @@ fn scoped_reads_bind_identity_preserve_absent_roots_and_verify_team_and_file_dat
             assert!(row.modified_microseconds > 0);
             let node =
                 session.data_entry("owner", None, "/large", row.metadata.version, &mut vault)?;
-            assert_eq!(node.size, Some(data.len() as u64));
+            assert_eq!(node.size, None);
             assert!(
                 node.content.is_none(),
                 "large-file metadata must not fetch content"

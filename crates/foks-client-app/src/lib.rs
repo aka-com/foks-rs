@@ -212,8 +212,8 @@ pub use checkpoint::{
 use kv::{display_component, split_parent};
 pub use kv::{
     DataCatalogEntryReport, DataCatalogReport, DataMemberReport, DataMembershipReport,
-    DataMembershipsReport, DataWriteKind, DataWriteOutcome, DataWriteSpec, DataWriteStatus,
-    KvCatalogEntry, KvCatalogReport, KvChunkReport, KvEntrySummary, KvListReport,
+    DataMembershipsReport, DataStatReport, DataWriteKind, DataWriteOutcome, DataWriteSpec,
+    DataWriteStatus, KvCatalogEntry, KvCatalogReport, KvChunkReport, KvEntrySummary, KvListReport,
     KvMutationPrecondition, KvReadReport, KvRoleSummary, KvWriteReport,
 };
 pub use registry::{

@@ -109,6 +109,27 @@ impl KvWriteSession<'_> {
         )
     }
 
+    /// Open a bounded symlink box from an authenticated metadata projection.
+    /// No file content is traversed or fetched by this path-resolution helper.
+    pub fn projected_symlink_target(
+        &self,
+        node: KvNodeId,
+        encoded: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>> {
+        if node.node_type()? != KvNodeType::Symlink {
+            return Err(Error::KvRequest("node is not a symlink"));
+        }
+        let foks_proto::KvNode::Symlink(boxed) = foks_proto::KvNode::decode(encoded)? else {
+            return Err(Error::KvResponse("symlink metadata mismatch"));
+        };
+        let keys = kv_key(&self.private_keys, boxed.key.role, boxed.key.generation)?;
+        let KvSmallFilePlaintext::Symlink(target) = keys.open_small_file(node, &boxed)? else {
+            return Err(Error::KvResponse("symlink plaintext mismatch"));
+        };
+        validate_kv_symlink(&target)?;
+        Ok(Zeroizing::new(target))
+    }
+
     /// Creates the first root for a party whose KV namespace is absent. The
     /// directory can become unreferenced if `kvPutRoot` loses a race, matching the
     /// upstream two-step protocol; no authenticated namespace state is lost.

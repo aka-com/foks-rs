@@ -26,7 +26,13 @@ pub(super) fn apply_write<R: Read>(
     {
         return Err(Error::InvalidAccount("namespace exceeds adapter limit"));
     }
-    let (parent_path, name) = split_parent(&spec.path)?;
+    let path = resolve_adapter_path(
+        session,
+        &tree,
+        &spec.path,
+        matches!(spec.kind, DataWriteKind::Put | DataWriteKind::Mkdir),
+    )?;
+    let (parent_path, name) = split_parent(&path)?;
     if spec.mkdir_p && resolve_directory(&tree, &parent_path).is_err() {
         if tree
             .iter()
@@ -115,12 +121,18 @@ pub(super) fn apply_write<R: Read>(
         }
         DataWriteKind::Move => {
             let existing = existing.ok_or(Error::InvalidKvPath("move source does not exist"))?;
-            let (destination, destination_name) = split_parent(
-                spec.destination
-                    .as_deref()
-                    .ok_or(Error::InvalidKvPath("missing destination"))?,
-            )?;
-            let destination = resolve_directory(&tree, &destination)?;
+            let destination_path = spec
+                .destination
+                .as_deref()
+                .ok_or(Error::InvalidKvPath("missing destination"))?;
+            let destination_path = resolve_adapter_path(session, &tree, destination_path, true)?;
+            let (destination, destination_name) =
+                if let Ok(directory) = resolve_directory(&tree, &destination_path) {
+                    (directory, name.clone())
+                } else {
+                    let (parent, name) = split_parent(&destination_path)?;
+                    (resolve_directory(&tree, &parent)?, name)
+                };
             if tree
                 .iter()
                 .find(|dir| dir.directory_id == destination)
@@ -144,4 +156,84 @@ pub(super) fn apply_write<R: Read>(
             Ok(Some(hex(&node.node_id.0)))
         }
     }
+}
+
+fn resolve_adapter_path(
+    session: &foks_client::KvWriteSession<'_>,
+    tree: &[KvDirectoryProjection],
+    path: &str,
+    follow_final: bool,
+) -> Result<String> {
+    let mut parts = path_components(path)?;
+    let mut seen = std::collections::BTreeSet::new();
+    for _ in 0..32 {
+        if parts.len() > 64 || !seen.insert(parts.clone()) {
+            return Err(Error::InvalidKvPath("symlink depth or cycle limit"));
+        }
+        let mut current = root_directory(tree)?;
+        let mut redirect = None;
+        for (index, component) in parts.iter().enumerate() {
+            let directory = tree
+                .iter()
+                .find(|dir| dir.directory_id == current)
+                .ok_or(Error::InvalidKvPath("missing directory projection"))?;
+            let Some(entry) = directory
+                .entries
+                .iter()
+                .find(|entry| &entry.name == component)
+            else {
+                break;
+            };
+            let node = KvNodeId(entry.node_id);
+            let final_entry = index + 1 == parts.len();
+            if node.node_type()? == KvNodeType::Symlink && (!final_entry || follow_final) {
+                let target = session.projected_symlink_target(
+                    node,
+                    entry
+                        .node_bytes
+                        .as_deref()
+                        .ok_or(Error::InvalidKvPath("inaccessible symlink"))?,
+                )?;
+                let mut resolved = if target.starts_with(b"/") {
+                    Vec::new()
+                } else {
+                    parts[..index].to_vec()
+                };
+                for component in target.split(|b| *b == b'/') {
+                    match component {
+                        b"" | b"." => (),
+                        b".." => {
+                            resolved.pop();
+                        }
+                        component => resolved.push(component.to_vec()),
+                    }
+                }
+                resolved.extend_from_slice(&parts[index + 1..]);
+                redirect = Some(resolved);
+                break;
+            }
+            if !final_entry {
+                if node.node_type()? != KvNodeType::Directory {
+                    return Err(Error::InvalidKvPath("parent is not a directory"));
+                }
+                current = node.object_id();
+            }
+        }
+        match redirect {
+            Some(next) => parts = next,
+            None => {
+                let result = format!(
+                    "/{}",
+                    parts
+                        .iter()
+                        .map(|part| display_component(part))
+                        .collect::<Vec<_>>()
+                        .join("/")
+                );
+                path_components(&result)?;
+                return Ok(result);
+            }
+        }
+    }
+    Err(Error::InvalidKvPath("symlink depth exceeds adapter limit"))
 }

@@ -1992,6 +1992,7 @@ dependencies = [
  "foks-agent-client",
  "foks-agent-proto",
  "foks-crypto",
+ "foks-proto",
  "futures-util",
  "getrandom 0.4.3",
  "rmcp",

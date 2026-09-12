@@ -46,7 +46,7 @@ impl AgentBackend {
             return Err("agent changed submission identity".into());
         }
         if prepared.status != DataWriteStatus::Prepared {
-            return write_result(prepared);
+            return write_tool_result(prepared, spec.kind);
         }
         if cancelled.is_cancelled() {
             return Err(format!("cancelled; prepared submission_id={id}"));
@@ -90,8 +90,40 @@ impl AgentBackend {
         if result.submission_id != id {
             return Err("agent changed submission identity".into());
         }
-        write_result(result)
+        write_tool_result(result, spec.kind)
     }
+}
+
+fn write_tool_result(
+    result: foks_agent_proto::data::DataWriteOutcome,
+    kind: foks_agent_proto::data::DataWriteKind,
+) -> Result<CallToolResult, String> {
+    let committed = result.status == foks_agent_proto::data::DataWriteStatus::Committed;
+    let node_id = result.node_id.clone();
+    let mut response = write_result(result)?;
+    if committed {
+        let text = if kind == foks_agent_proto::data::DataWriteKind::Mkdir {
+            match node_id {
+                Some(id) if id.len() == 34 => {
+                    let mut bytes = [0; 17];
+                    for (byte, pair) in bytes.iter_mut().zip(id.as_bytes().chunks_exact(2)) {
+                        *byte = u8::from_str_radix(
+                            std::str::from_utf8(pair).map_err(|_| "invalid directory ID")?,
+                            16,
+                        )
+                        .map_err(|_| "invalid directory ID")?;
+                    }
+                    format!("DirID: 1{}", foks_proto::encode_base62_strict(&bytes[1..]))
+                }
+                _ => "committed; original directory ID is unavailable in this recovery result"
+                    .to_owned(),
+            }
+        } else {
+            "ok".to_owned()
+        };
+        response.content = vec![rmcp::model::ContentBlock::text(text)];
+    }
+    Ok(response)
 }
 
 #[allow(clippy::too_many_arguments)]

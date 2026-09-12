@@ -397,7 +397,7 @@ fn validate_spec(spec: &DataWriteSpec) -> Result<()> {
         return Err(Error::InvalidAccount("invalid adapter write arguments"));
     }
     if let Some(destination) = &spec.destination {
-        split_parent(destination)?;
+        path_components(destination)?;
         if path_components(destination)?.len() > 64 {
             return Err(Error::InvalidKvPath("adapter path depth exceeds limit"));
         }

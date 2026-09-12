@@ -19,6 +19,10 @@ pub enum DataRead {
         selector: String,
     },
     Catalog,
+    Stat {
+        path: String,
+        version: Option<u64>,
+    },
     Entry {
         path: String,
         version: u64,
@@ -174,4 +178,15 @@ pub struct DataWriteOutcome {
 pub struct DataSubmission {
     pub scope: DataScope,
     pub submission_id: String,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct DataStat {
+    pub path: String,
+    pub version: Option<u64>,
+    pub dirent: Option<Vec<u8>>,
+    pub directory: Option<Vec<u8>>,
+    pub node: Option<Vec<u8>>,
+    pub size: Option<u64>,
+    pub target: Option<String>,
 }

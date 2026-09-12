@@ -13,6 +13,7 @@ packages=(
   foks-client-app
   foks-compat-artifact
   foks-cli
+  foks-mcp
   foks-agent-proto
   foks-agent-client
   foks-agent
@@ -25,6 +26,7 @@ for package in "${packages[@]}"; do
 done
 
 cargo fmt "${package_args[@]}" -- --check
+cargo build --offline --locked -p foks-agent
 cargo test --offline "${package_args[@]}"
 cargo clippy --offline "${package_args[@]}" --all-targets -- -D warnings
 

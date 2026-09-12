@@ -67,6 +67,9 @@ done <"$boundary_paths"
 
 # The AKA-free rule itself, by name and across every feature combination: a
 # dependency reachable only behind a non-default feature is still a dependency.
+# MCP process tests use the packaged sibling agent executable.
+cargo build --offline --locked -p foks-agent
+
 while IFS= read -r package; do
     for features in "" "--all-features"; do
         # shellcheck disable=SC2086

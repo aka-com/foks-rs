@@ -81,6 +81,8 @@ jobs:
         run: tools/foks-server/check.sh
       - name: Verify the Rust client against Go v0.1.9
         run: tools/foks-v019-oracle/run-live-compat.sh
+      - name: Verify MCP against Rust and Go FOKS services
+        run: tools/foks-v019-oracle/run-mcp-compat.sh
       - name: Verify team frames against Go v0.1.9
         run: tools/foks-v019-oracle/run-live-team-compat.sh
       - name: Verify the Go v0.1.9 client against the Rust server

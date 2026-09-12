@@ -1,6 +1,8 @@
 use super::*;
 
 mod data;
+mod data_stat;
+pub use data_stat::*;
 mod data_write;
 pub use data::*;
 pub use data_write::*;

@@ -287,7 +287,7 @@ impl CheckedProfileSession<'_> {
         Ok((account, user, team))
     }
 
-    fn data_tree(
+    pub(super) fn data_tree(
         &self,
         account: &LoadedAccount,
         user: &AuthenticatedUserOutcome,
@@ -358,6 +358,22 @@ impl CheckedProfileSession<'_> {
         let (account, user, team) = self.data_context(alias, team_id, vault)?;
         let tree = self.data_tree(&account, &user, team.as_ref())?;
         let entry = checked_entry(&tree, path, version)?;
+        if KvNodeId(entry.node_id).node_type()? == KvNodeType::File {
+            let metadata = flatten_catalog_tree(&tree)?
+                .into_iter()
+                .find(|row| row.path == path)
+                .ok_or(Error::InvalidKvPath("missing file metadata"))?;
+            return Ok(KvReadReport {
+                path: path.to_owned(),
+                version,
+                node_type: "file".into(),
+                size: None,
+                read_role: metadata.read_role,
+                write_role: metadata.write_role,
+                content: None,
+                symlink_target: None,
+            });
+        }
         let host = self.pinned_host()?;
         let node = match team.as_ref() {
             Some(team) => self.client.read_team_kv_node(

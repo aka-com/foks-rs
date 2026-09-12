@@ -1156,11 +1156,9 @@ where
         return Err(Error::KvResponse("KV range length is zero"));
     }
 
-    // Desktop callers advance by their prior response length. Most FOKS
-    // writers use stable chunk sizes, so that offset is normally an exact
-    // stored-chunk boundary. Try it first; an older writer may have chosen a
-    // larger chunk, in which case the server's no-entry response is safe to
-    // fall back from to the bounded sequential scan below.
+    // Go returns the stored chunk containing the requested offset, which can
+    // start before it. Authenticate that offset and then slice the requested
+    // range; exact-boundary-only hosts can fall back to the bounded scan.
     if requested_offset >= length as u64 {
         match fetch(
             auth,
@@ -1171,15 +1169,26 @@ where
         ) {
             Ok(chunk_bytes) => {
                 let chunk = KvEncryptedChunk::decode(&chunk_bytes)?;
-                let clear =
-                    Zeroizing::new(open_kv_chunk(&file_seed, node, requested_offset, &chunk)?);
+                if chunk.offset > requested_offset {
+                    return Err(Error::KvResponse("chunk starts after the requested range"));
+                }
+                let clear = Zeroizing::new(open_kv_chunk(&file_seed, node, chunk.offset, &chunk)?);
                 if clear.is_empty() && !chunk.final_chunk {
                     return Err(Error::KvResponse("empty non-final file chunk"));
                 }
-                let chunk_end = validate_large_file_append(requested_offset, clear.len())?;
-                let count = length.min(clear.len());
+                let chunk_end = validate_large_file_append(chunk.offset, clear.len())?;
+                if chunk_end < requested_offset
+                    || (chunk_end == requested_offset && !chunk.final_chunk)
+                {
+                    return Err(Error::KvResponse(
+                        "chunk does not contain the requested range",
+                    ));
+                }
+                let start = usize::try_from(requested_offset - chunk.offset)
+                    .map_err(|_| Error::KvResponse("KV range overflow"))?;
+                let end = start.saturating_add(length).min(clear.len());
                 return Ok(KvFetchedChunk {
-                    content: clear[..count].to_vec(),
+                    content: clear[start..end].to_vec(),
                     eof: chunk.final_chunk && requested_end >= chunk_end,
                 });
             }

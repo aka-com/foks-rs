@@ -1018,6 +1018,45 @@ mod tests {
         assert_eq!(fetched.content, fixture("kv-large-plaintext.bin")[1..4]);
         assert!(!fetched.eof);
         assert!(requests.is_empty());
+        // Go's range query returns the containing stored chunk (offset zero),
+        // even when the requested offset lies inside it.
+        let ranged = read_kv_chunk_with_fetch(
+            large_id,
+            4,
+            3,
+            &private_keys,
+            KvAuth::Team(&token),
+            |_, request| match request {
+                KvRequest::Node(_) => Ok(fixture("kv-large-node.snowp")),
+                KvRequest::Chunk { offset, .. } => {
+                    assert_eq!(*offset, 4);
+                    Ok(fixture("kv-large-chunk.snowp"))
+                }
+                _ => panic!("unexpected range request"),
+            },
+        )
+        .unwrap();
+        assert_eq!(ranged.content, fixture("kv-large-plaintext.bin")[4..7]);
+        let future = read_kv_chunk_with_fetch(
+            large_id,
+            4,
+            3,
+            &private_keys,
+            KvAuth::Team(&token),
+            |_, request| {
+                if matches!(request, KvRequest::Node(_)) {
+                    return Ok(fixture("kv-large-node.snowp"));
+                }
+                let mut chunk =
+                    foks_proto::KvEncryptedChunk::decode(&fixture("kv-large-chunk.snowp")).unwrap();
+                chunk.offset = 5;
+                Ok(chunk.encode().unwrap())
+            },
+        );
+        assert!(
+            future.is_err(),
+            "a future chunk cannot answer an earlier range"
+        );
     }
 
     #[test]

@@ -198,3 +198,21 @@ To intentionally regenerate, set `FOKS_RT_FIXTURE_OUT` to
 `../../crates/foks-snowpack/tests/fixtures/foks-v0.1.9/realtime`.
 The fixture seeds are public test data. No live account or server is contacted.
 Rust crypto and RPC tests assert exact equality with these Go-produced bytes.
+
+## MCP adapter comparison
+
+`./run-mcp-compat.sh [all|rust|go]` runs the same independent stdio and Go-SDK
+scenarios through Rust MCP against Rust and pinned Go services. The Go SDK also
+unmarshals stat output into upstream `lcl.KVStat`. The Go service direction reuses
+`TestRustClientHappyPath` setup and its ephemeral production-strength TLS leaf.
+The Go MCP command is a reference comparator, not a peer of Rust MCP.
+
+The unmodified upstream comparator is run with:
+
+```sh
+go test -C "$(go env GOPATH)/pkg/mod/github.com/foks-proj/go-foks@v0.1.9" \
+  -mod=readonly ./integration-tests/cli -run '^TestMCP' -count=1
+```
+
+Ordinary `go test ./...` skips the opt-in Rust MCP process test unless its driver
+supplies `FOKS_MCP_CLI` and `FOKS_MCP_STATE_DIR`. No real hosted account is required.
