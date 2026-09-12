@@ -1080,6 +1080,7 @@ fn file_mutation(
             .map_err(|_| "content size exceeds maximum upload limit")?;
         Ok(KvAccountMutation::Stream {
             header: KvUploadHeader {
+                adapter: None,
                 store,
                 path,
                 total_length,
@@ -1103,6 +1104,7 @@ fn file_upload_header(
     mkdir_p: bool,
 ) -> Result<KvUploadHeader, &'static str> {
     Ok(KvUploadHeader {
+        adapter: None,
         store,
         path,
         total_length,
@@ -2996,6 +2998,7 @@ mod tests {
             edit_kv_file_mutation(&item, vec![0; MAXIMUM_INLINE_KV_BYTES + 1]).unwrap(),
             KvAccountMutation::Stream {
                 header: KvUploadHeader {
+                    adapter: None,
                     precondition: KvPrecondition::ExactVersion { version: 7 },
                     read_role: KvRole::Member { visibility: -1 },
                     write_role: KvRole::Admin,
@@ -3014,6 +3017,7 @@ mod tests {
         assert!(matches!(
             create_kv_file_upload(&account, "/large", 84 * 1024 * 1024).unwrap(),
             KvUploadHeader {
+                adapter: None,
                 total_length: 88_080_384,
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
@@ -3027,6 +3031,7 @@ mod tests {
         assert!(matches!(
             edit_kv_file_upload(&file, 64).unwrap(),
             KvUploadHeader {
+                adapter: None,
                 total_length: 64,
                 read_role: KvRole::Member { visibility: -1 },
                 write_role: KvRole::Admin,
@@ -3038,6 +3043,7 @@ mod tests {
         assert!(matches!(
             edit_kv_file_upload(&item, 64).unwrap(),
             KvUploadHeader {
+                adapter: None,
                 total_length: 64,
                 read_role: KvRole::Member { visibility: -1 },
                 write_role: KvRole::Admin,

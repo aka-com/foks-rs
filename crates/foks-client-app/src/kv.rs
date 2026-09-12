@@ -1,7 +1,9 @@
 use super::*;
 
 mod data;
+mod data_write;
 pub use data::*;
+pub use data_write::*;
 
 impl CheckedProfileSession<'_> {
     pub fn list_kv(&self, alias: &str, vault: &mut AccountVault<'_>) -> Result<KvListReport> {

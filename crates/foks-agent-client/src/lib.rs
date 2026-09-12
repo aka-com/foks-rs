@@ -102,8 +102,17 @@ impl AgentClient {
         header: KvUploadHeader,
         reader: &mut R,
     ) -> Result<Response> {
+        self.put_kv_stream_cancellable(header, reader, &|| false)
+    }
+
+    pub fn put_kv_stream_cancellable<R: std::io::Read + ?Sized>(
+        &self,
+        header: KvUploadHeader,
+        reader: &mut R,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Response> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let response = upload_platform(&self.socket, self.timeout, id, header, reader)?;
+        let response = upload_platform(&self.socket, self.timeout, id, header, reader, cancelled)?;
         if response.id != Some(id) {
             return Err(Error::Ambiguous(Error::ResponseBinding.to_string()));
         }
@@ -155,9 +164,12 @@ fn upload_platform<R: std::io::Read + ?Sized>(
     id: u64,
     header: KvUploadHeader,
     reader: &mut R,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<Response> {
     use std::io::Write as _;
 
+    let deadline = std::time::Instant::now() + timeout;
+    check_upload_cancelled(cancelled, deadline)?;
     let total = header.total_length;
     let mut stream = connect_platform(socket, timeout)?;
     stream.write_all(&foks_agent_proto::encode(&Request::new(
@@ -167,6 +179,7 @@ fn upload_platform<R: std::io::Read + ?Sized>(
     let mut buffer = Zeroizing::new(vec![0u8; MAXIMUM_UPLOAD_FRAME_BYTES]);
     let mut offset = 0u64;
     while offset < total {
+        check_upload_cancelled(cancelled, deadline)?;
         let wanted = usize::try_from((total - offset).min(MAXIMUM_UPLOAD_FRAME_BYTES as u64))
             .map_err(|_| Error::Io(std::io::Error::other("upload length overflow")))?;
         read_upload_chunk(reader, &mut buffer[..wanted])?;
@@ -210,6 +223,7 @@ fn upload_platform<R: std::io::Read + ?Sized>(
             "upload exceeds its declared length",
         )));
     }
+    check_upload_cancelled(cancelled, deadline)?;
     let commit = foks_agent_proto::encode(&KvUploadFrame {
         version: PROTOCOL_VERSION,
         id,
@@ -221,7 +235,21 @@ fn upload_platform<R: std::io::Read + ?Sized>(
             Err(_) => Err(Error::Ambiguous(error.to_string())),
         };
     }
-    read_response(&mut stream).map_err(|error| Error::Ambiguous(error.to_string()))
+    read_response_cancellable(&mut stream, cancelled, deadline)
+        .map_err(|error| Error::Ambiguous(error.to_string()))
+}
+
+fn check_upload_cancelled(
+    cancelled: &dyn Fn() -> bool,
+    deadline: std::time::Instant,
+) -> Result<()> {
+    if cancelled() || std::time::Instant::now() >= deadline {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "upload cancelled or deadline exceeded",
+        )));
+    }
+    Ok(())
 }
 
 fn read_upload_chunk<R: std::io::Read + ?Sized>(reader: &mut R, output: &mut [u8]) -> Result<()> {
@@ -349,6 +377,7 @@ fn upload_platform<R: std::io::Read + ?Sized>(
     _id: u64,
     _header: KvUploadHeader,
     _reader: &mut R,
+    _cancelled: &dyn Fn() -> bool,
 ) -> Result<Response> {
     Err(Error::Unsupported)
 }
@@ -462,6 +491,7 @@ mod tests {
                 .unwrap();
         });
         let header = KvUploadHeader {
+            adapter: None,
             store: KvStoreRef::Account(AccountStoreRef {
                 profile: "local".to_owned(),
                 account_alias: "personal".to_owned(),
@@ -477,6 +507,67 @@ mod tests {
             .put_kv_stream(header, &mut std::io::empty())
             .unwrap_err();
         assert!(matches!(error, Error::Ambiguous(_)));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn cancelled_upload_closes_without_sending_commit() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("agent.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut frames = Vec::new();
+            loop {
+                let mut prefix = [0; 4];
+                match stream.read_exact(&mut prefix) {
+                    Ok(()) => (),
+                    Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                    Err(error) => panic!("{error}"),
+                }
+                let mut frame = vec![0; 4 + u32::from_be_bytes(prefix) as usize];
+                frame[..4].copy_from_slice(&prefix);
+                stream.read_exact(&mut frame[4..]).unwrap();
+                frames.push(frame);
+            }
+            assert_eq!(frames.len(), 2, "only header and one chunk may be sent");
+            assert!(matches!(
+                foks_agent_proto::decode_upload_frame(&frames[1])
+                    .unwrap()
+                    .payload,
+                KvUploadPayload::Chunk { .. }
+            ));
+        });
+        let cancelled = std::cell::Cell::new(false);
+        struct Reader<'a>(&'a std::cell::Cell<bool>, bool);
+        impl std::io::Read for Reader<'_> {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                if self.1 {
+                    return Ok(0);
+                }
+                output[0] = 42;
+                self.1 = true;
+                self.0.set(true);
+                Ok(1)
+            }
+        }
+        let header = KvUploadHeader {
+            adapter: None,
+            store: KvStoreRef::Account(AccountStoreRef {
+                profile: "local".into(),
+                account_alias: "owner".into(),
+            }),
+            path: "/file".into(),
+            total_length: 1,
+            read_role: KvRole::Owner,
+            write_role: KvRole::Owner,
+            precondition: KvPrecondition::Create,
+            mkdir_p: false,
+        };
+        assert!(AgentClient::new(&socket)
+            .put_kv_stream_cancellable(header, &mut Reader(&cancelled, false), &|| cancelled.get())
+            .is_err());
         server.join().unwrap();
     }
 
@@ -505,6 +596,7 @@ mod tests {
         });
         let length = 2 * 1024 * 1024;
         let header = KvUploadHeader {
+            adapter: None,
             store: KvStoreRef::Account(AccountStoreRef {
                 profile: "local".to_owned(),
                 account_alias: "personal".to_owned(),

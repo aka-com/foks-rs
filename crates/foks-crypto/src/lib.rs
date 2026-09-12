@@ -615,6 +615,12 @@ fn decode_with_redacted_trailing_seed(plaintext: &[u8]) -> Result<(Value, Secret
     Ok((decode(&redacted)?, seed))
 }
 
+/// Fingerprint of bounded plaintext for a local adapter's durable upload intent.
+/// The domain separator is local and never emitted on the FOKS wire.
+pub fn kv_adapter_body_hash(body: &[u8]) -> [u8; 32] {
+    prefixed_hash(0x5de4_c49e_cabc_9643, body)
+}
+
 /// SHA-512/256 over the 8-byte big-endian type ID and arbitrary bytes.
 ///
 /// This primitive does not validate that `object` is a signable Snowpack

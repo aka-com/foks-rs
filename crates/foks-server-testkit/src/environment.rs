@@ -323,6 +323,11 @@ impl TestEnvironment {
                 "TeamAdmin",
                 "editTeam",
             ),
+            TestFault::KvPutAfterCommitBeforeResponse => (
+                foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
+                "KvStore",
+                "put",
+            ),
             TestFault::BetweenLargeFileChunks => (
                 foks_server::SessionFaultPoint::BetweenLargeFileChunks,
                 "KvStore",
@@ -362,6 +367,7 @@ pub enum TestFault {
     FederationGrantTeamAfterCommitBeforeResponse,
     FederationTeamEditAfterCommitBeforeResponse,
     BetweenLargeFileChunks,
+    KvPutAfterCommitBeforeResponse,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

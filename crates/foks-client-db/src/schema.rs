@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 27;
+pub(crate) const VERSION: u32 = 28;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -19,6 +19,7 @@ pub(crate) const REVISION_TABLES: &[&str] = &[
     "adhoc_team_operations",
     "team_mutation_operations",
     "mutation_operations",
+    "mutation_children",
     "federation_saga_operations",
     "scheduled_jobs",
     "chat_operations",
@@ -332,7 +333,7 @@ WHERE state IN (1, 2, 3, 4, 5);
 -- protected material store; it is never written to this hard-state database.
 CREATE TABLE mutation_operations (
     operation_id BLOB PRIMARY KEY CHECK (length(operation_id) = 16),
-    operation_kind INTEGER NOT NULL CHECK (operation_kind BETWEEN 1 AND 7),
+    operation_kind INTEGER NOT NULL CHECK (operation_kind BETWEEN 1 AND 8),
     host_id BLOB NOT NULL REFERENCES hosts(host_id) ON DELETE RESTRICT,
     scope_id BLOB NOT NULL CHECK (length(scope_id) IN (0, 16, 33, 34)),
     subject_id BLOB NOT NULL CHECK (length(subject_id) IN (0, 16, 33, 34)),
@@ -345,6 +346,16 @@ CREATE TABLE mutation_operations (
     created_at INTEGER NOT NULL CHECK (created_at >= 0),
     updated_at INTEGER NOT NULL CHECK (updated_at >= created_at)
 ) STRICT, WITHOUT ROWID;
+
+-- A high-level adapter intent owns the lower-level KV records it caused.
+-- Completion labels identify final namespace attempts, including rejected CAS retries.
+CREATE TABLE mutation_children (
+    parent_id BLOB NOT NULL REFERENCES mutation_operations(operation_id) ON DELETE RESTRICT,
+    child_id BLOB PRIMARY KEY REFERENCES mutation_operations(operation_id) ON DELETE RESTRICT,
+    completion INTEGER NOT NULL CHECK (completion IN (0,1)),
+    CHECK (parent_id != child_id)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX mutation_children_parent ON mutation_children(parent_id);
 
 CREATE INDEX mutation_operations_pending
 ON mutation_operations (host_id, state, updated_at)

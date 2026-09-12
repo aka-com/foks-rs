@@ -235,6 +235,7 @@ pub enum MutationKind {
     KvNamespace = 5,
     KvContent = 6,
     KvRoot = 7,
+    KvAdapter = 8,
 }
 
 impl MutationKind {
@@ -247,6 +248,7 @@ impl MutationKind {
             5 => Ok(Self::KvNamespace),
             6 => Ok(Self::KvContent),
             7 => Ok(Self::KvRoot),
+            8 => Ok(Self::KvAdapter),
             _ => Err(Error::InvalidMutationOperation("unknown operation kind")),
         }
     }
@@ -2263,6 +2265,69 @@ mod tests {
             reopened.mutation(&[6; 16]).unwrap().unwrap().attempt_count,
             1
         );
+    }
+
+    #[test]
+    fn adapter_child_binding_is_atomic_and_rejects_wrong_scope_and_terminal_parent() {
+        let (_directory, mut store) = store();
+        let host = snapshot();
+        store.accept_host_parts(host.parts()).unwrap();
+        let parent = MutationOperation {
+            operation_id: [41; 16],
+            kind: MutationKind::KvAdapter,
+            host_id: host.host_id,
+            scope_id: vec![1; 33],
+            subject_id: vec![2; 33],
+            expected_version: None,
+            request_hash: [3; 32],
+            material_ref: vec![41; 16],
+            material_hash: [4; 32],
+            state: MutationState::Prepared,
+            attempt_count: 0,
+            created_at: 100,
+            updated_at: 100,
+        };
+        store.record_mutation(&parent).unwrap();
+        let mut child = parent.clone();
+        child.operation_id = [42; 16];
+        child.kind = MutationKind::KvNamespace;
+        child.scope_id = parent.subject_id.clone();
+        child.subject_id = vec![5; 16];
+        assert!(store
+            .record_child_mutation(&child, &parent.operation_id, true)
+            .is_err());
+        assert!(store.mutation(&child.operation_id).unwrap().is_none());
+        store
+            .begin_mutation_submission(&parent.operation_id, 101)
+            .unwrap();
+        child.scope_id = vec![7; 33];
+        assert!(store
+            .record_child_mutation(&child, &parent.operation_id, true)
+            .is_err());
+        assert!(store.mutation(&child.operation_id).unwrap().is_none());
+        child.scope_id = parent.subject_id.clone();
+        store
+            .record_child_mutation(&child, &parent.operation_id, true)
+            .unwrap();
+        assert_eq!(
+            store.mutation_children(&parent.operation_id).unwrap().len(),
+            1
+        );
+        assert!(store
+            .record_child_mutation(&child, &parent.operation_id, false)
+            .is_err());
+        assert_eq!(
+            store.mutation_children(&parent.operation_id).unwrap().len(),
+            1
+        );
+        store
+            .advance_mutation(&parent.operation_id, MutationState::Rejected, 102)
+            .unwrap();
+        child.operation_id = [43; 16];
+        assert!(store
+            .record_child_mutation(&child, &parent.operation_id, true)
+            .is_err());
+        assert!(store.mutation(&child.operation_id).unwrap().is_none());
     }
 
     #[test]

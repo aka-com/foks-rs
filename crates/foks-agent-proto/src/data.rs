@@ -128,3 +128,50 @@ impl Drop for DataChunk {
         self.content.zeroize();
     }
 }
+
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DataWriteKind {
+    Put,
+    Mkdir,
+    Remove,
+    Move,
+}
+
+#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DataWriteSpec {
+    pub kind: DataWriteKind,
+    pub path: String,
+    pub destination: Option<String>,
+    pub team_selector: Option<String>,
+    pub overwrite: bool,
+    pub mkdir_p: bool,
+    pub recursive: bool,
+    pub body_length: u64,
+    pub body_hash: [u8; 32],
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DataWriteStatus {
+    Prepared,
+    Committed,
+    Rejected,
+    SubmissionUnknown,
+}
+
+#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DataWriteOutcome {
+    pub submission_id: String,
+    pub status: DataWriteStatus,
+    /// True when ancillary namespace steps committed but completion is unproven.
+    pub partial: bool,
+    pub node_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DataSubmission {
+    pub scope: DataScope,
+    pub submission_id: String,
+}

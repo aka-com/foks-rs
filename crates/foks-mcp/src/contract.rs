@@ -41,8 +41,18 @@ pub enum Invocation {
     Move(MoveArgs),
     #[serde(rename = "list-memberships")]
     Memberships(EmptyArgs),
+    #[serde(rename = "fennec_status")]
+    Status(SubmissionArgs),
+    #[serde(rename = "fennec_pending")]
+    Pending(EmptyArgs),
     #[serde(rename = "team-list")]
     Members(TeamListArgs),
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmissionArgs {
+    pub fennec_submission_id: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -83,6 +93,8 @@ pub struct GetArgs {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PutArgs {
+    #[serde(default)]
+    pub fennec_submission_id: Option<String>,
     pub path: String,
     pub content: String,
     #[serde(default)]
@@ -104,6 +116,8 @@ impl Drop for PutArgs {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MkdirArgs {
+    #[serde(default)]
+    pub fennec_submission_id: Option<String>,
     pub path: String,
     #[serde(default)]
     pub team: Option<String>,
@@ -114,6 +128,8 @@ pub struct MkdirArgs {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RemoveArgs {
+    #[serde(default)]
+    pub fennec_submission_id: Option<String>,
     pub path: String,
     #[serde(default)]
     pub team: Option<String>,
@@ -124,6 +140,8 @@ pub struct RemoveArgs {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MoveArgs {
+    #[serde(default)]
+    pub fennec_submission_id: Option<String>,
     pub src: String,
     pub dst: String,
     #[serde(default)]
@@ -149,7 +167,18 @@ impl ToolSet {
         match (self, read_only) {
             (Self::Team, _) => &["list", "list-memberships"],
             (Self::Kv, true) => &["list", "get", "stat", "usage"],
-            (Self::Kv, false) => &["list", "get", "stat", "usage", "put", "mkdir", "rm", "mv"],
+            (Self::Kv, false) => &[
+                "list",
+                "get",
+                "stat",
+                "usage",
+                "put",
+                "mkdir",
+                "rm",
+                "mv",
+                "fennec_status",
+                "fennec_pending",
+            ],
         }
     }
 
@@ -177,6 +206,8 @@ impl ToolSet {
             let (required, strings, flags): (&[&str], &[&str], &[&str]) = match (self, *name) {
                 (Self::Team, "list") => (&["team"], &["team"], &[]),
                 (Self::Team, _) => (&[], &[], &[]),
+                (_, "fennec_status") => (&["fennec_submission_id"], &["fennec_submission_id"], &[]),
+                (_, "fennec_pending") => (&[], &[], &[]),
                 (_, "get") => (&["path"], &["path", "team"], &["base64"]),
                 (_, "put") => (&["path", "content"], &["path", "content", "team"], &["base64", "mkdir_p", "overwrite"]),
                 (_, "mkdir") => (&["path"], &["path", "team"], &["mkdir_p"]),
@@ -189,6 +220,7 @@ impl ToolSet {
             for key in strings { properties.insert((*key).to_owned(), json!({"type":"string"})); }
             for key in flags { properties.insert((*key).to_owned(), json!({"type":"boolean", "default":false})); }
             let writes = matches!(*name, "put" | "mkdir" | "rm" | "mv");
+            if writes { properties.insert("fennec_submission_id".into(), json!({"type":"string", "pattern":"^[0-9a-f]{32}$"})); }
             serde_json::from_value(json!({
                 "name": name,
                 "description": format!("FOKS {} {name} in the selected account", if self == Self::Kv {"KV"} else {"team"}),
@@ -253,7 +285,7 @@ mod tests {
 
     #[test]
     fn tools_are_isolated_and_read_only_is_enforced_on_dispatch() {
-        assert_eq!(ToolSet::Kv.tools(false).len(), 8);
+        assert_eq!(ToolSet::Kv.tools(false).len(), 10);
         assert_eq!(ToolSet::Team.tools(false).len(), 2);
         assert!(matches!(
             ToolSet::Kv.parse(true, "put", args(json!({"path":"x","content":"secret"}))),

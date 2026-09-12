@@ -21,18 +21,18 @@ struct Process {
 }
 impl Process {
     fn start(state: &Path, set: &str) -> Self {
+        Self::start_mode(state, set, true)
+    }
+    fn start_mode(state: &Path, set: &str, read_only: bool) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_foks-rs"))
             .args(["--state-dir"])
             .arg(state)
-            .args([
-                "mcp",
-                set,
-                "--profile",
-                "local",
-                "--account",
-                "owner",
-                "--read-only",
-            ])
+            .args(["mcp", set, "--profile", "local", "--account", "owner"])
+            .args(if read_only {
+                vec!["--read-only"]
+            } else {
+                vec![]
+            })
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -222,4 +222,60 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
         .unwrap()
         .contains("mcpteam"));
     team.eof();
+    let mut writes = Process::start_mode(&state, "kv", false);
+    let id = "12".repeat(16);
+    let body = "x".repeat(300 * 1024);
+    let args =
+        json!({"path":"/written/file", "content":body, "mkdir_p":true, "fennec_submission_id":id});
+    let put = writes.call("put", args.clone());
+    assert_eq!(
+        put["result"]["structuredContent"]["status"], "committed",
+        "{put}"
+    );
+    writes.eof();
+    let mut writes = Process::start_mode(&state, "kv", false);
+    let repeated = writes.call("put", args);
+    assert_eq!(
+        repeated["result"]["structuredContent"]["status"], "committed",
+        "{repeated}"
+    );
+    assert_eq!(
+        writes.call("fennec_status", json!({"fennec_submission_id":id}))["result"]
+            ["structuredContent"]["status"],
+        "committed"
+    );
+    let moved = writes.call("mv", json!({"src":"/written/file", "dst":"/written/moved"}));
+    assert_eq!(
+        moved["result"]["structuredContent"]["status"], "committed",
+        "{moved}"
+    );
+    let got = writes.call("get", json!({"path":"/written/moved"}));
+    assert_eq!(got["result"]["content"][0]["text"], body);
+    let duplicate = writes.call(
+        "put",
+        json!({"path":"/written/moved", "content":"different"}),
+    );
+    assert_eq!(
+        duplicate["result"]["structuredContent"]["status"], "rejected",
+        "{duplicate}"
+    );
+    let team_write = writes.call(
+        "put",
+        json!({"path":"/team-file", "team":"mcpteam", "content":"team bytes"}),
+    );
+    assert_eq!(
+        team_write["result"]["structuredContent"]["status"], "committed",
+        "{team_write}"
+    );
+    let mkdir = writes.call("mkdir", json!({"path":"/new-dir"}));
+    assert_eq!(
+        mkdir["result"]["structuredContent"]["status"], "committed",
+        "{mkdir}"
+    );
+    let removed = writes.call("rm", json!({"path":"/written", "recursive":true}));
+    assert_eq!(
+        removed["result"]["structuredContent"]["status"], "committed",
+        "{removed}"
+    );
+    writes.eof();
 }

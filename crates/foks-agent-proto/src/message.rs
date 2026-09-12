@@ -332,6 +332,8 @@ pub struct KvChunkResult {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct KvUploadHeader {
+    #[serde(default)]
+    pub adapter: Option<crate::data::DataSubmission>,
     pub store: KvStoreRef,
     pub path: String,
     pub total_length: u64,
@@ -402,6 +404,20 @@ impl Request {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "operation", rename_all = "kebab-case")]
 pub enum Operation {
+    PrepareDataWrite {
+        scope: crate::data::DataScope,
+        submission_id: String,
+        spec: crate::data::DataWriteSpec,
+    },
+    ExecuteDataWrite {
+        submission: crate::data::DataSubmission,
+    },
+    DataWriteStatus {
+        submission: crate::data::DataSubmission,
+    },
+    PendingDataWrites {
+        scope: crate::data::DataScope,
+    },
     BindDataAccount {
         profile: String,
         account_alias: String,
@@ -925,6 +941,8 @@ impl Operation {
                 | Self::DiscoverGoProfiles
                 | Self::BindDataAccount { .. }
                 | Self::ReadData { .. }
+                | Self::DataWriteStatus { .. }
+                | Self::PendingDataWrites { .. }
                 | Self::ListProfiles
                 | Self::DescribeResetHardState { .. }
                 | Self::Probe { .. }
@@ -1020,6 +1038,10 @@ impl std::fmt::Debug for Operation {
                 .finish(),
             Self::BindDataAccount { .. } => formatter.write_str("BindDataAccount"),
             Self::ReadData { .. } => formatter.write_str("ReadData"),
+            Self::PrepareDataWrite { .. } => formatter.write_str("PrepareDataWrite"),
+            Self::ExecuteDataWrite { .. } => formatter.write_str("ExecuteDataWrite"),
+            Self::DataWriteStatus { .. } => formatter.write_str("DataWriteStatus"),
+            Self::PendingDataWrites { .. } => formatter.write_str("PendingDataWrites"),
             Self::ListProfiles => formatter.write_str("ListProfiles"),
             Self::Probe { profile } => formatter
                 .debug_struct("Probe")

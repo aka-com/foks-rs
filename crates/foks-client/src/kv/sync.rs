@@ -438,6 +438,8 @@ impl FoksClient {
             auth: OwnedKvAuth::User,
             private_keys: keys,
             protected_store,
+            adapter_parent: None,
+            adapter_completion: false,
             soft_database_path: soft_database_path.to_owned(),
             connection,
         })
@@ -481,6 +483,8 @@ impl FoksClient {
             auth: OwnedKvAuth::User,
             private_keys: keys,
             protected_store,
+            adapter_parent: None,
+            adapter_completion: false,
             soft_database_path: soft_database_path.to_owned(),
             connection,
         })
@@ -553,6 +557,8 @@ impl FoksClient {
                 })
                 .collect(),
             protected_store,
+            adapter_parent: None,
+            adapter_completion: false,
             soft_database_path: soft_database_path.to_owned(),
             connection,
         })

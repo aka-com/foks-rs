@@ -67,6 +67,8 @@ pub struct KvWriteSession<'a> {
     protected_store: &'a mut dyn ProtectedMutationStore,
     soft_database_path: PathBuf,
     connection: KvConnection,
+    adapter_parent: Option<[u8; 16]>,
+    adapter_completion: bool,
 }
 
 #[derive(Debug)]

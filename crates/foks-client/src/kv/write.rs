@@ -35,6 +35,67 @@ impl KvWriteSession<'_> {
     // small-file budget. Larger plaintexts use the chunked-file protocol.
     pub(crate) const SMALL_FILE_BYTES: usize = 2048 - 8;
 
+    /// Bind all later journaled steps to a durable, submitting adapter intent.
+    pub fn bind_adapter_intent(&mut self, operation_id: [u8; 16]) -> Result<()> {
+        if self.adapter_parent.is_some() {
+            return Err(Error::OperationBinding(
+                "KV session already has an adapter intent",
+            ));
+        }
+        let operation = HardStateStore::open(&self.host.database_path)?
+            .mutation(&operation_id)?
+            .ok_or(Error::OperationBinding("adapter intent is missing"))?;
+        let party = if operation.subject_id.is_empty() {
+            &operation.scope_id
+        } else {
+            &operation.subject_id
+        };
+        if operation.kind != MutationKind::KvAdapter
+            || operation.state != MutationState::Submitting
+            || operation.host_id != self.host.host_id.as_bytes()
+            || party != self.party.party.as_bytes()
+        {
+            return Err(Error::OperationBinding(
+                "adapter intent does not match KV session",
+            ));
+        }
+        self.adapter_parent = Some(operation_id);
+        Ok(())
+    }
+
+    /// Subsequent namespace attempts constitute the final high-level operation.
+    /// Call only after ancillary root / mkdir-p steps have completed.
+    pub fn mark_adapter_completion(&mut self) -> Result<()> {
+        if self.adapter_parent.is_none() || self.adapter_completion {
+            return Err(Error::OperationBinding(
+                "invalid adapter completion boundary",
+            ));
+        }
+        self.adapter_completion = true;
+        Ok(())
+    }
+
+    /// Read-only recovery: prepared requests are never sent by this entry point.
+    pub fn inspect_namespace_mutation(
+        &mut self,
+        operation_id: [u8; 16],
+    ) -> Result<Vec<KvDirectoryProjection>> {
+        let operation = HardStateStore::open(&self.host.database_path)?
+            .mutation(&operation_id)?
+            .ok_or(Error::OperationBinding("namespace mutation is missing"))?;
+        if !matches!(
+            operation.state,
+            MutationState::Submitting
+                | MutationState::SubmissionUnknown
+                | MutationState::RemoteVerified
+        ) {
+            return Err(Error::OperationBinding(
+                "namespace mutation is not awaiting verification",
+            ));
+        }
+        self.resume_namespace_mutation(operation_id)
+    }
+
     pub fn sync(&mut self) -> Result<Vec<KvDirectoryProjection>> {
         let auth = self.auth.borrowed();
         let connection = &mut self.connection;
@@ -332,6 +393,27 @@ impl KvWriteSession<'_> {
         destination_name: &str,
         options: KvWriteOptions,
     ) -> Result<KvWriteResult> {
+        self.move_entry_checked(
+            source_parent,
+            source_name,
+            None,
+            destination_parent,
+            destination_name,
+            options,
+        )
+    }
+
+    /// Move atomically while retaining the caller's source version across CAS retries.
+    #[allow(clippy::too_many_arguments)]
+    pub fn move_entry_checked(
+        &mut self,
+        source_parent: [u8; 16],
+        source_name: &str,
+        source_version: Option<u64>,
+        destination_parent: [u8; 16],
+        destination_name: &str,
+        options: KvWriteOptions,
+    ) -> Result<KvWriteResult> {
         validate_kv_component(source_name.as_bytes())?;
         validate_kv_component(destination_name.as_bytes())?;
         if source_parent == destination_parent && source_name == destination_name {
@@ -350,6 +432,9 @@ impl KvWriteSession<'_> {
                 .iter()
                 .find(|entry| entry.name == source_name.as_bytes())
                 .ok_or(Error::KvResponse("move source does not exist"))?;
+            if source_version.is_some_and(|version| version != source_entry.version) {
+                return Err(Error::KvResponse("KV dirent version precondition failed"));
+            }
             let source = KvDirent::decode(&source_entry.dirent_bytes)?;
             if source.value.node_type()? == KvNodeType::None {
                 return Err(Error::KvResponse("move source is tombstoned"));
@@ -475,12 +560,12 @@ impl KvWriteSession<'_> {
                 }
                 MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
                     .submission_unknown(&operation.operation_id)?;
-                return match self.reconcile_namespace_mutation(&operation, &dirents) {
+                return match self.reconcile_namespace_mutation(&operation, &dirents, false) {
                     Ok(tree) => Ok((dirents, tree)),
                     Err(_) => Err(error),
                 };
             }
-            let projected = self.reconcile_namespace_mutation(&operation, &dirents)?;
+            let projected = self.reconcile_namespace_mutation(&operation, &dirents, true)?;
             return Ok((dirents, projected));
         }
         Err(Error::KvResponse("KV namespace retry limit exhausted"))
@@ -545,7 +630,7 @@ impl KvWriteSession<'_> {
                 return Err(Error::OperationBinding("KV namespace mutation is terminal"));
             }
         }
-        self.reconcile_namespace_mutation(&operation, &dirents)
+        self.reconcile_namespace_mutation(&operation, &dirents, false)
     }
 
     /// Recovers creation of a party's first root. As with namespace writes,
@@ -606,7 +691,7 @@ impl KvWriteSession<'_> {
         let material = Zeroizing::new(root.encoded().to_vec());
         let operation =
             MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
-                .prepare(
+                .prepare_with_parent(
                     MutationDraft {
                         operation_id,
                         kind: MutationKind::KvRoot,
@@ -620,6 +705,7 @@ impl KvWriteSession<'_> {
                         ),
                     },
                     material,
+                    self.adapter_parent.map(|id| (id, false)),
                 )?;
         MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
             .begin_submission(&operation_id)?;
@@ -673,28 +759,43 @@ impl KvWriteSession<'_> {
         let operation_id = random_bytes()?;
         let subject_id = namespace_subject(dirents);
         let expected_version = Some(precondition.root_version);
-        MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store).prepare(
-            MutationDraft {
-                operation_id,
-                kind: MutationKind::KvNamespace,
-                host_id: self.host.host_id.as_bytes().to_vec(),
-                scope_id: self.party.party.as_bytes().to_vec(),
-                subject_id,
-                expected_version,
-                request_hash: foks_crypto::prefixed_hash(
-                    KV_NAMESPACE_REQUEST_HASH_TYPE_ID,
-                    &material,
-                ),
-            },
-            material,
-        )
+        MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
+            .prepare_with_parent(
+                MutationDraft {
+                    operation_id,
+                    kind: MutationKind::KvNamespace,
+                    host_id: self.host.host_id.as_bytes().to_vec(),
+                    scope_id: self.party.party.as_bytes().to_vec(),
+                    subject_id,
+                    expected_version,
+                    request_hash: foks_crypto::prefixed_hash(
+                        KV_NAMESPACE_REQUEST_HASH_TYPE_ID,
+                        &material,
+                    ),
+                },
+                material,
+                self.adapter_parent.map(|id| (id, self.adapter_completion)),
+            )
     }
 
     fn reconcile_namespace_mutation(
         &mut self,
         operation: &MutationOperation,
         dirents: &[KvDirent],
+        acknowledged: bool,
     ) -> Result<Vec<KvDirectoryProjection>> {
+        if !acknowledged
+            && dirents.iter().all(|entry| {
+                entry
+                    .value
+                    .node_type()
+                    .is_ok_and(|kind| kind == KvNodeType::None)
+            })
+        {
+            return Err(Error::TransitionNotObserved(
+                "absence cannot prove a specific unacknowledged unlink",
+            ));
+        }
         let affected = dirents
             .iter()
             .map(|dirent| dirent.parent)
@@ -723,12 +824,19 @@ impl KvWriteSession<'_> {
                         "KV tombstone was not reflected by synchronization",
                     ));
                 }
-            } else if projected.is_none_or(|entry| {
-                entry.version != expected.version || entry.node_id != expected.value.0
-            }) {
-                return Err(Error::TransitionNotObserved(
+            } else {
+                let entry = projected.ok_or(Error::TransitionNotObserved(
                     "KV dirent mutation was not reflected by synchronization",
-                ));
+                ))?;
+                let observed = KvDirent::decode(&entry.dirent_bytes)?;
+                // Go assigns creation_time; every client-authenticated field must match.
+                if observed.binding_payload()? != expected.binding_payload()?
+                    || observed.binding_mac != expected.binding_mac
+                {
+                    return Err(Error::TransitionNotObserved(
+                        "KV dirent differs from the durable outbox",
+                    ));
+                }
             }
         }
         MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)

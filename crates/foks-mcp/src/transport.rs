@@ -60,6 +60,7 @@ where
     ) -> impl Future<Output = io::Result<()>> + Send + 'static {
         let writer = self.writer.clone();
         let pending = self.pending.clone();
+        let guard = self.lifetime.clone().drop_guard();
         async move {
             // Check encoded size, not plaintext length: JSON escaping can expand sixfold.
             let bytes =
@@ -89,6 +90,7 @@ where
                     .map_err(|_| io::Error::other("MCP admission unavailable"))?
                     .remove(&id);
             }
+            guard.disarm();
             Ok(())
         }
     }

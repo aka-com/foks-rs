@@ -17,6 +17,9 @@ use std::{collections::HashSet, path::Path};
 use tokio_util::sync::CancellationToken;
 use zeroize::{Zeroize as _, Zeroizing};
 
+mod writes;
+use writes::{write_result, write_spec};
+
 pub struct AgentBackend {
     client: AgentClient,
     account: DataScope,
@@ -345,7 +348,101 @@ impl Backend for AgentBackend {
                     serde_json::to_string(&node).map_err(|_| "invalid entry metadata")?,
                 ))
             }
-            _ => Err("this tool's agent adapter is not implemented yet".into()),
+            Invocation::Put(args) => {
+                let body = crate::contract::decode_content(&args.content, args.base64)
+                    .map_err(|error| error.to_string())?;
+                self.write(
+                    args.fennec_submission_id.as_deref(),
+                    write_spec(
+                        foks_agent_proto::data::DataWriteKind::Put,
+                        &args.path,
+                        None,
+                        args.team.clone(),
+                        args.overwrite,
+                        args.mkdir_p,
+                        false,
+                        &body,
+                    )?,
+                    &body,
+                    cancelled,
+                )
+            }
+            Invocation::Mkdir(args) => self.write(
+                args.fennec_submission_id.as_deref(),
+                write_spec(
+                    foks_agent_proto::data::DataWriteKind::Mkdir,
+                    &args.path,
+                    None,
+                    args.team,
+                    false,
+                    args.mkdir_p,
+                    false,
+                    &[],
+                )?,
+                &[],
+                cancelled,
+            ),
+            Invocation::Remove(args) => self.write(
+                args.fennec_submission_id.as_deref(),
+                write_spec(
+                    foks_agent_proto::data::DataWriteKind::Remove,
+                    &args.path,
+                    None,
+                    args.team,
+                    false,
+                    false,
+                    args.recursive,
+                    &[],
+                )?,
+                &[],
+                cancelled,
+            ),
+            Invocation::Move(args) => self.write(
+                args.fennec_submission_id.as_deref(),
+                write_spec(
+                    foks_agent_proto::data::DataWriteKind::Move,
+                    &args.src,
+                    Some(&args.dst),
+                    args.team,
+                    false,
+                    false,
+                    false,
+                    &[],
+                )?,
+                &[],
+                cancelled,
+            ),
+            Invocation::Status(args) => {
+                let result: foks_agent_proto::data::DataWriteOutcome = call(
+                    &self.client,
+                    Operation::DataWriteStatus {
+                        submission: foks_agent_proto::data::DataSubmission {
+                            scope: self.account.clone(),
+                            submission_id: args.fennec_submission_id.clone(),
+                        },
+                    },
+                    cancelled,
+                )?;
+                if result.submission_id != args.fennec_submission_id {
+                    return Err("agent changed submission identity".into());
+                }
+                write_result(result)
+            }
+            Invocation::Pending(_) => {
+                let result: Vec<foks_agent_proto::data::DataWriteOutcome> = call(
+                    &self.client,
+                    Operation::PendingDataWrites {
+                        scope: self.account.clone(),
+                    },
+                    cancelled,
+                )?;
+                if result.len() > 64 {
+                    return Err("pending inventory exceeds limit".into());
+                }
+                Ok(text_result(
+                    serde_json::to_string(&result).map_err(|_| "invalid pending inventory")?,
+                ))
+            }
         }
     }
 }

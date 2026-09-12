@@ -69,6 +69,16 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
         draft: MutationDraft,
         material: Zeroizing<Vec<u8>>,
     ) -> Result<MutationOperation> {
+        self.prepare_with_parent(draft, material, None)
+    }
+
+    /// Atomically binds a namespace step to its adapter intent before delivery.
+    pub fn prepare_with_parent(
+        &mut self,
+        draft: MutationDraft,
+        material: Zeroizing<Vec<u8>>,
+        parent: Option<([u8; 16], bool)>,
+    ) -> Result<MutationOperation> {
         let material_ref = draft.operation_id.to_vec();
         let now = now_microseconds()?;
         let operation = MutationOperation {
@@ -95,7 +105,13 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
         self.protected
             .put_if_absent(&material_ref, &material)
             .map_err(material_error)?;
-        if let Err(error) = hard_store.record_mutation(&operation) {
+        let recorded = match parent {
+            Some((parent, completion)) => {
+                hard_store.record_child_mutation(&operation, &parent, completion)
+            }
+            None => hard_store.record_mutation(&operation),
+        };
+        if let Err(error) = recorded {
             // If another writer did not claim this exact operation ID, there
             // is no public journal that can refer to the newly installed
             // material. Remove it so a chain-position conflict cannot leak a

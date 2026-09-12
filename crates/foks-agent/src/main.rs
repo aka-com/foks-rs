@@ -78,6 +78,7 @@ static RESET_TICKETS: OnceLock<Mutex<BTreeMap<[u8; 32], ResetTicket>>> = OnceLoc
 
 #[derive(Clone)]
 struct ConnectionCapacity {
+    recovery: Arc<Semaphore>,
     blocking: Arc<Semaphore>,
     chat_polling: Arc<Semaphore>,
     active_chat_polls: Arc<Mutex<std::collections::HashSet<ChatPollKey>>>,
@@ -198,6 +199,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let listener = bind_private_agent_socket(&socket)?;
     let _socket_guard = SocketGuard(socket.clone());
     let active = Arc::new(Semaphore::new(arguments.maximum_connections));
+    let recovery = Arc::new(Semaphore::new(1));
     let blocking = Arc::new(Semaphore::new(arguments.blocking_workers));
     let chat_polling = Arc::new(Semaphore::new(arguments.chat_poll_workers));
     let active_chat_polls = Arc::new(Mutex::new(std::collections::HashSet::new()));
@@ -251,6 +253,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 };
                 let state_dir = state_dir.clone();
                 let capacity = ConnectionCapacity {
+                    recovery: recovery.clone(),
                     blocking: blocking.clone(),
                     chat_polling: chat_polling.clone(),
                     active_chat_polls: active_chat_polls.clone(),
@@ -685,24 +688,31 @@ async fn handle_connection(
         } else {
             None
         };
-        let permit =
-            match tokio::time::timeout(timeout, capacity.blocking.clone().acquire_owned()).await {
-                Ok(Ok(permit)) => permit,
-                Ok(Err(_)) => return Err("agent worker pool closed".into()),
-                Err(_) => {
-                    write_response(
-                        &mut stream,
-                        &Response::error(
-                            request.id,
-                            ErrorCode::Busy,
-                            "agent worker pool is saturated",
-                        ),
-                        timeout,
-                    )
-                    .await?;
-                    continue;
-                }
-            };
+        let worker_pool = if matches!(
+            request.operation,
+            Operation::DataWriteStatus { .. } | Operation::PendingDataWrites { .. }
+        ) {
+            capacity.recovery.clone()
+        } else {
+            capacity.blocking.clone()
+        };
+        let permit = match tokio::time::timeout(timeout, worker_pool.acquire_owned()).await {
+            Ok(Ok(permit)) => permit,
+            Ok(Err(_)) => return Err("agent worker pool closed".into()),
+            Err(_) => {
+                write_response(
+                    &mut stream,
+                    &Response::error(
+                        request.id,
+                        ErrorCode::Busy,
+                        "agent worker pool is saturated",
+                    ),
+                    timeout,
+                )
+                .await?;
+                continue;
+            }
+        };
         let state = state_dir.clone();
         let operation_ready = ready.clone();
         let operation_timeout = if request.operation.is_device_pairing_wait() {
@@ -820,7 +830,9 @@ async fn handle_streaming_upload(
     request_id: u64,
     header: KvUploadHeader,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if header.total_length > MAXIMUM_STREAM_KV_BYTES {
+    if header.total_length > MAXIMUM_STREAM_KV_BYTES
+        || (header.adapter.is_some() && header.total_length > 4 * 1024 * 1024)
+    {
         write_response(
             stream,
             &Response::error(
@@ -873,19 +885,30 @@ async fn handle_streaming_upload(
     let worker_header = header.clone();
     let worker = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        let result = put_kv_reader(
-            &state_dir,
-            &ProfileRegistry::open(&state_dir)?,
-            timeout,
-            worker_cancellation,
-            &worker_header.store,
-            &worker_header.path,
-            UploadReader::new(receiver, worker_header.total_length),
-            worker_header.precondition,
-            worker_header.read_role,
-            worker_header.write_role,
-            worker_header.mkdir_p,
-        );
+        let result = if let Some(submission) = worker_header.adapter {
+            data::upload(
+                &state_dir,
+                &ProfileRegistry::open(&state_dir)?,
+                submission,
+                &mut UploadReader::new(receiver, worker_header.total_length),
+                timeout,
+                worker_cancellation,
+            )
+        } else {
+            put_kv_reader(
+                &state_dir,
+                &ProfileRegistry::open(&state_dir)?,
+                timeout,
+                worker_cancellation,
+                &worker_header.store,
+                &worker_header.path,
+                UploadReader::new(receiver, worker_header.total_length),
+                worker_header.precondition,
+                worker_header.read_role,
+                worker_header.write_role,
+                worker_header.mkdir_p,
+            )
+        };
         let response = match result {
             Ok(value) => Response::success(request_id, value),
             Err(error) => dispatch_error_response(request_id, error.as_ref()),
@@ -1957,6 +1980,26 @@ fn dispatch_result(
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let mut registry = ProfileRegistry::open(state_dir)?;
     match operation {
+        operation @ (Operation::PrepareDataWrite { .. }
+        | Operation::ExecuteDataWrite { .. }
+        | Operation::DataWriteStatus { .. }
+        | Operation::PendingDataWrites { .. }) => {
+            let scope = match &operation {
+                Operation::PrepareDataWrite { scope, .. }
+                | Operation::PendingDataWrites { scope } => scope.clone(),
+                Operation::ExecuteDataWrite { submission }
+                | Operation::DataWriteStatus { submission } => submission.scope.clone(),
+                _ => unreachable!(),
+            };
+            data::write_control(
+                state_dir,
+                &registry,
+                scope,
+                operation,
+                timeout,
+                cancellation,
+            )
+        }
         Operation::BindDataAccount {
             profile,
             account_alias,

@@ -468,6 +468,7 @@ fn eighty_four_megabyte_file_uses_bounded_stream_frames_without_inline_content()
         transcript.request.operation,
         Operation::PutKvStream {
             header: foks_agent_proto::KvUploadHeader {
+                adapter: None,
                 total_length: 88_080_384,
                 precondition: KvPrecondition::Create,
                 mkdir_p: true,
@@ -505,6 +506,7 @@ fn replacement_file_stream_is_bound_to_the_inspected_version_and_roles() {
         transcript.request.operation,
         Operation::PutKvStream {
             header: foks_agent_proto::KvUploadHeader {
+                adapter: None,
                 total_length: 16,
                 read_role: KvRole::Member { visibility: -16384 },
                 write_role: KvRole::Admin,

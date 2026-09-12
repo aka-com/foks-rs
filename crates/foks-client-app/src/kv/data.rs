@@ -249,7 +249,7 @@ impl CheckedProfileSession<'_> {
         Ok(hex(team.verified.team().as_bytes()))
     }
 
-    fn data_context(
+    pub(super) fn data_context(
         &self,
         alias: &str,
         team_id: Option<&str>,

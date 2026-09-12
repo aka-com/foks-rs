@@ -8,49 +8,101 @@ impl HardStateStore {
     /// caller; an orphaned material record is safe, while a journal row with
     /// missing material is not recoverable.
     pub fn record_mutation(&mut self, operation: &MutationOperation) -> Result<()> {
-        validate_mutation_operation(operation)?;
-        if operation.state != MutationState::Prepared
-            || operation.attempt_count != 0
-            || operation.created_at != operation.updated_at
+        record_mutation_on(&self.connection, operation)
+    }
+
+    /// Record a child and its parent binding in one WAL transaction, before delivery.
+    pub fn record_child_mutation(
+        &mut self,
+        operation: &MutationOperation,
+        parent_id: &[u8; 16],
+        completion: bool,
+    ) -> Result<()> {
+        if !matches!(
+            operation.kind,
+            MutationKind::KvRoot | MutationKind::KvContent | MutationKind::KvNamespace
+        ) || (completion && operation.kind != MutationKind::KvNamespace)
         {
             return Err(Error::InvalidMutationOperation(
-                "new operation must be unattempted and prepared",
+                "invalid adapter child kind",
             ));
         }
-        let host_exists = self.connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM hosts WHERE host_id = ?1)",
-            [&operation.host_id],
-            |row| row.get::<_, bool>(0),
+        let transaction = self.write_transaction()?;
+        let (host, actor, team, kind, state): (Vec<u8>, Vec<u8>, Vec<u8>, u8, u8) = transaction.query_row(
+            "SELECT host_id, scope_id, subject_id, operation_kind, state FROM mutation_operations WHERE operation_id=?1",
+            [parent_id.as_slice()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)),
         )?;
-        if !host_exists {
-            return Err(Error::UnknownHost);
+        let party = if team.is_empty() { &actor } else { &team };
+        if kind != MutationKind::KvAdapter as u8
+            || state != MutationState::Submitting as u8
+            || host != operation.host_id
+            || *party != operation.scope_id
+        {
+            return Err(Error::InvalidMutationOperation(
+                "adapter child scope or state mismatch",
+            ));
         }
-        self.connection.execute(
-            "INSERT INTO mutation_operations (
-                operation_id, operation_kind, host_id, scope_id, subject_id,
-                expected_version, request_hash, material_ref, material_hash,
-                state, attempt_count, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        let children: u32 = transaction.query_row(
+            "SELECT count(*) FROM mutation_children WHERE parent_id=?1",
+            [parent_id.as_slice()],
+            |row| row.get(0),
+        )?;
+        if children >= 256 {
+            return Err(Error::InvalidMutationOperation(
+                "adapter child budget exhausted",
+            ));
+        }
+        record_mutation_on(&transaction, operation)?;
+        transaction.execute(
+            "INSERT INTO mutation_children(parent_id,child_id,completion) VALUES (?1,?2,?3)",
             params![
+                parent_id.as_slice(),
                 operation.operation_id.as_slice(),
-                operation.kind as u8,
-                operation.host_id,
-                operation.scope_id,
-                operation.subject_id,
-                operation
-                    .expected_version
-                    .map(|value| sqlite_integer("mutation expected version", value))
-                    .transpose()?,
-                operation.request_hash.as_slice(),
-                operation.material_ref,
-                operation.material_hash.as_slice(),
-                operation.state as u8,
-                sqlite_integer("mutation attempt count", operation.attempt_count)?,
-                sqlite_integer("mutation created time", operation.created_at)?,
-                sqlite_integer("mutation updated time", operation.updated_at)?,
+                completion
             ],
         )?;
+        transaction.commit()?;
         Ok(())
+    }
+
+    pub fn mutation_children(
+        &self,
+        parent_id: &[u8; 16],
+    ) -> Result<Vec<(MutationOperation, bool)>> {
+        let mut statement = self.connection.prepare("SELECT child_id,completion FROM mutation_children WHERE parent_id=?1 ORDER BY child_id")?;
+        let ids = statement
+            .query_map([parent_id.as_slice()], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, bool>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|(id, completion)| {
+                let id: [u8; 16] = id
+                    .try_into()
+                    .map_err(|_| Error::InvalidMutationOperation("invalid child ID"))?;
+                let operation = self
+                    .mutation(&id)?
+                    .ok_or(Error::InvalidMutationOperation("missing mutation child"))?;
+                Ok((operation, completion))
+            })
+            .collect()
+    }
+
+    /// Bounded recovery inventory. Terminal IDs remain as replay tombstones.
+    pub fn adapter_mutations(&self, host: &[u8], actor: &[u8]) -> Result<Vec<MutationOperation>> {
+        let mut statement = self.connection.prepare("SELECT operation_id FROM mutation_operations WHERE operation_kind=8 AND host_id=?1 AND scope_id=?2 ORDER BY created_at DESC,operation_id LIMIT 4097")?;
+        let ids = statement
+            .query_map(params![host, actor], |row| row.get::<_, Vec<u8>>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|id| {
+                let id = id
+                    .try_into()
+                    .map_err(|_| Error::InvalidMutationOperation("invalid adapter ID"))?;
+                self.mutation(&id)?
+                    .ok_or(Error::InvalidMutationOperation("missing adapter intent"))
+            })
+            .collect()
     }
 
     /// Atomically marks the one and only initial submission attempt. Once this
@@ -882,4 +934,53 @@ pub(crate) fn team_mutation_from_connection(
             })
         })
         .transpose()
+}
+
+fn record_mutation_on(
+    connection: &rusqlite::Connection,
+    operation: &MutationOperation,
+) -> Result<()> {
+    validate_mutation_operation(operation)?;
+    if operation.state != MutationState::Prepared
+        || operation.attempt_count != 0
+        || operation.created_at != operation.updated_at
+    {
+        return Err(Error::InvalidMutationOperation(
+            "new operation must be unattempted and prepared",
+        ));
+    }
+    let host_exists = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM hosts WHERE host_id = ?1)",
+        [&operation.host_id],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !host_exists {
+        return Err(Error::UnknownHost);
+    }
+    connection.execute(
+        "INSERT INTO mutation_operations (
+                operation_id, operation_kind, host_id, scope_id, subject_id,
+                expected_version, request_hash, material_ref, material_hash,
+                state, attempt_count, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            operation.operation_id.as_slice(),
+            operation.kind as u8,
+            operation.host_id,
+            operation.scope_id,
+            operation.subject_id,
+            operation
+                .expected_version
+                .map(|value| sqlite_integer("mutation expected version", value))
+                .transpose()?,
+            operation.request_hash.as_slice(),
+            operation.material_ref,
+            operation.material_hash.as_slice(),
+            operation.state as u8,
+            sqlite_integer("mutation attempt count", operation.attempt_count)?,
+            sqlite_integer("mutation created time", operation.created_at)?,
+            sqlite_integer("mutation updated time", operation.updated_at)?,
+        ],
+    )?;
+    Ok(())
 }
