@@ -23,6 +23,8 @@ use foks_proto::{
 use foks_snowpack::{decode, encode, Value};
 use thiserror::Error;
 
+mod invitations;
+pub use invitations::*;
 mod account;
 pub mod arguments;
 mod generated;

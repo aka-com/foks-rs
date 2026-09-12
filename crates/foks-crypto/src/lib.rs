@@ -6,6 +6,8 @@
 
 #![forbid(unsafe_code)]
 
+mod invitations;
+pub use invitations::*;
 mod account;
 mod backup;
 mod bot_token;

@@ -862,7 +862,7 @@ fn change_metadata_value(metadata: &ChangeMetadata) -> Value {
     }
 }
 
-fn rational_range_value(range: &RationalRange) -> Value {
+pub(crate) fn rational_range_value(range: &RationalRange) -> Value {
     Value::Array(vec![
         rational_value(&range.low),
         rational_value(&range.high),
@@ -1497,7 +1497,7 @@ fn change_metadata(value: &Value) -> Result<ChangeMetadata> {
     }
 }
 
-fn rational_range(value: &Value) -> Result<RationalRange> {
+pub(crate) fn rational_range(value: &Value) -> Result<RationalRange> {
     let fields = array(value, 2)?;
     Ok(RationalRange {
         low: rational(&fields[0])?,
@@ -1644,4 +1644,13 @@ pub(crate) fn array_any(value: &Value) -> Result<&[Value]> {
 
 pub(crate) fn list_values(value: &Value) -> Result<Vec<&Value>> {
     Ok(array_any(value)?.iter().collect())
+}
+
+impl RationalRange {
+    pub fn encoded(&self) -> Result<Vec<u8>> {
+        Ok(encode(&rational_range_value(self))?)
+    }
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        rational_range(&decode(bytes)?)
+    }
 }
