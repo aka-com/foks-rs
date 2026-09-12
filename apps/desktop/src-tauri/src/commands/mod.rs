@@ -16,6 +16,7 @@ pub(crate) mod sso;
 mod types;
 mod validation;
 pub(crate) mod vault;
+pub(crate) mod web_admin;
 pub(crate) mod yubikey;
 
 pub use context::{AppState, MAIN};

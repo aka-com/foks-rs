@@ -766,6 +766,10 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       available: false,
       settings: { enabled: false, previews: false, overrides: {} },
     }),
+    configureWebAdmin: async () => ({ ok: true }),
+    openWebAdmin: async () => {
+      throw new Error('Host administration requires a connected host.');
+    },
     botAccount: async () => ({
       rows: [],
       message: 'Bot credentials require a connected agent.',

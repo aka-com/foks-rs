@@ -1125,6 +1125,18 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
     }
     if let Some(error) = error.downcast_ref::<foks_client_app::Error>() {
         match error {
+            foks_client_app::Error::WebAdmin(error) => {
+                use foks_client::WebAdminError as W;
+                let code = match error {
+                    W::Unsupported => ErrorCode::WebAdminUnsupported,
+                    W::Expired => ErrorCode::WebAdminExpired,
+                    W::WrongAccount => ErrorCode::WebAdminWrongAccount,
+                    W::DestinationRejected => ErrorCode::WebAdminDestinationRejected,
+                    W::Unavailable => ErrorCode::WebAdminUnavailable,
+                    W::ReauthenticationRequired => ErrorCode::ReauthenticationRequired,
+                };
+                return Response::error(id, code, error.to_string());
+            }
             foks_client_app::Error::BotTokenLocked => {
                 return Response::error(
                     id,
@@ -2398,6 +2410,19 @@ fn dispatch_result(
             account_alias,
             action,
         } => account::rename(
+            state_dir,
+            &registry,
+            &profile,
+            &account_alias,
+            action,
+            timeout,
+            cancellation,
+        ),
+        Operation::WebAdmin {
+            profile,
+            account_alias,
+            action,
+        } => account::web_admin(
             state_dir,
             &registry,
             &profile,

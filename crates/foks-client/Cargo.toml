@@ -25,6 +25,7 @@ rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 thiserror = { workspace = true }
 webpki-roots = { workspace = true }
+url = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]

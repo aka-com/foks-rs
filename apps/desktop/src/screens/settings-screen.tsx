@@ -1,3 +1,4 @@
+import { AdminPanel } from '../components/admin-panel';
 import { BotPanel } from '../components/bot-panel';
 import { RenamePanel } from '../components/rename-panel';
 import { SsoPanel } from '../components/sso-panel';
@@ -838,6 +839,14 @@ export function SettingsScreen({
                     bridge.fixtureWorld && enteredScene === 'settings-account',
                   )}
                 />
+                {accountStores(world).map((store) => (
+                  <AdminPanel
+                    key={`admin-${store.id}`}
+                    bridge={bridge}
+                    profile={store.server}
+                    account={store.account}
+                  />
+                ))}
                 {accountStores(world).map((store) => (
                   <BotPanel
                     key={`bot-${store.id}`}

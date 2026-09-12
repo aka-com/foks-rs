@@ -156,6 +156,9 @@ func TestRustClientHappyPath(t *testing.T) {
 		"--state-dir", stateDirectory,
 		"--username", username,
 	)
+	if os.Getenv("FOKS_RUST_LIVE_ACCOUNT") != "" {
+		accountAdminGate(t, environment, command)
+	}
 	filteredStop := make(chan struct{})
 	filteredDone := make(chan error, 1)
 	if os.Getenv("FOKS_RUST_LIVE_CHAT") != "" {

@@ -61,3 +61,59 @@ pub(super) fn rename(
         )?)?)
     })
 }
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn web_admin(
+    state_dir: &Path,
+    registry: &ProfileRegistry,
+    profile: &str,
+    alias: &str,
+    action: foks_agent_proto::admin::AdminAction,
+    timeout: Duration,
+    cancellation: CancellationToken,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    use foks_agent_proto::admin::{AdminAction, AdminNavigation};
+    if !action.validate() {
+        return Err(Box::new(AgentRequestError("invalid admin handoff")));
+    }
+    let session = ProfileSession::open_with_control(registry, profile, timeout, cancellation)?;
+    with_vault(state_dir, &session, |session, vault| match action {
+        AdminAction::Policy => {
+            let (host_id, uid, destination) = session.web_admin_policy(alias, vault)?;
+            Ok(serde_json::to_value(
+                foks_agent_proto::admin::AdminPolicy {
+                    profile: profile.into(),
+                    account_alias: alias.into(),
+                    host_id,
+                    uid,
+                    destination,
+                },
+            )?)
+        }
+        AdminAction::Configure { destination } => {
+            session.configure_web_admin(alias, &destination, vault)?;
+            Ok(serde_json::json!({"configured":true}))
+        }
+        AdminAction::Prepare { pin } => {
+            let parent = pin
+                .map(|pin| {
+                    let a = vault.yubi_account(alias)?;
+                    Ok::<_, Box<dyn std::error::Error>>(
+                        HardwareYubiProvider::new()
+                            .open(&a.locator, Some(&Pin::new(pin.expose())?))?,
+                    )
+                })
+                .transpose()?;
+            let handoff =
+                session.web_admin_handoff(alias, parent.as_deref().map(|p| p as _), vault)?;
+            Ok(serde_json::to_value(AdminNavigation {
+                profile: profile.into(),
+                account_alias: alias.into(),
+                host_id: handoff.host_id,
+                uid: handoff.uid,
+                destination: handoff.destination,
+                url: foks_agent_proto::SecretString::new(handoff.navigation.expose()),
+            })?)
+        }
+    })
+}

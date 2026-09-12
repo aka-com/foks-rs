@@ -3,6 +3,7 @@ mod account_conveniences;
 mod bot_token;
 mod mcp;
 mod sso;
+mod web_admin;
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Write as _};
@@ -138,6 +139,8 @@ enum ProfileGeneration {
 
 #[derive(clap::Subcommand)]
 enum AccountCommand {
+    #[command(subcommand)]
+    Admin(web_admin::AdminCommand),
     #[command(subcommand)]
     Bot(bot_token::BotCommand),
     #[command(subcommand)]
@@ -800,6 +803,7 @@ fn account_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let registry = ProfileRegistry::open(state_dir)?;
     match command {
+        AccountCommand::Admin(command) => web_admin::run(state_dir, command),
         AccountCommand::Bot(command) => bot_token::run(state_dir, command),
         AccountCommand::Rename(command) => account_conveniences::run(state_dir, command),
         AccountCommand::List { profile } => {

@@ -8,6 +8,32 @@ static TEST_FAIL_AFTER_BACKUP_REVOCATION: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 impl CheckedProfileSession<'_> {
+    pub(super) fn with_account_credential<T>(
+        &self,
+        alias: &str,
+        parent: Option<&dyn foks_crypto::YubiDevice>,
+        vault: &mut AccountVault<'_>,
+        f: impl FnOnce(foks_client::FederationCredential<'_, '_>) -> Result<T>,
+    ) -> Result<T> {
+        match vault.account(alias) {
+            Ok(account) => f(foks_client::FederationCredential::Software(
+                &account.credential,
+            )),
+            Err(Error::AccountMissing) => {
+                let account = vault.yubi_account(alias)?;
+                let parent = parent.ok_or_else(|| {
+                    Error::YubiUnlockRequired("unlock the selected account key".into())
+                })?;
+                let credential = account.credential(parent);
+                if parent.entity_id().p256_key()? != account.locator.signing_public_key {
+                    return Err(Error::InvalidAccount("wrong account hardware key"));
+                }
+                f(foks_client::FederationCredential::Yubi(&credential))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     pub(super) fn mutation_store(&self, master: &[u8; 32]) -> Result<EncryptedFileMutationStore> {
         Ok(EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,

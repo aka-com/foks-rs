@@ -20,7 +20,7 @@ impl CheckedProfileSession<'_> {
             entity_id_from_hex(target_hex)?.require_type(foks_proto::ENTITY_BOT_TOKEN_KEY)?;
         let host = self.pinned_host()?;
         let mut protected = self.mutation_store(master)?;
-        self.with_bot_owner(owner, parent, vault, |credential| {
+        self.with_account_credential(owner, parent, vault, |credential| {
             let prior = HardStateStore::open(&self.paths.hard_database)?
                 .latest_mutation_for_binding(
                     host.host_id().as_bytes(),

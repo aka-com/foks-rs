@@ -56,6 +56,8 @@ pub use foks_protocol_metadata::PINNED_PROTOCOL_METADATA_SHA256;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error(transparent)]
+    WebAdmin(#[from] foks_client::WebAdminError),
     #[error("bot token is locked; load the original token into this agent session")]
     BotTokenLocked,
     #[error("invalid bot token")]
@@ -190,10 +192,14 @@ pub use yubi::{
 };
 
 mod bot_token;
+#[cfg(test)]
+mod test_support;
+mod web_admin;
 pub use bot_token::{
     BotEnrollmentAction, BotEnrollmentOutcome, BotEnrollmentReport, BotRevocationReport,
     BotSelection,
 };
+pub use web_admin::AdminHandoff;
 mod account;
 mod account_conveniences;
 pub use account_conveniences::{RenameAction, RenameReport};

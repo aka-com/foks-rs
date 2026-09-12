@@ -112,6 +112,11 @@ impl AgentError {
 
     pub fn from_agent(code: ErrorCode, message: String) -> Self {
         let (slug, retryable) = match code {
+            ErrorCode::WebAdminUnsupported => ("web-admin-unsupported", false),
+            ErrorCode::WebAdminExpired => ("web-admin-expired", true),
+            ErrorCode::WebAdminWrongAccount => ("web-admin-wrong-account", false),
+            ErrorCode::WebAdminDestinationRejected => ("web-admin-destination-rejected", false),
+            ErrorCode::WebAdminUnavailable => ("web-admin-unavailable", true),
             ErrorCode::BotToken => ("bot-token", false),
             ErrorCode::BotTokenLocked => ("bot-token-locked", true),
             ErrorCode::ChatInvalidInput => ("chat-invalid-input", false),

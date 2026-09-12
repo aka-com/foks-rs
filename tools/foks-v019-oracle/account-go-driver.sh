@@ -11,4 +11,4 @@ while [ "$#" -gt 0 ]; do
         *) echo 'invalid ACCOUNT driver argument' >&2; exit 2;;
     esac
 done
-exec cargo test --manifest-path "$repository/Cargo.toml" --locked -p foks-client --test account_live -- --nocapture
+exec cargo test --manifest-path "$repository/Cargo.toml" --locked -p foks-client --features test-support --test account_live -- --nocapture

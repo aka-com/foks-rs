@@ -138,4 +138,78 @@ fn durable_rename_against_go() {
             assert!(!auth.puks.iter().any(|k| k.role == foks_proto::Role::OWNER));
         }
     }
+    #[cfg(feature = "test-support")]
+    if let Ok(destination) = std::env::var("FOKS_TEST_ADMIN_DESTINATION") {
+        use foks_client::{AdminDestination, WebAdminError};
+        let policy = AdminDestination::loopback_test(&destination).unwrap();
+        let handoff = client
+            .new_web_admin_handoff(&host, credential, &policy)
+            .unwrap();
+        let attacker = format!(
+            "https://attacker.example/?{}",
+            handoff.expose().split_once('?').unwrap().1
+        );
+        assert!(
+            client
+                .check_web_admin_session(&host, credential, &attacker)
+                .is_ok(),
+            "Go checks session ownership, not origin"
+        );
+        assert!(policy.validate_handoff(&attacker).is_err());
+        let other = client
+            .create_software_account(
+                &host,
+                SoftwareAccountRequest {
+                    username_utf8: "adminother".into(),
+                    device_name: "other admin".into(),
+                    invite_code: InviteCode::Empty,
+                    email: "adminother@example.test".into(),
+                    passphrase: None,
+                },
+                SoftwareAccountSecrets::new(
+                    SecretSeed::new([91; 32]),
+                    SecretSeed::new([92; 32]),
+                    [0x35; 17],
+                ),
+                &soft,
+                &mut protected,
+            )
+            .unwrap();
+        assert_eq!(
+            client
+                .check_web_admin_session(
+                    &host,
+                    FederationCredential::Software(&other.credential),
+                    handoff.expose()
+                )
+                .unwrap_err(),
+            WebAdminError::WrongAccount
+        );
+        let mut tampered = Zeroizing::new(handoff.expose().to_owned());
+        let last = tampered.pop().unwrap();
+        tampered.push(if last == '0' { '1' } else { '0' });
+        assert_eq!(
+            client
+                .check_web_admin_session(&host, credential, &tampered)
+                .unwrap_err(),
+            WebAdminError::Expired
+        );
+        let control = std::env::var("FOKS_TEST_ADMIN_CONTROL").unwrap();
+        let address = control.strip_prefix("http://").unwrap();
+        let mut stream = std::net::TcpStream::connect(address).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        use std::io::{Read, Write};
+        write!(stream,"POST /expire HTTP/1.1\r\nHost: {address}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        let mut response = String::new();
+        stream.take(1024).read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 204"));
+        assert_eq!(
+            client
+                .check_web_admin_session(&host, credential, handoff.expose())
+                .unwrap_err(),
+            WebAdminError::Expired
+        );
+    }
 }

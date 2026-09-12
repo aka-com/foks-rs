@@ -68,7 +68,11 @@ fn host_is(url: &Url, host: &str) -> bool {
 pub(crate) fn policy<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri::plugin::Builder::new("foks-navigation-policy")
         .on_navigation(|webview, url| {
-            let allowed = allowed_navigation(url, tauri::is_dev());
+            let allowed = if webview.label().starts_with("host-admin-") {
+                crate::commands::web_admin::navigation_allowed(webview.label(), url)
+            } else {
+                allowed_navigation(url, tauri::is_dev())
+            };
             if !allowed {
                 // Log origin components only (scheme, host, port) to avoid leaking
                 // sensitive data potentially contained in path or query parameters.

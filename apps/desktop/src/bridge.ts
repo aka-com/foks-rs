@@ -558,7 +558,31 @@ export interface FirstRunFixture {
 
 export type Unlisten = () => void;
 
+export interface CommandAck {
+  ok: true;
+}
+export function decodeCommandAck(value: unknown): CommandAck {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    Object.keys(value).length !== 1 ||
+    !('ok' in value) ||
+    value.ok !== true
+  )
+    throw new Error('Invalid command acknowledgement');
+  return { ok: true };
+}
 export interface Bridge {
+  configureWebAdmin(
+    profile: string,
+    accountAlias: string,
+    destination: string,
+  ): Promise<CommandAck>;
+  openWebAdmin(
+    profile: string,
+    accountAlias: string,
+    pin: string | null,
+  ): Promise<CommandAck>;
   botAccount(
     profile: string,
     accountAlias: string,
@@ -2070,6 +2094,14 @@ export const tauriBridge: Bridge = {
   rerunGroupAdmission: (storeId, operationId) =>
     checked('rerun_group_admission', { storeId, operationId }, decodeMutation),
   chatLocal: (action) => checked('chat_local', { action }, decodeLocalSession),
+  configureWebAdmin: (profile, accountAlias, destination) =>
+    checked(
+      'configure_web_admin',
+      { profile, accountAlias, destination },
+      decodeCommandAck,
+    ),
+  openWebAdmin: (profile, accountAlias, pin) =>
+    checked('open_web_admin', { profile, accountAlias, pin }, decodeCommandAck),
   botAccount: (profile, accountAlias, action) =>
     checked(
       'bot_account_request',

@@ -181,6 +181,8 @@ pub fn run() {
             commands::sso::sso_request,
             commands::account_conveniences::rename_account_request,
             commands::bot::bot_account_request,
+            commands::web_admin::configure_web_admin,
+            commands::web_admin::open_web_admin,
             commands::sso::open_sso_browser,
             commands::application::agent_status,
             commands::application::retry_agent_connection,

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -404,6 +404,11 @@ impl Request {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "operation", rename_all = "kebab-case")]
 pub enum Operation {
+    WebAdmin {
+        profile: String,
+        account_alias: String,
+        action: crate::admin::AdminAction,
+    },
     BotAccount {
         profile: String,
         account_alias: String,
@@ -915,6 +920,10 @@ impl Operation {
     /// handoff hook.
     pub fn zeroize_plaintext(&mut self) {
         match self {
+            Self::WebAdmin {
+                action: crate::admin::AdminAction::Configure { destination },
+                ..
+            } => destination.zeroize(),
             Self::PutKv { content, .. } => content.zeroize(),
             Self::PutKvSymlink { target, .. } => target.zeroize(),
             _ => {}
@@ -992,6 +1001,16 @@ impl Operation {
 impl std::fmt::Debug for Operation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::WebAdmin {
+                profile,
+                account_alias,
+                action,
+            } => formatter
+                .debug_struct("WebAdmin")
+                .field("profile", profile)
+                .field("account_alias", account_alias)
+                .field("action", action)
+                .finish(),
             Self::BotAccount { .. } => formatter.write_str("BotAccount { [REDACTED] }"),
             Self::ListAccountRenames { .. } => formatter.write_str("ListAccountRenames { .. }"),
             Self::RenameAccount { .. } => formatter.write_str("RenameAccount { [REDACTED] }"),
@@ -1918,6 +1937,12 @@ impl std::fmt::Debug for ResponseResult {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorCode {
+    WebAdminUnsupported,
+    WebAdminExpired,
+    WebAdminWrongAccount,
+    WebAdminDestinationRejected,
+    WebAdminUnavailable,
+
     BotToken,
     BotTokenLocked,
     ReauthenticationRequired,

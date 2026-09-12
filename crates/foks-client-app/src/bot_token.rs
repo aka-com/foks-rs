@@ -112,31 +112,6 @@ impl PendingBot {
     }
 }
 impl CheckedProfileSession<'_> {
-    fn with_bot_owner<T>(
-        &self,
-        alias: &str,
-        parent: Option<&dyn foks_crypto::YubiDevice>,
-        vault: &mut AccountVault<'_>,
-        f: impl FnOnce(foks_client::FederationCredential<'_, '_>) -> Result<T>,
-    ) -> Result<T> {
-        match vault.account(alias) {
-            Ok(account) => f(foks_client::FederationCredential::Software(
-                &account.credential,
-            )),
-            Err(Error::AccountMissing) => {
-                let account = vault.yubi_account(alias)?;
-                let parent = parent.ok_or_else(|| {
-                    Error::YubiUnlockRequired("unlock the selected owner key".into())
-                })?;
-                let credential = account.credential(parent);
-                if parent.entity_id().p256_key()? != account.locator.signing_public_key {
-                    return Err(Error::InvalidAccount("wrong hardware owner"));
-                }
-                f(foks_client::FederationCredential::Yubi(&credential))
-            }
-            Err(error) => Err(error),
-        }
-    }
     fn clean_bot_receipts(
         &self,
         uid: &[u8],
@@ -216,7 +191,7 @@ impl CheckedProfileSession<'_> {
         self.profile.require(Capability::DeviceAdministration)?;
         validate_name(owner)?;
         let host = self.pinned_host()?;
-        let (uid, signer) = self.with_bot_owner(owner, parent, vault, |c| {
+        let (uid, signer) = self.with_account_credential(owner, parent, vault, |c| {
             let auth = self.client.authenticate_credential_and_pin(&host, c)?;
             let signer = c.device_id()?;
             if role == Role::NONE
@@ -335,7 +310,7 @@ impl CheckedProfileSession<'_> {
             && p.token.is_some()
             && op.as_ref().is_none_or(|o| !o.state.is_terminal())
         {
-            let result = self.with_bot_owner(owner, parent, vault, |c| {
+            let result = self.with_account_credential(owner, parent, vault, |c| {
                 if c.uid().as_bytes() != p.uid || c.device_id()?.as_bytes() != p.signer {
                     return Err(Error::InvalidAccount("bot owner credential changed"));
                 }

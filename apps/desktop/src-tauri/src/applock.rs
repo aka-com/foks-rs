@@ -49,6 +49,11 @@ impl AppLock {
         }
     }
 
+    pub(crate) fn permits_generation(&self, generation: u64) -> bool {
+        !self.locked.load(Ordering::Acquire)
+            && self.generation.load(Ordering::Acquire) == generation
+    }
+
     pub fn state(&self) -> LockStateDto {
         LockStateDto {
             locked: self.locked.load(Ordering::Acquire),
@@ -144,6 +149,7 @@ pub fn lock_app(
 ) -> Result<LockStateDto, AgentError> {
     crate::commands::require_main_window(&webview)?;
     lock.lock()?;
+    crate::commands::web_admin::close_all(webview.app_handle());
     crate::commands::chat_local::conceal(webview.app_handle());
     Ok(lock.state())
 }
@@ -292,8 +298,11 @@ mod tests {
         });
         lock.locked.store(false, Ordering::Release);
         let before = lock.generation.load(Ordering::Acquire);
+        assert!(lock.permits_generation(before));
         lock.lock().unwrap();
+        assert!(!lock.permits_generation(before));
         lock.locked.store(false, Ordering::Release);
+        assert!(!lock.permits_generation(before));
         assert_ne!(before, lock.generation.load(Ordering::Acquire));
     }
 
