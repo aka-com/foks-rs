@@ -117,6 +117,16 @@ pub fn encode_grant_local_team_view_request(
         ],
     )
 }
+pub fn encode_post_team_removal_request(
+    tok: &[u8; 16],
+    removal: &foks_proto::TeamRemovalAndCommitment,
+) -> Result<Vec<u8>> {
+    call(
+        TEAM_ADMIN_PROTOCOL_ID,
+        11,
+        vec![token(tok), decode(&removal.encoded()?)?],
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;

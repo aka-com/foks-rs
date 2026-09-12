@@ -10,6 +10,25 @@ pub enum InvitationRole {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum InvitationAction {
+    AcceptTeam {
+        invite: String,
+        source_team_alias: String,
+        source_role: InvitationRole,
+    },
+    AcceptTeamRemote {
+        remote_profile: String,
+        invite: String,
+        source_team_alias: String,
+        source_role: InvitationRole,
+    },
+    Range {
+        team_alias: String,
+        raise: bool,
+    },
+    PendingApprovals {
+        team_alias: String,
+    },
+
     PreviewRemote {
         remote_profile: String,
         invite: String,
@@ -40,6 +59,10 @@ pub enum InvitationAction {
     SyncRemote {
         remote_profile: String,
         team_id: String,
+        #[serde(default)]
+        source_team_alias: Option<String>,
+        #[serde(default)]
+        source_role: Option<InvitationRole>,
     },
 
     Preview {
@@ -82,7 +105,8 @@ impl std::fmt::Debug for InvitationAction {
 impl InvitationAction {
     pub fn remote_profile(&self) -> Option<&str> {
         match self {
-            Self::PreviewRemote { remote_profile, .. }
+            Self::AcceptTeamRemote { remote_profile, .. }
+            | Self::PreviewRemote { remote_profile, .. }
             | Self::AcceptRemote { remote_profile, .. }
             | Self::AttemptRemote { remote_profile, .. }
             | Self::StatusRemote { remote_profile, .. }
@@ -104,6 +128,24 @@ impl InvitationAction {
             return false;
         }
         match self {
+            Self::AcceptTeam {
+                invite,
+                source_team_alias,
+                ..
+            }
+            | Self::AcceptTeamRemote {
+                invite,
+                source_team_alias,
+                ..
+            } => {
+                name(source_team_alias)
+                    && !invite.is_empty()
+                    && invite.len() <= 256
+                    && invite.bytes().all(|c| c.is_ascii_alphanumeric())
+            }
+            Self::Range { team_alias, .. } | Self::PendingApprovals { team_alias } => {
+                name(team_alias)
+            }
             Self::PreviewRemote { invite, .. } | Self::AcceptRemote { invite, .. } => {
                 !invite.is_empty()
                     && invite.len() <= 256

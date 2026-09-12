@@ -216,3 +216,28 @@ go test -C "$(go env GOPATH)/pkg/mod/github.com/foks-proj/go-foks@v0.1.9" \
 
 Ordinary `go test ./...` skips the opt-in Rust MCP process test unless its driver
 supplies `FOKS_MCP_CLI` and `FOKS_MCP_STATE_DIR`. No real hosted account is required.
+
+## Invitation compatibility
+
+`run-invitation-compat.sh` runs the pinned Go test fleet (Docker/PostgreSQL) and
+`foks-server-testkit/tests/invitations_live.rs`. It tests Rust local invitation
+acceptance, duplicate-pending rejection, approval and PTK opening on Go; both
+mixed-host directions for user and team applicants; and the unmodified Go RPC
+SDK/core signing a local Requested link, granting scoped view permission, then
+proving membership to Rust after administrator approval. Team applicants use
+explicitly separated index ranges. The fixture accounts and their keys exist
+only in private temporary test directories. This gate exercises SDK/core code;
+it is not a claim that every interactive Go CLI invitation flow is covered.
+
+For only the Go-client-to-Rust half, set `FOKS_GO_ORACLE_DIR` to this directory
+and run this from the repository:
+
+```sh
+cargo test --locked -p foks-server-testkit --test invitations_live \
+  official_go_invitation_client_against_rust -- --nocapture
+```
+The normal Rust suite skips external Go/Docker gates unless explicitly enabled.
+`TestInvitationCertificateFixtures` remains the immutable wire/crypto gate and
+records the pinned Go client's reversed verifier order for rotated certificates;
+initial certificates work in the live gate. The existing `run-live-team-compat.sh`
+remains a fixture/Rust conformance gate, not a substitute for this mixed-host gate.

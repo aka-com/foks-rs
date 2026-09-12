@@ -387,6 +387,8 @@ fn remote_invitation_reopens_both_profiles_and_admits_with_verified_keys() {
         Some(InvitationAction::SyncRemote {
             remote_profile: "local".into(),
             team_id: team.team_id_hex,
+            source_team_alias: None,
+            source_role: None,
         }),
     );
     assert_eq!(sync["membership_verified"], true);

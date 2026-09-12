@@ -5,7 +5,7 @@ use std::time::Duration;
 use foks_client_db::{HardStateStore, TeamMutationKind, TeamMutationOperation, TeamMutationState};
 use foks_crypto::{
     derive_shared_public, derive_subkey_id, make_add_local_team_member_link,
-    make_add_remote_team_member_link, open_team_remote_member_view_token, prefixed_hash,
+    make_add_scoped_team_member_link, open_team_remote_member_view_token, prefixed_hash,
     seal_shared_key_boxes, seal_team_remote_member_view_token, seal_team_removal_key,
     AddLocalTeamMemberInput, AddRemoteTeamMemberInput, PukBoxRandomness, SharedKeyBoxInput,
     SharedPublicMaterial,
@@ -85,12 +85,12 @@ pub struct RemoteMemberViewPermission {
     pub permission: PermissionToken,
 }
 
-struct RemotePartyAddition<'a> {
+struct ScopedPartyAddition<'a> {
     party: &'a EntityId,
     host: &'a EntityId,
     key: &'a VerifiedSharedKey,
     index_range: Option<&'a foks_proto::RationalRange>,
-    permission: &'a PermissionToken,
+    permission: Option<&'a PermissionToken>,
     destination_role: Role,
     removal_key: &'a SecretSeed,
     receipt: Option<&'a foks_proto::TeamRsvp>,
@@ -186,6 +186,7 @@ impl FoksClient {
             request,
             None,
             None,
+            true,
         )
     }
 
@@ -216,6 +217,7 @@ impl FoksClient {
             request,
             Some(plan),
             Some(&mut *protected_store),
+            true,
         )?;
         remove_addition_material(protected_store, &added.operation_id)?;
         Ok(added)
@@ -254,9 +256,145 @@ impl FoksClient {
             request,
             None,
             None,
+            true,
         )
     }
 
+    /// The witness is independently loaded through the invitation's scoped grant.
+    pub fn invited_team_addition_plan(
+        &self,
+        actor: &EntityId,
+        loaded: &AuthenticatedTeamOutcome,
+        source: &VerifiedTeamState,
+        source_role: Role,
+        destination_role: Role,
+        removal: &SecretSeed,
+    ) -> Result<LocalTeamMemberAdditionPlan> {
+        let key = source
+            .shared_key(source_role)
+            .ok_or(Error::TeamBinding("invited source role key"))?;
+        let scoped = (source.host() != loaded.verified.host()).then_some(source.host());
+        if destination_role == Role::NONE
+            || (scoped.is_some() && destination_role.kind() != RoleType::Member)
+            || !foks_verify::rational_range_strictly_before(
+                source.index_range(),
+                loaded.verified.index_range(),
+            )?
+            || loaded.verified.members().iter().any(|m| {
+                m.party == *source.team()
+                    && m.scoped_host.as_ref() == scoped
+                    && m.source_role == source_role
+            })
+        {
+            return Err(Error::TeamBinding("invited team role, cycle or duplicate"));
+        }
+        let binding = AdditionBinding {
+            target_id: source.team(),
+            target_host: scoped,
+            target_verify_key: &key.verify_key,
+            target_generation: key.generation,
+            target_source_role: source_role,
+            destination_role,
+            removal_key_commitment: foks_crypto::team_removal_key_commitment(removal)?,
+            expected_seqno: loaded
+                .verified
+                .chain_seqno()
+                .checked_add(1)
+                .ok_or(Error::TeamBinding("team sequence overflow"))?,
+        };
+        Ok(LocalTeamMemberAdditionPlan {
+            target_id: source.team().clone(),
+            target_verify_key: key.verify_key.clone(),
+            target_generation: key.generation,
+            target_source_role: source_role,
+            destination_role,
+            removal_key_commitment: binding.removal_key_commitment,
+            expected_seqno: binding.expected_seqno,
+            operation_id: addition_operation_id(actor, loaded.verified.team(), &binding)?,
+        })
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_invited_team_durable(
+        &self,
+        host: &PinnedHost,
+        credential: crate::FederationCredential<'_, '_>,
+        destination: &EntityId,
+        source: &VerifiedTeamState,
+        permission: Option<&PermissionToken>,
+        receipt: &foks_proto::TeamRsvp,
+        plan: &LocalTeamMemberAdditionPlan,
+        removal: &SecretSeed,
+        protected: &mut dyn ProtectedMutationStore,
+    ) -> Result<AddedLocalTeamMember> {
+        if receipt.is_remote() != (source.host() != host.host_id()) {
+            return Err(Error::TeamBinding("invited team receipt host"));
+        }
+        let actor = self.authenticate_credential_and_pin(host, credential)?;
+        let owner = current_owner_puk(&actor)?;
+        let (seed, certs) = credential.transport();
+        self.add_scoped_party_with_material(
+            host,
+            credential.uid(),
+            &credential.device_id()?,
+            seed,
+            certs,
+            &actor,
+            owner,
+            destination,
+            &ScopedPartyAddition {
+                party: source.team(),
+                host: source.host(),
+                key: source
+                    .shared_key(plan.target_source_role)
+                    .ok_or(Error::TeamBinding("invited team source key"))?,
+                index_range: Some(source.index_range()),
+                permission,
+                destination_role: plan.destination_role,
+                removal_key: removal,
+                receipt: receipt.is_remote().then_some(receipt),
+                plan: Some(plan),
+            },
+            None,
+            Some(protected),
+        )
+    }
+    pub fn resume_invited_local_addition(
+        &self,
+        host: &PinnedHost,
+        credential: crate::FederationCredential<'_, '_>,
+        team: &EntityId,
+        plan: &LocalTeamMemberAdditionPlan,
+        protected: &mut dyn ProtectedMutationStore,
+    ) -> Result<AddedLocalTeamMember> {
+        self.resume_durable_member_addition(host, credential, team, None, plan, protected)
+    }
+    pub fn add_invited_local_user_durable(
+        &self,
+        host: &PinnedHost,
+        credential: crate::FederationCredential<'_, '_>,
+        team: &EntityId,
+        plan: &LocalTeamMemberAdditionPlan,
+        request: &AddLocalTeamMemberRequest<'_>,
+        protected: &mut dyn ProtectedMutationStore,
+    ) -> Result<AddedLocalTeamMember> {
+        let user = self.authenticate_credential_and_pin(host, credential)?;
+        let owner = current_owner_puk(&user)?;
+        let (seed, certs) = credential.transport();
+        self.add_local_user_with_material(
+            host,
+            credential.uid(),
+            &credential.device_id()?,
+            seed,
+            certs,
+            &user,
+            owner,
+            team,
+            request,
+            Some(plan),
+            Some(protected),
+            false,
+        )
+    }
     pub fn invited_remote_user_addition_plan(
         &self,
         actor: &EntityId,
@@ -309,7 +447,7 @@ impl FoksClient {
         let actor = self.authenticate_credential_and_pin(host, credential)?;
         let owner = current_owner_puk(&actor)?;
         let (seed, certs) = credential.transport();
-        self.add_remote_party_with_material(
+        self.add_scoped_party_with_material(
             host,
             credential.uid(),
             &credential.device_id()?,
@@ -318,12 +456,12 @@ impl FoksClient {
             &actor,
             owner,
             team,
-            &RemotePartyAddition {
+            &ScopedPartyAddition {
                 party: remote.user.verified.uid(),
                 host: remote.user.verified.host(),
                 key: current_owner_public(&remote.user.verified)?,
                 index_range: None,
-                permission: &remote.payload.permission,
+                permission: Some(&remote.payload.permission),
                 destination_role: plan.destination_role,
                 removal_key: removal,
                 receipt: Some(receipt),
@@ -559,7 +697,7 @@ impl FoksClient {
             .verified
             .shared_key(Role::ADMIN)
             .ok_or(Error::KeyBinding("remote admin PTK"))?;
-        self.add_remote_party_with_material(
+        self.add_scoped_party_with_material(
             host,
             uid,
             device_id,
@@ -568,12 +706,12 @@ impl FoksClient {
             actor_user,
             actor_puk,
             team,
-            &RemotePartyAddition {
+            &ScopedPartyAddition {
                 party: request.remote_team.verified.team(),
                 host: request.remote_team.verified.host(),
                 key,
                 index_range: Some(request.remote_team.verified.index_range()),
-                permission: &request.remote_team.permission,
+                permission: Some(&request.remote_team.permission),
                 destination_role: request.destination_role,
                 removal_key: request.removal_key,
                 receipt: None,
@@ -585,7 +723,7 @@ impl FoksClient {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn add_remote_party_with_material(
+    fn add_scoped_party_with_material(
         &self,
         host: &PinnedHost,
         uid: &EntityId,
@@ -595,7 +733,7 @@ impl FoksClient {
         actor_user: &AuthenticatedUserOutcome,
         actor_puk: &UserPrivateKey,
         team: &EntityId,
-        request: &RemotePartyAddition<'_>,
+        request: &ScopedPartyAddition<'_>,
         saga_id: Option<&[u8; 16]>,
         protected_store: Option<&mut dyn ProtectedMutationStore>,
     ) -> Result<AddedRemoteTeamMember> {
@@ -603,9 +741,12 @@ impl FoksClient {
         let remote_id = request.party;
         let remote_host = request.host;
         let target = request.key;
-        if remote_host == host.host_id()
-            || remote_id == team
-            || !matches!(request.destination_role.kind(), RoleType::Member)
+        let scoped_host = (remote_host != host.host_id()).then_some(remote_host);
+        if remote_id == team
+            || request.destination_role == Role::NONE
+            || (scoped_host.is_some()
+                && (!matches!(request.destination_role.kind(), RoleType::Member)
+                    || request.permission.is_none()))
         {
             return Err(Error::TeamRequest(
                 "remote members require a distinct host and member role",
@@ -625,7 +766,7 @@ impl FoksClient {
             authorized_actor_member(&authenticated_team.verified, uid, actor_public)?;
         if authenticated_team.verified.members().iter().any(|member| {
             member.party == *remote_id
-                && member.scoped_host.as_ref() == Some(remote_host)
+                && member.scoped_host.as_ref() == scoped_host
                 && member.source_role == target.role
         }) {
             return Err(Error::TeamRequest("remote team is already a member"));
@@ -678,7 +819,7 @@ impl FoksClient {
             verify_key: target.verify_key.clone(),
             hepk: target.hepk.clone(),
         };
-        let material = make_add_remote_team_member_link(
+        let material = make_add_scoped_team_member_link(
             &AddRemoteTeamMemberInput {
                 actor: uid,
                 actor_source_role: actor_public.role,
@@ -742,43 +883,58 @@ impl FoksClient {
                 "remote member removal box does not match signed commitment",
             ));
         }
-        let member = FqParty::new(remote_id.clone(), remote_host.clone())?;
-        let token_payload = TeamRemoteMemberViewTokenBoxPayload {
-            token: request.permission.clone(),
-            party: member.clone(),
-            time: now_milliseconds()?,
+        let remote_tokens =
+            if let Some(permission) = request.permission.filter(|_| scoped_host.is_some()) {
+                let member = FqParty::new(remote_id.clone(), remote_host.clone())?;
+                let token_payload = TeamRemoteMemberViewTokenBoxPayload {
+                    token: permission.clone(),
+                    party: member.clone(),
+                    time: now_milliseconds()?,
+                };
+                let secret_box = seal_team_remote_member_view_token(
+                    &member_floor_private.seed,
+                    &token_payload,
+                    random_bytes()?,
+                )?;
+                let mut join_request = random_bytes()?;
+                join_request[0] = 56;
+                let remote_token = TeamRemoteMemberViewToken {
+                    team: team.clone(),
+                    inner: TeamRemoteMemberViewTokenInner {
+                        member,
+                        ptk_generation: member_floor_private.generation,
+                        secret_box,
+                        ptk_role: member_floor_private.role,
+                    },
+                    join_request: RemoteTeamRsvp::new(
+                        request.receipt.map_or(join_request, |r| *r.expose()),
+                    )?,
+                };
+                vec![remote_token]
+            } else {
+                Vec::new()
+            };
+        let encode_admission = if scoped_host.is_none() && request.receipt.is_some() {
+            foks_rpc::encode_local_invitation_admission_request
+        } else {
+            encode_add_team_member_request
         };
-        let secret_box = seal_team_remote_member_view_token(
-            &member_floor_private.seed,
-            &token_payload,
-            random_bytes()?,
-        )?;
-        let mut join_request = random_bytes()?;
-        join_request[0] = 56;
-        let remote_token = TeamRemoteMemberViewToken {
-            team: team.clone(),
-            inner: TeamRemoteMemberViewTokenInner {
-                member,
-                ptk_generation: member_floor_private.generation,
-                secret_box,
-                ptk_role: member_floor_private.role,
-            },
-            join_request: RemoteTeamRsvp::new(
-                request.receipt.map_or(join_request, |r| *r.expose()),
-            )?,
-        };
-        let encoded_request = encode_add_team_member_request(&AddTeamMemberArgument {
+        let encoded_request = encode_admission(&AddTeamMemberArgument {
             link: &material.link,
             next_tree_location: material.next_tree_location,
             ptk_boxes: &ptk_boxes,
             removal_keys: &[removal_box],
             hepks: std::slice::from_ref(&target.hepk),
-            remote_member_view_tokens: &[remote_token],
-            local_permissions_for: &[],
+            remote_member_view_tokens: &remote_tokens,
+            local_permissions_for: if scoped_host.is_none() && request.receipt.is_none() {
+                std::slice::from_ref(remote_id)
+            } else {
+                &[]
+            },
         })?;
         let binding = AdditionBinding {
             target_id: remote_id,
-            target_host: Some(remote_host),
+            target_host: scoped_host,
             target_verify_key: &target.verify_key,
             target_generation: target.generation,
             target_source_role: target.role,
@@ -1335,8 +1491,8 @@ impl FoksClient {
         request: &AddLocalTeamMemberRequest<'_>,
         expected_plan: Option<&LocalTeamMemberAdditionPlan>,
         protected_store: Option<&mut dyn ProtectedMutationStore>,
+        insert_local_permission: bool,
     ) -> Result<AddedLocalTeamMember> {
-        self.require_open_user_viewership(host, auth_seed, certificate_chain)?;
         validate_target_user(host, uid, team, request)?;
         require_nonstale_shared_key(request.target_user, Role::OWNER)?;
         let target = current_owner_public(request.target_user)?;
@@ -1452,14 +1608,25 @@ impl FoksClient {
                 "member removal box does not match the signed commitment",
             ));
         }
-        let encoded_request = encode_add_team_member_request(&AddTeamMemberArgument {
+        let encode_admission = if insert_local_permission {
+            encode_add_team_member_request
+        } else {
+            foks_rpc::encode_local_invitation_admission_request
+        };
+        let encoded_request = encode_admission(&AddTeamMemberArgument {
             link: &material.link,
             next_tree_location: material.next_tree_location,
             ptk_boxes: &ptk_boxes,
             removal_keys: &[removal_box],
             hepks: std::slice::from_ref(&target.hepk),
             remote_member_view_tokens: &[],
-            local_permissions_for: std::slice::from_ref(request.target_user.uid()),
+            // Invitation acceptance already granted scoped view permission. Go
+            // permits bulk grants here only on hosts with open viewership.
+            local_permissions_for: if insert_local_permission {
+                std::slice::from_ref(request.target_user.uid())
+            } else {
+                &[]
+            },
         })?;
         let binding = AdditionBinding {
             target_id: request.target_user.uid(),
@@ -1954,7 +2121,7 @@ fn box_visible_ptks_for_remote(
             generation: key.generation,
             role: key.role,
             receiver_id: target_id,
-            receiver_host: Some(target_host),
+            receiver_host: (target_host != host.host_id()).then_some(target_host),
             receiver_hepk: &target.hepk,
             receiver_role: target.role,
             receiver_generation: target.generation,

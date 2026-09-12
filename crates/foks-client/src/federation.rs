@@ -61,6 +61,10 @@ pub struct RemoteTeamOutcome {
 }
 
 impl RemoteTeamOutcome {
+    pub fn view_permission(&self) -> &PermissionToken {
+        &self.permission
+    }
+
     /// Converts this current-head remote projection into a team-recipient
     /// witness after checking its complete direct roster. Child teams must
     /// already be represented by their own recursively verified witnesses.

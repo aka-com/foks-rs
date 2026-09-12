@@ -1438,6 +1438,18 @@ pub fn make_add_remote_team_member_link(
     actor_puk_seed: &SecretSeed,
     removal_key: &SecretSeed,
 ) -> Result<AddLocalTeamMemberMaterial> {
+    if input.member_host == input.host {
+        return Err(Error::NamedTeamMaterial);
+    }
+    make_add_scoped_team_member_link(input, actor_puk_seed, removal_key)
+}
+
+/// Shared local/remote party addition; local scope is encoded as nil.
+pub fn make_add_scoped_team_member_link(
+    input: &AddRemoteTeamMemberInput<'_>,
+    actor_puk_seed: &SecretSeed,
+    removal_key: &SecretSeed,
+) -> Result<AddLocalTeamMemberMaterial> {
     input.actor.clone().require_type(foks_proto::ENTITY_USER)?;
     if !matches!(
         input.member.entity_type(),
@@ -1459,7 +1471,6 @@ pub fn make_add_remote_team_member_link(
         || input.member_source_role == Role::NONE
         || input.member_destination_role == Role::NONE
         || input.member_generation == 0
-        || input.member_host == input.host
         || input.actor == input.member
         || matches!(
             input.member.entity_type(),
@@ -1486,7 +1497,7 @@ pub fn make_add_remote_team_member_link(
         changes: vec![TeamMemberChange {
             role: input.member_destination_role,
             party: input.member.clone(),
-            scoped_host: Some(input.member_host.clone()),
+            scoped_host: (input.member_host != input.host).then(|| input.member_host.clone()),
             source_role: input.member_source_role,
             keys: Some(TeamMemberKeys {
                 verify_key: input.member_public.verify_key.clone(),

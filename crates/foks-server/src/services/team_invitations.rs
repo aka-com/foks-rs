@@ -339,7 +339,7 @@ impl InvitationService<'_> {
                 EntityId::from_bytes(authority.team_id).map_err(internal)?,
                 Some(head(&source)?),
                 Some(head(&destination)?),
-                Some(authority.ptk_verify_key),
+                None::<Vec<u8>>,
             )
         } else {
             if role != Role::OWNER {
@@ -546,6 +546,29 @@ impl InvitationService<'_> {
                 .then_with(|| a.receipt.expose().cmp(b.receipt.expose()))
         });
         foks_proto::encode_team_inbox(&rows).map_err(internal)
+    }
+    pub fn post_removal(&self, bytes: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
+        principal.require_ordinary_device()?;
+        let f = fields(bytes, 2)?;
+        let hash = crate::auth::team::admin_token_hash(&token(&f[0])?);
+        let removal = foks_proto::TeamRemovalAndCommitment::decode(&encode(&f[1]).map_err(bad)?)
+            .map_err(bad)?;
+        let uid = principal.uid().to_vec();
+        let credential = principal.device_id().to_vec();
+        self.writer
+            .call_with_current_time(Arc::clone(self.clock), move |db, now| {
+                db.post_team_removal(
+                    InvitationActor {
+                        uid: &uid,
+                        credential: &credential,
+                    },
+                    &hash,
+                    &removal,
+                    now,
+                )?;
+                Ok(())
+            })
+            .map_err(write_error)
     }
     pub fn reject(&self, bytes: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
         principal.require_ordinary_device()?;

@@ -115,6 +115,8 @@ pub struct TeamMutation<'a> {
     pub removal_proofs: &'a [TeamRemovalProofMutation<'a>],
     pub remote_member_view_tokens: &'a [TeamRemoteMemberViewTokenMutation<'a>],
     pub local_view_permissions: &'a [TeamLocalViewPermissionMutation<'a>],
+    /// Local invite grants must still exist in the committing transaction.
+    pub required_local_view_permissions: &'a [Vec<u8>],
     pub generic_link: Option<crate::GenericLinkMutation<'a>>,
     pub expected_root_epoch: u64,
     pub expected_root_hash: &'a [u8; 32],
@@ -165,6 +167,15 @@ impl Database {
             .is_some();
         if !active_signer {
             return Err(Error::Invalid("inactive team mutation signer"));
+        }
+        for target in mutation.required_local_view_permissions {
+            let exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM team_local_view_permissions WHERE team_id=?1 AND target_id=?2)",
+                params![mutation.team_id, target], |row| row.get(0),
+            )?;
+            if !exists {
+                return Err(Error::Invalid("local invitation view grant missing"));
+            }
         }
         let root: (i64, Vec<u8>) = transaction.query_row(
             "SELECT r.epoch, r.root_hash FROM merkle_root_heads h

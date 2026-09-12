@@ -4,6 +4,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("membership chain is not bound to its authenticated owner root")]
+    GenericChainRootChanged,
     #[error("OIDC session: {0}")]
     Sso(&'static str),
     #[error("OIDC provider validation failed: {0}")]

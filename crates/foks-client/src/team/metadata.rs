@@ -55,7 +55,7 @@ impl FoksClient {
     ) -> Result<TeamIndexRangeMutationOutcome> {
         self.narrow_team_index_range_durable(
             host,
-            credential,
+            crate::FederationCredential::Software(credential),
             team,
             TeamIndexRangeDirection::Lower,
             protected_store,
@@ -71,30 +71,35 @@ impl FoksClient {
     ) -> Result<TeamIndexRangeMutationOutcome> {
         self.narrow_team_index_range_durable(
             host,
-            credential,
+            crate::FederationCredential::Software(credential),
             team,
             TeamIndexRangeDirection::Raise,
             protected_store,
         )
     }
 
-    fn narrow_team_index_range_durable(
+    pub fn narrow_team_index_range_durable(
         &self,
         host: &PinnedHost,
-        credential: &DeviceCredential,
+        credential: crate::FederationCredential<'_, '_>,
         team: &EntityId,
         direction: TeamIndexRangeDirection,
         protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<TeamIndexRangeMutationOutcome> {
         team.clone().require_type(ENTITY_NAMED_TEAM)?;
-        let user = self.authenticate_and_pin(host, credential)?;
+        let user = self.authenticate_credential_and_pin(host, credential)?;
         let owner = current_owner_puk(&user)?;
-        let device_id = credential.public_material()?.id;
-        let authenticated =
-            self.load_and_pin_team(host, credential, &user.verified, &user.puks, team)?;
+        let device_id = credential.device_id()?;
+        let authenticated = self.load_and_pin_team_with_credential(
+            host,
+            credential,
+            &user.verified,
+            &user.puks,
+            team,
+        )?;
         let actor_public = user_key_for_seed(&user.verified, &owner.seed)?;
         let actor =
-            authorized_actor_member(&authenticated.verified, &credential.uid, actor_public)?;
+            authorized_actor_member(&authenticated.verified, credential.uid(), actor_public)?;
         if !matches!(actor.role.kind(), RoleType::Admin | RoleType::Owner) {
             return Err(Error::TeamRequest(
                 "team index range can be changed only by an administrator",
@@ -155,7 +160,7 @@ impl FoksClient {
         };
         let material = make_team_index_range_link(
             &TeamMetadataInput {
-                actor: &credential.uid,
+                actor: credential.uid(),
                 actor_source_role: actor_public.role,
                 team,
                 host: host.host_id(),
@@ -174,7 +179,7 @@ impl FoksClient {
         })?;
         let operation_id = team_index_range_operation_id(
             host.host_id(),
-            &credential.uid,
+            credential.uid(),
             team,
             expected_seqno,
             &next,
@@ -199,7 +204,7 @@ impl FoksClient {
             operation_id,
             kind: TeamMutationKind::MetadataChange,
             host_id: host.host_id().as_bytes().to_vec(),
-            actor_id: credential.uid.as_bytes().to_vec(),
+            actor_id: credential.uid().as_bytes().to_vec(),
             device_id: device_id.as_bytes().to_vec(),
             team_id: team.as_bytes().to_vec(),
             expected_seqno,
@@ -225,7 +230,7 @@ impl FoksClient {
     fn resume_team_index_range_mutation(
         &self,
         host: &PinnedHost,
-        credential: &DeviceCredential,
+        credential: crate::FederationCredential<'_, '_>,
         team: &EntityId,
         user: &AuthenticatedUserOutcome,
         authenticated: AuthenticatedTeamOutcome,
@@ -235,7 +240,7 @@ impl FoksClient {
         protected_store: &mut dyn ProtectedMutationStore,
         hard_store: &mut HardStateStore,
     ) -> Result<TeamIndexRangeMutationOutcome> {
-        validate_team_index_range_operation(&operation, host, &credential.uid, device_id, team)?;
+        validate_team_index_range_operation(&operation, host, credential.uid(), device_id, team)?;
         if prefixed_hash(TEAM_MUTATION_REQUEST_HASH_TYPE_ID, exact_request)
             != operation.request_hash
         {
@@ -290,7 +295,7 @@ impl FoksClient {
     fn submit_and_reconcile_team_index_range(
         &self,
         host: &PinnedHost,
-        credential: &DeviceCredential,
+        credential: crate::FederationCredential<'_, '_>,
         team: &EntityId,
         user: &AuthenticatedUserOutcome,
         operation: TeamMutationOperation,
@@ -308,8 +313,8 @@ impl FoksClient {
                 host,
                 &host.user,
                 exact_request,
-                &credential.seed,
-                &credential.certificate_chain,
+                credential.transport().0,
+                credential.transport().1,
             )?;
             decode_team_edit_result(&response)?;
             Ok(())
@@ -365,7 +370,7 @@ impl FoksClient {
     fn wait_for_team_index_range_transition(
         &self,
         host: &PinnedHost,
-        credential: &DeviceCredential,
+        credential: crate::FederationCredential<'_, '_>,
         team: &EntityId,
         user: &AuthenticatedUserOutcome,
         expected_seqno: u64,
@@ -373,7 +378,13 @@ impl FoksClient {
     ) -> Result<AuthenticatedTeamOutcome> {
         let mut last_error = None;
         for attempt in 0..40 {
-            match self.load_and_pin_team(host, credential, &user.verified, &user.puks, team) {
+            match self.load_and_pin_team_with_credential(
+                host,
+                credential,
+                &user.verified,
+                &user.puks,
+                team,
+            ) {
                 Ok(authenticated) if authenticated.verified.chain_seqno() >= expected_seqno => {
                     validate_team_index_range_transition(
                         &authenticated.verified,

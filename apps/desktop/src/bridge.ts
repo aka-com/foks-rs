@@ -1,3 +1,8 @@
+import {
+  decodeInvitationReply,
+  type InvitationAction,
+  type InvitationReply,
+} from './invitation-contract';
 import { decodeBotReply, type BotAction, type BotReply } from './bot-contract';
 import {
   decodeRenameProgress,
@@ -588,6 +593,12 @@ export interface Bridge {
     accountAlias: string,
     action: BotAction,
   ): Promise<BotReply>;
+  invitation(
+    profile: string,
+    accountAlias: string,
+    action: InvitationAction,
+    pin: string | null,
+  ): Promise<InvitationReply>;
   renameAccount(
     profile: string,
     accountAlias: string,
@@ -2107,6 +2118,12 @@ export const tauriBridge: Bridge = {
       'bot_account_request',
       { profile, accountAlias, action },
       decodeBotReply,
+    ),
+  invitation: (profile, accountAlias, action, pin) =>
+    checked(
+      'invitation_request',
+      { profile, accountAlias, action, pin },
+      decodeInvitationReply,
     ),
   renameAccount: (profile, accountAlias, action) =>
     checked(

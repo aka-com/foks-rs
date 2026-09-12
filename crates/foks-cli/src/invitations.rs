@@ -14,6 +14,31 @@ pub struct Scope {
 }
 #[derive(clap::Subcommand)]
 pub enum InvitationCommand {
+    AcceptTeam {
+        #[command(flatten)]
+        scope: Scope,
+        invite: String,
+        source_team: String,
+        #[arg(long, default_value="admin", value_parser=["member","admin","owner"])]
+        source_role: String,
+        #[arg(long, default_value_t = 0)]
+        visibility: i16,
+        #[arg(long)]
+        remote_profile: Option<String>,
+    },
+    Range {
+        #[command(flatten)]
+        scope: Scope,
+        team: String,
+        #[arg(long)]
+        raise: bool,
+    },
+    PendingApprovals {
+        #[command(flatten)]
+        scope: Scope,
+        team: String,
+    },
+
     PreviewRemote {
         #[command(flatten)]
         scope: Scope,
@@ -59,6 +84,12 @@ pub enum InvitationCommand {
         scope: Scope,
         remote_profile: String,
         team_id: String,
+        #[arg(long)]
+        source_team: Option<String>,
+        #[arg(long, default_value="admin",value_parser=["member","admin","owner"])]
+        source_role: String,
+        #[arg(long, default_value_t = 0)]
+        visibility: i16,
     },
     Preview {
         #[command(flatten)]
@@ -121,6 +152,46 @@ pub enum InvitationCommand {
 }
 pub fn run(state: &Path, command: InvitationCommand) -> Result<(), Box<dyn std::error::Error>> {
     let (scope, action) = match command {
+        InvitationCommand::AcceptTeam {
+            scope,
+            invite,
+            source_team,
+            source_role,
+            visibility,
+            remote_profile,
+        } => {
+            let role = match source_role.as_str() {
+                "owner" => InvitationRole::Owner,
+                "admin" => InvitationRole::Admin,
+                _ => InvitationRole::Member { visibility },
+            };
+            let action = match remote_profile {
+                Some(remote_profile) => InvitationAction::AcceptTeamRemote {
+                    remote_profile,
+                    invite,
+                    source_team_alias: source_team,
+                    source_role: role,
+                },
+                None => InvitationAction::AcceptTeam {
+                    invite,
+                    source_team_alias: source_team,
+                    source_role: role,
+                },
+            };
+            (scope, action)
+        }
+        InvitationCommand::Range { scope, team, raise } => (
+            scope,
+            InvitationAction::Range {
+                team_alias: team,
+                raise,
+            },
+        ),
+        InvitationCommand::PendingApprovals { scope, team } => (
+            scope,
+            InvitationAction::PendingApprovals { team_alias: team },
+        ),
+
         InvitationCommand::PreviewRemote {
             scope,
             remote_profile,
@@ -197,11 +268,20 @@ pub fn run(state: &Path, command: InvitationCommand) -> Result<(), Box<dyn std::
             scope,
             remote_profile,
             team_id,
+            source_team,
+            source_role,
+            visibility,
         } => (
             scope,
             InvitationAction::SyncRemote {
                 remote_profile,
                 team_id,
+                source_team_alias: source_team,
+                source_role: Some(match source_role.as_str() {
+                    "owner" => InvitationRole::Owner,
+                    "member" => InvitationRole::Member { visibility },
+                    _ => InvitationRole::Admin,
+                }),
             },
         ),
         InvitationCommand::Preview { scope, invite } => {

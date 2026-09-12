@@ -237,6 +237,7 @@ const COVERAGE: &[Coverage] = &[
             ("TeamAdmin", "makeInertTeamBearerToken"),
             ("TeamAdmin", "activateTeamBearerToken"),
             ("TeamAdmin", "loadRemovalKeyBoxForTeamAdmin"),
+            ("TeamAdmin", "postTeamRemoval"),
             ("TeamAdmin", "createTeamAdHoc"),
         ],
     },
@@ -247,11 +248,6 @@ const COVERAGE: &[Coverage] = &[
             ("TeamLoader", "checkTeamVOBearerToken"),
             ("TeamAdmin", "checkTeamBearerToken"),
         ],
-    },
-    Coverage {
-        name: "unsupported_team_routes",
-        run: crate::authorization::unsupported_team_routes_return_typed_status,
-        routes: &[("TeamAdmin", "postTeamRemoval")],
     },
     Coverage {
         name: "unsupported_realtime_routes",

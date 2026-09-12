@@ -357,6 +357,30 @@ pub(crate) fn public_client_creates_and_loads_named_and_adhoc_teams() {
             .removal,
         returned.removal
     );
+    let delivery = foks_proto::TeamRemovalAndCommitment {
+        removal: returned.removal.clone(),
+        commitment,
+    };
+    for _ in 0..2 {
+        fixture
+            .client
+            .foks()
+            .post_invitation_team_removal(
+                fixture.host(),
+                foks_client::FederationCredential::Software(&account.credential),
+                &delivery,
+            )
+            .unwrap();
+    }
+    assert!(fixture
+        .client
+        .foks()
+        .post_invitation_team_removal(
+            fixture.host(),
+            foks_client::FederationCredential::Software(&target.credential),
+            &delivery
+        )
+        .is_err());
     let mut public = crate::authorization::public_stream(&fixture);
     public
         .write_all(

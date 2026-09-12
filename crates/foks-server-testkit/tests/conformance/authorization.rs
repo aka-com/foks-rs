@@ -341,7 +341,7 @@ pub(crate) fn team_admin_bearer_is_held_by_transport_and_signed_by_target_ptk() 
 }
 
 #[test]
-pub(crate) fn local_parent_team_authorization_follows_the_parent_roster() {
+pub(crate) fn local_parent_team_authorization_requires_its_scoped_grant() {
     let fixture = Fixture::start("local-parent-team-auth");
     let account = fixture
         .client
@@ -442,6 +442,17 @@ pub(crate) fn local_parent_team_authorization_follows_the_parent_roster() {
         )
         .unwrap();
 
+    // An independently granted view survives the absence of membership. This
+    // is the same scope used to inspect an invited team before admission.
+    let mut granted = authenticated_stream(&fixture, &account.credential);
+    granted.write_all(&request).unwrap();
+    foks_rpc::read_bare_response(&mut granted, MAX_RESPONSE, 0).unwrap();
+    connection
+        .execute(
+            "DELETE FROM team_local_view_permissions WHERE team_id=?1 AND target_id=?2",
+            rusqlite::params![parent.team.as_bytes(), child.team.as_bytes()],
+        )
+        .unwrap();
     let mut authenticated = authenticated_stream(&fixture, &account.credential);
     authenticated.write_all(&request).unwrap();
     assert!(matches!(
@@ -678,10 +689,6 @@ pub(crate) fn bearer_token_introspection() {
 }
 
 #[test]
-pub(crate) fn unsupported_team_routes_return_typed_status() {
-    unsupported_routes_return_typed_status("Team");
-}
-
 pub(crate) fn unsupported_realtime_routes_return_typed_status() {
     unsupported_routes_return_typed_status("RealTime");
 }

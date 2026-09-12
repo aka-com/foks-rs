@@ -70,9 +70,7 @@ fn signup(
         )
         .unwrap();
     assert_eq!(foks.ping(&host, &created.credential).unwrap(), uid);
-    let database =
-        foks_server_db::ReadDatabase::open(environment.database_path(), Default::default())
-            .unwrap();
+    let database = environment.read_database().unwrap();
     let access = database.sso_access(uid.as_bytes()).unwrap().unwrap();
     assert_eq!(access.subject, "alice-subject");
     assert_eq!(access.state, foks_server_db::SsoAccessState::Active);
@@ -189,7 +187,8 @@ fn provider_subject_cannot_retarget_a_foks_account() {
         }))
     ));
     assert_eq!(
-        foks_server_db::ReadDatabase::open(environment.database_path(), Default::default())
+        environment
+            .read_database()
             .unwrap()
             .sso_access(created.credential.uid.as_bytes())
             .unwrap()
@@ -552,8 +551,7 @@ fn a_provider_subject_cannot_create_two_accounts_and_failed_signup_is_atomic() {
     );
 
     assert!(result.is_err());
-    let db = foks_server_db::ReadDatabase::open(environment.database_path(), Default::default())
-        .unwrap();
+    let db = environment.read_database().unwrap();
     assert!(db.user_authority(uid.as_bytes()).unwrap().is_none());
     assert!(db.sso_access(uid.as_bytes()).unwrap().is_none());
     assert_eq!(
@@ -624,7 +622,8 @@ fn refresh_claims_fence_races_revocation_policy_changes_and_crashes() {
         .unwrap();
     server.shutdown().unwrap();
     let _reopened = environment.start_oidc_server(config).unwrap();
-    let row = foks_server_db::ReadDatabase::open(environment.database_path(), Default::default())
+    let row = environment
+        .read_database()
         .unwrap()
         .sso_access(created.credential.uid.as_bytes())
         .unwrap()

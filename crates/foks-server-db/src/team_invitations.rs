@@ -274,6 +274,10 @@ pub(crate) fn insert_local_admission(
         if authority.team_id != a.joiner.as_bytes() {
             return Err(Error::AuthorizationChanged);
         }
+        let selected: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM team_shared_keys WHERE team_id=?1 AND role_type=?2 AND visibility=?3)",params![a.joiner.as_bytes(),sql_integer(role)?,visibility],|r|r.get(0))?;
+        if !selected {
+            return Err(Error::AuthorizationChanged);
+        }
         for (team, expected) in [
             (a.joiner.as_bytes(), a.source_head),
             (a.destination.as_slice(), a.destination_head),
@@ -460,7 +464,7 @@ pub(crate) fn approve_local_additions(
         if member.scoped_host_id.is_some_and(|h| h != host) {
             continue;
         }
-        let present:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM team_members WHERE team_id=?1 AND party_id=?2 AND source_role_type=?3 AND source_visibility=?4)",params![m.team_id,member.party_id,sql_integer(member.source_role_type)?,member.source_visibility],|r|r.get(0))?;
+        let present:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM team_members WHERE team_id=?1 AND party_id=?2 AND scoped_host_id IS NULL AND source_role_type=?3 AND source_visibility=?4)",params![m.team_id,member.party_id,sql_integer(member.source_role_type)?,member.source_visibility],|r|r.get(0))?;
         if present {
             continue;
         }
@@ -629,6 +633,76 @@ pub(crate) fn approve_remote_invitation(
             Ok(())
         }
         _ => Err(Error::InvitationDecisionConflict),
+    }
+}
+
+impl Database {
+    /// Deliver a proof for an already committed removal. Its secret MAC is
+    /// checked by the recipient; server authority is the team-scoped commitment.
+    pub fn post_team_removal(
+        &mut self,
+        actor: InvitationActor<'_>,
+        token: &[u8; 32],
+        removal: &foks_proto::TeamRemovalAndCommitment,
+        now: u64,
+    ) -> Result<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let admin = require_admin(&tx, &actor, token, now)?;
+        let p = &removal.removal.payload;
+        if admin.team_id != p.team.as_bytes() {
+            return Err(Error::AuthorizationChanged);
+        }
+        let host: Vec<u8> = tx.query_row(
+            "SELECT host_id FROM teams WHERE team_id=?1",
+            [&admin.team_id],
+            |r| r.get(0),
+        )?;
+        let prior: Option<Vec<u8>> = tx
+            .query_row(
+                "SELECT exact_removal FROM team_removal_proofs WHERE team_id=?1 AND commitment=?2",
+                params![admin.team_id, removal.commitment.as_slice()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let prior = prior.ok_or(Error::AuthorizationChanged)?;
+        let prior = foks_proto::TeamRemovalProof::decode(&prior)
+            .map_err(|_| Error::AuthorizationChanged)?;
+        if host != p.host.as_bytes()
+            || p.admin_host.as_bytes() != host
+            || (p.admin.as_bytes() != actor.uid && p.admin != prior.payload.admin)
+        {
+            return Err(Error::AuthorizationChanged);
+        }
+        let (kind, visibility) = (
+            p.source_role.protocol_value(),
+            p.source_role.visibility().unwrap_or(0),
+        );
+        // This row is inserted atomically with the signed removal and captures
+        // its original key box even after the member has rejoined.
+        let changed = tx.execute(
+            "UPDATE team_removal_proofs SET exact_removal=?7
+            WHERE team_id=?1 AND commitment=?2 AND member_id=?3 AND member_host_id=?4
+            AND source_role_type=?5 AND source_visibility=?6",
+            params![
+                admin.team_id,
+                removal.commitment.as_slice(),
+                p.member.as_bytes(),
+                p.member_host.as_bytes(),
+                sql_integer(kind)?,
+                visibility,
+                removal
+                    .removal
+                    .encoded()
+                    .map_err(|_| Error::AuthorizationChanged)?
+            ],
+        )?;
+        if changed != 1 {
+            return Err(Error::AuthorizationChanged);
+        }
+        tx.commit()?;
+        Ok(())
     }
 }
 

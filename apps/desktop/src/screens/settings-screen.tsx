@@ -1,3 +1,4 @@
+import { InvitationPanel } from '../components/invitation-panel';
 import { AdminPanel } from '../components/admin-panel';
 import { BotPanel } from '../components/bot-panel';
 import { RenamePanel } from '../components/rename-panel';
@@ -854,6 +855,15 @@ export function SettingsScreen({
                     profile={store.server}
                     account={store.account}
                     onComplete={() => onRefresh('Bot account updated')}
+                  />
+                ))}
+                {accountStores(world).map((store) => (
+                  <InvitationPanel
+                    key={`invite-${store.id}`}
+                    bridge={bridge}
+                    profile={store.server}
+                    account={store.account}
+                    onComplete={() => onRefresh('Group membership refreshed')}
                   />
                 ))}
                 {accountStores(world).map((store) => (

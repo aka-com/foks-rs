@@ -1415,12 +1415,42 @@ impl TeamMetadataEditArgument<'_> {
 
 impl AddTeamMemberArgument<'_> {
     pub fn encoded(&self) -> Result<Vec<u8>> {
+        self.encode_with_existing_local_grant(false)
+    }
+
+    /// Admission through a previously verified local invitation grant. This is
+    /// an ordinary signed team edit; no new grant is requested. Remote members,
+    /// removals, rotations and multi-party changes must use their own encoders.
+    pub fn encoded_local_invitation(&self) -> Result<Vec<u8>> {
+        let change = self.link.decode_team_group_change()?;
+        let [member] = change.changes.as_slice() else {
+            return Err(Error::FieldCount {
+                expected: 1,
+                found: change.changes.len(),
+            });
+        };
+        if member.scoped_host.is_some()
+            || member.role == Role::NONE
+            || member.keys.is_none()
+            || !change.shared_keys.is_empty()
+            || !change.metadata.is_empty()
+            || !self.remote_member_view_tokens.is_empty()
+            || !self.local_permissions_for.is_empty()
+        {
+            return Err(Error::IntegerRange("local invitation admission shape"));
+        }
+        self.encode_with_existing_local_grant(true)
+    }
+
+    fn encode_with_existing_local_grant(&self, existing_local_grant: bool) -> Result<Vec<u8>> {
         for found in [self.removal_keys.len(), self.hepks.len()] {
             if found != 1 {
                 return Err(Error::FieldCount { expected: 1, found });
             }
         }
-        if self.remote_member_view_tokens.len() + self.local_permissions_for.len() != 1 {
+        if !existing_local_grant
+            && self.remote_member_view_tokens.len() + self.local_permissions_for.len() != 1
+        {
             return Err(Error::FieldCount {
                 expected: 1,
                 found: self.remote_member_view_tokens.len() + self.local_permissions_for.len(),

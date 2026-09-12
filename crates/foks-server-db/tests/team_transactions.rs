@@ -160,7 +160,7 @@ fn every_team_publication_boundary_is_atomic() {
                 exact_parcel: &admin_parcel,
             },
         ];
-        let mutation = TeamMutation {
+        let mut mutation = TeamMutation {
             team_id: &team,
             signer_credential_id: &[4; 33],
             header: Some(TeamHeader {
@@ -188,6 +188,7 @@ fn every_team_publication_boundary_is_atomic() {
             removal_boxes: &[removal_box],
             removal_proofs: &[removal_proof],
             remote_member_view_tokens: &[],
+            required_local_view_permissions: &[],
             local_view_permissions: &[foks_server_db::TeamLocalViewPermissionMutation {
                 target_id: &[1; 33],
                 minimum_role_type: 1,
@@ -209,6 +210,20 @@ fn every_team_publication_boundary_is_atomic() {
             now: 1_000_001,
             receipt_expires_at: 2_000_001,
         };
+        // An admission cannot claim a pre-existing invitation grant that is
+        // absent at the atomic publication boundary, even if it also asks to
+        // create a grant in this same mutation.
+        let required = vec![vec![1; 33]];
+        mutation.required_local_view_permissions = &required;
+        assert!(matches!(
+            fixture.database.commit_team_mutation(&mutation),
+            Err(foks_server_db::Error::Invalid(
+                "local invitation view grant missing"
+            ))
+        ));
+        assert!(fixture.database.team(&team).unwrap().is_none());
+        assert_eq!(fixture.database.current_root().unwrap().unwrap(), prior);
+        mutation.required_local_view_permissions = &[];
         assert!(fixture
             .database
             .commit_team_mutation_with_failure(&mutation, Some(point))

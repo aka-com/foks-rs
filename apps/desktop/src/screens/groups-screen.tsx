@@ -1,3 +1,4 @@
+import { InvitationPanel } from '../components/invitation-panel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import {
@@ -2176,6 +2177,15 @@ export function GroupSettingsScreen({
                     failure={rosterFailure}
                     onRetry={() => void onApplied('Refreshing group members…')}
                   />
+                  {rosterManageable && store.kind === 'team' && (
+                    <InvitationPanel
+                      bridge={bridge}
+                      profile={store.server}
+                      account={store.account}
+                      teamAlias={store.alias}
+                      onComplete={() => onApplied('Group requests updated')}
+                    />
+                  )}
                   <FederationSection
                     world={world}
                     store={store}

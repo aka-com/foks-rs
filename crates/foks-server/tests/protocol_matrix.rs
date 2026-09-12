@@ -78,13 +78,25 @@ fn team_chain_route_is_shared_by_public_and_authenticated_listeners_only() {
     ));
 }
 
+fn public_team_authority_policy(id: RouteId) -> Option<&'static str> {
+    match id {
+        RouteId::TeamLoaderLoadTeamChain => Some("active_team_or_remote_view_token"),
+        RouteId::TeamLoaderGetTeamVOBearerTokenChallenge => Some("active_local_or_remote_member"),
+        RouteId::TeamLoaderActivateTeamVOBearerToken => {
+            Some("current_local_or_remote_shared_signature")
+        }
+        RouteId::TeamLoaderCheckTeamVOBearerToken => Some("active_local_or_remote_team_view_token"),
+        _ => None,
+    }
+}
+
 #[test]
 fn principal_bound_routes_are_authenticated_only() {
     for route in ROUTES.iter().filter(|route| {
         route.authentication.starts_with("active_") || route.authentication.starts_with("current_")
     }) {
-        if route.id == RouteId::TeamLoaderLoadTeamChain {
-            assert_eq!(route.authentication, "active_team_or_remote_view_token");
+        if let Some(policy) = public_team_authority_policy(route.id) {
+            assert_eq!(route.authentication, policy);
             assert_eq!(route.listeners, ["public_services", "authenticated"]);
         } else {
             assert_eq!(
@@ -142,11 +154,12 @@ fn authentication_policy_matches_listener_principal_availability() {
             );
             continue;
         }
-        if route.id == RouteId::TeamLoaderLoadTeamChain {
-            // Documented carve-out: also reachable on the authenticated listener,
-            // where a principal or a remote-view bearer token authorizes it. On the
-            // public path the handler must return only public-verifiable chain data.
-            assert_eq!(route.authentication, "active_team_or_remote_view_token");
+        if let Some(policy) = public_team_authority_policy(route.id) {
+            // Foreign members prove the scoped PUK/PTK on the public listener.
+            // Local members still require an active authenticated transport.
+            // A valid view token can deliver role-scoped encrypted PTKs, never
+            // unboxed keys. Keep this exception restricted to exact route IDs.
+            assert_eq!(route.authentication, policy);
             assert_eq!(route.listeners, ["public_services", "authenticated"]);
             continue;
         }
@@ -258,6 +271,11 @@ fn protocol_contract_is_valid_and_exactly_registered() {
             ("merkle_verify".to_owned(), 4003),
             ("method_not_found".to_owned(), 211),
             ("name_in_use".to_owned(), 1023),
+            ("no_change".to_owned(), 1029),
+            ("oauth2".to_owned(), 1067),
+            ("oauth2_auth".to_owned(), 1069),
+            ("team_invite_pending".to_owned(), 7015),
+            ("timeout".to_owned(), 1009),
             ("not_found".to_owned(), 1049),
             ("rt_generic".to_owned(), 12001),
             ("rt_channel_exists".to_owned(), 12002),

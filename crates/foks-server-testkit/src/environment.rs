@@ -123,6 +123,14 @@ impl TestEnvironment {
         self.inner.paths.database()
     }
 
+    /// Open a read-only view of this sealed environment's owned database.
+    pub fn read_database(&self) -> foks_server_db::Result<foks_server_db::ReadDatabase> {
+        foks_server_db::ReadDatabase::open(
+            self.inner.paths.database(),
+            self.inner.database_config.clone(),
+        )
+    }
+
     #[doc(hidden)]
     pub fn rotate_host_key(&self) -> foks_server::Result<foks_server::host::HostKeyRotationState> {
         if *self
@@ -310,6 +318,16 @@ impl TestEnvironment {
                 "User",
                 "provisionDevice",
             ),
+            TestFault::InvitationHomeUserAfterCommitBeforeResponse => (
+                foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
+                "User",
+                "postGenericLink",
+            ),
+            TestFault::InvitationHomeTeamAfterCommitBeforeResponse => (
+                foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
+                "TeamAdmin",
+                "postTeamMembershipLink",
+            ),
             TestFault::RemoteInvitationAfterCommitBeforeResponse => (
                 foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
                 "TeamGuest",
@@ -401,6 +419,8 @@ pub enum TestFault {
     RenameAfterCommitBeforeResponse,
     InvitationAfterCommitBeforeResponse,
     RemoteInvitationAfterCommitBeforeResponse,
+    InvitationHomeUserAfterCommitBeforeResponse,
+    InvitationHomeTeamAfterCommitBeforeResponse,
     SignupBeforeCommit,
     SignupAfterCommitBeforeResponse,
     SignupDuringResponseWrite,

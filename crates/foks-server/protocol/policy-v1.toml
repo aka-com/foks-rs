@@ -1091,12 +1091,12 @@ protocol = "TeamAdmin"
 method = "postTeamRemoval"
 listeners = ["authenticated"]
 authentication = "active_team_admin_token"
-request = "Unsupported"
-result = "Unsupported"
-statuses = ["unsupported"]
+request = "PostTeamRemovalArgument"
+result = "Void"
+statuses = ["ok", "bad_args", "permission_denied", "oauth2_auth", "tx_retry"]
 max_request_bytes = 4096
-supported = false
-coverage = ["unsupported_team_routes"]
+supported = true
+coverage = ["team_create_edit_and_kv"]
 
 
 [[route]]

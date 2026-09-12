@@ -310,7 +310,7 @@ pub(crate) fn post_team_membership_link(
         request.link,
         principal,
         &team,
-        Some(&authority.ptk_verify_key),
+        None, // The writer verifies a current Admin/Owner signer independently of the bearer role.
         host,
         writer,
         keys,
@@ -602,6 +602,7 @@ pub(crate) fn create(
                 removal_proofs: &[],
                 remote_member_view_tokens: &[],
                 local_view_permissions: &local_view_permissions,
+                required_local_view_permissions: &[],
                 generic_link: Some(foks_server_db::GenericLinkMutation {
                     entity_id: &command.membership_link.user,
                     chain_type: foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP,
@@ -1011,6 +1012,7 @@ pub(crate) fn edit(
                     removal_proofs: &removal_proofs,
                     remote_member_view_tokens: &remote_member_view_tokens,
                     local_view_permissions: &local_view_permissions,
+                    required_local_view_permissions: &command.required_local_view_permissions,
                     generic_link: None,
                     expected_root_epoch: root.epoch,
                     expected_root_hash: &root.root_hash,

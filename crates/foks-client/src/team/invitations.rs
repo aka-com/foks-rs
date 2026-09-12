@@ -379,6 +379,30 @@ impl FoksClient {
         }
         Ok(receipt)
     }
+    pub fn post_invitation_team_removal(
+        &self,
+        host: &PinnedHost,
+        credential: FederationCredential<'_, '_>,
+        removal: &foks_proto::TeamRemovalAndCommitment,
+    ) -> Result<()> {
+        let user = self.authenticate_credential_and_pin(host, credential)?;
+        let team = self.load_and_pin_team_with_credential(
+            host,
+            credential,
+            &user.verified,
+            &user.puks,
+            &removal.removal.payload.team,
+        )?;
+        let (seed, certs) = credential.transport();
+        let token = self.activate_team_admin_bearer(host, credential.uid(), seed, certs, &team)?;
+        self.call_void_with_material(
+            host,
+            &host.user,
+            &foks_rpc::encode_post_team_removal_request(&token, removal)?,
+            seed,
+            certs,
+        )
+    }
     pub fn team_invitation_inbox(
         &self,
         host: &PinnedHost,

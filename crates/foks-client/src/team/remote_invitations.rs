@@ -233,13 +233,23 @@ impl FoksClient {
             MutationCoordinator::new(&home.database_path, protected).begin_submission(&id)?;
             phase = 1;
             let (seed, certs) = credential.transport();
-            let send = self.call_void_with_material(
-                home,
-                &home.user,
-                &foks_rpc::encode_post_generic_link_request(&p.home_link)?,
-                seed,
-                certs,
-            );
+            let entity = p.home_link.link.decode_generic()?.entity;
+            let request = if entity == *credential.uid() {
+                foks_rpc::encode_post_generic_link_request(&p.home_link)?
+            } else {
+                let user = self.authenticate_credential_and_pin(home, credential)?;
+                let source = self.load_and_pin_team_with_credential(
+                    home,
+                    credential,
+                    &user.verified,
+                    &user.puks,
+                    &entity,
+                )?;
+                let token =
+                    self.activate_team_admin_bearer(home, credential.uid(), seed, certs, &source)?;
+                foks_rpc::encode_post_team_membership_link_request(&token, &p.home_link)?
+            };
+            let send = self.call_void_with_material(home, &home.user, &request, seed, certs);
             // A verified exact home link resolves its lost reply. It never establishes
             // guest delivery and cannot cause an automatic second home submission.
             if let Err(e) = send {
@@ -283,6 +293,10 @@ impl FoksClient {
             }
         }
         op = self.invitation_operation(home, credential.uid(), id)?;
+        if receipt.is_none() && op.state == MutationState::Submitting {
+            MutationCoordinator::new(&home.database_path, protected).submission_unknown(&id)?;
+            op = self.invitation_operation(home, credential.uid(), id)?;
+        }
         Ok(super::InvitationProgress {
             operation: op,
             receipt,
@@ -295,7 +309,33 @@ impl FoksClient {
         credential: FederationCredential<'_, '_>,
         link: &PostGenericLinkArgument,
     ) -> Result<bool> {
+        // The fleet may publish a root between owner and subchain reads.
+        // Retry both read-only proofs together; never retry the home send.
+        self.retry_chain_load(home, |home| {
+            self.invitation_home_link_at_root(home, credential, link)
+        })
+    }
+    fn invitation_home_link_at_root(
+        &self,
+        home: &PinnedHost,
+        credential: FederationCredential<'_, '_>,
+        link: &PostGenericLinkArgument,
+    ) -> Result<bool> {
         let user = self.authenticate_credential_and_pin(home, credential)?;
+        let entity = link.link.decode_generic()?.entity;
+        if entity != *credential.uid() {
+            let source = self.load_and_pin_team_with_credential(
+                home,
+                credential,
+                &user.verified,
+                &user.puks,
+                &entity,
+            )?;
+            let verified = self.invitation_team_membership_chain(home, credential, &source)?;
+            let hash =
+                foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, &link.link.encoded()?);
+            return Ok(verified.link_hashes.contains(&hash));
+        }
         let (seed, certs) = credential.transport();
         let response = self.call_with_material(
             home,

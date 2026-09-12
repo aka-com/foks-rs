@@ -533,6 +533,8 @@ pub(crate) fn team_remote_invitations() {
         )
         .unwrap()
         .operation;
+    home.environment
+        .arm_fault(foks_server_testkit::TestFault::InvitationHomeUserAfterCommitBeforeResponse);
     let progress = home
         .client
         .foks()
@@ -746,4 +748,652 @@ pub(crate) fn team_remote_invitations() {
         .iter()
         .any(|m| m.party == joiner.credential.uid
             && m.scoped_host.as_ref() == Some(home.host().host_id())));
+    // A home PUK rotation can precede the destination's CLKR. Membership
+    // remains readable through the authenticated historical recipient key.
+    let user = home
+        .client
+        .foks()
+        .authenticate_credential_and_pin(home.host(), c)
+        .unwrap();
+    let old = user
+        .puks
+        .iter()
+        .find(|key| key.role == Role::OWNER && key.generation == 1)
+        .unwrap();
+    home.client
+        .foks()
+        .rotate_software_puks(
+            home.host(),
+            &joiner.credential,
+            &[foks_client::UserPukRotation {
+                role: Role::OWNER,
+                previous_generation: 1,
+                previous_seed: SecretSeed::from_slice(old.seed.as_slice()).unwrap(),
+                new_seed: SecretSeed::new([229; 32]),
+            }],
+            Some(foks_client::NoPassphraseConfigured),
+            &mut protected,
+        )
+        .unwrap();
+    let after_rotation = home
+        .client
+        .foks()
+        .load_invited_remote_team(home.host(), destination.host(), c, &team)
+        .unwrap();
+    assert_eq!(after_rotation.ptks.len(), 2);
+}
+
+#[test]
+fn team_joiners_keep_source_role_and_admin_signer_separate() {
+    let f = Fixture::start("invitation-team-joiner");
+    let owner = f
+        .client
+        .create_account(f.host(), &TestAccountSpec::new("teamjoinerowner", 81))
+        .unwrap();
+    let cred = FederationCredential::Software(&owner.credential);
+    let create = |name: &str, n: u8| {
+        f.client
+            .foks()
+            .create_single_owner_named_team(
+                f.host(),
+                &owner.credential,
+                name,
+                &NamedTeamSecrets {
+                    member_min: SecretSeed::new([n; 32]),
+                    member: SecretSeed::new([n + 1; 32]),
+                    admin: SecretSeed::new([n + 2; 32]),
+                    owner: SecretSeed::new([n + 3; 32]),
+                    removal_key: SecretSeed::new([n + 4; 32]),
+                    team_name_commitment_key: [n + 5; 16],
+                },
+            )
+            .unwrap()
+    };
+    let a = create("joiningsource", 90);
+    let b = create("joiningdestination", 100);
+    let (source, destination) = (a, b);
+    let mut ranges = f.client.open_protected_store().unwrap();
+    f.client
+        .foks()
+        .lower_team_index_range_durable(f.host(), &owner.credential, &source.team, &mut ranges)
+        .unwrap();
+    f.client
+        .foks()
+        .raise_team_index_range_durable(f.host(), &owner.credential, &destination.team, &mut ranges)
+        .unwrap();
+    let invite = f
+        .client
+        .foks()
+        .prepare_team_invitation(f.host(), cred, &destination.team)
+        .unwrap();
+    f.client
+        .foks()
+        .upload_team_invitation(f.host(), cred, &invite)
+        .unwrap();
+    for (source_role, role, n) in [
+        (Role::member(0), Role::member(0), 120),
+        (Role::ADMIN, Role::ADMIN, 121),
+        (Role::OWNER, Role::OWNER, 122),
+    ] {
+        let prepared = f
+            .client
+            .foks()
+            .prepare_local_team_invitation(
+                f.host(),
+                cred,
+                &source.team,
+                source_role,
+                &invite.invite,
+            )
+            .unwrap();
+        let decoded = prepared
+            .membership_link
+            .as_ref()
+            .unwrap()
+            .link
+            .decode_generic()
+            .unwrap();
+        assert_eq!(decoded.entity, source.team);
+        assert_eq!(
+            decoded.signer,
+            source
+                .authenticated
+                .verified
+                .shared_key(Role::ADMIN)
+                .unwrap()
+                .verify_key
+        );
+        let mut protected = f.client.open_protected_store().unwrap();
+        let op = f
+            .client
+            .foks()
+            .prepare_invitation_operation(
+                f.host(),
+                cred,
+                foks_client::InvitationIntent::LocalAcceptance(prepared),
+                &mut protected,
+            )
+            .unwrap();
+        let delivered = f
+            .client
+            .foks()
+            .invitation_progress(
+                f.host(),
+                cred,
+                op.operation.operation_id,
+                true,
+                &mut protected,
+            )
+            .unwrap();
+        let rows = f
+            .client
+            .foks()
+            .team_invitation_inbox(f.host(), cred, &destination.team, None)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        let verified = f
+            .client
+            .foks()
+            .load_local_invitation_team(f.host(), cred, &destination.team, &rows[0])
+            .unwrap();
+        let user = f
+            .client
+            .foks()
+            .authenticate_credential_and_pin(f.host(), cred)
+            .unwrap();
+        let dest = f
+            .client
+            .foks()
+            .load_and_pin_team_with_credential(
+                f.host(),
+                cred,
+                &user.verified,
+                &user.puks,
+                &destination.team,
+            )
+            .unwrap();
+        let removal = SecretSeed::new([n; 32]);
+        let plan = f
+            .client
+            .foks()
+            .invited_team_addition_plan(
+                cred.uid(),
+                &dest,
+                verified.verified(),
+                source_role,
+                role,
+                &removal,
+            )
+            .unwrap();
+        let added = f
+            .client
+            .foks()
+            .add_invited_team_durable(
+                f.host(),
+                cred,
+                &destination.team,
+                verified.verified(),
+                None,
+                delivered.receipt.as_ref().unwrap(),
+                &plan,
+                &removal,
+                &mut protected,
+            )
+            .unwrap();
+        assert!(added
+            .authenticated
+            .verified
+            .members()
+            .iter()
+            .any(|m| m.party == source.team && m.source_role == source_role && m.role == role));
+        assert!(f
+            .client
+            .foks()
+            .team_invitation_inbox(f.host(), cred, &destination.team, None)
+            .unwrap()
+            .is_empty());
+    }
+}
+
+#[test]
+fn remote_team_invitation_posts_home_intent_and_loads_destination_keys() {
+    let home = Fixture::start("remote-team-invite-home");
+    let dest = Fixture::start("remote-team-invite-dest");
+    let a = home
+        .client
+        .create_account(home.host(), &TestAccountSpec::new("remoteteamjoiner", 131))
+        .unwrap();
+    let b = dest
+        .client
+        .create_account(dest.host(), &TestAccountSpec::new("remoteteamadmin", 132))
+        .unwrap();
+    let secrets = |n| NamedTeamSecrets {
+        member_min: SecretSeed::new([n; 32]),
+        member: SecretSeed::new([n + 1; 32]),
+        admin: SecretSeed::new([n + 2; 32]),
+        owner: SecretSeed::new([n + 3; 32]),
+        removal_key: SecretSeed::new([n + 4; 32]),
+        team_name_commitment_key: [n + 5; 16],
+    };
+    let source = home
+        .client
+        .foks()
+        .create_single_owner_named_team(home.host(), &a.credential, "remotechild", &secrets(140))
+        .unwrap();
+    let destination = dest
+        .client
+        .foks()
+        .create_single_owner_named_team(dest.host(), &b.credential, "remoteparent", &secrets(150))
+        .unwrap();
+    let mut hp = home.client.open_protected_store().unwrap();
+    let mut dp = dest.client.open_protected_store().unwrap();
+    home.client
+        .foks()
+        .lower_team_index_range_durable(home.host(), &a.credential, &source.team, &mut hp)
+        .unwrap();
+    dest.client
+        .foks()
+        .raise_team_index_range_durable(dest.host(), &b.credential, &destination.team, &mut dp)
+        .unwrap();
+    let ac = FederationCredential::Software(&a.credential);
+    let bc = FederationCredential::Software(&b.credential);
+    let cert = dest
+        .client
+        .foks()
+        .prepare_team_invitation(dest.host(), bc, &destination.team)
+        .unwrap();
+    dest.client
+        .foks()
+        .upload_team_invitation(dest.host(), bc, &cert)
+        .unwrap();
+    let prepared = home
+        .client
+        .foks()
+        .prepare_remote_team_invitation(
+            home.host(),
+            dest.host(),
+            ac,
+            &source.team,
+            Role::ADMIN,
+            &cert.invite,
+        )
+        .unwrap();
+    let op = home
+        .client
+        .foks()
+        .prepare_invitation_operation(
+            home.host(),
+            ac,
+            foks_client::InvitationIntent::RemoteAcceptance(Box::new(prepared)),
+            &mut hp,
+        )
+        .unwrap();
+    home.environment
+        .arm_fault(foks_server_testkit::TestFault::InvitationHomeTeamAfterCommitBeforeResponse);
+    home.client
+        .foks()
+        .remote_invitation_progress(
+            home.host(),
+            dest.host(),
+            ac,
+            op.operation.operation_id,
+            true,
+            &mut hp,
+        )
+        .unwrap();
+    let row = dest
+        .client
+        .foks()
+        .team_invitation_inbox(dest.host(), bc, &destination.team, None)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let foks_proto::RawInboxRequest::Remote(request) = &row.request else {
+        panic!()
+    };
+    let payload = dest
+        .client
+        .foks()
+        .open_remote_invitation(dest.host(), bc, &destination.team, request)
+        .unwrap();
+    let remote = dest
+        .client
+        .foks()
+        .verify_remote_invitation_team(home.host(), &payload)
+        .unwrap();
+    let user = dest
+        .client
+        .foks()
+        .authenticate_credential_and_pin(dest.host(), bc)
+        .unwrap();
+    let loaded = dest
+        .client
+        .foks()
+        .load_and_pin_team_with_credential(
+            dest.host(),
+            bc,
+            &user.verified,
+            &user.puks,
+            &destination.team,
+        )
+        .unwrap();
+    let removal = SecretSeed::new([170; 32]);
+    assert!(dest
+        .client
+        .foks()
+        .invited_team_addition_plan(
+            bc.uid(),
+            &loaded,
+            &remote.verified,
+            Role::ADMIN,
+            Role::ADMIN,
+            &removal
+        )
+        .is_err());
+    let plan = dest
+        .client
+        .foks()
+        .invited_team_addition_plan(
+            bc.uid(),
+            &loaded,
+            &remote.verified,
+            Role::ADMIN,
+            Role::member(0),
+            &removal,
+        )
+        .unwrap();
+    dest.client
+        .foks()
+        .add_invited_team_durable(
+            dest.host(),
+            bc,
+            &destination.team,
+            &remote.verified,
+            Some(&payload.permission),
+            &row.receipt,
+            &plan,
+            &removal,
+            &mut dp,
+        )
+        .unwrap();
+    let loaded = home
+        .client
+        .foks()
+        .load_invited_remote_team_as_team(
+            home.host(),
+            dest.host(),
+            ac,
+            &source.team,
+            Role::ADMIN,
+            &destination.team,
+        )
+        .unwrap();
+    assert!(loaded.ptks.len() >= 2);
+    assert!(dest
+        .client
+        .foks()
+        .team_invitation_inbox(dest.host(), bc, &destination.team, None)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn hardware_admin_approves_local_invitation_with_durable_recovery() {
+    use foks_yubi::{MockYubiProvider, Pin, PivPolicy, SlotId, YubiProvider as _};
+    let f = Fixture::start("invitation-hardware-admin");
+    let pin = Pin::new("654321").unwrap();
+    let provider = MockYubiProvider::with_card("invite-key", 72001, &pin).unwrap();
+    let card = provider.cards().unwrap().remove(0);
+    let key = provider
+        .prepare(
+            &card,
+            SlotId::new(0x82).unwrap(),
+            SlotId::new(0x83).unwrap(),
+            &pin,
+            None,
+            PivPolicy::Once,
+            PivPolicy::Never,
+        )
+        .unwrap();
+    let mut protected = f.client.open_protected_store().unwrap();
+    let owner = f
+        .client
+        .foks()
+        .create_yubi_account(
+            f.host(),
+            key.device.as_ref(),
+            foks_client::YubiAccountRequest {
+                username_utf8: "hardwareinviteadmin".into(),
+                device_name: "security key".into(),
+                invite_code: foks_proto::InviteCode::Empty,
+                email: String::new(),
+                passphrase: None,
+                pq_hint: foks_proto::YubiSlotAndPqKeyId {
+                    slot: 0x83,
+                    id: key.locator.pq_key_id,
+                },
+            },
+            foks_client::YubiAccountSecrets::new(
+                SecretSeed::new([181; 32]),
+                SecretSeed::new([182; 32]),
+                [183; 17],
+            ),
+            f.client.soft_state_path(),
+            &mut protected,
+        )
+        .unwrap();
+    let cred = FederationCredential::Yubi(&owner.credential);
+    let team = f
+        .client
+        .foks()
+        .create_single_owner_named_team_yubi(
+            f.host(),
+            &owner.credential,
+            "hardwareinviteteam",
+            &NamedTeamSecrets {
+                member_min: SecretSeed::new([184; 32]),
+                member: SecretSeed::new([185; 32]),
+                admin: SecretSeed::new([186; 32]),
+                owner: SecretSeed::new([187; 32]),
+                removal_key: SecretSeed::new([188; 32]),
+                team_name_commitment_key: [189; 16],
+            },
+        )
+        .unwrap();
+    f.client
+        .foks()
+        .narrow_team_index_range_durable(
+            f.host(),
+            cred,
+            &team.team,
+            foks_client::TeamIndexRangeDirection::Raise,
+            &mut protected,
+        )
+        .unwrap();
+    let cert = f
+        .client
+        .foks()
+        .prepare_team_invitation(f.host(), cred, &team.team)
+        .unwrap();
+    f.client
+        .foks()
+        .upload_team_invitation(f.host(), cred, &cert)
+        .unwrap();
+    let jc = TestClient::new(&f.environment, "hardware-invite-joiner").unwrap();
+    let joiner = jc
+        .create_account(f.host(), &TestAccountSpec::new("hardwareinvitejoiner", 191))
+        .unwrap();
+    let joincred = FederationCredential::Software(&joiner.credential);
+    let accept = jc
+        .foks()
+        .prepare_local_invitation_acceptance(f.host(), joincred, &cert.invite)
+        .unwrap();
+    jc.foks()
+        .submit_local_invitation_acceptance(f.host(), joincred, &accept)
+        .unwrap();
+    let row = f
+        .client
+        .foks()
+        .team_invitation_inbox(f.host(), cred, &team.team, None)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let target = f
+        .client
+        .foks()
+        .load_local_invitation_joiner(f.host(), cred, &team.team, &row)
+        .unwrap();
+    let actor = f
+        .client
+        .foks()
+        .authenticate_credential_and_pin(f.host(), cred)
+        .unwrap();
+    let loaded = f
+        .client
+        .foks()
+        .load_and_pin_team_with_credential(f.host(), cred, &actor.verified, &actor.puks, &team.team)
+        .unwrap();
+    let removal = SecretSeed::new([192; 32]);
+    let request = foks_client::AddLocalTeamMemberRequest {
+        target_user: &target,
+        destination_role: Role::member(0),
+        removal_key: &removal,
+    };
+    let plan = f
+        .client
+        .foks()
+        .local_team_member_addition_plan(cred.uid(), &team.team, &loaded, &request)
+        .unwrap();
+    f.client
+        .foks()
+        .add_invited_local_user_durable(f.host(), cred, &team.team, &plan, &request, &mut protected)
+        .unwrap();
+    let recovered = f
+        .client
+        .foks()
+        .resume_invited_local_addition(f.host(), cred, &team.team, &plan, &mut protected)
+        .unwrap();
+    assert_eq!(recovered.authenticated.verified.members().len(), 2);
+    assert!(f
+        .client
+        .foks()
+        .team_invitation_inbox(f.host(), cred, &team.team, None)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn invitation_inbox_ties_are_bounded_and_do_not_skip_filtered_prefixes() {
+    let f = Fixture::start("invitation-inbox-limits");
+    let owner = f
+        .client
+        .create_account(f.host(), &TestAccountSpec::new("inboxlimitadmin", 181))
+        .unwrap();
+    let cred = FederationCredential::Software(&owner.credential);
+    let team = f
+        .client
+        .foks()
+        .create_single_owner_named_team(
+            f.host(),
+            &owner.credential,
+            "inboxlimits",
+            &NamedTeamSecrets {
+                member_min: SecretSeed::new([182; 32]),
+                member: SecretSeed::new([183; 32]),
+                admin: SecretSeed::new([184; 32]),
+                owner: SecretSeed::new([185; 32]),
+                removal_key: SecretSeed::new([186; 32]),
+                team_name_commitment_key: [187; 16],
+            },
+        )
+        .unwrap()
+        .team;
+    let cert = f
+        .client
+        .foks()
+        .prepare_team_invitation(f.host(), cred, &team)
+        .unwrap();
+    f.client
+        .foks()
+        .upload_team_invitation(f.host(), cred, &cert)
+        .unwrap();
+    let remote = include_bytes!(
+        "../../../foks-snowpack/tests/fixtures/foks-v0.1.9/invitations/remote.request"
+    );
+    let mut db = rusqlite::Connection::open(f.environment.database_path()).unwrap();
+    let tx = db.transaction().unwrap();
+    // Deliberately seed beyond admission quotas to exercise an all-tied page
+    // larger than the maximum reader limit (including existing imported rows).
+    for n in 0..1001_u32 {
+        let mut local = [57_u8; 17];
+        local[1..5].copy_from_slice(&n.to_be_bytes());
+        let mut remote_receipt = local;
+        remote_receipt[0] = 56;
+        let mut joiner = [1_u8; 33];
+        joiner[1..5].copy_from_slice(&n.to_be_bytes());
+        tx.execute("INSERT INTO team_local_join_requests(receipt,team_id,joiner_id,source_role_type,source_visibility,state,permission,created_ms) VALUES(?1,?2,?3,3,0,0,?4,1000)",rusqlite::params![local.as_slice(),team.as_bytes(),joiner.as_slice(),[55_u8;17].as_slice()]).unwrap();
+        tx.execute("INSERT INTO team_remote_join_requests(receipt,team_id,certificate_hash,exact_request,state,created_ms) VALUES(?1,?2,?3,?4,0,1000)",rusqlite::params![remote_receipt.as_slice(),team.as_bytes(),cert.invite.hash.as_slice(),remote.as_slice()]).unwrap();
+    }
+    tx.commit().unwrap();
+    let read = |limit, start, end| {
+        f.client
+            .foks()
+            .team_invitation_inbox(
+                f.host(),
+                cred,
+                &team,
+                Some(foks_proto::InboxPagination { limit, start, end }),
+            )
+            .unwrap()
+    };
+    assert_eq!(read(0, 0, 0).len(), 200); // Go's limit applies to each request kind.
+    let page = read(3, 1000, 1000);
+    assert_eq!(page.len(), 6);
+    assert!(page.iter().all(|r| r.time == 1000));
+    assert_eq!(read(10_000, 1000, 1000).len(), 2000); // remains incomplete; never subtract a millisecond.
+    let identities = page
+        .iter()
+        .map(|r| r.receipt.expose().to_vec())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(identities.len(), 6);
+    // A newer insert between inclusive reads cannot make the older tie group
+    // disappear or be silently treated as already traversed.
+    db.execute("UPDATE team_remote_join_requests SET created_ms=1001 WHERE receipt=(SELECT max(receipt) FROM team_remote_join_requests)",[]).unwrap();
+    assert_eq!(read(1000, 1000, 1000).len(), 2000);
+    assert_eq!(read(1000, 1001, 1001).len(), 1);
+    // Terminal rows newer than every pending row must be filtered before LIMIT.
+    db.execute("UPDATE team_local_join_requests SET state=2,created_ms=2000 WHERE receipt IN(SELECT receipt FROM team_local_join_requests ORDER BY receipt LIMIT 100)",[]).unwrap();
+    assert_eq!(read(100, 0, 0).len(), 200);
+    assert!(read(100, 2000, 2000).is_empty());
+    assert!(page
+        .iter()
+        .all(|r| matches!(r.state, foks_proto::JoinRequestState::Pending)));
+    // Existing rows remain readable at capacity, but another public guest
+    // admission is rejected without creating a receipt or evicting a request.
+    let home = Fixture::start("invitation-quota-home");
+    let applicant = home
+        .client
+        .create_account(home.host(), &TestAccountSpec::new("quotaapplicant", 211))
+        .unwrap();
+    let prepared = home
+        .client
+        .foks()
+        .prepare_remote_user_invitation(
+            home.host(),
+            f.host(),
+            FederationCredential::Software(&applicant.credential),
+            &cert.invite,
+        )
+        .unwrap();
+    let before = read(1000, 0, 0).len();
+    assert!(matches!(
+        home.client
+            .foks()
+            .submit_remote_invitation(f.host(), &prepared),
+        Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+            code: 1060,
+            ..
+        }))
+    ));
+    assert_eq!(read(1000, 0, 0).len(), before);
 }

@@ -297,15 +297,9 @@ pub(crate) fn load_chain(
                 .team(request.team.as_bytes())
                 .map_err(|_| RpcStatus::TransactionRetry)?
                 .ok_or(RpcStatus::TeamNotFound)?;
-            if target.host_id != host.as_bytes()
-                || !parent.members.iter().any(|member| {
-                    member.party_id == request.team.as_bytes()
-                        && member
-                            .scoped_host_id
-                            .as_deref()
-                            .is_none_or(|scope| scope == host.as_bytes())
-                })
-            {
+            // An explicit scoped grant also authorizes pre-admission inspection.
+            // Requiring a roster row here would make team invitations circular.
+            if target.host_id != host.as_bytes() {
                 return Err(permission_denied());
             }
             None

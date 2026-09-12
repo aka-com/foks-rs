@@ -89,6 +89,56 @@ pub fn make_team_certificate(
     verify_team_certificate(&cert, &team_certificate_invite(&cert)?)?;
     Ok(cert)
 }
+/// Boxing establishes payload confidentiality, not the claimed joiner's authority.
+pub fn seal_remote_join_request(
+    sender_seed: &SecretSeed,
+    certificate: &TeamCertificatePayload,
+    payload: &foks_proto::RemoteJoinPayload,
+    randomness: &crate::PukBoxRandomness,
+) -> Result<foks_proto::RemoteJoinRequest> {
+    let sender = derive_shared_public(sender_seed, ENTITY_PTK_VERIFY)?;
+    let clear = zeroize::Zeroizing::new(payload.encoded()?);
+    let encrypted = crate::seal_hybrid_payload(
+        sender_seed,
+        &sender.hepk,
+        &certificate.hepk,
+        foks_proto::TEAM_REMOTE_JOIN_PAYLOAD_TYPE_ID,
+        &clear,
+        randomness,
+        true,
+    )?;
+    Ok(foks_proto::RemoteJoinRequest {
+        hepk_fingerprint: hepk_fingerprint(&certificate.hepk)?,
+        encrypted,
+        visible: payload.visible.clone(),
+    })
+}
+/// Caller must subsequently verify the claimed joiner's chain using the permission.
+pub fn open_remote_join_request(
+    request: &foks_proto::RemoteJoinRequest,
+    receiver: &dyn crate::HybridSecretDecapsulator,
+) -> Result<foks_proto::RemoteJoinPayload> {
+    if hepk_fingerprint(receiver.hepk())? != request.hepk_fingerprint {
+        return Err(Error::WrongReceiver);
+    }
+    let sender = request
+        .encrypted
+        .sender_dh
+        .as_ref()
+        .ok_or(Error::HybridBox)?;
+    let clear = crate::open_hybrid_box(
+        &request.encrypted,
+        receiver,
+        sender,
+        foks_proto::TEAM_REMOTE_JOIN_PAYLOAD_TYPE_ID,
+    )?;
+    let payload = foks_proto::RemoteJoinPayload::decode(&clear)?;
+    if payload.visible != request.visible {
+        return Err(Error::PukBinding);
+    }
+    Ok(payload)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,54 +231,4 @@ mod tests {
             }
         }
     }
-}
-
-/// Boxing establishes payload confidentiality, not the claimed joiner's authority.
-pub fn seal_remote_join_request(
-    sender_seed: &SecretSeed,
-    certificate: &TeamCertificatePayload,
-    payload: &foks_proto::RemoteJoinPayload,
-    randomness: &crate::PukBoxRandomness,
-) -> Result<foks_proto::RemoteJoinRequest> {
-    let sender = derive_shared_public(sender_seed, ENTITY_PTK_VERIFY)?;
-    let clear = zeroize::Zeroizing::new(payload.encoded()?);
-    let encrypted = crate::seal_hybrid_payload(
-        sender_seed,
-        &sender.hepk,
-        &certificate.hepk,
-        foks_proto::TEAM_REMOTE_JOIN_PAYLOAD_TYPE_ID,
-        &clear,
-        randomness,
-        true,
-    )?;
-    Ok(foks_proto::RemoteJoinRequest {
-        hepk_fingerprint: hepk_fingerprint(&certificate.hepk)?,
-        encrypted,
-        visible: payload.visible.clone(),
-    })
-}
-/// Caller must subsequently verify the claimed joiner's chain using the permission.
-pub fn open_remote_join_request(
-    request: &foks_proto::RemoteJoinRequest,
-    receiver: &dyn crate::HybridSecretDecapsulator,
-) -> Result<foks_proto::RemoteJoinPayload> {
-    if hepk_fingerprint(receiver.hepk())? != request.hepk_fingerprint {
-        return Err(Error::WrongReceiver);
-    }
-    let sender = request
-        .encrypted
-        .sender_dh
-        .as_ref()
-        .ok_or(Error::HybridBox)?;
-    let clear = crate::open_hybrid_box(
-        &request.encrypted,
-        receiver,
-        sender,
-        foks_proto::TEAM_REMOTE_JOIN_PAYLOAD_TYPE_ID,
-    )?;
-    let payload = foks_proto::RemoteJoinPayload::decode(&clear)?;
-    if payload.visible != request.visible {
-        return Err(Error::PukBinding);
-    }
-    Ok(payload)
 }

@@ -117,6 +117,10 @@ impl Operations for ServerData {
             RouteId::TeamAdminLoadTeamRawInbox => service
                 .inbox(argument, principal.ok_or_else(permission_denied)?)
                 .map(Some),
+            RouteId::TeamAdminPostTeamRemoval => {
+                service.post_removal(argument, principal.ok_or_else(permission_denied)?)?;
+                Ok(None)
+            }
             RouteId::TeamAdminRejectJoinReq => {
                 service.reject(argument, principal.ok_or_else(permission_denied)?)?;
                 Ok(None)
@@ -432,6 +436,7 @@ pub(super) fn response(
         | RouteId::TeamAdminLoadTeamRemoteJoinReq
         | RouteId::TeamMemberAcceptInviteLocal
         | RouteId::TeamAdminLoadTeamRawInbox
+        | RouteId::TeamAdminPostTeamRemoval
         | RouteId::TeamAdminRejectJoinReq
         | RouteId::TeamGuestLookupTeamCertByHash
         | RouteId::TeamAdminPutTeamCert

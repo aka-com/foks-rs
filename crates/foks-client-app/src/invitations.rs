@@ -6,6 +6,25 @@ use foks_proto::{InboxPagination, RawInboxRow, TeamInvite};
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum InvitationAction {
+    AcceptTeam {
+        invite: String,
+        source_team_alias: String,
+        source_role: TeamMemberRole,
+    },
+    AcceptTeamRemote {
+        remote_profile: String,
+        invite: String,
+        source_team_alias: String,
+        source_role: TeamMemberRole,
+    },
+    Range {
+        team_alias: String,
+        raise: bool,
+    },
+    PendingApprovals {
+        team_alias: String,
+    },
+
     PreviewRemote {
         remote_profile: String,
         invite: String,
@@ -36,6 +55,10 @@ pub enum InvitationAction {
     SyncRemote {
         remote_profile: String,
         team_id: String,
+        #[serde(default)]
+        source_team_alias: Option<String>,
+        #[serde(default)]
+        source_role: Option<TeamMemberRole>,
     },
 
     Preview {
@@ -138,13 +161,35 @@ impl CheckedProfileSession<'_> {
             .map(|a| &a.credential.uid)
             .unwrap_or_else(|| &hardware.as_ref().unwrap().uid);
         if matches!(&action, InvitationAction::List) {
-            return Ok(serde_json::Value::Array(
-                HardStateStore::open(&self.paths.hard_database)?
-                    .invitation_operations(host.host_id().as_bytes(), uid.as_bytes())?
-                    .iter()
-                    .map(operation_report)
-                    .collect(),
-            ));
+            let mut protected = self.mutation_store(master)?;
+            let mut rows = Vec::new();
+            for op in HardStateStore::open(&self.paths.hard_database)?
+                .invitation_operations(host.host_id().as_bytes(), uid.as_bytes())?
+            {
+                let mut row = operation_report(&op);
+                let destination = self
+                    .client
+                    .invitation_destination(&host, &op, &mut protected)?;
+                row["remote"] = destination.is_some().into();
+                if let Some(host) = destination {
+                    row["host_id"] = hex(host.as_bytes()).into();
+                }
+                rows.push(row);
+            }
+            return Ok(serde_json::Value::Array(rows));
+        }
+        if let InvitationAction::PendingApprovals { team_alias } = &action {
+            let team = vault.team(team_alias)?;
+            if team.account_alias != alias {
+                return Err(Error::InvalidAccount("team account binding"));
+            }
+            let db = HardStateStore::open(&self.paths.hard_database)?;
+            let mut rows = Vec::new();
+            for m in &team.invitation_members {
+                let operation = db.team_mutation(&m.membership.operation_id)?;
+                rows.push(serde_json::json!({"request_id":m.request_id,"source_profile":m.source_profile,"remote":m.source_host != host.host_id().as_bytes(),"operation_id":hex(&m.membership.operation_id),"state":if m.membership.active {"complete"} else if operation.is_some() {"action-required"} else {"prepared"},"role":m.membership.destination_role}));
+            }
+            return Ok(serde_json::Value::Array(rows));
         }
         if let InvitationAction::Cancel { operation_id } = &action {
             let id = handle(operation_id)?;
@@ -218,6 +263,46 @@ impl CheckedProfileSession<'_> {
                     .map(operation_report)
                     .collect(),
             )),
+            InvitationAction::AcceptTeam {
+                invite,
+                source_team_alias,
+                source_role,
+            } => {
+                self.cleanup_invitation_receipts(&host, credential.uid(), &mut protected, vault)?;
+                let source = vault.team(&source_team_alias)?;
+                if source.account_alias != alias || !source.active {
+                    return Err(Error::InvalidAccount("source team account binding"));
+                }
+                let p = self.client.prepare_local_team_invitation(
+                    &host,
+                    credential,
+                    &EntityId::from_bytes(source.team_id.clone())?,
+                    source_role.role(),
+                    &TeamInvite::import(&invite)?,
+                )?;
+                prepare(InvitationIntent::LocalAcceptance(p), &mut protected)
+            }
+            InvitationAction::Range { team_alias, raise } => {
+                let source = vault.team(&team_alias)?;
+                if source.account_alias != alias || !source.active {
+                    return Err(Error::InvalidAccount("source team account binding"));
+                }
+                let team = EntityId::from_bytes(source.team_id.clone())?;
+                let r = self.client.narrow_team_index_range_durable(
+                    &host,
+                    credential,
+                    &team,
+                    if raise {
+                        foks_client::TeamIndexRangeDirection::Raise
+                    } else {
+                        foks_client::TeamIndexRangeDirection::Lower
+                    },
+                    &mut protected,
+                )?;
+                Ok(
+                    serde_json::json!({"operation_id":hex(&r.operation_id),"state":"complete","team_sequence":r.authenticated.verified.chain_seqno()}),
+                )
+            }
             InvitationAction::Create { team_alias } => {
                 let t = vault.team(&team_alias)?;
                 if t.account_alias != alias {
@@ -308,16 +393,38 @@ impl CheckedProfileSession<'_> {
                 let mut reports = Vec::new();
                 for row in rows {
                     let id = hex(&random_array::<16>()?);
-                    let expanded = self
-                        .client
-                        .load_local_invitation_joiner(&host, credential, &team, &row);
+                    let expanded = match &row.request {
+                        foks_proto::RawInboxRequest::Local { joiner, .. }
+                            if joiner.entity_type() != foks_proto::ENTITY_USER =>
+                        {
+                            self.client
+                                .load_local_invitation_team(&host, credential, &team, &row)
+                                .map(|t| {
+                                    (
+                                        t.verified().team().clone(),
+                                        String::from_utf8_lossy(t.verified().team_name_utf8())
+                                            .into_owned(),
+                                        "team",
+                                    )
+                                })
+                        }
+                        _ => self
+                            .client
+                            .load_local_invitation_joiner(&host, credential, &team, &row)
+                            .map(|u| {
+                                (
+                                    u.uid().clone(),
+                                    String::from_utf8_lossy(u.username_utf8()).into_owned(),
+                                    "user",
+                                )
+                            }),
+                    };
                     let mut report = serde_json::json!({"request_id":id,"time":row.time,"remote":row.receipt.is_remote()});
                     match expanded {
-                        Ok(user) => {
-                            report["joiner_id"] = hex(user.uid().as_bytes()).into();
-                            report["username"] = String::from_utf8_lossy(user.username_utf8())
-                                .into_owned()
-                                .into();
+                        Ok((party, name, kind)) => {
+                            report["joiner_id"] = hex(party.as_bytes()).into();
+                            report["username"] = name.into();
+                            report["joiner_kind"] = kind.into();
                             report["verified"] = true.into();
                         }
                         Err(_) => {
@@ -341,25 +448,16 @@ impl CheckedProfileSession<'_> {
                 team_alias,
                 request_id,
                 role,
-            } => {
-                let team = vault.team(&team_alias)?;
-                if team.account_alias != alias {
-                    return Err(Error::InvalidAccount("team belongs to another account"));
-                }
-                let team_id = EntityId::from_bytes(team.team_id.clone())?;
-                let row =
-                    self.invitation_inbox_handle(&host, credential, &team_id, &request_id, vault)?;
-                let target = self
-                    .client
-                    .load_local_invitation_joiner(&host, credential, &team_id, &row)?;
-                Ok(serde_json::to_value(self.add_verified_local_team_member(
-                    &team_alias,
-                    &target,
-                    role,
-                    vault,
-                    master,
-                )?)?)
-            }
+            } => self.approve_invitation(
+                None,
+                alias,
+                &team_alias,
+                &request_id,
+                role,
+                credential,
+                vault,
+                master,
+            ),
             InvitationAction::Reject {
                 team_alias,
                 request_id,
@@ -510,5 +608,6 @@ fn inbox_key(host: &foks_client::PinnedHost, uid: &EntityId, team: &EntityId) ->
 #[cfg(test)]
 mod tests;
 
+mod admission;
 mod remote;
 pub(super) use remote::StoredInvitationMembership;

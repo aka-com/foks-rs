@@ -1261,7 +1261,6 @@ pub(crate) fn retryable_chain_load_error(error: &Error) -> bool {
                 *message,
                 "user chain references an unauthenticated future Merkle root"
                     | "chain response is not anchored at the latest Merkle root"
-                    | "membership chain is not bound to the authenticated user root"
             )
         }
         Error::Verify(
@@ -1270,7 +1269,8 @@ pub(crate) fn retryable_chain_load_error(error: &Error) -> bool {
             | foks_verify::Error::MissingDelegatedKey("Merkle signer")
             | foks_verify::Error::DelegatedSignature("Merkle signer"),
         ) => true,
-        Error::Database(foks_client_db::Error::MerkleRollback { .. }) => true,
+        Error::GenericChainRootChanged
+        | Error::Database(foks_client_db::Error::MerkleRollback { .. }) => true,
         _ => false,
     }
 }
@@ -1422,6 +1422,7 @@ mod tests {
 
     #[test]
     fn only_trust_refresh_races_are_retried() {
+        assert!(retryable_chain_load_error(&Error::GenericChainRootChanged));
         assert!(retryable_chain_load_error(&Error::UserBinding(
             "user chain references an unauthenticated future Merkle root"
         )));

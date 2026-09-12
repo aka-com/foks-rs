@@ -1020,6 +1020,18 @@ pub fn encode_add_team_member_request(argument: &AddTeamMemberArgument<'_>) -> R
     )
 }
 
+/// Local invitation admission reuses its explicit scoped view grant.
+pub fn encode_local_invitation_admission_request(
+    argument: &AddTeamMemberArgument<'_>,
+) -> Result<Vec<u8>> {
+    encode_call(
+        TEAM_ADMIN_PROTOCOL_ID,
+        TEAM_EDIT_METHOD_POSITION,
+        &argument.encoded_local_invitation()?,
+        0,
+    )
+}
+
 pub fn encode_team_metadata_edit_request(
     argument: &TeamMetadataEditArgument<'_>,
 ) -> Result<Vec<u8>> {

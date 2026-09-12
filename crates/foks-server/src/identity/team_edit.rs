@@ -43,6 +43,7 @@ pub(crate) struct Command {
     pub removal_proofs: Vec<RemovalProof>,
     pub remote_member_view_tokens: Vec<TeamRemoteMemberViewToken>,
     pub local_view_permissions: Vec<(Vec<u8>, Role)>,
+    pub required_local_view_permissions: Vec<Vec<u8>>,
 }
 
 pub(crate) fn validate(
@@ -267,7 +268,7 @@ pub(crate) fn validate(
         .iter()
         .map(|entity| entity.as_bytes().to_vec())
         .collect::<BTreeSet<_>>();
-    if expected_local != supplied_local {
+    if !supplied_local.is_subset(&expected_local) {
         return Err(Error::Signup("local team permission set mismatch"));
     }
     let remote_member_view_tokens = validate_remote_member_view_tokens(
@@ -293,6 +294,10 @@ pub(crate) fn validate(
         removal_boxes,
         removal_proofs,
         remote_member_view_tokens,
+        required_local_view_permissions: expected_local
+            .difference(&supplied_local)
+            .cloned()
+            .collect(),
         local_view_permissions: supplied_local
             .into_iter()
             .map(|target| (target, Role::member(0)))

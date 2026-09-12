@@ -31,7 +31,8 @@ impl CheckedProfileSession<'_> {
     ) -> Result<serde_json::Value> {
         validate_name(alias)?;
         let selected = match &action {
-            InvitationAction::PreviewRemote { remote_profile, .. }
+            InvitationAction::AcceptTeamRemote { remote_profile, .. }
+            | InvitationAction::PreviewRemote { remote_profile, .. }
             | InvitationAction::AcceptRemote { remote_profile, .. }
             | InvitationAction::AttemptRemote { remote_profile, .. }
             | InvitationAction::StatusRemote { remote_profile, .. }
@@ -102,6 +103,37 @@ impl CheckedProfileSession<'_> {
         let mut protected = self.mutation_store(master)?;
         let attempt = matches!(&action, InvitationAction::AttemptRemote { .. });
         match action {
+            InvitationAction::AcceptTeamRemote {
+                invite,
+                source_team_alias,
+                source_role,
+                ..
+            } => {
+                self.cleanup_invitation_receipts(&home, credential.uid(), &mut protected, vault)?;
+                let source = vault.team(&source_team_alias)?;
+                if source.account_alias != alias || !source.active {
+                    return Err(Error::InvalidAccount("source team account binding"));
+                }
+                let p = self.client.prepare_remote_team_invitation(
+                    &home,
+                    &remote,
+                    credential,
+                    &EntityId::from_bytes(source.team_id.clone())?,
+                    source_role.role(),
+                    &TeamInvite::import(&invite)?,
+                )?;
+                let progress = self.client.prepare_invitation_operation(
+                    &home,
+                    credential,
+                    InvitationIntent::RemoteAcceptance(Box::new(p)),
+                    &mut protected,
+                )?;
+                let mut report = operation_report(&progress.operation);
+                report["remote"] = true.into();
+                report["remote"] = true.into();
+                report["remote_profile"] = other.profile.name.clone().into();
+                Ok(report)
+            }
             InvitationAction::AcceptRemote { invite, .. } => {
                 self.cleanup_invitation_receipts(&home, credential.uid(), &mut protected, vault)?;
                 let p = self.client.prepare_remote_user_invitation(
@@ -117,6 +149,7 @@ impl CheckedProfileSession<'_> {
                     &mut protected,
                 )?;
                 let mut report = operation_report(&progress.operation);
+                report["remote"] = true.into();
                 report["remote_profile"] = other.profile.name.clone().into();
                 Ok(report)
             }
@@ -130,13 +163,36 @@ impl CheckedProfileSession<'_> {
                     attempt,
                     &mut protected,
                 )?;
-                self.finish_invitation_progress(progress, &mut protected, vault)
+                let mut report =
+                    self.finish_invitation_progress(progress, &mut protected, vault)?;
+                report["remote"] = true.into();
+                report["remote_profile"] = other.profile.name.clone().into();
+                Ok(report)
             }
-            InvitationAction::SyncRemote { team_id, .. } => {
+            InvitationAction::SyncRemote {
+                team_id,
+                source_team_alias,
+                source_role,
+                ..
+            } => {
                 let team = entity_id_from_hex(&team_id)?;
-                let loaded = self
-                    .client
-                    .load_invited_remote_team(&home, &remote, credential, &team)?;
+                let loaded = if let Some(alias_of_source) = source_team_alias {
+                    let stored = vault.team(&alias_of_source)?;
+                    if stored.account_alias != alias || !stored.active {
+                        return Err(Error::InvalidAccount("source team account binding"));
+                    }
+                    self.client.load_invited_remote_team_as_team(
+                        &home,
+                        &remote,
+                        credential,
+                        &EntityId::from_bytes(stored.team_id.clone())?,
+                        source_role.unwrap_or(TeamMemberRole::Admin).role(),
+                        &team,
+                    )?
+                } else {
+                    self.client
+                        .load_invited_remote_team(&home, &remote, credential, &team)?
+                };
                 Ok(
                     serde_json::json!({"team_id":team_id,"host_id":hex(remote.host_id().as_bytes()),"membership_verified":true,"key_generations":loaded.ptks.len(),"team_sequence":loaded.verified.chain_seqno()}),
                 )
@@ -161,165 +217,39 @@ impl CheckedProfileSession<'_> {
                 let payload = self
                     .client
                     .open_remote_invitation(&home, credential, &team, &request)?;
-                let expanded = self
-                    .client
-                    .verify_remote_invitation_user(&remote, payload)?;
-                Ok(
-                    serde_json::json!({"request_id":request_id,"joiner_id":hex(expanded.user.verified.uid().as_bytes()),"host_id":hex(remote.host_id().as_bytes()),"username":String::from_utf8_lossy(expanded.user.verified.username_utf8()),"verified":true}),
-                )
+                if payload.joiner.party.entity_type() == foks_proto::ENTITY_USER {
+                    let expanded = self
+                        .client
+                        .verify_remote_invitation_user(&remote, payload)?;
+                    Ok(
+                        serde_json::json!({"request_id":request_id,"joiner_id":hex(expanded.user.verified.uid().as_bytes()),"host_id":hex(remote.host_id().as_bytes()),"username":String::from_utf8_lossy(expanded.user.verified.username_utf8()),"verified":true,"joiner_kind":"user"}),
+                    )
+                } else {
+                    let source_role = payload.source_role;
+                    let expanded = self
+                        .client
+                        .verify_remote_invitation_team(&remote, &payload)?;
+                    Ok(
+                        serde_json::json!({"request_id":request_id,"joiner_id":hex(expanded.verified.team().as_bytes()),"host_id":hex(remote.host_id().as_bytes()),"username":String::from_utf8_lossy(expanded.verified.team_name_utf8()),"verified":true,"joiner_kind":"team","source_role":StoredTeamRole::from_role(source_role)}),
+                    )
+                }
             }
+
             InvitationAction::ApproveRemote {
                 team_alias,
                 request_id,
                 role,
                 ..
-            } => {
-                handle(&request_id)?;
-                if !matches!(role, TeamMemberRole::Member { .. }) {
-                    return Err(Error::InvalidAccount(
-                        "remote members cannot be administrators or owners",
-                    ));
-                }
-                let mut stored = vault.team(&team_alias)?;
-                if stored.account_alias != alias
-                    || !stored.active
-                    || stored.kind != crate::team::StoredTeamKind::Named
-                {
-                    return Err(Error::InvalidAccount(
-                        "invitation requires this account's active named team",
-                    ));
-                }
-                let team = EntityId::from_bytes(stored.team_id.clone())?;
-                if let Some(existing) = stored
-                    .invitation_members
-                    .iter()
-                    .find(|m| m.request_id == request_id)
-                {
-                    if existing.source_profile != other.profile.name
-                        || existing.source_host != remote.host_id().as_bytes()
-                        || existing.membership.destination_role.role()? != role.role()
-                    {
-                        return Err(Error::InvalidAccount("approval binding cannot change"));
-                    }
-                    let plan = crate::team::local_addition_plan(&existing.membership)?;
-                    if HardStateStore::open(&self.paths.hard_database)?
-                        .team_mutation(&plan.operation_id)?
-                        .is_some()
-                    {
-                        let added = self.client.resume_invited_remote_addition(
-                            &home,
-                            credential,
-                            &team,
-                            remote.host_id(),
-                            &plan,
-                            &mut protected,
-                        )?;
-                        let found = stored
-                            .invitation_members
-                            .iter_mut()
-                            .find(|m| m.request_id == request_id)
-                            .unwrap();
-                        found.membership.active = true;
-                        vault.put_team(&stored)?;
-                        return Ok(
-                            serde_json::json!({"operation_id":hex(&added.operation_id),"request_id":request_id,"state":"complete","team_sequence":added.authenticated.verified.chain_seqno()}),
-                        );
-                    }
-                }
-                if stored.local_members.iter().any(|m| !m.active)
-                    || stored
-                        .invitation_members
-                        .iter()
-                        .any(|m| !m.membership.active && m.request_id != request_id)
-                    || vault.team_member_edit(&team_alias)?.is_some()
-                    || vault.team_rekey(&team_alias)?.is_some()
-                {
-                    return Err(Error::InvalidAccount(
-                        "resume the pending team mutation first",
-                    ));
-                }
-                if stored.invitation_members.len() >= 1000 {
-                    return Err(Error::InvalidAccount(
-                        "invitation member receipt capacity reached",
-                    ));
-                }
-                let row =
-                    self.invitation_inbox_handle(&home, credential, &team, &request_id, vault)?;
-                let foks_proto::RawInboxRequest::Remote(request) = &row.request else {
-                    return Err(Error::InvalidAccount("expected a remote request"));
-                };
-                let payload = self
-                    .client
-                    .open_remote_invitation(&home, credential, &team, request)?;
-                let expanded = self
-                    .client
-                    .verify_remote_invitation_user(&remote, payload)?;
-                let user = self
-                    .client
-                    .authenticate_credential_and_pin(&home, credential)?;
-                let loaded = self.client.load_and_pin_team_with_credential(
-                    &home,
-                    credential,
-                    &user.verified,
-                    &user.puks,
-                    &team,
-                )?;
-                let removal = SecretSeed::new(random_array()?);
-                let plan = self.client.invited_remote_user_addition_plan(
-                    credential.uid(),
-                    &team,
-                    &loaded,
-                    &expanded,
-                    role.role(),
-                    &removal,
-                )?;
-                // No journal means no send. Replacing preflight-only material is safe;
-                // a recorded exact edit always takes the recovery branch above.
-                stored
-                    .invitation_members
-                    .retain(|m| m.request_id != request_id);
-                stored.invitation_members.push(StoredInvitationMembership {
-                    request_id: request_id.clone(),
-                    source_profile: other.profile.name.clone(),
-                    source_host: remote.host_id().as_bytes().to_vec(),
-                    membership: StoredLocalMembership {
-                        username: String::from_utf8_lossy(expanded.user.verified.username_utf8())
-                            .into_owned(),
-                        target_id: plan.target_id.as_bytes().to_vec(),
-                        target_verify_key: plan.target_verify_key.as_bytes().to_vec(),
-                        target_generation: plan.target_generation,
-                        target_source_role: StoredTeamRole::from_role(plan.target_source_role),
-                        destination_role: StoredTeamRole::from_role(plan.destination_role),
-                        removal_key_commitment: plan.removal_key_commitment,
-                        removal_key: *removal.as_bytes(),
-                        expected_seqno: plan.expected_seqno,
-                        operation_id: plan.operation_id,
-                        active: false,
-                    },
-                });
-                vault.put_team(&stored)?;
-                let added = self.client.add_invited_remote_user_durable(
-                    &home,
-                    credential,
-                    &team,
-                    &expanded,
-                    &row.receipt,
-                    &plan,
-                    &removal,
-                    &mut protected,
-                )?;
-                stored
-                    .invitation_members
-                    .iter_mut()
-                    .find(|m| m.request_id == request_id)
-                    .unwrap()
-                    .membership
-                    .active = true;
-                vault.put_team(&stored)?;
-                Ok(
-                    serde_json::json!({"operation_id":hex(&added.operation_id),"request_id":request_id,"state":"complete","team_sequence":added.authenticated.verified.chain_seqno()}),
-                )
-            }
+            } => self.approve_invitation(
+                Some(other),
+                alias,
+                &team_alias,
+                &request_id,
+                role,
+                credential,
+                vault,
+                master,
+            ),
             _ => Err(Error::InvalidAccount(
                 "action does not use a remote profile",
             )),

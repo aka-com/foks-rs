@@ -4,6 +4,7 @@ mod bearer;
 mod invitation_operations;
 mod remote_invitations;
 pub use remote_invitations::*;
+mod invitation_teams;
 mod invitations;
 pub use invitation_operations::*;
 pub use invitations::*;
@@ -866,6 +867,7 @@ impl FoksClient {
             &credential.certificate_chain,
             parent,
             child,
+            true,
         )
     }
 
@@ -885,6 +887,7 @@ impl FoksClient {
             &credential.certificate_chain,
             parent,
             child,
+            true,
         )
     }
 
@@ -897,6 +900,7 @@ impl FoksClient {
         certificate_chain: &[Vec<u8>],
         parent: &AuthenticatedTeamOutcome,
         child: &EntityId,
+        require_membership: bool,
     ) -> Result<VerifiedTeamRecipient> {
         if parent.verified.host() != host.host_id()
             || parent.verified.team() == child
@@ -915,7 +919,7 @@ impl FoksClient {
             .iter()
             .filter(|member| member.party == *child && member.scoped_host.is_none())
             .count();
-        if matches != 1 {
+        if require_membership && matches != 1 {
             return Err(Error::TeamBinding(
                 "local child team is not unique in the parent roster",
             ));
@@ -1324,9 +1328,7 @@ fn verify_generic_chain(
         hash: foks_crypto::prefixed_hash_signable(MERKLE_ROOT_TYPE_ID, &root_bytes)?,
     };
     if response_root != owner.tree_root() {
-        return Err(Error::TeamBinding(
-            "membership chain is not bound to its authenticated owner root",
-        ));
+        return Err(Error::GenericChainRootChanged);
     }
     let seed_wire = foks_snowpack::encode(&foks_snowpack::Value::Binary(seed.to_vec()))?;
     let seed_commitment = foks_crypto::prefixed_hash_signable(TREE_LOCATION_TYPE_ID, &seed_wire)?;
@@ -2643,6 +2645,53 @@ impl FoksClient {
         }
     }
     /// Load a destination team through this home account's verified PUK.
+    pub fn load_invited_remote_team_as_team(
+        &self,
+        home: &PinnedHost,
+        destination: &PinnedHost,
+        credential: FederationCredential<'_, '_>,
+        source_team: &EntityId,
+        source_role: Role,
+        target_team: &EntityId,
+    ) -> Result<AuthenticatedTeamOutcome> {
+        if home.host_id() == destination.host_id() {
+            return Err(Error::TeamBinding("remote membership hosts"));
+        }
+        let user = self.authenticate_credential_and_pin(home, credential)?;
+        let loaded = self.load_and_pin_team_with_credential(
+            home,
+            credential,
+            &user.verified,
+            &user.puks,
+            source_team,
+        )?;
+        let history = verified_team_private_history(&loaded)?;
+        let (seed, certs) = credential.transport();
+        let mut error = None;
+        for key in loaded.ptks.iter().rev().filter(|k| k.role == source_role) {
+            let actor = TeamViewActor {
+                party: source_team,
+                host: home.host_id(),
+                source: team_key_for_seed(&history, key)?,
+                history: &history,
+                seed: &key.seed,
+            };
+            match self.load_and_pin_team_for_actor_with_material(
+                destination,
+                credential.uid(),
+                seed,
+                certs,
+                actor,
+                target_team,
+            ) {
+                Ok(team) => return Ok(team),
+                Err(e) => error = Some(e),
+            }
+        }
+        Err(error.unwrap_or(Error::TeamBinding(
+            "joining team source private key unavailable",
+        )))
+    }
     pub fn load_invited_remote_team(
         &self,
         home: &PinnedHost,
@@ -2654,33 +2703,35 @@ impl FoksClient {
             return Err(Error::TeamBinding("remote membership hosts"));
         }
         let user = self.authenticate_credential_and_pin(home, credential)?;
-        let owner = crate::current_owner_puk(&user)?;
-        let source = user_key_history_for_seed(&user.verified, &owner.seed)?;
-        let actor = TeamViewActor {
-            party: credential.uid(),
-            host: home.host_id(),
-            source,
-            history: user.verified.shared_key_history(),
-            seed: &owner.seed,
-        };
         let (seed, certs) = credential.transport();
-        let token = self.activate_team_view_for_actor_with_material(
-            destination,
-            credential.uid(),
-            seed,
-            certs,
-            &actor,
-            team,
-        )?;
-        self.load_and_pin_team_for_actor_with_view_token(
-            destination,
-            credential.uid(),
-            seed,
-            certs,
-            actor,
-            team,
-            &token,
-        )
+        // The destination may still name an older PUK until its CLKR runs.
+        // Historical seeds are opened through the authenticated home seed chain;
+        // each attempt still proves the exact destination roster key and host.
+        let mut last_error = None;
+        for owner in user.puks.iter().rev().filter(|key| key.role == Role::OWNER) {
+            let source = user_key_history_for_seed(&user.verified, &owner.seed)?;
+            let actor = TeamViewActor {
+                party: credential.uid(),
+                host: home.host_id(),
+                source,
+                history: user.verified.shared_key_history(),
+                seed: &owner.seed,
+            };
+            match self.load_and_pin_team_for_actor_with_material(
+                destination,
+                credential.uid(),
+                seed,
+                certs,
+                actor,
+                team,
+            ) {
+                Ok(team) => return Ok(team),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.unwrap_or(Error::KeyBinding(
+            "no authenticated owner PUK can open the invited team",
+        )))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2782,56 +2833,87 @@ impl FoksClient {
     ) -> Result<AuthenticatedTeamOutcome> {
         let (merkle_acceptance, chain_bytes, verified) = self.retry_chain_load(host, |host| {
             let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
-            let prior = self.prior_team_for_reload(host, team)?;
-            let (start, name) = match prior.as_ref() {
-                Some(prior) => (
-                    prior
-                        .chain_seqno()
-                        .checked_add(1)
-                        .ok_or(Error::TeamBinding("team chain sequence overflow"))?,
-                    Some((
-                        prior.team_name(),
+            for incremental in [true, false] {
+                let prior = if incremental {
+                    self.prior_team_for_reload(host, team)?
+                } else {
+                    None
+                };
+                let (start, name) = match prior.as_ref() {
+                    Some(prior) => (
                         prior
-                            .team_name_sequence()
+                            .chain_seqno()
                             .checked_add(1)
-                            .ok_or(Error::TeamBinding("team name sequence overflow"))?,
-                    )),
-                ),
-                None => (1, None),
-            };
-            let chain_bytes = self.call_team_view_for_actor(
-                host,
-                actor.host,
-                &encode_load_team_chain_request_from(
-                    team,
-                    host.host_id(),
-                    view_token,
-                    start,
-                    name,
-                )?,
-                auth_seed,
-                certificate_chain,
-            )?;
-            let authenticated_roots =
-                self.authenticate_team_chain_roots(host, &merkle, &chain_bytes)?;
-            let verified = match prior.as_ref() {
-                Some(prior) => verify_team_chain_increment(
-                    &chain_bytes,
-                    prior,
-                    team,
-                    host.host_id(),
-                    &authenticated_roots,
-                    &merkle,
-                )?,
-                None => verify_team_chain(
-                    &chain_bytes,
-                    team,
-                    host.host_id(),
-                    &authenticated_roots,
-                    &merkle,
-                )?,
-            };
-            Ok((merkle_acceptance, chain_bytes, verified))
+                            .ok_or(Error::TeamBinding("team chain sequence overflow"))?,
+                        Some((
+                            prior.team_name(),
+                            prior
+                                .team_name_sequence()
+                                .checked_add(1)
+                                .ok_or(Error::TeamBinding("team name sequence overflow"))?,
+                        )),
+                    ),
+                    None => (1, None),
+                };
+                let chain_bytes = self.call_team_view_for_actor(
+                    host,
+                    actor.host,
+                    &encode_load_team_chain_request_from(
+                        team,
+                        host.host_id(),
+                        view_token,
+                        start,
+                        name,
+                    )?,
+                    auth_seed,
+                    certificate_chain,
+                )?;
+                let authenticated_roots =
+                    self.authenticate_team_chain_roots(host, &merkle, &chain_bytes)?;
+                let verified = match prior.as_ref() {
+                    Some(prior) => verify_team_chain_increment(
+                        &chain_bytes,
+                        prior,
+                        team,
+                        host.host_id(),
+                        &authenticated_roots,
+                        &merkle,
+                    )?,
+                    None => verify_team_chain(
+                        &chain_bytes,
+                        team,
+                        host.host_id(),
+                        &authenticated_roots,
+                        &merkle,
+                    )?,
+                };
+                // Go sends HEPKs only for the returned links. A cached team head
+                // may be shared by several member actors, so its empty/delta reply
+                // can omit this recipient's parcel sender. Fetch one full proof,
+                // then bind the returned HEPK to the verified roster fingerprint.
+                let chain = TeamChain::decode(&chain_bytes)?;
+                if prior.is_some()
+                    && chain.boxes.iter().any(|parcel| {
+                        matches!(
+                            team_parcel_sender_hepk(
+                                parcel,
+                                actor.source,
+                                actor.history,
+                                host.host_id(),
+                                verified.members(),
+                                &chain.hepks
+                            ),
+                            Err(Error::TeamBinding(
+                                "team PTK parcel sender HEPK is unavailable"
+                            ))
+                        )
+                    })
+                {
+                    continue;
+                }
+                return Ok((merkle_acceptance, chain_bytes, verified));
+            }
+            Err(Error::TeamBinding("team PTK sender could not be resolved"))
         })?;
         let member = verified
             .members()

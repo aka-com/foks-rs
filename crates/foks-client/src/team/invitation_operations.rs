@@ -111,7 +111,10 @@ impl FoksClient {
             InvitationIntent::RemoteAcceptance(p) => {
                 let decoded = p.home_link.link.decode_generic()?;
                 if &p.invite.host == host.host_id()
-                    || &decoded.entity != credential.uid()
+                    || (!matches!(
+                        decoded.entity.entity_type(),
+                        foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+                    ) && &decoded.entity != credential.uid())
                     || &decoded.host != host.host_id()
                 {
                     return Err(Error::OperationBinding("remote invitation source"));
@@ -154,6 +157,23 @@ impl FoksClient {
             operation,
             receipt: None,
             invite: None,
+        })
+    }
+    pub fn invitation_destination(
+        &self,
+        host: &PinnedHost,
+        op: &MutationOperation,
+        protected: &mut impl ProtectedMutationStore,
+    ) -> Result<Option<EntityId>> {
+        if op.state.is_terminal() {
+            return Ok(None);
+        }
+        let intent = InvitationIntent::decode(
+            &MutationCoordinator::new(&host.database_path, protected).load_bound_material(op)?,
+        )?;
+        Ok(match intent {
+            InvitationIntent::RemoteAcceptance(p) => Some(p.invite.host),
+            _ => None,
         })
     }
     pub fn invitation_operation(
