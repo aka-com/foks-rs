@@ -4,12 +4,17 @@ The web half of `foks-desktop`, with its own trust boundary, release train, and
 command surface.
 
 In production, the application selects the Tauri bridge, loads the catalog once,
-validates all responses at runtime, and passes opaque store references back unchanged. Show and Read target each read one item at one exact version,
-hold the returned string only in the open details panel, and drop it on Hide,
-selection change or window blur. Copy value, Copy path and Download stay in Rust. List rows use
+validates all responses at runtime, and passes opaque store references back unchanged. Show loads one item at its exact version and keeps the value only in the open
+details panel until Hide, selection change or window blur. Link destinations
+load automatically at the selected version and Open target navigates in one
+click. Copy value and Download stay in Rust. List rows use
 `apps/desktop/kit/virtual-list.ts`; cards are capped at 200 because the virtual list
 does not model a wrapping grid. Account-store creates use must-not-exist;
 edits, removes and file replacements carry the catalog's exact version.
+List rows show Name and Shared readers; the catalog has no write timestamp, so
+the UI does not invent a Modified value from its version counter. Folder view
+derives a folders-only tree from the filtered catalog, and search temporarily
+returns to the flat list without changing the selected New-item destination.
 Active authenticated groups can create the same four product kinds as account
 stores. Group creates carry explicit read and write roles, with their reader
 preview computed from the selected role and live roster. Text edits, streamed
@@ -283,7 +288,7 @@ kept so deep links defined in the design specification resolve to this location.
 | `show`                                                                      | All items                                   | loads and reveals GitHub version 9 once                                                                       |
 | `resource`                                                                  | All items                                   | selects the masked Anthropic API key                                                                          |
 | `file`                                                                      | All items                                   | selects Household's emergency PDF                                                                             |
-| `link`                                                                      | All items                                   | selects latest-key; its target stays masked until Read target issues an exact-version read                    |
+| `link`                                                                      | All items                                   | selects latest-key and loads its target at the exact catalog version                                          |
 | `group`                                                                     | Household (`team:household`)                | selects the Wi-Fi password                                                                                    |
 | `new`                                                                       | All items                                   | Password sheet in Household with explicit group roles and computed reader preview                             |
 | `new-group`                                                                 | All items                                   | Resource sheet in Engineering with explicit roles and computed reader preview                                 |
@@ -294,6 +299,7 @@ kept so deep links defined in the design specification resolve to this location.
 | `exists`                                                                    | All items                                   | must-not-exist refusal; Open refreshes the invalidated catalog first                                          |
 | `conflict`                                                                  | All items                                   | exact-version refusal with retained draft and Refresh and review                                              |
 | `grid`                                                                      | All items                                   | `view=grid`                                                                                                   |
+| `folders`                                                                   | All items                                   | `view=folders`; store roots and folders are derived from catalog paths                                        |
 | `lease`                                                                     | Work (Acme)                                 | `lease=lapsed` — the whole world, not a place                                                                 |
 | `inactive`                                                                  | Homelab                                     | group reports inactive; Resume creation uses its resumable operation                                          |
 | `alerts`                                                                    | Alerts                                      | `lease=lapsed`, so the pane has its critical entry                                                            |
@@ -311,7 +317,7 @@ kept so deep links defined in the design specification resolve to this location.
 | `join-invite`                                                               | Settings › Groups                           | invite sheet opened on the exact `acct:work` fixture store                                                    |
 | `boot` · `who` · `address` · `no-address` · `checked` · `compare` · `error` | First run, steps 0–2                        | `path=invited` or `path=own` selects the setup route                                                          |
 | `account` · `existing` · `protect` · `phrase`                               | First run, steps 3–4                        | account creation/recovery and the one-time backup sheet                                                       |
-| `waiting` · `added`                               | First run, steps 5–6                        | invited group discovery and completion                                                                     |
+| `waiting` · `added`                                                         | First run, steps 5–6                        | invited group discovery and completion                                                                        |
 | `checklist-invited` · `checklist-own`                                       | Get started inside the ordinary shell       | resumable nonsecret progress summary                                                                          |
 | `first-run&step=<step>&path=<path>`                                         | the resumable first-run location codec      | used after the first in-app transition and across reload                                                      |
 | `servers-list` · `servers-server` · `servers-lapsed` · `servers-rollback`   | Servers & devices                           | list/detail/stopped states from `04-servers.html`                                                             |
@@ -325,7 +331,7 @@ modifiers because those properties represent presentation options or environment
 status rather than distinct navigation destinations. `decodeScene` encapsulates
 these orthogonal state properties alongside the active location.
 Everything is also addressable on its own — `sel=<store>|<path>`, `view=`,
-`kind=`, `sort=`, `lease=` — and `sceneHref` writes back only what differs
+`kind=`, `sort=`, `folder=`, `closed=`, `lease=` — and `sceneHref` writes back only what differs
 from the default, so an ordinary `?state=all` stays `?state=all`.
 
 Search query text is intentionally omitted from the URL address state so that

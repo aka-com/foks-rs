@@ -57,6 +57,7 @@ export function nextSidebarCycleLocation(
 export interface NavRowProps {
   active: boolean;
   glyph?: ReactNode;
+  indented?: boolean;
   name: string;
   caption?: string;
   /** Dimmed: this row is unavailable in the current application state. */
@@ -70,6 +71,7 @@ export interface NavRowProps {
 export function NavRow({
   active,
   glyph,
+  indented = false,
   name,
   caption,
   dimmed = false,
@@ -78,7 +80,12 @@ export function NavRow({
   tail,
   onSelect,
 }: NavRowProps): ReactNode {
-  const className = ['nav', active ? 'on' : '', dimmed ? 'off' : '']
+  const className = [
+    'nav',
+    active ? 'on' : '',
+    dimmed ? 'off' : '',
+    indented ? 'indented' : '',
+  ]
     .filter(Boolean)
     .join(' ');
   return (
@@ -234,6 +241,7 @@ export function Sidebar({
                   active={
                     location.kind === 'team-chat' && location.ref === store.id
                   }
+                  indented
                   name={`${store.name} chat`}
                   tail={
                     chatAvailable(world, store) ? chatTail(store.id) : undefined

@@ -144,3 +144,11 @@ only reconciles a request already submitted; it never sends it again. Keep the o
 operation handle if a reply is lost. Hardware accounts accept `--pin-file` on prepare,
 attempt and status; without an unlocked key, recovery reports that hardware is needed.
 Changing a remote username preserves the local account alias.
+
+`team invite` exposes certificate preview, local and remote requests,
+administrator decisions, recovery and removal handling. `account bot` manages
+durable enrollment, one-time export, resident loading and revocation. `account
+admin` configures an account-bound HTTPS origin and requests a checked handoff
+from a host that implements the Go administration methods; the standalone Rust
+server returns unsupported for that operation. Use each command's `--help` for
+the required profile, account and protected-input arguments.

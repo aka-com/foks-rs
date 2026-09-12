@@ -247,5 +247,27 @@ surface. This slice does not implement federated trust policy, push
 propagation, remote-user membership, join inboxes, or cross-host PTK rotation
 after a remote roster/key change.
 
+The invitation client implements Go-compatible certificate lookup and
+verification, local and remote user/team join requests, durable approval or
+rejection, scoped member-key loading, and committed removal delivery. Submission
+identity and authenticated read-back stay separate so an unknown transport
+outcome is never treated as permission to resend. Pending inbox enumeration can
+remain explicitly incomplete when a Go page is entirely filtered.
+
+Basic realtime chat supports encrypted named-team channels, authenticated
+history and inbox synchronization, bounded polling, exact unread evidence when
+synchronization completes, durable pending-send reconciliation, and
+channel-local quarantine for corrupt content. Ad-hoc-team Basic chat is not yet
+admitted by the Rust server policy; managed extended channels and content
+actions remain outside the implemented protocol surface.
+
+OIDC support covers protected software and YubiKey signup, browser-flow recovery,
+signed provider bindings, reauthentication, and ongoing service-access status.
+An OIDC-enabled Rust host requires linked access for every account; there is no
+workflow to migrate an existing device-only account into that policy. Account
+helpers also cover durable username changes, resident bot-token enrollment and
+revocation, and checked hosted web-administration handoff. The Rust server does
+not issue local web-administration sessions.
+
 See [SECURITY.md](SECURITY.md) for the trust boundaries, invariant ownership,
 secret lifecycle, review order, and explicitly unimplemented surfaces.

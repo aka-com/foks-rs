@@ -65,6 +65,27 @@ test('a no-op action returns the same state object', () => {
   assert.notEqual(transition(state, { type: 'search', query: 'wifi' }), state);
 });
 
+test('folder selection clears an item while fold state remains independent', () => {
+  const state: LocationState = {
+    ...INITIAL_STATE,
+    selection: { store: 'acct:personal', path: '/agents/key' },
+    folder: 'acct:personal|/agents',
+  };
+  const selected = transition(state, {
+    type: 'folder',
+    folder: 'acct:personal|/documents',
+  });
+  assert.equal(selected.selection, null);
+  assert.equal(selected.folder, 'acct:personal|/documents');
+
+  const folded = transition(selected, {
+    type: 'toggle-folder',
+    folder: 'acct:personal|/agents',
+  });
+  assert.equal(folded.folder, selected.folder);
+  assert.deepEqual(folded.closedFolders, ['acct:personal|/agents']);
+});
+
 test('select and search actions preserve the current location', () => {
   const state = at({ kind: 'store', ref: 'acct:personal' });
   const selected = transition(state, {
@@ -447,8 +468,10 @@ test('full scene state round-trips through URL serialization', () => {
       location: { kind: 'store' as const, ref: 'team:eng' },
       selection: { store: 'team:eng', path: '/deploy/production-token' },
       kind: 'Password' as const,
-      sort: 'version' as const,
-      view: 'grid' as const,
+      sort: 'group' as const,
+      view: 'folders' as const,
+      folder: '/deploy',
+      closedFolders: ['team:eng|/deploy/archive'],
       lease: 'lapsed' as const,
     },
     {

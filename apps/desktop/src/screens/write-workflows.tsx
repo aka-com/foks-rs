@@ -67,7 +67,13 @@ interface NewDraft {
 }
 
 export type WriteWorkflow =
-  | { kind: 'new'; itemKind: NewKind; storeId: StoreRef; draft?: NewDraft }
+  | {
+      kind: 'new';
+      itemKind: NewKind;
+      storeId: StoreRef;
+      initialFolder?: string;
+      draft?: NewDraft;
+    }
   | {
       kind: 'exists';
       itemKind: NewKind;
@@ -75,7 +81,7 @@ export type WriteWorkflow =
       path: string;
       draft?: NewDraft;
     }
-  | { kind: 'remove'; item: Item }
+  | { kind: 'delete'; item: Item }
   | { kind: 'conflict'; item: Item; draft: string }
   | { kind: 'agent-lost'; message?: string }
   | null;
@@ -86,6 +92,28 @@ const DRAFT_PATH: Readonly<Record<NewKind, string>> = {
   File: '/documents/emergency.pdf',
   Link: '/latest-key',
 };
+
+function defaultPath(itemKind: NewKind, folder?: string): string {
+  if (!folder || folder === '/') return DRAFT_PATH[itemKind];
+  const name = DRAFT_PATH[itemKind].split('/').at(-1) ?? 'new-item';
+  return `${folder.replace(/\/$/, '')}/${name}`;
+}
+
+function fileDropPath(name: string, folder?: string): string {
+  return folder && folder !== '/'
+    ? `${folder.replace(/\/$/, '')}/${name}`
+    : `/documents/${name}`;
+}
+
+function namedPath(
+  name: string,
+  defaultDirectory: string,
+  folder?: string,
+): string {
+  const directory =
+    folder && folder !== '/' ? folder.replace(/\/$/, '') : defaultDirectory;
+  return `${directory}/${name}`;
+}
 
 export function initialWriteWorkflow(
   search: string,
@@ -362,12 +390,16 @@ function NewSheet({
       ? workflow.storeId
       : (defaultCreateStore(world) ?? workflow.storeId),
   );
+  const [site, setSite] = useState(workflow.draft?.site ?? '');
   const [path, setPath] = useState(
-    workflow.draft?.path ?? DRAFT_PATH[workflow.itemKind],
-  );
-  const [site, setSite] = useState(
-    workflow.draft?.site ??
-      (workflow.itemKind === 'Password' ? 'github.com' : ''),
+    workflow.draft?.path ??
+      (workflow.itemKind === 'Password'
+        ? namedPath(
+            workflow.draft?.site ?? '',
+            '/logins',
+            workflow.initialFolder,
+          )
+        : defaultPath(workflow.itemKind, workflow.initialFolder)),
   );
   const [username, setUsername] = useState(workflow.draft?.username ?? '');
   const [password, setPassword] = useState(workflow.draft?.password ?? '');
@@ -425,7 +457,7 @@ function NewSheet({
         setSourcePath(first);
         setFileError(null);
         const name = first.split(/[\\/]/).at(-1);
-        if (name) setPath(`/documents/${name}`);
+        if (name) setPath(fileDropPath(name, workflow.initialFolder));
         setHovering(false);
       })
       .then(
@@ -442,7 +474,7 @@ function NewSheet({
       hoverOff?.();
       pathsOff?.();
     };
-  }, [bridge, itemKind]);
+  }, [bridge, itemKind, workflow.initialFolder]);
 
   const pathName = path.split('/').at(-1) ?? '';
   const submit = async (): Promise<void> => {
@@ -613,7 +645,7 @@ function NewSheet({
                 site,
                 (next) => {
                   setSite(next);
-                  setPath(`/logins/${next}`);
+                  setPath(namedPath(next, '/logins', workflow.initialFolder));
                 },
                 'e.g. github.com',
               )}
@@ -636,7 +668,11 @@ function NewSheet({
                   setResourceName(next);
                   if (next)
                     setPath(
-                      `/agents/${next.toLowerCase().replace(/[^a-z0-9._-]+/g, '-')}`,
+                      namedPath(
+                        next.toLowerCase().replace(/[^a-z0-9._-]+/g, '-'),
+                        '/agents',
+                        workflow.initialFolder,
+                      ),
                     );
                 },
                 'e.g. ANTHROPIC_API_KEY',
@@ -848,7 +884,7 @@ export function WriteOverlay({
       />
     );
   return (
-    <RemoveSheet
+    <DeleteSheet
       workflow={workflow}
       bridge={bridge}
       setWorkflow={setWorkflow}
@@ -961,23 +997,23 @@ function ConflictSheet({
 }
 
 /**
- * Confirmation dialog for removing an item.
+ * Confirmation dialog for deleting an item.
  */
-function RemoveSheet({
+function DeleteSheet({
   workflow,
   bridge,
   setWorkflow,
   onApplied,
   onMutationError,
 }: {
-  workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'remove' }>;
+  workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'delete' }>;
   bridge: Bridge;
   setWorkflow: (workflow: WriteWorkflow) => void;
   onApplied: (message: string) => Promise<void>;
   onMutationError: MutationFailureHandler;
 }): ReactNode {
   const toasts = useToast();
-  const [removing, setRemoving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   return (
     <SheetDialog
       danger
@@ -987,7 +1023,7 @@ function RemoveSheet({
           <Icon name="trash" />
         </span>
       }
-      title={`Remove ${nameOf(workflow.item.path)}?`}
+      title={`Delete ${nameOf(workflow.item.path)}?`}
       subtitle={workflow.item.path}
       footer={
         <>
@@ -995,10 +1031,10 @@ function RemoveSheet({
           <Button
             variant="primary"
             danger
-            disabled={removing}
+            disabled={deleting}
             onClick={() => {
-              if (removing) return;
-              setRemoving(true);
+              if (deleting) return;
+              setDeleting(true);
               void (async () => {
                 try {
                   await bridge.removeItem({
@@ -1006,7 +1042,7 @@ function RemoveSheet({
                     path: workflow.item.path,
                     version: workflow.item.version,
                   });
-                  await onApplied(`Removed ${nameOf(workflow.item.path)}`);
+                  await onApplied(`Deleted ${nameOf(workflow.item.path)}`);
                   setWorkflow(null);
                 } catch (error) {
                   const typed = normalizeCommandError(error);
@@ -1014,25 +1050,25 @@ function RemoveSheet({
                     setWorkflow(null);
                     await onMutationError(error, { report: false });
                     toasts.show(
-                      'This item was modified by another user or session. Review the updated item before removing.',
+                      'This item was modified by another user or session. Review the updated item before deleting.',
                       { tone: 'warning' },
                     );
                   } else {
                     await onMutationError(error, { item: workflow.item });
                   }
                 } finally {
-                  setRemoving(false);
+                  setDeleting(false);
                 }
               })();
             }}
           >
-            {removing ? 'Removing…' : 'Remove'}
+            {deleting ? 'Deleting…' : 'Delete'}
           </Button>
         </>
       }
     >
       <p>
-        This item will be permanently removed. This action cannot be undone.
+        This item will be permanently deleted. This action cannot be undone.
       </p>
     </SheetDialog>
   );

@@ -19,7 +19,11 @@ removals, PTK rotation/history, removal-key retrieval, scoped remote-team
 membership with PTK view boxes, remote user/team view grants, and personal/team
 KV. KV covers roots, directories, optimistic dirent writes,
 small files, symlinks, chunked files, pagination, cache checks, and expiring
-locks. Public-client tests exercise these paths without server test hooks.
+locks. It also supports durable local and remote invitation requests and
+decisions, invitation certificates and scoped view grants, committed removal
+delivery, atomic username changes, OIDC signup and reauthentication with ongoing
+access enforcement, and Basic encrypted realtime chat for named teams.
+Public-client tests exercise these paths without server test hooks.
 
 Federation is limited to Beacon discovery followed by independently pinned
 remote hosts, expiring bearer grants for public user/team chains, and a durable
@@ -27,10 +31,10 @@ client-coordinated remote-team admission workflow. This server answers the publi
 `Beacon.beaconLookup` for its own HostID with its advertised probe endpoint and
 returns a typed not-found for any other host; the client still treats the hint
 as untrusted until a direct probe authenticates the requested HostID. There is no general
-federated trust administration, remote-host push channel, direct remote-user
-membership, remote authentication to local services, team nesting,
-team-member/guest services, realtime service, or arbitrary cross-host
-transaction.
+federated trust administration, remote-host push channels, direct remote-user
+membership, general team nesting, extended or ad-hoc-team chat, or arbitrary
+cross-host transactions. The invitation implementation provides bounded
+team-member and guest workflows; it is not a general federated workflow engine.
 Passphrase-only device provisioning/recovery also remains unsupported. Ad-hoc
 teams are immutable after creation. This v0.1.9-compatible slice is not a
 replacement for the full Go server. The executable contract is
@@ -383,3 +387,7 @@ tools/foks-client/check.sh
 
 Organization authentication setup, operational policy and acceptance guidance are
 in [OIDC.md](OIDC.md).
+
+The Go-compatible web-administration handoff is a client feature for hosts that
+already expose `User.newWebAdminPanelURL` and `User.checkURL`. This standalone
+server does not issue those sessions and has no local web-administration product.

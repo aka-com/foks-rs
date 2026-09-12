@@ -254,8 +254,9 @@ initial personal KV root. The software path supports an Ed25519 eldest and an
 optional PPE passphrase established atomically at signup. The parallel Yubi
 path builds the v0.1.9 P-256 eldest and encrypted delegated Ed25519 mTLS
 subkey, binds both retired-key slots and their public keys to application
-durable state, and supports the same optional signup passphrase. SSO and
-passphrase-only device recovery setup remain outside this slice.
+durable state, and supports the same optional signup passphrase. OIDC-enabled
+signup adds a provider-validated, device-signed binding to that same atomic
+account mutation. Passphrase-only device recovery remains outside this slice.
 
 The device-mutation convenience path requires the owner device and new
 software-device seeds in one process so both exact signatures can be built.
@@ -283,6 +284,17 @@ alive. It does not durably journal the intended PPE generation and boxes, so a
 process death in the post-commit response window requires verifying the desired
 passphrase before another change; blindly retrying a change can create another
 PPE generation.
+
+OIDC browser flows bind host, provider configuration, issuer, subject, nonce,
+purpose, UID, device, and authenticated tree root before software or YubiKey
+signing. Browser URLs and provider tokens stay in bounded native/server owners;
+public local status exposes no credentials. The Rust server encrypts retained
+refresh state, rechecks access on authenticated requests and queued writes, and
+fences uncertain token refresh rather than replaying a possibly rotating token.
+Reauthentication can refresh an already linked issuer/subject identity. There
+is no transition that links an existing device-only account after OIDC policy is
+enabled, so such a deployment requires a separately designed migration rather
+than inserting linkage rows or bypassing policy checks.
 
 Ad-hoc team creation requires an enrolled software or Yubi owner device and
 the current owner PUK. A software device signs the membership link directly;
@@ -321,14 +333,10 @@ addition and no PTK rotation. The caller-retained removal key is committed in
 that link, dual-boxed to the current admin PTK and target PUK, and excluded
 from SQLite. Reconciliation replays the authenticated team chain and checks
 the exact expected link rather than trusting the latest roster projection.
-FOKS's closed-viewership three-way invitation flow is intentionally absent.
-The product surface therefore exposes direct open-view local additions,
-strict demotions, removals, and authenticated roster listing. Promotion is
-absent because it requires distributing newly visible existing PTKs and is not
-safely represented by the single demotion/removal transaction. Direct edits
-currently require a local-user-only roster; mixed local/federated or nested-team
-rosters fail closed until their complete receiver set can be hydrated through
-the corresponding cross-host or parent-team capabilities.
+The direct product surface also exposes strict demotions, removals, and
+authenticated roster listing. Promotion is absent from that direct edit because
+it requires distributing newly visible existing PTKs and is not safely
+represented by the single demotion/removal transaction.
 
 Named-team removal and downgrade accept exactly one member already present in
 the authenticated roster. A caller-retained removal key may be used by the
@@ -401,12 +409,38 @@ RSVP satisfies the local server tuple. The permission-token hash prefix
 is never placed on the wire and must not be catalogued as an upstream protocol
 type ID.
 
-Not yet implemented: additional founding members; promotion/addition through
-closed-viewership invitation and remote-join protocols; federated trust
-administration or push propagation; direct remote-user membership; automatic
-cross-team PTK rotation after remote roster/key changes; Git;
-chat/realtime; passphrase-based device recovery; SSO; or a full federated FOKS
-server. These omissions should fail by absence, not by permissive fallbacks.
+The separate invitation workflow implements the Go-compatible consent model for
+local and remote user or team applicants. Invitation certificates, requests,
+administrator decisions, scoped view grants, admission mutations, and removal
+proofs are independently authenticated. Durable application records distinguish
+submission from outcome; pending-inbox absence is not a rejection receipt, and
+an unknown delivery outcome is never automatically replayed. Remote identities
+and key material remain bound to their host and source role throughout approval
+and recovery.
+
+Basic chat is restricted to named teams. Message keys and channel context are
+bound before encryption, history verifies sequence/ID anchors, pending sends use
+the protected mutation ledger, and corrupt channel content quarantines only that
+channel while shared identity or inbox failures stop the shared owner. The Go
+inbox API can return an all-filtered page without a progress cursor; after the
+bounded larger-page retry, the client retains an incomplete cursor rather than
+claiming exact unread state. Ad-hoc-team chat and extended chat actions are not
+implemented.
+
+Username changes retain signed name history and bind durable attempts to an
+immutable UID and request. Resident bot credentials are imported into bounded
+session owners, exported at most once during enrollment, and never written to
+public SQLite. Hosted web-administration bearer URLs stay inside the native
+handoff and are checked against an account-bound HTTPS origin. The local Rust
+server has no corresponding web-administration session issuer.
+
+Not yet implemented: additional founding members; direct role promotion;
+federated trust administration or push propagation; direct remote-user
+membership; automatic cross-team PTK rotation after remote roster/key changes;
+Git; ad-hoc-team or extended chat; passphrase-based device recovery; migration
+of existing device-only accounts into OIDC policy; local web administration; or
+a full federated FOKS server. These omissions should fail by absence, not by
+permissive fallbacks.
 
 ## Testing strategy
 

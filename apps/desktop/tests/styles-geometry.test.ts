@@ -147,7 +147,18 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
     shell,
     /\.meta code\{[^}]*overflow-wrap:anywhere[^}]*word-break:normal/,
   );
-  assert.match(shell, /\.tile \.qa\{[^}]*right:8px;top:8px;/);
+  assert.match(shell, /\.tile \.qa\{[^}]*right:6px;bottom:6px;/);
+  assert.match(
+    shell,
+    /\.folder-split\{[^}]*grid-template-columns:236px minmax\(0,1fr\)/,
+  );
+  assert.match(
+    shell,
+    /\.tpane\{[^}]*background:var\(--main-surface\)[^}]*padding:4px 6px 8px/,
+  );
+  assert.match(shell, /\.tpane \.fn\{[^}]*font-weight:500/);
+  assert.doesNotMatch(shell, /\.tpane \.fn\.on\{[^}]*font-weight/);
+  assert.match(shell, /\.twist\{[^}]*left:calc\(6px \+ var\(--d,0\) \* 18px\)/);
   assert.match(shell, /\.radio\{[^}]*text-align:left[^}]*width:100%/);
   // Layout server settings rows with right-aligned action banners.
   assert.match(shell, /\.settings-inset \.fr \.v\.srv\{flex-direction:row/);

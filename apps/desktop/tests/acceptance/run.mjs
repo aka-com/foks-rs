@@ -45,6 +45,7 @@ const STATES = [
   'exists',
   'conflict',
   'grid',
+  'folders',
   'lease',
   'inactive',
   'agent-lost',
@@ -198,13 +199,9 @@ async function visit(context, url, shot) {
     new URL(url).searchParams.get('state') === 'link'
   ) {
     await page
-      .getByRole('button', { name: 'Reveal target', exact: true })
+      .getByRole('button', { name: 'Open target', exact: true })
       .waitFor({ timeout: 5000 })
-      .catch(() =>
-        problems.push(
-          'the Link target was not kept masked behind an explicit read',
-        ),
-      );
+      .catch(() => problems.push('the Link did not offer Open target'));
   }
 
   const width = await page.evaluate(
@@ -315,7 +312,7 @@ async function personaWalks(context, origin) {
       .locator('.details .party')
       .filter({ hasText: 'deploy-bot' });
     check(
-      (await deployBot.textContent())?.includes('no read access'),
+      (await deployBot.textContent())?.includes('No read access'),
       'Sharing did not show that deploy-bot cannot read production-token',
     );
     await page
@@ -326,7 +323,7 @@ async function personaWalks(context, origin) {
       .locator('.details .party')
       .filter({ hasText: 'deploy-bot' });
     check(
-      !(await stagingBot.textContent())?.includes('no read access'),
+      !(await stagingBot.textContent())?.includes('No read access'),
       'Sharing did not show that deploy-bot can read staging-token',
     );
   } catch (error) {
@@ -489,7 +486,13 @@ async function groupItemWalk(context, origin) {
     await created.waitFor();
     const people = Number(count?.[1]);
     if (
-      !(await created.locator('.chip').textContent())?.includes(String(people))
+      !(await created.locator('.shared').getAttribute('title'))?.includes(
+        'Readable by',
+      ) ||
+      (people > 2 &&
+        !(await created.locator('.shared .more').textContent())?.includes(
+          String(people - 2),
+        ))
     ) {
       failures.push(
         'created group item did not retain its computed read-role count',
@@ -508,16 +511,16 @@ async function groupItemWalk(context, origin) {
     await toast(page, 'Changes saved');
     // Verify the updated version number is rendered.
     await page.locator('.details', { hasText: 'Version2' }).waitFor();
-    // The confirmation sheet adds a second "Remove", so each click is scoped.
+    // The confirmation sheet adds a second "Delete", so each click is scoped.
     await page
       .locator('.details')
-      .getByRole('button', { name: 'Remove', exact: true })
+      .getByRole('button', { name: 'Delete', exact: true })
       .click();
     await page
       .locator('.sheet')
-      .getByRole('button', { name: 'Remove', exact: true })
+      .getByRole('button', { name: 'Delete', exact: true })
       .click();
-    await toast(page, 'Removed phase7_browser_key');
+    await toast(page, 'Deleted phase7_browser_key');
     await created.waitFor({ state: 'detached' });
 
     await page.goto(`${origin}/?state=group-new-link`, { waitUntil: 'load' });
@@ -543,6 +546,78 @@ async function groupItemWalk(context, origin) {
   } catch (error) {
     failures.push(
       `group item walk: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  } finally {
+    await page.close();
+  }
+  return failures;
+}
+
+async function folderWalk(context, origin) {
+  const page = await context.newPage();
+  const failures = [];
+  page.on('pageerror', (error) => failures.push(`pageerror: ${error.message}`));
+  page.on('console', (message) => {
+    if (message.type() === 'error') failures.push(`console: ${message.text()}`);
+  });
+  try {
+    await page.goto(`${origin}/?state=folders`, { waitUntil: 'load' });
+    const personal = page
+      .locator('.tpane .fn')
+      .filter({ hasText: /^Personal$/ });
+    await personal.locator('.fselect').click();
+    await page
+      .locator('.folder-body .row')
+      .filter({ hasText: 'agents' })
+      .click();
+    await page.locator('.crumbs .cur', { hasText: 'agents' }).waitFor();
+    await page
+      .locator('.folder-body .row')
+      .filter({ hasText: 'anthropic-api-key' })
+      .waitFor();
+
+    await page
+      .locator('.toolbar')
+      .getByRole('button', { name: 'New', exact: true })
+      .click();
+    await page.getByRole('menuitem', { name: 'Note' }).click();
+    await page.getByRole('textbox', { name: 'Name' }).fill('FOLDER_TEST');
+    await page.getByText('Advanced', { exact: true }).click();
+    const path = await page.getByRole('textbox', { name: 'Path' }).inputValue();
+    if (path !== '/agents/folder_test')
+      failures.push(`new item path ignored the selected folder: ${path}`);
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+
+    await page.locator('.search input').fill('staging-token');
+    if (await page.locator('.tpane').count())
+      failures.push('folder tree remained visible during search');
+    const result = page
+      .locator('.body .row')
+      .filter({ hasText: 'staging-token' });
+    await result.waitFor();
+    const subtitle = (await result.locator('small').textContent()) ?? '';
+    if (!subtitle.includes('Engineering · /deploy/staging-token'))
+      failures.push(
+        `search result did not show its full location: ${subtitle}`,
+      );
+
+    await page
+      .locator('.toolbar')
+      .getByRole('button', { name: 'New', exact: true })
+      .click();
+    await page.getByRole('menuitem', { name: 'Note' }).click();
+    await page
+      .getByRole('textbox', { name: 'Name' })
+      .fill('SEARCH_FOLDER_TEST');
+    await page.getByText('Advanced', { exact: true }).click();
+    const retainedPath = await page
+      .getByRole('textbox', { name: 'Path' })
+      .inputValue();
+    if (retainedPath !== '/agents/search_folder_test')
+      failures.push(`search changed the selected save folder: ${retainedPath}`);
+  } catch (error) {
+    failures.push(
+      `folder walk: ${error instanceof Error ? error.message : String(error)}`,
     );
   } finally {
     await page.close();
@@ -791,6 +866,15 @@ async function main() {
       for (const problem of groupItemProblems) console.error(`  ${problem}`);
     } else {
       console.log('ok   Phase 7 group create / exact edit / remove walk');
+    }
+
+    const folderProblems = await folderWalk(context, site.origin);
+    if (folderProblems.length) {
+      failed += 1;
+      console.error('FAIL folder browsing / create target walk');
+      for (const problem of folderProblems) console.error(`  ${problem}`);
+    } else {
+      console.log('ok   folder browsing / create target walk');
     }
 
     const firstRunProblems = await firstRunWalk(context, site.origin);

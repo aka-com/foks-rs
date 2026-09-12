@@ -91,6 +91,34 @@ export const FOKS_ICONS = {
   bell: [['path', { d: 'M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4' }]],
   plus: [['path', { d: 'M12 5v14M5 12h14' }]],
   arrow: [['path', { d: 'M5 12h14M13 6l6 6-6 6' }]],
+  arrowUpRight: [['path', { d: 'M6 18L18 6M6 6h12v12' }]],
+  folder: [
+    [
+      'path',
+      {
+        d: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
+      },
+    ],
+  ],
+  sortName: [
+    ['path', { d: 'M4 6h9M4 12h7M4 18h5' }],
+    ['path', { d: 'M17 6v12M14 15l3 3 3-3' }],
+  ],
+  sortKind: [
+    ['circle', { cx: 7.5, cy: 7.5, r: 3.5 }],
+    ['rect', { x: 13, y: 4, width: 7, height: 7, rx: 1.5 }],
+    ['path', { d: 'M7.5 13.5l3.5 6.5h-7z' }],
+    ['path', { d: 'M13 20l3.5-6.5 3.5 6.5z' }],
+  ],
+  sortGroup: [
+    ['path', { d: 'M12 4l8 4-8 4-8-4z' }],
+    ['path', { d: 'M4 12l8 4 8-4' }],
+    ['path', { d: 'M4 16l8 4 8-4' }],
+  ],
+  sortTime: [
+    ['circle', { cx: 12, cy: 12, r: 8.5 }],
+    ['path', { d: 'M12 7.5V12l3 2' }],
+  ],
   x: [['path', { d: 'M6 6l12 12M18 6L6 18' }]],
   gear: [
     [

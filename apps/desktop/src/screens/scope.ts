@@ -48,9 +48,75 @@ const SORTS: Readonly<
     (storeOf(world, a.store)?.name ?? '').localeCompare(
       storeOf(world, b.store)?.name ?? '',
     ) || nameOf(a.path).localeCompare(nameOf(b.path)),
-  version: () => (a, b) =>
-    b.version - a.version || nameOf(a.path).localeCompare(nameOf(b.path)),
 };
+
+export interface FolderNode {
+  name: string;
+  path: string;
+  folders: FolderNode[];
+  items: Item[];
+  count: number;
+}
+
+interface MutableFolderNode extends Omit<FolderNode, 'folders'> {
+  children: Map<string, MutableFolderNode>;
+}
+
+/** Build a folders-only tree from item paths. Folder nodes are derived catalog views. */
+export function folderTree(items: readonly Item[]): FolderNode {
+  const root: MutableFolderNode = {
+    name: '',
+    path: '/',
+    children: new Map(),
+    items: [],
+    count: 0,
+  };
+  for (const item of items) {
+    const parts = item.path.split('/').filter(Boolean);
+    let node = root;
+    for (const part of parts.slice(0, -1)) {
+      let child = node.children.get(part);
+      if (!child) {
+        child = {
+          name: part,
+          path: node.path === '/' ? `/${part}` : `${node.path}/${part}`,
+          children: new Map(),
+          items: [],
+          count: 0,
+        };
+        node.children.set(part, child);
+      }
+      node = child;
+    }
+    node.items.push(item);
+  }
+  const finish = (node: MutableFolderNode): FolderNode => {
+    const folders = [...node.children.values()]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(finish);
+    return {
+      name: node.name,
+      path: node.path,
+      folders,
+      items: node.items,
+      count:
+        node.items.length +
+        folders.reduce((sum, child) => sum + child.count, 0),
+    };
+  };
+  return finish(root);
+}
+
+/** Find a derived folder by its absolute path. */
+export function folderAt(root: FolderNode, path: string): FolderNode | null {
+  if (!path || path === '/') return root;
+  let node: FolderNode | undefined = root;
+  for (const part of path.split('/').filter(Boolean)) {
+    node = node.folders.find((folder) => folder.name === part);
+    if (!node) return null;
+  }
+  return node;
+}
 
 /** Checks whether the given location displays catalog items. */
 export function listsItems(location: Location): boolean {

@@ -110,7 +110,10 @@ test('bridge verifies Tauri runtime presence and checks VITE_FOKS_MOCK flag', as
   const bridge = await readSource('../src/bridge.ts', import.meta.url);
   assert.match(bridge, /'__TAURI_INTERNALS__' in window/);
   assert.match(bridge, /import\.meta\.env\?\.VITE_FOKS_MOCK === '1'/);
-  assert.match(bridge, /The only seam between the FOKS webview and the local agent/);
+  assert.match(
+    bridge,
+    /The only seam between the FOKS webview and the local agent/,
+  );
 });
 
 test('icons are structured data, not markup strings', async () => {
@@ -119,10 +122,10 @@ test('icons are structured data, not markup strings', async () => {
     await readSource('../src/icons.ts', import.meta.url),
   );
   assert.doesNotMatch(icons, /<svg|<path|<circle|<rect/);
-  const names = icons.match(/^ {2}[a-z]+: \[$/gm) ?? [];
+  const names = icons.match(/^ {2}[A-Za-z][A-Za-z0-9]*: \[$/gm) ?? [];
   assert.equal(
     names.length,
-    25,
-    'all 24 shared shell icons and first-run’s local door icon are ported',
+    30,
+    'all shell icons, including sort marks and first-run’s local door icon, are ported',
   );
 });

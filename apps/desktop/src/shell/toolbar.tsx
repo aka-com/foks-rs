@@ -14,13 +14,19 @@ import {
   SegmentedControl,
 } from '../components';
 import { KINDS, KIND_LIST, kindLabel } from '../model';
+import type { FoksIconName } from '../icons';
 import type { KindFilter, SortKey, ViewMode } from '../location';
 
 const SORT_LABELS: Readonly<Record<SortKey, string>> = {
-  name: 'Sort by name',
-  kind: 'Sort by kind',
+  name: 'By name',
+  kind: 'By kind',
   group: 'Grouped',
-  version: 'Sort by version',
+};
+
+const SORT_ICONS: Readonly<Record<SortKey, FoksIconName>> = {
+  name: 'sortName',
+  kind: 'sortKind',
+  group: 'sortGroup',
 };
 
 export interface ToolbarProps {
@@ -103,9 +109,12 @@ export function Toolbar({
       <span className="spacer" />
       {/* Sort selection menu trigger. */}
       <MenuButton
-        label={SORT_LABELS[sort]}
-        menuLabel={`Sort by: ${SORT_LABELS[sort]}`}
+        label={<Icon name={SORT_ICONS[sort]} />}
+        menuLabel="Item order"
         align="end"
+        className="sortwrap"
+        title={SORT_LABELS[sort]}
+        aria-label={SORT_LABELS[sort]}
       >
         {(close) => (
           <>
@@ -121,7 +130,7 @@ export function Toolbar({
                   close();
                 }}
               >
-                {sort === key ? <Icon name="check" /> : <span className="ic" />}
+                <Icon name={SORT_ICONS[key]} className="mark" />
                 {SORT_LABELS[key]}
               </button>
             ))}
@@ -136,6 +145,7 @@ export function Toolbar({
         items={[
           { id: 'list', icon: 'list', title: 'List' },
           { id: 'grid', icon: 'grid', title: 'Cards' },
+          { id: 'folders', icon: 'folder', title: 'Folders' },
         ]}
       />
       <Button

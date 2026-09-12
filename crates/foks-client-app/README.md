@@ -46,9 +46,17 @@ The implemented application slice covers:
 - backup enrollment and owner recovery with pre-submit durable secrets;
 - named/ad-hoc team creation, resume, PTK-protected local records, team sync,
   team-KV root creation, and party-ID-selected local-user demotion/removal over
-  fully authenticated local and federated recipient projections; and
+  fully authenticated local and federated recipient projections;
 - two-profile remote-team admission, protected federation bindings, durable
-  crash reconciliation, and daily remote-view renewal.
+  crash reconciliation, and daily remote-view renewal;
+- Basic named-team chat, inbox polling, protected pending-send recovery and
+  channel-local integrity isolation;
+- Go-compatible local/remote invitation requests, administrator decisions,
+  admission/removal recovery and scoped member-key loading;
+- protected OIDC signup and reauthentication for software and YubiKey accounts;
+  and
+- durable username changes, resident bot-token lifecycle and checked hosted
+  web-administration handoff.
 
 Federation takes both profile operation locks in canonical path order and
 publishes both rollback checkpoints even after an error. The scheduled job row

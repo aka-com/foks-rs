@@ -1,7 +1,9 @@
 # Generated protocol metadata and upstream drift design
 
-Status: design only. This does not change the pinned v0.1.9 contract or add Go
-to any Rust build, test, or runtime dependency.
+Status: implemented design record. The checked metadata, policy merge, generated
+Rust route/constants, offline verification and scheduled upstream-drift audit are
+active. This machinery does not change the pinned v0.1.9 contract or add Go to
+any Rust build, test, or runtime dependency.
 
 ## Outcome
 

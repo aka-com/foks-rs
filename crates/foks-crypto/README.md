@@ -12,8 +12,12 @@ v0.1.9 client:
 - XSalsa20-Poly1305 PUK/PTK unboxing with receiver, host, generation, role, and
   public-key binding checks;
 - exact account, device, PUK, and ad-hoc-team mutation construction;
-- v0.1.9 Argon2id stretching, PPE enrollment/reboxing, and challenge login; and
-- authenticated KV name, directory-entry, and content encryption.
+- v0.1.9 Argon2id stretching, PPE enrollment/reboxing, and challenge login;
+- authenticated KV name, directory-entry, and content encryption;
+- context-bound Basic and extension chat encryption fixtures;
+- invitation certificate/request signing and verification;
+- OIDC binding signatures and server token-envelope helpers; and
+- Go-compatible bot-token key derivation and authentication.
 
 Higher-level host-chain policy and SQLite pinning live in `foks-verify` and
 `foks-client-db` respectively.

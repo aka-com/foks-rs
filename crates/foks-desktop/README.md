@@ -30,7 +30,7 @@ foks-desktop-backend --agent-socket SOCKET team-resume work engineering
 
 For a private local testkit state, bootstrap explicitly and bind the profile
 to the testkit CA. Production defaults remain the native credential backend
-and Web PKI. Protocol v2 accepts one explicit trust-root path, which is enough
+and Web PKI. The current local protocol accepts one explicit trust-root path, which is enough
 for the testkit's single CA; the backend requires that path to resolve to one
 nonempty regular UTF-8-named file of at most 1 MiB before sending it:
 
@@ -120,7 +120,7 @@ generic container or a device-local content source. See
 [`apps/desktop/README.md`](../../apps/desktop/README.md) for the current frontend
 architecture.
 
-The target local boundary is protocol v2: the desktop launches a detached agent that
+The target local boundary uses the current agent protocol: the desktop launches a detached agent that
 survives window closure; the agent can start in a restricted bootstrap mode, which the
 desktop drives behind a full-window blocking state, and then becomes ready without
 exposing credential storage to the GUI. Up to four catalog reads run concurrently;
@@ -128,22 +128,22 @@ mutations are single-flight. Account and team stores both support paged metadata
 large files use version-bound chunks, item read/write roles are visible, and every edit is
 compare-and-swap guarded.
 
-The Items view implements this contract. Values remain masked until Reveal, large
-values are fetched in exact-version chunks, and team stores expose no mutation
-controls. New account-store files, folders, and symlinks default both native
-roles to Owner. File and symlink replacement preserves the roles displayed by
-the catalog, while replacement and removal send the displayed version as a
-mandatory compare-and-swap precondition. Values above the safe inline frame
-bound use the same-socket upload automatically without a plaintext staging
-file; ambiguous post-commit failures trigger a catalog refresh rather than an
-automatic retry.
+The Items view implements this contract. Values remain masked until Reveal, and
+large values are fetched in exact-version chunks. Account and active named-team
+stores expose role-aware mutations; ad-hoc or unavailable team stores remain
+read-only. New files, folders, and symlinks use explicit read/write roles. File
+and symlink replacement preserves the roles displayed by the catalog, while
+replacement and removal send the displayed version as a mandatory
+compare-and-swap precondition. Values above the safe inline frame bound use the
+same-socket upload automatically without a plaintext staging file; ambiguous
+post-commit failures trigger a catalog refresh rather than an automatic retry.
 
 Parties can create native named or ad-hoc teams and resume an interrupted
 creation from its local team alias. Named teams define a display name, while ad-hoc teams do not. Team renaming and
 closure are not currently supported by the team protocol.
 
 Settings exposes the existing FOKS owner-device and recovery workflows through
-local protocol v2: list and provision software owner devices, resume an
+the current local protocol: list and provision software owner devices, resume an
 interrupted provision, prepare and commit an owner backup, and recover or resume recovery
 to a new owner device. Owner backup is a two-step prepare/commit flow; its
 generated phrase is returned once for offline storage and is not persisted
@@ -175,6 +175,11 @@ typed agent protocol.
 This crate isolates desktop presentation from core protocol and storage crates.
 All onboarding and passphrase operations communicate exclusively through the
 typed local agent IPC socket.
+
+Newer Tauri-only surfaces for chat and notifications, invitations, OIDC,
+account rename, bot credentials and hosted administration live under
+`apps/desktop/src-tauri` and `apps/desktop/src`. They use the same agent protocol
+but do not expand this retained scripted backend into a second product frontend.
 
 macOS and Linux use private Unix sockets. The shipping Tauri binary owns the
 platform webview integration and managed-agent placement. Packaging, signing,

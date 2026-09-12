@@ -9,6 +9,7 @@ import {
   Avatar,
   Button,
   Chip,
+  Field,
   Icon,
   Inset,
   InsetRow,
@@ -21,6 +22,8 @@ import {
   catalog,
   fmtSize,
   formatRole,
+  isLogin,
+  kindLabel,
   kindOf,
   nameOf,
   parseRole,
@@ -40,10 +43,13 @@ import { editableValue } from './edit-value';
 
 const FIELD_LABELS: Readonly<Record<string, string>> = {
   user: 'User name',
+  username: 'User name',
   password: 'Password',
   url: 'Website',
   ssid: 'Network',
 };
+
+const MASK = '••••••••••••';
 
 /** Coalesces concurrent in-flight read requests for the same item. */
 const readFlights = new WeakMap<
@@ -139,12 +145,14 @@ function passwordFields(
 function PartyRow({
   party,
   canRead,
-  serverName,
 }: {
   party: Party;
   canRead: boolean;
-  serverName: string;
 }): ReactNode {
+  const details = [
+    party.party_kind !== 'user' ? 'Member group' : '',
+    canRead ? '' : 'No read access',
+  ].filter(Boolean);
   return (
     <div className="party">
       <Avatar party={party} className="pav" />
@@ -156,12 +164,7 @@ function PartyRow({
             <Chip tone="you">you</Chip>
           </>
         ) : null}
-        <small>
-          {party.note ??
-            (party.party_kind !== 'user' ? 'Member group' : serverName)}
-          {' · '}Access level {roleText(party.destination_role)}
-          {canRead ? '' : ' · no read access'}
-        </small>
+        {details.length ? <small>{details.join(' · ')}</small> : null}
       </span>
       <Chip>{roleText(party.destination_role)}</Chip>
     </div>
@@ -177,7 +180,7 @@ export interface DetailsPanelProps {
   onRevealHandled?: () => void;
   onSelect: (selection: Selection) => void;
   onClose: () => void;
-  onRemove: (item: Item) => void;
+  onDelete: (item: Item) => void;
   onConflict: (item: Item, draft: string) => void;
   onApplied: (message: string) => Promise<void>;
   onCommandError: (error: unknown, item?: Item) => void;
@@ -200,7 +203,7 @@ export function DetailsPanel({
   onRevealHandled,
   onSelect,
   onClose,
-  onRemove,
+  onDelete,
   onConflict,
   onApplied,
   onCommandError,
@@ -226,6 +229,7 @@ export function DetailsPanel({
   const toasts = useToast();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
+  const [editPasswordShown, setEditPasswordShown] = useState(false);
   const [saving, setSaving] = useState(false);
   const [replacementPath, setReplacementPath] = useState<string | null>(null);
   const [dropHover, setDropHover] = useState(false);
@@ -254,10 +258,13 @@ export function DetailsPanel({
     try {
       const response = await readOnce(bridge, request);
       assertExactRead(request, response);
-      if (epoch !== concealEpoch.current) return;
+      if (epoch !== concealEpoch.current || keyRef.current !== requestKey)
+        return;
       setRead({ key: requestKey, state: 'shown', value: response.value });
+      return response.value;
     } catch (error) {
-      if (epoch !== concealEpoch.current) return;
+      if (epoch !== concealEpoch.current || keyRef.current !== requestKey)
+        return;
       const typed = normalizeCommandError(error);
       if (typed.code === 'agent-lost') {
         onCommandError(error, item);
@@ -281,9 +288,13 @@ export function DetailsPanel({
     setRead(null);
     setEditing(false);
     setEditValue('');
+    setEditPasswordShown(false);
     setReplacementPath(null);
     setEditError(null);
     setBinaryFile(false);
+    return () => {
+      concealEpoch.current += 1;
+    };
   }, [key]);
 
   // Reveal content only when explicitly requested.
@@ -298,6 +309,7 @@ export function DetailsPanel({
   // Conceal sensitive values when the window loses focus.
   useEffect(() => {
     const conceal = (): void => {
+      if (item && kindOf(item) === 'Link') return;
       concealEpoch.current += 1;
       setRead(null);
     };
@@ -311,8 +323,14 @@ export function DetailsPanel({
     setRead(null);
     setEditValue('');
     setEditing(false);
+    setEditPasswordShown(false);
     setReplacementPath(null);
   }, [concealSignal]);
+
+  // Link destinations are navigation metadata; load the exact selected version.
+  useEffect(() => {
+    if (item && kindOf(item) === 'Link') void show();
+  }, [item, show]);
 
   useEffect(() => {
     if (!item || !resumeDraft) return;
@@ -445,6 +463,7 @@ export function DetailsPanel({
       assertExactRead(request, response);
       if (!current()) return;
       setEditValue(editableValue(item, response.value));
+      setEditPasswordShown(false);
       setEditing(true);
       setRead(null);
     } catch (error) {
@@ -492,6 +511,18 @@ export function DetailsPanel({
     }
   };
 
+  const editFields = editing && isLogin(item) ? parseFields(editValue) : [];
+  const updateEditField = (index: number, value: string): void => {
+    setEditValue(
+      editFields
+        .map(([field, current], candidate) => {
+          const next = candidate === index ? value : current;
+          return field ? `${field}: ${next}` : next;
+        })
+        .join('\n'),
+    );
+  };
+
   const preview =
     editing && fileMode ? (
       <Inset variant="preview" className={dropHover ? 'drop-hover' : undefined}>
@@ -504,6 +535,33 @@ export function DetailsPanel({
                 : 'Drop a file here, or choose a file when saving'}
           </span>
         </InsetRow>
+      </Inset>
+    ) : editing && isLogin(item) ? (
+      <Inset className="edit">
+        {editFields.map(([field, value], index) => {
+          const secret = field?.toLowerCase() === 'password';
+          return (
+            <Field
+              key={`${field ?? 'value'}-${index}`}
+              label={FIELD_LABELS[field ?? ''] ?? field ?? 'Value'}
+              value={value}
+              type={secret && !editPasswordShown ? 'password' : 'text'}
+              mono={secret}
+              onChange={(next) => updateEditField(index, next)}
+              action={
+                secret ? (
+                  <button
+                    type="button"
+                    onClick={() => setEditPasswordShown((shown) => !shown)}
+                  >
+                    <Icon name={editPasswordShown ? 'eyeoff' : 'eye'} />
+                    {editPasswordShown ? 'Hide' : 'Show'}
+                  </button>
+                ) : undefined
+              }
+            />
+          );
+        })}
       </Inset>
     ) : editing ? (
       <Inset variant="preview">
@@ -521,7 +579,7 @@ export function DetailsPanel({
               <InsetRow
                 key={index}
                 label={FIELD_LABELS[field ?? ''] ?? field ?? 'Value'}
-                className={shownValue === null ? undefined : 'rev'}
+                className="rev"
                 valueClass={shownValue === null ? 'mask' : 'mono'}
                 action={
                   shownValue === null ? (
@@ -559,7 +617,7 @@ export function DetailsPanel({
                   )
                 }
               >
-                {value}
+                {shownValue === null ? MASK : value}
               </InsetRow>
             ) : (
               <InsetRow key={index} label={FIELD_LABELS[field ?? ''] ?? field}>
@@ -610,7 +668,7 @@ export function DetailsPanel({
             )
           }
         >
-          {shownValue ?? '••••••••••••••••••••'}
+          {shownValue ?? MASK}
         </InsetRow>
       </Inset>
     ) : fileMode ? (
@@ -622,9 +680,7 @@ export function DetailsPanel({
             </span>
             <span>
               <b>{nameOf(item.path)}</b>
-              <span>
-                {fmtSize(item.size)} · version {item.version}
-              </span>
+              <span>{fmtSize(item.size)}</span>
             </span>
           </div>
           <div className="row2">
@@ -670,11 +726,12 @@ export function DetailsPanel({
                   reading ? (
                     'Reading target…'
                   ) : (
-                    'Target path hidden'
+                    'Target unavailable'
                   )
                 ) : (
                   <>
-                    Links to <code>{shownValue}</code>
+                    {shownValue}
+                    {serverName ? ` on ${serverName}` : ''}
                   </>
                 )}
               </span>
@@ -683,40 +740,35 @@ export function DetailsPanel({
           <div className="row2">
             <Button
               variant="primary"
-              icon="arrow"
               disabled={reading}
               onClick={() => {
-                if (shownValue === null) {
-                  void show();
-                  return;
-                }
-                // Resolve against catalog items to avoid selecting folder nodes.
-                const target = catalog(world).find(
-                  (candidate) =>
-                    candidate.store === item.store &&
-                    candidate.path === shownValue,
-                );
-                if (target)
-                  onSelect({ store: target.store, path: target.path });
+                const requestKey = key;
+                const epoch = concealEpoch.current;
+                void (async () => {
+                  const path = shownValue ?? (await show());
+                  if (
+                    path === undefined ||
+                    keyRef.current !== requestKey ||
+                    epoch !== concealEpoch.current
+                  )
+                    return;
+                  const target = catalog(world).find(
+                    (candidate) =>
+                      candidate.store === item.store && candidate.path === path,
+                  );
+                  if (target)
+                    onSelect({ store: target.store, path: target.path });
+                  else toasts.show(`Linked item not found: ${path}`);
+                })();
               }}
             >
-              {shownValue === null
-                ? reading
-                  ? 'Reading…'
-                  : 'Reveal target'
-                : 'Open target'}
+              Open target
+              <Icon name="arrowUpRight" />
             </Button>
           </div>
         </div>
       </Inset>
     );
-
-  const footnote =
-    kind === 'Link'
-      ? shownValue === null
-        ? `Reveals the target path for version ${item.version}. The path is hidden when the window loses focus.`
-        : `Links to ${shownValue} on ${serverName}. Opening it navigates to the item at that path.`
-      : '';
 
   return (
     <aside className="details" aria-label={`Details for ${nameOf(item.path)}`}>
@@ -725,7 +777,7 @@ export function DetailsPanel({
         <span className="t">
           <h2>{nameOf(item.path)}</h2>
           <small>
-            {displayKind} in {store?.name}
+            {kindLabel(displayKind)} in {store?.name}
           </small>
         </span>
         <button
@@ -739,21 +791,19 @@ export function DetailsPanel({
         </button>
       </div>
       <div className="scroll">
-        {editing || displayKind !== 'Resource' ? (
+        {editing || (displayKind !== 'Resource' && displayKind !== 'File') ? (
           <SectionLabel>
             {editing
               ? 'Edit'
               : displayKind === 'Password'
                 ? 'Login'
-                : displayKind}
+                : kindLabel(displayKind)}
           </SectionLabel>
         ) : null}
         {preview}
-        {editing || footnote ? (
+        {editing ? (
           <div className="pfn">
-            {editing
-              ? `This item will save as version ${item.version + 1}. If it was modified elsewhere, refresh to review updates before saving.`
-              : footnote}
+            {`This item will save as version ${item.version + 1}. If it was modified elsewhere, refresh to review updates before saving.`}
           </div>
         ) : null}
         {readError ? (
@@ -767,12 +817,57 @@ export function DetailsPanel({
           </p>
         ) : null}
 
-        <SectionLabel>Info</SectionLabel>
+        <div className={editing ? 'eact' : 'detail-actions'}>
+          {editing ? (
+            <>
+              <Button disabled={saving} onClick={() => setEditing(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                disabled={saving}
+                onClick={() => void saveEdit()}
+              >
+                {saving ? 'Saving…' : 'Save changes'}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                icon="pencil"
+                disabled={!canChange || kind === 'Link' || saving}
+                title={
+                  !canChange
+                    ? `You need ${roleText(item.write)} permissions to edit this item.`
+                    : kind === 'Link'
+                      ? 'To update this link’s destination, delete it and create a new link.'
+                      : 'Edit this item'
+                }
+                onClick={() => void beginEdit()}
+              >
+                {saving ? 'Reading…' : 'Edit'}
+              </Button>
+              <Button
+                variant="danger"
+                icon="trash"
+                disabled={!canChange}
+                title={
+                  canChange
+                    ? 'Delete this item'
+                    : `You need ${roleText(item.write)} permissions to delete this item.`
+                }
+                onClick={() => onDelete(item)}
+              >
+                Delete
+              </Button>
+            </>
+          )}
+        </div>
         <div className="meta">
           <b>Path</b>
-          <code>{item.path}</code>
+          <span>{item.path}</span>
           <b>Kind</b>
-          <span>{displayKind}</span>
+          <span>{kindLabel(displayKind)}</span>
           <b>Version</b>
           <span>{item.version}</span>
           <b>Size</b>
@@ -799,7 +894,6 @@ export function DetailsPanel({
                 <PartyRow
                   key={party.party_id_hex}
                   party={party}
-                  serverName={serverName}
                   canRead={readers.includes(party)}
                 />
               ))}
@@ -810,70 +904,6 @@ export function DetailsPanel({
         </div>
 
         {/* Raw metadata is available only in developer diagnostics. */}
-      </div>
-      <div className="dfoot">
-        {editing ? (
-          <>
-            <Button disabled={saving} onClick={() => setEditing(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              disabled={saving}
-              onClick={() => void saveEdit()}
-            >
-              {saving ? 'Saving…' : 'Save changes'}
-            </Button>
-          </>
-        ) : (
-          <>
-            <Button
-              icon="pencil"
-              disabled={!canChange || kind === 'Link' || saving}
-              title={
-                !canChange
-                  ? `You need ${roleText(item.write)} permissions to edit this item.`
-                  : kind === 'Link'
-                    ? 'To update this link’s destination, delete it and create a new link.'
-                    : 'Edit this item'
-              }
-              onClick={() => void beginEdit()}
-            >
-              {saving ? 'Reading…' : 'Edit'}
-            </Button>
-            <Button
-              onClick={() => {
-                if (!request) return;
-                void bridge.copyItemPath(request).then(
-                  () => toasts.show(`Path copied: ${item.path}`),
-                  (error) => {
-                    if (normalizeCommandError(error).code === 'agent-lost')
-                      onCommandError(error, item);
-                    else
-                      toasts.show(normalizeCommandError(error).message, {
-                        tone: 'warning',
-                      });
-                  },
-                );
-              }}
-            >
-              Copy path
-            </Button>
-            <Button
-              variant="danger"
-              icon="trash"
-              disabled={!canChange}
-              title={
-                canChange
-                  ? 'Remove this item'
-                  : `You need ${roleText(item.write)} permissions to remove this item.`
-              }
-              onClick={() => onRemove(item)}
-            >
-              Remove
-            </Button>
-          </>
-        )}
       </div>
     </aside>
   );

@@ -8,6 +8,12 @@ Signup invites and passphrase salts, encrypted PPE generations, one-time login
 challenges, and bounded failed-proof accounting use the same single-writer
 transaction boundary as identity state.
 
+That writer also owns username mutations, invitation certificates and pending
+requests, scoped team view grants and removals, realtime channels/messages/inbox
+versions, and encrypted OIDC sessions and access state. Authorization and
+capacity are rechecked in the committing transaction; read snapshots never
+publish a partially committed mutation or inbox wakeup.
+
 Database opens reject a symlink at the database leaf. On Unix, the main
 database must be a regular file with exactly one hardlink and a stable nonzero
 device/inode identity; unsupported filesystem identity semantics fail closed.

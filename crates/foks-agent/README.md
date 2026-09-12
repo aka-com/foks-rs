@@ -61,6 +61,13 @@ and removal select a local-user row by its authenticated party ID and, when the
 roster contains admitted teams, verify those scoped recipients through the
 existing cross-profile federation path before rotating any PTK.
 
+The same checked account boundary now owns Basic named-team chat polling and
+durable sends, OIDC signup and reauthentication, local/remote invitation
+workflows, durable username changes, resident bot credentials, and hosted
+web-administration handoff. Long chat polls use separate bounded admission;
+browser and bearer secrets remain inside native/application handlers rather
+than general agent state.
+
 Team creation dispatches the existing native named/ad-hoc workflows and stores
 their recovery material in the account vault before the remote mutation. A
 separate resume operation continues that durable record after interruption;
@@ -72,7 +79,9 @@ foks-agent --state-dir /private/client
 
 macOS and Linux are supported. Windows is currently unsupported because
 authenticated named-pipe transport and ACL validation are not yet implemented.
-Use `foks-rs` directly on Windows until that boundary exists.
+The resident-agent and desktop workflows therefore have no supported Windows
+path. Lower-level direct-client use requires an embedder-supplied credential and
+rollback boundary.
 
 On Unix, the socket authenticates the operating-system user ID. It is not a
 sandbox boundary between mutually untrusted processes running under the same

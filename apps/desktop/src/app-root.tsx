@@ -615,8 +615,8 @@ function VaultShell({
       state={state}
       locations={locations}
       onReveal={(item) => setRevealRequest(`${item.store}|${item.path}`)}
-      onNew={(itemKind, storeId) =>
-        setWorkflow({ kind: 'new', itemKind, storeId })
+      onNew={(itemKind, storeId, initialFolder) =>
+        setWorkflow({ kind: 'new', itemKind, storeId, initialFolder })
       }
       onResume={async (storeId) => {
         try {
@@ -626,7 +626,7 @@ function VaultShell({
           await mutationError(error);
         }
       }}
-      onRemove={(item) => setWorkflow({ kind: 'remove', item })}
+      onDelete={(item) => setWorkflow({ kind: 'delete', item })}
       onSettings={(storeId) =>
         locations.navigate({
           kind: 'group-settings',
@@ -778,7 +778,7 @@ function VaultShell({
             onClose={() => {
               locations.setDetails(false);
             }}
-            onRemove={(item) => setWorkflow({ kind: 'remove', item })}
+            onDelete={(item) => setWorkflow({ kind: 'delete', item })}
             onConflict={(item, draft) =>
               setWorkflow({ kind: 'conflict', item, draft })
             }

@@ -17,23 +17,27 @@ install frontend dependencies:
 ```sh
 npm install --global npm@11.12.1
 npm ci
+
+npm run dev             # Run with auto-reload, and a local FOKS server and agent
+npm run start           # Run with auto-reload, for an existing FOKS agent
+
+npm run bundle:macos    # Create bundled DMG
+npm run build:frontend  # Build frontend-only mock for browser testing
 ```
 
-Common commands:
+Tests and checks:
 
 ```sh
 npm run test:core       # seven core Rust crates + UI tests
 npm run test:full       # entire Rust workspace + UI tests
+npm run format
 npm run lint
 npm run typecheck
 npm run test:foks-ui
-npm run build:frontend
-npm start
 ```
 
 `cargo` builds and tests the Rust packages. npm drives Vite, TypeScript,
-ESLint, UI tests, and the Tauri CLI. `npm run bundle:macos` and
-`npm run bundle:deb` stage the managed agent and create native packages.
+ESLint, UI tests, and the Tauri CLI.
 
 - The complete desktop and release workflow and platform prerequisites are documented in
   [`apps/desktop/src-tauri/README.md`](apps/desktop/src-tauri/README.md).

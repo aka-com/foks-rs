@@ -43,13 +43,13 @@ export type Location =
 export type Selection = { store: StoreRef; path: string } | null;
 
 /** Layout mode for displaying vault items. */
-export type ViewMode = 'list' | 'grid';
+export type ViewMode = 'list' | 'grid' | 'folders';
 
 /** Kind filter selection, where 'All' disables kind filtering. */
 export type KindFilter = 'All' | 'Password' | 'Resource' | 'File' | 'Link';
 
 /** The sort menu's choice. */
-export type SortKey = 'name' | 'kind' | 'group' | 'version';
+export type SortKey = 'name' | 'kind' | 'group';
 
 export interface LocationState {
   location: Location;
@@ -61,6 +61,10 @@ export interface LocationState {
   details: boolean;
   kind: KindFilter;
   sort: SortKey;
+  /** Selected folder in folder view: `store|/path` on All, `/path` in a store. */
+  folder: string;
+  /** Comma-free tree node keys whose children are folded. */
+  closedFolders: readonly string[];
 }
 
 export const INITIAL_STATE: LocationState = {
@@ -71,6 +75,8 @@ export const INITIAL_STATE: LocationState = {
   details: false,
   kind: 'All',
   sort: 'name',
+  folder: '',
+  closedFolders: [],
 };
 
 /* ------------------------------------------------------------ transition -- */
@@ -82,7 +88,9 @@ export type LocationAction =
   | { type: 'view'; view: ViewMode }
   | { type: 'details'; open: boolean }
   | { type: 'kind'; kind: KindFilter }
-  | { type: 'sort'; sort: SortKey };
+  | { type: 'sort'; sort: SortKey }
+  | { type: 'folder'; folder: string }
+  | { type: 'toggle-folder'; folder: string };
 
 /** Returns whether two locations identify the same navigation target. */
 export function sameLocation(a: Location, b: Location): boolean {
@@ -120,6 +128,8 @@ export function transition(
             ...state,
             location: action.location,
             selection: null,
+            folder: '',
+            closedFolders: [],
             query:
               action.location.kind === 'team-chat' ||
               state.location.kind === 'team-chat'
@@ -153,6 +163,16 @@ export function transition(
       return state.sort === action.sort
         ? state
         : { ...state, sort: action.sort };
+    case 'folder':
+      return state.folder === action.folder && state.selection === null
+        ? state
+        : { ...state, folder: action.folder, selection: null };
+    case 'toggle-folder': {
+      const closed = new Set(state.closedFolders);
+      if (closed.has(action.folder)) closed.delete(action.folder);
+      else closed.add(action.folder);
+      return { ...state, closedFolders: [...closed].sort() };
+    }
   }
 }
 
@@ -500,6 +520,8 @@ export interface Scene {
   view: ViewMode;
   kind: KindFilter;
   sort: SortKey;
+  folder: string;
+  closedFolders: readonly string[];
   lease: LeaseState;
   /** One-shot Show intent carried only by the named acceptance scene. */
   reveal: boolean;
@@ -557,6 +579,7 @@ const SCENE_ALIASES: Readonly<Record<string, Partial<Scene>>> = {
   'group-new-file': { location: { kind: 'store', ref: 'team:eng' } },
   // `grid` is `all` seen as cards.
   grid: { view: 'grid' },
+  folders: { view: 'folders' },
   // Lapsed-lease fixture, with the lapsed store selected.
   lease: { location: { kind: 'store', ref: 'acct:work' }, lease: 'lapsed' },
   // The group whose summary reports inactive.
@@ -565,7 +588,7 @@ const SCENE_ALIASES: Readonly<Record<string, Partial<Scene>>> = {
   alerts: { lease: 'lapsed' },
 };
 
-const VIEWS: readonly ViewMode[] = ['list', 'grid'];
+const VIEWS: readonly ViewMode[] = ['list', 'grid', 'folders'];
 const KIND_FILTERS: readonly KindFilter[] = [
   'All',
   'Password',
@@ -573,7 +596,7 @@ const KIND_FILTERS: readonly KindFilter[] = [
   'File',
   'Link',
 ];
-const SORTS: readonly SortKey[] = ['name', 'kind', 'group', 'version'];
+const SORTS: readonly SortKey[] = ['name', 'kind', 'group'];
 
 function oneOf<T extends string>(
   values: readonly T[],
@@ -598,6 +621,8 @@ export const INITIAL_SCENE: Scene = {
   view: 'list',
   kind: 'All',
   sort: 'name',
+  folder: '',
+  closedFolders: [],
   lease: 'fresh',
   reveal: false,
   demo: null,
@@ -622,6 +647,8 @@ export function decodeScene(search: string): Scene {
       alias.kind ??
       INITIAL_SCENE.kind,
     sort: oneOf(SORTS, params.get('sort')) ?? alias.sort ?? INITIAL_SCENE.sort,
+    folder: params.get('folder') ?? alias.folder ?? INITIAL_SCENE.folder,
+    closedFolders: (params.get('closed') ?? '').split(',').filter(Boolean),
     lease:
       oneOf(['fresh', 'lapsed'] as const, params.get('lease')) ??
       alias.lease ??
@@ -644,6 +671,8 @@ export function sceneHref(href: string, scene: Scene): string {
     view: scene.view === INITIAL_SCENE.view ? null : scene.view,
     kind: scene.kind === INITIAL_SCENE.kind ? null : scene.kind,
     sort: scene.sort === INITIAL_SCENE.sort ? null : scene.sort,
+    folder: scene.folder || null,
+    closed: scene.closedFolders.length ? scene.closedFolders.join(',') : null,
     lease: scene.lease === INITIAL_SCENE.lease ? null : scene.lease,
   });
 }
@@ -656,6 +685,8 @@ export function sceneOf(state: LocationState, lease: LeaseState): Scene {
     view: state.view,
     kind: state.kind,
     sort: state.sort,
+    folder: state.folder,
+    closedFolders: state.closedFolders,
     lease,
     reveal: false,
     demo: null,
@@ -720,6 +751,14 @@ export class LocationStore {
   setSort(sort: SortKey): void {
     this.dispatch({ type: 'sort', sort });
   }
+
+  setFolder(folder: string): void {
+    this.dispatch({ type: 'folder', folder });
+  }
+
+  toggleFolder(folder: string): void {
+    this.dispatch({ type: 'toggle-folder', folder });
+  }
 }
 
 /** Initializes a LocationStore populated with state from a decoded Scene. */
@@ -732,6 +771,8 @@ export function storeAtScene(scene: Scene): LocationStore {
     view: scene.view,
     kind: scene.kind,
     sort: scene.sort,
+    folder: scene.folder,
+    closedFolders: scene.closedFolders,
   });
 }
 
