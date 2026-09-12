@@ -1,3 +1,4 @@
+import { SsoPanel } from '../components/sso-panel';
 import {
   useCallback,
   useEffect,
@@ -2109,6 +2110,28 @@ export function FirstRunExperience({
             </Inset>
           </div>
         </div>
+        {profile && !checkpoint.account && (
+          <SsoPanel
+            key={`${profile.profile}/${accountAlias}`}
+            bridge={bridge}
+            profile={profile.profile}
+            account={accountAlias}
+            login={false}
+            deviceName={deviceName}
+            invite={invite}
+            disabled={busy}
+            onComplete={async () => {
+              setInvite('');
+              const identity = await refreshAccountIdentity(accountAlias);
+              send({
+                type: 'account-complete',
+                alias: accountAlias,
+                username: identity.username,
+                deviceName: deviceName.trim(),
+              });
+            }}
+          />
+        )}
         {message ? <p className="crit">{message}</p> : null}
         <button
           className="lnk account-recover-link"

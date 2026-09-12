@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+foks-oidc = { workspace = true }
 foks-client = { workspace = true }
 foks-client-db = { workspace = true }
 foks-compat-artifact = { workspace = true }

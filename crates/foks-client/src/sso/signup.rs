@@ -9,11 +9,18 @@ pub struct SsoSignupAuthorization {
     pub(crate) args: RegSsoArgs,
     pub(crate) reservation: foks_proto::UsernameReservation,
     pub(crate) username: String,
+    email: String,
     pub(crate) uid: EntityId,
     pub(crate) device: EntityId,
     expires_at_ms: u64,
 }
 impl SsoSignupAuthorization {
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+    pub fn email(&self) -> &str {
+        &self.email
+    }
     pub(crate) fn validate(&self, client: &FoksClient, host: &PinnedHost) -> Result<()> {
         let flow = HardStateStore::open(&host.database_path)?
             .sso_flow(&self.flow_id)?
@@ -98,6 +105,7 @@ impl FoksClient {
             args,
             reservation: result.reservation,
             username: result.tokens.username,
+            email: identity.email.unwrap_or_default(),
             uid,
             device,
             expires_at_ms: flow.expires_at_ms.min(identity.expires_at_ms),

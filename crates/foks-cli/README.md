@@ -126,3 +126,6 @@ To exercise the lifecycle on a disposable local test server, run
 `device revoke PROFILE ALIAS DEVICE_ID` and
 `recovery revoke PROFILE ACCOUNT_ALIAS BACKUP_ALIAS BACKUP_ID`; backup enrollment
 JSON includes `backup_id_hex` so cleanup never guesses a credential identity.
+
+Organization enrollment and reauthentication use `foks-rs sso`. See the
+[OIDC client flow and operator guide](../foks-server/OIDC.md).

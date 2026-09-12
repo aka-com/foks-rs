@@ -178,6 +178,8 @@ pub fn run() {
         .manage(commands::chat_local::LocalState::default())
         .manage(Arc::new(applock::AppLock::new()))
         .invoke_handler(tauri::generate_handler![
+            commands::sso::sso_request,
+            commands::sso::open_sso_browser,
             commands::application::agent_status,
             commands::application::retry_agent_connection,
             commands::enrollment::initialize_client_state,

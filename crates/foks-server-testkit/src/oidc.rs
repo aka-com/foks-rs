@@ -32,6 +32,7 @@ struct State {
     subject: String,
     refreshes: usize,
     outage: bool,
+    denied: bool,
     invalid_grant: bool,
     access_lifetime: u64,
 }
@@ -58,6 +59,7 @@ impl TestOidcProvider {
             subject: "alice-subject".into(),
             refreshes: 0,
             outage: false,
+            denied: false,
             invalid_grant: false,
             access_lifetime: 300,
         }));
@@ -118,6 +120,9 @@ impl TestOidcProvider {
         s.username = username.into();
         s.subject = subject.into();
     }
+    pub fn set_denied(&self, value: bool) {
+        self.state.lock().unwrap().denied = value;
+    }
     pub fn set_outage(&self, value: bool) {
         self.state.lock().unwrap().outage = value;
     }
@@ -173,6 +178,7 @@ async fn reply(
         "/authorize"=>{
             let q=url::form_urlencoded::parse(query.as_bytes()).collect::<BTreeMap<_,_>>();
             if q.get("redirect_uri").map(|s|s.as_ref())!=Some(&redirect)||q.get("client_id").map(|s|s.as_ref())!=Some("fennec")||q.get("code_challenge_method").map(|s|s.as_ref())!=Some("S256"){return Ok(response(400,"invalid authorization request".into()));}
+            if state.denied { let mut uri=url::Url::parse(&redirect).unwrap();uri.query_pairs_mut().append_pair("state",q.get("state").unwrap()).append_pair("error","access_denied"); return Ok(Response::builder().status(303).header("location",uri.as_str()).body(Full::new(Bytes::new())).unwrap()); }
             state.next+=1;let code=format!("test-code-{}",state.next);
             let entry=Code{nonce:q.get("nonce").unwrap().to_string(),challenge:q.get("code_challenge").unwrap().to_string(),username:state.username.clone(),subject:state.subject.clone()};state.codes.insert(code.clone(),entry);
             let mut uri=url::Url::parse(&redirect).unwrap();uri.query_pairs_mut().append_pair("state",q.get("state").unwrap()).append_pair("code",&code);

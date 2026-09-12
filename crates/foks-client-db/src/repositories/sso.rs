@@ -13,6 +13,7 @@ pub enum SsoFlowState {
     Expired = 6,
     Unknown = 7,
     Rejected = 8,
+    Denied = 9,
 }
 impl SsoFlowState {
     fn parse(n: u8) -> rusqlite::Result<Self> {
@@ -27,6 +28,7 @@ impl SsoFlowState {
             6 => Expired,
             7 => Unknown,
             8 => Rejected,
+            9 => Denied,
             _ => return Err(rusqlite::Error::InvalidQuery),
         })
     }
@@ -35,7 +37,7 @@ impl SsoFlowState {
         matches!(
             (self, next),
             (Prepared, AwaitingBrowser | Cancelled | Expired)
-                | (AwaitingBrowser, Ready | Cancelled | Expired)
+                | (AwaitingBrowser, Ready | Cancelled | Expired | Denied)
                 | (Ready, Binding | Cancelled | Expired)
                 | (Binding, Complete | Unknown | Rejected)
                 | (Unknown, Complete | Rejected)
@@ -105,7 +107,7 @@ impl HardStateStore {
         let now = sqlite_integer("OAuth creation time", now_ms)?;
         let expiry = sqlite_integer("OAuth expiry", flow.expires_at_ms)?;
         let tx = self.write_transaction()?;
-        let (active,total):(i64,i64)=tx.query_row("SELECT coalesce(sum(CASE WHEN state IN (0,1,2,3,7) AND (expires_at>?3 OR state IN (3,7)) THEN 1 ELSE 0 END),0),count(*) FROM sso_flows WHERE host_id=?1 AND uid=?2",params![flow.host,flow.uid,now],|r|Ok((r.get(0)?,r.get(1)?))).map_err(Error::from)?;
+        let (active,total):(i64,i64)=tx.query_row("SELECT coalesce(sum(CASE WHEN state IN (0,1,2,3,7) AND (expires_at>?3 OR (state IN (3,7) AND final_operation IS NOT NULL)) THEN 1 ELSE 0 END),0),count(*) FROM sso_flows WHERE host_id=?1 AND uid=?2",params![flow.host,flow.uid,now],|r|Ok((r.get(0)?,r.get(1)?))).map_err(Error::from)?;
         if active >= 4 || total >= 4096 {
             return Err(Error::SsoState("flow capacity exhausted").into());
         }

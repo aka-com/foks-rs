@@ -1,3 +1,4 @@
+import { SsoPanel } from '../components/sso-panel';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
@@ -819,21 +820,35 @@ export function SettingsScreen({
               />
             ) : null}
             {section === 'account' ? (
-              <AccountSection
-                world={world}
-                statuses={statuses}
-                loadedProfiles={loadedProfiles}
-                deviceNames={accountDeviceNames}
-                onConnectGoProfile={() => setSheet('go-profile')}
-                onPassphrase={(store, mode) => {
-                  setPassphraseStore(store);
-                  setPassphraseMode(mode);
-                  setSheet('passphrase');
-                }}
-                fixtureLapsed={Boolean(
-                  bridge.fixtureWorld && enteredScene === 'settings-account',
-                )}
-              />
+              <>
+                <AccountSection
+                  world={world}
+                  statuses={statuses}
+                  loadedProfiles={loadedProfiles}
+                  deviceNames={accountDeviceNames}
+                  onConnectGoProfile={() => setSheet('go-profile')}
+                  onPassphrase={(store, mode) => {
+                    setPassphraseStore(store);
+                    setPassphraseMode(mode);
+                    setSheet('passphrase');
+                  }}
+                  fixtureLapsed={Boolean(
+                    bridge.fixtureWorld && enteredScene === 'settings-account',
+                  )}
+                />
+                {accountStores(world).map((store) => (
+                  <SsoPanel
+                    key={store.id}
+                    bridge={bridge}
+                    profile={store.server}
+                    account={store.account}
+                    login={true}
+                    onComplete={() =>
+                      onRefresh('Organization sign-in verified')
+                    }
+                  />
+                ))}
+              </>
             ) : null}
             {section === 'servers' ? (
               <ServersSection

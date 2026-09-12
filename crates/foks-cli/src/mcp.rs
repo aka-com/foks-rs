@@ -44,7 +44,7 @@ pub fn run(state: &Path, command: McpCommand) -> Result<(), Box<dyn std::error::
     result
 }
 
-fn ensure_agent(state: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub(super) fn ensure_agent(state: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = AgentClient::new(state.join("foks-rs.sock"));
     client.set_timeout(Duration::from_millis(250))?;
     let available = || matches!(client.call(Operation::Ping), Ok(response) if matches!(response.result, ResponseResult::Success { .. }));

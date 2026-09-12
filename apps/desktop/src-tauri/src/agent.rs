@@ -137,6 +137,7 @@ impl AgentError {
             ErrorCode::ProfileBusy => ("profile-busy", true),
             ErrorCode::RateLimited => ("rate-limited", true),
             ErrorCode::QuotaExceeded => ("quota-exceeded", false),
+            ErrorCode::ReauthenticationRequired => ("reauthentication-required", false),
             ErrorCode::OperationFailed => ("operation-failed", false),
         };
         let mut mapped = Self::new(slug, message, retryable);

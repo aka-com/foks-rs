@@ -10,6 +10,7 @@ name = "foks-agent"
 path = "src/main.rs"
 
 [dependencies]
+foks-oidc = { workspace = true }
 clap = { workspace = true }
 foks-agent-proto = { workspace = true }
 foks-client = { workspace = true }

@@ -193,10 +193,28 @@ impl FoksClient {
         if matches!(
             flow.state,
             SsoFlowState::Complete
+                | SsoFlowState::Denied
                 | SsoFlowState::Cancelled
                 | SsoFlowState::Expired
                 | SsoFlowState::Rejected
         ) {
+            erase_flow_material(store, &id)?;
+        }
+        // Expired uncertain login attempts retain an honest receipt, not reusable tokens.
+        // Signup's final mutation owns its separate recovery material.
+        if flow.expires_at_ms <= crate::now_milliseconds()?
+            && flow.final_operation.is_none()
+            && matches!(flow.state, SsoFlowState::Binding | SsoFlowState::Unknown)
+        {
+            if flow.state == SsoFlowState::Binding {
+                HardStateStore::open(&host.database_path)?.sso_transition(
+                    &id,
+                    flow.state,
+                    SsoFlowState::Unknown,
+                    None,
+                )?;
+                flow.state = SsoFlowState::Unknown;
+            }
             erase_flow_material(store, &id)?;
         }
         let browser_url = if flow.state == SsoFlowState::AwaitingBrowser {
@@ -224,6 +242,19 @@ impl FoksClient {
         id: [u8; 16],
         store: &mut impl ProtectedMutationStore,
     ) -> Result<SsoProgress> {
+        let progress = self.sso_progress(host, id, store)?;
+        if progress.state == SsoFlowState::Complete {
+            return Err(Error::Sso("completed authentication cannot be cancelled"));
+        }
+        if matches!(
+            progress.state,
+            SsoFlowState::Denied
+                | SsoFlowState::Cancelled
+                | SsoFlowState::Expired
+                | SsoFlowState::Rejected
+        ) {
+            return Ok(progress);
+        }
         let (flow, _) = load(host, &id, store)?;
         HardStateStore::open(&host.database_path)?.sso_transition(
             &id,
@@ -269,12 +300,33 @@ impl FoksClient {
             for_login: flow.for_login,
         };
         let client = self.isolated_with_timeout(std::time::Duration::from_millis(wait_ms + 5000));
-        let response = Zeroizing::new(client.call_after_vhost_selection(
+        let response = match client.call_after_vhost_selection(
             host,
             &host.registration,
             &foks_rpc::encode_registration_select_vhost_request(host.host_id())?,
             &foks_rpc::encode_poll_oauth2_session_request_at(&request, 1)?,
-        )?);
+        ) {
+            Ok(bytes) => Zeroizing::new(bytes),
+            Err(Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1009, .. })) => {
+                return self.sso_progress(host, id, store)
+            }
+            Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: 1067,
+                ref detail,
+            })) if detail
+                .detail()
+                .is_some_and(|d| d == "authorization denied" || d.contains("access_denied")) =>
+            {
+                HardStateStore::open(&host.database_path)?.sso_transition(
+                    &id,
+                    SsoFlowState::AwaitingBrowser,
+                    SsoFlowState::Denied,
+                    None,
+                )?;
+                return self.sso_progress(host, id, store);
+            }
+            Err(error) => return Err(error),
+        };
         if response.len() > foks_oidc::MAX_PROVIDER_BYTES {
             return Err(Error::Sso("OAuth poll result exceeds limit"));
         }

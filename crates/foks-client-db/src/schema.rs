@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 29;
+pub(crate) const VERSION: u32 = 30;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -35,7 +35,7 @@ CREATE TABLE sso_flows (
     uid BLOB NOT NULL CHECK(length(uid)=33),
     device_id BLOB NOT NULL CHECK(length(device_id) IN (33,34)),
     for_login INTEGER NOT NULL CHECK(for_login IN (0,1)),
-    state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 8),
+    state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 9),
     material_hash BLOB NOT NULL CHECK(length(material_hash)=32),
     config_hash BLOB NOT NULL CHECK(length(config_hash)=32),
     expires_at INTEGER NOT NULL CHECK(expires_at>=0),

@@ -1,4 +1,9 @@
 import {
+  decodeSsoProgress,
+  type SsoAction,
+  type SsoProgress,
+} from './sso-contract';
+import {
   decodeLocalSession,
   type LocalAction,
   type LocalSession,
@@ -548,6 +553,16 @@ export interface FirstRunFixture {
 export type Unlisten = () => void;
 
 export interface Bridge {
+  sso(
+    profile: string,
+    accountAlias: string,
+    action: SsoAction,
+  ): Promise<SsoProgress>;
+  openSsoBrowser(
+    profile: string,
+    accountAlias: string,
+    operationId: string,
+  ): Promise<CopyResponse>;
   chat(
     storeId: StoreRef,
     action: ChatAction,
@@ -2039,6 +2054,18 @@ export const tauriBridge: Bridge = {
   rerunGroupAdmission: (storeId, operationId) =>
     checked('rerun_group_admission', { storeId, operationId }, decodeMutation),
   chatLocal: (action) => checked('chat_local', { action }, decodeLocalSession),
+  sso: (profile, accountAlias, action) =>
+    checked(
+      'sso_request',
+      { profile, accountAlias, action },
+      decodeSsoProgress,
+    ),
+  openSsoBrowser: (profile, accountAlias, operationId) =>
+    checked(
+      'open_sso_browser',
+      { profile, accountAlias, operationId },
+      decodeCopy,
+    ),
   openChatLink: (url) => checked('open_chat_link', { url }, decodeCopy),
   copyText: (text) => checked('copy_text', { text }, decodeCopy),
   initializeClientState: () =>

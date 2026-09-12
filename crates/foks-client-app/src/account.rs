@@ -103,6 +103,28 @@ impl CheckedProfileSession<'_> {
         let pending = vault.pending(alias)?;
         let host = self.pinned_host()?;
         let Some(operation) = pending.journal_operation(&host, &self.paths.hard_database)? else {
+            let mut uid =
+                derive_shared_verify_key(&SecretSeed::new(pending.puk_seed), ENTITY_PUK_VERIFY)?
+                    .into_bytes();
+            uid[0] = ENTITY_USER;
+            if HardStateStore::open(&self.paths.hard_database)?
+                .sso_flows(host.host_id().as_bytes(), &uid)?
+                .iter()
+                .any(|flow| {
+                    matches!(
+                        flow.state,
+                        foks_client_db::SsoFlowState::Prepared
+                            | foks_client_db::SsoFlowState::AwaitingBrowser
+                            | foks_client_db::SsoFlowState::Ready
+                            | foks_client_db::SsoFlowState::Binding
+                            | foks_client_db::SsoFlowState::Unknown
+                    )
+                })
+            {
+                return Err(Error::InvalidAccount(
+                    "resume the account's organization sign-in flow",
+                ));
+            }
             // A crash during preflight can leave only the protected seeds.
             // No journal means signup could not have been sent to the server.
             vault.remove_pending_signup(alias)?;
@@ -1131,9 +1153,9 @@ impl Drop for StoredAccount {
 pub(super) struct PendingSignup {
     version: u32,
     alias: String,
-    username: String,
-    device_seed: [u8; 32],
-    puk_seed: [u8; 32],
+    pub(super) username: String,
+    pub(super) device_seed: [u8; 32],
+    pub(super) puk_seed: [u8; 32],
     self_token: [u8; 17],
 }
 
@@ -1269,7 +1291,7 @@ struct StoredBackup {
     backup_id: Vec<u8>,
 }
 impl PendingSignup {
-    fn journal_operation(
+    pub(super) fn journal_operation(
         &self,
         host: &foks_client::PinnedHost,
         database: &Path,
@@ -1304,7 +1326,7 @@ impl PendingSignup {
         })
     }
 
-    fn secrets(&self) -> Result<SoftwareAccountSecrets> {
+    pub(super) fn secrets(&self) -> Result<SoftwareAccountSecrets> {
         validate_pending(self)?;
         Ok(SoftwareAccountSecrets::new(
             SecretSeed::new(self.device_seed),

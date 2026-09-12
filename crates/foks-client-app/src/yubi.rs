@@ -2241,6 +2241,205 @@ fn validate_locator(locator: &YubiDeviceLocator) -> Result<()> {
     Ok(())
 }
 
+impl AccountVault<'_> {
+    pub(super) fn pending_yubi_sso_intent(
+        &mut self,
+        alias: &str,
+    ) -> Result<foks_client::SsoIntent> {
+        let pending = self.pending_yubi(alias)?;
+        if !matches!(pending.purpose, PendingYubiPurpose::Signup { .. }) {
+            return Err(Error::InvalidAccount("hardware operation is not a signup"));
+        }
+        let seed = pending
+            .puk_seed
+            .ok_or(Error::InvalidAccount("hardware signup seed is missing"))?;
+        let mut uid =
+            derive_shared_verify_key(&SecretSeed::new(seed), ENTITY_PUK_VERIFY)?.into_bytes();
+        uid[0] = ENTITY_USER;
+        let device = EntityId::from_bytes(
+            [
+                vec![foks_proto::ENTITY_YUBI],
+                pending.locator()?.signing_public_key.to_vec(),
+            ]
+            .concat(),
+        )?;
+        Ok(foks_client::SsoIntent {
+            uid: EntityId::from_bytes(uid)?,
+            device,
+            for_login: false,
+        })
+    }
+}
+impl CheckedProfileSession<'_> {
+    pub fn begin_yubi_sso_signup(
+        &self,
+        input: YubiSignupInput,
+        pin: Pin,
+        provider: &dyn YubiProvider,
+        vault: &mut AccountVault<'_>,
+        master: &[u8; 32],
+        http: &foks_oidc::ProviderHttp,
+    ) -> Result<crate::SsoReport> {
+        self.profile.require(Capability::Signup)?;
+        self.profile.require(Capability::DeviceAdministration)?;
+        validate_name(&input.alias)?;
+        if input.device_name.is_empty() || input.device_name.len() > 256 {
+            return Err(Error::InvalidAccount("invalid hardware device name"));
+        }
+        if input.passphrase.is_some() {
+            self.profile.require(Capability::Passphrases)?;
+        }
+        // Check that this host requires OIDC before changing a hardware slot.
+        if self
+            .client
+            .registration_server_config(&self.pinned_host()?)?
+            .sso
+            .is_none_or(|c| c.active != foks_proto::SsoProtocol::Oauth2)
+        {
+            return Err(Error::InvalidAccount("host does not require SSO"));
+        }
+        let mut pending = match vault.pending_yubi(&input.alias) {
+            Ok(p) => {
+                let (card, signing, pq) = if let Some(locator) = &p.locator {
+                    (&locator.card, locator.signing_slot, locator.pq_slot)
+                } else {
+                    let preparation = p
+                        .preparation
+                        .as_ref()
+                        .ok_or(Error::InvalidAccount("hardware preparation is missing"))?;
+                    (
+                        &preparation.card,
+                        preparation.signing_slot,
+                        preparation.pq_slot,
+                    )
+                };
+                if card != &input.card || signing != input.signing_slot || pq != input.pq_slot {
+                    return Err(Error::InvalidAccount(
+                        "resume the original hardware card and slots",
+                    ));
+                }
+                p
+            }
+            Err(Error::AccountMissing) => {
+                if vault.contains(&input.alias)? {
+                    return Err(Error::AccountExists);
+                }
+                let preparation = PendingYubiPreparation::new(
+                    input.card,
+                    input.signing_slot,
+                    input.pq_slot,
+                    input.retry_configuration,
+                );
+                let p = PendingYubiAccount::new_signup(
+                    &input.alias,
+                    &input.alias,
+                    preparation,
+                    input.device_name,
+                    String::new(),
+                    input.invite,
+                    input.passphrase.as_ref().map(|p| p.expose().to_vec()),
+                )?;
+                vault.put_pending_yubi(&p)?;
+                p
+            }
+            Err(e) => return Err(e),
+        };
+        if !matches!(pending.purpose, PendingYubiPurpose::Signup { .. }) {
+            return Err(Error::InvalidAccount(
+                "resume the original hardware operation",
+            ));
+        }
+        let _prepared = vault.prepare_pending_yubi(&mut pending, &pin, provider)?;
+        let intent = vault.pending_yubi_sso_intent(&input.alias)?;
+        self.begin_bound_sso(&input.alias, intent, master, http)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_yubi_sso_signup(
+        &self,
+        alias: &str,
+        id: [u8; 16],
+        pin: Pin,
+        provider: &dyn YubiProvider,
+        vault: &mut AccountVault<'_>,
+        master: &[u8; 32],
+        http: &foks_oidc::ProviderHttp,
+    ) -> Result<crate::SsoReport> {
+        let flow = self.checked_sso_flow(alias, id, vault)?;
+        self.profile.require(Capability::DeviceAdministration)?;
+        if flow.for_login {
+            return Err(Error::InvalidAccount("login flow cannot create an account"));
+        }
+        let host = self.pinned_host()?;
+        let mut protected = self.sso_store(master)?;
+        if flow.final_operation.is_some() {
+            self.resume_yubi_account(alias, pin, provider, vault, master)?;
+        } else {
+            let mut pending = vault.pending_yubi(alias)?;
+            let prepared = vault.prepare_pending_yubi(&mut pending, &pin, provider)?;
+            let auth = self.client.authorize_sso_signup(
+                &host,
+                id,
+                foks_client::SsoSigningKey::Yubi(prepared.device.as_ref()),
+                http,
+                &mut protected,
+            )?;
+            pending.username = auth.username().into();
+            let PendingYubiPurpose::Signup {
+                device_name,
+                email,
+                invite,
+                passphrase,
+            } = &mut pending.purpose
+            else {
+                return Err(Error::InvalidAccount("hardware flow purpose differs"));
+            };
+            *email = auth.email().into();
+            let request = YubiAccountRequest {
+                username_utf8: auth.username().into(),
+                device_name: device_name.clone(),
+                email: email.clone(),
+                invite_code: InviteCode::from_user_input(invite, true)?,
+                passphrase: passphrase.as_ref().map(Passphrase::new).transpose()?,
+                pq_hint: YubiSlotAndPqKeyId {
+                    slot: u64::from(prepared.locator.pq_slot.get()),
+                    id: prepared.locator.pq_key_id,
+                },
+            };
+            vault.put_pending_yubi(&pending)?;
+            let created = self.client.create_yubi_account_with_sso(
+                &host,
+                prepared.device.as_ref(),
+                request,
+                pending.signup_secrets()?,
+                &self.paths.soft_database,
+                &auth,
+                &mut protected,
+            )?;
+            vault.commit_created_yubi(
+                alias,
+                &pending.username,
+                &prepared.locator,
+                &created.credential,
+                None,
+            )?;
+            MutationCoordinator::new(&self.paths.hard_database, &mut protected)
+                .finalize(&created.operation_id)?;
+            vault.remove_pending_yubi(alias)?;
+            drop(created);
+            // Existing hardware completion owns management-key journaling and background jobs.
+            self.resume_yubi_account(alias, pin, provider, vault, master)?;
+        }
+        let mut report = crate::sso::report(
+            alias,
+            false,
+            self.client.sso_progress(&host, id, &mut protected)?,
+        );
+        // resume_yubi_account verified authenticated service access above.
+        report.service_access = true;
+        Ok(report)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

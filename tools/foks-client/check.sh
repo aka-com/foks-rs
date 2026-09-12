@@ -10,6 +10,7 @@ packages=(
   foks-snowpack
   foks-verify
   foks-client
+  foks-oidc
   foks-client-app
   foks-compat-artifact
   foks-cli

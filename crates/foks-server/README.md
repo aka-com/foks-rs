@@ -380,3 +380,6 @@ AKA-dependency and test gate:
 ```text
 tools/foks-client/check.sh
 ```
+
+Organization authentication setup, operational policy and acceptance guidance are
+in [OIDC.md](OIDC.md).

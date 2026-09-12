@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -404,6 +404,11 @@ impl Request {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "operation", rename_all = "kebab-case")]
 pub enum Operation {
+    Sso {
+        profile: String,
+        account_alias: String,
+        action: crate::sso::SsoAction,
+    },
     PrepareDataWrite {
         scope: crate::data::DataScope,
         submission_id: String,
@@ -973,6 +978,7 @@ impl Operation {
 impl std::fmt::Debug for Operation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Sso { .. } => formatter.write_str("Sso { [REDACTED] }"),
             Self::Chat { store, action } => formatter
                 .debug_struct("Chat")
                 .field("store", store)
@@ -1895,6 +1901,7 @@ impl std::fmt::Debug for ResponseResult {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorCode {
+    ReauthenticationRequired,
     ChatInvalidInput,
     ChatUnsupported,
     ChatAccessDenied,

@@ -25,6 +25,7 @@ serde_json = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+foks-oidc = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }
 foks-server-testkit = { workspace = true }
 

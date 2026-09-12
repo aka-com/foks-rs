@@ -10,6 +10,7 @@ pub(crate) mod enrollment;
 mod execution;
 pub(crate) mod groups;
 pub(crate) mod servers;
+pub(crate) mod sso;
 mod types;
 mod validation;
 pub(crate) mod vault;

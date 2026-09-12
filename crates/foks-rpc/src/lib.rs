@@ -105,6 +105,12 @@ pub enum Error {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StatusDetail(Option<String>);
 
+impl StatusDetail {
+    pub fn detail(&self) -> Option<&str> {
+        self.0.as_deref()
+    }
+}
+
 impl std::fmt::Display for StatusDetail {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(detail) = &self.0 {

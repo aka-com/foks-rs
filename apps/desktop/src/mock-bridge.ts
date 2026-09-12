@@ -34,6 +34,7 @@ export class VersionMismatchError extends Error {
 }
 
 export function mockBridge(world: World = FIXTURE): Bridge {
+  const ssoModes = new Map<string, boolean>();
   const stores: Store[] = world.stores.map((store) => ({ ...store }));
   const servers = world.servers.map((server) => ({ ...server }));
   const accounts = world.accounts.map((account) => ({ ...account }));
@@ -765,6 +766,31 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       available: false,
       settings: { enabled: false, previews: false, overrides: {} },
     }),
+    sso: async (profile, accountAlias, action) => {
+      const key = `${profile}/${accountAlias}`;
+      const begins =
+        action.action === 'begin' || action.action === 'begin-yubi-signup';
+      if (begins)
+        ssoModes.set(key, action.action === 'begin' && action.for_login);
+      return {
+        operationId: '1'.repeat(32),
+        accountAlias,
+        forLogin: ssoModes.get(key) ?? true,
+        state: begins
+          ? 'waiting'
+          : action.action === 'poll'
+            ? 'ready'
+            : action.action === 'cancel'
+              ? 'cancelled'
+              : action.action.startsWith('finish-')
+                ? 'complete'
+                : 'waiting',
+        browserAvailable: begins || action.action === 'status',
+        expiresAtMs: Date.now() + 600000,
+        serviceAccess: action.action.startsWith('finish-'),
+      };
+    },
+    openSsoBrowser: async () => ({ ok: true }),
     openChatLink: async () => ({ ok: true }),
     copyText: async () => ({ ok: true }),
     initializeClientState: async () => ({ phase: 'Ready' }),

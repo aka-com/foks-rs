@@ -2,6 +2,7 @@
 mod chat;
 mod chat_poll;
 mod data;
+mod sso;
 #[cfg(test)]
 use chat_poll::ActiveChatPollGuard;
 use chat_poll::{handle_chat_poll, ChatPollKey};
@@ -1186,6 +1187,12 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
     }
     let mut source = Some(error);
     while let Some(candidate) = source {
+        if matches!(
+            candidate.downcast_ref::<foks_rpc::Error>(),
+            Some(foks_rpc::Error::RemoteStatus { code: 1069, .. })
+        ) {
+            return Response::error(id, ErrorCode::ReauthenticationRequired, "Organization sign-in is required. Sign in again for this account, then review the interrupted operation before retrying.");
+        }
         if let Some(chat) = candidate.downcast_ref::<foks_client::Error>() {
             let code = match chat {
                 foks_client::Error::ChatInvalidInput(..) => Some(ErrorCode::ChatInvalidInput),
@@ -2362,6 +2369,19 @@ fn dispatch_result(
                 Ok(serde_json::to_value(pending)?)
             })
         }
+        Operation::Sso {
+            profile,
+            account_alias,
+            action,
+        } => sso::handle(
+            state_dir,
+            &registry,
+            &profile,
+            &account_alias,
+            action,
+            timeout,
+            cancellation,
+        ),
         Operation::CreateAccount {
             profile,
             alias,
