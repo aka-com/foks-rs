@@ -5,7 +5,12 @@ edition.workspace = true
 license.workspace = true
 description = "Bounded OIDC provider and identity policy for FOKS clients and hosts"
 
+[features]
+test-support = []
+
 [dependencies]
+reqwest = { workspace = true, features = ["blocking"] }
+tokio = { workspace = true }
 openidconnect = { version = "=4.0.1", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde_json = { workspace = true }

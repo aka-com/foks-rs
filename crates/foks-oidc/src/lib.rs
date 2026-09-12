@@ -1,10 +1,12 @@
 //! Shared OIDC policy. A validated provider token is not a FOKS device credential.
 #![forbid(unsafe_code)]
+mod provider;
 use chrono::{DateTime, Utc};
 use openidconnect::{
     core::{CoreIdToken, CoreIdTokenVerifier, CoreJsonWebKeySet, CoreJwsSigningAlgorithm},
     ClientId, IssuerUrl, Nonce,
 };
+pub use provider::*;
 use thiserror::Error;
 
 pub const MAX_PROVIDER_BYTES: usize = 1024 * 1024;
@@ -16,6 +18,8 @@ pub const MAX_IDENTITY_SESSIONS: usize = 4;
 
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum Error {
+    #[error("OIDC provider is unavailable")]
+    ProviderUnavailable,
     #[error("invalid OIDC provider configuration")]
     Configuration,
     #[error("OIDC provider document exceeds its bound")]

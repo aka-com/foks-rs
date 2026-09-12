@@ -6,6 +6,7 @@ mod host;
 mod jobs;
 mod journals;
 mod metadata;
+pub(crate) mod sso;
 mod team;
 mod user;
 
@@ -35,6 +36,7 @@ mod tests {
             include_str!("metadata.rs"),
             include_str!("team.rs"),
             include_str!("user.rs"),
+            include_str!("sso.rs"),
         ];
         for repository in repositories {
             assert!(!repository.contains("transaction_with_behavior"));

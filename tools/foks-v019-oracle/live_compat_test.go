@@ -139,6 +139,15 @@ func TestRustClientHappyPath(t *testing.T) {
 		}
 	}()
 
+	if os.Getenv("FOKS_RUST_LIVE_SSO") != "" {
+		stopSSO, ssoDone := configureRustLiveSSO(t, environment, stateDirectory)
+		defer func() {
+			stopSSO()
+			if e := <-ssoDone; e != nil {
+				t.Error(e)
+			}
+		}()
+	}
 	username := "rustcompat"
 	command := exec.Command(
 		driver,

@@ -282,28 +282,89 @@ impl FoksClient {
         soft_database_path: &Path,
         protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<CreatedSoftwareAccount> {
+        self.create_software_account_authorized(
+            host,
+            request,
+            secrets,
+            soft_database_path,
+            protected_store,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_software_account_with_sso(
+        &self,
+        host: &PinnedHost,
+        request: SoftwareAccountRequest,
+        secrets: SoftwareAccountSecrets,
+        soft_database_path: &Path,
+        authorization: &crate::SsoSignupAuthorization,
+        protected_store: &mut impl ProtectedMutationStore,
+    ) -> Result<CreatedSoftwareAccount> {
+        self.create_software_account_authorized(
+            host,
+            request,
+            secrets,
+            soft_database_path,
+            protected_store,
+            Some(authorization),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_software_account_authorized(
+        &self,
+        host: &PinnedHost,
+        request: SoftwareAccountRequest,
+        secrets: SoftwareAccountSecrets,
+        soft_database_path: &Path,
+        protected_store: &mut impl ProtectedMutationStore,
+        authorization: Option<&crate::SsoSignupAuthorization>,
+    ) -> Result<CreatedSoftwareAccount> {
         self.check_invite_code(host, &request.invite_code)?;
-        let reservation = self.reserve_username(host, &request.username_utf8)?;
+        let reservation = if let Some(auth) = authorization {
+            auth.validate(self, host)?;
+            if request.username_utf8 != auth.username {
+                return Err(Error::Sso(
+                    "signup username must match the provider reservation",
+                ));
+            }
+            auth.reservation.clone()
+        } else {
+            self.reserve_username(host, &request.username_utf8)?
+        };
         let (_, merkle) = self.advance_merkle_root(host)?;
         let prepared =
             self.prepare_software_account(host, &merkle, &request, reservation, &secrets)?;
         let signup_request =
             self.software_signup_request(&prepared, &request, *secrets.self_token)?;
+        let signup_request = if let Some(auth) = authorization {
+            if prepared.eldest.uid != auth.uid || prepared.eldest.device.id != auth.device {
+                return Err(Error::Sso("signup keys do not match OAuth binding"));
+            }
+            Zeroizing::new(foks_rpc::attach_signup_sso(&signup_request, &auth.args)?)
+        } else {
+            signup_request
+        };
         let request_hash = prefixed_hash(SIGNUP_REQUEST_HASH_TYPE_ID, &signup_request);
         let material =
             encode_signup_material(&secrets, &prepared.normalized_username, &signup_request)?;
-        let operation = MutationCoordinator::new(&host.database_path, protected_store).prepare(
-            MutationDraft {
-                operation_id: prepared.operation_id,
-                kind: MutationKind::Signup,
-                host_id: host.host_id().as_bytes().to_vec(),
-                scope_id: prepared.eldest.device.id.as_bytes().to_vec(),
-                subject_id: prepared.eldest.uid.as_bytes().to_vec(),
-                expected_version: None,
-                request_hash,
-            },
-            material,
-        )?;
+        let draft = MutationDraft {
+            operation_id: prepared.operation_id,
+            kind: MutationKind::Signup,
+            host_id: host.host_id().as_bytes().to_vec(),
+            scope_id: prepared.eldest.device.id.as_bytes().to_vec(),
+            subject_id: prepared.eldest.uid.as_bytes().to_vec(),
+            expected_version: None,
+            request_hash,
+        };
+        let mut coordinator = MutationCoordinator::new(&host.database_path, protected_store);
+        let operation = if let Some(auth) = authorization {
+            coordinator.prepare_sso_signup(draft, material, auth.flow_id)?
+        } else {
+            coordinator.prepare(draft, material)?
+        };
         let created = self.submit_or_reconcile_software_account(
             host,
             operation,
@@ -315,6 +376,15 @@ impl FoksClient {
         )?;
         if let Some(passphrase) = request.passphrase.as_ref() {
             self.verify_passphrase(host, &created.credential, passphrase)?;
+        }
+        if let Some(auth) = authorization {
+            HardStateStore::open(&host.database_path)?.sso_transition(
+                &auth.flow_id,
+                foks_client_db::SsoFlowState::Binding,
+                foks_client_db::SsoFlowState::Complete,
+                None,
+            )?;
+            self.sso_progress(host, auth.flow_id, protected_store)?;
         }
         Ok(created)
     }

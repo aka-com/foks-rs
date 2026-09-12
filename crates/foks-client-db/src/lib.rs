@@ -12,6 +12,8 @@ mod schema;
 mod soft;
 mod soft_schema;
 
+pub use repositories::sso::{SsoFlow, SsoFlowState};
+
 pub use repositories::chat::{
     ChatAnchor, ChatOperation, ChatOperationKind, ChatOperationState, ChatScope, ChatSubmission,
 };
@@ -542,6 +544,8 @@ pub struct FederationSagaOperation {
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("OIDC flow state: {0}")]
+    SsoState(&'static str),
     #[error("chat state conflict: {0}")]
     ChatConflict(&'static str),
     #[error("invalid chat operation transition: {0}")]

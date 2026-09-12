@@ -35,6 +35,9 @@ pub(crate) fn validate_signup(
     current_root: &MerkleRoot,
     current_root_hash: [u8; 32],
 ) -> Result<ValidatedSignup> {
+    if request.sso != foks_proto::RegSsoArgs::None {
+        return Err(Error::Signup("SSO enforcement is not configured"));
+    }
     if !matches!(
         request.invite_code,
         InviteCode::Empty | InviteCode::Standard(_) | InviteCode::MultiUse(_)

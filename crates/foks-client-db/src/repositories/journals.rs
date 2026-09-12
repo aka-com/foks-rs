@@ -11,6 +11,39 @@ impl HardStateStore {
         record_mutation_on(&self.connection, operation)
     }
 
+    /// Commit a prepared signup and its OAuth owner together, after protected material.
+    pub fn record_sso_signup(
+        &mut self,
+        operation: &MutationOperation,
+        flow_id: &[u8; 16],
+    ) -> Result<()> {
+        if operation.kind != MutationKind::Signup || operation.state != MutationState::Prepared {
+            return Err(Error::SsoState("flow child is not a prepared signup"));
+        }
+        let tx = self.write_transaction()?;
+        let (host, uid, device, state, login): (Vec<u8>, Vec<u8>, Vec<u8>, u8, bool) = tx
+            .query_row(
+                "SELECT host_id,uid,device_id,state,for_login FROM sso_flows WHERE operation_id=?1",
+                [flow_id.as_slice()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )?;
+        if host != operation.host_id
+            || uid != operation.subject_id
+            || device != operation.scope_id
+            || state != crate::SsoFlowState::Ready as u8
+            || login
+        {
+            return Err(Error::SsoState("signup does not match ready flow"));
+        }
+        record_mutation_on(&tx, operation)?;
+        tx.execute(
+            "UPDATE sso_flows SET state=3,final_operation=?2 WHERE operation_id=?1",
+            params![flow_id.as_slice(), operation.operation_id.as_slice()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Record a child and its parent binding in one WAL transaction, before delivery.
     pub fn record_child_mutation(
         &mut self,

@@ -4,10 +4,10 @@ use super::{
     device_label_name_and_commitment_key, hepk, DeviceLabelNameAndCommitmentKey, Hepk, UserLink,
 };
 use crate::{
-    array, boolean, decode, encode, entity, expect_unsigned, fixed_blob, list, list_or_null,
-    option, role, text, unsigned, EntityId, Error, HybridBox, Result, Role, SecretSeed,
-    SeedChainBox, SharedKeyBoxSet, TeamRemoteMemberViewToken, TeamRemovalKeyBox, Value,
-    ENTITY_AD_HOC_TEAM, ENTITY_HOST, ENTITY_NAMED_TEAM, ENTITY_USER,
+    array, boolean, decode, encode, entity, fixed_blob, list, list_or_null, option, role, text,
+    unsigned, EntityId, Error, HybridBox, Result, Role, SecretSeed, SeedChainBox, SharedKeyBoxSet,
+    TeamRemoteMemberViewToken, TeamRemovalKeyBox, Value, ENTITY_AD_HOC_TEAM, ENTITY_HOST,
+    ENTITY_NAMED_TEAM, ENTITY_USER,
 };
 use zeroize::Zeroizing;
 
@@ -509,6 +509,7 @@ fn base62_decoded_len(characters: usize) -> usize {
 /// Owned, strictly decoded v0.1.9 software-signup request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecodedSignupArgument {
+    pub sso: crate::RegSsoArgs,
     pub username_utf8: Vec<u8>,
     pub reservation: UsernameReservation,
     pub link: UserLink,
@@ -531,19 +532,12 @@ impl DecodedSignupArgument {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
         let fields = array(&value, 16)?;
-        let host_policy = array(&fields[15], 2)?;
-        expect_unsigned(&host_policy[0], "signup host policy", 0)?;
-        if !matches!(host_policy[1], Value::Variant(None)) {
-            return Err(Error::Type {
-                expected: "empty signup host policy",
-                found: "another value",
-            });
-        }
         let hepk_outer = array(&fields[13], 1)?;
         let hepks = array(&hepk_outer[0], 2)?;
         let invite_code = InviteCode::from_value(&fields[7])?;
         invite_code.validate()?;
         Ok(Self {
+            sso: crate::RegSsoArgs::decode(&encode(&fields[15])?)?,
             username_utf8: text(&fields[0])?.into_bytes(),
             reservation: UsernameReservation::decode(&encode(&fields[1])?)?,
             link: UserLink::decode(&encode(&fields[2])?)?,

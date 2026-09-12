@@ -194,10 +194,15 @@ impl OAuth2TokenSet {
         ]))?)
     }
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct OAuth2PollResult {
     pub tokens: OAuth2TokenSet,
     pub reservation: UsernameReservation,
+}
+impl std::fmt::Debug for OAuth2PollResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OAuth2PollResult([REDACTED])")
+    }
 }
 impl OAuth2PollResult {
     pub fn decode(bytes: &[u8]) -> Result<Self> {

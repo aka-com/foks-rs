@@ -35,6 +35,32 @@ pub fn encode_sso_login_request_at(arg: &SsoLoginArgument, sequence: u64) -> Res
     )
 }
 
+/// Add an exact SSO annex before the signup request enters its mutation journal.
+pub fn attach_signup_sso(request: &[u8], sso: &foks_proto::RegSsoArgs) -> Result<Vec<u8>> {
+    let mut reader = std::io::Cursor::new(request);
+    let call = crate::read_call(&mut reader, crate::DEFAULT_MAX_FRAME_LENGTH)?;
+    if reader.position() != request.len() as u64
+        || call.protocol_id() != REG_PROTOCOL_ID
+        || call.method_position() != crate::REG_SIGNUP_METHOD_POSITION
+    {
+        return Err(crate::Error::Envelope {
+            expected: "one signup frame",
+            found: "another request",
+        });
+    }
+    foks_proto::DecodedSignupArgument::decode(call.argument())?;
+    let foks_snowpack::Value::Array(mut fields) = foks_snowpack::decode(call.argument())? else {
+        unreachable!("typed signup decoder checked array")
+    };
+    fields[15] = foks_snowpack::decode(&sso.encoded()?)?;
+    encode_call(
+        REG_PROTOCOL_ID,
+        crate::REG_SIGNUP_METHOD_POSITION,
+        &foks_snowpack::encode(&foks_snowpack::Value::Array(fields))?,
+        call.sequence(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

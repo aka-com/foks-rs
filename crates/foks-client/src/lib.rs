@@ -65,6 +65,8 @@ pub(crate) const TEAM_MUTATION_OPERATION_ID_TYPE_ID: u64 = 0x11ad_72e6_d590_82f1
 pub(crate) const TEAM_MUTATION_REQUEST_HASH_TYPE_ID: u64 = 0x4d1f_b849_724a_f9c4;
 
 mod account;
+mod sso;
+pub use sso::{SsoIntent, SsoProgress, SsoSigningKey, SsoSignupAuthorization};
 mod auth;
 mod device;
 mod discovery;

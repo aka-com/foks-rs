@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 28;
+pub(crate) const VERSION: u32 = 29;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -22,12 +22,27 @@ pub(crate) const REVISION_TABLES: &[&str] = &[
     "mutation_children",
     "federation_saga_operations",
     "scheduled_jobs",
+    "sso_flows",
     "chat_operations",
     "chat_anchors",
     "chat_submissions",
 ];
 
 pub(crate) const INITIAL: &str = r#"
+CREATE TABLE sso_flows (
+    operation_id BLOB PRIMARY KEY CHECK(length(operation_id)=16),
+    host_id BLOB NOT NULL CHECK(length(host_id)=33),
+    uid BLOB NOT NULL CHECK(length(uid)=33),
+    device_id BLOB NOT NULL CHECK(length(device_id) IN (33,34)),
+    for_login INTEGER NOT NULL CHECK(for_login IN (0,1)),
+    state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 8),
+    material_hash BLOB NOT NULL CHECK(length(material_hash)=32),
+    config_hash BLOB NOT NULL CHECK(length(config_hash)=32),
+    expires_at INTEGER NOT NULL CHECK(expires_at>=0),
+    final_operation BLOB REFERENCES mutation_operations(operation_id),
+    CHECK(final_operation IS NULL OR for_login=0)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX sso_flows_by_account ON sso_flows(host_id,uid,state);
 CREATE TABLE chat_operations (
     operation_id BLOB PRIMARY KEY CHECK(length(operation_id)=16),
     host_id BLOB NOT NULL CHECK(length(host_id)=33),

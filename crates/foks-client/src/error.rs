@@ -4,6 +4,10 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("OIDC session: {0}")]
+    Sso(&'static str),
+    #[error("OIDC provider validation failed: {0}")]
+    Oidc(#[from] foks_oidc::Error),
     #[error("invalid chat input: {0}")]
     ChatInvalidInput(&'static str),
     #[error("unsupported chat operation: {0}")]

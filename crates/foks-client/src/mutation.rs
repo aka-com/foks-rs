@@ -79,6 +79,25 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
         material: Zeroizing<Vec<u8>>,
         parent: Option<([u8; 16], bool)>,
     ) -> Result<MutationOperation> {
+        self.prepare_linked(draft, material, parent, None)
+    }
+
+    pub(crate) fn prepare_sso_signup(
+        &mut self,
+        draft: MutationDraft,
+        material: Zeroizing<Vec<u8>>,
+        flow: [u8; 16],
+    ) -> Result<MutationOperation> {
+        self.prepare_linked(draft, material, None, Some(flow))
+    }
+
+    fn prepare_linked(
+        &mut self,
+        draft: MutationDraft,
+        material: Zeroizing<Vec<u8>>,
+        parent: Option<([u8; 16], bool)>,
+        sso: Option<[u8; 16]>,
+    ) -> Result<MutationOperation> {
         let material_ref = draft.operation_id.to_vec();
         let now = now_microseconds()?;
         let operation = MutationOperation {
@@ -109,7 +128,10 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
             Some((parent, completion)) => {
                 hard_store.record_child_mutation(&operation, &parent, completion)
             }
-            None => hard_store.record_mutation(&operation),
+            None => match sso {
+                Some(flow) => hard_store.record_sso_signup(&operation, &flow),
+                None => hard_store.record_mutation(&operation),
+            },
         };
         if let Err(error) = recorded {
             // If another writer did not claim this exact operation ID, there
