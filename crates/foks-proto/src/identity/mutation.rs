@@ -1207,11 +1207,10 @@ pub struct HostConfig {
 
 /// Public registration policy returned by `Reg.getServerConfig`.
 ///
-/// Preserves optional raw SSO bytes to ensure round-trip fidelity across
-/// different server configurations.
+/// Typed SSO policy preserves the pinned optional configuration shape.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegServerConfig {
-    pub sso: Option<Vec<u8>>,
+    pub sso: Option<crate::SsoConfig>,
     pub host_type: u64,
     pub user_viewership: ViewershipMode,
     pub team_viewership: ViewershipMode,
@@ -1227,8 +1226,8 @@ impl RegServerConfig {
         }
         let sso = self
             .sso
-            .as_deref()
-            .map(decode)
+            .as_ref()
+            .map(|config| -> Result<Value> { Ok(decode(&config.encoded()?)?) })
             .transpose()?
             .unwrap_or(Value::Null);
         Ok(encode(&Value::Array(vec![
@@ -1254,9 +1253,7 @@ impl RegServerConfig {
             ));
         }
         Ok(Self {
-            sso: (!matches!(fields[0], Value::Null))
-                .then(|| encode(&fields[0]))
-                .transpose()?,
+            sso: option(&fields[0], |v| crate::SsoConfig::decode(&encode(v)?))?,
             host_type,
             user_viewership: ViewershipMode::decode(&viewership[0])?,
             team_viewership: ViewershipMode::decode(&viewership[1])?,

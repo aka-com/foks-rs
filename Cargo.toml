@@ -15,6 +15,7 @@ members = [
     "crates/foks-keystore",
     "crates/foks-merkle-store",
     "crates/foks-mcp",
+    "crates/foks-oidc",
     "crates/foks-proto",
     "crates/foks-protocol-metadata",
     "crates/foks-rpc",
@@ -61,6 +62,7 @@ foks-go-interop = { path = "crates/foks-go-interop" }
 foks-keystore = { path = "crates/foks-keystore" }
 foks-merkle-store = { path = "crates/foks-merkle-store" }
 foks-mcp = { path = "crates/foks-mcp" }
+foks-oidc = { path = "crates/foks-oidc" }
 foks-proto = { path = "crates/foks-proto" }
 foks-protocol-metadata = { path = "crates/foks-protocol-metadata" }
 foks-rpc = { path = "crates/foks-rpc" }

@@ -26,7 +26,9 @@ use thiserror::Error;
 pub mod arguments;
 mod generated;
 mod realtime;
+mod sso;
 mod status;
+pub use sso::*;
 use status::check_status;
 #[cfg(test)]
 mod realtime_status_tests;

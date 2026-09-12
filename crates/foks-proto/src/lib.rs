@@ -87,6 +87,7 @@ mod realtime;
 mod realtime_extension;
 mod role;
 mod service;
+mod sso;
 mod yubi;
 
 pub use chat_context::*;
@@ -104,6 +105,7 @@ pub use realtime::*;
 pub use realtime_extension::*;
 pub use role::*;
 pub use service::*;
+pub use sso::*;
 pub use yubi::*;
 
 pub(crate) use codec::{

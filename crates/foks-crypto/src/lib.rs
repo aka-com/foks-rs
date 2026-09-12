@@ -11,6 +11,8 @@ mod chat_v2;
 mod kex;
 mod passphrase;
 mod realtime;
+mod sso;
+pub use sso::*;
 
 pub use backup::*;
 pub use chat_v2::*;
