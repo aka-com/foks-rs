@@ -2,6 +2,10 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("SSO flow failed: {0}")]
+    Sso(&'static str),
+    #[error(transparent)]
+    Oidc(#[from] foks_oidc::Error),
     #[error("server I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("TLS configuration failed: {0}")]

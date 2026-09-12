@@ -7,6 +7,7 @@ use crate::{Entropy, RateLimitConfig, WriterHandle};
 
 #[derive(Clone)]
 pub struct Config {
+    pub sso: Option<Arc<crate::sso::SsoService>>,
     pub probe_address: SocketAddr,
     pub public_address: SocketAddr,
     pub authenticated_address: SocketAddr,

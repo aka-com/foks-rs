@@ -3,10 +3,11 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 pub const APPLICATION_ID: i64 = 0x464f_4b53;
-pub const SCHEMA_VERSION: i64 = 35;
+pub const SCHEMA_VERSION: i64 = 37;
 
 const SCHEMA: &str = concat!(
     include_str!("schema/core.sql"),
+    include_str!("schema/sso.sql"),
     include_str!("schema/identity.sql"),
     include_str!("schema/invites.sql"),
     include_str!("schema/passphrases.sql"),

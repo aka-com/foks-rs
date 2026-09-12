@@ -25,6 +25,7 @@ pub(super) fn role(kind: i64, visibility: i64) -> Result<Role> {
     }
 }
 pub(super) fn check_actor(c: &Connection, a: &RealtimeActor, now: u64) -> Result<()> {
+    crate::sso_access::require_access(c, &a.uid, now / 1000)?;
     if now >= a.certificate_expires_at
         || a.uid.first() != Some(&ENTITY_USER)
         || !matches!(

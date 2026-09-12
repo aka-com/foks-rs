@@ -1,7 +1,9 @@
 //! Shared OIDC policy. A validated provider token is not a FOKS device credential.
 #![forbid(unsafe_code)]
+mod exchange;
 mod provider;
 use chrono::{DateTime, Utc};
+pub use exchange::*;
 use openidconnect::{
     core::{CoreIdToken, CoreIdTokenVerifier, CoreJsonWebKeySet, CoreJwsSigningAlgorithm},
     ClientId, IssuerUrl, Nonce,
@@ -18,6 +20,8 @@ pub const MAX_IDENTITY_SESSIONS: usize = 4;
 
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum Error {
+    #[error("OIDC provider rejected the grant")]
+    GrantRejected,
     #[error("OIDC provider is unavailable")]
     ProviderUnavailable,
     #[error("invalid OIDC provider configuration")]
@@ -47,6 +51,9 @@ pub struct TokenValidator {
     keys: CoreJsonWebKeySet,
 }
 impl TokenValidator {
+    pub(crate) fn client_id(&self) -> &str {
+        self.client_id.as_str()
+    }
     pub fn new(issuer: String, client_id: String, jwks: &[u8]) -> Result<Self, Error> {
         if jwks.len() > MAX_PROVIDER_BYTES {
             return Err(Error::DocumentLimit);
@@ -63,6 +70,23 @@ impl TokenValidator {
         })
     }
     pub fn validate(&self, raw: &str, nonce: &str, now_ms: u64) -> Result<VerifiedIdentity, Error> {
+        self.validate_mode(raw, nonce, now_ms, false)
+    }
+    pub fn validate_refresh(
+        &self,
+        raw: &str,
+        nonce: &str,
+        now_ms: u64,
+    ) -> Result<VerifiedIdentity, Error> {
+        self.validate_mode(raw, nonce, now_ms, true)
+    }
+    fn validate_mode(
+        &self,
+        raw: &str,
+        nonce: &str,
+        now_ms: u64,
+        allow_missing_nonce: bool,
+    ) -> Result<VerifiedIdentity, Error> {
         if raw.len() > MAX_PROVIDER_BYTES {
             return Err(Error::DocumentLimit);
         }
@@ -90,7 +114,13 @@ impl TokenValidator {
             }
         });
         let claims = token
-            .claims(&verifier, &Nonce::new(nonce.to_owned()))
+            .claims(&verifier, |claim: Option<&Nonce>| {
+                if allow_missing_nonce && claim.is_none() {
+                    Ok(())
+                } else {
+                    openidconnect::NonceVerifier::verify(&Nonce::new(nonce.to_owned()), claim)
+                }
+            })
             .map_err(|_| Error::Token)?;
         // SDK deliberately leaves azp to callers. Multi-audience tokens require it.
         if claims
@@ -99,6 +129,7 @@ impl TokenValidator {
             || (claims.audiences().len() > 1 && claims.authorized_party().is_none())
             || claims.subject().as_str().is_empty()
             || claims.subject().as_str().len() > 255
+            || !claims.subject().as_str().is_ascii()
             || claims.expiration() <= claims.issue_time()
             || claims.issuer().as_str() != self.issuer.as_str()
         {

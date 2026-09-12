@@ -40,6 +40,10 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "DELETE FROM sso_sessions WHERE expires_at_ms<=?1",
+            [sql_integer(now / 1000)?],
+        )?;
         let reservations = transaction.execute(
             "DELETE FROM names WHERE uid IS NULL AND expires_at <= ?1",
             [sql_integer(now)?],

@@ -540,7 +540,9 @@ fn validate_listener(value: &str) -> Result<(), MetadataError> {
 fn validate_route_result(value: &str) -> Result<(), MetadataError> {
     if matches!(
         value,
-        "RtChannelSet"
+        "URLString"
+            | "OAuth2PollResult"
+            | "RtChannelSet"
             | "RtChatCapabilities"
             | "RtSendResult"
             | "RtThreadPage"

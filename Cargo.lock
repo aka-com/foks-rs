@@ -2030,13 +2030,16 @@ dependencies = [
 name = "foks-oidc"
 version = "0.3.0"
 dependencies = [
+ "base64 0.23.1",
  "chrono",
  "openidconnect",
  "reqwest",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -2075,17 +2078,22 @@ dependencies = [
 name = "foks-server"
 version = "0.3.0"
 dependencies = [
+ "base64 0.23.1",
  "chacha20poly1305",
  "clap",
  "foks-client-db",
  "foks-crypto",
  "foks-merkle-store",
+ "foks-oidc",
  "foks-proto",
  "foks-rpc",
  "foks-server-db",
  "foks-snowpack",
  "foks-verify",
  "getrandom 0.4.3",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "libc",
  "lru",
  "rcgen",
@@ -2093,6 +2101,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "serde",
+ "serde_json",
  "signal-hook",
  "tempfile",
  "thiserror 2.0.20",
@@ -2100,6 +2109,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "toml 0.9.12+spec-1.1.0",
+ "url",
  "x509-parser",
  "zeroize",
 ]
@@ -2121,6 +2131,7 @@ dependencies = [
 name = "foks-server-testkit"
 version = "0.3.0"
 dependencies = [
+ "base64 0.23.1",
  "foks-agent-client",
  "foks-agent-proto",
  "foks-client",
@@ -2130,6 +2141,7 @@ dependencies = [
  "foks-crypto",
  "foks-desktop",
  "foks-merkle-store",
+ "foks-oidc",
  "foks-proto",
  "foks-rpc",
  "foks-server",
@@ -2137,14 +2149,22 @@ dependencies = [
  "foks-snowpack",
  "foks-verify",
  "foks-yubi",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "rcgen",
+ "reqwest",
+ "rsa",
  "rusqlite",
  "rustls",
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
+ "tokio",
  "toml 0.9.12+spec-1.1.0",
+ "url",
  "zeroize",
 ]
 
@@ -2812,6 +2832,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
+name = "httpdate"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
 name = "hybrid-array"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2835,6 +2861,7 @@ dependencies = [
  "http",
  "http-body",
  "httparse",
+ "httpdate",
  "itoa",
  "pin-project-lite",
  "smallvec",

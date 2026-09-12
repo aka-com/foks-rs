@@ -47,3 +47,6 @@ mod yubikey;
 
 #[path = "conformance/realtime.rs"]
 mod realtime;
+
+#[path = "conformance/sso.rs"]
+mod sso;

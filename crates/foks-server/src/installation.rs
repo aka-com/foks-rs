@@ -14,6 +14,8 @@ const MAXIMUM_CONFIG_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct InstallationConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oidc: Option<crate::sso::OidcOperatorConfig>,
     pub version: u32,
     pub canonical_name: String,
     pub database: PathBuf,
@@ -33,6 +35,21 @@ pub struct InstallationConfig {
 impl InstallationConfig {
     pub fn validate(&self) -> crate::Result<()> {
         validate_hostname(&self.canonical_name)?;
+        if let Some(oidc) = &self.oidc {
+            oidc.validate(foks_oidc::NetworkPolicy::default())?;
+            if [
+                self.probe_address,
+                self.public_address,
+                self.authenticated_address,
+                self.management_address,
+            ]
+            .contains(&oidc.listen)
+            {
+                return Err(crate::Error::Config(
+                    "OIDC listener must have a distinct address",
+                ));
+            }
+        }
         if self.version != INSTALLATION_VERSION
             || self.backup_interval_seconds == 0
             || self.backup_retain == 0
@@ -128,6 +145,7 @@ pub fn initialize(
     write_new_file(&probe_certificate_der, certificate.der(), 0o644)?;
 
     let config = InstallationConfig {
+        oidc: None,
         version: INSTALLATION_VERSION,
         canonical_name: canonical_name.to_owned(),
         database: data.join("foks-server.sqlite"),
@@ -158,6 +176,10 @@ pub fn load_config(path: impl AsRef<Path>) -> crate::Result<InstallationConfig> 
 }
 
 pub fn validate_artifacts(config: &InstallationConfig) -> crate::Result<()> {
+    if let Some(oidc) = &config.oidc {
+        crate::keys::read_secret_file(&oidc.client_secret_file, 4096)?;
+    }
+
     config.validate()?;
     crate::keys::read_root_key_file(&config.root_key_file)?;
     validate_private_directory(&config.key_directory)?;

@@ -69,11 +69,19 @@ pub(super) async fn poll_response(
         }
     })
     .await?;
+    let auth_data = data.clone();
+    let auth_principal = principal.clone();
+    blocking(move || auth_data.authorize_principal(&auth_principal)).await?;
     let actor = crate::services::realtime::RealtimeService::actor(&principal, &data.host_id)?;
     let listener = data.realtime.listener(&actor, app)?;
-    let writer = data.writer.clone().ok_or(RpcStatus::Unsupported)?;
+    let writer = data
+        .writer
+        .as_ref()
+        .ok_or(RpcStatus::Unsupported)?
+        .for_authenticated_request(principal.uid(), principal.device_id(), data.clock.clone());
     let service = data.realtime.clone();
     let deadline = tokio::time::Instant::now() + timeout;
+    let mut active_poll = None;
     loop {
         let mut notified = Box::pin(Arc::clone(&listener).notified_owned());
         notified.as_mut().enable();
@@ -108,10 +116,10 @@ pub(super) async fn poll_response(
         if remaining.is_zero() {
             return poll_result(sequence, head, false);
         }
-        let _active_poll = crate::ServerMetrics::realtime_poll_guard(Arc::clone(&data.metrics));
-        if tokio::time::timeout(remaining, notified).await.is_err() {
-            return poll_result(sequence, head, false);
-        }
+        active_poll.get_or_insert_with(|| {
+            crate::ServerMetrics::realtime_poll_guard(Arc::clone(&data.metrics))
+        });
+        let _ = tokio::time::timeout(remaining.min(Duration::from_secs(1)), notified).await;
     }
 }
 

@@ -26,6 +26,7 @@ mod rate_limit;
 mod read_pool;
 pub mod rpc;
 mod services;
+pub mod sso;
 mod standalone;
 mod writer;
 

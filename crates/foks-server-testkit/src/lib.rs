@@ -9,6 +9,7 @@ mod client;
 mod clock;
 mod config;
 mod environment;
+pub mod oidc;
 mod process;
 mod scheduling;
 

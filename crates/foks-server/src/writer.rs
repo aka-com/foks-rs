@@ -53,7 +53,14 @@ pub struct Writer {
 
 #[derive(Clone)]
 pub struct WriterHandle {
+    authorization: Option<Arc<WriteAuthorization>>,
     queue: Arc<WriterQueue>,
+}
+
+struct WriteAuthorization {
+    uid: Vec<u8>,
+    credential: Vec<u8>,
+    clock: Arc<dyn foks_server_db::Clock>,
 }
 
 struct WriterQueue {
@@ -155,6 +162,7 @@ impl Writer {
         match startup_receiver.recv() {
             Ok(Ok(())) => Ok(Self {
                 handle: WriterHandle {
+                    authorization: None,
                     queue: Arc::new(WriterQueue {
                         sender,
                         accepting: Mutex::new(true),
@@ -214,11 +222,40 @@ impl Writer {
 }
 
 impl WriterHandle {
+    pub(crate) fn for_authenticated_request(
+        &self,
+        uid: &[u8],
+        credential: &[u8],
+        clock: Arc<dyn foks_server_db::Clock>,
+    ) -> Self {
+        Self {
+            queue: self.queue.clone(),
+            authorization: Some(Arc::new(WriteAuthorization {
+                uid: uid.to_vec(),
+                credential: credential.to_vec(),
+                clock,
+            })),
+        }
+    }
+
     pub fn call<F, T>(&self, operation: F) -> Result<T>
     where
         F: FnOnce(&mut Database) -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
+        let authorization = self.authorization.clone();
+        let operation = move |database: &mut Database| {
+            if let Some(auth) = authorization {
+                if database
+                    .active_credential_owner(&auth.uid, &auth.credential)?
+                    .is_none()
+                {
+                    return Err(Error::AuthorizationChanged);
+                }
+                database.sso_require_access(&auth.uid, auth.clock.now_micros()? / 1000)?;
+            }
+            operation(database)
+        };
         let (response, receiver) = mpsc::sync_channel(1);
         let accepting = self
             .queue

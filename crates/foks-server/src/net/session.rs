@@ -26,7 +26,10 @@ use crate::keys::{HostKeyProvider, KeyPurpose};
 use crate::rpc::{route_call, Listener, RouteError};
 use crate::{Entropy, Result, SessionLimits, WriterHandle};
 
+#[derive(Clone)]
 pub(crate) struct ServerData {
+    sso: Option<Arc<crate::sso::SsoService>>,
+    peer_ip: Option<std::net::IpAddr>,
     probe_response: Arc<[u8]>,
     host_id: Vec<u8>,
     canonical_name: String,
@@ -109,6 +112,15 @@ impl ServerData {
             .first()
             .ok_or(crate::Error::Config("empty bootstrap hostchain"))?;
         let host_id = first.decode_change()?.host.into_bytes();
+        if config
+            .sso
+            .as_ref()
+            .is_some_and(|s| s.configured_host().as_slice() != host_id)
+        {
+            return Err(crate::Error::Config(
+                "OIDC service belongs to a different host",
+            ));
+        }
         let zone = foks_proto::PublicZone::decode(&probe.public_zone.inner)?;
         let root = MerkleRoot::decode(&probe.merkle_root.inner)?;
         let probe_endpoint = zone.services.probe.clone();
@@ -116,6 +128,8 @@ impl ServerData {
             .ok_or(crate::Error::Config("invalid bootstrap probe endpoint"))?
             .to_owned();
         Ok(Self {
+            sso: config.sso.clone(),
+            peer_ip: None,
             probe_response,
             host_id,
             canonical_name,
@@ -574,6 +588,22 @@ impl ServerData {
         let host = EntityId::from_bytes(self.host_id.clone()).map_err(bad_arguments)?;
         let validated = validate_signup(&request, &host, &cited_root, cited.root_hash)
             .map_err(|_| bad_arguments("software signup validation failed"))?;
+        let sso_binding = match &self.sso {
+            Some(service) => Some(
+                service
+                    .prepare_signup(
+                        &request.sso,
+                        &validated.uid,
+                        &validated.device_id,
+                        &request.username_utf8,
+                        &request.email,
+                        &request.reservation,
+                    )
+                    .map_err(crate::sso::status)?,
+            ),
+            None if request.sso == foks_proto::RegSsoArgs::None => None,
+            None => return Err(RpcStatus::OAuth2("OIDC is not configured".into())),
+        };
         let passphrase = request
             .passphrase
             .as_ref()
@@ -711,10 +741,15 @@ impl ServerData {
                 now,
                 receipt_expires_at,
             };
-            database.commit_identity(&mutation)?;
+            database.commit_identity_with_sso(&mutation, sso_binding.as_ref())?;
             Ok(())
         });
         match result {
+            Err(crate::Error::Database(foks_server_db::Error::Duplicate(
+                "SSO provider identity",
+            ))) => Err(RpcStatus::OAuth2(
+                "provider identity is already linked to another account".into(),
+            )),
             Ok(()) => Ok(()),
             Err(crate::Error::Database(foks_server_db::Error::NameInUse)) => {
                 Err(RpcStatus::NameInUse)
@@ -756,6 +791,10 @@ impl ServerData {
         ) {
             return Err(bad_arguments("unsupported certificate credential kind"));
         }
+        if let Some(sso) = &self.sso {
+            sso.ensure_access(uid.as_bytes(), device.as_bytes())
+                .map_err(|e| RpcStatus::OAuth2Auth(Box::new(crate::sso::status(e))))?;
+        }
         let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
         let keys = Arc::clone(self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?);
         let clock = Arc::clone(&self.clock);
@@ -768,6 +807,7 @@ impl ServerData {
                 return Ok(None);
             };
             let now = clock.now_micros()?;
+            database.sso_require_access(uid.as_bytes(), now / 1000)?;
             if let Some(certificate) =
                 database.certificate_for_device(uid.as_bytes(), device.as_bytes())?
             {
@@ -1382,7 +1422,33 @@ pub(crate) async fn serve(
             &routed,
             Ok(call) if call.route.id == crate::rpc::RouteId::RealTimeRtPollInbox
         );
-        let outcome = if kex_receive {
+        let sso_poll = matches!(&routed,Ok(call) if call.route.id==crate::rpc::RouteId::RegPollOAuth2SessionCompletion);
+        let outcome = if sso_poll {
+            let _request_memory = request_memory;
+            let call = match routed {
+                Ok(call) => call,
+                Err(_) => unreachable!("recognized OIDC poll"),
+            };
+            let route = Some(call.route);
+            let result = async {
+                let service = data.sso.as_ref().ok_or(RpcStatus::Unsupported)?;
+                let arg = foks_proto::PollOAuth2SessionArgument::decode(call.call.argument())
+                    .map_err(|_| bad_arguments("invalid OIDC poll"))?;
+                let bytes = service.poll(arg).await?;
+                foks_rpc::encode_success_response_at(&bytes, sequence)
+                    .map_err(|_| RpcStatus::TransactionRetry)
+            };
+            let response = tokio::select! {
+                result=result=>match result {Ok(bytes)=>bytes,Err(status)=>encode_status_response_at(&status,sequence)?},
+                _=stream.get_ref().0.readable()=>return Ok(()),
+                _=stop.changed()=>break,
+            };
+            RequestOutcome {
+                response,
+                route,
+                disconnect_before_response: false,
+            }
+        } else if kex_receive {
             // Go-compatible KEX receives can remain open for up to an hour.
             // Await the relay directly rather than occupying a blocking worker;
             // the listener's active-connection semaphore remains the bound.
@@ -1534,7 +1600,26 @@ pub(crate) async fn serve(
                                     disconnect_before_response: true,
                                 });
                             }
-                            match handlers::response(data.as_ref(), call, principal.as_ref()) {
+                            let mut request_data = data.as_ref().clone();
+                            request_data.peer_ip = Some(peer_ip);
+                            let authorization = if !call.route.supported {
+                                Err(RpcStatus::Unsupported)
+                            } else if let Some(principal) = principal.as_ref() {
+                                request_data.authorize_principal(principal).map(|()| {
+                                    request_data.writer = request_data.writer.as_ref().map(|w| {
+                                        w.for_authenticated_request(
+                                            principal.uid(),
+                                            principal.device_id(),
+                                            request_data.clock.clone(),
+                                        )
+                                    });
+                                })
+                            } else {
+                                Ok(())
+                            };
+                            match authorization.and_then(|()| {
+                                handlers::response(&request_data, call, principal.as_ref())
+                            }) {
                                 Ok(response) => response,
                                 Err(status) => encode_status_response_at(&status, sequence)?,
                             }
@@ -2052,5 +2137,29 @@ mod tests {
             foks_rpc::InboundMessage::Call(call) => assert_eq!(call.argument(), argument),
             foks_rpc::InboundMessage::Control => panic!("expected a CALL_V2 request"),
         }
+    }
+}
+
+impl ServerData {
+    fn authorize_principal(&self, principal: &Principal) -> std::result::Result<(), RpcStatus> {
+        let reader = self.read_database()?;
+        let now = self
+            .clock
+            .now_micros()
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        if reader
+            .sso_require_access(principal.uid(), now / 1000)
+            .is_ok()
+        {
+            return Ok(());
+        }
+        drop(reader);
+        let sso = self.sso.as_ref().ok_or_else(|| {
+            RpcStatus::OAuth2Auth(Box::new(RpcStatus::OAuth2(
+                "provider disabled; service access remains locked".into(),
+            )))
+        })?;
+        sso.ensure_access(principal.uid(), principal.device_id())
+            .map_err(|e| RpcStatus::OAuth2Auth(Box::new(crate::sso::status(e))))
     }
 }

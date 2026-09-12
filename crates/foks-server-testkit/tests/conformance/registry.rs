@@ -24,6 +24,15 @@ struct DeclaredRoute {
 
 const COVERAGE: &[Coverage] = &[
     Coverage {
+        name: "sso",
+        run: crate::sso::sso_signup_login_and_expiry_enforcement,
+        routes: &[
+            ("Reg", "initOAuth2Session"),
+            ("Reg", "pollOAuth2SessionCompletion"),
+            ("Reg", "ssoLogin"),
+        ],
+    },
+    Coverage {
         name: "kex_relay",
         run: crate::kex::interactive_software_device_pairing,
         routes: &[("Kex", "send"), ("Kex", "receive")],

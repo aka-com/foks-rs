@@ -15,6 +15,7 @@ use crate::Writer;
 use crate::{Config, ReadDatabaseConfig, Result, SessionLimits};
 
 pub struct StandaloneConfig {
+    pub oidc: Option<(crate::sso::OidcOperatorConfig, foks_oidc::NetworkPolicy)>,
     pub database_path: PathBuf,
     pub key_directory: PathBuf,
     pub root_key: Zeroizing<[u8; 32]>,
@@ -42,6 +43,7 @@ pub struct RunningStandaloneServer {
     // Drop first so the backup thread cannot outlive the shared key-provider
     // lock held by `server` and race an offline rotation.
     backup: Option<crate::operations::BackupScheduler>,
+    oidc_http: Option<crate::sso::OidcHttpServer>,
     server: RunningServer,
     bootstrap: BootstrapState,
     delegated_roots: rustls::RootCertStore,
@@ -554,6 +556,9 @@ impl RunningStandaloneServer {
         if let Some(backup) = self.backup.take() {
             backup.shutdown()?;
         }
+        if let Some(http) = self.oidc_http.take() {
+            http.shutdown()?;
+        }
         self.server.shutdown()?;
         self.management.shutdown()?;
         self.maintenance.shutdown()?;
@@ -715,8 +720,35 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     let metrics = Arc::new(crate::ServerMetrics::default());
     let backup_schedule = config.backup;
 
+    let sso = if let Some((operator, policy)) = config.oidc {
+        let host: [u8; 33] = bootstrap
+            .host_id
+            .as_bytes()
+            .try_into()
+            .map_err(|_| crate::Error::Config("invalid OIDC host"))?;
+        Some(crate::sso::SsoService::open(
+            operator,
+            policy,
+            host,
+            writer_handle.clone(),
+            keys.clone(),
+            config.clock.clone(),
+            config.entropy.clone(),
+        )?)
+    } else {
+        writer_handle.call(|db| {
+            db.sso_disable_policy()?;
+            Ok(())
+        })?;
+        None
+    };
+    let oidc_http = sso
+        .as_ref()
+        .map(|service| crate::sso::OidcHttpServer::start(service.clone()))
+        .transpose()?;
     let server = RunningServer::start_bound(
         Config {
+            sso,
             probe_address: config.probe_address,
             public_address: config.public_address,
             authenticated_address: config.authenticated_address,
@@ -762,6 +794,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         .transpose()?;
     management.mark_ready();
     Ok(RunningStandaloneServer {
+        oidc_http,
         backup,
         server,
         bootstrap,

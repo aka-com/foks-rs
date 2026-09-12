@@ -326,9 +326,16 @@ func liveSignup(
 	if err := reg.CheckNameExists(ctx, username); err == nil {
 		t.Fatal("checkNameExists accepted an unused name")
 	}
-	reservation, err := reg.ReserveUsername(ctx, username)
+	config, err := reg.GetServerConfig(ctx)
 	if err != nil {
-		t.Fatalf("reserve username: %v", err)
+		t.Fatal(err)
+	}
+	var reservation rem.ReserveNameRes
+	if config.Sso == nil {
+		reservation, err = reg.ReserveUsername(ctx, username)
+		if err != nil {
+			t.Fatalf("reserve username: %v", err)
+		}
 	}
 	var deviceSeed, pukSeed proto.SecretSeed32
 	for index := range deviceSeed {
@@ -348,6 +355,25 @@ func liveSignup(
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	pukEntity, err := puk.EntityID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	uidEntity, err := pukEntity.Persistent(proto.PartyType_User)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, err := uidEntity.ToUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ssoArg := rem.NewRegSSOArgsWithNone()
+	email := proto.Email("gocompat@example.com")
+	if config.Sso != nil {
+		ssoArg, reservation = liveOidcFlow(t, ctx, reg, merkleClient, host, uid, device, false)
+		email = proto.Email("gocompat@example.test")
 	}
 	label := proto.DeviceLabel{
 		DeviceType: proto.DeviceType_Computer,
@@ -374,18 +400,6 @@ func liveSignup(
 	if err != nil {
 		t.Fatal(err)
 	}
-	pukEntity, err := puk.EntityID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	uidEntity, err := pukEntity.Persistent(proto.PartyType_User)
-	if err != nil {
-		t.Fatal(err)
-	}
-	uid, err := uidEntity.ToUID()
-	if err != nil {
-		t.Fatal(err)
-	}
 	selfToken, err := core.NewPermissionToken()
 	if err != nil {
 		t.Fatal(err)
@@ -406,11 +420,11 @@ func liveSignup(
 		},
 		NextTreeLocation:         *eldest.NextTreeLocation,
 		InviteCode:               rem.NewInviteCodeWithEmpty(),
-		Email:                    proto.Email("gocompat@example.com"),
+		Email:                    email,
 		SubchainTreeLocationSeed: *eldest.SubchainTreeLocationSeed,
 		SelfToken:                selfToken,
 		Hepks:                    *eldest.HEPKSet,
-		Sso:                      rem.NewRegSSOArgsWithNone(),
+		Sso:                      ssoArg,
 	}
 	if err := reg.Signup(ctx, argument); err != nil {
 		t.Fatalf("official signup: %v", err)

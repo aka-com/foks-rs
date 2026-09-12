@@ -33,6 +33,7 @@ impl SessionDiagnostics for StderrSessionDiagnostics {
 
 pub(crate) fn classify(error: &Error) -> SessionErrorClass {
     match error {
+        Error::Sso(_) | Error::Oidc(_) => SessionErrorClass::Internal,
         Error::Io(_) => SessionErrorClass::Transport,
         Error::Tls(_) => SessionErrorClass::Tls,
         Error::Rpc(_) => SessionErrorClass::Rpc,

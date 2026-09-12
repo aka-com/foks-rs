@@ -12,6 +12,12 @@ pub struct InProcessServer {
 
 impl InProcessServer {
     pub(crate) fn start(environment: TestEnvironment) -> foks_server::Result<Self> {
+        Self::start_with_oidc(environment, None)
+    }
+    pub(crate) fn start_with_oidc(
+        environment: TestEnvironment,
+        oidc: Option<foks_server::sso::OidcOperatorConfig>,
+    ) -> foks_server::Result<Self> {
         {
             let mut running = environment
                 .inner
@@ -26,6 +32,7 @@ impl InProcessServer {
         let [probe_address, public_address, authenticated_address] =
             environment.configured_addresses();
         let result = foks_server::start_standalone(StandaloneConfig {
+            oidc: oidc.map(|config| (config, foks_oidc::NetworkPolicy::loopback_test())),
             database_path: environment.inner.paths.database().to_path_buf(),
             key_directory: environment.inner.paths.keys().to_path_buf(),
             root_key: zeroize::Zeroizing::new(environment.inner.root_key),
@@ -271,6 +278,7 @@ impl ProbeOverrideServer {
             environment.configured_addresses();
         let tls = Arc::clone(&environment.inner.tls.public);
         let result = foks_server::net::start(foks_server::Config {
+            sso: None,
             probe_address,
             public_address,
             authenticated_address,

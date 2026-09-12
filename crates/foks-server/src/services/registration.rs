@@ -26,6 +26,7 @@ pub(crate) fn client_version_info(argument: &[u8]) -> Result<Vec<u8>, RpcStatus>
 pub(crate) fn server_config(
     argument: &[u8],
     database: &foks_server_db::ReadDatabase,
+    sso: Option<foks_proto::SsoConfig>,
 ) -> Result<Vec<u8>, RpcStatus> {
     foks_rpc::arguments::decode_void(argument).map_err(bad_arguments)?;
     let invite_code_regime = database
@@ -34,7 +35,7 @@ pub(crate) fn server_config(
         .regime
         .protocol_value();
     foks_proto::RegServerConfig {
-        sso: None,
+        sso,
         host_type: 4,
         user_viewership: USER_VIEWERSHIP,
         team_viewership: foks_proto::ViewershipMode::Open,

@@ -271,3 +271,37 @@ mod http_tests {
         thread.join().unwrap();
     }
 }
+
+impl openidconnect::SyncHttpClient for ProviderHttp {
+    type Error = Error;
+    fn call(
+        &self,
+        request: openidconnect::HttpRequest,
+    ) -> Result<openidconnect::HttpResponse, Error> {
+        let url = self.policy.check_url(&request.uri().to_string())?;
+        if request.body().len() > MAX_PROVIDER_BYTES {
+            return Err(Error::DocumentLimit);
+        }
+        let (parts, body) = request.into_parts();
+        let response = self
+            .client
+            .request(parts.method, url)
+            .headers(parts.headers)
+            .body(body)
+            .send()
+            .map_err(|_| Error::ProviderUnavailable)?;
+        // Never forward a code, verifier or client secret to a redirect target.
+        if response.status().is_redirection() {
+            return Err(Error::ProviderUnavailable);
+        }
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = bounded_response(response)?;
+        let mut result = openidconnect::http::Response::builder()
+            .status(status)
+            .body(bytes)
+            .map_err(|_| Error::ProviderUnavailable)?;
+        *result.headers_mut() = headers;
+        Ok(result)
+    }
+}

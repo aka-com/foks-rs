@@ -75,6 +75,22 @@ impl Database {
         mutation: &IdentityMutation<'_>,
         failure: Option<FailurePoint>,
     ) -> Result<CommitOutcome> {
+        self.commit_identity_authorized(mutation, failure, None)
+    }
+
+    pub fn commit_identity_with_sso(
+        &mut self,
+        mutation: &IdentityMutation<'_>,
+        binding: Option<&crate::SsoAccountBinding>,
+    ) -> Result<CommitOutcome> {
+        self.commit_identity_authorized(mutation, None, binding)
+    }
+    fn commit_identity_authorized(
+        &mut self,
+        mutation: &IdentityMutation<'_>,
+        failure: Option<FailurePoint>,
+        binding: Option<&crate::SsoAccountBinding>,
+    ) -> Result<CommitOutcome> {
         validate(self, mutation)?;
         let transaction = self
             .connection
@@ -87,6 +103,7 @@ impl Database {
         )? {
             return Ok(CommitOutcome::Replayed(receipt.response));
         }
+        crate::sso_access::require_signup(&transaction, binding)?;
         let consumed_invite = crate::invites::consume(&transaction, mutation.invite, mutation.now)?;
         inject(failure, FailurePoint::Invite)?;
         let reservation: Option<(Vec<u8>, i64, i64)> = transaction
@@ -305,6 +322,14 @@ impl Database {
             mutation.receipt_expires_at,
         )?;
         inject(failure, FailurePoint::Receipt)?;
+        if let Some(binding) = binding {
+            if binding.access.uid.as_slice() != mutation.uid
+                || binding.device.as_slice() != mutation.device_id
+            {
+                return Err(Error::AuthorizationChanged);
+            }
+            crate::sso_access::bind(&transaction, binding, mutation.now / 1000, true)?;
+        }
         transaction.commit()?;
         Ok(CommitOutcome::Committed(mutation.response.to_vec()))
     }

@@ -9,6 +9,9 @@ description = "Bounded OIDC provider and identity policy for FOKS clients and ho
 test-support = []
 
 [dependencies]
+base64 = { workspace = true }
+sha2 = "0.10"
+zeroize = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 tokio = { workspace = true }
 openidconnect = { version = "=4.0.1", default-features = false }

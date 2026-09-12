@@ -135,6 +135,8 @@ struct InitArguments {
 
 #[derive(clap::Args)]
 struct ServeArguments {
+    #[arg(skip)]
+    oidc: Option<foks_server::sso::OidcOperatorConfig>,
     #[arg(long)]
     canonical_name: String,
     #[arg(long)]
@@ -374,6 +376,7 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let config = foks_server::installation::load_config(path)?;
     foks_server::installation::validate_artifacts(&config)?;
     serve(ServeArguments {
+        oidc: config.oidc,
         canonical_name: config.canonical_name,
         database: config.database,
         key_directory: config.key_directory,
@@ -444,6 +447,10 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
     let now_microseconds =
         u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros())?;
     let server = foks_server::start_standalone(StandaloneConfig {
+        oidc: arguments
+            .oidc
+            .clone()
+            .map(|config| (config, foks_oidc::NetworkPolicy::default())),
         database_path: arguments.database,
         key_directory: arguments.key_directory,
         root_key,

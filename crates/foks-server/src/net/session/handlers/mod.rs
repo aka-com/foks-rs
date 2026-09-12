@@ -25,6 +25,7 @@ pub(super) fn response(
     use RouteId::*;
 
     match call.route.id {
+        RegPollOAuth2SessionCompletion => Err(RpcStatus::Unsupported),
         ProbeProbe
         | MerkleQueryLookup
         | MerkleQueryGetHistoricalRoots
@@ -37,7 +38,9 @@ pub(super) fn response(
         | RegSelectVHost
         | KvStoreSelectVHost => probe::response(data, call),
         BeaconBeaconLookup => beacon::response(data, call),
-        RegReserveUsername
+        RegInitOAuth2Session
+        | RegSsoLogin
+        | RegReserveUsername
         | RegCheckNameExists
         | RegJoinWaitList
         | RegResolveUsername

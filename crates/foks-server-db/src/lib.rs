@@ -27,6 +27,8 @@ mod realtime;
 mod receipts;
 mod recovery;
 mod schema;
+mod sso;
+mod sso_access;
 mod team;
 mod team_names;
 mod transaction;
@@ -83,6 +85,8 @@ pub use realtime::{RealtimeActor, RealtimeCommit, RealtimeLimits, RealtimeWakeTa
 pub use receipts::Receipt;
 pub use recovery::RecoveryCredentialSnapshot;
 pub use schema::{APPLICATION_ID, SCHEMA_VERSION};
+pub use sso::{SsoSession, SsoSessionState};
+pub use sso_access::{SsoAccess, SsoAccessState, SsoAccountBinding};
 pub use team::{
     TeamHeader, TeamLocalViewPermissionMutation, TeamMemberMutation, TeamMutation,
     TeamMutationFailurePoint, TeamParcelMutation, TeamRemoteMemberViewTokenMutation,

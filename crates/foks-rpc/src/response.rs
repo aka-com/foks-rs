@@ -9,6 +9,9 @@ use super::{
 /// Application errors that a v1 server may place on the v0.1.9 wire.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RpcStatus {
+    OAuth2(String),
+    OAuth2Auth(Box<RpcStatus>),
+    Timeout,
     Realtime(String),
     RtChannelExists,
     RtRace(String),
@@ -62,6 +65,9 @@ pub enum RpcStatus {
 impl RpcStatus {
     fn code(&self) -> u64 {
         match self {
+            Self::OAuth2(_) => 1067,
+            Self::OAuth2Auth(_) => 1069,
+            Self::Timeout => 1009,
             Self::Realtime(_) => 12001,
             Self::RtChannelExists => 12002,
             Self::RtRace(_) => 12003,
@@ -158,7 +164,15 @@ fn encode_status(status: &RpcStatus, output: &mut Vec<u8>) -> Result<()> {
 fn status_switch_variant(status: &RpcStatus) -> Value {
     let arm = |tag: &[u8], value: Value| Value::Variant(Some((tag.to_vec(), Box::new(value))));
     match status {
-        RpcStatus::BadArguments(message)
+        RpcStatus::OAuth2Auth(inner) => arm(
+            b"4",
+            Value::Array(vec![
+                Value::Unsigned(inner.code()),
+                status_switch_variant(inner),
+            ]),
+        ),
+        RpcStatus::OAuth2(message)
+        | RpcStatus::BadArguments(message)
         | RpcStatus::Duplicate(message)
         | RpcStatus::MerkleVerify(message)
         | RpcStatus::KvRace(message)

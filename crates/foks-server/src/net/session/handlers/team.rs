@@ -84,7 +84,11 @@ impl Operations for ServerData {
     ) -> Result<Vec<u8>, RpcStatus> {
         principal.require_ordinary_device()?;
         let database = self.read_database()?;
-        crate::services::registration::server_config(argument, &database)
+        crate::services::registration::server_config(
+            argument,
+            &database,
+            self.sso.as_ref().map(|s| s.public_config()),
+        )
     }
 
     fn loader_challenge(

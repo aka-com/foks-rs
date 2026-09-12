@@ -7,6 +7,8 @@ use crate::rpc::{RouteId, RoutedCall};
 use super::super::ServerData;
 
 pub(super) trait Operations {
+    fn init_oauth2(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+    fn sso_login(&self, argument: &[u8]) -> Result<(), RpcStatus>;
     fn resolve_username(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn client_version_info(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn server_config(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
@@ -28,6 +30,29 @@ pub(super) trait Operations {
 }
 
 impl Operations for ServerData {
+    fn init_oauth2(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        let arg = foks_proto::InitOAuth2SessionArgument::decode(argument)
+            .map_err(|_| RpcStatus::BadArguments("invalid OIDC request".into()))?;
+        let peer = self.peer_ip.ok_or(RpcStatus::Unsupported)?.to_string();
+        let url = self
+            .sso
+            .as_ref()
+            .ok_or(RpcStatus::Unsupported)?
+            .init(&arg, peer.as_bytes())
+            .map_err(crate::sso::status)?;
+        foks_snowpack::encode(&foks_snowpack::Value::Text(url.into_bytes()))
+            .map_err(|_| RpcStatus::TransactionRetry)
+    }
+    fn sso_login(&self, argument: &[u8]) -> Result<(), RpcStatus> {
+        let arg = foks_proto::SsoLoginArgument::decode(argument)
+            .map_err(|_| RpcStatus::BadArguments("invalid SSO login request".into()))?;
+        self.sso
+            .as_ref()
+            .ok_or(RpcStatus::Unsupported)?
+            .login(&arg)
+            .map_err(crate::sso::status)
+    }
+
     fn resolve_username(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
         let database = self.read_database()?;
         let snapshot = database
@@ -42,7 +67,11 @@ impl Operations for ServerData {
 
     fn server_config(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
         let database = self.read_database()?;
-        crate::services::registration::server_config(argument, &database)
+        crate::services::registration::server_config(
+            argument,
+            &database,
+            self.sso.as_ref().map(|s| s.public_config()),
+        )
     }
 
     fn check_name_exists(&self, argument: &[u8]) -> Result<(), RpcStatus> {
@@ -167,6 +196,15 @@ pub(super) fn response(
 ) -> Result<Vec<u8>, RpcStatus> {
     let sequence = call.call.sequence();
     match call.route.id {
+        RouteId::RegInitOAuth2Session => {
+            encode_success_response_at(&operations.init_oauth2(call.call.argument())?, sequence)
+                .map_err(|_| RpcStatus::TransactionRetry)
+        }
+        RouteId::RegSsoLogin => {
+            operations.sso_login(call.call.argument())?;
+            encode_void_success_response_at(sequence).map_err(|_| RpcStatus::TransactionRetry)
+        }
+
         RouteId::RegResolveUsername => encode_success_response_at(
             &operations.resolve_username(call.call.argument())?,
             sequence,

@@ -102,6 +102,12 @@ impl TestEnvironment {
         Ok(environment)
     }
 
+    pub fn start_oidc_server(
+        &self,
+        config: foks_server::sso::OidcOperatorConfig,
+    ) -> foks_server::Result<crate::InProcessServer> {
+        crate::InProcessServer::start_with_oidc(self.clone(), Some(config))
+    }
     pub fn start_server(&self) -> foks_server::Result<crate::InProcessServer> {
         crate::InProcessServer::start(self.clone())
     }

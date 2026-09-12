@@ -22,27 +22,13 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: Option<(Option<Vec<u8>>, Option<i64>)> = transaction
-            .query_row(
-                "SELECT uid, expires_at FROM names WHERE normalized_name = ?1",
-                [normalized_name],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        if existing
-            .is_some_and(|(uid, expiry)| uid.is_some() || expiry.is_none_or(|value| value > now))
-        {
-            return Err(Error::NameInUse);
-        }
-        transaction.execute(
-            "INSERT INTO names(normalized_name, reservation_token, reservation_sequence, expires_at, uid)
-             VALUES (?1, ?2, ?3, ?4, NULL)
-             ON CONFLICT(normalized_name) DO UPDATE SET
-                reservation_token = excluded.reservation_token,
-                reservation_sequence = excluded.reservation_sequence,
-                expires_at = excluded.expires_at,
-                uid = NULL",
-            params![normalized_name, token, sql_integer(sequence)?, sql_integer(expires_at)?],
+        reserve_on(
+            &transaction,
+            normalized_name,
+            token,
+            sequence,
+            now,
+            expires_at,
         )?;
         transaction.commit()?;
         Ok(())
@@ -143,4 +129,36 @@ fn self_token_matches(
         )
         .optional()?
         .is_some())
+}
+
+pub(crate) fn reserve_on(
+    connection: &rusqlite::Connection,
+    normalized_name: &[u8],
+    token: &[u8; 17],
+    sequence: u64,
+    now: i64,
+    expires_at: u64,
+) -> Result<()> {
+    let existing: Option<(Option<Vec<u8>>, Option<i64>)> = connection
+        .query_row(
+            "SELECT uid, expires_at FROM names WHERE normalized_name = ?1",
+            [normalized_name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if existing.is_some_and(|(uid, expiry)| uid.is_some() || expiry.is_none_or(|value| value > now))
+    {
+        return Err(Error::NameInUse);
+    }
+    connection.execute(
+            "INSERT INTO names(normalized_name, reservation_token, reservation_sequence, expires_at, uid)
+             VALUES (?1, ?2, ?3, ?4, NULL)
+             ON CONFLICT(normalized_name) DO UPDATE SET
+                reservation_token = excluded.reservation_token,
+                reservation_sequence = excluded.reservation_sequence,
+                expires_at = excluded.expires_at,
+                uid = NULL",
+            params![normalized_name, token, sql_integer(sequence)?, sql_integer(expires_at)?],
+        )?;
+    Ok(())
 }
