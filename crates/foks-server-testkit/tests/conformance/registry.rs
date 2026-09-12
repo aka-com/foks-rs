@@ -24,6 +24,17 @@ struct DeclaredRoute {
 
 const COVERAGE: &[Coverage] = &[
     Coverage {
+        name: "account_conveniences",
+        run: crate::account::account_conveniences,
+        routes: &[
+            ("User", "changeUsername"),
+            ("User", "reserveUsernameForChange"),
+            ("User", "getTreeLocation"),
+            ("Reg", "getHostID"),
+            ("Reg", "getVHostMgmtHost"),
+        ],
+    },
+    Coverage {
         name: "sso",
         run: crate::sso::sso_signup_login_and_expiry_enforcement,
         routes: &[

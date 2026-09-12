@@ -50,3 +50,6 @@ mod realtime;
 
 #[path = "conformance/sso.rs"]
 mod sso;
+
+#[path = "conformance/account.rs"]
+mod account;

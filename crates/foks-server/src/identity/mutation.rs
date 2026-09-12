@@ -6,6 +6,7 @@ use foks_proto::{
 use crate::{Error, Result};
 
 pub(crate) enum Argument {
+    Rename(String, foks_proto::ChangedUsernameFullUpdate),
     Provision(DecodedProvisionDeviceArgument),
     Revoke(DecodedRevokeDeviceArgument),
 }
@@ -13,6 +14,7 @@ pub(crate) enum Argument {
 impl Argument {
     pub(crate) fn link(&self) -> &foks_proto::UserLink {
         match self {
+            Self::Rename(_, full) => &full.link,
             Self::Provision(argument) => &argument.link,
             Self::Revoke(argument) => &argument.link,
         }
@@ -46,6 +48,7 @@ pub(crate) struct Parcel {
 }
 
 pub(crate) struct Command {
+    pub username: Option<foks_server_db::UsernameMutation>,
     pub uid: Vec<u8>,
     pub signer: Vec<u8>,
     pub sequence: u64,
@@ -91,8 +94,10 @@ pub(crate) fn validate(
     }
     let provision_self_token = match &argument {
         Argument::Provision(argument) => Some(argument.self_token),
-        Argument::Revoke(_) => None,
+        Argument::Revoke(_) | Argument::Rename(..) => None,
     };
+    let empty_hepks = Vec::new();
+    let empty_boxes = SharedKeyBoxSet::new([0; 16], Vec::new(), None)?;
     let (
         link,
         next_tree_location,
@@ -104,6 +109,17 @@ pub(crate) fn validate(
         subkey_box,
         yubi_pq_hint,
     ) = match &argument {
+        Argument::Rename(_, full) => (
+            &full.link,
+            full.next_tree_location,
+            &empty_hepks,
+            &empty_boxes,
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+        ),
         Argument::Provision(argument) => (
             &argument.link,
             argument.next_tree_location,
@@ -182,6 +198,52 @@ pub(crate) fn validate(
             "mutation signer does not match TLS principal",
         ));
     }
+    let username = if let Argument::Rename(display, full) = &argument {
+        let normalized = foks_verify::normalize_username(display.as_bytes())
+            .ok_or(Error::Signup("invalid username"))?;
+        let [foks_proto::ChangeMetadata::Username(commitment)] =
+            verified.change.metadata.as_slice()
+        else {
+            return Err(Error::Signup(
+                "rename requires exactly one username commitment",
+            ));
+        };
+        if !verified.change.changes.is_empty() || !verified.change.shared_keys.is_empty() {
+            return Err(Error::Signup(
+                "rename cannot alter credentials or shared keys",
+            ));
+        }
+        let wire = foks_snowpack::encode(&foks_snowpack::Value::Array(vec![
+            foks_snowpack::Value::Text(normalized.clone()),
+            foks_snowpack::Value::Unsigned(full.reservation.sequence),
+        ]))?;
+        if foks_crypto::commitment(
+            foks_proto::NAME_COMMITMENT_TYPE_ID,
+            &wire,
+            &full.commitment_key,
+        ) != *commitment
+        {
+            return Err(Error::Signup("rename commitment mismatch"));
+        }
+        Some(foks_server_db::UsernameMutation {
+            normalized_name: normalized,
+            username_utf8: display.as_bytes().to_vec(),
+            commitment_key: full.commitment_key,
+            token: full.reservation.token,
+            name_sequence: full.reservation.sequence,
+            reservation_expires_at: full.reservation.expires_at,
+        })
+    } else {
+        if verified
+            .change
+            .metadata
+            .iter()
+            .any(|m| matches!(m, foks_proto::ChangeMetadata::Username(_)))
+        {
+            return Err(Error::Signup("username change requires rename route"));
+        }
+        None
+    };
     let member = verified.change.changes.first();
     let (added, revoked) = match member {
         Some(member) if member.role == Role::NONE => {
@@ -320,6 +382,7 @@ pub(crate) fn validate(
         ));
     }
     Ok(Command {
+        username,
         uid: authority.uid.clone(),
         signer: verified.change.signer.as_bytes().to_vec(),
         sequence: expected_sequence,

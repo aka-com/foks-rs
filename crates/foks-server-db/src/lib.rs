@@ -94,6 +94,6 @@ pub use team::{
 };
 pub use user_mutation::{
     AddedCredential, ParcelMutation, SeedChainMutation, SharedKeyMutation, UserMutation,
-    UserMutationFailurePoint,
+    UserMutationFailurePoint, UsernameMutation,
 };
 pub use yubi::{SubkeyChallengeResult, YubiManagementKeySnapshot};

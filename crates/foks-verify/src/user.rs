@@ -254,6 +254,20 @@ impl VerifiedUserState {
         self.next_tree_location
     }
 
+    /// Exact link retained only after full chain and Merkle verification.
+    pub fn authenticated_link(&self, sequence: u64) -> Result<Option<foks_proto::UserLink>> {
+        let value = foks_snowpack::decode(&self.authenticated_chain_bytes)?;
+        let Value::Array(links) = value else {
+            return Err(Error::UserChainContinuity);
+        };
+        let link = sequence
+            .checked_sub(1)
+            .and_then(|n| usize::try_from(n).ok())
+            .and_then(|n| links.get(n));
+        link.map(|v| Ok(foks_proto::UserLink::decode(&encode(v)?)?))
+            .transpose()
+    }
+
     pub fn tree_root(&self) -> TreeRoot {
         TreeRoot {
             epoch: self.merkle_epoch,
@@ -955,6 +969,7 @@ fn verify_user_chain_increment_at_root(
     if chain.links.is_empty()
         && root_hash == prior.merkle_root_hash
         && username == prior.username
+        && username_utf8 == prior.username_utf8
         && username_sequence == prior.username_sequence
     {
         return Ok(prior.clone());

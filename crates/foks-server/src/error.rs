@@ -50,10 +50,15 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// Preserves the canonical Merkle epoch limit across RPC mutation boundaries
-/// instead of collapsing it into an opaque retry response.
-pub(crate) fn merkle_mint_status(error: &Error) -> Option<foks_rpc::RpcStatus> {
+/// Preserve authentication and Merkle failures across queued mutation boundaries.
+pub(crate) fn mutation_failure_status(error: &Error) -> Option<foks_rpc::RpcStatus> {
     match error {
+        Error::Sso(message) => Some(foks_rpc::RpcStatus::OAuth2Auth(Box::new(
+            foks_rpc::RpcStatus::OAuth2((*message).into()),
+        ))),
+        Error::AuthorizationChanged => Some(foks_rpc::RpcStatus::PermissionDenied(
+            "credential authorization changed".into(),
+        )),
         Error::Merkle(foks_merkle_store::Error::EpochLimitExceeded { .. }) => {
             Some(foks_rpc::RpcStatus::MerkleVerify(error.to_string()))
         }
@@ -70,7 +75,7 @@ mod tests {
             pointer_count: 16,
         });
         assert!(matches!(
-            super::merkle_mint_status(&error),
+            super::mutation_failure_status(&error),
             Some(foks_rpc::RpcStatus::MerkleVerify(detail))
                 if detail.contains("epoch 65536") && detail.contains("back-pointer count 16")
         ));

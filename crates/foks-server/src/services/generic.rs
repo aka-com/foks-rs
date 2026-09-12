@@ -432,7 +432,7 @@ fn decode_root_status(root: &foks_server_db::RootSnapshot) -> Result<MerkleRoot,
 }
 
 fn map_write_error(error: crate::Error) -> RpcStatus {
-    if let Some(status) = crate::error::merkle_mint_status(&error) {
+    if let Some(status) = crate::error::mutation_failure_status(&error) {
         return status;
     }
     match error {

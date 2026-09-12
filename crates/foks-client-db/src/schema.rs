@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 30;
+pub(crate) const VERSION: u32 = 31;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -348,7 +348,7 @@ WHERE state IN (1, 2, 3, 4, 5);
 -- protected material store; it is never written to this hard-state database.
 CREATE TABLE mutation_operations (
     operation_id BLOB PRIMARY KEY CHECK (length(operation_id) = 16),
-    operation_kind INTEGER NOT NULL CHECK (operation_kind BETWEEN 1 AND 8),
+    operation_kind INTEGER NOT NULL CHECK (operation_kind BETWEEN 1 AND 9),
     host_id BLOB NOT NULL REFERENCES hosts(host_id) ON DELETE RESTRICT,
     scope_id BLOB NOT NULL CHECK (length(scope_id) IN (0, 16, 33, 34)),
     subject_id BLOB NOT NULL CHECK (length(subject_id) IN (0, 16, 33, 34)),
@@ -381,7 +381,19 @@ WHERE state IN (1, 2, 3, 4);
 -- alternate owner is reconciling an unavailable original signer.
 CREATE UNIQUE INDEX user_mutation_reserved_chain_position
 ON mutation_operations (host_id, scope_id, expected_version)
-WHERE operation_kind IN (2, 3, 4) AND state IN (1, 2, 3, 4);
+WHERE operation_kind IN (2, 3, 4, 9) AND state IN (1, 2, 3, 4);
+
+CREATE UNIQUE INDEX account_convenience_active_preparation
+ON mutation_operations(host_id,scope_id) WHERE operation_kind=9 AND state IN (1,2);
+
+-- Bounds survive concurrent processes. Unknown submissions are never evicted.
+CREATE TRIGGER account_convenience_capacity BEFORE INSERT ON mutation_operations
+WHEN NEW.operation_kind = 9 BEGIN
+    SELECT CASE WHEN (SELECT count(*) FROM mutation_operations WHERE host_id=NEW.host_id AND scope_id=NEW.scope_id AND operation_kind=9 AND state IN (1,2,3,4)) >= 32
+        THEN RAISE(ABORT, 'account pending operation capacity') END;
+    SELECT CASE WHEN (SELECT count(*) FROM mutation_operations WHERE host_id=NEW.host_id AND scope_id=NEW.scope_id AND operation_kind=9) >= 4096
+        THEN RAISE(ABORT, 'account retained operation capacity') END;
+END;
 
 -- Cross-host coordination contains only public identities, capability hashes,
 -- and local journal references. Bearer tokens and removal keys remain in the

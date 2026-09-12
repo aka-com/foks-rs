@@ -1,6 +1,7 @@
 //! Desktop IPC domains. Tauri registration lives in `crate::run`.
 //! Shared context and validation preserve the same authorization boundary across domains.
 
+pub(crate) mod account_conveniences;
 pub(crate) mod accounts;
 pub(crate) mod application;
 pub(crate) mod chat;

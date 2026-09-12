@@ -1017,3 +1017,55 @@ fn record_mutation_on(
     )?;
     Ok(())
 }
+
+impl HardStateStore {
+    /// Pending account work comes first; retain a bounded window of completed receipts.
+    pub fn username_changes(
+        &self,
+        host: &[u8],
+        uid: &[u8],
+        device: &[u8],
+    ) -> Result<Vec<MutationOperation>> {
+        let mut stmt=self.connection.prepare("SELECT operation_id FROM mutation_operations WHERE operation_kind=9 AND host_id=?1 AND scope_id=?2 AND subject_id=?3 ORDER BY CASE WHEN state IN (1,2,3,4) THEN 0 ELSE 1 END, created_at DESC LIMIT 160")?;
+        let ids = stmt
+            .query_map(params![host, uid, device], |r| r.get::<_, Vec<u8>>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|id| {
+                self.mutation(
+                    &id.try_into()
+                        .map_err(|_| Error::InvalidMutationOperation("operation ID"))?,
+                )?
+                .ok_or(Error::InvalidMutationOperation("missing rename"))
+            })
+            .collect()
+    }
+    pub fn expired_username_change_receipts(
+        &self,
+        host: &[u8],
+        uid: &[u8],
+        before: u64,
+    ) -> Result<Vec<MutationOperation>> {
+        let mut stmt=self.connection.prepare("SELECT operation_id FROM mutation_operations WHERE operation_kind=9 AND host_id=?1 AND scope_id=?2 AND state IN (5,6) AND updated_at<?3 ORDER BY updated_at LIMIT 256")?;
+        let ids = stmt
+            .query_map(
+                params![host, uid, sqlite_integer("receipt cutoff", before)?],
+                |r| r.get::<_, Vec<u8>>(0),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|id| {
+                self.mutation(
+                    &id.try_into()
+                        .map_err(|_| Error::InvalidMutationOperation("receipt ID"))?,
+                )?
+                .ok_or(Error::InvalidMutationOperation("missing receipt"))
+            })
+            .collect()
+    }
+    /// Called only after protected material is erased; never removes pending work.
+    pub fn delete_username_change_receipt(&mut self, id: &[u8; 16]) -> Result<()> {
+        self.connection.execute("DELETE FROM mutation_operations WHERE operation_id=?1 AND operation_kind=9 AND state IN (5,6)",[id.as_slice()])?;
+        Ok(())
+    }
+}

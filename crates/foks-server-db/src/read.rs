@@ -74,7 +74,16 @@ pub struct UserChainLinkSnapshot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserNameSnapshot {
+    pub chain_sequence: u64,
+    pub normalized_name: Vec<u8>,
+    pub name_sequence: u64,
+    pub commitment_key: [u8; 16],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UserChainSnapshot {
+    pub names: Vec<UserNameSnapshot>,
     pub uid: Vec<u8>,
     pub normalized_name: Vec<u8>,
     pub username_utf8: Vec<u8>,
@@ -229,6 +238,26 @@ impl Database {
 }
 
 impl ReadDatabase {
+    /// Go indexes a next-location commitment by the following link sequence.
+    pub fn user_tree_location(&self, uid: &[u8], sequence: u64) -> Result<Option<[u8; 32]>> {
+        let Some(prior) = sequence.checked_sub(1).filter(|n| *n > 0) else {
+            return Ok(None);
+        };
+        let bytes: Option<Vec<u8>> = self
+            .connection
+            .query_row(
+                "SELECT location FROM tree_locations WHERE uid=?1 AND seqno=?2",
+                rusqlite::params![uid, crate::error::sql_integer(prior)?],
+                |r| r.get(0),
+            )
+            .optional()?;
+        bytes
+            .map(|b| {
+                b.try_into()
+                    .map_err(|_| crate::Error::Invalid("tree location"))
+            })
+            .transpose()
+    }
     pub fn current_root(&self) -> Result<Option<RootSnapshot>> {
         root_snapshot(&self.connection)
     }
@@ -991,7 +1020,30 @@ fn user_chain_inner(connection: &Connection, uid: &[u8]) -> Result<Option<UserCh
     let exact_shared_hepks = hepk_statement
         .query_map([uid], |row| row.get(0))?
         .collect::<std::result::Result<Vec<Vec<u8>>, _>>()?;
+    let mut stmt = connection.prepare("SELECT chain_sequence, normalized_name, name_sequence, commitment_key FROM user_name_history WHERE uid=?1 ORDER BY chain_sequence")?;
+    let names = stmt
+        .query_map([uid], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Vec<u8>>(3)?,
+            ))
+        })?
+        .map(|r| {
+            let (seq, name, nseq, key) = r?;
+            Ok(UserNameSnapshot {
+                chain_sequence: unsigned(seq)?,
+                normalized_name: name,
+                name_sequence: unsigned(nseq)?,
+                commitment_key: key
+                    .try_into()
+                    .map_err(|_| crate::Error::Invalid("name commitment key"))?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     Ok(Some(UserChainSnapshot {
+        names,
         uid: uid.to_vec(),
         normalized_name,
         username_utf8,

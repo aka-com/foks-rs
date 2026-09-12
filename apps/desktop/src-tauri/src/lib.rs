@@ -179,6 +179,7 @@ pub fn run() {
         .manage(Arc::new(applock::AppLock::new()))
         .invoke_handler(tauri::generate_handler![
             commands::sso::sso_request,
+            commands::account_conveniences::rename_account_request,
             commands::sso::open_sso_browser,
             commands::application::agent_status,
             commands::application::retry_agent_connection,

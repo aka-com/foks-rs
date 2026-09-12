@@ -3,7 +3,8 @@ CREATE TABLE names (
     reservation_token BLOB UNIQUE CHECK (reservation_token IS NULL OR length(reservation_token) = 17),
     reservation_sequence INTEGER NOT NULL CHECK (reservation_sequence >= 1),
     expires_at INTEGER CHECK (expires_at IS NULL OR expires_at >= 0),
-    uid BLOB UNIQUE CHECK (uid IS NULL OR length(uid) = 33),
+    dead INTEGER NOT NULL DEFAULT 0 CHECK (dead IN (0, 1)),
+    uid BLOB CHECK (uid IS NULL OR length(uid) = 33),
     UNIQUE (normalized_name, uid),
     CHECK ((uid IS NULL AND reservation_token IS NOT NULL AND expires_at IS NOT NULL)
         OR (uid IS NOT NULL AND reservation_token IS NULL AND expires_at IS NULL))
@@ -19,6 +20,20 @@ CREATE TABLE users (
     created_at INTEGER NOT NULL CHECK (created_at >= 0),
     FOREIGN KEY (normalized_name, uid) REFERENCES names(normalized_name, uid)
 ) STRICT;
+
+CREATE UNIQUE INDEX names_current_uid ON names(uid) WHERE dead = 0;
+CREATE TABLE user_name_history (
+    uid BLOB NOT NULL REFERENCES users(uid),
+    chain_sequence INTEGER NOT NULL CHECK (chain_sequence >= 1),
+    normalized_name BLOB NOT NULL,
+    name_sequence INTEGER NOT NULL CHECK (name_sequence >= 1),
+    commitment_key BLOB NOT NULL CHECK (length(commitment_key) = 16),
+    PRIMARY KEY (uid, chain_sequence)
+) STRICT;
+CREATE TRIGGER initial_user_name AFTER INSERT ON users BEGIN
+    INSERT INTO user_name_history VALUES (NEW.uid, 1, NEW.normalized_name,
+        NEW.username_sequence, NEW.username_commitment_key);
+END;
 
 CREATE TABLE devices (
     device_id BLOB PRIMARY KEY CHECK (length(device_id) IN (33, 34)),

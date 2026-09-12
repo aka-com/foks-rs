@@ -252,7 +252,14 @@ impl WriterHandle {
                 {
                     return Err(Error::AuthorizationChanged);
                 }
-                database.sso_require_access(&auth.uid, auth.clock.now_micros()? / 1000)?;
+                database
+                    .sso_require_access(&auth.uid, auth.clock.now_micros()? / 1000)
+                    .map_err(|e| match e {
+                        foks_server_db::Error::AuthorizationChanged => {
+                            Error::Sso("reauthentication required before queued write")
+                        }
+                        other => Error::Database(other),
+                    })?;
             }
             operation(database)
         };

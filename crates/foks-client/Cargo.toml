@@ -44,3 +44,7 @@ path = "tests/public_probe.rs"
 [[test]]
 name = "sso_live"
 path = "tests/sso_live.rs"
+
+[[test]]
+name = "account_live"
+path = "tests/account_live.rs"

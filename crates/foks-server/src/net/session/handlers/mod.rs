@@ -38,7 +38,9 @@ pub(super) fn response(
         | RegSelectVHost
         | KvStoreSelectVHost => probe::response(data, call),
         BeaconBeaconLookup => beacon::response(data, call),
-        RegInitOAuth2Session
+        RegGetHostID
+        | RegGetVHostMgmtHost
+        | RegInitOAuth2Session
         | RegSsoLogin
         | RegReserveUsername
         | RegCheckNameExists
@@ -58,7 +60,10 @@ pub(super) fn response(
         | RegGetUIDLookupChallege
         | RegLookupUIDByDevice
         | RegLoadUserChain => registration::response(data, call),
-        UserResolveUsername
+        UserChangeUsername
+        | UserReserveUsernameForChange
+        | UserGetTreeLocation
+        | UserResolveUsername
         | UserPing
         | UserGetDeviceNag
         | UserClearDeviceNag

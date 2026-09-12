@@ -28,6 +28,7 @@ use crate::{Entropy, Result, SessionLimits, WriterHandle};
 
 #[derive(Clone)]
 pub(crate) struct ServerData {
+    vhost_management_host: String,
     sso: Option<Arc<crate::sso::SsoService>>,
     peer_ip: Option<std::net::IpAddr>,
     probe_response: Arc<[u8]>,
@@ -105,6 +106,7 @@ impl ServerData {
         config: &crate::Config,
         rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     ) -> Result<Self> {
+        crate::config::validate_vhost_management_host(&config.vhost_management_host)?;
         let probe_response = Arc::clone(&config.probe_response);
         let probe = foks_proto::ProbeResponse::decode(&probe_response)?;
         let first = probe
@@ -129,6 +131,7 @@ impl ServerData {
             .to_owned();
         Ok(Self {
             sso: config.sso.clone(),
+            vhost_management_host: config.vhost_management_host.clone(),
             peer_ip: None,
             probe_response,
             host_id,
@@ -169,7 +172,6 @@ impl ServerData {
         principal: &Principal,
         provision: bool,
     ) -> std::result::Result<(), RpcStatus> {
-        const RECEIPT_LIFETIME_MICROSECONDS: u64 = 24 * 60 * 60 * 1_000_000;
         let decoded = if provision {
             crate::identity::mutation::Argument::Provision(
                 foks_rpc::arguments::decode_provision_device(argument).map_err(bad_arguments)?,
@@ -179,6 +181,16 @@ impl ServerData {
                 foks_rpc::arguments::decode_revoke_device(argument).map_err(bad_arguments)?,
             )
         };
+        self.commit_user_mutation_argument(argument, principal, decoded)
+    }
+
+    fn commit_user_mutation_argument(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+        decoded: crate::identity::mutation::Argument,
+    ) -> std::result::Result<(), RpcStatus> {
+        const RECEIPT_LIFETIME_MICROSECONDS: u64 = 24 * 60 * 60 * 1_000_000;
         let reader = self.read_database()?;
         let exact_link = decoded.link().encoded().map_err(bad_arguments)?;
         let submitted_change = decoded
@@ -250,6 +262,16 @@ impl ServerData {
                 Some(&authority.next_tree_location),
             )?;
             let mut leaves = vec![(chain_key, command.link_hash)];
+            if let Some(name) = &command.username {
+                leaves.push((
+                    foks_merkle_store::username_key(
+                        &name.normalized_name,
+                        &host,
+                        name.name_sequence,
+                    )?,
+                    foks_merkle_store::username_leaf(&EntityId::from_bytes(command.uid.clone())?)?,
+                ));
+            }
             let settings_location = command
                 .user_settings
                 .as_ref()
@@ -437,6 +459,7 @@ impl ServerData {
                 return Err(crate::Error::Signup("user mutation link hash changed"));
             }
             database.commit_user_mutation(&foks_server_db::UserMutation {
+                username: command.username.as_ref(),
                 uid: &command.uid,
                 signer_device_id: &command.signer,
                 expected_sequence: command.sequence,
@@ -473,6 +496,12 @@ impl ServerData {
             Ok(())
         });
         match result {
+            Err(crate::Error::Database(foks_server_db::Error::Reservation)) => {
+                Err(bad_arguments("invalid rename reservation"))
+            }
+            Err(crate::Error::Database(foks_server_db::Error::NameInUse)) => {
+                Err(RpcStatus::NameInUse)
+            }
             Ok(()) => Ok(()),
             Err(crate::Error::Database(foks_server_db::Error::StaleRoot)) => Err(
                 RpcStatus::RevokeRace("user chain or Merkle root changed".to_owned()),
@@ -484,7 +513,7 @@ impl ServerData {
                 Err(bad_arguments("user mutation retry binding failed"))
             }
             Err(crate::Error::WriterQueue) => Err(RpcStatus::RateLimited),
-            Err(error) => Err(crate::error::merkle_mint_status(&error)
+            Err(error) => Err(crate::error::mutation_failure_status(&error)
                 .unwrap_or_else(|| bad_arguments("user mutation validation failed"))),
         }
     }
@@ -539,7 +568,8 @@ impl ServerData {
             Err(crate::Error::Database(foks_server_db::Error::NameInUse)) => {
                 Err(RpcStatus::NameInUse)
             }
-            Err(_) => Err(RpcStatus::TransactionRetry),
+            Err(error) => Err(crate::error::mutation_failure_status(&error)
+                .unwrap_or(RpcStatus::TransactionRetry)),
         }
     }
 
@@ -764,9 +794,8 @@ impl ServerData {
                 foks_server_db::Error::Reservation | foks_server_db::Error::ReceiptConflict,
             )) => Err(bad_arguments("signup reservation or retry binding failed")),
             Err(crate::Error::WriterQueue) => Err(RpcStatus::RateLimited),
-            Err(error) => {
-                Err(crate::error::merkle_mint_status(&error).unwrap_or(RpcStatus::TransactionRetry))
-            }
+            Err(error) => Err(crate::error::mutation_failure_status(&error)
+                .unwrap_or(RpcStatus::TransactionRetry)),
         }
     }
 

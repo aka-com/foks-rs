@@ -1,3 +1,4 @@
+import { RenamePanel } from '../components/rename-panel';
 import { SsoPanel } from '../components/sso-panel';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -836,6 +837,15 @@ export function SettingsScreen({
                     bridge.fixtureWorld && enteredScene === 'settings-account',
                   )}
                 />
+                {accountStores(world).map((store) => (
+                  <RenamePanel
+                    key={`rename-${store.id}`}
+                    bridge={bridge}
+                    profile={store.server}
+                    account={store.account}
+                    onComplete={() => onRefresh('Username updated')}
+                  />
+                ))}
                 {accountStores(world).map((store) => (
                   <SsoPanel
                     key={store.id}

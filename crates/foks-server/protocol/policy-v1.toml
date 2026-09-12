@@ -4,6 +4,7 @@ version = 1
 baseline = "foks-v0.1.9"
 
 [status_aliases]
+no_change = "NO_CHANGE_ERROR"
 oauth2 = "OAUTH2_ERROR"
 oauth2_auth = "OAUTH2_AUTH_ERROR"
 timeout = "TIMEOUT_ERROR"
@@ -1726,3 +1727,68 @@ statuses = ["ok", "bad_args", "oauth2", "oauth2_auth", "timeout", "rate_limited"
 max_request_bytes = 1048576
 supported = true
 coverage = ["sso"]
+
+[[route]]
+protocol = "User"
+method = "changeUsername"
+position_constant = "USER_CHANGE_USERNAME_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "AccountArgument"
+result = "Void"
+statuses = ["ok", "oauth2_auth", "bad_args", "no_change", "name_in_use", "permission_denied", "not_found", "revoke_race", "tx_retry", "rate_limited"]
+max_request_bytes = 8388608
+supported = true
+coverage = ["account_conveniences"]
+
+[[route]]
+protocol = "User"
+method = "reserveUsernameForChange"
+position_constant = "USER_RESERVE_USERNAME_FOR_CHANGE_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "AccountArgument"
+result = "UsernameReservation"
+statuses = ["ok", "oauth2_auth", "bad_args", "no_change", "name_in_use", "permission_denied", "not_found", "revoke_race", "tx_retry", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+coverage = ["account_conveniences"]
+
+[[route]]
+protocol = "User"
+method = "getTreeLocation"
+position_constant = "USER_GET_TREE_LOCATION_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "AccountArgument"
+result = "TreeLocation"
+statuses = ["ok", "oauth2_auth", "bad_args", "no_change", "name_in_use", "permission_denied", "not_found", "revoke_race", "tx_retry", "rate_limited"]
+max_request_bytes = 1024
+supported = true
+coverage = ["account_conveniences"]
+
+[[route]]
+protocol = "Reg"
+method = "getHostID"
+position_constant = "REG_GET_HOST_ID_METHOD_POSITION"
+listeners = ["public_services"]
+authentication = "delegated_tls"
+request = "Void"
+result = "HostID"
+statuses = ["ok", "bad_args", "tx_retry"]
+max_request_bytes = 1024
+supported = true
+coverage = ["account_conveniences"]
+
+[[route]]
+protocol = "Reg"
+method = "getVHostMgmtHost"
+position_constant = "REG_GET_VHOST_MGMT_HOST_METHOD_POSITION"
+listeners = ["public_services"]
+authentication = "delegated_tls"
+request = "Void"
+result = "TcpAddress"
+statuses = ["ok", "bad_args", "tx_retry"]
+max_request_bytes = 1024
+supported = true
+coverage = ["account_conveniences"]

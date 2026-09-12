@@ -244,7 +244,7 @@ fn material_error(error: ProtectedStoreError) -> Error {
     Error::ProtectedMaterial(error.to_string())
 }
 
-fn remove_terminal_material<S: ProtectedMutationStore + ?Sized>(
+pub(crate) fn remove_terminal_material<S: ProtectedMutationStore + ?Sized>(
     store: &mut S,
     key: &[u8],
 ) -> Result<()> {

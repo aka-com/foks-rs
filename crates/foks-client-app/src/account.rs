@@ -8,6 +8,13 @@ static TEST_FAIL_AFTER_BACKUP_REVOCATION: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 impl CheckedProfileSession<'_> {
+    pub(super) fn mutation_store(&self, master: &[u8; 32]) -> Result<EncryptedFileMutationStore> {
+        Ok(EncryptedFileMutationStore::open(
+            &self.paths.protected_mutations,
+            derive_mutation_key(master),
+        )?)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn create_account(
         &self,
@@ -963,6 +970,7 @@ impl CheckedProfileSession<'_> {
         let uid = vault.account(alias)?.credential.uid;
         self.register_default_refresh_jobs_for(&uid, now_microseconds()?)?;
         let (_, authenticated, directories) = self.authenticated_tree(alias, vault)?;
+        self.refresh_verified_account_labels(&authenticated.verified, vault)?;
         Ok(SyncReport::from_tree(
             authenticated.verified.username(),
             authenticated.verified.chain_seqno(),
@@ -1745,6 +1753,18 @@ impl<'a> AccountVault<'a> {
         self.store
             .put(&backup_key(&backup.backup_alias), &encoded)?;
         Ok(())
+    }
+
+    pub(super) fn refresh_uid_labels(&mut self, uid: &EntityId, username: &[u8]) -> Result<()> {
+        let name = std::str::from_utf8(username)
+            .map_err(|_| Error::InvalidAccount("verified username is not UTF8"))?;
+        for alias in self.aliases()? {
+            let account = self.account(&alias)?;
+            if account.credential.uid == *uid && account.username != name {
+                self.commit_created(&alias, name, &account.credential)?;
+            }
+        }
+        self.refresh_yubi_uid_labels(uid, name)
     }
 
     pub(super) fn commit_created(

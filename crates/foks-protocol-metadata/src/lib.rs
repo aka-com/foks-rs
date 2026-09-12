@@ -598,6 +598,8 @@ fn validate_route_result(value: &str) -> Result<(), MetadataError> {
             | "TeamRemovalKeyBox"
             | "TeamViewChallenge"
             | "TreeRoot"
+            | "TreeLocation"
+            | "HostID"
             | "UID"
             | "Unsupported"
             | "UserChain"

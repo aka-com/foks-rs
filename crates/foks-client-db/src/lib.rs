@@ -238,6 +238,7 @@ pub enum MutationKind {
     KvContent = 6,
     KvRoot = 7,
     KvAdapter = 8,
+    UsernameChange = 9,
 }
 
 impl MutationKind {
@@ -251,6 +252,7 @@ impl MutationKind {
             6 => Ok(Self::KvContent),
             7 => Ok(Self::KvRoot),
             8 => Ok(Self::KvAdapter),
+            9 => Ok(Self::UsernameChange),
             _ => Err(Error::InvalidMutationOperation("unknown operation kind")),
         }
     }
@@ -2213,6 +2215,73 @@ mod tests {
                 .unwrap();
             assert_eq!(count, 3, "revision trigger coverage changed for {table}");
         }
+    }
+
+    #[test]
+    fn rename_capacity_and_cleanup_preserve_unknown_receipts() {
+        let (_directory, mut store) = store();
+        let host = snapshot();
+        store.accept_host_parts(host.parts()).unwrap();
+        let mut op = MutationOperation {
+            operation_id: [1; 16],
+            kind: MutationKind::UsernameChange,
+            host_id: host.host_id.clone(),
+            scope_id: vec![1; 33],
+            subject_id: vec![2; 33],
+            expected_version: Some(1),
+            request_hash: [3; 32],
+            material_ref: vec![4],
+            material_hash: [5; 32],
+            state: MutationState::Prepared,
+            attempt_count: 0,
+            created_at: 100,
+            updated_at: 100,
+        };
+        for i in 1..=32 {
+            op.operation_id = [i; 16];
+            op.expected_version = Some(u64::from(i));
+            op.material_ref = vec![i];
+            store.record_mutation(&op).unwrap();
+            let mut concurrent = op.clone();
+            concurrent.operation_id = [i + 64; 16];
+            concurrent.expected_version = Some(1000);
+            concurrent.material_ref = vec![i + 64];
+            assert!(store.record_mutation(&concurrent).is_err());
+            store
+                .begin_mutation_submission(&op.operation_id, 101)
+                .unwrap();
+            store
+                .advance_mutation(&op.operation_id, MutationState::SubmissionUnknown, 102)
+                .unwrap();
+        }
+        op.operation_id = [33; 16];
+        op.expected_version = Some(33);
+        op.material_ref = vec![33];
+        assert!(store.record_mutation(&op).is_err());
+        assert!(store
+            .expired_username_change_receipts(&host.host_id, &op.scope_id, 1000)
+            .unwrap()
+            .is_empty());
+        store.delete_username_change_receipt(&[1; 16]).unwrap();
+        assert!(store.mutation(&[1; 16]).unwrap().is_some());
+        store
+            .advance_mutation(&[1; 16], MutationState::Rejected, 103)
+            .unwrap();
+        let receipts = store
+            .expired_username_change_receipts(&host.host_id, &op.scope_id, 1000)
+            .unwrap();
+        assert_eq!(receipts.len(), 1);
+        store
+            .delete_username_change_receipt(&receipts[0].operation_id)
+            .unwrap();
+        store.record_mutation(&op).unwrap();
+        assert_eq!(
+            store
+                .username_changes(&host.host_id, &op.scope_id, &op.subject_id)
+                .unwrap()
+                .len(),
+            32
+        );
     }
 
     #[test]

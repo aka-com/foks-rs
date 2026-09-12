@@ -101,6 +101,7 @@ fn every_user_mutation_publication_boundary_is_atomic() {
             }),
         };
         let mutation = UserMutation {
+            username: None,
             uid: &[1; 33],
             signer_device_id: &[4; 33],
             expected_sequence: 2,
@@ -300,6 +301,7 @@ fn revocation_rejects_generic_links_signed_after_its_cited_root() {
         .map(|epoch| (epoch, [0x92; 32]))
         .collect::<Vec<_>>();
     let result = fixture.database.commit_user_mutation(&UserMutation {
+        username: None,
         uid: uid.as_bytes(),
         signer_device_id: signer.as_bytes(),
         expected_sequence: 2,

@@ -1,4 +1,9 @@
 import {
+  decodeRenameProgress,
+  type RenameAction,
+  type RenameProgress,
+} from './rename-contract';
+import {
   decodeSsoProgress,
   type SsoAction,
   type SsoProgress,
@@ -553,6 +558,11 @@ export interface FirstRunFixture {
 export type Unlisten = () => void;
 
 export interface Bridge {
+  renameAccount(
+    profile: string,
+    accountAlias: string,
+    action: RenameAction | null,
+  ): Promise<RenameProgress[]>;
   sso(
     profile: string,
     accountAlias: string,
@@ -2054,6 +2064,12 @@ export const tauriBridge: Bridge = {
   rerunGroupAdmission: (storeId, operationId) =>
     checked('rerun_group_admission', { storeId, operationId }, decodeMutation),
   chatLocal: (action) => checked('chat_local', { action }, decodeLocalSession),
+  renameAccount: (profile, accountAlias, action) =>
+    checked(
+      'rename_account_request',
+      { profile, accountAlias, action },
+      decodeRenameProgress,
+    ),
   sso: (profile, accountAlias, action) =>
     checked(
       'sso_request',

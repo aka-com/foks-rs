@@ -15,6 +15,7 @@ use crate::Writer;
 use crate::{Config, ReadDatabaseConfig, Result, SessionLimits};
 
 pub struct StandaloneConfig {
+    pub vhost_management_host: String,
     pub oidc: Option<(crate::sso::OidcOperatorConfig, foks_oidc::NetworkPolicy)>,
     pub database_path: PathBuf,
     pub key_directory: PathBuf,
@@ -748,6 +749,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         .transpose()?;
     let server = RunningServer::start_bound(
         Config {
+            vhost_management_host: config.vhost_management_host.clone(),
             sso,
             probe_address: config.probe_address,
             public_address: config.public_address,

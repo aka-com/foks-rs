@@ -3,6 +3,31 @@ use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 use crate::{error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result};
 
 impl Database {
+    pub fn change_username_display(
+        &mut self,
+        uid: &[u8],
+        credential: &[u8],
+        expected_name: &[u8],
+        expected_display: &[u8],
+        display: &[u8],
+    ) -> Result<()> {
+        if display.is_empty() || display.len() > 4096 {
+            return Err(Error::Invalid("username display"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM devices WHERE uid=?1 AND (device_id=?2 OR subkey_id=?2) AND active=1)", params![uid, credential], |r|r.get(0))?;
+        if !active {
+            return Err(Error::AuthorizationChanged);
+        }
+        if tx.execute("UPDATE users SET username_utf8=?1 WHERE uid=?2 AND normalized_name=?3 AND username_utf8=?4", params![display, uid, expected_name, expected_display])? != 1 {
+            return Err(Error::StaleRoot);
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn reserve_name(
         &mut self,
         normalized_name: &[u8],
@@ -90,7 +115,7 @@ fn uid_by_normalized_name(
 ) -> Result<Option<Vec<u8>>> {
     Ok(connection
         .query_row(
-            "SELECT uid FROM names WHERE normalized_name = ?1 AND uid IS NOT NULL",
+            "SELECT uid FROM names WHERE normalized_name = ?1 AND uid IS NOT NULL AND dead = 0",
             [normalized_name],
             |row| row.get(0),
         )

@@ -274,7 +274,7 @@ fn authorize(
     Ok(())
 }
 
-fn authorize_database(
+pub(crate) fn authorize_database(
     database: &foks_server_db::ReadDatabase,
     principal: &Principal,
 ) -> Result<(), RpcStatus> {
@@ -441,14 +441,24 @@ pub(crate) fn render_user_chain(
         .and_then(|value| value.checked_add(1))
         .ok_or(RpcStatus::TransactionRetry)?;
     let full = start == 1 && request.name_cursor.is_none();
+    let cursor_matches_current = request.name_cursor.as_ref()
+        == Some(&(
+            chain.normalized_name.clone(),
+            chain.username_sequence.saturating_add(1),
+        ));
     if !full
-        && request.name_cursor.as_ref()
-            != Some(&(
-                chain.normalized_name.clone(),
-                chain.username_sequence.saturating_add(1),
-            ))
+        && request.name_cursor.as_ref().is_none_or(|(name, seq)| {
+            chain
+                .names
+                .iter()
+                .rev()
+                .find(|n| n.chain_sequence < start)
+                .is_none_or(|n| {
+                    &n.normalized_name != name || n.name_sequence.saturating_add(1) != *seq
+                })
+        })
     {
-        return Err(bad_arguments("unsupported user-chain name cursor"));
+        return Err(bad_arguments("invalid user-chain name cursor"));
     }
     if start == 0 || (!full && start < 2) || start > maximum_start {
         return Err(bad_arguments("user-chain start is out of range"));
@@ -484,16 +494,18 @@ pub(crate) fn render_user_chain(
         vec![chain.links[start_index - 1].next_tree_location]
     };
     locations.extend(selected.iter().map(|link| link.next_tree_location));
-    let usernames = if full {
-        vec![foks_proto::NameCommitmentAndKey {
-            name: chain.normalized_name.clone(),
-            sequence: chain.username_sequence,
-            commitment_key: chain.username_commitment_key,
-        }]
-    } else {
-        Vec::new()
-    };
-    let mut paths = if full {
+    let usernames = chain
+        .names
+        .iter()
+        .filter(|n| n.chain_sequence >= start)
+        .map(|n| foks_proto::NameCommitmentAndKey {
+            name: n.normalized_name.clone(),
+            sequence: n.name_sequence,
+            commitment_key: n.commitment_key,
+        })
+        .collect::<Vec<_>>();
+    let include_name_start = full || !cursor_matches_current;
+    let mut paths = if include_name_start {
         vec![prove(name_one)?, prove(name_next)?]
     } else {
         vec![prove(name_next)?]
@@ -573,7 +585,7 @@ pub(crate) fn render_user_chain(
         paths: &paths,
         device_names: &device_names,
         username_utf8: &chain.username_utf8,
-        num_username_links: if full { 2 } else { 1 },
+        num_username_links: if include_name_start { 2 } else { 1 },
         exact_hepks: &hepks
             .iter()
             .map(|hepk| hepk.encoded().map_err(|_| RpcStatus::TransactionRetry))

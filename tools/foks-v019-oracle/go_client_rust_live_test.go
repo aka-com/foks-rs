@@ -137,6 +137,7 @@ func TestGoClientAgainstRustServer(t *testing.T) {
 	liveSetPassphrase(t, ctx, &userClient, &merkleClient, &user)
 	teamID := liveCreateAndLoadTeam(t, ctx, authRPC, &userClient, &merkleClient, &user)
 	liveKVPutGet(t, ctx, authRPC, &user)
+	liveRename(t, ctx, &userClient, &merkleClient, &user)
 	t.Logf("official Go client completed user=%s team=%s", user.uid, teamID)
 }
 

@@ -653,6 +653,22 @@ impl AccountVault<'_> {
         }
     }
 
+    pub(super) fn refresh_yubi_uid_labels(&mut self, uid: &EntityId, name: &str) -> Result<()> {
+        let aliases = self
+            .store
+            .keys()?
+            .into_iter()
+            .filter_map(|k| k.strip_prefix("yubi-account.").map(str::to_owned))
+            .collect::<Vec<_>>();
+        for alias in aliases {
+            let mut account = self.stored_yubi(&alias)?;
+            if account.uid == uid.as_bytes() && account.username != name {
+                account.username = name.into();
+                self.put_stored_yubi(&account)?;
+            }
+        }
+        Ok(())
+    }
     fn stored_yubi(&mut self, alias: &str) -> Result<StoredYubiAccount> {
         validate_name(alias)?;
         let bytes = self.store.get(&yubi_account_key(alias)).map_err(|error| {
@@ -1324,6 +1340,7 @@ impl CheckedProfileSession<'_> {
             &authenticated.puks,
             &self.paths.soft_database,
         )?;
+        self.refresh_verified_account_labels(&authenticated.verified, vault)?;
         Ok(SyncReport::from_tree(
             authenticated.verified.username(),
             authenticated.verified.chain_seqno(),
@@ -2370,7 +2387,7 @@ impl CheckedProfileSession<'_> {
             return Err(Error::InvalidAccount("login flow cannot create an account"));
         }
         let host = self.pinned_host()?;
-        let mut protected = self.sso_store(master)?;
+        let mut protected = self.mutation_store(master)?;
         if flow.final_operation.is_some() {
             self.resume_yubi_account(alias, pin, provider, vault, master)?;
         } else {

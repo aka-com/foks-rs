@@ -766,6 +766,24 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       available: false,
       settings: { enabled: false, previews: false, overrides: {} },
     }),
+    renameAccount: async (_profile, accountAlias, action) =>
+      action
+        ? [
+            {
+              operation_id: '2'.repeat(32),
+              account_alias: accountAlias,
+              state:
+                action.action === 'prepare'
+                  ? 'prepared'
+                  : action.action === 'cancel'
+                    ? 'rejected'
+                    : 'complete',
+              target: action.action === 'prepare' ? action.username : null,
+              current_username: null,
+              hardware_required: false,
+            },
+          ]
+        : [],
     sso: async (profile, accountAlias, action) => {
       const key = `${profile}/${accountAlias}`;
       const begins =

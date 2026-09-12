@@ -1318,7 +1318,7 @@ mod tests {
 }
 
 fn map_edit_error(error: crate::Error) -> RpcStatus {
-    if let Some(status) = crate::error::merkle_mint_status(&error) {
+    if let Some(status) = crate::error::mutation_failure_status(&error) {
         return status;
     }
     match error {
@@ -1363,7 +1363,7 @@ fn require_cited_root(
 }
 
 fn map_create_error(error: crate::Error) -> RpcStatus {
-    if let Some(status) = crate::error::merkle_mint_status(&error) {
+    if let Some(status) = crate::error::mutation_failure_status(&error) {
         return status;
     }
     match error {
@@ -1382,7 +1382,7 @@ fn map_create_error(error: crate::Error) -> RpcStatus {
 }
 
 fn map_write_error(error: crate::Error) -> RpcStatus {
-    if let Some(status) = crate::error::merkle_mint_status(&error) {
+    if let Some(status) = crate::error::mutation_failure_status(&error) {
         return status;
     }
     match error {

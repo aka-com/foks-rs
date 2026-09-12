@@ -6,6 +6,18 @@ use crate::rpc::{RouteId, RoutedCall};
 use super::super::{permission_denied, ServerData};
 
 pub(super) trait Operations {
+    fn change_username(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus>;
+    fn reserve_username_for_change(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus>;
+    fn get_tree_location(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus>;
+
     fn resolve_username(
         &self,
         argument: &[u8],
@@ -62,6 +74,96 @@ pub(super) trait Operations {
 }
 
 impl Operations for ServerData {
+    fn reserve_username_for_change(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        crate::services::user::authorize_database(&database, principal)?;
+        self.reserve_username(argument)
+    }
+    fn get_tree_location(
+        &self,
+        argument: &[u8],
+        principal: &Principal,
+    ) -> Result<Vec<u8>, RpcStatus> {
+        let database = self.read_database()?;
+        crate::services::user::authorize_database(&database, principal)?;
+        let foks_snowpack::Value::Array(fields) =
+            foks_snowpack::decode(argument).map_err(super::super::bad_arguments)?
+        else {
+            return Err(super::super::bad_arguments("invalid tree location request"));
+        };
+        let [foks_snowpack::Value::Unsigned(seqno)] = fields.as_slice() else {
+            return Err(super::super::bad_arguments("invalid tree sequence"));
+        };
+        let location = database
+            .user_tree_location(principal.uid(), *seqno)
+            .map_err(|_| RpcStatus::TransactionRetry)?
+            .ok_or_else(|| RpcStatus::NotFound("no tree location found".into()))?;
+        foks_snowpack::encode(&foks_snowpack::Value::Binary(location.to_vec()))
+            .map_err(|_| RpcStatus::TransactionRetry)
+    }
+    fn change_username(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
+        let arg = foks_proto::ChangeUsernameArgument::decode(argument)
+            .map_err(super::super::bad_arguments)?;
+        let database = self.read_database()?;
+        crate::services::user::authorize_database(&database, principal)?;
+        let chain = database
+            .user_chain(principal.uid())
+            .map_err(|_| RpcStatus::TransactionRetry)?
+            .ok_or_else(permission_denied)?;
+        if chain.username_utf8 == arg.username.as_bytes() {
+            return Err(RpcStatus::NoChange(
+                "username given matches current username".into(),
+            ));
+        }
+        let normalized = foks_verify::normalize_username(arg.username.as_bytes())
+            .ok_or_else(|| super::super::bad_arguments("invalid username"))?;
+        if normalized == chain.normalized_name {
+            if arg.full.is_some() {
+                return Err(super::super::bad_arguments(
+                    "display rename must omit full update",
+                ));
+            }
+            let uid = principal.uid().to_vec();
+            let credential = principal.device_id().to_vec();
+            self.writer
+                .as_ref()
+                .ok_or(RpcStatus::Unsupported)?
+                .call(move |db| {
+                    db.change_username_display(
+                        &uid,
+                        &credential,
+                        &normalized,
+                        &chain.username_utf8,
+                        arg.username.as_bytes(),
+                    )?;
+                    Ok(())
+                })
+                .map_err(|e| match e {
+                    crate::Error::Database(foks_server_db::Error::StaleRoot) => {
+                        RpcStatus::RevokeRace("username changed concurrently".into())
+                    }
+                    crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => {
+                        permission_denied()
+                    }
+                    other => crate::error::mutation_failure_status(&other)
+                        .unwrap_or(RpcStatus::TransactionRetry),
+                })
+        } else {
+            let full = arg.full.ok_or_else(|| {
+                super::super::bad_arguments("normalized rename requires full update")
+            })?;
+            self.commit_user_mutation_argument(
+                argument,
+                principal,
+                crate::identity::mutation::Argument::Rename(arg.username, full),
+            )
+        }
+    }
+
     fn resolve_username(
         &self,
         argument: &[u8],
@@ -326,6 +428,20 @@ pub(super) fn response(
     let principal = principal.ok_or_else(permission_denied)?;
     let sequence = call.call.sequence();
     match call.route.id {
+        RouteId::UserChangeUsername => {
+            operations.change_username(call.call.argument(), principal)?;
+            encode_void_success_response_at(sequence).map_err(|_| RpcStatus::TransactionRetry)
+        }
+        RouteId::UserReserveUsernameForChange => encode_success_response_at(
+            &operations.reserve_username_for_change(call.call.argument(), principal)?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::TransactionRetry),
+        RouteId::UserGetTreeLocation => encode_success_response_at(
+            &operations.get_tree_location(call.call.argument(), principal)?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::TransactionRetry),
         RouteId::UserResolveUsername => encode_success_response_at(
             &operations.resolve_username(call.call.argument(), principal)?,
             sequence,

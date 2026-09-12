@@ -83,12 +83,6 @@ fn pending_intent(p: &PendingSignup) -> Result<SsoIntent> {
     })
 }
 impl CheckedProfileSession<'_> {
-    pub(super) fn sso_store(&self, master: &[u8; 32]) -> Result<EncryptedFileMutationStore> {
-        Ok(EncryptedFileMutationStore::open(
-            &self.paths.protected_mutations,
-            derive_mutation_key(master),
-        )?)
-    }
     fn sso_identity(
         &self,
         alias: &str,
@@ -209,7 +203,7 @@ impl CheckedProfileSession<'_> {
     ) -> Result<SsoReport> {
         let login = intent.for_login;
         let host = self.pinned_host()?;
-        let mut protected = self.sso_store(master)?;
+        let mut protected = self.mutation_store(master)?;
         // Reopening a browser flow never sends init again, even when its reply was lost.
         for flow in HardStateStore::open(&self.paths.hard_database)?
             .sso_flows(host.host_id().as_bytes(), intent.uid.as_bytes())?
@@ -244,7 +238,7 @@ impl CheckedProfileSession<'_> {
     ) -> Result<SsoReport> {
         let flow = self.checked_sso_flow(alias, id, vault)?;
         let host = self.pinned_host()?;
-        let mut protected = self.sso_store(master)?;
+        let mut protected = self.mutation_store(master)?;
         let result = match action {
             SsoAction::Status => self.client.sso_progress(&host, id, &mut protected),
             // Short isolated waits release the profile lock between polls.
@@ -327,7 +321,7 @@ impl CheckedProfileSession<'_> {
         let loaded = vault.yubi_account(alias)?;
         let credential = loaded.credential(parent);
         let host = self.pinned_host()?;
-        let mut protected = self.sso_store(master)?;
+        let mut protected = self.mutation_store(master)?;
         let p = self.client.finish_sso_login(
             &host,
             id,
@@ -358,7 +352,7 @@ impl CheckedProfileSession<'_> {
             return Err(Error::InvalidAccount("login flow cannot create an account"));
         }
         let host = self.pinned_host()?;
-        let mut protected = self.sso_store(master)?;
+        let mut protected = self.mutation_store(master)?;
         if input.passphrase.is_some() {
             self.profile.require(Capability::Passphrases)?;
         }

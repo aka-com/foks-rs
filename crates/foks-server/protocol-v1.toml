@@ -27,6 +27,7 @@ merkle_no_root = 4001
 merkle_verify = 4003
 method_not_found = 211
 name_in_use = 1023
+no_change = 1029
 not_found = 1049
 oauth2 = 1067
 oauth2_auth = 1069
@@ -2103,3 +2104,88 @@ statuses = ["ok", "bad_args", "oauth2", "oauth2_auth", "timeout", "rate_limited"
 max_request_bytes = 1048576
 supported = true
 coverage = ["sso"]
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "changeUsername"
+position = 11
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "AccountArgument"
+result = "Void"
+upstream_result = "void"
+argument_header = true
+result_header = true
+statuses = ["ok", "oauth2_auth", "bad_args", "no_change", "name_in_use", "permission_denied", "not_found", "revoke_race", "tx_retry", "rate_limited"]
+max_request_bytes = 8388608
+supported = true
+coverage = ["account_conveniences"]
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "reserveUsernameForChange"
+position = 12
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "AccountArgument"
+result = "UsernameReservation"
+upstream_result = "ReserveNameRes"
+argument_header = true
+result_header = true
+statuses = ["ok", "oauth2_auth", "bad_args", "no_change", "name_in_use", "permission_denied", "not_found", "revoke_race", "tx_retry", "rate_limited"]
+max_request_bytes = 4096
+supported = true
+coverage = ["account_conveniences"]
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "getTreeLocation"
+position = 13
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "AccountArgument"
+result = "TreeLocation"
+upstream_result = "lib.TreeLocation"
+argument_header = true
+result_header = true
+statuses = ["ok", "oauth2_auth", "bad_args", "no_change", "name_in_use", "permission_denied", "not_found", "revoke_race", "tx_retry", "rate_limited"]
+max_request_bytes = 1024
+supported = true
+coverage = ["account_conveniences"]
+
+[[route]]
+protocol = "Reg"
+protocol_id = 0xf7ab85f3
+method = "getHostID"
+position = 3
+listeners = ["public_services"]
+authentication = "delegated_tls"
+request = "Void"
+result = "HostID"
+upstream_result = "lib.HostID"
+argument_header = true
+result_header = true
+statuses = ["ok", "bad_args", "tx_retry"]
+max_request_bytes = 1024
+supported = true
+coverage = ["account_conveniences"]
+
+[[route]]
+protocol = "Reg"
+protocol_id = 0xf7ab85f3
+method = "getVHostMgmtHost"
+position = 22
+listeners = ["public_services"]
+authentication = "delegated_tls"
+request = "Void"
+result = "TcpAddress"
+upstream_result = "lib.TCPAddr"
+argument_header = true
+result_header = true
+statuses = ["ok", "bad_args", "tx_retry"]
+max_request_bytes = 1024
+supported = true
+coverage = ["account_conveniences"]

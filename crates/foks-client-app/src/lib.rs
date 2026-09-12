@@ -186,6 +186,8 @@ pub use yubi::{
 };
 
 mod account;
+mod account_conveniences;
+pub use account_conveniences::{RenameAction, RenameReport};
 mod sso;
 pub use sso::{SsoAction, SsoReport, SsoSignupInput};
 mod chat;

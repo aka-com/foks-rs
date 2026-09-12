@@ -49,7 +49,18 @@ pub struct SeedChainMutation<'a> {
     pub exact_box: &'a [u8],
 }
 
+#[derive(Clone, Debug)]
+pub struct UsernameMutation {
+    pub normalized_name: Vec<u8>,
+    pub username_utf8: Vec<u8>,
+    pub commitment_key: [u8; 16],
+    pub token: [u8; 17],
+    pub name_sequence: u64,
+    pub reservation_expires_at: u64,
+}
+
 pub struct UserMutation<'a> {
+    pub username: Option<&'a UsernameMutation>,
     pub uid: &'a [u8],
     pub signer_device_id: &'a [u8],
     pub expected_sequence: u64,
@@ -144,6 +155,38 @@ impl Database {
             return Err(Error::Invalid("inactive user mutation signer"));
         }
         assert_no_racing_revoked_credential(&transaction, mutation)?;
+        if let Some(name) = mutation.username {
+            let expiry = name
+                .reservation_expires_at
+                .checked_mul(1000)
+                .ok_or(Error::IntegerRange)?;
+            let valid: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM names WHERE normalized_name=?1 AND uid IS NULL
+                 AND reservation_token=?2 AND reservation_sequence=?3 AND expires_at=?4 AND expires_at>?5)",
+                params![name.normalized_name, name.token, sql_integer(name.name_sequence)?, sql_integer(expiry)?, sql_integer(mutation.now)?],
+                |r| r.get(0))?;
+            if !valid {
+                return Err(Error::Reservation);
+            }
+            transaction.execute(
+                "UPDATE names SET dead=1 WHERE uid=?1 AND dead=0",
+                [mutation.uid],
+            )?;
+            transaction.execute("UPDATE names SET uid=?1, reservation_token=NULL, expires_at=NULL WHERE normalized_name=?2", params![mutation.uid, name.normalized_name])?;
+            transaction.execute("UPDATE users SET normalized_name=?1, username_utf8=?2, username_sequence=?3, username_commitment_key=?4 WHERE uid=?5",
+                params![name.normalized_name, name.username_utf8, sql_integer(name.name_sequence)?, name.commitment_key, mutation.uid])?;
+            transaction.execute(
+                "INSERT INTO user_name_history VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    mutation.uid,
+                    sql_integer(mutation.expected_sequence)?,
+                    name.normalized_name,
+                    sql_integer(name.name_sequence)?,
+                    name.commitment_key
+                ],
+            )?;
+        }
+
         enforce_credential_capacity(&transaction, &self.config, mutation)?;
 
         transaction.execute(
@@ -389,6 +432,24 @@ fn validate(database: &Database, mutation: &UserMutation<'_>) -> Result<()> {
         )?,
         *mutation.link_hash,
     )];
+    if let Some(name) = mutation.username {
+        if name.normalized_name.is_empty()
+            || name.normalized_name.len() > database.config.maximum_name_bytes
+            || name.name_sequence != 1
+            || name.username_utf8.len() > 4096
+        {
+            return Err(Error::Invalid("username mutation"));
+        }
+        let host = database
+            .host_bootstrap()?
+            .ok_or(Error::Invalid("missing host"))?;
+        let host = foks_proto::EntityId::from_bytes(host.host_id)
+            .map_err(|_| Error::Invalid("host ID"))?;
+        expected_leaves.push((
+            foks_merkle_store::username_key(&name.normalized_name, &host, name.name_sequence)?,
+            foks_merkle_store::username_leaf(&uid)?,
+        ));
+    }
     if let Some(settings) = &mutation.user_settings {
         expected_leaves.push((
             foks_merkle_store::chain_key(

@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+mod account;
 mod chat;
 mod chat_poll;
 mod data;
@@ -2369,6 +2370,31 @@ fn dispatch_result(
                 Ok(serde_json::to_value(pending)?)
             })
         }
+        Operation::ListAccountRenames {
+            profile,
+            account_alias,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(
+                    session.account_renames(&account_alias, vault)?,
+                )?)
+            })
+        }
+        Operation::RenameAccount {
+            profile,
+            account_alias,
+            action,
+        } => account::rename(
+            state_dir,
+            &registry,
+            &profile,
+            &account_alias,
+            action,
+            timeout,
+            cancellation,
+        ),
         Operation::Sso {
             profile,
             account_alias,

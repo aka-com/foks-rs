@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+mod account_conveniences;
 mod mcp;
 mod sso;
 
@@ -136,10 +137,20 @@ enum ProfileGeneration {
 
 #[derive(clap::Subcommand)]
 enum AccountCommand {
-    List { profile: String },
+    #[command(subcommand)]
+    Rename(account_conveniences::RenameCommand),
+    List {
+        profile: String,
+    },
     Create(AccountCreate),
-    Resume { profile: String, alias: String },
-    Sync { profile: String, alias: String },
+    Resume {
+        profile: String,
+        alias: String,
+    },
+    Sync {
+        profile: String,
+        alias: String,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -786,6 +797,7 @@ fn account_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let registry = ProfileRegistry::open(state_dir)?;
     match command {
+        AccountCommand::Rename(command) => account_conveniences::run(state_dir, command),
         AccountCommand::List { profile } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |_session, vault, _| {

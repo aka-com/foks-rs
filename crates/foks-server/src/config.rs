@@ -7,6 +7,7 @@ use crate::{Entropy, RateLimitConfig, WriterHandle};
 
 #[derive(Clone)]
 pub struct Config {
+    pub vhost_management_host: String,
     pub sso: Option<Arc<crate::sso::SsoService>>,
     pub probe_address: SocketAddr,
     pub public_address: SocketAddr,
@@ -119,4 +120,25 @@ mod tests {
         };
         assert!(memory.validate().is_err());
     }
+}
+
+/// The advertised authority is configuration, not an arbitrary browser URL.
+pub(crate) fn validate_vhost_management_host(value: &str) -> crate::Result<()> {
+    if value.is_empty() {
+        return Ok(());
+    }
+    let url = url::Url::parse(&format!("https://{value}"))
+        .map_err(|_| crate::Error::Config("invalid vhost management authority"))?;
+    if value.len() > 1024
+        || value.chars().any(char::is_whitespace)
+        || value.contains(['/', '?', '#', '@'])
+        || url.host_str().is_none()
+        || value
+            .rsplit_once(':')
+            .and_then(|(_, p)| p.parse::<u16>().ok())
+            .is_none_or(|p| p == 0)
+    {
+        return Err(crate::Error::Config("invalid vhost management authority"));
+    }
+    Ok(())
 }

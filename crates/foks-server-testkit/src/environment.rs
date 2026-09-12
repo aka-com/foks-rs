@@ -108,6 +108,12 @@ impl TestEnvironment {
     ) -> foks_server::Result<crate::InProcessServer> {
         crate::InProcessServer::start_with_oidc(self.clone(), Some(config))
     }
+    pub fn start_server_with_management(
+        &self,
+        authority: &str,
+    ) -> foks_server::Result<crate::InProcessServer> {
+        crate::InProcessServer::start_with_management(self.clone(), None, authority.to_owned())
+    }
     pub fn start_server(&self) -> foks_server::Result<crate::InProcessServer> {
         crate::InProcessServer::start(self.clone())
     }
@@ -294,6 +300,11 @@ impl TestEnvironment {
 
     pub fn arm_fault(&self, fault: TestFault) -> u64 {
         let (point, protocol, method) = match fault {
+            TestFault::RenameAfterCommitBeforeResponse => (
+                foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
+                "User",
+                "changeUsername",
+            ),
             TestFault::SignupBeforeCommit => (
                 foks_server::SessionFaultPoint::BeforeDurableMutation,
                 "Reg",
@@ -365,6 +376,7 @@ impl TestEnvironment {
 
 #[derive(Clone, Copy, Debug)]
 pub enum TestFault {
+    RenameAfterCommitBeforeResponse,
     SignupBeforeCommit,
     SignupAfterCommitBeforeResponse,
     SignupDuringResponseWrite,

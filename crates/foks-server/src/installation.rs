@@ -14,6 +14,8 @@ const MAXIMUM_CONFIG_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct InstallationConfig {
+    #[serde(default)]
+    pub vhost_management_host: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oidc: Option<crate::sso::OidcOperatorConfig>,
     pub version: u32,
@@ -35,6 +37,7 @@ pub struct InstallationConfig {
 impl InstallationConfig {
     pub fn validate(&self) -> crate::Result<()> {
         validate_hostname(&self.canonical_name)?;
+        crate::config::validate_vhost_management_host(&self.vhost_management_host)?;
         if let Some(oidc) = &self.oidc {
             oidc.validate(foks_oidc::NetworkPolicy::default())?;
             if [
@@ -145,6 +148,7 @@ pub fn initialize(
     write_new_file(&probe_certificate_der, certificate.der(), 0o644)?;
 
     let config = InstallationConfig {
+        vhost_management_host: String::new(),
         oidc: None,
         version: INSTALLATION_VERSION,
         canonical_name: canonical_name.to_owned(),

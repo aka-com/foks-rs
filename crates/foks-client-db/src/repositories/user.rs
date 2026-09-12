@@ -381,7 +381,6 @@ impl HardStateStore {
                         });
                     }
                     if username != snapshot.username
-                        || username_utf8 != snapshot.username_utf8
                         || stored_unsigned("username sequence", *username_sequence)?
                             != snapshot.username_sequence
                         || load_user_devices(&transaction, snapshot.host_id, snapshot.uid)?
@@ -408,7 +407,11 @@ impl HardStateStore {
                                     epoch: snapshot.merkle_epoch,
                                 });
                             }
-                            Acceptance::Unchanged
+                            if username_utf8 != snapshot.username_utf8 {
+                                Acceptance::Advanced
+                            } else {
+                                Acceptance::Unchanged
+                            }
                         }
                         std::cmp::Ordering::Greater => Acceptance::Advanced,
                     }

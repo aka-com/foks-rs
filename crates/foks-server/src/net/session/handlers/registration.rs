@@ -7,6 +7,9 @@ use crate::rpc::{RouteId, RoutedCall};
 use super::super::ServerData;
 
 pub(super) trait Operations {
+    fn host_id(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+    fn vhost_management_host(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
+
     fn init_oauth2(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
     fn sso_login(&self, argument: &[u8]) -> Result<(), RpcStatus>;
     fn resolve_username(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus>;
@@ -30,6 +33,19 @@ pub(super) trait Operations {
 }
 
 impl Operations for ServerData {
+    fn host_id(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        foks_rpc::arguments::decode_void(argument).map_err(super::super::bad_arguments)?;
+        foks_snowpack::encode(&foks_snowpack::Value::Binary(self.host()?.into_bytes()))
+            .map_err(|_| RpcStatus::TransactionRetry)
+    }
+    fn vhost_management_host(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        foks_rpc::arguments::decode_void(argument).map_err(super::super::bad_arguments)?;
+        foks_snowpack::encode(&foks_snowpack::Value::Text(
+            self.vhost_management_host.as_bytes().to_vec(),
+        ))
+        .map_err(|_| RpcStatus::TransactionRetry)
+    }
+
     fn init_oauth2(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
         let arg = foks_proto::InitOAuth2SessionArgument::decode(argument)
             .map_err(|_| RpcStatus::BadArguments("invalid OIDC request".into()))?;
@@ -196,6 +212,15 @@ pub(super) fn response(
 ) -> Result<Vec<u8>, RpcStatus> {
     let sequence = call.call.sequence();
     match call.route.id {
+        RouteId::RegGetHostID => {
+            encode_success_response_at(&operations.host_id(call.call.argument())?, sequence)
+                .map_err(|_| RpcStatus::TransactionRetry)
+        }
+        RouteId::RegGetVHostMgmtHost => encode_success_response_at(
+            &operations.vhost_management_host(call.call.argument())?,
+            sequence,
+        )
+        .map_err(|_| RpcStatus::TransactionRetry),
         RouteId::RegInitOAuth2Session => {
             encode_success_response_at(&operations.init_oauth2(call.call.argument())?, sequence)
                 .map_err(|_| RpcStatus::TransactionRetry)

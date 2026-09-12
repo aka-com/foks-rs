@@ -35,6 +35,7 @@ pub enum RpcStatus {
     KeyNotFound(String),
     KexBadSecret,
     NameInUse,
+    NoChange(String),
     NotFound(String),
     PermissionDenied(String),
     PassphraseNotFound,
@@ -91,6 +92,7 @@ impl RpcStatus {
             Self::KeyNotFound(_) => 1025,
             Self::KexBadSecret => 1032,
             Self::NameInUse => 1023,
+            Self::NoChange(_) => 1029,
             Self::NotFound(_) => 1049,
             Self::PermissionDenied(_) => 1013,
             Self::PassphraseNotFound => STATUS_PASSPHRASE_NOT_FOUND_ERROR,
@@ -171,7 +173,8 @@ fn status_switch_variant(status: &RpcStatus) -> Value {
                 status_switch_variant(inner),
             ]),
         ),
-        RpcStatus::OAuth2(message)
+        RpcStatus::NoChange(message)
+        | RpcStatus::OAuth2(message)
         | RpcStatus::BadArguments(message)
         | RpcStatus::Duplicate(message)
         | RpcStatus::MerkleVerify(message)

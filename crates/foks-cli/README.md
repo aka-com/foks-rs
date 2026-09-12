@@ -129,3 +129,18 @@ JSON includes `backup_id_hex` so cleanup never guesses a credential identity.
 
 Organization enrollment and reauthentication use `foks-rs sso`. See the
 [OIDC client flow and operator guide](../foks-server/OIDC.md).
+
+Account rename uses an explicit prepare/confirm flow:
+
+```sh
+foks-rs account rename prepare --profile local --account work new_username
+foks-rs account rename attempt --profile local --account work --operation OPERATION_ID
+foks-rs account rename status --profile local --account work --operation OPERATION_ID
+foks-rs account rename list --profile local --account work
+```
+
+`cancel` accepts the same operation selector before submission. A later `attempt`
+only reconciles a request already submitted; it never sends it again. Keep the original
+operation handle if a reply is lost. Hardware accounts accept `--pin-file` on prepare,
+attempt and status; without an unlocked key, recovery reports that hardware is needed.
+Changing a remote username preserves the local account alias.
