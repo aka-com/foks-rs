@@ -400,11 +400,11 @@ pub fn encode_base62_strict(input: &[u8]) -> String {
     let mut encoded = Vec::with_capacity(base62_encoded_len(input.len()));
     for block in input.chunks(32) {
         let output_len = base62_encoded_len(block.len());
-        let mut number = block.to_vec();
-        let mut output = vec![b'0'; output_len];
+        let mut number = Zeroizing::new(block.to_vec());
+        let mut output = Zeroizing::new(vec![b'0'; output_len]);
         for position in (0..output_len).rev() {
             let mut remainder = 0u16;
-            for byte in &mut number {
+            for byte in number.iter_mut() {
                 let value = (remainder << 8) | u16::from(*byte);
                 *byte = u8::try_from(value / 62).expect("base-62 quotient fits a byte");
                 remainder = value % 62;
@@ -414,6 +414,16 @@ pub fn encode_base62_strict(input: &[u8]) -> String {
         encoded.extend_from_slice(&output);
     }
     String::from_utf8(encoded).expect("base-62 alphabet is ASCII")
+}
+
+/// Strict Go base62 decoding. Callers must bound inputs before decoding secrets.
+pub fn decode_base62_strict(input: &str) -> Result<Vec<u8>> {
+    let mut decoded = Zeroizing::new(Vec::with_capacity(base62_decoded_len(input.len())));
+    for block in input.as_bytes().chunks(43) {
+        let bytes = Zeroizing::new(decode_base62_block(block)?);
+        decoded.extend_from_slice(&bytes);
+    }
+    Ok(std::mem::take(&mut *decoded))
 }
 
 fn decode_base62_invite(input: &str) -> Result<Vec<u8>> {
@@ -452,7 +462,7 @@ fn decode_base62_block(bytes: &[u8]) -> Result<Vec<u8>> {
             found: bytes.len(),
         });
     }
-    let mut number = vec![0u8];
+    let mut number = Zeroizing::new(vec![0u8]);
     for byte in bytes {
         let digit = base62_digit(*byte).ok_or(Error::Type {
             expected: "strict base-62 invite code",

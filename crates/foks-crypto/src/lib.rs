@@ -7,6 +7,8 @@
 #![forbid(unsafe_code)]
 
 mod backup;
+mod bot_token;
+pub use bot_token::*;
 mod chat_v2;
 mod kex;
 mod passphrase;

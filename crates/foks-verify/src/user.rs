@@ -1713,3 +1713,26 @@ mod incremental_tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod account_normalization_tests {
+    #[test]
+    fn account_names_match_pinned_go_fixture_cases() {
+        // account/normalization.json is generated and checked by TestAccountFixtures.
+        for (input, expected) in [
+            ("alice", Some("alice")),
+            ("ALICE", Some("alice")),
+            ("Álice", Some("alice")),
+            ("a.b", Some("a_b")),
+            ("ab", None),
+            ("alice smith", None),
+            ("Ａlice", None),
+        ] {
+            assert_eq!(
+                super::normalize_username(input.as_bytes()).as_deref(),
+                expected.map(str::as_bytes),
+                "{input}"
+            );
+        }
+    }
+}

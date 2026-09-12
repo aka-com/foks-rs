@@ -71,6 +71,8 @@ pub const ENTITY_AD_HOC_TEAM: u8 = 20;
 pub const CHAIN_TYPE_USER_SETTINGS: u64 = 2;
 pub const CHAIN_TYPE_TEAM_MEMBERSHIP: u64 = 4;
 
+mod account;
+pub use account::*;
 mod chat_context;
 mod codec;
 mod compat;

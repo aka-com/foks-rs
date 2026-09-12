@@ -23,10 +23,12 @@ use foks_proto::{
 use foks_snowpack::{decode, encode, Value};
 use thiserror::Error;
 
+mod account;
 pub mod arguments;
 mod generated;
 mod realtime;
 mod sso;
+pub use account::*;
 mod status;
 pub use sso::*;
 use status::check_status;
