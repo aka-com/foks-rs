@@ -1,19 +1,4 @@
-/* ============================================================================
-   FOKS desktop — the wave 6 shell stylesheet.
-
-   Lifted whole from `dev/foks-desktop/iteration/wave6/shell.css`. The design
-   is the source of truth: change it there, then bring the change here, rather
-   than diverging.
-
-   Common tokens come from `apps/desktop/kit/tokens.css`; the FOKS-specific values
-   remain here and override the imported defaults through cascade order.
-
-   See `apps/desktop/kit/README.md` for the measurement and theme decision.
-
-   The window chrome below (`.window`) is the mock's
-   page furniture — a fake macOS window drawn inside a browser page. The real
-   app window replaces it; `./app.css` does that and is loaded after this file.
-   ============================================================================ */
+/* Shell stylesheet */
 
 @import '/kit/tokens.css';
 

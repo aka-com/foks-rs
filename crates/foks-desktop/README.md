@@ -117,8 +117,8 @@ native FOKS hierarchy: profiles contain accounts and their personal stores; acco
 join or create teams, whose stores and party rosters retain their authenticated team
 identity. The client may aggregate those stores into one Items view, but does not add a
 generic container or a device-local content source. See
-[`dev/foks-desktop/README.md`](../../dev/foks-desktop/README.md) for the design contract and
-implementation stages.
+[`apps/desktop/README.md`](../../apps/desktop/README.md) for the current frontend
+architecture.
 
 The target local boundary is protocol v2: the desktop launches a detached agent that
 survives window closure; the agent can start in a restricted bootstrap mode, which the

@@ -213,9 +213,8 @@ and reader computations are client-side presentation models without protocol equ
 
 ## Design tokens and the theme decision
 
-`src/styles/shell.css` is `dev/foks-desktop/iteration/wave6/shell.css` lifted
-whole. The design is authoritative: change it there, then bring the
-change here.
+`src/styles/shell.css` defines the desktop shell styles. Make shell design
+changes directly in this stylesheet.
 
 The one edit is the token block. Measured against `ui/styles.css`, the mock's
 48 `:root` tokens split **35 identical / 5 same-name-different-value / 8

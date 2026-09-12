@@ -5,8 +5,5 @@ apps/desktop/public/vendor/
 # Generated/staged output.
 node_modules/
 
-# Static design references; preserve their compact formatting.
-dev/foks-desktop/
-
 # Preserve the compact formatting of the imported shell stylesheet.
 apps/desktop/src/styles/shell.css
