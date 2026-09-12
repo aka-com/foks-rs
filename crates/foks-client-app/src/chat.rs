@@ -28,6 +28,22 @@ pub fn chat_submission(master_key: &[u8; 32], id: [u8; 16], input: &[u8]) -> Cha
 }
 
 impl CheckedProfileSession<'_> {
+    pub fn recover_chat_operation_text(
+        &self,
+        team_alias: &str,
+        id: &[u8; 16],
+        channel: RtChannelId,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<Option<zeroize::Zeroizing<String>>> {
+        self.with_chat(team_alias, vault, |chat| {
+            let mut protected = EncryptedFileMutationStore::open(
+                &self.paths.protected_mutations,
+                derive_mutation_key(master_key),
+            )?;
+            Ok(chat.recover_operation_text(&mut chat.connection()?, &mut protected, id, channel)?)
+        })
+    }
     pub fn chat_operation_status(
         &self,
         team_alias: &str,

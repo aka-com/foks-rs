@@ -11,6 +11,7 @@ CREATE TABLE rt_channels (
     short_id INTEGER NOT NULL UNIQUE CHECK (short_id >= 0),
     team_id BLOB NOT NULL,
     app_id INTEGER NOT NULL,
+    format INTEGER NOT NULL DEFAULT 1 CHECK (format IN (1, 2)),
     metadata BLOB NOT NULL CHECK (length(metadata) <= 16384),
     -- Immutable configuration above; append activity below.
     last_message BLOB CHECK (last_message IS NULL OR length(last_message) <= 256),
@@ -18,6 +19,11 @@ CREATE TABLE rt_channels (
     FOREIGN KEY (team_id, app_id) REFERENCES rt_channel_sets(team_id, app_id)
 ) STRICT;
 CREATE INDEX rt_channels_team ON rt_channels(team_id, app_id, channel_id);
+-- Format activation is intentionally excluded: extended chat starts in new channels.
+CREATE TRIGGER rt_channel_format_immutable BEFORE UPDATE OF format ON rt_channels
+WHEN NEW.format != OLD.format BEGIN
+    SELECT RAISE(ABORT, 'realtime channel format is immutable');
+END;
 CREATE TABLE rt_messages (
     message_id BLOB PRIMARY KEY CHECK (length(message_id) = 16),
     channel_id BLOB NOT NULL REFERENCES rt_channels(channel_id),

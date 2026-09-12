@@ -1,30 +1,46 @@
-import type { ChatAction, ChatOperation, ChatResult } from '../chat-contract';
+import type { ChatOperation } from '../chat-contract';
+import type { ConversationEvent } from './conversation-events';
 import { CHAT_HISTORY_BYTES, CHAT_PENDING_ROWS } from '../chat-limits';
 
 export interface TrackedOperation extends ChatOperation {
   text?: string;
   observed?: boolean;
   statusUnknown?: boolean;
+  bodyUnavailable?: boolean;
 }
 const terminal = (op: ChatOperation) =>
   !['prepared', 'uncertain'].includes(op.state);
 /** Ledger status and accepted-history observation are independent facts. */
 export function reconcileOperations(
   old: TrackedOperation[],
-  action: ChatAction,
-  result: ChatResult,
+  result: ConversationEvent,
 ): TrackedOperation[] {
+  if (result.kind === 'body-recovered')
+    return bound(
+      old.map((op) =>
+        op.id === result.operation &&
+        op.channel === result.channel &&
+        op.kind === 'send-message' &&
+        !op.observed
+          ? {
+              ...op,
+              text: result.text ?? op.text,
+              bodyUnavailable: result.text === null,
+            }
+          : op,
+      ),
+    );
   if (result.kind === 'operation') {
     const previous = old.find((op) => op.id === result.operation.id);
-    if (action.action === 'finalize' || result.operation.state === 'cancelled')
+    if (result.discard)
       return old.filter((op) => op.id !== result.operation.id);
     const next: TrackedOperation = {
       ...previous,
       ...result.operation,
       statusUnknown: false,
     };
-    if (action.action === 'prepare-message' && !next.observed)
-      next.text = action.text;
+    if (result.preparedText !== undefined && !next.observed)
+      next.text = result.preparedText;
     return bound([...old.filter((op) => op.id !== next.id), next]);
   }
   if (result.kind === 'pending') {
@@ -42,21 +58,28 @@ export function reconcileOperations(
   }
   // This event is dispatched only after the entire page is accepted into history.
   if (result.kind === 'history') {
-    const ids = new Set(result.messages.map((m) => m.id));
-    return old.map((op) =>
-      ids.has(op.id) ? { ...op, observed: true, text: undefined } : op,
-    );
+    return observeMessages(old, new Set(result.messages.map((m) => m.id)));
   }
   if (result.kind === 'channels')
     return old.filter(
       (op) =>
         !(
-          op.create &&
+          op.kind === 'create-channel' &&
           op.state === 'confirmed' &&
           result.channels.some((c) => c.id === op.channel)
         ),
     );
   return old;
+}
+export function observeMessages(
+  old: TrackedOperation[],
+  ids: ReadonlySet<string>,
+): TrackedOperation[] {
+  return old.map((op) =>
+    op.kind === 'send-message' && ids.has(op.id)
+      ? { ...op, observed: true, text: undefined }
+      : op,
+  );
 }
 function bound(rows: TrackedOperation[]): TrackedOperation[] {
   // Observed terminal operations no longer occur in pending queries. Foreground

@@ -116,7 +116,8 @@ pub(super) fn response(
         LogSendLogSendInit | LogSendLogSendInitFile | LogSendLogSendUploadBlock => {
             logsend::response(data, call, principal)
         }
-        RealTimeRtNewChannel
+        RealTimeFennecChatCapabilities
+        | RealTimeRtNewChannel
         | RealTimeRtListAllChannelsForTeam
         | RealTimeRtSend
         | RealTimeRtGetThread

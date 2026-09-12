@@ -26,6 +26,10 @@ use thiserror::Error;
 pub mod arguments;
 mod generated;
 mod realtime;
+mod status;
+use status::check_status;
+#[cfg(test)]
+mod realtime_status_tests;
 mod response;
 pub use realtime::*;
 mod server;
@@ -80,6 +84,8 @@ pub enum Error {
     Sequence { expected: u64, received: u64 },
     #[error("FOKS server returned status {code}{detail}")]
     RemoteStatus { code: u64, detail: StatusDetail },
+    #[error("FOKS server does not implement protocol {protocol_id:#x} method {position}")]
+    MethodNotFound { protocol_id: u64, position: u64 },
     #[error("FOKS KV cache is stale")]
     KvStaleCache(KvPathVersionVector),
     #[error("RPC {kind} count {received} exceeds limit {maximum}")]
@@ -2128,145 +2134,6 @@ fn decode_data_wrap(bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(data)
 }
 
-fn check_status(bytes: &[u8]) -> Result<()> {
-    if bytes == [0xc0] {
-        return Ok(());
-    }
-    if matches!(bytes.first(), Some(0x92)) {
-        return check_positional_status(bytes);
-    }
-    // RPC status values are encoded by the Go RPC codec as named MessagePack
-    // structs, not as canonical positional Snowpack values. For example a
-    // stale-cache status is `{Sc: 8012, f11: {Root, Path}}`.
-    let mut cursor = Cursor::new(bytes);
-    let fields = map_length(&mut cursor)?;
-    if !(1..=2).contains(&fields) {
-        return Err(Error::Envelope {
-            expected: "one- or two-field FOKS status",
-            found: "unexpected map length",
-        });
-    }
-    let mut code = None;
-    let mut payload = None;
-    for _ in 0..fields {
-        let key = text(cursor.value()?)?;
-        let value = cursor.value()?;
-        if key == b"Sc" {
-            if code.replace(unsigned(value)?).is_some() {
-                return Err(Error::Envelope {
-                    expected: "one FOKS status code",
-                    found: "duplicate status code",
-                });
-            }
-        } else if payload.replace((key, value)).is_some() {
-            return Err(Error::Envelope {
-                expected: "one FOKS status payload",
-                found: "duplicate status payload",
-            });
-        }
-    }
-    if !cursor.done() {
-        return Err(Error::Envelope {
-            expected: "end of FOKS status",
-            found: "trailing data",
-        });
-    }
-    let code = code.ok_or(Error::Envelope {
-        expected: "FOKS status code",
-        found: "status without Sc",
-    })?;
-    if code == 0 && payload.is_none() {
-        return Ok(());
-    }
-    if code == 0 {
-        return Err(Error::Envelope {
-            expected: "payload-free successful FOKS status",
-            found: "successful status with a payload",
-        });
-    }
-    if code == 8012 {
-        let Some((tag, value)) = payload else {
-            return Err(Error::Envelope {
-                expected: "KV stale-cache status payload",
-                found: "missing status payload",
-            });
-        };
-        if tag != b"f11" {
-            return Err(Error::Envelope {
-                expected: "KV stale-cache status field f11",
-                found: "another status variant",
-            });
-        }
-        return Err(Error::KvStaleCache(named_path_version_vector(value)?));
-    }
-    let detail = match payload {
-        Some((_, value)) => match decode(value) {
-            Ok(Value::Text(bytes)) => String::from_utf8(bytes).ok(),
-            Ok(other) => Some(format!("{other:?}")),
-            Err(_) => None,
-        },
-        None => None,
-    };
-    Err(Error::RemoteStatus {
-        code,
-        detail: StatusDetail(detail),
-    })
-}
-
-fn check_positional_status(bytes: &[u8]) -> Result<()> {
-    let value = decode(bytes)?;
-    let Value::Array(fields) = value else {
-        return Err(Error::Envelope {
-            expected: "two-field FOKS Status",
-            found: value.kind(),
-        });
-    };
-    if fields.len() != 2 {
-        return Err(Error::Envelope {
-            expected: "two-field FOKS Status",
-            found: "another array length",
-        });
-    }
-    let Value::Unsigned(code) = fields[0] else {
-        return Err(Error::Envelope {
-            expected: "unsigned FOKS status code",
-            found: fields[0].kind(),
-        });
-    };
-    if code == 0 && fields[1] == Value::Variant(None) {
-        return Ok(());
-    }
-    if code == 8012 {
-        let Value::Variant(Some((tag, value))) = &fields[1] else {
-            return Err(Error::Envelope {
-                expected: "KV stale-cache status payload",
-                found: "missing status payload",
-            });
-        };
-        if tag.as_slice() != b"b" {
-            return Err(Error::Envelope {
-                expected: "KV stale-cache status variant b",
-                found: "another status variant",
-            });
-        }
-        return Err(Error::KvStaleCache(positional_path_version_vector(value)?));
-    }
-    let detail = match &fields[1] {
-        Value::Variant(Some((_, value))) => match value.as_ref() {
-            Value::Text(bytes) => String::from_utf8(bytes.clone()).ok(),
-            other => Some(format!("{other:?}")),
-        },
-        _ => None,
-    };
-    Err(Error::RemoteStatus {
-        code,
-        detail: StatusDetail(detail),
-    })
-}
-
-/// Decodes go-foks' positional `PathVersionVector` (`[Root, Path]`) carried in a
-/// stale-cache status, applying the same directory/dirent bounds as the cached
-/// projection so a hostile server cannot force an unbounded allocation.
 fn positional_path_version_vector(value: &Value) -> Result<KvPathVersionVector> {
     let Value::Array(fields) = value else {
         return Err(Error::Envelope {

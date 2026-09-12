@@ -78,7 +78,7 @@ export function PendingRow({
   return (
     <div className="chat-pending" data-operation={op.id}>
       <span className="chat-pending-title">
-        {op.create ? 'Channel' : 'Message'} ·{' '}
+        {op.kind === 'create-channel' ? 'Channel' : 'Message'} ·{' '}
         {op.statusUnknown ? 'Checking status' : PENDING_STATE[op.state]}
       </span>
       <small>
@@ -95,7 +95,13 @@ export function PendingRow({
           <Button
             size="sm"
             disabled={busy}
-            onClick={() => void run(op.statusUnknown ? 'status' : 'attempt')}
+            onClick={() =>
+              void run(
+                op.statusUnknown || op.state === 'uncertain'
+                  ? 'status'
+                  : 'attempt',
+              )
+            }
           >
             {op.statusUnknown
               ? 'Check status'

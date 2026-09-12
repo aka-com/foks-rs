@@ -223,6 +223,11 @@ const COVERAGE: &[Coverage] = &[
         routes: &[("RealTime", "rtPollInbox")],
     },
     Coverage {
+        name: "realtime_capabilities",
+        run: crate::realtime::realtime_capabilities,
+        routes: &[("RealTime", "fennecChatCapabilities")],
+    },
+    Coverage {
         name: "realtime_text",
         run: crate::realtime::realtime_text,
         routes: &[

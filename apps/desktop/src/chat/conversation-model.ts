@@ -1,7 +1,8 @@
-import type { ChatAction, ChatMessage, ChatResult } from '../chat-contract';
+import type { ChatMessage } from '../chat-contract';
+import type { ConversationEvent } from './conversation-events';
 import { CHAT_HISTORY_BYTES, CHAT_HISTORY_ROWS } from '../chat-limits';
-import { channelIntegrity } from './client';
-import { reconcileOperations } from './operations';
+import { channelIntegrity } from './errors';
+import { reconcileOperations, observeMessages } from './operations';
 import type { TrackedOperation } from './operations';
 
 export interface HistoryWindow {
@@ -22,28 +23,38 @@ export const emptyConversation = (): ConversationState => ({
 /** History acceptance and delivery observation commit together, or neither commits. */
 export function conversationResult(
   state: ConversationState,
-  action: ChatAction,
-  result: ChatResult,
+  result: ConversationEvent,
 ): ConversationState {
+  if (result.kind === 'reset') return emptyConversation();
+  if (result.kind === 'access')
+    return {
+      operations: state.operations.map((op) =>
+        result.readable.has(op.channel) ? op : { ...op, text: undefined },
+      ),
+      history:
+        state.history && result.readable.has(state.history.channel)
+          ? state.history
+          : null,
+    };
+  if (result.kind === 'status-unresolved')
+    return {
+      ...state,
+      operations: state.operations.map((op) =>
+        op.id === result.operation ? { ...op, statusUnknown: true } : op,
+      ),
+    };
   if (result.kind !== 'history') {
-    let operations = reconcileOperations(state.operations, action, result);
+    let operations = reconcileOperations(state.operations, result);
     if (state.history)
-      operations = reconcileOperations(
+      operations = observeMessages(
         operations,
-        { action: 'history', channel: state.history.channel, before: null },
-        {
-          kind: 'history',
-          channel: state.history.channel,
-          before: state.history.before,
-          messages: state.history.messages,
-          missing_predecessors: [],
-        },
+        new Set(state.history.messages.map((m) => m.id)),
       );
     return { ...state, operations };
   }
   const previous =
     state.history?.channel === result.channel ? state.history : null;
-  const older = action.action === 'history' ? action.before : null;
+  const older = result.requestBefore;
   const last = previous?.messages.at(-1);
   const incoming = [...result.messages].sort((a, b) =>
     BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1,
@@ -58,7 +69,7 @@ export function conversationResult(
   );
   for (const message of incoming) {
     const old = rows.get(message.id);
-    if (old && JSON.stringify(old) !== JSON.stringify(message))
+    if (old && !sameMessage(old, message))
       throw channelIntegrity('The message changed while refreshing.');
     rows.set(message.id, message);
   }
@@ -86,10 +97,9 @@ export function conversationResult(
       ambiguous: false,
     };
   const verification = new Map(reset ? [] : previous?.verification);
-  for (const message of incoming)
-    verification.set(message.id, result.missing_predecessors.length > 0);
+  for (const message of incoming) verification.set(message.id, result.missing);
   return {
-    operations: reconcileOperations(state.operations, action, result),
+    operations: reconcileOperations(state.operations, result),
     history: {
       channel: result.channel,
       messages,
@@ -98,4 +108,17 @@ export function conversationResult(
         reset || older || !previous?.before ? result.before : previous.before,
     },
   };
+}
+
+function sameMessage(a: ChatMessage, b: ChatMessage): boolean {
+  return (
+    a.id === b.id &&
+    a.sequence === b.sequence &&
+    a.sender === b.sender &&
+    a.send_time === b.send_time &&
+    a.insert_time === b.insert_time &&
+    a.content.kind === b.content.kind &&
+    (a.content.kind !== 'text' ||
+      (b.content.kind === 'text' && a.content.text === b.content.text))
+  );
 }

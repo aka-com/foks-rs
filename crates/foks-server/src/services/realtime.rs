@@ -222,6 +222,15 @@ impl RealtimeService {
                 let snapshot = reader.snapshot().map_err(db_error)?;
                 let now = clock.now_micros().map_err(db_error)?;
                 let data = match request {
+                    RealtimeRequest::ChatCapabilities(arg) => {
+                        if arg.host.entity().as_bytes() != host {
+                            return Err(RpcStatus::PermissionDenied("wrong realtime host".into()));
+                        }
+                        snapshot.rt_check_actor(&actor, now).map_err(db_error)?;
+                        // Discovery is implemented. Extended channel behavior is
+                        // enabled only as its end-to-end stages are completed.
+                        foks_proto::RtChatCapabilities::basic_only(arg.host).encoded()
+                    }
                     RealtimeRequest::SelectVhost(arg) => {
                         if arg.host.entity().as_bytes() != host {
                             return Err(RpcStatus::PermissionDenied("wrong realtime host".into()));
@@ -265,6 +274,7 @@ fn db_error(error: DbError) -> RpcStatus {
             RpcStatus::PermissionDenied("realtime access denied".into())
         }
         DbError::RtRace => RpcStatus::RtRace("realtime state changed; refresh before retry".into()),
+        DbError::RtUnsupportedFormat => RpcStatus::Unsupported,
         DbError::RtMessageOrder => {
             RpcStatus::RtMessageOrder("realtime predecessor mismatch".into())
         }

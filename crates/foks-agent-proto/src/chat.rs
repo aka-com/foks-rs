@@ -29,6 +29,7 @@ pub enum ChatAction {
     PrepareChannel {
         submission: String,
         name: SecretString,
+        description: SecretString,
         admin: bool,
     },
     PrepareMessage {
@@ -38,6 +39,10 @@ pub enum ChatAction {
     },
     Status {
         operation: String,
+    },
+    OperationBody {
+        operation: String,
+        channel: String,
     },
     Attempt {
         operation: String,
@@ -61,6 +66,7 @@ impl ChatAction {
                 | Self::PollInbox { .. }
                 | Self::Pending
                 | Self::Status { .. }
+                | Self::OperationBody { .. }
         )
     }
     pub fn validate(&self) -> bool {
@@ -82,8 +88,15 @@ impl ChatAction {
                     && *timeout_milliseconds <= CHAT_POLL_MILLISECONDS as u64
             }
             Self::PrepareChannel {
-                submission, name, ..
-            } => valid_chat_id(submission) && name.expose().len() <= CHAT_NAME_BYTES,
+                submission,
+                name,
+                description,
+                ..
+            } => {
+                valid_chat_id(submission)
+                    && name.expose().len() <= CHAT_NAME_BYTES
+                    && description.expose().len() <= CHAT_DESCRIPTION_BYTES
+            }
             Self::PrepareMessage {
                 submission,
                 channel,
@@ -98,6 +111,9 @@ impl ChatAction {
             | Self::Attempt { operation }
             | Self::Cancel { operation }
             | Self::Finalize { operation } => valid_chat_id(operation),
+            Self::OperationBody { operation, channel } => {
+                valid_chat_id(operation) && valid_chat_id(channel)
+            }
             Self::SyncInbox { blocked_channels } => {
                 blocked_channels.len() <= CHAT_CHANNEL_ROWS
                     && blocked_channels.iter().all(|id| valid_chat_id(id))
@@ -192,14 +208,31 @@ pub struct ChatConversation {
 pub struct ChatOperation {
     pub id: String,
     pub channel: String,
-    pub create: bool,
+    pub kind: ChatOperationKind,
     pub state: ChatState,
-    pub sequence: Option<String>,
+    pub receipt: Option<ChatReceipt>,
     pub rejection_code: Option<i64>,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChatOperationKind {
+    CreateChannel,
+    SendMessage,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ChatReceipt {
+    ChannelCreated,
+    MessageSent { sequence: String },
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ChatResult {
+    OperationBody {
+        operation: String,
+        channel: String,
+        text: Option<SecretString>,
+    },
     Channels {
         channels: Vec<ChatChannel>,
         version: String,
@@ -245,6 +278,26 @@ pub struct ChatReply {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn channel_description_is_bounded_and_part_of_submission() {
+        let mut action = ChatAction::PrepareChannel {
+            submission: "ab".repeat(16),
+            name: SecretString::new("design"),
+            description: SecretString::new("private description"),
+            admin: false,
+        };
+        assert!(action.validate());
+        assert!(!format!("{action:?}").contains("private description"));
+        let encoded = serde_json::to_value(&action).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ChatAction>(encoded).unwrap(),
+            action
+        );
+        if let ChatAction::PrepareChannel { description, .. } = &mut action {
+            *description = SecretString::new("x".repeat(CHAT_DESCRIPTION_BYTES + 1));
+        }
+        assert!(!action.validate());
+    }
     #[test]
     fn quarantined_preview_requests_are_bounded_and_canonical() {
         let id = "ab".repeat(16);

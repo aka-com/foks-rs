@@ -14,6 +14,7 @@ import {
 } from './chat-limits';
 export { CHAT_TEXT_BYTES } from './chat-limits';
 export type ChatAction =
+  | { action: 'operation-body'; operation: string; channel: string }
   | { action: 'channels' }
   | { action: 'pending' }
   | { action: 'inbox' }
@@ -25,6 +26,7 @@ export type ChatAction =
       action: 'prepare-channel';
       submission: string;
       name: string;
+      description: string;
       admin: boolean;
     }
   | {
@@ -83,12 +85,21 @@ export interface ChatConversation {
 export interface ChatOperation {
   id: string;
   channel: string;
-  create: boolean;
+  kind: 'create-channel' | 'send-message';
   state: 'prepared' | 'uncertain' | 'confirmed' | 'rejected' | 'cancelled';
-  sequence: string | null;
+  receipt:
+    | { kind: 'channel-created' }
+    | { kind: 'message-sent'; sequence: string }
+    | null;
   rejection_code: number | null;
 }
 export type ChatResult =
+  | {
+      kind: 'operation-body';
+      operation: string;
+      channel: string;
+      text: string | null;
+    }
   | { kind: 'channels'; channels: ChatChannel[]; version: string }
   | {
       kind: 'history';
@@ -203,9 +214,9 @@ function operation(value: unknown): ChatOperation {
   const v = object(value, [
     'id',
     'channel',
-    'create',
+    'kind',
     'state',
-    'sequence',
+    'receipt',
     'rejection_code',
   ]);
   const state = text(v.state);
@@ -218,9 +229,12 @@ function operation(value: unknown): ChatOperation {
   const op: ChatOperation = {
     id: chatId(v.id),
     channel: chatId(v.channel),
-    create: bool(v.create),
+    kind:
+      v.kind === 'create-channel' || v.kind === 'send-message'
+        ? v.kind
+        : fail(),
     state: state as ChatOperation['state'],
-    sequence: v.sequence === null ? null : sequence(v.sequence),
+    receipt: operationReceipt(v.receipt),
     rejection_code:
       v.rejection_code === null
         ? null
@@ -231,11 +245,29 @@ function operation(value: unknown): ChatOperation {
   };
   if (
     (state === 'rejected') !== (op.rejection_code !== null) ||
-    (state === 'confirmed' && !op.create) !== (op.sequence !== null) ||
-    op.sequence === '0'
+    (state === 'confirmed') !== (op.receipt !== null) ||
+    (op.receipt !== null &&
+      (op.kind === 'create-channel') !==
+        (op.receipt.kind === 'channel-created'))
   )
     return fail();
   return op;
+}
+function operationReceipt(value: unknown): ChatOperation['receipt'] {
+  if (value === null) return null;
+  if (typeof value !== 'object' || !value) return fail();
+  const kind = (value as Record<string, unknown>).kind;
+  if (kind === 'channel-created') {
+    object(value, ['kind']);
+    return { kind };
+  }
+  if (kind === 'message-sent') {
+    const v = object(value, ['kind', 'sequence']);
+    const position = sequence(v.sequence);
+    if (position === '0') return fail();
+    return { kind, sequence: position };
+  }
+  return fail();
 }
 export function decodeChatReply(
   value: unknown,
@@ -487,11 +519,26 @@ export function decodeChatReply(
     if (
       ('operation' in action && action.operation !== op.id) ||
       (action.action === 'prepare-message' &&
-        (op.create || op.channel !== action.channel)) ||
-      (action.action === 'prepare-channel' && !op.create)
+        (op.kind !== 'send-message' || op.channel !== action.channel)) ||
+      (action.action === 'prepare-channel' && op.kind !== 'create-channel')
     )
       return fail();
     result = { kind: 'operation', operation: op };
+  } else if (
+    r.kind === 'operation-body' &&
+    action.action === 'operation-body'
+  ) {
+    object(r, ['kind', 'operation', 'channel', 'text']);
+    const operationId = chatId(r.operation);
+    const channelId = chatId(r.channel);
+    if (operationId !== action.operation || channelId !== action.channel)
+      return fail();
+    result = {
+      kind: 'operation-body',
+      operation: operationId,
+      channel: channelId,
+      text: r.text === null ? null : text(r.text, CHAT_TEXT_BYTES),
+    };
   } else if (r.kind === 'pending' && action.action === 'pending') {
     object(r, ['kind', 'operations']);
     const operations = array(r.operations, CHAT_PENDING_ROWS, operation);

@@ -1,16 +1,18 @@
 //! Typed v0.1.9 realtime calls. All payloads use the Header/Data RPC envelope.
 use crate::{encode_call, Result, REAL_TIME_PROTOCOL_ID};
 use foks_proto::{
-    RealtimeWire, RtChannelSet, RtCreateChannelArgument, RtGetChangedThreadsArgument,
-    RtGetInboxVersionArgument, RtGetThreadArgument, RtInboxDelta, RtInboxPollResult,
-    RtListChannelsArgument, RtMessageList, RtPollInboxArgument, RtReadThroughArgument,
-    RtRecentsArgument, RtSelectVhostArgument, RtSendArgument, RtSendResult, RtThreadPage,
+    RealtimeWire, RtChannelSet, RtChatCapabilities, RtChatCapabilitiesArgument,
+    RtCreateChannelArgument, RtGetChangedThreadsArgument, RtGetInboxVersionArgument,
+    RtGetThreadArgument, RtInboxDelta, RtInboxPollResult, RtListChannelsArgument, RtMessageList,
+    RtPollInboxArgument, RtReadThroughArgument, RtRecentsArgument, RtSelectVhostArgument,
+    RtSendArgument, RtSendResult, RtThreadPage,
 };
 
 pub use foks_proto::RT_MAX_REQUEST_BYTES;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RealtimeRequest {
+    ChatCapabilities(RtChatCapabilitiesArgument),
     CreateChannel(RtCreateChannelArgument),
     ListChannels(RtListChannelsArgument),
     Send(RtSendArgument),
@@ -25,6 +27,7 @@ pub enum RealtimeRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RealtimeResponse {
+    ChatCapabilities(RtChatCapabilities),
     Void,
     Channels(RtChannelSet),
     Sent(RtSendResult),
@@ -39,6 +42,7 @@ impl RealtimeRequest {
     pub fn position(&self) -> u64 {
         use crate::*;
         match self {
+            Self::ChatCapabilities(_) => RT_CHAT_CAPABILITIES_METHOD_POSITION,
             Self::CreateChannel(_) => RT_NEW_CHANNEL_METHOD_POSITION,
             Self::ListChannels(_) => RT_LIST_CHANNELS_METHOD_POSITION,
             Self::Send(_) => RT_SEND_METHOD_POSITION,
@@ -59,6 +63,7 @@ impl RealtimeRequest {
     }
     pub fn argument(&self) -> Result<Vec<u8>> {
         let bytes = match self {
+            Self::ChatCapabilities(v) => v.encoded()?,
             Self::CreateChannel(v) => v.encoded()?,
             Self::ListChannels(v) => v.encoded()?,
             Self::Send(v) => v.encoded()?,
@@ -86,6 +91,9 @@ impl RealtimeRequest {
         use crate::*;
         check_request_size(bytes)?;
         Ok(match position {
+            RT_CHAT_CAPABILITIES_METHOD_POSITION => {
+                Self::ChatCapabilities(RtChatCapabilitiesArgument::decode(bytes)?)
+            }
             RT_NEW_CHANNEL_METHOD_POSITION => {
                 Self::CreateChannel(RtCreateChannelArgument::decode(bytes)?)
             }
@@ -119,6 +127,16 @@ impl RealtimeRequest {
     /// Decode response Data after the transport has checked status, header and sequence.
     pub fn decode_result(&self, bytes: &[u8]) -> Result<RealtimeResponse> {
         Ok(match self {
+            Self::ChatCapabilities(request) => {
+                let response = RtChatCapabilities::decode(bytes)?;
+                if response.host != request.host {
+                    return Err(crate::Error::Envelope {
+                        expected: "requested capability host",
+                        found: "different host",
+                    });
+                }
+                RealtimeResponse::ChatCapabilities(response)
+            }
             Self::CreateChannel(_) | Self::ReadThrough(_) | Self::SelectVhost(_) => {
                 // The transport's checked void reader returns an empty buffer.
                 if !bytes.is_empty() && bytes != [0xc0] {

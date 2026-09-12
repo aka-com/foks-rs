@@ -1,10 +1,12 @@
-import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Fragment, useId } from 'react';
 import type { ReactNode } from 'react';
 import { Band, Button, Chip, Icon } from '../components';
 import type { ChatAction, ChatChannel, ChatReply } from '../chat-contract';
-import { CHAT_TEXT_BYTES } from '../chat-contract';
 import { shortId } from '../model';
-import { failure, preparationCanChange, submissionId } from './actions';
+import { failure } from './actions';
+import { useChatComposer, TEXT_LIMIT_LABEL } from './use-chat-composer';
+import { useChatReadIntent } from './use-chat-read-intent';
+import { useChatViewport } from './use-chat-viewport';
 import { useChatHistory } from './use-chat-history';
 import { PendingRow } from './pending-row';
 import {
@@ -13,7 +15,6 @@ import {
   messageDate,
   messageTime,
 } from './presentation';
-const TEXT_LIMIT_LABEL = `${CHAT_TEXT_BYTES / 1024} KiB`;
 export function ChatThread({
   channel,
   actor,
@@ -44,174 +45,46 @@ export function ChatThread({
     before: string | null,
   ) => void;
 }): ReactNode {
+  const { scroller, atBottom, onScroll, capture } = useChatViewport(
+    history?.channel === channel.id ? history.messages : EMPTY_MESSAGES,
+  );
+  const { messages, before, missing, error, setError, busy, load } =
+    useChatHistory(
+      channel,
+      request,
+      revision,
+      acceptHistory,
+      history,
+      blockHistory,
+      capture,
+    );
   const {
-    messages,
-    before,
-    missing,
-    error,
-    setError,
-    busy,
-    load,
-    scroller,
-    atBottom,
-    onScroll,
-  } = useChatHistory(
-    channel,
-    request,
-    revision,
-    acceptHistory,
-    history,
-    blockHistory,
-  );
-  const active = useRef(false);
-  useEffect(() => {
-    active.current = true;
-    return () => {
-      active.current = false;
-    };
-  }, []);
-  const [draft, setDraft] = useState('');
-  const [sending, setSending] = useState(false);
-  const [sendError, setSendError] = useState('');
-  const [newFrom, setNewFrom] = useState<string | null>(null);
+    draft,
+    setDraft,
+    sending,
+    sendError,
+    draftBytes,
+    send,
+    overLimit,
+    nearLimit,
+    recovering,
+  } = useChatComposer(channel, request, refreshPending, load);
   const hintId = useId();
-  const submission = useRef<Extract<
-    ChatAction,
-    { action: 'prepare-message' }
-  > | null>(null);
-  const sendGuard = useRef(false);
-  const readMark = readThrough ?? '0';
-  const markedThrough = useRef(readMark);
-  const markingThrough = useRef('0');
-  const draftBytes = useMemo(
-    () => new TextEncoder().encode(draft).length,
-    [draft],
+  const newFrom = useChatReadIntent(
+    channel.id,
+    messages,
+    atBottom,
+    readThrough,
+    markRead,
+    setError,
+    true,
   );
-  useEffect(
-    () => () => {
-      submission.current = null;
-    },
-    [],
-  );
-  useEffect(() => {
-    if (readThrough !== null) setNewFrom((old) => old ?? readThrough);
-  }, [readThrough]);
-  useEffect(() => {
-    if (BigInt(readMark) > BigInt(markedThrough.current))
-      markedThrough.current = readMark;
-  }, [readMark]);
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const schedule = () => {
-      if (timer) clearTimeout(timer);
-      const latest = messages.at(-1)?.sequence;
-      if (
-        !latest ||
-        !atBottom ||
-        document.visibilityState === 'hidden' ||
-        !document.hasFocus() ||
-        BigInt(latest) <= BigInt(markedThrough.current) ||
-        BigInt(latest) <= BigInt(markingThrough.current)
-      )
-        return;
-      timer = setTimeout(() => {
-        if (
-          !atBottom ||
-          document.visibilityState === 'hidden' ||
-          !document.hasFocus() ||
-          BigInt(latest) <= BigInt(markedThrough.current) ||
-          BigInt(latest) <= BigInt(markingThrough.current)
-        )
-          return;
-        markingThrough.current = latest;
-        void markRead(channel.id, latest)
-          .then(() => {
-            markedThrough.current = latest;
-          })
-          .catch((cause) => setError(failure(cause)))
-          .finally(() => {
-            if (markingThrough.current === latest) markingThrough.current = '0';
-          });
-      }, 300);
-    };
-    schedule();
-    window.addEventListener('focus', schedule);
-    window.addEventListener('blur', schedule);
-    document.addEventListener('visibilitychange', schedule);
-    return () => {
-      if (timer) clearTimeout(timer);
-      window.removeEventListener('focus', schedule);
-      window.removeEventListener('blur', schedule);
-      document.removeEventListener('visibilitychange', schedule);
-    };
-  }, [atBottom, channel.id, markRead, messages, setError]);
   const jumpToLatest = () => {
     const element = scroller.current;
     if (!element) return;
     element.scrollTop = element.scrollHeight;
     onScroll();
   };
-  const send = async () => {
-    if (
-      !channel.writable ||
-      sendGuard.current ||
-      (!submission.current && !draft.trim())
-    )
-      return;
-    if (draftBytes > CHAT_TEXT_BYTES) {
-      setSendError(
-        `Messages can contain up to ${TEXT_LIMIT_LABEL} of UTF-8 text.`,
-      );
-      return;
-    }
-    sendGuard.current = true;
-    setSending(true);
-    setSendError('');
-    submission.current ??= {
-      action: 'prepare-message',
-      submission: submissionId(),
-      channel: channel.id,
-      text: draft,
-    };
-    let preparedId: string | null = null;
-    try {
-      const reply = await request(submission.current);
-      if (!active.current) return;
-      if (reply.result.kind !== 'operation')
-        throw new Error('Invalid message preparation.');
-      preparedId = reply.result.operation.id;
-      submission.current = null;
-      setDraft('');
-      await refreshPending();
-      if (!active.current) return;
-      await request({
-        action: 'attempt',
-        operation: preparedId,
-      });
-      if (!active.current) return;
-      await refreshPending();
-      await load();
-    } catch (e) {
-      if (active.current) {
-        if (submission.current && preparationCanChange(e))
-          submission.current = null;
-        setSendError(failure(e));
-        if (preparedId) {
-          try {
-            await request({ action: 'status', operation: preparedId });
-          } catch {
-            /* Keep the durable identity visible if status is unavailable. */
-          }
-        }
-        void refreshPending().catch(() => {});
-      }
-    } finally {
-      sendGuard.current = false;
-      if (active.current) setSending(false);
-    }
-  };
-  const overLimit = draftBytes > CHAT_TEXT_BYTES;
-  const nearLimit = draftBytes > CHAT_TEXT_BYTES * 0.75;
   const title = channelTitle(channel);
   return (
     <>
@@ -385,7 +258,7 @@ export function ChatThread({
                 aria-label="Message"
                 aria-describedby={hintId}
                 value={draft}
-                disabled={sending || submission.current !== null}
+                disabled={sending || recovering}
                 placeholder={`Message ${title}`}
                 rows={2}
                 onChange={(e) => setDraft(e.target.value)}
@@ -403,7 +276,7 @@ export function ChatThread({
               />
               <div className="chat-composer-row">
                 <small id={hintId}>
-                  {submission.current
+                  {recovering
                     ? 'The reply to this message was lost. Recover it to send the same text once.'
                     : 'Enter to send · Shift+Enter for a new line'}
                 </small>
@@ -419,14 +292,12 @@ export function ChatThread({
                   variant="primary"
                   type="submit"
                   disabled={
-                    sending ||
-                    overLimit ||
-                    (!draft.trim() && !submission.current)
+                    sending || overLimit || (!draft.trim() && !recovering)
                   }
                 >
                   {sending
                     ? 'Sending…'
-                    : submission.current
+                    : recovering
                       ? 'Recover preparation'
                       : 'Send'}
                 </Button>
@@ -442,3 +313,5 @@ export function ChatThread({
     </>
   );
 }
+
+const EMPTY_MESSAGES: import('../chat-contract').ChatMessage[] = [];

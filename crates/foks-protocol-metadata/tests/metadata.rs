@@ -62,6 +62,71 @@ fn rejects_unknown_policy_method() {
     ));
 }
 
+fn local_policy() -> foks_protocol_metadata::Policy {
+    let mut policy = parse_policy(POLICY).unwrap();
+    let mut route = policy.routes[0].clone();
+    route.method = "fennecChatCapabilities".into();
+    route.local_position = Some(65536);
+    route.position_constant = Some("CHAT_CAPABILITIES_METHOD_POSITION".into());
+    route.listeners = vec!["authenticated".into()];
+    route.authentication = "active_device_mtls".into();
+    policy.routes.push(route);
+    policy
+}
+
+#[test]
+fn local_extensions_use_the_same_policy_and_generation_path() {
+    let artifact = parse_artifact(ARTIFACT).unwrap();
+    let policy = local_policy();
+    let merged = merge(&artifact, &policy).unwrap();
+    assert_eq!(merged.routes[0].position, 1);
+    let extension = &merged.routes[1];
+    assert_eq!(extension.protocol_id, 1);
+    assert_eq!(extension.position, 65536);
+    assert_eq!(extension.upstream_result, "<local-extension>");
+    assert!(extension.argument_header && extension.result_header);
+    assert!(render_protocol_ids(&merged)
+        .contains("pub const CHAT_CAPABILITIES_METHOD_POSITION: u64 = 65536;"));
+    assert!(foks_protocol_metadata::render_routes(&merged)
+        .contains("RouteId::ProbeFennecChatCapabilities"));
+    assert!(foks_protocol_metadata::render_contract(&merged)
+        .contains("upstream_result = \"<local-extension>\""));
+}
+
+#[test]
+fn extensions_cannot_override_upstream_or_bypass_policy() {
+    let artifact = parse_artifact(ARTIFACT).unwrap();
+    for mutate in [
+        |p: &mut foks_protocol_metadata::Policy| p.routes[1].local_position = Some(1),
+        |p: &mut foks_protocol_metadata::Policy| p.routes[1].local_position = Some(131072),
+        |p: &mut foks_protocol_metadata::Policy| p.routes[1].local_position = None,
+        |p: &mut foks_protocol_metadata::Policy| p.routes[1].upstream_method = Some("probe".into()),
+        |p: &mut foks_protocol_metadata::Policy| p.routes[1].method = "probe".into(),
+        |p: &mut foks_protocol_metadata::Policy| p.routes[1].method = "fennec".into(),
+        |p: &mut foks_protocol_metadata::Policy| p.routes[1].method = "fennec-Chat".into(),
+        |p: &mut foks_protocol_metadata::Policy| p.routes[1].position_constant = None,
+        |p: &mut foks_protocol_metadata::Policy| p.routes[1].listeners = vec!["probe".into()],
+        |p: &mut foks_protocol_metadata::Policy| p.routes[1].statuses = vec!["invented".into()],
+        |p: &mut foks_protocol_metadata::Policy| p.routes[1].coverage.clear(),
+        |p: &mut foks_protocol_metadata::Policy| {
+            let mut duplicate = p.routes[1].clone();
+            duplicate.method = "fennecOther".into();
+            duplicate.position_constant = Some("OTHER_METHOD_POSITION".into());
+            p.routes.push(duplicate);
+        },
+    ] {
+        let mut policy = local_policy();
+        mutate(&mut policy);
+        assert!(merge(&artifact, &policy).is_err(), "accepted {policy:?}");
+    }
+    // An upstream method need not be exposed locally to reserve its dispatch key.
+    let mut future = artifact;
+    future.protocols[0].methods[0].position = 65536;
+    let mut local_only = local_policy();
+    local_only.routes.remove(0);
+    assert!(merge(&future, &local_only).is_err());
+}
+
 #[test]
 fn rejects_duplicate_wire_positions() {
     let duplicate = ARTIFACT.replace(

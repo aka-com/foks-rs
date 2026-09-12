@@ -110,6 +110,11 @@ pub struct RoutePolicy {
     pub method: String,
     #[serde(default)]
     pub upstream_method: Option<String>,
+    /// Explicit Rust extension; never inferred from an unknown upstream method.
+    /// Positions 65536..=131071 are our local extension allocation range, not an
+    /// upstream reservation. Merging still checks every upstream position/name.
+    #[serde(default)]
+    pub local_position: Option<u64>,
     #[serde(default)]
     pub position_constant: Option<String>,
     pub listeners: Vec<String>,
@@ -366,19 +371,43 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
                 MetadataError::Invalid(format!("unknown local protocol {}", route.protocol))
             })?;
         let protocol = upstream_protocols[protocol_policy.upstream.as_str()];
-        let upstream_method = route.upstream_method.as_deref().unwrap_or(&route.method);
-        let method = protocol
-            .methods
-            .iter()
-            .find(|method| method.name == upstream_method)
-            .ok_or_else(|| {
-                MetadataError::Invalid(format!(
-                    "unknown upstream method {}.{}",
-                    protocol.name, upstream_method
-                ))
-            })?;
+        let (position, upstream_result) = if let Some(position) = route.local_position {
+            if route.upstream_method.is_some()
+                || !(65536..=131071).contains(&position)
+                || !route.method.starts_with("fennec")
+                || route.method.len() == "fennec".len()
+                || !route
+                    .method
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric())
+                || route.position_constant.is_none()
+                || protocol
+                    .methods
+                    .iter()
+                    .any(|method| method.position == position || method.name == route.method)
+            {
+                return invalid(format!(
+                    "invalid or colliding local extension {}.{}",
+                    protocol.name, route.method
+                ));
+            }
+            (position, "<local-extension>")
+        } else {
+            let upstream_method = route.upstream_method.as_deref().unwrap_or(&route.method);
+            let method = protocol
+                .methods
+                .iter()
+                .find(|method| method.name == upstream_method)
+                .ok_or_else(|| {
+                    MetadataError::Invalid(format!(
+                        "unknown upstream method {}.{}",
+                        protocol.name, upstream_method
+                    ))
+                })?;
+            (method.position, method.result_type.as_str())
+        };
         if !local_routes.insert((route.protocol.as_str(), route.method.as_str()))
-            || !dispatch.insert((protocol.unique_id, method.position))
+            || !dispatch.insert((protocol.unique_id, position))
         {
             return invalid(format!(
                 "duplicate route {}.{} or dispatch key",
@@ -461,8 +490,8 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
         routes.push(MergedRoute {
             policy: route,
             protocol_id: protocol.unique_id,
-            position: method.position,
-            upstream_result: method.result_type.as_str(),
+            position,
+            upstream_result,
             argument_header: protocol.argument_header,
             result_header: protocol.result_header,
         });
@@ -512,6 +541,7 @@ fn validate_route_result(value: &str) -> Result<(), MetadataError> {
     if matches!(
         value,
         "RtChannelSet"
+            | "RtChatCapabilities"
             | "RtSendResult"
             | "RtThreadPage"
             | "RtMessageList"

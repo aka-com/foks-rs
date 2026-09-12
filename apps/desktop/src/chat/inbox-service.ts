@@ -3,6 +3,14 @@ import { normalizeCommandError } from '../bridge';
 import type { ChatReply, ChatResult, ChatScope } from '../chat-contract';
 import type { TeamStore, World } from '../model';
 import { chatClient, integrity } from './client';
+import {
+  accountKey,
+  teamIdentity,
+  contentRevisions,
+  readonlyMap,
+  readonlySet,
+  freezeDto,
+} from './snapshots';
 
 type Inbox = Extract<ChatResult, { kind: 'inbox' }>;
 export interface TeamInbox {
@@ -12,6 +20,7 @@ export interface TeamInbox {
   error: string;
   stale: boolean;
   revision: number;
+  channelRevisions: ReadonlyMap<string, number>;
   blockedChannels: ReadonlySet<string>;
 }
 export interface ChatClock {
@@ -47,22 +56,21 @@ interface Account {
   pollClient?: ReturnType<typeof chatClient>;
   pollTeam?: string;
 }
-const keyOf = (store: TeamStore) =>
-  JSON.stringify([store.server, store.account]);
-const identity = (s: TeamStore) =>
-  JSON.stringify([s.server, s.account, s.alias, s.team_id_hex]);
+const keyOf = accountKey;
+const identity = teamIdentity;
 const initial = (): TeamInbox => ({
   state: 'loading',
   error: '',
   stale: false,
   revision: 0,
+  channelRevisions: readonlyMap([]),
   blockedChannels: new Set(),
 });
 
 /** Main-window owner. Finite jobs, account poll scope, and one background job per profile. */
 export class ChatInboxService {
   private accounts = new Map<string, Account>();
-  private snapshot: ReadonlyMap<string, TeamInbox> = new Map();
+  private snapshot: ReadonlyMap<string, TeamInbox> = readonlyMap([]);
   private listeners = new Set<() => void>();
   private jobs = new Map<ReturnType<typeof chatClient>, Account>();
   private profiles = new Set<string>();
@@ -83,7 +91,14 @@ export class ChatInboxService {
     };
   };
   private publish(id: string, entry: TeamInbox) {
-    this.snapshot = new Map(this.snapshot).set(id, entry);
+    const accepted = Object.freeze({
+      ...entry,
+      scope: entry.scope ? freezeDto(structuredClone(entry.scope)) : undefined,
+      data: entry.data ? freezeDto(structuredClone(entry.data)) : undefined,
+      blockedChannels: readonlySet(entry.blockedChannels),
+      channelRevisions: readonlyMap(entry.channelRevisions),
+    });
+    this.snapshot = readonlyMap(new Map(this.snapshot).set(id, accepted));
     for (const listener of this.listeners) listener();
   }
   start() {
@@ -101,7 +116,7 @@ export class ChatInboxService {
     this.accounts.clear();
     this.profiles.clear();
     this.polls = 0;
-    this.snapshot = new Map();
+    this.snapshot = readonlyMap([]);
     for (const listener of this.listeners) listener();
   }
   updateStores(world: World) {
@@ -120,7 +135,7 @@ export class ChatInboxService {
           account.teams.delete(id);
           const next = new Map(this.snapshot);
           next.delete(id);
-          this.snapshot = next;
+          this.snapshot = readonlyMap(next);
           for (const [client, owner] of this.jobs)
             if (owner === account) client.dispose();
         }
@@ -281,10 +296,14 @@ export class ChatInboxService {
       for (const id of reply.result.blocked_channels) team.blocked.add(id);
       const data = withoutBlockedPreviews(reply.result, team.blocked);
       const old = this.snapshot.get(team.store.id);
-      const changed =
-        !old?.data ||
-        JSON.stringify(old.data) !== JSON.stringify(data) ||
-        data.degraded;
+      const revisions = contentRevisions(
+        old?.data,
+        data,
+        old?.channelRevisions ?? new Map(),
+      );
+      const changed = [...revisions].some(
+        ([id, value]) => old?.channelRevisions.get(id) !== value,
+      );
       this.publish(team.store.id, {
         state: 'ready',
         blockedChannels: new Set(team.blocked),
@@ -297,6 +316,7 @@ export class ChatInboxService {
             : '',
         stale: false,
         revision: (old?.revision ?? 0) + Number(changed),
+        channelRevisions: revisions,
       });
       team.retry = 250;
       team.due = team.dirty ? 0 : this.clock.now() + 25_000;

@@ -379,6 +379,7 @@ test('definite preparation errors allow input correction', async () => {
 
 test('ambiguous channel preparation keeps its sheet and submission until recovery', async () => {
   const submissions: string[] = [];
+  const descriptions: string[] = [];
   let dropped = false;
   await setup((base) => ({
     ...base,
@@ -386,6 +387,7 @@ test('ambiguous channel preparation keeps its sheet and submission until recover
       const reply = await base.chat(store, action, view);
       if (action.action === 'prepare-channel') {
         submissions.push(action.submission);
+        descriptions.push(action.description);
         if (!dropped) {
           dropped = true;
           throw {
@@ -402,8 +404,13 @@ test('ambiguous channel preparation keeps its sheet and submission until recover
   }));
   const name = openChannelSheet();
   ui.fireEvent.change(name, { target: { value: 'recoverable' } });
+  const description = ui.screen.getByRole('textbox', {
+    name: 'Channel description',
+  });
+  ui.fireEvent.change(description, { target: { value: 'Team Decisions' } });
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
   await ui.screen.findByText('Preparation reply lost');
+  assert.equal((description as HTMLTextAreaElement).disabled, true);
   assert.equal(
     ui.screen.getByRole('button', { name: 'Cancel' }).hasAttribute('disabled'),
     true,
@@ -417,6 +424,50 @@ test('ambiguous channel preparation keeps its sheet and submission until recover
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
   assert.equal(new Set(submissions).size, 1);
   assert.equal(submissions.length, 2);
+  assert.deepEqual(descriptions, ['Team Decisions', 'Team Decisions']);
+});
+
+test('team members opens the existing membership workflow in the same window', async () => {
+  let destination: unknown;
+  await setup(undefined, true, (location) => {
+    destination = location;
+  });
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team members' }));
+  assert.deepEqual(destination, {
+    kind: 'group-settings',
+    ref: 'team:eng',
+    tab: 'people',
+  });
+});
+
+test('reopening recovers retained pending text without attempting the send', async () => {
+  let seeded = false;
+  let attempts = 0;
+  await setup((base) => ({
+    ...base,
+    chat: async (store, action, view) => {
+      if (action.action === 'attempt') attempts++;
+      if (action.action === 'pending' && !seeded) {
+        seeded = true;
+        const channels = await base.chat(store, { action: 'channels' }, view);
+        assert.equal(channels.result.kind, 'channels');
+        if (channels.result.kind !== 'channels') throw new Error('fixture');
+        await base.chat(
+          store,
+          {
+            action: 'prepare-message',
+            submission: 'ac'.repeat(16),
+            channel: channels.result.channels[0].id,
+            text: 'Recovered original pending text',
+          },
+          view,
+        );
+      }
+      return base.chat(store, action, view);
+    },
+  }));
+  await ui.screen.findByText('Recovered original pending text');
+  assert.equal(attempts, 0);
 });
 
 test('channel creation opens in a sheet, selects the new channel, and needs no manual cleanup', async () => {
@@ -885,6 +936,7 @@ test('read-only projection keeps history and removes composer', async () => {
 test('uncertain send retains body in thread and merges once after delivery checking', async () => {
   let lost = false;
   let attempts = 0;
+  let resolveDelivery = false;
   await setup((base) => ({
     ...base,
     chat: async (store, action, view) => {
@@ -901,6 +953,14 @@ test('uncertain send retains body in thread and merges once after delivery check
           };
         }
       }
+      // Simulate the server finishing the original in-flight request while the
+      // client checks status; the UI must never submit a second attempt.
+      if (resolveDelivery && action.action === 'status')
+        return base.chat(
+          store,
+          { action: 'attempt', operation: action.operation },
+          view,
+        );
       const reply = await base.chat(store, action, view);
       if (lost && reply.result.kind === 'pending')
         reply.result.operations = reply.result.operations.map((op) => ({
@@ -924,6 +984,7 @@ test('uncertain send retains body in thread and merges once after delivery check
   await ui.screen.findByRole('button', { name: 'Check delivery' });
   assert.ok(document.querySelector('.chat-messages [data-operation]'));
   assert.equal(ui.screen.getAllByText('Keep this pending body').length, 1);
+  resolveDelivery = true;
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Check delivery' }));
   await ui.waitFor(() =>
     assert.ok(
@@ -931,7 +992,7 @@ test('uncertain send retains body in thread and merges once after delivery check
     ),
   );
   assert.equal(ui.screen.getAllByText('Keep this pending body').length, 1);
-  assert.equal(attempts, 2);
+  assert.equal(attempts, 1);
 });
 
 for (const fault of ['history', 'preview', 'scope'] as const) {

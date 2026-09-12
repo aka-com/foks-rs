@@ -80,6 +80,10 @@ fn verify_realtime(
     )?;
     let mut chat = client.chat_session(host, credential, &team.team)?;
     let mut realtime = chat.connection()?;
+    let capabilities = chat.capabilities(&mut realtime)?;
+    if capabilities.extended_channels {
+        return Err("pinned Go unexpectedly advertises extended chat".into());
+    }
     let prepared_channel = chat.prepare_channel(
         &mut realtime,
         protected,

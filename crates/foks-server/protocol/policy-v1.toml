@@ -1,8 +1,10 @@
-# Handwritten local policy. Numeric wire identities come only from upstream metadata.
+# Handwritten policy. Upstream identities remain pinned; local extensions declare
+# a separate explicit position and cannot override an upstream dispatch key.
 version = 1
 baseline = "foks-v0.1.9"
 
 [status_aliases]
+method_not_found = "METHOD_NOT_FOUND_ERROR"
 rt_generic = "RT_GENERIC_ERROR"
 rt_channel_exists = "RT_CHANNEL_EXISTS_ERROR"
 rt_race = "RT_RACE"
@@ -1525,6 +1527,21 @@ name = "RealTime"
 upstream = "RealTime"
 id_constant = "REAL_TIME_PROTOCOL_ID"
 
+# Explicit local extension; this position is not sourced from Go metadata.
+[[route]]
+protocol = "RealTime"
+method = "fennecChatCapabilities"
+local_position = 65536
+position_constant = "RT_CHAT_CAPABILITIES_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "RtChatCapabilitiesArgument"
+result = "RtChatCapabilities"
+statuses = ["ok", "bad_args", "permission_denied", "tx_retry"]
+max_request_bytes = 4096
+supported = true
+coverage = ["realtime_capabilities"]
+
 [[route]]
 protocol = "RealTime"
 method = "rtNewChannel"
@@ -1572,7 +1589,7 @@ listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "RtSendArgument"
 result = "RtSendResult"
-statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
+statuses = ["ok", "unsupported", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
 supported = true
 coverage = ["realtime_text"]
@@ -1585,7 +1602,7 @@ listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "RtGetThreadArgument"
 result = "RtThreadPage"
-statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
+statuses = ["ok", "unsupported", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
 supported = true
 coverage = ["realtime_text"]
@@ -1624,7 +1641,7 @@ listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "RtReadThroughArgument"
 result = "Void"
-statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_not_found"]
+statuses = ["ok", "unsupported", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_not_found"]
 max_request_bytes = 1048576
 supported = true
 coverage = ["realtime_text"]
@@ -1663,7 +1680,7 @@ listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "RtRecentsArgument"
 result = "RtMessageList"
-statuses = ["ok", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
+statuses = ["ok", "unsupported", "bad_args", "permission_denied", "tx_retry", "rt_generic", "rt_channel_exists", "rt_race", "rt_not_found", "rt_msg_order"]
 max_request_bytes = 1048576
 supported = true
 coverage = ["realtime_text"]

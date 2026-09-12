@@ -1,11 +1,5 @@
 import { normalizeCommandError } from '../bridge';
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   ChatAction,
   ChatChannel,
@@ -18,7 +12,7 @@ import type { HistoryWindow } from './conversation-model';
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
 
-/** Manages history loading, page verification, and scroll position for the active channel. */
+/** Loads verified pages and retains invalidations while a request is running. */
 export function useChatHistory(
   channel: ChatChannel,
   request: (action: ChatAction) => Promise<ChatReply>,
@@ -29,6 +23,7 @@ export function useChatHistory(
   ) => void,
   history?: HistoryWindow | null,
   onFatal?: (channel: string) => void,
+  onLoading?: (before: string | null) => void,
 ) {
   const accepted = history?.channel === channel.id ? history : null;
   const messages = accepted?.messages ?? EMPTY_MESSAGES;
@@ -38,21 +33,10 @@ export function useChatHistory(
     : false;
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [atBottom, setAtBottom] = useState(true);
   const active = useRef(false);
   const reading = useRef(false);
   const again = useRef(false);
-  const scroller = useRef<HTMLDivElement>(null);
-  const followBottom = useRef(true);
-  const scroll = useRef<{ height: number; top: number } | null>(null);
   const seenRevision = useRef(revision);
-  const onScroll = useCallback(() => {
-    const element = scroller.current;
-    if (!element) return;
-    setAtBottom(
-      element.scrollHeight - element.scrollTop - element.clientHeight < 80,
-    );
-  }, []);
   const load = useCallback(
     async (older: string | null = null) => {
       if (reading.current) {
@@ -62,19 +46,7 @@ export function useChatHistory(
       reading.current = true;
       setBusy(true);
       setError('');
-      followBottom.current =
-        !older &&
-        (!scroller.current ||
-          scroller.current.scrollHeight -
-            scroller.current.scrollTop -
-            scroller.current.clientHeight <
-            80);
-      if (older) setAtBottom(false);
-      if (older && scroller.current)
-        scroll.current = {
-          height: scroller.current.scrollHeight,
-          top: scroller.current.scrollTop,
-        };
+      onLoading?.(older);
       try {
         const reply = await request({
           action: 'history',
@@ -103,7 +75,7 @@ export function useChatHistory(
         }
       }
     },
-    [request, channel.id, onAccepted, onFatal],
+    [request, channel.id, onAccepted, onFatal, onLoading],
   );
   useEffect(() => {
     active.current = true;
@@ -117,18 +89,6 @@ export function useChatHistory(
     seenRevision.current = revision;
     if (active.current && channel.readable) void load();
   }, [channel.readable, load, revision]);
-  useLayoutEffect(() => {
-    if (scroll.current && scroller.current) {
-      scroller.current.scrollTop =
-        scroll.current.top +
-        scroller.current.scrollHeight -
-        scroll.current.height;
-      scroll.current = null;
-    } else if (followBottom.current && scroller.current) {
-      scroller.current.scrollTop = scroller.current.scrollHeight;
-    }
-    onScroll();
-  }, [messages, onScroll]);
   return {
     messages,
     before,
@@ -137,8 +97,5 @@ export function useChatHistory(
     setError,
     busy,
     load,
-    scroller,
-    atBottom,
-    onScroll,
   };
 }

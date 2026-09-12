@@ -8,30 +8,8 @@ import type {
 } from '../chat-contract';
 import { submissionId } from './actions';
 
-export const cancelled = () =>
-  Object.assign(new Error('Conversation closed.'), {
-    code: 'cancelled',
-    message: 'Conversation closed.',
-    retryable: false,
-    fatal: false,
-    ambiguous: false,
-  });
-export const integrity = (message = 'The chat identity changed.') => ({
-  code: 'chat-integrity',
-  message,
-  retryable: false,
-  fatal: true,
-  ambiguous: false,
-});
-export const channelIntegrity = (
-  message = 'Channel content could not be verified.',
-) => ({
-  code: 'chat-channel-integrity',
-  message,
-  retryable: false,
-  fatal: true,
-  ambiguous: false,
-});
+import { cancelled, integrity } from './errors';
+export { cancelled, integrity, channelIntegrity } from './errors';
 export function sameScope(a: ChatScope, b: ChatScope): boolean {
   return (
     a.host === b.host &&
@@ -43,6 +21,7 @@ export function sameScope(a: ChatScope, b: ChatScope): boolean {
   );
 }
 const kinds = {
+  'operation-body': 'operation-body',
   channels: 'channels',
   history: 'history',
   inbox: 'inbox',
@@ -56,18 +35,23 @@ const kinds = {
   attempt: 'operation',
   cancel: 'operation',
   finalize: 'operation',
-} as const;
+} as const satisfies Record<ChatAction['action'], ChatResult['kind']>;
 type ResultFor<A extends ChatAction> = Extract<
   ChatResult,
   { kind: (typeof kinds)[A['action']] }
 >;
+export type ReplyFor<A extends ChatAction> = Omit<ChatReply, 'result'> & {
+  result: ResultFor<A>;
+};
 
 /** One request lifetime. Disposing cannot cancel a different owner or a later generation. */
 export function chatClient(bridge: Bridge, profile: string, storeId: string) {
   const view = submissionId();
   let closed = false;
   let scope: ChatScope | null = null;
-  const request = async (action: ChatAction): Promise<ChatReply> => {
+  const request = async <A extends ChatAction>(
+    action: A,
+  ): Promise<ReplyFor<A>> => {
     const work = async () => {
       if (closed) throw cancelled();
       const reply = await bridge.chat(storeId, action, view);
@@ -76,7 +60,8 @@ export function chatClient(bridge: Bridge, profile: string, storeId: string) {
       if (reply.result.kind !== kinds[action.action])
         throw integrity('Unexpected chat response.');
       scope = reply.scope;
-      return reply;
+      // Both scope and the action/result correlation have been checked above.
+      return reply as ReplyFor<A>;
     };
     return action.action === 'poll-inbox'
       ? work()
@@ -85,7 +70,7 @@ export function chatClient(bridge: Bridge, profile: string, storeId: string) {
   return {
     request,
     async run<A extends ChatAction>(action: A): Promise<ResultFor<A>> {
-      return (await request(action)).result as ResultFor<A>;
+      return (await request(action)).result;
     },
     dispose() {
       if (closed) return;

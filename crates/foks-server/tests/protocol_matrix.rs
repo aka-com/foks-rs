@@ -256,6 +256,7 @@ fn protocol_contract_is_valid_and_exactly_registered() {
             ("merkle_leaf_not_found".to_owned(), 4002),
             ("merkle_no_root".to_owned(), 4001),
             ("merkle_verify".to_owned(), 4003),
+            ("method_not_found".to_owned(), 211),
             ("name_in_use".to_owned(), 1023),
             ("not_found".to_owned(), 1049),
             ("rt_generic".to_owned(), 12001),

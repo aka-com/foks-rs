@@ -71,6 +71,7 @@ pub const ENTITY_AD_HOC_TEAM: u8 = 20;
 pub const CHAIN_TYPE_USER_SETTINGS: u64 = 2;
 pub const CHAIN_TYPE_TEAM_MEMBERSHIP: u64 = 4;
 
+mod chat_context;
 mod codec;
 mod compat;
 mod entity;
@@ -83,10 +84,12 @@ mod key_material;
 mod kv;
 mod passphrase;
 mod realtime;
+mod realtime_extension;
 mod role;
 mod service;
 mod yubi;
 
+pub use chat_context::*;
 pub use compat::*;
 pub use entity::*;
 pub use error::*;
@@ -98,6 +101,7 @@ pub use key_material::*;
 pub use kv::*;
 pub use passphrase::*;
 pub use realtime::*;
+pub use realtime_extension::*;
 pub use role::*;
 pub use service::*;
 pub use yubi::*;

@@ -16,7 +16,10 @@ import {
   channelIntegrity,
 } from './client';
 import { conversationResult, emptyConversation } from './conversation-model';
-import type { TrackedOperation } from './operations';
+import { eventFromReply } from './conversation-events';
+import { recoverPending } from './recover-pending';
+import { coalesceStatus, RecoverySchedule } from './recovery-schedule';
+import type { ConversationEvent } from './conversation-events';
 import { useChatInbox } from './inbox-provider';
 
 /** Foreground operation owner. Account synchronization belongs to the shell. */
@@ -29,8 +32,8 @@ export function useChatConversation(
   const inbox = snapshot.get(storeId);
   const [model, setModel] = useState(emptyConversation);
   const current = useRef(model);
-  const setOperations = useCallback((operations: TrackedOperation[]) => {
-    current.current = { ...current.current, operations };
+  const dispatch = useCallback((event: ConversationEvent) => {
+    current.current = conversationResult(current.current, event);
     setModel(current.current);
   }, []);
   const [error, setError] = useState('');
@@ -49,11 +52,13 @@ export function useChatConversation(
       }
     }
   }, []);
-  const update = useCallback((action: ChatAction, result: ChatResult) => {
-    current.current = conversationResult(current.current, action, result);
-    setModel(current.current);
-  }, []);
-  const request = useCallback(
+  const update = useCallback(
+    (action: ChatAction, result: ChatResult) => {
+      dispatch(eventFromReply(action, result));
+    },
+    [dispatch],
+  );
+  const performRequest = useCallback(
     async (action: ChatAction): Promise<ChatReply> => {
       const client = owner.current;
       const channel =
@@ -109,14 +114,17 @@ export function useChatConversation(
           update(action, reply.result);
           const channels = service.getSnapshot().get(storeId)?.data?.channels;
           if (channels)
-            setOperations(
-              current.current.operations.map((op) =>
-                channels.some((c) => c.id === op.channel && c.readable) &&
-                !service.isChannelBlocked(storeId, op.channel)
-                  ? op
-                  : { ...op, text: undefined },
+            dispatch({
+              kind: 'access',
+              readable: new Set(
+                channels
+                  .filter(
+                    (c) =>
+                      c.readable && !service.isChannelBlocked(storeId, c.id),
+                  )
+                  .map((c) => c.id),
               ),
-            );
+            });
         }
         return reply;
       } catch (cause) {
@@ -131,17 +139,13 @@ export function useChatConversation(
             owner.current = null;
             fatal.current = typed.message;
             setBlocked(typed.message);
-            current.current = emptyConversation();
-            setOperations([]);
+            dispatch({ kind: 'reset' });
           }
           if (!typed.fatal && action.action === 'attempt')
-            setOperations(
-              current.current.operations.map((op) =>
-                op.id === action.operation
-                  ? { ...op, statusUnknown: true }
-                  : op,
-              ),
-            );
+            dispatch({
+              kind: 'status-unresolved',
+              operation: action.operation,
+            });
           if (typed.code === 'chat-access-denied') service.invalidate(storeId);
         }
         throw cause;
@@ -150,28 +154,32 @@ export function useChatConversation(
         if (historyClient) historyClients.current.delete(historyClient);
       }
     },
-    [bridge, profile, storeId, service, update, setOperations, cancelHistory],
+    [bridge, profile, storeId, service, update, dispatch, cancelHistory],
+  );
+  const statusChecks = useRef(new Map<string, Promise<ChatReply>>());
+  const schedule = useRef(new RecoverySchedule());
+  // Automatic recovery admits one RPC at a time. Explicit requests enter the
+  // profile queue before the next automatic item, bypassing scheduler backoff.
+  const request = useCallback(
+    (action: ChatAction): Promise<ChatReply> => {
+      if (action.action !== 'status') return performRequest(action);
+      return coalesceStatus(statusChecks.current, action.operation, () =>
+        performRequest(action),
+      );
+    },
+    [performRequest],
   );
   const recovery = useRef<Promise<void> | null>(null);
   const refreshPending = useCallback(() => {
     if (recovery.current) return recovery.current;
-    const work = (async () => {
-      await request({ action: 'pending' });
-      // Bound automatic status recovery; remaining rows retain explicit controls.
-      for (const op of current.current.operations
-        .filter((op) => op.statusUnknown && !op.observed)
-        .slice(0, 16)) {
-        try {
-          await request({ action: 'status', operation: op.id });
-        } catch (cause) {
-          if (
-            normalizeCommandError(cause).fatal ||
-            normalizeCommandError(cause).code === 'cancelled'
-          )
-            break;
-        }
-      }
-    })();
+    const client = owner.current;
+    const work = recoverPending(
+      request,
+      () => current.current.operations,
+      () => client !== null && owner.current === client,
+      schedule.current,
+      (channel) => service.isChannelBlocked(storeId, channel),
+    );
     recovery.current = work;
     void work
       .finally(() => {
@@ -179,7 +187,7 @@ export function useChatConversation(
       })
       .catch(() => {});
     return work;
-  }, [request]);
+  }, [request, service, storeId]);
   const syncInbox = useCallback(async () => {
     service.invalidate(storeId);
   }, [service, storeId]);
@@ -226,16 +234,18 @@ export function useChatConversation(
   useEffect(() => {
     const client = chatClient(bridge, profile, storeId);
     owner.current = client;
+    schedule.current = new RecoverySchedule();
+    statusChecks.current = new Map();
     void refresh();
     return () => {
       owner.current = null;
       client.dispose();
       cancelHistory();
-      current.current = emptyConversation();
+      dispatch({ kind: 'reset' });
       recovery.current = null;
       resolvedScope.current = null;
     };
-  }, [bridge, profile, storeId, refresh, cancelHistory]);
+  }, [bridge, profile, storeId, refresh, cancelHistory, dispatch]);
   useEffect(() => {
     if (inbox?.data) {
       for (const channel of inbox.blockedChannels) cancelHistory(channel);
@@ -244,23 +254,10 @@ export function useChatConversation(
           .filter((c) => c.readable && !inbox.blockedChannels.has(c.id))
           .map((c) => c.id),
       );
-      current.current = {
-        ...current.current,
-        operations: current.current.operations.map((op) =>
-          readable.has(op.channel) ? op : { ...op, text: undefined },
-        ),
-        history:
-          current.current.history &&
-          readable.has(current.current.history.channel)
-            ? current.current.history
-            : null,
-      };
-      update(
-        { action: 'channels' },
-        { kind: 'channels', channels: inbox.data.channels, version: '0' },
-      );
+      dispatch({ kind: 'access', readable });
+      dispatch({ kind: 'channels', channels: inbox.data.channels });
     }
-  }, [inbox?.data, inbox?.blockedChannels, update, cancelHistory]);
+  }, [inbox?.data, inbox?.blockedChannels, dispatch, cancelHistory]);
   useEffect(() => {
     if (inbox?.state === 'blocked') {
       owner.current?.dispose();
@@ -268,18 +265,12 @@ export function useChatConversation(
       cancelHistory();
       fatal.current = inbox.error;
       setBlocked(inbox.error);
-      current.current = emptyConversation();
-      setOperations([]);
+      dispatch({ kind: 'reset' });
     }
     if (inbox?.state === 'unavailable' || inbox?.state === 'loading') {
-      current.current = { ...current.current, history: null };
-      current.current.operations = current.current.operations.map((op) => ({
-        ...op,
-        text: undefined,
-      }));
-      setOperations(current.current.operations);
+      dispatch({ kind: 'access', readable: new Set() });
     }
-  }, [inbox?.state, inbox?.error, setOperations, cancelHistory]);
+  }, [inbox?.state, inbox?.error, dispatch, cancelHistory]);
   return {
     channels: inbox?.data?.channels ?? [],
     conversations: inbox?.data?.conversations ?? [],
@@ -296,6 +287,7 @@ export function useChatConversation(
     blocked,
     blockedChannels: inbox?.blockedChannels ?? EMPTY_BLOCKED,
     revision: inbox?.revision ?? 0,
+    channelRevisions: inbox?.channelRevisions,
     actor: inbox?.scope?.actor ?? null,
     request,
     refresh,

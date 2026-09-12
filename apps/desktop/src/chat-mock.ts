@@ -249,14 +249,37 @@ export function mockChat(world?: World) {
       const op: ChatOperation = old?.op ?? {
         id,
         channel: action.action === 'prepare-channel' ? id : action.channel,
-        create: action.action === 'prepare-channel',
+        kind:
+          action.action === 'prepare-channel'
+            ? 'create-channel'
+            : 'send-message',
         state: 'prepared',
-        sequence: null,
+        receipt: null,
         rejection_code: null,
       };
       team.operations.set(op.id, op);
       team.submissions.set(action.submission, { input, op });
       result = { kind: 'operation', operation: { ...op } };
+    } else if (action.action === 'operation-body') {
+      const op = team.operations.get(action.operation);
+      if (!op || op.channel !== action.channel || op.kind !== 'send-message')
+        throw { code: 'chat-not-found', message: 'Operation not found.' };
+      const material = [...team.submissions.values()].find(
+        (s) => s.op.id === op.id,
+      );
+      const submitted = material
+        ? (JSON.parse(material.input) as ChatAction)
+        : null;
+      result = {
+        kind: 'operation-body',
+        operation: op.id,
+        channel: op.channel,
+        text:
+          ['prepared', 'uncertain'].includes(op.state) &&
+          submitted?.action === 'prepare-message'
+            ? submitted.text
+            : null,
+      };
     } else {
       const op = team.operations.get(action.operation);
       if (!op)
@@ -268,10 +291,16 @@ export function mockChat(world?: World) {
         )!.input;
         const submitted = JSON.parse(input) as ChatAction;
         if (submitted.action === 'prepare-channel') {
+          op.receipt = { kind: 'channel-created' };
           team.channels.push({
             id: op.channel,
             name: submitted.name,
-            description: null,
+            description: submitted.description
+              ? Array.from(
+                  submitted.description,
+                  (c) => Array.from(c.toLowerCase())[0],
+                ).join('')
+              : null,
             admin: submitted.admin,
             readable: true,
             writable: true,
@@ -284,17 +313,20 @@ export function mockChat(world?: World) {
         }
         if (submitted.action === 'prepare-message') {
           const rows = team.messages.get(op.channel) ?? [];
-          op.sequence = String(rows.length + 1);
+          op.receipt = {
+            kind: 'message-sent',
+            sequence: String(rows.length + 1),
+          };
           rows.push({
             id: op.id,
-            sequence: op.sequence,
+            sequence: op.receipt.sequence,
             sender: '01' + 'ab'.repeat(32),
             send_time: String(Date.now()),
             insert_time: String(Date.now()),
             content: { kind: 'text', text: submitted.text },
           });
           team.messages.set(op.channel, rows);
-          team.reads.set(op.channel, BigInt(op.sequence));
+          team.reads.set(op.channel, BigInt(op.receipt.sequence));
           bump(op.channel);
         }
         op.state = 'confirmed';

@@ -60,6 +60,7 @@ impl FoksClient {
     }
 }
 
+mod capabilities;
 mod history;
 mod inbox;
 mod operations;

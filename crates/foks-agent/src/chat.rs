@@ -178,7 +178,10 @@ fn operation(op: foks_client_db::ChatOperation) -> Result<ChatOperation> {
     Ok(ChatOperation {
         id: hex(&op.id),
         channel: hex(&op.scope.channel),
-        create: op.kind == K::Create,
+        kind: match op.kind {
+            K::Create => ChatOperationKind::CreateChannel,
+            K::Send => ChatOperationKind::SendMessage,
+        },
         state: match op.state {
             S::Prepared => ChatState::Prepared,
             S::Uncertain => ChatState::Uncertain,
@@ -186,7 +189,18 @@ fn operation(op: foks_client_db::ChatOperation) -> Result<ChatOperation> {
             S::Rejected => ChatState::Rejected,
             S::Cancelled => ChatState::Cancelled,
         },
-        sequence,
+        receipt: if op.state == S::Confirmed {
+            Some(match op.kind {
+                K::Create => ChatReceipt::ChannelCreated,
+                K::Send => ChatReceipt::MessageSent {
+                    sequence: sequence.ok_or(foks_client::Error::ChatIntegrity(
+                        "confirmed send has no receipt",
+                    ))?,
+                },
+            })
+        } else {
+            None
+        },
         rejection_code: op.rejection_code,
     })
 }
@@ -216,6 +230,29 @@ pub(super) fn dispatch(
     };
     let team = &store.team_alias;
     let result = match action {
+        ChatAction::OperationBody { operation, channel } => {
+            let text = session.recover_chat_operation_text(
+                team,
+                &id(&operation)?,
+                RtChannelId(id(&channel)?),
+                vault,
+                master,
+            )?;
+            if text
+                .as_ref()
+                .is_some_and(|text| text.len() > CHAT_TEXT_BYTES)
+            {
+                return Err(foks_client::Error::ChatLimit(
+                    "retained message exceeds desktop text limit",
+                )
+                .into());
+            }
+            ChatResult::OperationBody {
+                operation,
+                channel,
+                text: text.map(|text| SecretString::new(text.as_str())),
+            }
+        }
         ChatAction::Channels => {
             let channels = session.list_chat_channels(team, vault)?;
             if channels.host.entity().as_bytes() != resolved.host
@@ -348,12 +385,17 @@ pub(super) fn dispatch(
                 break result;
             }
         }
-        ChatAction::PrepareChannel { name, admin, .. } => ChatResult::Operation {
+        ChatAction::PrepareChannel {
+            name,
+            description,
+            admin,
+            ..
+        } => ChatResult::Operation {
             operation: operation(session.prepare_chat_channel_submission(
                 team,
                 foks_client_app::ChatChannelInput {
                     name: name.expose(),
-                    description: "",
+                    description: description.expose(),
                     tier: if admin {
                         RtChannelTier::Admin
                     } else {

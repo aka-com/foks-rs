@@ -38,6 +38,8 @@ pub enum Error {
     RtRace,
     #[error("realtime message ordering precondition failed")]
     RtMessageOrder,
+    #[error("this realtime method does not support the channel format")]
+    RtUnsupportedFormat,
     #[error("KV object conflicts with authoritative state")]
     KvConflict,
     #[error("KV mutation is not permitted by the stored object role")]

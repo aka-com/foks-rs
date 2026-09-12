@@ -113,32 +113,52 @@ impl HardStateStore {
         op: &ChatOperation,
         submission: Option<&ChatSubmission>,
     ) -> Result<()> {
+        self.chat_record_submission_with_material(op, submission, || Ok(()))
+    }
+
+    /// Validate and stage the ledger rows before persisting protected material.
+    /// The callback must durably store material before returning, must not access
+    /// this database, and runs only for a new operation, under the writer lock.
+    /// Failure rolls back the ledger. A crash after the callback can still leave
+    /// orphan material; never delete it on an ambiguous commit outcome.
+    pub fn chat_record_submission_with_material<E: From<Error>>(
+        &mut self,
+        op: &ChatOperation,
+        submission: Option<&ChatSubmission>,
+        persist_material: impl FnOnce() -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), E> {
         if op.state != ChatOperationState::Prepared
             || op.receipt.is_some()
             || op.rejection_code.is_some()
         {
-            return Err(Error::ChatOperationState("new operation is not prepared"));
+            return Err(Error::ChatOperationState("new operation is not prepared").into());
         }
         if let Some(old) = self.chat_operation(&op.id)? {
-            return if old == *op {
-                Ok(())
-            } else {
-                Err(Error::ChatConflict("operation ID reused"))
-            };
+            if old != *op {
+                return Err(Error::ChatConflict("operation ID reused").into());
+            }
+            if let Some(submission) = submission {
+                if self.chat_submission(&op.scope, submission)? != Some(old) {
+                    return Err(Error::ChatConflict("operation submission differs").into());
+                }
+            }
+            return Ok(());
         }
         let tx = self.write_transaction()?;
-        let count: i64 = tx.query_row(
-            "SELECT COUNT(*)
+        let count: i64 = tx
+            .query_row(
+                "SELECT COUNT(*)
              FROM chat_operations
              WHERE host_id = ?1
                AND uid = ?2
                AND team_id = ?3
                AND state IN (0, 1)",
-            params![op.scope.host, op.scope.uid, op.scope.team],
-            |row| row.get(0),
-        )?;
+                params![op.scope.host, op.scope.uid, op.scope.team],
+                |row| row.get(0),
+            )
+            .map_err(Error::from)?;
         if count >= ChatLimits::PENDING_OPERATIONS as i64 {
-            return Err(Error::ChatLimit("pending operation limit"));
+            return Err(Error::ChatLimit("pending operation limit").into());
         }
         tx.execute(
             "INSERT INTO chat_operations (
@@ -155,7 +175,8 @@ impl HardStateStore {
                 op.request_hash.as_slice(),
                 sqlite_integer("chat cursor", op.scan_cursor)?
             ],
-        )?;
+        )
+        .map_err(Error::from)?;
         if let Some(submission) = submission {
             tx.execute(
                 "INSERT INTO chat_submissions (
@@ -169,9 +190,11 @@ impl HardStateStore {
                     submission.input_mac.as_slice(),
                     op.id.as_slice()
                 ],
-            )?;
+            )
+            .map_err(Error::from)?;
         }
-        tx.commit()?;
+        persist_material()?;
+        tx.commit().map_err(Error::from)?;
         Ok(())
     }
     pub fn chat_operation(&self, id: &[u8; 16]) -> Result<Option<ChatOperation>> {
@@ -450,6 +473,94 @@ mod tests {
             channel: [4; 16],
         }
     }
+    fn prepared(id: u128) -> ChatOperation {
+        ChatOperation {
+            id: id.to_be_bytes(),
+            scope: scope(2),
+            kind: ChatOperationKind::Send,
+            state: ChatOperationState::Prepared,
+            request_hash: [8; 32],
+            scan_cursor: 0,
+            receipt: None,
+            rejection_code: None,
+        }
+    }
+
+    #[test]
+    fn preparation_failure_rolls_back_both_rows_and_can_be_retried_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hard");
+        let mut db = HardStateStore::open(&path).unwrap();
+        let op = prepared(1);
+        let submission = ChatSubmission {
+            id: [9; 16],
+            input_mac: [10; 32],
+        };
+        let revision = db.metadata().unwrap().revision;
+        let result = db.chat_record_submission_with_material(&op, Some(&submission), || {
+            Err(Error::ChatConflict("injected protected write failure"))
+        });
+        assert!(result.is_err());
+        drop(db);
+        let mut db = HardStateStore::open(&path).unwrap();
+        assert_eq!(db.metadata().unwrap().revision, revision);
+        assert!(db.chat_operation(&op.id).unwrap().is_none());
+        assert!(db
+            .chat_submission(&op.scope, &submission)
+            .unwrap()
+            .is_none());
+        db.chat_record_submission_with_material::<Error>(&op, Some(&submission), || Ok(()))
+            .unwrap();
+        assert_eq!(
+            db.chat_submission(&op.scope, &submission).unwrap(),
+            Some(op)
+        );
+    }
+
+    #[test]
+    fn rejected_and_duplicate_preparations_do_not_write_material() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = HardStateStore::open(&dir.path().join("hard")).unwrap();
+        let op = prepared(1);
+        let submission = ChatSubmission {
+            id: [9; 16],
+            input_mac: [10; 32],
+        };
+        db.chat_record_submission(&op, Some(&submission)).unwrap();
+        db.chat_record_submission_with_material::<Error>(&op, Some(&submission), || {
+            panic!("duplicate write")
+        })
+        .unwrap();
+        let changed = ChatSubmission {
+            id: [11; 16],
+            ..submission
+        };
+        assert!(db
+            .chat_record_submission_with_material::<Error>(&op, Some(&changed), || panic!(
+                "unbound submission"
+            ))
+            .is_err());
+        assert!(db
+            .chat_record_submission_with_material::<Error>(
+                &prepared(2),
+                Some(&submission),
+                || panic!("conflicting write")
+            )
+            .is_err());
+        assert!(db.chat_operation(&prepared(2).id).unwrap().is_none());
+        for id in 2..=ChatLimits::PENDING_OPERATIONS {
+            db.chat_record(&prepared(id as u128)).unwrap();
+        }
+        assert!(matches!(
+            db.chat_record_submission_with_material::<Error>(
+                &prepared(u128::MAX),
+                None,
+                || panic!("over-capacity write")
+            ),
+            Err(Error::ChatLimit(_))
+        ));
+    }
+
     #[test]
     fn conflict_queries_use_exact_index_keys() {
         let dir = tempfile::tempdir().unwrap();

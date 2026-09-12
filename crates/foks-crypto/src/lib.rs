@@ -7,11 +7,13 @@
 #![forbid(unsafe_code)]
 
 mod backup;
+mod chat_v2;
 mod kex;
 mod passphrase;
 mod realtime;
 
 pub use backup::*;
+pub use chat_v2::*;
 pub use kex::*;
 pub use passphrase::*;
 pub use realtime::*;

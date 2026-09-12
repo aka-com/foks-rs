@@ -1,13 +1,34 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { reconcileOperations } from '../src/chat/operations';
-import type { ChatOperation, ChatResult } from '../src/chat-contract';
+import { reconcileOperations as reduceOperations } from '../src/chat/operations';
+import type {
+  ChatAction,
+  ChatOperation,
+  ChatResult,
+} from '../src/chat-contract';
+import { eventFromReply } from '../src/chat/conversation-events';
+import {
+  conversationResult as reduceConversation,
+  emptyConversation,
+} from '../src/chat/conversation-model';
+import type { ConversationState } from '../src/chat/conversation-model';
+import type { TrackedOperation } from '../src/chat/operations';
+const reconcileOperations = (
+  old: TrackedOperation[],
+  action: ChatAction,
+  result: ChatResult,
+) => reduceOperations(old, eventFromReply(action, result));
+const conversationResult = (
+  state: ConversationState,
+  action: ChatAction,
+  result: ChatResult,
+) => reduceConversation(state, eventFromReply(action, result));
 const op: ChatOperation = {
   id: 'a'.repeat(32),
   channel: 'b'.repeat(32),
-  create: false,
+  kind: 'send-message',
   state: 'prepared',
-  sequence: null,
+  receipt: null,
   rejection_code: null,
 };
 const history: ChatResult = {
@@ -26,6 +47,30 @@ const history: ChatResult = {
     },
   ],
 };
+test('body recovery never resurrects observed text or changes delivery status', () => {
+  const event = {
+    kind: 'body-recovered',
+    operation: op.id,
+    channel: op.channel,
+    text: 'original',
+  } as const;
+  const recovered = reduceOperations([{ ...op, statusUnknown: true }], event);
+  assert.equal(recovered[0].text, 'original');
+  assert.equal(recovered[0].statusUnknown, true);
+  assert.equal(recovered[0].state, 'prepared');
+  const absent = reduceOperations([op], { ...event, text: null });
+  assert.equal(absent[0].bodyUnavailable, true);
+  assert.equal(absent[0].state, 'prepared');
+  assert.equal(absent[0].id, op.id);
+  assert.equal(
+    reduceOperations([{ ...op, observed: true }], event)[0].text,
+    undefined,
+  );
+  assert.equal(
+    reduceOperations([op], { ...event, channel: 'f'.repeat(32) })[0].text,
+    undefined,
+  );
+});
 test('pending omission preserves unknown send but does not recheck terminal state', () => {
   const rows = reconcileOperations(
     [{ ...op, text: 'hello' }],
@@ -39,7 +84,11 @@ test('pending omission preserves unknown send but does not recheck terminal stat
     { action: 'status', operation: op.id },
     {
       kind: 'operation',
-      operation: { ...op, state: 'confirmed', sequence: '1' },
+      operation: {
+        ...op,
+        state: 'confirmed',
+        receipt: { kind: 'message-sent', sequence: '1' },
+      },
     },
   );
   assert.equal(
@@ -67,8 +116,6 @@ test('history observation survives later ledger replies without retaining plaint
 });
 
 test('atomic model handles history before pending and rejects conflicting pages without dropping sends', async () => {
-  const { conversationResult, emptyConversation } =
-    await import('../src/chat/conversation-model');
   const action = {
     action: 'history',
     channel: op.channel,

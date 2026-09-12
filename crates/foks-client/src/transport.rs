@@ -260,7 +260,9 @@ impl PooledConnection {
         if result.is_err()
             && !matches!(
                 &result,
-                Err(Error::Rpc(foks_rpc::Error::RemoteStatus { .. }))
+                Err(Error::Rpc(
+                    foks_rpc::Error::RemoteStatus { .. } | foks_rpc::Error::MethodNotFound { .. }
+                ))
             )
         {
             // An unread or partial response must never satisfy a later call.
@@ -313,7 +315,12 @@ impl PooledConnection {
         // A status error is a complete frame with the expected sequence, so
         // consume its sequence just like success. It does not desynchronize I/O.
         if let Err(error) = &response {
-            if !matches!(error, Error::Rpc(foks_rpc::Error::RemoteStatus { .. })) {
+            if !matches!(
+                error,
+                Error::Rpc(
+                    foks_rpc::Error::RemoteStatus { .. } | foks_rpc::Error::MethodNotFound { .. }
+                )
+            ) {
                 return response;
             }
         }

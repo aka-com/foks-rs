@@ -44,12 +44,17 @@ fn valid_preview(preview: &ChatPreview) -> bool {
 fn valid_operation(op: &ChatOperation) -> bool {
     valid_chat_id(&op.id)
         && valid_chat_id(&op.channel)
-        && op
-            .sequence
-            .as_ref()
-            .is_none_or(|n| chat_sequence(n).is_some_and(|n| n > 0))
+        && match (&op.kind, &op.receipt) {
+            (_, None) => op.state != ChatState::Confirmed,
+            (ChatOperationKind::CreateChannel, Some(ChatReceipt::ChannelCreated)) => {
+                op.state == ChatState::Confirmed
+            }
+            (ChatOperationKind::SendMessage, Some(ChatReceipt::MessageSent { sequence })) => {
+                op.state == ChatState::Confirmed && chat_sequence(sequence).is_some_and(|n| n > 0)
+            }
+            _ => false,
+        }
         && (op.state == ChatState::Rejected) == op.rejection_code.is_some()
-        && (op.state == ChatState::Confirmed && !op.create) == op.sequence.is_some()
 }
 pub fn validate_chat_reply(
     store: &TeamStoreRef,
@@ -70,6 +75,22 @@ pub fn validate_chat_reply(
         return Err(invalid());
     }
     let valid = match (action, &reply.result) {
+        (
+            ChatAction::OperationBody { operation, channel },
+            ChatResult::OperationBody {
+                operation: actual,
+                channel: actual_channel,
+                text,
+            },
+        ) => {
+            operation == actual
+                && channel == actual_channel
+                && valid_chat_id(actual)
+                && valid_chat_id(actual_channel)
+                && text
+                    .as_ref()
+                    .is_none_or(|text| text.expose().len() <= CHAT_TEXT_BYTES)
+        }
         (ChatAction::Channels, ChatResult::Channels { channels, version }) => {
             let mut ids = HashSet::new();
             chat_sequence(version).is_some()
@@ -191,10 +212,12 @@ pub fn validate_chat_reply(
                 .is_some_and(|head| (*bumped && head > since) || (!*bumped && head <= since))
         }),
         (ChatAction::PrepareMessage { channel, .. }, ChatResult::Operation { operation }) => {
-            valid_operation(operation) && !operation.create && &operation.channel == channel
+            valid_operation(operation)
+                && operation.kind == ChatOperationKind::SendMessage
+                && &operation.channel == channel
         }
         (ChatAction::PrepareChannel { .. }, ChatResult::Operation { operation }) => {
-            valid_operation(operation) && operation.create
+            valid_operation(operation) && operation.kind == ChatOperationKind::CreateChannel
         }
         (
             ChatAction::Status {

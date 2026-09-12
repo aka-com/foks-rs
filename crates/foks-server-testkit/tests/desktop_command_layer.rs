@@ -589,6 +589,7 @@ fn exercise_chat(socket: &Path, team_id: &str, probe: &str, certificate: &Path) 
     let create = A::PrepareChannel {
         submission: "ab".repeat(16),
         name: SecretString::new(""),
+        description: SecretString::new("team discussions"),
         admin: false,
     };
     let R::Operation {
@@ -617,6 +618,20 @@ fn exercise_chat(socket: &Path, team_id: &str, probe: &str, certificate: &Path) 
         panic!("expected create receipt")
     };
     assert_eq!(confirmed.state, ChatState::Confirmed);
+    let R::Channels { channels, .. } = chat(&owner, A::Channels) else {
+        panic!("expected channel discovery")
+    };
+    assert_eq!(
+        channels
+            .iter()
+            .find(|c| c.id == channel)
+            .unwrap()
+            .description
+            .as_ref()
+            .unwrap()
+            .expose(),
+        "team discussions"
+    );
     // A fresh local client recovers the same completed submission without resealing.
     let restarted = AgentClient::new(socket);
     let reply = foks_desktop::chat_request(&restarted, owner.clone(), create).unwrap();
@@ -687,6 +702,22 @@ fn exercise_chat(socket: &Path, team_id: &str, probe: &str, certificate: &Path) 
             text: SecretString::new("changed"),
         };
         assert!(foks_desktop::chat_request(&client, actor.clone(), altered).is_err());
+        let body_action = A::OperationBody {
+            operation: prepared.id.clone(),
+            channel: channel.clone(),
+        };
+        // Body recovery survives a new local connection and does not attempt delivery.
+        let body = foks_desktop::chat_request(
+            &AgentClient::new(socket),
+            actor.clone(),
+            body_action.clone(),
+        )
+        .unwrap();
+        assert!(
+            matches!(body.result, R::OperationBody { text: Some(text), .. } if text.expose() == format!("chat from account {index}"))
+        );
+        let other = if index == 0 { &guest } else { &owner };
+        assert!(foks_desktop::chat_request(&client, other.clone(), body_action.clone()).is_err());
         let R::Operation { operation: receipt } = chat(
             actor,
             A::Attempt {
@@ -695,7 +726,16 @@ fn exercise_chat(socket: &Path, team_id: &str, probe: &str, certificate: &Path) 
         ) else {
             panic!("expected receipt")
         };
-        assert_eq!(receipt.sequence, Some((index + 1).to_string()));
+        assert_eq!(
+            receipt.receipt,
+            Some(foks_agent_proto::chat::ChatReceipt::MessageSent {
+                sequence: (index + 1).to_string()
+            })
+        );
+        assert!(matches!(
+            chat(actor, body_action),
+            R::OperationBody { text: None, .. }
+        ));
         let R::Operation { operation: replay } = chat(actor, action) else {
             panic!("expected replay")
         };

@@ -65,7 +65,7 @@ export function ChatScreen({
     loading,
     blocked,
     blockedChannels,
-    revision,
+    channelRevisions,
     actor,
     request,
     refresh,
@@ -173,12 +173,27 @@ export function ChatScreen({
         title={`${store.name} · Chat`}
         subtitle="Encrypted channels for team members"
         action={
-          <Button
-            icon="file"
-            onClick={() => onNavigate({ kind: 'store', ref: store.id })}
-          >
-            Files
-          </Button>
+          <>
+            <Button
+              icon="people"
+              title="Manage membership and access to team files and chat"
+              onClick={() =>
+                onNavigate({
+                  kind: 'group-settings',
+                  ref: store.id,
+                  tab: 'people',
+                })
+              }
+            >
+              Team members
+            </Button>
+            <Button
+              icon="file"
+              onClick={() => onNavigate({ kind: 'store', ref: store.id })}
+            >
+              Files
+            </Button>
+          </>
         }
       />
       <div className="chat-layout">
@@ -296,7 +311,9 @@ export function ChatScreen({
           {pending.some(
             (op) =>
               !op.observed &&
-              (op.create || op.channel !== channel?.id || !channel?.readable),
+              (op.kind === 'create-channel' ||
+                op.channel !== channel?.id ||
+                !channel?.readable),
           ) && (
             <section className="chat-recovery" aria-label="Needs attention">
               <SectionLabel>Needs attention</SectionLabel>
@@ -308,7 +325,7 @@ export function ChatScreen({
                 .filter(
                   (op) =>
                     !op.observed &&
-                    (op.create ||
+                    (op.kind === 'create-channel' ||
                       op.channel !== channel?.id ||
                       !channel?.readable),
                 )
@@ -361,14 +378,17 @@ export function ChatScreen({
               senderNames={senderNames}
               request={request}
               refreshPending={refreshPending}
-              revision={revision}
+              revision={channelRevisions?.get(channel.id) ?? 0}
               readThrough={activeConversation?.read_through ?? null}
               markRead={markRead}
               history={history}
               acceptHistory={acceptHistory}
               blockHistory={blockHistory}
               pending={pending.filter(
-                (op) => !op.create && !op.observed && op.channel === channel.id,
+                (op) =>
+                  op.kind !== 'create-channel' &&
+                  !op.observed &&
+                  op.channel === channel.id,
               )}
             />
           ) : loading ? (
@@ -432,6 +452,7 @@ function ChannelCreateSheet({
   onCreated: (channelId: string) => Promise<void>;
 }): ReactNode {
   const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
   const [admin, setAdmin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -455,6 +476,7 @@ function ChannelCreateSheet({
       action: 'prepare-channel',
       submission: submissionId(),
       name,
+      description,
       admin,
     };
     let preparedId: string | null = null;
@@ -467,6 +489,7 @@ function ChannelCreateSheet({
       preparedId = op.id;
       submission.current = null;
       setName('');
+      setDescription('');
       const attempted = await request({ action: 'attempt', operation: op.id });
       if (!alive.current) return;
       const channelId =
@@ -539,6 +562,20 @@ function ChannelCreateSheet({
             <small>
               3–32 characters, lowercased automatically. Leave it empty only for
               the general channel.
+            </small>
+          </InsetRow>
+          <InsetRow label="Description">
+            <textarea
+              aria-label="Channel description"
+              value={description}
+              disabled={locked}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="What this channel is for"
+              maxLength={1024}
+            />
+            <small>
+              Optional, 3–512 characters. Descriptions are lowercased
+              automatically.
             </small>
           </InsetRow>
         </Inset>

@@ -65,6 +65,49 @@ impl ChatTransport for FailedRead<'_> {
 }
 
 #[test]
+pub(crate) fn realtime_capabilities() {
+    let fixture = Fixture::start("realtime-capabilities");
+    let account = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("rtcaps", 0x39))
+        .unwrap();
+    let mut connection = fixture
+        .client
+        .foks()
+        .realtime_connection(&fixture.probe.pinned, &account.credential)
+        .unwrap();
+    let host = RtHostId::new(fixture.probe.pinned.host_id().clone()).unwrap();
+    assert_eq!(
+        connection
+            .call(&Request::ChatCapabilities(RtChatCapabilitiesArgument {
+                host: host.clone()
+            }))
+            .unwrap(),
+        Response::ChatCapabilities(RtChatCapabilities::basic_only(host))
+    );
+    let mut other = fixture.probe.pinned.host_id().as_bytes().to_vec();
+    other[1] ^= 1;
+    let wrong = Request::ChatCapabilities(RtChatCapabilitiesArgument {
+        host: RtHostId::new(EntityId::from_bytes(other).unwrap()).unwrap(),
+    });
+    assert!(matches!(
+        connection.call(&wrong),
+        Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+            code: foks_rpc::STATUS_PERMISSION_ERROR,
+            ..
+        }))
+    ));
+    assert_eq!(
+        connection
+            .call(&Request::GetInboxVersion(RtGetInboxVersionArgument {
+                key: RtInboxKey { app: RtAppId::Chat }
+            }))
+            .unwrap(),
+        Response::InboxVersion(0)
+    );
+}
+
+#[test]
 pub(crate) fn realtime_poll_capacity_is_separate_and_bounded() {
     let fixture = Fixture::start("realtime-poll-capacity");
     let account = fixture

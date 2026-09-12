@@ -13,6 +13,37 @@ fn request(position: u64) -> RealtimeRequest {
     assert_eq!(call.protocol_id(), REAL_TIME_PROTOCOL_ID);
     RealtimeRequest::decode_argument(position, call.argument()).unwrap()
 }
+
+#[test]
+fn capability_request_has_a_distinct_position_and_host_bound_response() {
+    let md = RtChannelMetadata::decode(&fixture("channel.snowp")).unwrap();
+    let mut bytes = md.team.entity().as_bytes().to_vec();
+    bytes[0] = ENTITY_HOST;
+    let host = RtHostId::new(EntityId::from_bytes(bytes.clone()).unwrap()).unwrap();
+    let request =
+        RealtimeRequest::ChatCapabilities(RtChatCapabilitiesArgument { host: host.clone() });
+    assert_eq!(request.position(), 65536);
+    assert!(!request.is_void());
+    let frame = request.encode_at(17).unwrap();
+    let call = read_call(&mut Cursor::new(frame), DEFAULT_MAX_FRAME_LENGTH).unwrap();
+    assert_eq!(call.protocol_id(), REAL_TIME_PROTOCOL_ID);
+    assert_eq!(
+        RealtimeRequest::decode_argument(call.method_position(), call.argument()).unwrap(),
+        request
+    );
+    let capabilities = RtChatCapabilities::basic_only(host);
+    assert_eq!(
+        request
+            .decode_result(&capabilities.encoded().unwrap())
+            .unwrap(),
+        RealtimeResponse::ChatCapabilities(capabilities)
+    );
+    bytes[1] ^= 1;
+    let other = RtChatCapabilities::basic_only(
+        RtHostId::new(EntityId::from_bytes(bytes).unwrap()).unwrap(),
+    );
+    assert!(request.decode_result(&other.encoded().unwrap()).is_err());
+}
 #[test]
 fn all_ten_methods_match_generated_go_frames_and_results() {
     for position in [0, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
@@ -37,6 +68,9 @@ fn all_ten_methods_match_generated_go_frames_and_results() {
         }
         let result = req.decode_result(&decoded).unwrap();
         let encoded = match result {
+            RealtimeResponse::ChatCapabilities(_) => {
+                panic!("Go Basic fixture returned an extension")
+            }
             RealtimeResponse::Void => continue,
             RealtimeResponse::Channels(v) => v.encoded().unwrap(),
             RealtimeResponse::Sent(v) => v.encoded().unwrap(),
