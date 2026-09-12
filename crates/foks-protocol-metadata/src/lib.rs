@@ -439,8 +439,22 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
         let principal_bound = route.authentication.starts_with("active_")
             || route.authentication.starts_with("current_");
         let public_team_chain = route.protocol == "TeamLoader"
-            && route.method == "loadTeamChain"
-            && route.authentication == "active_team_or_remote_view_token";
+            && matches!(
+                (route.method.as_str(), route.authentication.as_str()),
+                ("loadTeamChain", "active_team_or_remote_view_token")
+                    | (
+                        "getTeamVOBearerTokenChallenge",
+                        "active_local_or_remote_member"
+                    )
+                    | (
+                        "activateTeamVOBearerToken",
+                        "current_local_or_remote_shared_signature"
+                    )
+                    | (
+                        "checkTeamVOBearerToken",
+                        "active_local_or_remote_team_view_token"
+                    )
+            );
         if principal_bound {
             let expected_listeners: &[&str] = if public_team_chain {
                 &["public_services", "authenticated"]
@@ -543,6 +557,8 @@ fn validate_route_result(value: &str) -> Result<(), MetadataError> {
         "URLString"
             | "TeamRawInbox"
             | "TeamRSVPLocal"
+            | "TeamRSVPRemote"
+            | "TeamRemoteJoinReq"
             | "TeamCertificateList"
             | "TeamCertificateAndMetadata"
             | "OAuth2PollResult"

@@ -4,6 +4,7 @@ use foks_proto::{LocalInviteAcceptance, TeamCertificate, TeamInvite, TeamRsvp};
 use zeroize::Zeroizing;
 
 pub enum InvitationIntent {
+    RemoteAcceptance(Box<super::PreparedRemoteInvitation>),
     Certificate {
         team: EntityId,
         prepared: super::PreparedTeamInvitation,
@@ -21,9 +22,18 @@ pub struct InvitationProgress {
     pub invite: Option<String>,
 }
 impl InvitationIntent {
-    fn encode(&self) -> Result<Vec<u8>> {
+    pub(super) fn encode(&self) -> Result<Vec<u8>> {
         use foks_snowpack::Value;
         let (kind, fields) = match self {
+            Self::RemoteAcceptance(p) => (
+                3,
+                vec![
+                    Value::Binary(p.team.as_bytes().to_vec()),
+                    Value::Binary(p.invite.encoded()?),
+                    Value::Binary(p.request.encoded()?),
+                    Value::Binary(p.home_link.encoded()?),
+                ],
+            ),
             Self::Certificate { team, prepared } => (
                 0,
                 vec![
@@ -46,7 +56,7 @@ impl InvitationIntent {
             Value::Array(fields),
         ])))?)
     }
-    fn decode(b: &[u8]) -> Result<Self> {
+    pub(super) fn decode(b: &[u8]) -> Result<Self> {
         use foks_snowpack::Value;
         let sensitive = foks_snowpack::decode_sensitive(b)?;
         let Value::Array(v) = &*sensitive else {
@@ -62,6 +72,14 @@ impl InvitationIntent {
             }
         };
         match (*kind, f.len()) {
+            (3, 4) => Ok(Self::RemoteAcceptance(Box::new(
+                super::PreparedRemoteInvitation {
+                    team: EntityId::from_bytes(bin(0)?.to_vec())?,
+                    invite: TeamInvite::decode(bin(1)?)?,
+                    request: foks_proto::RemoteJoinRequest::decode(bin(2)?)?,
+                    home_link: foks_proto::PostGenericLinkArgument::decode(bin(3)?)?,
+                },
+            ))),
             (0, 3) => Ok(Self::Certificate {
                 team: EntityId::from_bytes(bin(0)?.to_vec())?,
                 prepared: super::PreparedTeamInvitation {
@@ -90,6 +108,16 @@ impl FoksClient {
     ) -> Result<InvitationProgress> {
         self.authenticate_credential_and_pin(host, credential)?;
         let subject = match &intent {
+            InvitationIntent::RemoteAcceptance(p) => {
+                let decoded = p.home_link.link.decode_generic()?;
+                if &p.invite.host == host.host_id()
+                    || &decoded.entity != credential.uid()
+                    || &decoded.host != host.host_id()
+                {
+                    return Err(Error::OperationBinding("remote invitation source"));
+                }
+                p.team.clone()
+            }
             InvitationIntent::Certificate { team, prepared } => {
                 let p =
                     foks_crypto::verify_team_certificate(&prepared.certificate, &prepared.invite)?;
@@ -165,6 +193,11 @@ impl FoksClient {
         let intent = InvitationIntent::decode(
             &MutationCoordinator::new(&host.database_path, protected).load_bound_material(&op)?,
         )?;
+        if matches!(&intent, InvitationIntent::RemoteAcceptance(_)) {
+            return Err(Error::OperationBinding(
+                "remote invitation requires its destination profile",
+            ));
+        }
         // A durable acknowledgement survives a crash before RemoteVerified.
         let receipt_key = [id.as_slice(), b"/invitation-ack"].concat();
         let ack = match protected.get(&receipt_key) {
@@ -188,6 +221,11 @@ impl FoksClient {
             self.authenticate_credential_and_pin(host, credential)?;
             MutationCoordinator::new(&host.database_path, protected).begin_submission(&id)?;
             let sent = match &intent {
+                InvitationIntent::RemoteAcceptance(_) => {
+                    return Err(Error::OperationBinding(
+                        "remote invitation requires its destination profile",
+                    ))
+                }
                 InvitationIntent::Certificate { prepared, .. } => self
                     .upload_team_invitation(host, credential, prepared)
                     .map(|_| None),

@@ -391,6 +391,10 @@ impl CheckedProfileSession<'_> {
         let mut stored = vault.team(team_alias)?;
         require_named_active_team(&stored)?;
         if stored.local_members.iter().any(|member| !member.active)
+            || stored
+                .invitation_members
+                .iter()
+                .any(|member| !member.membership.active)
             || vault.team_member_edit(team_alias)?.is_some()
             || vault.team_rekey(team_alias)?.is_some()
         {
@@ -814,6 +818,10 @@ impl CheckedProfileSession<'_> {
         let stored = vault.team(team_alias)?;
         require_named_active_team(&stored)?;
         if stored.local_members.iter().any(|member| !member.active)
+            || stored
+                .invitation_members
+                .iter()
+                .any(|member| !member.membership.active)
             || vault.team_member_edit(team_alias)?.is_some()
             || vault.team_rekey(team_alias)?.is_some()
         {
@@ -1201,7 +1209,7 @@ fn validate_edit_context(edit: &StoredTeamMemberEdit, context: &LocalTeamContext
     Ok(())
 }
 
-fn local_addition_plan(
+pub(super) fn local_addition_plan(
     stored: &StoredLocalMembership,
 ) -> Result<foks_client::LocalTeamMemberAdditionPlan> {
     Ok(foks_client::LocalTeamMemberAdditionPlan {
@@ -1345,7 +1353,7 @@ pub enum TeamMemberRole {
 }
 
 impl TeamMemberRole {
-    fn role(self) -> Role {
+    pub(super) fn role(self) -> Role {
         match self {
             Self::Member { visibility } => Role::member(visibility),
             Self::Admin => Role::ADMIN,
@@ -1437,6 +1445,8 @@ pub(super) struct StoredTeam {
     pub(super) federated_members: Vec<StoredFederatedMembership>,
     #[serde(default)]
     pub(super) local_members: Vec<StoredLocalMembership>,
+    #[serde(default)]
+    pub(super) invitation_members: Vec<crate::invitations::StoredInvitationMembership>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1660,6 +1670,7 @@ impl StoredTeam {
             name_commitment: None,
             active: false,
             federated_members: Vec::new(),
+            invitation_members: Vec::new(),
             local_members: Vec::new(),
         })
     }
@@ -1716,6 +1727,7 @@ impl StoredTeam {
             name_commitment: None,
             active: true,
             federated_members: Vec::new(),
+            invitation_members: Vec::new(),
             local_members: Vec::new(),
         })
     }

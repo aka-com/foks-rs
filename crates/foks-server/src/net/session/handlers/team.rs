@@ -20,14 +20,17 @@ pub(super) trait Operations {
     fn loader_challenge(
         &self,
         argument: &[u8],
-        principal: &Principal,
+        principal: Option<&Principal>,
     ) -> Result<Vec<u8>, RpcStatus>;
-    fn activate_loader(&self, argument: &[u8], principal: &Principal)
-        -> Result<Vec<u8>, RpcStatus>;
+    fn activate_loader(
+        &self,
+        argument: &[u8],
+        principal: Option<&Principal>,
+    ) -> Result<Vec<u8>, RpcStatus>;
     fn check_loader_token(
         &self,
         argument: &[u8],
-        principal: &Principal,
+        principal: Option<&Principal>,
     ) -> Result<Vec<u8>, RpcStatus>;
     fn load_chain(
         &self,
@@ -99,6 +102,10 @@ impl Operations for ServerData {
             entropy: self.entropy.as_ref(),
         };
         match route {
+            RouteId::TeamGuestAcceptInviteRemote => service.accept_remote(argument).map(Some),
+            RouteId::TeamAdminLoadTeamRemoteJoinReq => service
+                .load_remote(argument, principal.ok_or_else(permission_denied)?)
+                .map(Some),
             RouteId::TeamMemberAcceptInviteLocal => service
                 .accept_local(
                     argument,
@@ -148,7 +155,7 @@ impl Operations for ServerData {
     fn loader_challenge(
         &self,
         argument: &[u8],
-        principal: &Principal,
+        principal: Option<&Principal>,
     ) -> Result<Vec<u8>, RpcStatus> {
         let database = self.read_database()?;
         crate::services::team_loader::issue_challenge(
@@ -166,7 +173,7 @@ impl Operations for ServerData {
     fn activate_loader(
         &self,
         argument: &[u8],
-        principal: &Principal,
+        principal: Option<&Principal>,
     ) -> Result<Vec<u8>, RpcStatus> {
         let database = self.read_database()?;
         crate::services::team_loader::activate(
@@ -183,7 +190,7 @@ impl Operations for ServerData {
     fn check_loader_token(
         &self,
         argument: &[u8],
-        principal: &Principal,
+        principal: Option<&Principal>,
     ) -> Result<Vec<u8>, RpcStatus> {
         let database = self.read_database()?;
         crate::services::team_loader::check_team_view_token(
@@ -418,11 +425,12 @@ pub(super) fn response(
 ) -> Result<Vec<u8>, RpcStatus> {
     let sequence = call.call.sequence();
     let data = match call.route.id {
-        RouteId::TeamLoaderGetTeamVOBearerTokenChallenge => Some(operations.loader_challenge(
-            call.call.argument(),
-            principal.ok_or_else(permission_denied)?,
-        )?),
-        RouteId::TeamMemberAcceptInviteLocal
+        RouteId::TeamLoaderGetTeamVOBearerTokenChallenge => {
+            Some(operations.loader_challenge(call.call.argument(), principal)?)
+        }
+        RouteId::TeamGuestAcceptInviteRemote
+        | RouteId::TeamAdminLoadTeamRemoteJoinReq
+        | RouteId::TeamMemberAcceptInviteLocal
         | RouteId::TeamAdminLoadTeamRawInbox
         | RouteId::TeamAdminRejectJoinReq
         | RouteId::TeamGuestLookupTeamCertByHash
@@ -431,10 +439,9 @@ pub(super) fn response(
         | RouteId::TeamMemberGrantLocalViewPermissionForTeam => {
             operations.invitation(call.route.id, call.call.argument(), principal)?
         }
-        RouteId::TeamLoaderActivateTeamVOBearerToken => Some(operations.activate_loader(
-            call.call.argument(),
-            principal.ok_or_else(permission_denied)?,
-        )?),
+        RouteId::TeamLoaderActivateTeamVOBearerToken => {
+            Some(operations.activate_loader(call.call.argument(), principal)?)
+        }
         RouteId::TeamLoaderLoadTeamChain => {
             Some(operations.load_chain(call.call.argument(), principal)?)
         }
@@ -503,10 +510,9 @@ pub(super) fn response(
             call.call.argument(),
             principal.ok_or_else(permission_denied)?,
         )?),
-        RouteId::TeamLoaderCheckTeamVOBearerToken => Some(operations.check_loader_token(
-            call.call.argument(),
-            principal.ok_or_else(permission_denied)?,
-        )?),
+        RouteId::TeamLoaderCheckTeamVOBearerToken => {
+            Some(operations.check_loader_token(call.call.argument(), principal)?)
+        }
         RouteId::TeamAdminCheckTeamBearerToken => Some(operations.check_admin_token(
             call.call.argument(),
             principal.ok_or_else(permission_denied)?,

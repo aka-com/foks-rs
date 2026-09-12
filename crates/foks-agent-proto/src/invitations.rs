@@ -10,6 +10,38 @@ pub enum InvitationRole {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum InvitationAction {
+    PreviewRemote {
+        remote_profile: String,
+        invite: String,
+    },
+    AcceptRemote {
+        remote_profile: String,
+        invite: String,
+    },
+    AttemptRemote {
+        remote_profile: String,
+        operation_id: String,
+    },
+    StatusRemote {
+        remote_profile: String,
+        operation_id: String,
+    },
+    InspectRemote {
+        remote_profile: String,
+        team_alias: String,
+        request_id: String,
+    },
+    ApproveRemote {
+        remote_profile: String,
+        team_alias: String,
+        request_id: String,
+        role: InvitationRole,
+    },
+    SyncRemote {
+        remote_profile: String,
+        team_id: String,
+    },
+
     Preview {
         invite: String,
     },
@@ -48,6 +80,19 @@ impl std::fmt::Debug for InvitationAction {
     }
 }
 impl InvitationAction {
+    pub fn remote_profile(&self) -> Option<&str> {
+        match self {
+            Self::PreviewRemote { remote_profile, .. }
+            | Self::AcceptRemote { remote_profile, .. }
+            | Self::AttemptRemote { remote_profile, .. }
+            | Self::StatusRemote { remote_profile, .. }
+            | Self::InspectRemote { remote_profile, .. }
+            | Self::ApproveRemote { remote_profile, .. }
+            | Self::SyncRemote { remote_profile, .. } => Some(remote_profile),
+            _ => None,
+        }
+    }
+
     pub fn validate(&self) -> bool {
         let id = |s: &str| {
             s.len() == 32
@@ -55,7 +100,31 @@ impl InvitationAction {
                     .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
         };
         let name = |s: &str| !s.is_empty() && s.len() <= 128;
+        if self.remote_profile().is_some_and(|p| !name(p)) {
+            return false;
+        }
         match self {
+            Self::PreviewRemote { invite, .. } | Self::AcceptRemote { invite, .. } => {
+                !invite.is_empty()
+                    && invite.len() <= 256
+                    && invite.bytes().all(|c| c.is_ascii_alphanumeric())
+            }
+            Self::AttemptRemote { operation_id, .. } | Self::StatusRemote { operation_id, .. } => {
+                id(operation_id)
+            }
+            Self::InspectRemote {
+                team_alias,
+                request_id,
+                ..
+            }
+            | Self::ApproveRemote {
+                team_alias,
+                request_id,
+                ..
+            } => name(team_alias) && id(request_id),
+            Self::SyncRemote { team_id, .. } => {
+                team_id.len() == 66 && team_id.bytes().all(|c| c.is_ascii_hexdigit())
+            }
             Self::Preview { invite } | Self::Accept { invite } => {
                 !invite.is_empty()
                     && invite.len() <= 256

@@ -264,3 +264,132 @@ fn local_acceptance_lost_reply_stays_unknown_after_restart_without_replay() {
         Ok(())
     });
 }
+
+#[test]
+fn remote_invitation_reopens_both_profiles_and_admits_with_verified_keys() {
+    let mut f = Fixture::start();
+    let remote_env = TestEnvironment::new().unwrap();
+    let _server = remote_env.start_server().unwrap();
+    let root = remote_env.client_path("remote-invite", "root.der").unwrap();
+    remote_env.write_probe_root(&root).unwrap();
+    f.registry
+        .add(Profile {
+            name: "remote".into(),
+            probe: format!("localhost:{}", remote_env.addresses().unwrap().probe.port()),
+            protocol: ProtocolPolicy::V019,
+            trust: TrustRoot::CertificateDer { path: root },
+        })
+        .unwrap();
+    let run = |profile: &str, alias: &str, action: Option<InvitationAction>| {
+        let s = ProfileSession::open(&f.registry, profile).unwrap();
+        let other_name = if profile == "local" {
+            "remote"
+        } else {
+            "local"
+        };
+        let other = ProfileSession::open(&f.registry, other_name).unwrap();
+        f.credentials
+            .with_checked_sessions(&s, &other, |s, other| {
+                let master = f.credentials.master_key()?;
+                let mut store = EncryptedFileSecretStore::open(
+                    &s.paths.credential_store,
+                    derive_vault_key(&master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+                if let Some(action) = action {
+                    s.remote_invitation_action(other, alias, action, None, &mut vault, &master)
+                } else {
+                    s.probe_and_pin()?;
+                    s.create_account(
+                        alias,
+                        "remoteinvitejoiner",
+                        "laptop",
+                        "",
+                        "",
+                        None,
+                        &mut vault,
+                        &master,
+                    )?;
+                    Ok(serde_json::Value::Null)
+                }
+            })
+            .unwrap()
+    };
+    run("remote", "joiner", None);
+    f.run(|s, v, k| s.create_account("owner", "remoteinviteowner", "laptop", "", "", None, v, k));
+    let team = f.run(|s, v, k| s.create_named_team("owner", "project", "project", v, k));
+    let p = action(
+        &f,
+        "owner",
+        InvitationAction::Create {
+            team_alias: "project".into(),
+        },
+    );
+    let published = action(
+        &f,
+        "owner",
+        InvitationAction::Attempt {
+            operation_id: operation(&p),
+        },
+    );
+    let p = run(
+        "remote",
+        "joiner",
+        Some(InvitationAction::AcceptRemote {
+            remote_profile: "local".into(),
+            invite: published["invite"].as_str().unwrap().into(),
+        }),
+    );
+    let done = run(
+        "remote",
+        "joiner",
+        Some(InvitationAction::AttemptRemote {
+            remote_profile: "local".into(),
+            operation_id: operation(&p),
+        }),
+    );
+    assert_eq!(done["delivery_acknowledged"], true);
+    let inbox = action(
+        &f,
+        "owner",
+        InvitationAction::Inbox {
+            team_alias: "project".into(),
+        },
+    );
+    assert_eq!(inbox["rows"].as_array().unwrap().len(), 1);
+    let request_id = inbox["rows"][0]["request_id"].as_str().unwrap().to_owned();
+    let inspection = run(
+        "local",
+        "owner",
+        Some(InvitationAction::InspectRemote {
+            remote_profile: "remote".into(),
+            team_alias: "project".into(),
+            request_id: request_id.clone(),
+        }),
+    );
+    assert_eq!(inspection["verified"], true);
+    for _ in 0..2 {
+        let done = run(
+            "local",
+            "owner",
+            Some(InvitationAction::ApproveRemote {
+                remote_profile: "remote".into(),
+                team_alias: "project".into(),
+                request_id: request_id.clone(),
+                role: TeamMemberRole::Member { visibility: 0 },
+            }),
+        );
+        assert_eq!(done["state"], "complete");
+    }
+    let sync = run(
+        "remote",
+        "joiner",
+        Some(InvitationAction::SyncRemote {
+            remote_profile: "local".into(),
+            team_id: team.team_id_hex,
+        }),
+    );
+    assert_eq!(sync["membership_verified"], true);
+    assert!(sync["key_generations"].as_u64().unwrap() > 0);
+    assert!(!inspection.to_string().contains("permission"));
+}

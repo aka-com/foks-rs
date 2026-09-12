@@ -1140,3 +1140,45 @@ impl HardStateStore {
         Ok(())
     }
 }
+
+impl HardStateStore {
+    pub fn invitation_delivery_phase(&self, id: &[u8; 16]) -> Result<Option<u8>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT phase FROM invitation_delivery_steps WHERE operation_id=?1",
+                [id.as_slice()],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+    pub fn advance_invitation_delivery(
+        &mut self,
+        id: &[u8; 16],
+        expected: u8,
+        next: u8,
+    ) -> Result<()> {
+        let tx = self.write_transaction()?;
+        let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM mutation_operations WHERE operation_id=?1 AND operation_kind=11 AND state IN(1,2,3))",[id.as_slice()],|r|r.get(0))?;
+        if !valid || Some(next) != expected.checked_add(1) || next > 3 {
+            return Err(Error::InvalidMutationOperation(
+                "invitation phase transition",
+            ));
+        }
+        if expected == 0 {
+            tx.execute(
+                "INSERT OR IGNORE INTO invitation_delivery_steps(operation_id,phase) VALUES(?1,0)",
+                [id.as_slice()],
+            )?;
+        }
+        if tx.execute(
+            "UPDATE invitation_delivery_steps SET phase=?3 WHERE operation_id=?1 AND phase=?2",
+            params![id.as_slice(), expected, next],
+        )? != 1
+        {
+            return Err(Error::InvalidMutationOperation("invitation phase conflict"));
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}

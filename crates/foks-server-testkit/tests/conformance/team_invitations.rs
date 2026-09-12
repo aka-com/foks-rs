@@ -468,3 +468,282 @@ pub(crate) fn team_local_invitations() {
         .prepare_local_invitation_acceptance(f.host(), joiner_cred, &invitation.invite)
         .is_err());
 }
+
+#[test]
+pub(crate) fn team_remote_invitations() {
+    let home = Fixture::start("invitation-home");
+    let destination = Fixture::start("invitation-destination");
+    let joiner = home
+        .client
+        .create_account(home.host(), &TestAccountSpec::new("remoteinvitejoiner", 21))
+        .unwrap();
+    let owner = destination
+        .client
+        .create_account(
+            destination.host(),
+            &TestAccountSpec::new("remoteinviteowner", 22),
+        )
+        .unwrap();
+    let c = FederationCredential::Software(&joiner.credential);
+    let admin = FederationCredential::Software(&owner.credential);
+    let secrets = NamedTeamSecrets {
+        member_min: SecretSeed::new([61; 32]),
+        member: SecretSeed::new([62; 32]),
+        admin: SecretSeed::new([63; 32]),
+        owner: SecretSeed::new([64; 32]),
+        removal_key: SecretSeed::new([65; 32]),
+        team_name_commitment_key: [66; 16],
+    };
+    let team = destination
+        .client
+        .foks()
+        .create_single_owner_named_team(
+            destination.host(),
+            &owner.credential,
+            "remoteinvites",
+            &secrets,
+        )
+        .unwrap()
+        .team;
+    let cert = destination
+        .client
+        .foks()
+        .prepare_team_invitation(destination.host(), admin, &team)
+        .unwrap();
+    destination
+        .client
+        .foks()
+        .upload_team_invitation(destination.host(), admin, &cert)
+        .unwrap();
+    let prepared = home
+        .client
+        .foks()
+        .prepare_remote_user_invitation(home.host(), destination.host(), c, &cert.invite)
+        .unwrap();
+    let duplicate = prepared.clone();
+    let mut protected = home.client.open_protected_store().unwrap();
+    let op = home
+        .client
+        .foks()
+        .prepare_invitation_operation(
+            home.host(),
+            c,
+            foks_client::InvitationIntent::RemoteAcceptance(Box::new(prepared)),
+            &mut protected,
+        )
+        .unwrap()
+        .operation;
+    let progress = home
+        .client
+        .foks()
+        .remote_invitation_progress(
+            home.host(),
+            destination.host(),
+            c,
+            op.operation_id,
+            true,
+            &mut protected,
+        )
+        .unwrap();
+    assert_eq!(
+        progress.operation.state,
+        foks_client_db::MutationState::RemoteVerified
+    );
+    let receipt = progress.receipt.unwrap();
+    let request = destination
+        .client
+        .foks()
+        .load_remote_invitation_request(destination.host(), admin, &team, &receipt)
+        .unwrap();
+    let payload = destination
+        .client
+        .foks()
+        .open_remote_invitation(destination.host(), admin, &team, &request)
+        .unwrap();
+    let expanded = destination
+        .client
+        .foks()
+        .verify_remote_invitation_user(home.host(), payload)
+        .unwrap();
+    assert_eq!(expanded.user.verified.uid(), &joiner.credential.uid);
+    let second = home
+        .client
+        .foks()
+        .submit_remote_invitation(destination.host(), &duplicate)
+        .unwrap();
+    assert_ne!(
+        second, receipt,
+        "Go returns fresh RSVP even for exact ciphertext"
+    );
+    assert_eq!(
+        destination
+            .client
+            .foks()
+            .team_invitation_inbox(destination.host(), admin, &team, None)
+            .unwrap()
+            .len(),
+        2
+    );
+    destination
+        .client
+        .foks()
+        .reject_team_invitation(destination.host(), admin, &team, &receipt)
+        .unwrap();
+    assert!(destination
+        .client
+        .foks()
+        .load_remote_invitation_request(destination.host(), admin, &team, &receipt)
+        .is_err());
+    destination
+        .client
+        .foks()
+        .reject_team_invitation(destination.host(), admin, &team, &second)
+        .unwrap();
+    let next = home
+        .client
+        .foks()
+        .prepare_remote_user_invitation(home.host(), destination.host(), c, &cert.invite)
+        .unwrap();
+    let op = home
+        .client
+        .foks()
+        .prepare_invitation_operation(
+            home.host(),
+            c,
+            foks_client::InvitationIntent::RemoteAcceptance(Box::new(next)),
+            &mut protected,
+        )
+        .unwrap()
+        .operation;
+    destination
+        .environment
+        .arm_fault(foks_server_testkit::TestFault::RemoteInvitationAfterCommitBeforeResponse);
+    assert!(home
+        .client
+        .foks()
+        .remote_invitation_progress(
+            home.host(),
+            destination.host(),
+            c,
+            op.operation_id,
+            true,
+            &mut protected
+        )
+        .is_err());
+    drop(protected);
+    let mut protected = home.client.open_protected_store().unwrap();
+    for _ in 0..2 {
+        let progress = home
+            .client
+            .foks()
+            .remote_invitation_progress(
+                home.host(),
+                destination.host(),
+                c,
+                op.operation_id,
+                true,
+                &mut protected,
+            )
+            .unwrap();
+        assert_eq!(
+            progress.operation.state,
+            foks_client_db::MutationState::SubmissionUnknown
+        );
+    }
+    assert_eq!(
+        destination
+            .client
+            .foks()
+            .team_invitation_inbox(destination.host(), admin, &team, None)
+            .unwrap()
+            .len(),
+        1
+    );
+    let row = destination
+        .client
+        .foks()
+        .team_invitation_inbox(destination.host(), admin, &team, None)
+        .unwrap()
+        .remove(0);
+    let foks_proto::RawInboxRequest::Remote(request) = &row.request else {
+        panic!("remote row")
+    };
+    let payload = destination
+        .client
+        .foks()
+        .open_remote_invitation(destination.host(), admin, &team, request)
+        .unwrap();
+    let expanded = destination
+        .client
+        .foks()
+        .verify_remote_invitation_user(home.host(), payload)
+        .unwrap();
+    let user = destination
+        .client
+        .foks()
+        .authenticate_and_pin(destination.host(), &owner.credential)
+        .unwrap();
+    let loaded = destination
+        .client
+        .foks()
+        .load_and_pin_team_with_credential(
+            destination.host(),
+            admin,
+            &user.verified,
+            &user.puks,
+            &team,
+        )
+        .unwrap();
+    let removal = SecretSeed::new([85; 32]);
+    let plan = destination
+        .client
+        .foks()
+        .invited_remote_user_addition_plan(
+            &owner.credential.uid,
+            &team,
+            &loaded,
+            &expanded,
+            Role::member(0),
+            &removal,
+        )
+        .unwrap();
+    let mut destination_protected = destination.client.open_protected_store().unwrap();
+    let added = destination
+        .client
+        .foks()
+        .add_invited_remote_user_durable(
+            destination.host(),
+            admin,
+            &team,
+            &expanded,
+            &row.receipt,
+            &plan,
+            &removal,
+            &mut destination_protected,
+        )
+        .unwrap();
+    assert_eq!(added.authenticated.verified.members().len(), 2);
+    assert!(destination
+        .client
+        .foks()
+        .team_invitation_inbox(destination.host(), admin, &team, None)
+        .unwrap()
+        .is_empty());
+    assert!(destination
+        .client
+        .foks()
+        .reject_team_invitation(destination.host(), admin, &team, &row.receipt)
+        .is_err());
+    let membership = home
+        .client
+        .foks()
+        .load_invited_remote_team(home.host(), destination.host(), c, &team)
+        .unwrap();
+    assert_eq!(membership.ptks.len(), 2);
+    assert!(membership
+        .verified
+        .members()
+        .iter()
+        .any(|m| m.party == joiner.credential.uid
+            && m.scoped_host.as_ref() == Some(home.host().host_id())));
+}

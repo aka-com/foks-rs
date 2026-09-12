@@ -410,6 +410,98 @@ impl InvitationService<'_> {
             .encoded()
             .map_err(internal)
     }
+    pub fn accept_remote(&self, bytes: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        let f = fields(bytes, 2)?;
+        let invite = TeamInvite::decode(&encode(&f[0]).map_err(bad)?).map_err(bad)?;
+        if invite.host != *self.host {
+            return Err(denied());
+        }
+        let request =
+            foks_proto::RemoteJoinRequest::decode(&encode(&f[1]).map_err(bad)?).map_err(bad)?;
+        let preview =
+            foks_proto::TeamCertificateAndMetadata::decode(&self.certificate_lookup(
+                &encode(&Value::Array(vec![invite.to_value()])).map_err(bad)?,
+            )?)
+            .map_err(internal)?;
+        let p = foks_crypto::verify_team_certificate(&preview.certificate, &invite).map_err(bad)?;
+        if foks_crypto::hepk_fingerprint(&p.hepk).map_err(bad)? != request.hepk_fingerprint {
+            return Err(bad("encryption recipient"));
+        }
+        let snapshot = self.reader.snapshot().map_err(internal)?;
+        let team = snapshot
+            .team(p.team.team.as_bytes())
+            .map_err(internal)?
+            .ok_or_else(denied)?;
+        let links = team
+            .links
+            .iter()
+            .map(|l| foks_proto::UserLink::decode(&l.exact_link))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(internal)?;
+        let range = foks_verify::persisted_team_index_range(&links).map_err(internal)?;
+        if let Some(source) = &request.visible.index_range {
+            if !foks_verify::rational_range_strictly_before(source, &range).map_err(bad)? {
+                return Err(RpcStatus::TeamRoster("joining team index range".into()));
+            }
+        }
+        let destination_head = foks_crypto::prefixed_hash(
+            foks_proto::LINK_OUTER_TYPE_ID,
+            &team.links.last().ok_or_else(denied)?.exact_link,
+        );
+        let mut receipt = [0; 17];
+        self.entropy.fill(&mut receipt).map_err(internal)?;
+        receipt[0] = 56;
+        let admission = foks_server_db::RemoteInvitationAdmission {
+            certificate_hash: invite.hash,
+            team: p.team.team.as_bytes().to_vec(),
+            generation: p.key.generation,
+            exact_hepk: p.hepk.encoded().map_err(bad)?,
+            exact_request: request.encoded().map_err(bad)?,
+            receipt,
+            destination_head,
+        };
+        drop(snapshot);
+        self.writer
+            .call_with_current_time(Arc::clone(self.clock), move |db, now| {
+                db.accept_remote_invitation(&admission, now)?;
+                Ok(())
+            })
+            .map_err(write_error)?;
+        foks_proto::TeamRsvp::new(receipt)
+            .map_err(internal)?
+            .encoded()
+            .map_err(internal)
+    }
+    pub fn load_remote(&self, bytes: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus> {
+        principal.require_ordinary_device()?;
+        let f = fields(bytes, 2)?;
+        let token = crate::auth::team::admin_token_hash(&token(&f[0])?);
+        let receipt = foks_proto::TeamRsvp::decode(&encode(&f[1]).map_err(bad)?).map_err(bad)?;
+        if !receipt.is_remote() {
+            return Err(bad("remote receipt"));
+        }
+        let now = self.clock.now_micros().map_err(internal)?;
+        let snapshot = self.reader.snapshot().map_err(internal)?;
+        let authority = snapshot
+            .resolve_team_admin_token(&token, now)
+            .map_err(internal)?
+            .ok_or_else(denied)?;
+        if authority.holder_id != principal.uid()
+            || snapshot
+                .active_credential_owner(principal.uid(), principal.device_id())
+                .map_err(internal)?
+                .is_none()
+        {
+            return Err(denied());
+        }
+        snapshot
+            .sso_require_access(principal.uid(), now / 1000)
+            .map_err(|e| write_error(e.into()))?;
+        snapshot
+            .remote_invitation_request(&authority.team_id, receipt.expose())
+            .map_err(internal)?
+            .ok_or_else(|| RpcStatus::NotFound("remote join request".into()))
+    }
     pub fn inbox(&self, bytes: &[u8], principal: &Principal) -> Result<Vec<u8>, RpcStatus> {
         principal.require_ordinary_device()?;
         let f = fields(bytes, 2)?;
@@ -440,9 +532,19 @@ impl InvitationService<'_> {
         snapshot
             .sso_require_access(principal.uid(), now / 1000)
             .map_err(|e| write_error(e.into()))?;
-        let rows = snapshot
+        let mut rows = snapshot
             .local_invitation_inbox(&authority.team_id, pagination)
             .map_err(internal)?;
+        rows.extend(
+            snapshot
+                .remote_invitation_inbox(&authority.team_id, pagination)
+                .map_err(internal)?,
+        );
+        rows.sort_by(|a, b| {
+            b.time
+                .cmp(&a.time)
+                .then_with(|| a.receipt.expose().cmp(b.receipt.expose()))
+        });
         foks_proto::encode_team_inbox(&rows).map_err(internal)
     }
     pub fn reject(&self, bytes: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
@@ -450,13 +552,22 @@ impl InvitationService<'_> {
         let f = fields(bytes, 2)?;
         let token = crate::auth::team::admin_token_hash(&token(&f[0])?);
         let receipt = foks_proto::TeamRsvp::decode(&encode(&f[1]).map_err(bad)?).map_err(bad)?;
-        if receipt.is_remote() {
-            return Err(RpcStatus::Unsupported);
-        }
         let uid = principal.uid().to_vec();
         let credential = principal.device_id().to_vec();
         self.writer
             .call_with_current_time(Arc::clone(self.clock), move |db, time| {
+                if receipt.is_remote() {
+                    db.reject_remote_invitation(
+                        InvitationActor {
+                            uid: &uid,
+                            credential: &credential,
+                        },
+                        &token,
+                        receipt.expose(),
+                        time,
+                    )?;
+                    return Ok(());
+                }
                 db.reject_local_invitation(
                     InvitationActor {
                         uid: &uid,

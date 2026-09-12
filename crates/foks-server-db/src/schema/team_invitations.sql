@@ -27,3 +27,15 @@ CREATE TABLE team_local_join_requests (
 CREATE UNIQUE INDEX team_local_join_pending ON team_local_join_requests(team_id,joiner_id,source_role_type,source_visibility) WHERE state=0;
 CREATE INDEX team_local_join_inbox ON team_local_join_requests(team_id,state,created_ms DESC,receipt);
 CREATE INDEX team_local_join_joiner ON team_local_join_requests(joiner_id,state);
+CREATE TABLE team_remote_join_requests (
+    receipt BLOB PRIMARY KEY CHECK(length(receipt)=17),
+    team_id BLOB NOT NULL REFERENCES teams(team_id),
+    certificate_hash BLOB NOT NULL REFERENCES team_invitation_certificates(certificate_hash),
+    exact_request BLOB NOT NULL CHECK(length(exact_request)<=16384),
+    state INTEGER NOT NULL CHECK(state IN(0,1,2,3)),
+    created_ms INTEGER NOT NULL CHECK(created_ms>=0),
+    decision_ms INTEGER,
+    decision_sequence INTEGER,
+    decision_link_hash BLOB CHECK(decision_link_hash IS NULL OR length(decision_link_hash)=32)
+) STRICT;
+CREATE INDEX team_remote_join_inbox ON team_remote_join_requests(team_id,state,created_ms DESC,receipt);

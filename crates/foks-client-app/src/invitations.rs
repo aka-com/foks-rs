@@ -6,6 +6,38 @@ use foks_proto::{InboxPagination, RawInboxRow, TeamInvite};
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum InvitationAction {
+    PreviewRemote {
+        remote_profile: String,
+        invite: String,
+    },
+    AcceptRemote {
+        remote_profile: String,
+        invite: String,
+    },
+    AttemptRemote {
+        remote_profile: String,
+        operation_id: String,
+    },
+    StatusRemote {
+        remote_profile: String,
+        operation_id: String,
+    },
+    InspectRemote {
+        remote_profile: String,
+        team_alias: String,
+        request_id: String,
+    },
+    ApproveRemote {
+        remote_profile: String,
+        team_alias: String,
+        request_id: String,
+        role: TeamMemberRole,
+    },
+    SyncRemote {
+        remote_profile: String,
+        team_id: String,
+    },
+
     Preview {
         invite: String,
     },
@@ -165,24 +197,7 @@ impl CheckedProfileSession<'_> {
                 | InvitationAction::Accept { .. }
                 | InvitationAction::Reject { .. }
         ) {
-            let mut db = HardStateStore::open(&self.paths.hard_database)?;
-            for old in db.expired_invitation_receipts(
-                host.host_id().as_bytes(),
-                credential.uid().as_bytes(),
-                now_microseconds()?.saturating_sub(30 * 24 * 60 * 60 * 1_000_000),
-            )? {
-                for key in [
-                    old.material_ref.clone(),
-                    [old.operation_id.as_slice(), b"/invitation-ack"].concat(),
-                ] {
-                    match foks_client::ProtectedMutationStore::remove(&mut protected, &key) {
-                        Ok(()) | Err(foks_client::ProtectedStoreError::Missing) => {}
-                        Err(_) => return Err(Error::InvalidAccount("invitation cleanup failed")),
-                    }
-                }
-                vault.store.remove(&receipt_key(&old.operation_id))?;
-                db.delete_invitation_receipt(&old.operation_id)?;
-            }
+            self.cleanup_invitation_receipts(&host, credential.uid(), &mut protected, vault)?;
         }
         let prepare =
             |intent, protected: &mut EncryptedFileMutationStore| -> Result<serde_json::Value> {
@@ -237,46 +252,7 @@ impl CheckedProfileSession<'_> {
                     attempt_action,
                     &mut protected,
                 )?;
-                if let Some(invite) = progress.invite {
-                    vault.store.put(
-                        &receipt_key(&id),
-                        &serde_json::to_vec(&serde_json::json!({"invite":invite}))?,
-                    )?;
-                }
-                if let Some(receipt) = progress.receipt {
-                    vault.store.put(
-                        &receipt_key(&id),
-                        &serde_json::to_vec(&serde_json::json!({"receipt":receipt.encoded()?}))?,
-                    )?;
-                }
-                let mut result = operation_report(&progress.operation);
-                if progress.operation.state == MutationState::RemoteVerified {
-                    MutationCoordinator::new(&self.paths.hard_database, &mut protected)
-                        .finalize(&id)?;
-                    result["state"] = "complete".into();
-                }
-                if result["state"] == "complete" {
-                    let key = [id.as_slice(), b"/invitation-ack"].concat();
-                    match foks_client::ProtectedMutationStore::remove(&mut protected, &key) {
-                        Ok(()) | Err(foks_client::ProtectedStoreError::Missing) => {}
-                        Err(_) => {
-                            return Err(Error::InvalidAccount(
-                                "invitation acknowledgement cleanup failed",
-                            ))
-                        }
-                    }
-
-                    if let Ok(b) = vault.store.get(&receipt_key(&id)) {
-                        let stored: serde_json::Value = serde_json::from_slice(&b)?;
-                        if let Some(invite) = stored.get("invite") {
-                            result["invite"] = invite.clone();
-                        }
-                        if stored.get("receipt").is_some() {
-                            result["delivery_acknowledged"] = true.into();
-                        }
-                    }
-                }
-                Ok(result)
+                self.finish_invitation_progress(progress, &mut protected, vault)
             }
             InvitationAction::Cancel { operation_id } => {
                 let id = handle(&operation_id)?;
@@ -299,16 +275,35 @@ impl CheckedProfileSession<'_> {
                     return Err(Error::InvalidAccount("team belongs to another account"));
                 }
                 let team = EntityId::from_bytes(t.team_id.clone())?;
-                let rows = self.client.team_invitation_inbox(
+                let mut rows = self.client.team_invitation_inbox(
                     &host,
                     credential,
                     &team,
                     Some(InboxPagination {
                         start: 0,
                         end: 0,
-                        limit: 1000,
+                        limit: 100,
                     }),
                 )?;
+                // Go limits each request kind separately. Escalate a full first
+                // page once; never skip an unrepresentable equal-timestamp group.
+                if rows.iter().filter(|r| r.receipt.is_remote()).count() >= 100
+                    || rows.iter().filter(|r| !r.receipt.is_remote()).count() >= 100
+                {
+                    rows = self.client.team_invitation_inbox(
+                        &host,
+                        credential,
+                        &team,
+                        Some(InboxPagination {
+                            start: 0,
+                            end: 0,
+                            limit: 1000,
+                        }),
+                    )?;
+                }
+                let possibly_truncated = rows.iter().filter(|r| r.receipt.is_remote()).count()
+                    >= 1000
+                    || rows.iter().filter(|r| !r.receipt.is_remote()).count() >= 1000;
                 let mut handles = Vec::new();
                 let mut reports = Vec::new();
                 for row in rows {
@@ -340,7 +335,7 @@ impl CheckedProfileSession<'_> {
                 vault
                     .store
                     .put(&key, &Zeroizing::new(serde_json::to_vec(&handles)?))?;
-                Ok(serde_json::json!({"rows":reports,"possibly_truncated":handles.len()>=1000}))
+                Ok(serde_json::json!({"rows":reports,"possibly_truncated":possibly_truncated}))
             }
             InvitationAction::Approve {
                 team_alias,
@@ -384,8 +379,88 @@ impl CheckedProfileSession<'_> {
                     &mut protected,
                 )
             }
+            _ => Err(Error::InvalidConfig(
+                "invitation requires its remote profile",
+            )),
         }
     }
+    fn cleanup_invitation_receipts(
+        &self,
+        host: &foks_client::PinnedHost,
+        uid: &EntityId,
+        protected: &mut EncryptedFileMutationStore,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<()> {
+        let mut db = HardStateStore::open(&self.paths.hard_database)?;
+        for old in db.expired_invitation_receipts(
+            host.host_id().as_bytes(),
+            uid.as_bytes(),
+            now_microseconds()?.saturating_sub(30 * 24 * 60 * 60 * 1_000_000),
+        )? {
+            for key in [
+                old.material_ref.clone(),
+                [old.operation_id.as_slice(), b"/invitation-ack"].concat(),
+            ] {
+                match foks_client::ProtectedMutationStore::remove(protected, &key) {
+                    Ok(()) | Err(foks_client::ProtectedStoreError::Missing) => {}
+                    Err(_) => return Err(Error::InvalidAccount("invitation cleanup failed")),
+                }
+            }
+            vault
+                .store
+                .remove(&format!("invitation-receipt.{}", hex(&old.operation_id)))?;
+            db.delete_invitation_receipt(&old.operation_id)?;
+        }
+        Ok(())
+    }
+    fn finish_invitation_progress(
+        &self,
+        progress: foks_client::InvitationProgress,
+        protected: &mut EncryptedFileMutationStore,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<serde_json::Value> {
+        let id = progress.operation.operation_id;
+        if let Some(invite) = progress.invite {
+            vault.store.put(
+                &format!("invitation-receipt.{}", hex(&id)),
+                &serde_json::to_vec(&serde_json::json!({"invite":invite}))?,
+            )?;
+        }
+        if let Some(receipt) = progress.receipt {
+            vault.store.put(
+                &format!("invitation-receipt.{}", hex(&id)),
+                &serde_json::to_vec(&serde_json::json!({"receipt":receipt.encoded()?}))?,
+            )?;
+        }
+        let mut result = operation_report(&progress.operation);
+        if progress.operation.state == MutationState::RemoteVerified {
+            MutationCoordinator::new(&self.paths.hard_database, protected).finalize(&id)?;
+            result["state"] = "complete".into();
+        }
+        if result["state"] == "complete" {
+            let key = [id.as_slice(), b"/invitation-ack"].concat();
+            match foks_client::ProtectedMutationStore::remove(protected, &key) {
+                Ok(()) | Err(foks_client::ProtectedStoreError::Missing) => {}
+                Err(_) => {
+                    return Err(Error::InvalidAccount(
+                        "invitation acknowledgement cleanup failed",
+                    ))
+                }
+            }
+
+            if let Ok(b) = vault.store.get(&format!("invitation-receipt.{}", hex(&id))) {
+                let stored: serde_json::Value = serde_json::from_slice(&b)?;
+                if let Some(invite) = stored.get("invite") {
+                    result["invite"] = invite.clone();
+                }
+                if stored.get("receipt").is_some() {
+                    result["delivery_acknowledged"] = true.into();
+                }
+            }
+        }
+        Ok(result)
+    }
+
     fn invitation_inbox_handle(
         &self,
         host: &foks_client::PinnedHost,
@@ -434,3 +509,6 @@ fn inbox_key(host: &foks_client::PinnedHost, uid: &EntityId, team: &EntityId) ->
 
 #[cfg(test)]
 mod tests;
+
+mod remote;
+pub(super) use remote::StoredInvitationMembership;

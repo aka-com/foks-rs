@@ -284,9 +284,28 @@ impl FoksClient {
             })) => {}
             Err(e) => return Err(e),
         }
+        let membership_link = self.prepare_requested_user_membership(
+            host,
+            credential,
+            &user.verified,
+            &preview.advertised.team,
+        )?;
+        Ok(foks_proto::LocalInviteAcceptance {
+            invite: invite.clone(),
+            source_role: Role::OWNER,
+            source_token: None,
+            membership_link: Some(membership_link),
+        })
+    }
+    pub(super) fn prepare_requested_user_membership(
+        &self,
+        host: &PinnedHost,
+        credential: FederationCredential<'_, '_>,
+        user: &foks_verify::VerifiedUserState,
+        destination: &FqTeam,
+    ) -> Result<foks_proto::PostGenericLinkArgument> {
         let (seed, certs) = credential.transport();
-        let tail =
-            self.load_membership_chain_tail(host, credential.uid(), seed, certs, &user.verified)?;
+        let tail = self.load_membership_chain_tail(host, credential.uid(), seed, certs, user)?;
         let next = crate::random_bytes::<32>()?;
         let signer = credential.device_id()?;
         let unsigned = foks_proto::UnsignedUserLink::requested_membership(
@@ -296,13 +315,13 @@ impl FoksClient {
                 signer: &signer,
                 sequence: tail.sequence,
                 previous: tail.previous,
-                root: &user.verified.tree_root(),
+                root: &user.tree_root(),
                 time: now_milliseconds()?,
                 next_location_commitment: foks_crypto::prefixed_hash_signable(
                     foks_proto::TREE_LOCATION_TYPE_ID,
                     &foks_snowpack::encode(&foks_snowpack::Value::Binary(next.to_vec()))?,
                 )?,
-                team: &preview.advertised.team,
+                team: destination,
                 source_role: Role::OWNER,
             },
         )?;
@@ -317,16 +336,12 @@ impl FoksClient {
                 foks_crypto::sign_yubi_typed(c.parent, foks_proto::LINK_OUTER_V1_TYPE_ID, &signing)?
             }
         };
-        Ok(foks_proto::LocalInviteAcceptance {
-            invite: invite.clone(),
-            source_role: Role::OWNER,
-            source_token: None,
-            membership_link: Some(foks_proto::PostGenericLinkArgument {
-                link: unsigned.finish(vec![signature])?,
-                next_tree_location: next,
-            }),
+        Ok(foks_proto::PostGenericLinkArgument {
+            link: unsigned.finish(vec![signature])?,
+            next_tree_location: next,
         })
     }
+
     /// Submit this exact prepared request once. Caller must journal before calling;
     /// a lost response cannot be replayed to recover the server-assigned RSVP.
     pub fn submit_local_invitation_acceptance(

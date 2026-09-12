@@ -3928,6 +3928,40 @@ pub fn open_shared_key_parcel_with(
     expected_role: Role,
     expected_verify_key_type: u8,
 ) -> Result<SharedKeySeed> {
+    open_scoped_shared_key_parcel_with(
+        parcel,
+        receiver,
+        sender_hepk,
+        expected_verify_key,
+        expected_shared_hepk,
+        expected_shared_generation,
+        expected_host,
+        None,
+        expected_receiver_role,
+        expected_receiver_generation,
+        expected_role,
+        expected_verify_key_type,
+    )
+}
+
+/// Opens a parcel for an explicitly scoped foreign recipient. Go binds the
+/// current seed payload to the receiver host; the supplied verified PTK and
+/// temporary sender signature remain bound to the issuer.
+#[allow(clippy::too_many_arguments)]
+pub fn open_scoped_shared_key_parcel_with(
+    parcel: &PukParcel,
+    receiver: &dyn HybridSecretDecapsulator,
+    sender_hepk: &Hepk,
+    expected_verify_key: &EntityId,
+    expected_shared_hepk: &Hepk,
+    expected_shared_generation: u64,
+    expected_host: &EntityId,
+    receiver_host: Option<&EntityId>,
+    expected_receiver_role: Role,
+    expected_receiver_generation: u64,
+    expected_role: Role,
+    expected_verify_key_type: u8,
+) -> Result<SharedKeySeed> {
     if parcel.role != expected_role
         || parcel.generation != expected_shared_generation
         || parcel.hybrid.sender_dh.is_some()
@@ -3935,7 +3969,7 @@ pub fn open_shared_key_parcel_with(
         return Err(Error::HybridBox);
     }
     if &parcel.target != receiver.entity_id()
-        || parcel.target_host.is_some()
+        || parcel.target_host.as_ref() != receiver_host
         || parcel.target_role != expected_receiver_role
         || parcel.target_generation != expected_receiver_generation
     {
@@ -3950,7 +3984,7 @@ pub fn open_shared_key_parcel_with(
     )?;
     let shared = SharedKeySeed::decode(&cleartext)?;
     if &shared.receiver != receiver.entity_id()
-        || &shared.host != expected_host
+        || &shared.host != receiver_host.unwrap_or(expected_host)
         || shared.generation != parcel.generation
         || shared.role != parcel.role
     {

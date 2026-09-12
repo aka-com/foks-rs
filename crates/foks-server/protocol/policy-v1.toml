@@ -830,8 +830,8 @@ coverage = ["go_client_peripheral"]
 protocol = "TeamLoader"
 method = "getTeamVOBearerTokenChallenge"
 position_constant = "TEAM_GET_VIEW_CHALLENGE_METHOD_POSITION"
-listeners = ["authenticated"]
-authentication = "active_device_mtls"
+listeners = ["public_services", "authenticated"]
+authentication = "active_local_or_remote_member"
 request = "TeamViewRequest"
 result = "TeamViewChallenge"
 statuses = ["oauth2_auth", "ok", "bad_args", "team_not_found", "team_roster", "permission_denied"]
@@ -844,8 +844,8 @@ coverage = ["team_create_edit_and_kv"]
 protocol = "TeamLoader"
 method = "activateTeamVOBearerToken"
 position_constant = "TEAM_ACTIVATE_VIEW_METHOD_POSITION"
-listeners = ["authenticated"]
-authentication = "current_puk_signature"
+listeners = ["public_services", "authenticated"]
+authentication = "current_local_or_remote_shared_signature"
 request = "ActivateTeamViewArgument"
 result = "ActivatedTeamView"
 statuses = ["oauth2_auth", "ok", "bad_args", "expired", "team_bearer_token_stale", "team_not_found", "team_roster", "permission_denied"]
@@ -857,8 +857,8 @@ coverage = ["team_create_edit_and_kv"]
 [[route]]
 protocol = "TeamLoader"
 method = "checkTeamVOBearerToken"
-listeners = ["authenticated"]
-authentication = "active_team_view_token"
+listeners = ["public_services", "authenticated"]
+authentication = "active_local_or_remote_team_view_token"
 request = "CheckTeamVOBearerTokenArg"
 result = "TeamID"
 statuses = ["oauth2_auth", "ok", "bad_args", "team_bearer_token_stale", "permission_denied"]
@@ -1050,12 +1050,12 @@ protocol = "TeamAdmin"
 method = "loadTeamRemoteJoinReq"
 listeners = ["authenticated"]
 authentication = "active_team_admin_token"
-request = "Unsupported"
-result = "Unsupported"
-statuses = ["unsupported"]
+request = "LoadRemoteJoinRequestArgument"
+result = "TeamRemoteJoinReq"
+statuses = ["oauth2_auth", "ok", "bad_args", "permission_denied", "not_found", "rate_limited", "tx_retry"]
 max_request_bytes = 4096
-supported = false
-coverage = ["unsupported_team_routes"]
+supported = true
+coverage = ["team_remote_invitations"]
 
 
 [[route]]
@@ -1849,3 +1849,15 @@ statuses = ["oauth2_auth", "ok", "bad_args", "permission_denied", "team_invite_p
 max_request_bytes = 32768
 supported = true
 coverage = ["team_local_invitations"]
+
+[[route]]
+protocol = "TeamGuest"
+method = "acceptInviteRemote"
+listeners = ["public_services"]
+authentication = "public"
+request = "AcceptInviteRemoteArgument"
+result = "TeamRSVPRemote"
+statuses = ["ok", "bad_args", "permission_denied", "not_found", "quota_exceeded", "team_roster", "rate_limited", "tx_retry"]
+max_request_bytes = 32768
+supported = true
+coverage = ["team_remote_invitations"]

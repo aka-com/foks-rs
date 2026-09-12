@@ -71,9 +71,11 @@ CREATE TABLE team_members (
     generation INTEGER NOT NULL CHECK (generation >= 1),
     verify_key BLOB NOT NULL CHECK (length(verify_key) IN (33, 34)),
     hepk_fingerprint BLOB NOT NULL CHECK (length(hepk_fingerprint) = 32),
-    removal_key_commitment BLOB CHECK (removal_key_commitment IS NULL OR length(removal_key_commitment) = 32),
-    PRIMARY KEY (team_id, party_id, source_role_type, source_visibility)
+    removal_key_commitment BLOB CHECK (removal_key_commitment IS NULL OR length(removal_key_commitment) = 32)
 ) STRICT;
+CREATE UNIQUE INDEX team_members_identity ON team_members(
+    team_id, party_id, coalesce(scoped_host_id, X''), source_role_type, source_visibility
+);
 CREATE INDEX team_members_party ON team_members(party_id, team_id);
 
 CREATE TABLE team_shared_keys (
@@ -88,6 +90,7 @@ CREATE TABLE team_shared_keys (
 ) STRICT;
 
 CREATE TABLE team_parcels (
+    member_host_id BLOB NOT NULL CHECK(length(member_host_id)=33),
     team_id BLOB NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
     party_id BLOB NOT NULL CHECK (length(party_id) = 33),
     sender_id BLOB NOT NULL CHECK (length(sender_id) IN (33, 34)),
@@ -98,7 +101,7 @@ CREATE TABLE team_parcels (
     generation INTEGER NOT NULL CHECK (generation >= 1),
     exact_parcel BLOB NOT NULL,
     PRIMARY KEY (
-        team_id, party_id, target_role_type, target_visibility,
+        team_id, party_id, member_host_id, target_role_type, target_visibility,
         role_type, visibility, generation
     ),
     FOREIGN KEY (team_id, role_type, visibility, generation)

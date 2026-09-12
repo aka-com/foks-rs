@@ -295,7 +295,7 @@ pub(crate) fn insert_local_admission(
         return Err(Error::InvitationAlreadyPending);
     }
     let team_count: i64 = c.query_row(
-        "SELECT count(*) FROM team_local_join_requests WHERE team_id=?1 AND state=0",
+        "SELECT (SELECT count(*) FROM team_local_join_requests WHERE team_id=?1 AND state=0)+(SELECT count(*) FROM team_remote_join_requests WHERE team_id=?1 AND state=0)",
         [&a.destination],
         |r| r.get(0),
     )?;
@@ -474,4 +474,184 @@ pub(crate) fn approve_local_additions(
         }
     }
     Ok(approved)
+}
+
+/// Public guest admission owns only ciphertext and validated public witnesses.
+pub struct RemoteInvitationAdmission {
+    pub certificate_hash: [u8; 32],
+    pub team: Vec<u8>,
+    pub generation: u64,
+    pub exact_hepk: Vec<u8>,
+    pub exact_request: Vec<u8>,
+    pub receipt: [u8; 17],
+    pub destination_head: [u8; 32],
+}
+impl Database {
+    pub fn accept_remote_invitation(
+        &mut self,
+        a: &RemoteInvitationAdmission,
+        now: u64,
+    ) -> Result<()> {
+        if a.exact_request.len() > 16384 || a.receipt[0] != 56 {
+            return Err(Error::Invalid("remote invitation shape"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM team_invitation_certificates c JOIN team_shared_keys k ON k.team_id=c.team_id AND k.generation=c.generation WHERE c.certificate_hash=?1 AND c.team_id=?2 AND c.generation=?3 AND k.role_type=2 AND k.visibility=0 AND k.exact_hepk=?4)",params![a.certificate_hash.as_slice(),a.team,sql_integer(a.generation)?,a.exact_hepk],|r|r.get(0))?;
+        if !valid {
+            return Err(Error::AuthorizationChanged);
+        }
+        let head: Vec<u8> = tx.query_row(
+            "SELECT link_hash FROM team_chain_heads WHERE team_id=?1",
+            [&a.team],
+            |r| r.get(0),
+        )?;
+        if head != a.destination_head {
+            return Err(Error::AuthorizationChanged);
+        }
+        let pending:i64=tx.query_row("SELECT (SELECT count(*) FROM team_remote_join_requests WHERE team_id=?1 AND state=0)+(SELECT count(*) FROM team_local_join_requests WHERE team_id=?1 AND state=0)",[&a.team],|r|r.get(0))?;
+        let total: i64 =
+            tx.query_row("SELECT count(*) FROM team_remote_join_requests", [], |r| {
+                r.get(0)
+            })?;
+        if pending >= 1000 || total >= 65536 {
+            return Err(Error::QuotaExceeded);
+        }
+        // No ciphertext deduplication: Go issues a new RSVP for every successful send.
+        tx.execute("INSERT INTO team_remote_join_requests(receipt,team_id,certificate_hash,exact_request,state,created_ms) VALUES(?1,?2,?3,?4,0,?5)",params![a.receipt.as_slice(),a.team,a.certificate_hash.as_slice(),a.exact_request,sql_integer(now/1000)?])?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn reject_remote_invitation(
+        &mut self,
+        actor: InvitationActor<'_>,
+        admin_hash: &[u8; 32],
+        receipt: &[u8; 17],
+        now: u64,
+    ) -> Result<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let a = require_admin(&tx, &actor, admin_hash, now)?;
+        let state: Option<i64> = tx
+            .query_row(
+                "SELECT state FROM team_remote_join_requests WHERE team_id=?1 AND receipt=?2",
+                params![a.team_id, receipt.as_slice()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match state {
+            Some(0) => {
+                tx.execute("UPDATE team_remote_join_requests SET state=2,decision_ms=?3 WHERE team_id=?1 AND receipt=?2 AND state=0",params![a.team_id,receipt.as_slice(),sql_integer(now/1000)?])?;
+            }
+            Some(2) => {}
+            Some(_) => return Err(Error::InvitationDecisionConflict),
+            None => return Err(Error::AuthorizationChanged),
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+impl ReadSnapshot<'_> {
+    pub fn remote_invitation_request(
+        &self,
+        team: &[u8],
+        receipt: &[u8; 17],
+    ) -> Result<Option<Vec<u8>>> {
+        Ok(self.connection().query_row("SELECT exact_request FROM team_remote_join_requests WHERE team_id=?1 AND receipt=?2 AND state=0",params![team,receipt.as_slice()],|r|r.get(0)).optional()?)
+    }
+    pub fn remote_invitation_inbox(
+        &self,
+        team: &[u8],
+        p: foks_proto::InboxPagination,
+    ) -> Result<Vec<foks_proto::RawInboxRow>> {
+        let limit = if p.limit == 0 { 100 } else { p.limit.min(1000) };
+        let mut q=self.connection().prepare("SELECT receipt,exact_request,created_ms FROM team_remote_join_requests WHERE team_id=?1 AND state=0 AND (?2=0 OR created_ms>=?2) AND (?3=0 OR created_ms<=?3) ORDER BY created_ms DESC,receipt LIMIT ?4")?;
+        let rows = q
+            .query_map(
+                params![
+                    team,
+                    sql_integer(p.start)?,
+                    sql_integer(p.end)?,
+                    sql_integer(limit)?
+                ],
+                |r| {
+                    Ok((
+                        r.get::<_, Vec<u8>>(0)?,
+                        r.get::<_, Vec<u8>>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.into_iter()
+            .map(|(receipt, request, time)| {
+                Ok(foks_proto::RawInboxRow {
+                    time: crate::error::unsigned(time)?,
+                    state: foks_proto::JoinRequestState::Pending,
+                    receipt: foks_proto::TeamRsvp::new(
+                        receipt
+                            .try_into()
+                            .map_err(|_| Error::Invalid("remote receipt"))?,
+                    )
+                    .map_err(|_| Error::Invalid("remote receipt"))?,
+                    request: foks_proto::RawInboxRequest::Remote(
+                        foks_proto::RemoteJoinRequest::decode(&request)
+                            .map_err(|_| Error::Invalid("remote request"))?,
+                    ),
+                })
+            })
+            .collect()
+    }
+}
+/// Bind remote request decisions to the RSVP already carried by Go editTeam.
+/// Independent federation edits may have an RSVP with no inbox row.
+pub(crate) fn approve_remote_invitation(
+    c: &Connection,
+    team: &[u8],
+    receipt: &[u8; 17],
+    sequence: u64,
+    hash: &[u8],
+    now: u64,
+) -> Result<()> {
+    let state: Option<i64> = c
+        .query_row(
+            "SELECT state FROM team_remote_join_requests WHERE team_id=?1 AND receipt=?2",
+            params![team, receipt.as_slice()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match state {
+        None => Ok(()),
+        Some(0) => {
+            c.execute("UPDATE team_remote_join_requests SET state=1,decision_ms=?3,decision_sequence=?4,decision_link_hash=?5 WHERE team_id=?1 AND receipt=?2 AND state=0",params![team,receipt.as_slice(),sql_integer(now/1000)?,sql_integer(sequence)?,hash])?;
+            Ok(())
+        }
+        _ => Err(Error::InvitationDecisionConflict),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn member_identity_includes_host_and_source_role() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path().join("scope.db"), crate::Config::default()).unwrap();
+        let team = [3u8; 33];
+        db.connection.execute("INSERT INTO team_names(normalized_name,reservation_sequence,team_id) VALUES (?1,1,?1)", params![team.as_slice()]).unwrap();
+        db.connection.execute("INSERT INTO teams(team_id,team_kind,host_id,normalized_name,team_name_utf8,team_name_sequence,team_name_commitment_key,member_load_floor_type,member_load_floor_visibility,created_at) VALUES (?1,3,zeroblob(33),?1,?1,1,zeroblob(16),1,0,0)", params![team.as_slice()]).unwrap();
+        let insert = |host: Option<&[u8]>, source: i64| {
+            db.connection.execute(
+            "INSERT INTO team_members(team_id,party_id,scoped_host_id,source_role_type,source_visibility,role_type,visibility,generation,verify_key,hepk_fingerprint) VALUES (?1,zeroblob(33),?2,?3,0,1,0,1,zeroblob(33),zeroblob(32))",
+            params![team.as_slice(), host, source])
+        };
+        assert!(insert(None, 3).is_ok());
+        assert!(insert(None, 3).is_err());
+        assert!(insert(Some(&[1; 33]), 3).is_ok());
+        assert!(insert(Some(&[2; 33]), 3).is_ok());
+        assert!(insert(Some(&[1; 33]), 2).is_ok());
+        assert!(insert(Some(&[1; 33]), 3).is_err());
+    }
 }

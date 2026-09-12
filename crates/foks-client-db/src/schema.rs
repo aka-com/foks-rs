@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 33;
+pub(crate) const VERSION: u32 = 34;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "hosts",
@@ -20,6 +20,7 @@ pub(crate) const REVISION_TABLES: &[&str] = &[
     "team_mutation_operations",
     "mutation_operations",
     "mutation_children",
+    "invitation_delivery_steps",
     "federation_saga_operations",
     "scheduled_jobs",
     "sso_flows",
@@ -29,6 +30,10 @@ pub(crate) const REVISION_TABLES: &[&str] = &[
 ];
 
 pub(crate) const INITIAL: &str = r#"
+CREATE TABLE invitation_delivery_steps (
+    operation_id BLOB PRIMARY KEY REFERENCES mutation_operations(operation_id) ON DELETE CASCADE,
+    phase INTEGER NOT NULL CHECK(phase BETWEEN 0 AND 3)
+) STRICT, WITHOUT ROWID;
 CREATE TABLE sso_flows (
     operation_id BLOB PRIMARY KEY CHECK(length(operation_id)=16),
     host_id BLOB NOT NULL CHECK(length(host_id)=33),

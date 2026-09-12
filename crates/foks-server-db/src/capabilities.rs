@@ -555,12 +555,12 @@ fn authority_query(
             "SELECT m.verify_key, m.role_type, m.visibility
              FROM team_members m JOIN teams target ON target.team_id = m.team_id
              WHERE m.team_id = ?1 AND m.party_id = ?2
-               AND target.host_id = ?3
-               AND (m.scoped_host_id IS NULL OR m.scoped_host_id = ?3)
+               AND coalesce(m.scoped_host_id,target.host_id)=?3
                AND m.source_role_type = ?4 AND m.source_visibility = ?5
                AND m.generation = ?6
                AND (
-                 EXISTS (
+                 (target.host_id!=?3 AND m.scoped_host_id=?3)
+                 OR EXISTS (
                    SELECT 1 FROM shared_keys k
                    WHERE k.uid = m.party_id AND k.role_type = m.source_role_type
                      AND k.visibility = m.source_visibility

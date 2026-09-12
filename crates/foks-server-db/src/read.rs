@@ -327,6 +327,7 @@ impl ReadDatabase {
             party_id,
             target_role_type,
             target_visibility,
+            None,
         )
     }
 
@@ -385,14 +386,17 @@ fn team_parcels(
     party_id: &[u8],
     target_role_type: u64,
     target_visibility: i64,
+    member_host: Option<&[u8]>,
 ) -> Result<Vec<Vec<u8>>> {
     let mut statement = connection.prepare(
         "SELECT p.role_type, p.visibility, p.generation, p.exact_parcel FROM team_parcels p
          WHERE p.team_id = ?1 AND p.party_id = ?2
+           AND p.member_host_id=coalesce(?5,(SELECT host_id FROM teams WHERE team_id=?1))
            AND p.target_role_type = ?3 AND p.target_visibility = ?4
            AND p.generation = (
                SELECT max(latest.generation) FROM team_parcels latest
                WHERE latest.team_id = p.team_id AND latest.party_id = p.party_id
+                 AND latest.member_host_id=p.member_host_id
                  AND latest.target_role_type = p.target_role_type
                  AND latest.target_visibility = p.target_visibility
                  AND latest.role_type = p.role_type
@@ -406,7 +410,8 @@ fn team_parcels(
                 team_id,
                 party_id,
                 crate::error::sql_integer(target_role_type)?,
-                target_visibility
+                target_visibility,
+                member_host
             ],
             |row| {
                 Ok((
@@ -562,6 +567,16 @@ impl ReadSnapshot<'_> {
         local_team_list_inner(self.connection(), uid, host_id)
     }
 
+    pub fn scoped_team_parcels(
+        &self,
+        team: &[u8],
+        party: &[u8],
+        host: &[u8],
+        role: u64,
+        visibility: i64,
+    ) -> Result<Vec<Vec<u8>>> {
+        team_parcels(self.connection(), team, party, role, visibility, Some(host))
+    }
     pub fn team_parcels(
         &self,
         team_id: &[u8],
@@ -575,6 +590,7 @@ impl ReadSnapshot<'_> {
             party_id,
             target_role_type,
             target_visibility,
+            None,
         )
     }
 

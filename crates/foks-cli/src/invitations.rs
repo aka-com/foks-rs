@@ -14,6 +14,52 @@ pub struct Scope {
 }
 #[derive(clap::Subcommand)]
 pub enum InvitationCommand {
+    PreviewRemote {
+        #[command(flatten)]
+        scope: Scope,
+        remote_profile: String,
+        invite: String,
+    },
+    AcceptRemote {
+        #[command(flatten)]
+        scope: Scope,
+        remote_profile: String,
+        invite: String,
+    },
+    AttemptRemote {
+        #[command(flatten)]
+        scope: Scope,
+        remote_profile: String,
+        operation: String,
+    },
+    StatusRemote {
+        #[command(flatten)]
+        scope: Scope,
+        remote_profile: String,
+        operation: String,
+    },
+    InspectRemote {
+        #[command(flatten)]
+        scope: Scope,
+        remote_profile: String,
+        team: String,
+        request: String,
+    },
+    ApproveRemote {
+        #[command(flatten)]
+        scope: Scope,
+        remote_profile: String,
+        team: String,
+        request: String,
+        #[arg(long, default_value_t = 0)]
+        visibility: i16,
+    },
+    SyncRemote {
+        #[command(flatten)]
+        scope: Scope,
+        remote_profile: String,
+        team_id: String,
+    },
     Preview {
         #[command(flatten)]
         scope: Scope,
@@ -75,6 +121,89 @@ pub enum InvitationCommand {
 }
 pub fn run(state: &Path, command: InvitationCommand) -> Result<(), Box<dyn std::error::Error>> {
     let (scope, action) = match command {
+        InvitationCommand::PreviewRemote {
+            scope,
+            remote_profile,
+            invite,
+        } => (
+            scope,
+            InvitationAction::PreviewRemote {
+                remote_profile,
+                invite,
+            },
+        ),
+        InvitationCommand::AcceptRemote {
+            scope,
+            remote_profile,
+            invite,
+        } => (
+            scope,
+            InvitationAction::AcceptRemote {
+                remote_profile,
+                invite,
+            },
+        ),
+        InvitationCommand::AttemptRemote {
+            scope,
+            remote_profile,
+            operation,
+        } => (
+            scope,
+            InvitationAction::AttemptRemote {
+                remote_profile,
+                operation_id: operation,
+            },
+        ),
+        InvitationCommand::StatusRemote {
+            scope,
+            remote_profile,
+            operation,
+        } => (
+            scope,
+            InvitationAction::StatusRemote {
+                remote_profile,
+                operation_id: operation,
+            },
+        ),
+        InvitationCommand::InspectRemote {
+            scope,
+            remote_profile,
+            team,
+            request,
+        } => (
+            scope,
+            InvitationAction::InspectRemote {
+                remote_profile,
+                team_alias: team,
+                request_id: request,
+            },
+        ),
+        InvitationCommand::ApproveRemote {
+            scope,
+            remote_profile,
+            team,
+            request,
+            visibility,
+        } => (
+            scope,
+            InvitationAction::ApproveRemote {
+                remote_profile,
+                team_alias: team,
+                request_id: request,
+                role: InvitationRole::Member { visibility },
+            },
+        ),
+        InvitationCommand::SyncRemote {
+            scope,
+            remote_profile,
+            team_id,
+        } => (
+            scope,
+            InvitationAction::SyncRemote {
+                remote_profile,
+                team_id,
+            },
+        ),
         InvitationCommand::Preview { scope, invite } => {
             (scope, InvitationAction::Preview { invite })
         }

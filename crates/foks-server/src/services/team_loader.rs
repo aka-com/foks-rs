@@ -12,7 +12,7 @@ const VIEW_LIFETIME_MICROSECONDS: u64 = 6 * 60 * 60 * 1_000_000;
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn issue_challenge(
     argument: &[u8],
-    principal: &Principal,
+    principal: Option<&Principal>,
     host: &EntityId,
     reader: &foks_server_db::ReadDatabase,
     _writer: &WriterHandle,
@@ -20,10 +20,11 @@ pub(crate) fn issue_challenge(
     clock: &Arc<dyn foks_server_db::Clock>,
     entropy: &dyn Entropy,
 ) -> Result<Vec<u8>, RpcStatus> {
-    principal.require_ordinary_device()?;
+    if let Some(p) = principal {
+        p.require_ordinary_device()?;
+    }
     let request = foks_rpc::arguments::decode_team_view_request(argument).map_err(bad_arguments)?;
     if request.host != *host
-        || request.member_host != *host
         || !matches!(
             request.team.entity_type(),
             foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
@@ -34,13 +35,10 @@ pub(crate) fn issue_challenge(
                 | foks_proto::ENTITY_NAMED_TEAM
                 | foks_proto::ENTITY_AD_HOC_TEAM
         )
-        || reader
-            .active_credential_owner(principal.uid(), principal.device_id())
-            .map_err(|_| RpcStatus::TransactionRetry)?
-            .is_none()
     {
         return Err(permission_denied());
     }
+    require_view_transport(principal, &request.member_host, host, reader)?;
     let key = crate::keys::load_capability_generation(
         keys,
         reader
@@ -76,26 +74,23 @@ pub(crate) fn issue_challenge(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn activate(
     argument: &[u8],
-    principal: &Principal,
+    principal: Option<&Principal>,
     host: &EntityId,
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
     keys: &dyn HostKeyProvider,
     clock: &Arc<dyn foks_server_db::Clock>,
 ) -> Result<Vec<u8>, RpcStatus> {
-    principal.require_ordinary_device()?;
+    if let Some(p) = principal {
+        p.require_ordinary_device()?;
+    }
     let activation =
         foks_rpc::arguments::decode_activate_team_view(argument).map_err(bad_arguments)?;
     let challenge = &activation.challenge;
-    if challenge.request.host != *host
-        || challenge.request.member_host != *host
-        || reader
-            .active_credential_owner(principal.uid(), principal.device_id())
-            .map_err(|_| RpcStatus::TransactionRetry)?
-            .is_none()
-    {
+    if challenge.request.host != *host {
         return Err(permission_denied());
     }
+    require_view_transport(principal, &challenge.request.member_host, host, reader)?;
     let observed_now = clock
         .now_micros()
         .map_err(|_| RpcStatus::TransactionRetry)?;
@@ -189,12 +184,14 @@ pub(crate) fn activate(
 /// accepts a token that is still active on this host.
 pub(crate) fn check_team_view_token(
     argument: &[u8],
-    principal: &Principal,
+    principal: Option<&Principal>,
     host: &EntityId,
     reader: &foks_server_db::ReadDatabase,
     clock: &Arc<dyn foks_server_db::Clock>,
 ) -> Result<Vec<u8>, RpcStatus> {
-    principal.require_ordinary_device()?;
+    if let Some(p) = principal {
+        p.require_ordinary_device()?;
+    }
     let request = foks_rpc::arguments::decode_check_team_view(argument).map_err(bad_arguments)?;
     if request.host != *host {
         return Err(permission_denied());
@@ -208,6 +205,13 @@ pub(crate) fn check_team_view_token(
         .ok_or_else(|| {
             RpcStatus::TeamBearerTokenStale("team-view bearer token is not active".to_owned())
         })?;
+    require_view_transport(
+        principal,
+        &EntityId::from_bytes(authority.member_host_id.clone())
+            .map_err(|_| RpcStatus::TransactionRetry)?,
+        host,
+        reader,
+    )?;
     foks_snowpack::encode(&foks_snowpack::Value::Binary(authority.team_id))
         .map_err(|_| RpcStatus::TransactionRetry)
 }
@@ -228,20 +232,23 @@ pub(crate) fn load_chain(
         .map_err(|_| RpcStatus::TransactionRetry)?;
     let authority = match &request.authorization {
         foks_rpc::arguments::TeamChainAuthorization::LocalView(token) => {
-            let principal = principal.ok_or_else(permission_denied)?;
-            principal.require_ordinary_device()?;
             let authority = reader
                 .resolve_team_view_token(&team::token_hash(token), now)
                 .map_err(|_| RpcStatus::TransactionRetry)?
                 .ok_or(RpcStatus::Expired)?;
-            if authority.team_id != request.team.as_bytes()
-                || authority.member_host_id != host.as_bytes()
-                || reader
-                    .active_credential_owner(principal.uid(), principal.device_id())
+            if authority.team_id != request.team.as_bytes() {
+                return Err(permission_denied());
+            }
+            if authority.member_host_id == host.as_bytes() {
+                let p = principal.ok_or_else(permission_denied)?;
+                p.require_ordinary_device()?;
+                if reader
+                    .active_credential_owner(p.uid(), p.device_id())
                     .map_err(|_| RpcStatus::TransactionRetry)?
                     .is_none()
-            {
-                return Err(permission_denied());
+                {
+                    return Err(permission_denied());
+                }
             }
             Some(authority)
         }
@@ -423,9 +430,10 @@ fn encode_team_chain(
             )
             .ok_or(RpcStatus::TransactionRetry)?;
             database
-                .team_parcels(
+                .scoped_team_parcels(
                     request.team.as_bytes(),
                     &authority.member_id,
+                    &authority.member_host_id,
                     authority.source_role_type,
                     authority.source_visibility,
                 )
@@ -700,6 +708,27 @@ fn map_write_error(error: crate::Error) -> RpcStatus {
     }
 }
 
+fn require_view_transport(
+    principal: Option<&Principal>,
+    member_host: &EntityId,
+    host: &EntityId,
+    reader: &foks_server_db::ReadDatabase,
+) -> Result<(), RpcStatus> {
+    if let Some(p) = principal {
+        p.require_ordinary_device()?;
+        if reader
+            .active_credential_owner(p.uid(), p.device_id())
+            .map_err(|_| RpcStatus::TransactionRetry)?
+            .is_none()
+        {
+            return Err(permission_denied());
+        }
+    } else if member_host == host {
+        return Err(permission_denied());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -716,3 +745,6 @@ mod tests {
         );
     }
 }
+
+// Public registration connections authenticate a foreign member by its scoped
+// roster key. Local accounts retain mTLS/SSO enforcement on the user listener.

@@ -85,6 +85,18 @@ pub struct RemoteMemberViewPermission {
     pub permission: PermissionToken,
 }
 
+struct RemotePartyAddition<'a> {
+    party: &'a EntityId,
+    host: &'a EntityId,
+    key: &'a VerifiedSharedKey,
+    index_range: Option<&'a foks_proto::RationalRange>,
+    permission: &'a PermissionToken,
+    destination_role: Role,
+    removal_key: &'a SecretSeed,
+    receipt: Option<&'a foks_proto::TeamRsvp>,
+    plan: Option<&'a LocalTeamMemberAdditionPlan>,
+}
+
 struct AdditionBinding<'a> {
     target_id: &'a EntityId,
     target_host: Option<&'a EntityId>,
@@ -242,6 +254,83 @@ impl FoksClient {
             request,
             None,
             None,
+        )
+    }
+
+    pub fn invited_remote_user_addition_plan(
+        &self,
+        actor: &EntityId,
+        team: &EntityId,
+        loaded: &AuthenticatedTeamOutcome,
+        remote: &crate::ExpandedRemoteInvitation,
+        role: Role,
+        removal: &SecretSeed,
+    ) -> Result<LocalTeamMemberAdditionPlan> {
+        let target = current_owner_public(&remote.user.verified)?;
+        let binding = AdditionBinding {
+            target_id: remote.user.verified.uid(),
+            target_host: Some(remote.user.verified.host()),
+            target_verify_key: &target.verify_key,
+            target_generation: target.generation,
+            target_source_role: target.role,
+            destination_role: role,
+            removal_key_commitment: foks_crypto::team_removal_key_commitment(removal)?,
+            expected_seqno: loaded.verified.chain_seqno() + 1,
+        };
+        Ok(LocalTeamMemberAdditionPlan {
+            target_id: binding.target_id.clone(),
+            target_verify_key: target.verify_key.clone(),
+            target_generation: target.generation,
+            target_source_role: target.role,
+            destination_role: role,
+            removal_key_commitment: binding.removal_key_commitment,
+            expected_seqno: binding.expected_seqno,
+            operation_id: addition_operation_id(actor, team, &binding)?,
+        })
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_invited_remote_user_durable(
+        &self,
+        host: &PinnedHost,
+        credential: crate::FederationCredential<'_, '_>,
+        team: &EntityId,
+        remote: &crate::ExpandedRemoteInvitation,
+        receipt: &foks_proto::TeamRsvp,
+        plan: &LocalTeamMemberAdditionPlan,
+        removal: &SecretSeed,
+        protected: &mut dyn ProtectedMutationStore,
+    ) -> Result<AddedLocalTeamMember> {
+        if !receipt.is_remote()
+            || remote.payload.joiner.party != *remote.user.verified.uid()
+            || remote.payload.joiner.host != *remote.user.verified.host()
+        {
+            return Err(Error::TeamBinding("remote user invitation binding"));
+        }
+        let actor = self.authenticate_credential_and_pin(host, credential)?;
+        let owner = current_owner_puk(&actor)?;
+        let (seed, certs) = credential.transport();
+        self.add_remote_party_with_material(
+            host,
+            credential.uid(),
+            &credential.device_id()?,
+            seed,
+            certs,
+            &actor,
+            owner,
+            team,
+            &RemotePartyAddition {
+                party: remote.user.verified.uid(),
+                host: remote.user.verified.host(),
+                key: current_owner_public(&remote.user.verified)?,
+                index_range: None,
+                permission: &remote.payload.permission,
+                destination_role: plan.destination_role,
+                removal_key: removal,
+                receipt: Some(receipt),
+                plan: Some(plan),
+            },
+            None,
+            Some(protected),
         )
     }
 
@@ -465,22 +554,63 @@ impl FoksClient {
         protected_store: Option<&mut dyn ProtectedMutationStore>,
     ) -> Result<AddedRemoteTeamMember> {
         self.require_open_user_viewership(host, auth_seed, certificate_chain)?;
-        team.clone().require_type(ENTITY_NAMED_TEAM)?;
-        let remote_id = request.remote_team.verified.team();
-        let remote_host = request.remote_team.verified.host();
-        if remote_host == host.host_id()
-            || remote_id == team
-            || request.destination_role == Role::NONE
-        {
-            return Err(Error::TeamRequest(
-                "remote team, host, or destination role is invalid",
-            ));
-        }
-        let target = request
+        let key = request
             .remote_team
             .verified
             .shared_key(Role::ADMIN)
-            .ok_or(Error::KeyBinding("remote team has no current admin PTK"))?;
+            .ok_or(Error::KeyBinding("remote admin PTK"))?;
+        self.add_remote_party_with_material(
+            host,
+            uid,
+            device_id,
+            auth_seed,
+            certificate_chain,
+            actor_user,
+            actor_puk,
+            team,
+            &RemotePartyAddition {
+                party: request.remote_team.verified.team(),
+                host: request.remote_team.verified.host(),
+                key,
+                index_range: Some(request.remote_team.verified.index_range()),
+                permission: &request.remote_team.permission,
+                destination_role: request.destination_role,
+                removal_key: request.removal_key,
+                receipt: None,
+                plan: None,
+            },
+            saga_id,
+            protected_store,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_remote_party_with_material(
+        &self,
+        host: &PinnedHost,
+        uid: &EntityId,
+        device_id: &EntityId,
+        auth_seed: &SecretSeed,
+        certificate_chain: &[Vec<u8>],
+        actor_user: &AuthenticatedUserOutcome,
+        actor_puk: &UserPrivateKey,
+        team: &EntityId,
+        request: &RemotePartyAddition<'_>,
+        saga_id: Option<&[u8; 16]>,
+        protected_store: Option<&mut dyn ProtectedMutationStore>,
+    ) -> Result<AddedRemoteTeamMember> {
+        team.clone().require_type(ENTITY_NAMED_TEAM)?;
+        let remote_id = request.party;
+        let remote_host = request.host;
+        let target = request.key;
+        if remote_host == host.host_id()
+            || remote_id == team
+            || !matches!(request.destination_role.kind(), RoleType::Member)
+        {
+            return Err(Error::TeamRequest(
+                "remote members require a distinct host and member role",
+            ));
+        }
         let authenticated_team = self.load_and_pin_team_with_material(
             host,
             uid,
@@ -494,7 +624,9 @@ impl FoksClient {
         let actor_member =
             authorized_actor_member(&authenticated_team.verified, uid, actor_public)?;
         if authenticated_team.verified.members().iter().any(|member| {
-            member.party == *remote_id && member.scoped_host.as_ref() == Some(remote_host)
+            member.party == *remote_id
+                && member.scoped_host.as_ref() == Some(remote_host)
+                && member.source_role == target.role
         }) {
             return Err(Error::TeamRequest("remote team is already a member"));
         }
@@ -512,17 +644,20 @@ impl FoksClient {
                 "destination role has no existing PTK; addition would require rotation",
             ));
         }
-        if !foks_verify::rational_range_strictly_before(
-            request.remote_team.verified.index_range(),
-            authenticated_team.verified.index_range(),
-        )? {
+        if request.index_range.is_some_and(|range| {
+            !foks_verify::rational_range_strictly_before(
+                range,
+                authenticated_team.verified.index_range(),
+            )
+            .unwrap_or(false)
+        }) {
             return Err(Error::TeamRequest(
                 "remote team index range must end below the local team's lower bound",
             ));
         }
         let member_floor_public = authenticated_team
             .verified
-            .shared_key(Role::member(0))
+            .shared_key(authenticated_team.verified.member_load_floor())
             .ok_or(Error::KeyBinding("team has no member-load-floor PTK"))?;
         let member_floor_private =
             current_team_private_key(&authenticated_team, member_floor_public)?;
@@ -560,7 +695,7 @@ impl FoksClient {
                 member_destination_role: request.destination_role,
                 member_generation: target.generation,
                 member_public: &target_public,
-                member_index_range: Some(request.remote_team.verified.index_range()),
+                member_index_range: request.index_range,
             },
             &actor_puk.seed,
             request.removal_key,
@@ -609,7 +744,7 @@ impl FoksClient {
         }
         let member = FqParty::new(remote_id.clone(), remote_host.clone())?;
         let token_payload = TeamRemoteMemberViewTokenBoxPayload {
-            token: request.remote_team.permission.clone(),
+            token: request.permission.clone(),
             party: member.clone(),
             time: now_milliseconds()?,
         };
@@ -628,7 +763,9 @@ impl FoksClient {
                 secret_box,
                 ptk_role: member_floor_private.role,
             },
-            join_request: RemoteTeamRsvp::new(join_request)?,
+            join_request: RemoteTeamRsvp::new(
+                request.receipt.map_or(join_request, |r| *r.expose()),
+            )?,
         };
         let encoded_request = encode_add_team_member_request(&AddTeamMemberArgument {
             link: &material.link,
@@ -649,6 +786,13 @@ impl FoksClient {
             removal_key_commitment: material.removal_key_commitment,
             expected_seqno,
         };
+        if let Some(plan) = request.plan {
+            if plan.operation_id != addition_operation_id(uid, team, &binding)? {
+                return Err(Error::OperationBinding(
+                    "remote admission plan changed; refresh or resume original",
+                ));
+            }
+        }
         self.submit_addition_with_material(
             host,
             uid,
@@ -702,11 +846,67 @@ impl FoksClient {
         plan: &LocalTeamMemberAdditionPlan,
         protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<AddedLocalTeamMember> {
-        let authenticated_user = self.authenticate_and_pin(host, credential)?;
-        let owner = current_owner_puk(&authenticated_user)?;
-        let device_id = credential.public_material()?.id;
         let binding = addition_binding_from_plan(plan);
         validate_local_addition_plan(plan, &credential.uid, team, &binding)?;
+        self.resume_durable_member_addition(
+            host,
+            crate::FederationCredential::Software(credential),
+            team,
+            None,
+            plan,
+            protected_store,
+        )
+    }
+
+    /// Resume the exact original invitation admission, without relying on a pending
+    /// inbox row or the remote user's current key generation.
+    pub fn resume_invited_remote_addition(
+        &self,
+        host: &PinnedHost,
+        credential: crate::FederationCredential<'_, '_>,
+        team: &EntityId,
+        member_host: &EntityId,
+        plan: &LocalTeamMemberAdditionPlan,
+        protected_store: &mut dyn ProtectedMutationStore,
+    ) -> Result<AddedLocalTeamMember> {
+        if member_host == host.host_id() {
+            return Err(Error::TeamBinding("remote addition host"));
+        }
+        self.resume_durable_member_addition(
+            host,
+            credential,
+            team,
+            Some(member_host),
+            plan,
+            protected_store,
+        )
+    }
+    fn resume_durable_member_addition(
+        &self,
+        host: &PinnedHost,
+        credential: crate::FederationCredential<'_, '_>,
+        team: &EntityId,
+        member_host: Option<&EntityId>,
+        plan: &LocalTeamMemberAdditionPlan,
+        protected_store: &mut dyn ProtectedMutationStore,
+    ) -> Result<AddedLocalTeamMember> {
+        let authenticated_user = self.authenticate_credential_and_pin(host, credential)?;
+        let owner = current_owner_puk(&authenticated_user)?;
+        let device_id = credential.device_id()?;
+        let (auth_seed, certificate_chain) = credential.transport();
+        let binding = AdditionBinding {
+            target_id: &plan.target_id,
+            target_host: member_host,
+            target_verify_key: &plan.target_verify_key,
+            target_generation: plan.target_generation,
+            target_source_role: plan.target_source_role,
+            destination_role: plan.destination_role,
+            removal_key_commitment: plan.removal_key_commitment,
+            expected_seqno: plan.expected_seqno,
+        };
+        if addition_operation_id(credential.uid(), team, &binding)? != plan.operation_id {
+            return Err(Error::OperationBinding("member addition plan binding"));
+        }
         let mut hard_store = HardStateStore::open(&host.database_path)?;
         let operation = hard_store
             .team_mutation(&plan.operation_id)?
@@ -714,7 +914,7 @@ impl FoksClient {
         validate_addition_operation(
             &operation,
             host,
-            &credential.uid,
+            credential.uid(),
             &device_id,
             team,
             plan.expected_seqno,
@@ -729,9 +929,9 @@ impl FoksClient {
         if operation.state == TeamMutationState::Verified {
             let authenticated = self.wait_for_addition(
                 host,
-                &credential.uid,
-                &credential.seed,
-                &credential.certificate_chain,
+                credential.uid(),
+                auth_seed,
+                certificate_chain,
                 &authenticated_user,
                 &owner.seed,
                 team,
@@ -750,9 +950,9 @@ impl FoksClient {
         if operation.state != TeamMutationState::Prepared {
             match self.wait_for_addition(
                 host,
-                &credential.uid,
-                &credential.seed,
-                &credential.certificate_chain,
+                credential.uid(),
+                auth_seed,
+                certificate_chain,
                 &authenticated_user,
                 &owner.seed,
                 team,
@@ -771,9 +971,9 @@ impl FoksClient {
                 Err(error @ Error::OperationBinding(_)) => {
                     if self.authenticated_addition_conflicts(
                         host,
-                        &credential.uid,
-                        &credential.seed,
-                        &credential.certificate_chain,
+                        credential.uid(),
+                        auth_seed,
+                        certificate_chain,
                         &authenticated_user,
                         &owner.seed,
                         team,
@@ -816,8 +1016,8 @@ impl FoksClient {
                 host,
                 &host.user,
                 &exact_request,
-                &credential.seed,
-                &credential.certificate_chain,
+                auth_seed,
+                certificate_chain,
             )
             .and_then(|response| {
                 decode_team_edit_result(&response)?;
@@ -835,9 +1035,9 @@ impl FoksClient {
         )?;
         let authenticated = match self.wait_for_addition(
             host,
-            &credential.uid,
-            &credential.seed,
-            &credential.certificate_chain,
+            credential.uid(),
+            auth_seed,
+            certificate_chain,
             &authenticated_user,
             &owner.seed,
             team,
@@ -847,9 +1047,9 @@ impl FoksClient {
             Err(error @ Error::OperationBinding(_)) => {
                 if self.authenticated_addition_conflicts(
                     host,
-                    &credential.uid,
-                    &credential.seed,
-                    &credential.certificate_chain,
+                    credential.uid(),
+                    auth_seed,
+                    certificate_chain,
                     &authenticated_user,
                     &owner.seed,
                     team,

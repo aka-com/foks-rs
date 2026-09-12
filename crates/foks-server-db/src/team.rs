@@ -417,6 +417,38 @@ impl Database {
         }
 
         let invitees = crate::team_invitations::approve_local_additions(&transaction, mutation)?;
+        for token in mutation.remote_member_view_tokens {
+            let mut newly_admitted = false;
+            for member in mutation.members.iter().filter(|m| {
+                m.party_id == token.member_party_id
+                    && m.scoped_host_id == Some(token.member_host_id)
+            }) {
+                let existing: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM team_members WHERE team_id=?1 AND party_id=?2
+                     AND scoped_host_id=?3 AND source_role_type=?4 AND source_visibility=?5)",
+                    params![
+                        mutation.team_id,
+                        member.party_id,
+                        member.scoped_host_id,
+                        sql_integer(member.source_role_type)?,
+                        member.source_visibility
+                    ],
+                    |r| r.get(0),
+                )?;
+                newly_admitted |= !existing;
+            }
+            if newly_admitted {
+                crate::team_invitations::approve_remote_invitation(
+                    &transaction,
+                    mutation.team_id,
+                    token.join_request_token,
+                    mutation.expected_sequence,
+                    mutation.link_hash,
+                    mutation.now,
+                )?;
+            }
+        }
+
         let response = if invitees.is_empty() {
             mutation.response.to_vec()
         } else {
@@ -476,13 +508,19 @@ impl Database {
             )?;
         }
         for parcel in mutation.parcels {
+            let wire = foks_proto::PukParcel::decode(parcel.exact_parcel)
+                .map_err(|_| Error::Invalid("team parcel encoding"))?;
+            let recipient_host = wire
+                .target_host
+                .as_ref()
+                .map_or(team_host.as_slice(), |h| h.as_bytes());
             insert_exact(
                 &transaction,
                 "INSERT INTO team_parcels
                  (team_id, party_id, sender_id, target_role_type, target_visibility,
-                  role_type, visibility, generation, exact_parcel)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                 ON CONFLICT(team_id, party_id, target_role_type, target_visibility,
+                  role_type, visibility, generation, exact_parcel, member_host_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT(team_id, party_id, member_host_id, target_role_type, target_visibility,
                              role_type, visibility, generation) DO UPDATE SET
                    sender_id = excluded.sender_id, exact_parcel = excluded.exact_parcel
                  WHERE sender_id = excluded.sender_id AND exact_parcel = excluded.exact_parcel",
@@ -495,7 +533,8 @@ impl Database {
                     sql_integer(parcel.role_type)?,
                     parcel.visibility,
                     sql_integer(parcel.generation)?,
-                    parcel.exact_parcel
+                    parcel.exact_parcel,
+                    recipient_host
                 ],
                 "conflicting team parcel",
             )?;

@@ -2,6 +2,8 @@
 
 mod bearer;
 mod invitation_operations;
+mod remote_invitations;
+pub use remote_invitations::*;
 mod invitations;
 pub use invitation_operations::*;
 pub use invitations::*;
@@ -23,8 +25,8 @@ use foks_client_db::{
 };
 use foks_crypto::{
     adhoc_team_id_from_admin_seed, derive_subkey_id, hepk_fingerprint,
-    make_single_owner_adhoc_team, make_single_owner_adhoc_team_yubi, open_shared_key_parcel_with,
-    prefixed_hash, seal_shared_key_boxes, sign_shared_key_typed, AdHocTeamInput, AdHocTeamMaterial,
+    make_single_owner_adhoc_team, make_single_owner_adhoc_team_yubi, prefixed_hash,
+    seal_shared_key_boxes, sign_shared_key_typed, AdHocTeamInput, AdHocTeamMaterial,
     PukBoxRandomness, SharedKeyBoxInput, SharedKeyDecapsulator,
 };
 use foks_proto::{
@@ -2626,6 +2628,61 @@ impl FoksClient {
         )
     }
 
+    fn call_team_view_for_actor(
+        &self,
+        host: &PinnedHost,
+        source: &EntityId,
+        request: &[u8],
+        seed: &SecretSeed,
+        certs: &[Vec<u8>],
+    ) -> Result<Vec<u8>> {
+        if source == host.host_id() {
+            self.call_with_material(host, &host.user, request, seed, certs)
+        } else {
+            self.call(host, &host.registration, request, None)
+        }
+    }
+    /// Load a destination team through this home account's verified PUK.
+    pub fn load_invited_remote_team(
+        &self,
+        home: &PinnedHost,
+        destination: &PinnedHost,
+        credential: crate::FederationCredential<'_, '_>,
+        team: &EntityId,
+    ) -> Result<AuthenticatedTeamOutcome> {
+        if home.host_id() == destination.host_id() {
+            return Err(Error::TeamBinding("remote membership hosts"));
+        }
+        let user = self.authenticate_credential_and_pin(home, credential)?;
+        let owner = crate::current_owner_puk(&user)?;
+        let source = user_key_history_for_seed(&user.verified, &owner.seed)?;
+        let actor = TeamViewActor {
+            party: credential.uid(),
+            host: home.host_id(),
+            source,
+            history: user.verified.shared_key_history(),
+            seed: &owner.seed,
+        };
+        let (seed, certs) = credential.transport();
+        let token = self.activate_team_view_for_actor_with_material(
+            destination,
+            credential.uid(),
+            seed,
+            certs,
+            &actor,
+            team,
+        )?;
+        self.load_and_pin_team_for_actor_with_view_token(
+            destination,
+            credential.uid(),
+            seed,
+            certs,
+            actor,
+            team,
+            &token,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn activate_team_view_for_actor_with_material(
         &self,
@@ -2636,11 +2693,6 @@ impl FoksClient {
         actor: &TeamViewActor<'_>,
         team: &EntityId,
     ) -> Result<[u8; 16]> {
-        if actor.host != host.host_id() {
-            return Err(Error::TeamBinding(
-                "team view actor is not local to the target host",
-            ));
-        }
         let view_request = TeamViewRequest {
             team: team.clone(),
             host: host.host_id.clone(),
@@ -2649,9 +2701,9 @@ impl FoksClient {
             source_role: actor.source.role,
             generation: actor.source.generation,
         };
-        let challenge_bytes = self.call_with_material(
+        let challenge_bytes = self.call_team_view_for_actor(
             host,
-            &host.user,
+            actor.host,
             &encode_team_view_challenge_request(&view_request)?,
             auth_seed,
             certificate_chain,
@@ -2665,9 +2717,9 @@ impl FoksClient {
             TEAM_VIEW_CHALLENGE_TYPE_ID,
             &challenge.encoded()?,
         )?;
-        let activated_bytes = self.call_with_material(
+        let activated_bytes = self.call_team_view_for_actor(
             host,
-            &host.user,
+            actor.host,
             &encode_activate_team_view_request(&challenge, &signature)?,
             auth_seed,
             certificate_chain,
@@ -2728,11 +2780,6 @@ impl FoksClient {
         team: &EntityId,
         view_token: &[u8; 16],
     ) -> Result<AuthenticatedTeamOutcome> {
-        if actor.host != host.host_id() {
-            return Err(Error::TeamBinding(
-                "team view actor is not local to the target host",
-            ));
-        }
         let (merkle_acceptance, chain_bytes, verified) = self.retry_chain_load(host, |host| {
             let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
             let prior = self.prior_team_for_reload(host, team)?;
@@ -2752,9 +2799,9 @@ impl FoksClient {
                 ),
                 None => (1, None),
             };
-            let chain_bytes = self.call_with_material(
+            let chain_bytes = self.call_team_view_for_actor(
                 host,
-                &host.user,
+                actor.host,
                 &encode_load_team_chain_request_from(
                     team,
                     host.host_id(),
@@ -2795,7 +2842,7 @@ impl FoksClient {
                     && member
                         .scoped_host
                         .as_ref()
-                        .is_none_or(|scope| scope == host.host_id())
+                        .map_or(actor.host == host.host_id(), |scope| scope == actor.host)
             })
             .ok_or(Error::TeamBinding(
                 "requesting user is not in the verified team roster",
@@ -2839,7 +2886,7 @@ impl FoksClient {
                 verified.members(),
                 &chain.hepks,
             )?;
-            let clear = open_shared_key_parcel_with(
+            let clear = foks_crypto::open_scoped_shared_key_parcel_with(
                 parcel,
                 &receiver,
                 sender_hepk,
@@ -2847,6 +2894,7 @@ impl FoksClient {
                 &key.hepk,
                 key.generation,
                 host.host_id(),
+                (actor.host != host.host_id()).then_some(actor.host),
                 actor.source.role,
                 actor.source.generation,
                 key.role,

@@ -310,6 +310,11 @@ impl TestEnvironment {
                 "User",
                 "provisionDevice",
             ),
+            TestFault::RemoteInvitationAfterCommitBeforeResponse => (
+                foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
+                "TeamGuest",
+                "acceptInviteRemote",
+            ),
             TestFault::InvitationAfterCommitBeforeResponse => (
                 foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
                 "TeamMember",
@@ -395,6 +400,7 @@ pub enum TestFault {
     ProvisionAfterCommitBeforeResponse,
     RenameAfterCommitBeforeResponse,
     InvitationAfterCommitBeforeResponse,
+    RemoteInvitationAfterCommitBeforeResponse,
     SignupBeforeCommit,
     SignupAfterCommitBeforeResponse,
     SignupDuringResponseWrite,

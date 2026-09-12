@@ -17,8 +17,38 @@ pub(super) fn run(
     {
         return Err(Box::new(AgentRequestError("invalid invitation action")));
     }
-    let session = ProfileSession::open_with_control(registry, profile, timeout, cancellation)?;
+    let session =
+        ProfileSession::open_with_control(registry, profile, timeout, cancellation.clone())?;
     let credentials = ClientCredentials::open(state_dir)?;
+    if let Some(name) = action.remote_profile() {
+        let remote = ProfileSession::open_with_control(registry, name, timeout, cancellation)?;
+        return credentials.with_checked_sessions(&session, &remote, |session, remote| {
+            let master = credentials.master_key()?;
+            let mut store = EncryptedFileSecretStore::open(
+                &session.paths().credential_store,
+                derive_vault_key(&master),
+            )?;
+            let mut vault = AccountVault::new(&mut store);
+            let parent = pin
+                .map(|p| {
+                    let a = vault.yubi_account(alias)?;
+                    Ok::<_, Box<dyn std::error::Error>>(
+                        HardwareYubiProvider::new()
+                            .open(&a.locator, Some(&Pin::new(p.expose())?))?,
+                    )
+                })
+                .transpose()?;
+            let action = serde_json::from_value(serde_json::to_value(action)?)?;
+            Ok(session.remote_invitation_action(
+                remote,
+                alias,
+                action,
+                parent.as_deref().map(|p| p as _),
+                &mut vault,
+                &master,
+            )?)
+        });
+    }
     checked_session(&credentials, &session, |session| {
         let master = credentials.master_key()?;
         let mut store = EncryptedFileSecretStore::open(

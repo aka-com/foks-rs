@@ -106,8 +106,10 @@ pub(super) fn response(
         | TeamAdminGetTeamConfig
         | TeamAdminPutTeamCert
         | TeamAdminGetCurrentTeamCerts
+        | TeamGuestAcceptInviteRemote
         | TeamGuestLookupTeamCertByHash
         | TeamMemberAcceptInviteLocal
+        | TeamAdminLoadTeamRemoteJoinReq
         | TeamAdminLoadTeamRawInbox
         | TeamAdminRejectJoinReq
         | TeamMemberGrantLocalViewPermissionForTeam
@@ -143,9 +145,7 @@ pub(super) fn response(
         | RealTimeRtPollInbox
         | RealTimeRtSelectVHost
         | RealTimeRtGetThreadRecents => realtime::response(data, call, principal),
-        RealTimeRtGetChannel | TeamAdminLoadTeamRemoteJoinReq | TeamAdminPostTeamRemoval => {
-            Err(RpcStatus::Unsupported)
-        }
+        RealTimeRtGetChannel | TeamAdminPostTeamRemoval => Err(RpcStatus::Unsupported),
     }
 }
 

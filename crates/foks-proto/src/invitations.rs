@@ -493,12 +493,12 @@ impl RawInboxRow {
     }
 }
 pub fn decode_team_inbox(bytes: &[u8]) -> Result<Vec<RawInboxRow>> {
-    if bytes.len() > 2 * 1024 * 1024 {
+    if bytes.len() > 16 * 1024 * 1024 {
         return Err(Error::IntegerRange("inbox byte limit"));
     }
     let v = decode(bytes)?;
     let f = array(&v, 1)?;
-    if matches!(&f[0],Value::Array(rows) if rows.len()>1000) {
+    if matches!(&f[0],Value::Array(rows) if rows.len()>2000) {
         return Err(Error::IntegerRange("inbox row limit"));
     }
     list(&f[0], RawInboxRow::from_value)
