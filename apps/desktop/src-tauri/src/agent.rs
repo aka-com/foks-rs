@@ -112,6 +112,8 @@ impl AgentError {
 
     pub fn from_agent(code: ErrorCode, message: String) -> Self {
         let (slug, retryable) = match code {
+            ErrorCode::BotToken => ("bot-token", false),
+            ErrorCode::BotTokenLocked => ("bot-token-locked", true),
             ErrorCode::ChatInvalidInput => ("chat-invalid-input", false),
             ErrorCode::ChatUnsupported => ("chat-unsupported", false),
             ErrorCode::ChatAccessDenied => ("chat-access-denied", false),

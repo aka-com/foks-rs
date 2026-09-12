@@ -44,6 +44,10 @@ impl Role {
         self.kind as u64
     }
 
+    pub fn encoded(self) -> Result<Vec<u8>> {
+        Ok(crate::encode(&self.to_value())?)
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         crate::identity::role(&crate::decode(bytes)?)
     }

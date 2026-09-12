@@ -239,6 +239,7 @@ pub enum MutationKind {
     KvRoot = 7,
     KvAdapter = 8,
     UsernameChange = 9,
+    BotEnrollment = 10,
 }
 
 impl MutationKind {
@@ -253,6 +254,7 @@ impl MutationKind {
             7 => Ok(Self::KvRoot),
             8 => Ok(Self::KvAdapter),
             9 => Ok(Self::UsernameChange),
+            10 => Ok(Self::BotEnrollment),
             _ => Err(Error::InvalidMutationOperation("unknown operation kind")),
         }
     }

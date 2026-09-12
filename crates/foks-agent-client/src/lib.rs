@@ -13,6 +13,8 @@ use foks_agent_proto::{
 use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
 
+pub mod secret_file;
+
 const DEVICE_PAIRING_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CHAT_POLL_TIMEOUT: Duration = Duration::from_secs(60);
 const MAXIMUM_UPLOAD_FRAME_BYTES: usize = 128 * 1024;

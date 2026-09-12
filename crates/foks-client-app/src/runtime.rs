@@ -294,9 +294,7 @@ impl TeamRefreshCredential<'_, '_> {
 
     fn device_id(&self) -> Result<foks_proto::EntityId> {
         match self {
-            Self::Software(credential) => {
-                Ok(foks_crypto::derive_device_public(&credential.seed)?.id)
-            }
+            Self::Software(credential) => Ok(credential.public_material()?.id),
             Self::Yubi(credential) => Ok(credential.parent.entity_id().clone()),
         }
     }
@@ -972,6 +970,9 @@ impl CheckedProfileSession<'_> {
         let aliases = vault.aliases()?;
         let mut users = std::collections::BTreeSet::new();
         for alias in aliases {
+            if vault.bot_selection(&alias)?.is_some() {
+                continue;
+            }
             users.insert(vault.account(&alias)?.credential.uid.into_bytes());
         }
         for alias in vault.yubi_aliases()? {
@@ -996,6 +997,11 @@ impl CheckedProfileSession<'_> {
         self.profile.require(Capability::UserSync)?;
         if interval_micros == 0 {
             return Err(Error::InvalidConfig("job interval is zero"));
+        }
+        if vault.bot_selection(alias)?.is_some() {
+            return Err(Error::InvalidAccount(
+                "background security jobs require a permanent account credential",
+            ));
         }
         let loaded = vault.account(alias)?;
         let host = self.pinned_host()?;
@@ -1158,13 +1164,18 @@ impl CheckedProfileSession<'_> {
                     continue;
                 }
             };
+            if account.credential.key_kind == foks_client::SoftwareKeyKind::BotToken {
+                continue;
+            }
             if account.credential.uid.as_bytes() != uid {
                 continue;
             }
             match self.client.authenticate_and_pin(&host, &account.credential) {
                 Ok(authenticated) => {
                     authenticated_any = true;
-                    let signer = foks_crypto::derive_device_public(&account.credential.seed)
+                    let signer = account
+                        .credential
+                        .public_material()
                         .map_err(|error| error.to_string())?;
                     let is_owner = authenticated.verified.devices().iter().any(|device| {
                         device.id == signer.id && device.role == foks_proto::Role::OWNER
@@ -1257,7 +1268,8 @@ impl CheckedProfileSession<'_> {
                     .require(Capability::Passphrases)
                     .map_err(|error| error.to_string())?;
             }
-            let signer = foks_crypto::derive_device_public(&credential.seed)
+            let signer = credential
+                .public_material()
                 .map_err(|error| error.to_string())?;
             refreshed = if operation.subject_id == signer.id.as_bytes() {
                 self.client.resume_software_puk_rotation_from_journal(
@@ -1499,7 +1511,8 @@ impl CheckedProfileSession<'_> {
                 let mut candidates = credentials.iter().collect::<Vec<_>>();
                 candidates.sort_by_key(|credential| {
                     let matches = pending_signer.as_ref().is_some_and(|preferred| {
-                        foks_crypto::derive_device_public(&credential.seed)
+                        credential
+                            .public_material()
                             .is_ok_and(|device| device.id.as_bytes() == preferred)
                     });
                     !matches
@@ -3128,7 +3141,9 @@ fn prefer_pending_signer_alias(
     aliases.sort_by_key(|alias| {
         let matches_pending_signer = preferred.is_some_and(|preferred| {
             vault.account(alias).ok().is_some_and(|account| {
-                foks_crypto::derive_device_public(&account.credential.seed)
+                account
+                    .credential
+                    .public_material()
                     .is_ok_and(|device| device.id.as_bytes() == preferred)
             })
         });
@@ -3230,15 +3245,14 @@ mod tests {
         uid[0] = foks_proto::ENTITY_USER;
         let uid = foks_proto::EntityId::from_bytes(uid).unwrap();
         let credential = |seed| foks_client::DeviceCredential {
+            key_kind: foks_client::SoftwareKeyKind::Device,
             uid: uid.clone(),
             seed: foks_proto::SecretSeed::new([seed; 32]),
             certificate_chain: vec![vec![seed]],
         };
         let first = credential(0x31);
         let preferred = credential(0x41);
-        let preferred_id = foks_crypto::derive_device_public(&preferred.seed)
-            .unwrap()
-            .id;
+        let preferred_id = preferred.public_material().unwrap().id;
         let mut secrets = MemorySecretStore::default();
         let mut vault = AccountVault::new(&mut secrets);
         vault.commit_created("a-first", "alice", &first).unwrap();
@@ -3347,7 +3361,7 @@ mod tests {
                 let member = vault.account("member")?;
                 let team_id =
                     foks_proto::EntityId::from_bytes(vault.team("security-team")?.team_id.clone())?;
-                let target = foks_crypto::derive_device_public(&survivor.credential.seed)?.id;
+                let target = survivor.credential.public_material()?.id;
                 let host = session.pinned_host()?;
                 session
                     .client
@@ -3819,7 +3833,7 @@ mod tests {
                         }],
                         &mut mutations,
                     )?;
-                let retired_id = foks_crypto::derive_device_public(&retired.credential.seed)?.id;
+                let retired_id = retired.credential.public_material()?.id;
                 let stale = session
                     .client
                     .revoke_user_credential_without_puk_rotation_for_test(
@@ -3966,6 +3980,7 @@ mod tests {
         uid[0] = foks_proto::ENTITY_USER;
         let uid = foks_proto::EntityId::from_bytes(uid).unwrap();
         let credential = foks_client::DeviceCredential {
+            key_kind: foks_client::SoftwareKeyKind::Device,
             uid: uid.clone(),
             seed: foks_proto::SecretSeed::new([8; 32]),
             certificate_chain: vec![vec![9]],

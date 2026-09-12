@@ -88,7 +88,7 @@ impl CheckedProfileSession<'_> {
         self.profile.require(Capability::Signup)?;
         if vault.account_record_exists(alias)? {
             let loaded = vault.account(alias)?;
-            let device = derive_device_public(&loaded.credential.seed)?;
+            let device = loaded.credential.public_material()?;
             if let Some(operation) = HardStateStore::open(&self.paths.hard_database)?
                 .latest_finalizable_mutation_for_binding(
                     self.pinned_host()?.host_id().as_bytes(),
@@ -179,7 +179,9 @@ impl CheckedProfileSession<'_> {
                     .device_display_name(&device.id)
                     .map(str::to_owned),
                 role: format!("{:?}", device.role.kind()).to_ascii_lowercase(),
-                current: derive_device_public(&loaded.credential.seed)
+                current: loaded
+                    .credential
+                    .public_material()
                     .is_ok_and(|current| current.id == device.id),
             })
             .collect())
@@ -360,9 +362,7 @@ impl CheckedProfileSession<'_> {
         vault.remove_pending_device(target_alias)?;
         Ok(DeviceProvisionReport {
             alias: target_alias.to_owned(),
-            device_id_hex: hex(derive_device_public(&provisioned.credential.seed)?
-                .id
-                .as_bytes()),
+            device_id_hex: hex(provisioned.credential.public_material()?.id.as_bytes()),
             user_chain_sequence: provisioned.authenticated.verified.chain_seqno(),
         })
     }
@@ -377,7 +377,7 @@ impl CheckedProfileSession<'_> {
         if vault.account_record_exists(target_alias)? {
             let target = vault.account(target_alias)?;
             let host = self.pinned_host()?;
-            let device = derive_device_public(&target.credential.seed)?;
+            let device = target.credential.public_material()?;
             if let Some(operation) = HardStateStore::open(&self.paths.hard_database)?
                 .latest_finalizable_mutation_for_binding(
                     host.host_id().as_bytes(),
@@ -460,7 +460,7 @@ impl CheckedProfileSession<'_> {
         validate_name(target_alias)?;
         for alias in vault.aliases()? {
             let existing = vault.account(&alias)?;
-            let device = derive_device_public(&existing.credential.seed)?;
+            let device = existing.credential.public_material()?;
             if existing.credential.uid.as_bytes() == expected_user
                 && device.id.as_bytes() == expected_device
             {
@@ -497,6 +497,7 @@ impl CheckedProfileSession<'_> {
             self.client
                 .fetch_device_certificate_chain(&host, &uid, &device_seed)?;
         let credential = DeviceCredential {
+            key_kind: foks_client::SoftwareKeyKind::Device,
             uid,
             seed: device_seed,
             certificate_chain,
@@ -684,7 +685,7 @@ impl CheckedProfileSession<'_> {
         if vault.account_record_exists(target_alias)? {
             let account = vault.account(target_alias)?;
             let expected = derive_device_public(&SecretSeed::new(pending.device_seed))?;
-            let actual = derive_device_public(&account.credential.seed)?;
+            let actual = account.credential.public_material()?;
             if expected.id != actual.id
                 || bound_user
                     .as_ref()
@@ -736,9 +737,7 @@ impl CheckedProfileSession<'_> {
         vault.remove_pending_kex(&pending.target_alias)?;
         Ok(DeviceProvisionReport {
             alias: pending.target_alias.clone(),
-            device_id_hex: hex(derive_device_public(&provisioned.credential.seed)?
-                .id
-                .as_bytes()),
+            device_id_hex: hex(provisioned.credential.public_material()?.id.as_bytes()),
             user_chain_sequence: provisioned.authenticated.verified.chain_seqno(),
         })
     }
@@ -958,17 +957,17 @@ impl CheckedProfileSession<'_> {
         vault.remove_pending_recovery(&pending.target_alias)?;
         Ok(DeviceProvisionReport {
             alias: pending.target_alias.clone(),
-            device_id_hex: hex(derive_device_public(&recovered.credential.seed)?
-                .id
-                .as_bytes()),
+            device_id_hex: hex(recovered.credential.public_material()?.id.as_bytes()),
             user_chain_sequence: recovered.authenticated.verified.chain_seqno(),
         })
     }
     pub fn sync_account(&self, alias: &str, vault: &mut AccountVault<'_>) -> Result<SyncReport> {
         self.profile.require(Capability::UserSync)?;
         self.profile.require(Capability::Kv)?;
-        let uid = vault.account(alias)?.credential.uid;
-        self.register_default_refresh_jobs_for(&uid, now_microseconds()?)?;
+        let loaded = vault.account(alias)?;
+        if loaded.credential.key_kind == foks_client::SoftwareKeyKind::Device {
+            self.register_default_refresh_jobs_for(&loaded.credential.uid, now_microseconds()?)?;
+        }
         let (_, authenticated, directories) = self.authenticated_tree(alias, vault)?;
         self.refresh_verified_account_labels(&authenticated.verified, vault)?;
         Ok(SyncReport::from_tree(
@@ -1400,11 +1399,15 @@ impl Drop for KexAcceptanceInput {
 
 pub struct AccountVault<'a> {
     pub(super) store: &'a mut dyn SecretStore,
+    pub(super) loaded_bots: BTreeMap<String, LoadedAccount>,
 }
 
 impl<'a> AccountVault<'a> {
     pub fn new(store: &'a mut dyn SecretStore) -> Self {
-        Self { store }
+        Self {
+            store,
+            loaded_bots: BTreeMap::new(),
+        }
     }
 
     pub fn aliases(&mut self) -> Result<Vec<String>> {
@@ -1412,7 +1415,11 @@ impl<'a> AccountVault<'a> {
             .store
             .keys()?
             .into_iter()
-            .filter_map(|key| key.strip_prefix("account.").map(str::to_owned))
+            .filter_map(|key| {
+                key.strip_prefix("account.")
+                    .or_else(|| key.strip_prefix("bot-account."))
+                    .map(str::to_owned)
+            })
             .collect())
     }
 
@@ -1541,6 +1548,7 @@ impl<'a> AccountVault<'a> {
         validate_name(alias)?;
         Ok(self.store.keys()?.iter().any(|key| {
             key == &account_key(alias)
+                || key == &format!("bot-account.{alias}")
                 || key == &pending_key(alias)
                 || key == &pending_device_key(alias)
                 || key == &pending_recovery_key(alias)
@@ -1556,7 +1564,7 @@ impl<'a> AccountVault<'a> {
             .store
             .keys()?
             .iter()
-            .any(|key| key == &account_key(alias)))
+            .any(|key| key == &account_key(alias) || key == &format!("bot-account.{alias}")))
     }
 
     fn put_kex_offer(&mut self, offer: &StoredKexOffer) -> Result<()> {
@@ -1622,6 +1630,9 @@ impl<'a> AccountVault<'a> {
     }
     pub fn account(&mut self, alias: &str) -> Result<LoadedAccount> {
         validate_name(alias)?;
+        if self.bot_selection(alias)?.is_some() {
+            return self.loaded_bot(alias);
+        }
         let bytes = self
             .store
             .get(&account_key(alias))
@@ -1635,6 +1646,7 @@ impl<'a> AccountVault<'a> {
             alias: stored.alias.clone(),
             username: stored.username.clone(),
             credential: DeviceCredential {
+                key_kind: foks_client::SoftwareKeyKind::Device,
                 uid: EntityId::from_bytes(stored.uid.clone())?,
                 seed: SecretSeed::new(stored.device_seed),
                 certificate_chain: stored.certificate_chain.clone(),
@@ -1759,6 +1771,12 @@ impl<'a> AccountVault<'a> {
         let name = std::str::from_utf8(username)
             .map_err(|_| Error::InvalidAccount("verified username is not UTF8"))?;
         for alias in self.aliases()? {
+            if let Some(bot) = self.bot_selection(&alias)? {
+                if bot.uid == uid.as_bytes() {
+                    self.update_bot_label(&alias, name)?;
+                }
+                continue;
+            }
             let account = self.account(&alias)?;
             if account.credential.uid == *uid && account.username != name {
                 self.commit_created(&alias, name, &account.credential)?;
@@ -1773,6 +1791,11 @@ impl<'a> AccountVault<'a> {
         username: &str,
         credential: &DeviceCredential,
     ) -> Result<()> {
+        if credential.key_kind != foks_client::SoftwareKeyKind::Device {
+            return Err(Error::InvalidAccount(
+                "bot secrets cannot enter the persistent account vault",
+            ));
+        }
         let stored = StoredAccount {
             version: CREDENTIAL_VERSION,
             alias: alias.to_owned(),
@@ -2341,7 +2364,7 @@ mod tests {
                 )?;
                 let loaded = vault.account("source")?;
                 let uid: [u8; 33] = loaded.credential.uid.as_bytes().try_into().unwrap();
-                let device = derive_device_public(&loaded.credential.seed)?;
+                let device = loaded.credential.public_material()?;
                 let device_id: [u8; 33] = device.id.as_bytes().try_into().unwrap();
                 Ok::<_, Error>((uid, device_id, *loaded.credential.seed.as_bytes()))
             })

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use foks_client_db::{HardStateStore, TeamMutationKind, TeamMutationOperation, TeamMutationState};
 use foks_crypto::{
-    derive_device_public, derive_shared_public, derive_subkey_id, make_add_local_team_member_link,
+    derive_shared_public, derive_subkey_id, make_add_local_team_member_link,
     make_add_remote_team_member_link, open_team_remote_member_view_token, prefixed_hash,
     seal_shared_key_boxes, seal_team_remote_member_view_token, seal_team_removal_key,
     AddLocalTeamMemberInput, AddRemoteTeamMemberInput, PukBoxRandomness, SharedKeyBoxInput,
@@ -161,7 +161,7 @@ impl FoksClient {
     ) -> Result<AddedLocalTeamMember> {
         let authenticated_user = self.authenticate_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated_user)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         self.add_local_user_with_material(
             host,
             &credential.uid,
@@ -191,7 +191,7 @@ impl FoksClient {
     ) -> Result<AddedLocalTeamMember> {
         let authenticated_user = self.authenticate_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated_user)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         let added = self.add_local_user_with_material(
             host,
             &credential.uid,
@@ -268,7 +268,7 @@ impl FoksClient {
     ) -> Result<AddedRemoteTeamMember> {
         let authenticated_user = self.authenticate_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated_user)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         self.add_remote_team_with_material(
             host,
             &credential.uid,
@@ -676,7 +676,7 @@ impl FoksClient {
     ) -> Result<AddedLocalTeamMember> {
         let authenticated_user = self.authenticate_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated_user)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         self.resume_addition_with_material(
             host,
             &credential.uid,
@@ -704,7 +704,7 @@ impl FoksClient {
     ) -> Result<AddedLocalTeamMember> {
         let authenticated_user = self.authenticate_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated_user)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         let binding = addition_binding_from_plan(plan);
         validate_local_addition_plan(plan, &credential.uid, team, &binding)?;
         let mut hard_store = HardStateStore::open(&host.database_path)?;
@@ -912,7 +912,7 @@ impl FoksClient {
     ) -> Result<AddedRemoteTeamMember> {
         let authenticated_user = self.authenticate_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated_user)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         team.clone().require_type(ENTITY_NAMED_TEAM)?;
         let remote_id = request.remote_team.verified.team();
         let remote_host = request.remote_team.verified.host();

@@ -23,6 +23,7 @@ import (
 )
 
 type goLiveUser struct {
+	devices   []core.PrivateSuiter
 	host      proto.HostID
 	uid       proto.UID
 	device    core.PrivateSuiter
@@ -138,6 +139,7 @@ func TestGoClientAgainstRustServer(t *testing.T) {
 	teamID := liveCreateAndLoadTeam(t, ctx, authRPC, &userClient, &merkleClient, &user)
 	liveKVPutGet(t, ctx, authRPC, &user)
 	liveRename(t, ctx, &userClient, &merkleClient, &user)
+	liveBot(t, ctx, &userClient, &regClient, &merkleClient, &user, authenticatedAddress, serviceRoots)
 	t.Logf("official Go client completed user=%s team=%s", user.uid, teamID)
 }
 
@@ -446,7 +448,7 @@ func liveSignup(
 		t.Fatal(err)
 	}
 	return goLiveUser{
-		host: host, uid: uid, device: device, puk: puk, prev: *linkHash,
+		host: host, uid: uid, device: device, devices: []core.PrivateSuiter{device}, puk: puk, prev: *linkHash,
 		nextSeqno: eldest.Seqno + 1,
 	}
 }
@@ -468,6 +470,15 @@ func liveProvision(
 	if err != nil {
 		t.Fatal(err)
 	}
+	label := proto.DeviceLabel{
+		DeviceType: proto.DeviceType_Computer,
+		Name:       proto.DeviceNameNormalized("go provisioned"),
+		Serial:     proto.FirstDeviceSerial,
+	}
+	liveProvisionKey(t, ctx, userClient, regClient, merkleClient, user, newDevice, label, "go provisioned", proto.OwnerRole, nil)
+}
+
+func liveProvisionKey(t *testing.T, ctx context.Context, userClient *rem.UserClient, regClient *rem.RegClient, merkleClient *rem.MerkleQueryClient, user *goLiveUser, newDevice core.PrivateSuiter, label proto.DeviceLabel, name proto.DeviceName, role proto.Role, introduced core.SharedPrivateSuiter) {
 	newHEPK, err := newDevice.ExportHEPK()
 	if err != nil {
 		t.Fatal(err)
@@ -476,18 +487,13 @@ func liveProvision(
 	if err != nil {
 		t.Fatal(err)
 	}
-	label := proto.DeviceLabel{
-		DeviceType: proto.DeviceType_Computer,
-		Name:       proto.DeviceNameNormalized("go provisioned"),
-		Serial:     proto.FirstDeviceSerial,
-	}
 	link, err := core.MakeProvisionLink(
 		user.uid,
 		user.host,
 		existing,
 		newDevice,
-		proto.OwnerRole,
-		nil,
+		role,
+		introduced,
 		label,
 		user.nextSeqno,
 		user.prev,
@@ -509,8 +515,31 @@ func liveProvision(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := boxer.Box(user.puk, newPublic); err != nil {
+	boxedKey := user.puk
+	if introduced != nil {
+		boxedKey = introduced
+	}
+	if err := boxer.Box(boxedKey, newPublic); err != nil {
 		t.Fatal(err)
+	}
+	if introduced != nil {
+		for _, dev := range user.devices {
+			pub, err := dev.Publicize(&user.host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = boxer.Box(introduced, pub); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	hepks := []proto.HEPK{*newHEPK}
+	if introduced != nil {
+		hepk, err := introduced.ExportHEPK()
+		if err != nil {
+			t.Fatal(err)
+		}
+		hepks = append(hepks, *hepk)
 	}
 	boxes, err := boxer.Finish()
 	if err != nil {
@@ -523,13 +552,13 @@ func liveProvision(
 	if err := userClient.ProvisionDevice(ctx, rem.ProvisionDeviceArg{
 		Link: *link.Link,
 		Dlnc: rem.DeviceLabelNameAndCommitmentKey{
-			Dln:           proto.DeviceLabelAndName{Label: label, Nv: proto.NormalizationVersion_V0, Name: "go provisioned"},
+			Dln:           proto.DeviceLabelAndName{Label: label, Nv: proto.NormalizationVersion_V0, Name: name},
 			CommitmentKey: *link.DevNameCommitmentKey,
 		},
 		PukBoxes:         *boxes,
 		NextTreeLocation: *link.NextTreeLocation,
 		SelfToken:        selfToken,
-		Hepks:            proto.HEPKSet{V: []proto.HEPK{*newHEPK}},
+		Hepks:            proto.HEPKSet{V: hepks},
 	}); err != nil {
 		t.Fatalf("official device provision: %v", err)
 	}
@@ -537,12 +566,14 @@ func liveProvision(
 	if err != nil {
 		t.Fatal(err)
 	}
-	newDeviceID, err := newID.ToDeviceID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := regClient.ProbeKeyExists(ctx, rem.ProbeKeyExistsArg{Uid: user.uid, DevID: newDeviceID, SelfTok: selfToken}); err != nil {
-		t.Fatalf("activate provisioned key: %v", err)
+	if label.DeviceType == proto.DeviceType_Computer {
+		newDeviceID, err := newID.ToDeviceID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := regClient.ProbeKeyExists(ctx, rem.ProbeKeyExistsArg{Uid: user.uid, DevID: newDeviceID, SelfTok: selfToken}); err != nil {
+			t.Fatalf("activate provisioned key: %v", err)
+		}
 	}
 	user.prev, err = func() (proto.LinkHash, error) {
 		value, err := core.LinkHash(link.Link)
@@ -555,6 +586,7 @@ func liveProvision(
 		t.Fatal(err)
 	}
 	user.nextSeqno++
+	user.devices = append(user.devices, newDevice)
 }
 
 func liveSetPassphrase(

@@ -875,7 +875,10 @@ impl CheckedProfileSession<'_> {
             team_alias: team_alias.to_owned(),
             team_id: context.team_id.as_bytes().to_vec(),
             actor_uid: context.account.credential.uid.as_bytes().to_vec(),
-            actor_device_id: derive_device_public(&context.account.credential.seed)?
+            actor_device_id: context
+                .account
+                .credential
+                .public_material()?
                 .id
                 .as_bytes()
                 .to_vec(),
@@ -1174,10 +1177,7 @@ fn validate_edit_context(edit: &StoredTeamMemberEdit, context: &LocalTeamContext
     if edit.team_id != context.team_id.as_bytes()
         || edit.actor_uid != context.account.credential.uid.as_bytes()
         || edit.actor_uid != context.actor.verified.uid().as_bytes()
-        || edit.actor_device_id
-            != derive_device_public(&context.account.credential.seed)?
-                .id
-                .as_bytes()
+        || edit.actor_device_id != context.account.credential.public_material()?.id.as_bytes()
     {
         return Err(foks_client::Error::OperationBinding(
             "pending member edit belongs to another team or credential",

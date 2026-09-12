@@ -10,13 +10,12 @@ use super::{
     encode_merkle_check_key_exists_request, encode_merkle_lookup_request,
     encode_merkle_multi_lookup_request, encode_merkle_select_vhost_request,
     encode_registration_select_vhost_request, encode_resolve_username_request,
-    encode_user_ping_request, merkle_history_requirements, open_puk_parcel_for_role,
-    open_puk_parcel_with_for_role, open_puk_seed_chain, restore_merkle_anchor,
-    user_chain_root_epochs, verify_non_self_user_chain, verify_non_self_user_chain_increment,
-    verify_signed_merkle_advance, verify_user_chain, verify_user_chain_increment, Acceptance,
-    AuthenticatedMerkleRoots, DeviceNagInfo, EntityId, Error, FoksClient, HardStateStore,
-    HostchainTail, PinnedHost, PukParcel, Result, Role, SecretSeed, Value, VerifiedMerkleAdvance,
-    VerifiedUserState, YubiDevice, ENTITY_USER,
+    encode_user_ping_request, merkle_history_requirements, open_puk_parcel_with_for_role,
+    open_puk_seed_chain, restore_merkle_anchor, user_chain_root_epochs, verify_non_self_user_chain,
+    verify_non_self_user_chain_increment, verify_signed_merkle_advance, verify_user_chain,
+    verify_user_chain_increment, Acceptance, AuthenticatedMerkleRoots, DeviceNagInfo, EntityId,
+    Error, FoksClient, HardStateStore, HostchainTail, PinnedHost, PukParcel, Result, Role,
+    SecretSeed, Value, VerifiedMerkleAdvance, VerifiedUserState, YubiDevice, ENTITY_USER,
 };
 use foks_crypto::{open_subkey_box, sign_yubi_typed};
 use foks_proto::{
@@ -29,10 +28,21 @@ const YUBI_CHALLENGE_WINDOW_MILLISECONDS: u64 = 15 * 60 * 1_000;
 
 /// Device credential material used for mTLS. The master seed is never written
 /// by this crate; callers should source it from the encrypted local key store.
+pub use foks_crypto::SoftwareKeyKind;
 pub struct DeviceCredential {
+    pub key_kind: SoftwareKeyKind,
     pub uid: EntityId,
     pub seed: SecretSeed,
     pub certificate_chain: Vec<Vec<u8>>,
+}
+
+impl DeviceCredential {
+    pub fn public_material(&self) -> Result<foks_crypto::DevicePublicMaterial> {
+        Ok(foks_crypto::derive_software_public(
+            &self.seed,
+            self.key_kind,
+        )?)
+    }
 }
 
 /// Yubi parent decapsulation/signing plus the software Ed25519 subkey used
@@ -82,7 +92,7 @@ impl<'a, 'device> FederationCredential<'a, 'device> {
     /// the software device itself, or the Yubi parent.
     pub fn device_id(&self) -> Result<EntityId> {
         match self {
-            Self::Software(credential) => Ok(derive_device_public(&credential.seed)?.id),
+            Self::Software(credential) => Ok(credential.public_material()?.id),
             Self::Yubi(credential) => Ok(credential.parent.entity_id().clone()),
         }
     }
@@ -99,7 +109,7 @@ impl<'a, 'device> FederationCredential<'a, 'device> {
         }
         match self {
             Self::Software(credential) => {
-                let derived = derive_device_public(&credential.seed)?;
+                let derived = credential.public_material()?;
                 user.devices()
                     .iter()
                     .find(|device| device.id == derived.id && device.hepk == derived.hepk)
@@ -569,7 +579,7 @@ impl FoksClient {
         credential: &DeviceCredential,
         role: Role,
     ) -> Result<Vec<u8>> {
-        let device = derive_device_public(&credential.seed)?;
+        let device = credential.public_material()?;
         let request = encode_get_puk_for_role_request(role, device.id.as_bytes())?;
         self.call(host, &host.user, &request, Some(credential))
     }
@@ -595,9 +605,13 @@ impl FoksClient {
             .iter()
             .rev()
             .find_map(|sender| {
-                open_puk_parcel_for_role(
+                open_puk_parcel_with_for_role(
                     &parcel,
-                    &credential.seed,
+                    &foks_crypto::SoftwareDecapsulator::for_kind(
+                        &credential.seed,
+                        credential.key_kind,
+                    )
+                    .ok()?,
                     &sender.hepk,
                     &role_key.verify_key,
                     &role_key.hepk,
@@ -914,7 +928,7 @@ impl FoksClient {
         host: &PinnedHost,
         credential: &DeviceCredential,
     ) -> Result<AuthenticatedUserOutcome> {
-        let derived = derive_device_public(&credential.seed)?;
+        let derived = credential.public_material()?;
         let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
         let prior = match self.pinned_user(host, &credential.uid) {
             Ok(prior) => prior,
@@ -962,9 +976,13 @@ impl FoksClient {
             .iter()
             .rev()
             .find_map(|sender| {
-                open_puk_parcel_for_role(
+                open_puk_parcel_with_for_role(
                     &parcel,
-                    &credential.seed,
+                    &foks_crypto::SoftwareDecapsulator::for_kind(
+                        &credential.seed,
+                        credential.key_kind,
+                    )
+                    .ok()?,
                     &sender.hepk,
                     &role_key.verify_key,
                     &role_key.hepk,
@@ -1323,6 +1341,7 @@ mod tests {
         let uid =
             EntityId::from_bytes([vec![foks_proto::ENTITY_USER], vec![0x41; 32]].concat()).unwrap();
         let device = DeviceCredential {
+            key_kind: crate::SoftwareKeyKind::Device,
             uid: uid.clone(),
             seed: SecretSeed::new([0x51; 32]),
             certificate_chain: vec![vec![1, 2, 3]],
@@ -1335,7 +1354,7 @@ mod tests {
         assert_eq!(chain, device.certificate_chain.as_slice());
         assert_eq!(
             software.device_id().unwrap(),
-            foks_crypto::derive_device_public(&device.seed).unwrap().id
+            device.public_material().unwrap().id
         );
 
         let parent_id =

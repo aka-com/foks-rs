@@ -109,7 +109,20 @@ pub(crate) fn realtime_capabilities() {
 
 #[test]
 pub(crate) fn realtime_poll_capacity_is_separate_and_bounded() {
-    let fixture = Fixture::start("realtime-poll-capacity");
+    let environment = foks_server_testkit::TestEnvironment::with_profile(
+        foks_server_testkit::TestProfile::RealtimePollCapacity,
+    )
+    .unwrap();
+    let server = environment.start_server().unwrap();
+    let client =
+        foks_server_testkit::TestClient::new(&environment, "realtime-poll-capacity").unwrap();
+    let probe = client.probe_and_pin().unwrap();
+    let fixture = Fixture {
+        environment,
+        server,
+        client,
+        probe,
+    };
     let account = fixture
         .client
         .create_account(
@@ -118,7 +131,7 @@ pub(crate) fn realtime_poll_capacity_is_separate_and_bounded() {
         )
         .unwrap();
     let mut pollers = Vec::new();
-    for _ in 0..32 {
+    for _ in 0..4 {
         pollers.push(
             fixture
                 .client
@@ -137,7 +150,7 @@ pub(crate) fn realtime_poll_capacity_is_separate_and_bounded() {
         .foks()
         .realtime_connection(&fixture.probe.pinned, &account.credential)
         .unwrap();
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(33));
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(5));
     let waiting = pollers
         .into_iter()
         .map(|mut poller| {
@@ -156,7 +169,7 @@ pub(crate) fn realtime_poll_capacity_is_separate_and_bounded() {
         .collect::<Vec<_>>();
     barrier.wait();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while fixture.server.metrics().active_realtime_polls != 32 {
+    while fixture.server.metrics().active_realtime_polls != 4 {
         assert!(
             std::time::Instant::now() < deadline,
             "all realtime poll permits were not acquired before the readiness deadline"

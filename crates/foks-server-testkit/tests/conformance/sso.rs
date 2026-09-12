@@ -636,3 +636,77 @@ fn refresh_claims_fence_races_revocation_policy_changes_and_crashes() {
         .ping(&client.pinned_host().unwrap(), &created.credential)
         .is_err());
 }
+
+#[test]
+fn bot_enrollment_after_lost_reply_stays_bound_across_sso_reauthentication() {
+    use foks_client_db::{HardStateStore, MutationState};
+    let provider = TestOidcProvider::start();
+    let environment = TestEnvironment::new().unwrap();
+    let config = provider.config(environment.client_path("oidc", "bot-secret").unwrap());
+    let _server = environment.start_oidc_server(config).unwrap();
+    let client = TestClient::new(&environment, "oidc-bot").unwrap();
+    let created = signup(&environment, &client, &provider);
+    let host = client.pinned_host().unwrap();
+    let foks = client.foks();
+    let mut protected = client.open_protected_store().unwrap();
+    let token = foks_crypto::BotToken::generate().unwrap();
+    let owner = FederationCredential::Software(&created.credential);
+    let op = foks
+        .prepare_bot_enrollment(
+            &host,
+            owner,
+            foks_proto::Role::OWNER,
+            &token,
+            &mut protected,
+        )
+        .unwrap();
+    environment.arm_fault(foks_server_testkit::TestFault::ProvisionAfterCommitBeforeResponse);
+    assert!(foks
+        .bot_enrollment_progress(&host, owner, op.operation_id, true, &mut protected)
+        .is_err());
+    // Mint the bot certificate before advancing the fake clock beyond TLS skew.
+    // Subsequent assertions use its existing authenticated connection.
+    let bot = foks.load_bot_token(&host, &token).unwrap();
+    provider.set_invalid_grant(true);
+    environment.advance_clock(301_000_000);
+    assert!(foks
+        .bot_enrollment_progress(&host, owner, op.operation_id, true, &mut protected)
+        .is_err());
+    assert_eq!(
+        HardStateStore::open(client.hard_state_path())
+            .unwrap()
+            .mutation(&op.operation_id)
+            .unwrap()
+            .unwrap()
+            .attempt_count,
+        1
+    );
+    provider.set_invalid_grant(false);
+    let http = ProviderHttp::new(NetworkPolicy::loopback_test()).unwrap();
+    let flow = foks
+        .begin_sso(
+            &host,
+            SsoIntent {
+                uid: created.credential.uid.clone(),
+                device: created.credential.public_material().unwrap().id,
+                for_login: true,
+            },
+            &http,
+            &mut protected,
+        )
+        .unwrap();
+    provider.complete(flow.browser_url.as_ref().unwrap());
+    foks.poll_sso(&host, flow.operation_id, 1000, &http, &mut protected)
+        .unwrap();
+    foks.finish_sso_login(&host, flow.operation_id, owner, &http, &mut protected)
+        .unwrap();
+    let op = foks
+        .bot_enrollment_progress(&host, owner, op.operation_id, true, &mut protected)
+        .unwrap();
+    assert_eq!(op.attempt_count, 1);
+    assert_eq!(op.state, MutationState::RemoteVerified);
+    assert_eq!(foks.ping(&host, &bot).unwrap(), created.credential.uid);
+    provider.set_invalid_grant(true);
+    environment.advance_clock(301_000_000);
+    assert!(foks.ping(&host, &bot).is_err());
+}

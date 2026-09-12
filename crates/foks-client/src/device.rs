@@ -2,11 +2,11 @@
 
 use super::{
     derive_device_public, encode_provision_device_request, encode_revoke_device_request,
-    fix_device_name, make_software_provision_link, make_software_puk_rotation_link,
-    make_software_revoke_link, normalize_device_name, now_milliseconds, random_bytes,
-    seal_puk_seed_chain_box, seal_software_puk_boxes, AuthenticatedUserOutcome, DeviceCredential,
-    DeviceLabel, DeviceLabelNameAndCommitmentKey, DevicePublicMaterial, DeviceType, Duration,
-    EntityId, Error, FoksClient, HardStateStore, MutationCoordinator, MutationDraft, MutationKind,
+    fix_device_name, make_software_puk_rotation_link, make_software_revoke_link,
+    normalize_device_name, now_milliseconds, random_bytes, seal_puk_seed_chain_box,
+    seal_software_puk_boxes, AuthenticatedUserOutcome, DeviceCredential, DeviceLabel,
+    DeviceLabelNameAndCommitmentKey, DevicePublicMaterial, DeviceType, Duration, EntityId, Error,
+    FoksClient, HardStateStore, MutationCoordinator, MutationDraft, MutationKind,
     MutationOperation, MutationState, PassphraseUpdateArgument, PinnedHost, ProtectedMutationStore,
     ProvisionDeviceArgument, PukBoxRandomness, PukRotation, Result, RevokeDeviceArgument, Role,
     SecretSeed, SoftwareProvisionInput, SoftwarePukBoxInput, UserMutationBase, VerifiedUserState,
@@ -20,7 +20,7 @@ use foks_crypto::{
 };
 use foks_proto::YubiSlotAndPqKeyId;
 
-const USER_MUTATION_REQUEST_HASH_TYPE_ID: u64 = 0xc530_72ae_e24c_91d4;
+pub(crate) const USER_MUTATION_REQUEST_HASH_TYPE_ID: u64 = 0xc530_72ae_e24c_91d4;
 
 /// Secrets for a software device being provisioned. They must be committed to
 /// the encrypted credential store before the mutation is posted.
@@ -100,7 +100,7 @@ pub struct UserPukRotation {
 /// a stale assertion cannot orphan configured passphrase recovery material.
 pub struct NoPassphraseConfigured;
 
-fn validate_fresh_puk_seeds<'a>(
+pub(crate) fn validate_fresh_puk_seeds<'a>(
     verified: &VerifiedUserState,
     seeds: impl IntoIterator<Item = &'a SecretSeed>,
 ) -> Result<()> {
@@ -142,7 +142,7 @@ impl FoksClient {
             ));
         }
         let authenticated = self.authenticate_and_pin(host, existing)?;
-        let signer = derive_device_public(&existing.seed)?;
+        let signer = existing.public_material()?;
         let enrolled_signer = authenticated
             .verified
             .devices()
@@ -202,7 +202,7 @@ impl FoksClient {
             return Err(Error::AccountRequest("device is already enrolled"));
         }
         let next_tree_location = random_bytes()?;
-        let material = make_software_provision_link(
+        let material = foks_crypto::make_software_key_provision_link(
             &SoftwareProvisionInput {
                 base: UserMutationBase {
                     uid: authenticated.verified.uid(),
@@ -222,7 +222,9 @@ impl FoksClient {
                 device_name_commitment_key: device_name.commitment_key,
             },
             &existing.seed,
+            existing.key_kind,
             &secrets.device_seed,
+            crate::SoftwareKeyKind::Device,
             secrets.introduced_puk_seed.as_ref(),
         )?;
         let mut recipients = vec![new_device.clone()];
@@ -295,6 +297,7 @@ impl FoksClient {
                 Err(error) => return Err(error),
             };
         let credential = DeviceCredential {
+            key_kind: crate::SoftwareKeyKind::Device,
             uid: existing.uid.clone(),
             seed: secrets.device_seed,
             certificate_chain,
@@ -333,7 +336,7 @@ impl FoksClient {
             return Err(Error::AccountRequest("invalid Yubi provisioning request"));
         }
         let authenticated = self.authenticate_and_pin(host, existing)?;
-        let signer = derive_device_public(&existing.seed)?;
+        let signer = existing.public_material()?;
         let enrolled_signer = authenticated
             .verified
             .devices()
@@ -623,7 +626,7 @@ impl FoksClient {
         alternate_verifier: Option<&DeviceCredential>,
     ) -> Result<AuthenticatedUserOutcome> {
         let mut authenticated = self.authenticate_and_pin(host, signer_credential)?;
-        let signer = derive_device_public(&signer_credential.seed)?;
+        let signer = signer_credential.public_material()?;
         if &signer.id == target && require_complete_rotation {
             return Err(Error::AccountRequest(
                 "self-revocation requires an alternate verifier",
@@ -917,7 +920,7 @@ impl FoksClient {
         include_passphrase_annex: bool,
     ) -> Result<AuthenticatedUserOutcome> {
         let mut authenticated = self.authenticate_and_pin(host, signer_credential)?;
-        let signer = derive_device_public(&signer_credential.seed)?;
+        let signer = signer_credential.public_material()?;
         let signer_state = authenticated
             .verified
             .devices()
@@ -1162,6 +1165,7 @@ impl FoksClient {
             no_passphrase,
             protected_store,
             true,
+            None,
         )
     }
 
@@ -1175,9 +1179,40 @@ impl FoksClient {
         rotations: &[UserPukRotation],
         protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<AuthenticatedUserOutcome> {
-        self.rotate_yubi_puks_inner(host, credential, rotations, None, protected_store, false)
+        self.rotate_yubi_puks_inner(
+            host,
+            credential,
+            rotations,
+            None,
+            protected_store,
+            false,
+            None,
+        )
     }
 
+    pub fn revoke_bot_credential_with_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        target: &EntityId,
+        rotations: &[UserPukRotation],
+        no_passphrase: Option<NoPassphraseConfigured>,
+        protected: &mut impl ProtectedMutationStore,
+    ) -> Result<AuthenticatedUserOutcome> {
+        target
+            .clone()
+            .require_type(foks_proto::ENTITY_BOT_TOKEN_KEY)?;
+        self.rotate_yubi_puks_inner(
+            host,
+            credential,
+            rotations,
+            no_passphrase,
+            protected,
+            true,
+            Some(target),
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
     fn rotate_yubi_puks_inner(
         &self,
         host: &PinnedHost,
@@ -1186,6 +1221,7 @@ impl FoksClient {
         no_passphrase: Option<NoPassphraseConfigured>,
         protected_store: &mut impl ProtectedMutationStore,
         include_passphrase_annex: bool,
+        revoke_target: Option<&EntityId>,
     ) -> Result<AuthenticatedUserOutcome> {
         let mut authenticated = self.authenticate_yubi_and_pin(host, credential)?;
         let subkey = derive_subkey_id(&credential.subkey_seed)?;
@@ -1208,6 +1244,19 @@ impl FoksClient {
             .last()
             .map(|rotation| rotation.role)
             .ok_or(Error::AccountRequest("PUK rotation set is empty"))?;
+        if let Some(target) = revoke_target {
+            if authenticated
+                .verified
+                .devices()
+                .iter()
+                .find(|d| &d.id == target)
+                .is_none_or(|d| d.role != upper_role)
+            {
+                return Err(Error::AccountRequest(
+                    "bot revocation must rotate every affected role",
+                ));
+            }
+        }
         let expected_roles = authenticated
             .verified
             .shared_keys()
@@ -1265,6 +1314,7 @@ impl FoksClient {
             .verified
             .devices()
             .iter()
+            .filter(|device| revoke_target != Some(&device.id))
             .map(|device| {
                 let valid_receiver = match device.id.entity_type() {
                     foks_proto::ENTITY_YUBI => device.hepk.p256().is_some(),
@@ -1301,23 +1351,25 @@ impl FoksClient {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let link = make_yubi_puk_rotation_link(
-            &UserMutationBase {
-                uid: authenticated.verified.uid(),
-                host: authenticated.verified.host(),
-                seqno: authenticated
-                    .verified
-                    .chain_seqno()
-                    .checked_add(1)
-                    .ok_or(Error::AccountRequest("user sequence overflow"))?,
-                previous: authenticated.verified.chain_tail_hash(),
-                root: &authenticated.verified.tree_root(),
-                time: now_milliseconds()?,
-                next_tree_location,
-            },
-            credential.parent,
-            &rotation_refs,
-        )?;
+        let base = &UserMutationBase {
+            uid: authenticated.verified.uid(),
+            host: authenticated.verified.host(),
+            seqno: authenticated
+                .verified
+                .chain_seqno()
+                .checked_add(1)
+                .ok_or(Error::AccountRequest("user sequence overflow"))?,
+            previous: authenticated.verified.chain_tail_hash(),
+            root: &authenticated.verified.tree_root(),
+            time: now_milliseconds()?,
+            next_tree_location,
+        };
+        let link = match revoke_target {
+            Some(target) => {
+                foks_crypto::make_yubi_revoke_link(base, credential.parent, target, &rotation_refs)?
+            }
+            None => make_yubi_puk_rotation_link(base, credential.parent, &rotation_refs)?,
+        };
         let mut box_inputs = Vec::new();
         for rotation in rotations {
             let generation = rotation
@@ -1385,9 +1437,13 @@ impl FoksClient {
         })?);
         let operation_id = self.prepare_user_mutation(
             host,
-            MutationKind::PukRotation,
+            if revoke_target.is_some() {
+                MutationKind::DeviceRevoke
+            } else {
+                MutationKind::PukRotation
+            },
             authenticated.verified.uid(),
-            credential.parent.entity_id(),
+            revoke_target.unwrap_or_else(|| credential.parent.entity_id()),
             authenticated.verified.chain_seqno() + 1,
             &encoded,
             protected_store,
@@ -1400,21 +1456,23 @@ impl FoksClient {
             protected_store,
         )?;
         let updated = match self.wait_for_yubi_transition(host, credential, |user| {
-            rotations.iter().all(|rotation| {
-                let Some(expected_generation) = rotation.previous_generation.checked_add(1) else {
-                    return false;
-                };
-                let Ok(expected) =
-                    foks_crypto::derive_shared_public(&rotation.new_seed, ENTITY_PUK_VERIFY)
-                else {
-                    return false;
-                };
-                user.shared_key(rotation.role).is_some_and(|key| {
-                    key.generation == expected_generation
-                        && key.verify_key == expected.verify_key
-                        && key.hepk == expected.hepk
+            revoke_target.is_none_or(|target| !user.devices().iter().any(|d| &d.id == target))
+                && rotations.iter().all(|rotation| {
+                    let Some(expected_generation) = rotation.previous_generation.checked_add(1)
+                    else {
+                        return false;
+                    };
+                    let Ok(expected) =
+                        foks_crypto::derive_shared_public(&rotation.new_seed, ENTITY_PUK_VERIFY)
+                    else {
+                        return false;
+                    };
+                    user.shared_key(rotation.role).is_some_and(|key| {
+                        key.generation == expected_generation
+                            && key.verify_key == expected.verify_key
+                            && key.hepk == expected.hepk
+                    })
                 })
-            })
         }) {
             Ok(updated) => updated,
             Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
@@ -1663,6 +1721,7 @@ impl FoksClient {
                 Err(error) => return Err(error),
             };
         let credential = DeviceCredential {
+            key_kind: crate::SoftwareKeyKind::Device,
             uid: existing.uid.clone(),
             seed: new_device_seed,
             certificate_chain,
@@ -1747,7 +1806,7 @@ impl FoksClient {
             &signer.uid,
             protected_store,
         )?;
-        if operation.subject_id != derive_device_public(&signer.seed)?.id.as_bytes() {
+        if operation.subject_id != signer.public_material()?.id.as_bytes() {
             return Err(Error::OperationBinding(
                 "journaled PUK rotation belongs to another signer",
             ));
@@ -1802,7 +1861,7 @@ impl FoksClient {
         let request = MutationCoordinator::new(&host.database_path, protected_store)
             .load_bound_material(&operation)?;
         let decoded = decode_persisted_puk_rotation(&request)?;
-        let signer_id = derive_device_public(&signer.seed)?.id;
+        let signer_id = signer.public_material()?.id;
         if operation.subject_id != signer_id.as_bytes()
             || decoded.link.decode_group_change()?.signer != signer_id
         {
@@ -2074,7 +2133,7 @@ impl FoksClient {
                 .any(|key| key.role == Role::OWNER))
     }
 
-    fn confirm_persisted_passphrase_annex(
+    pub(crate) fn confirm_persisted_passphrase_annex(
         &self,
         host: &PinnedHost,
         credential: &DeviceCredential,
@@ -2099,7 +2158,7 @@ impl FoksClient {
         Ok(())
     }
 
-    fn confirm_persisted_passphrase_annex_yubi(
+    pub(crate) fn confirm_persisted_passphrase_annex_yubi(
         &self,
         host: &PinnedHost,
         credential: &YubiCredential<'_>,
@@ -2361,7 +2420,7 @@ fn decode_persisted_puk_rotation(
         .map_err(|_| Error::OperationBinding("persisted PUK rotation is malformed"))
 }
 
-fn random_nonzero_p256_secret() -> Result<[u8; 32]> {
+pub(crate) fn random_nonzero_p256_secret() -> Result<[u8; 32]> {
     loop {
         let mut bytes: [u8; 32] = random_bytes()?;
         // Any nonzero value below 2^255 is a valid P-256 scalar. Sacrificing

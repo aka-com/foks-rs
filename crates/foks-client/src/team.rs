@@ -18,7 +18,7 @@ use foks_client_db::{
     VerifiedUserGenericChainSnapshot,
 };
 use foks_crypto::{
-    adhoc_team_id_from_admin_seed, derive_device_public, derive_subkey_id, hepk_fingerprint,
+    adhoc_team_id_from_admin_seed, derive_subkey_id, hepk_fingerprint,
     make_single_owner_adhoc_team, make_single_owner_adhoc_team_yubi, open_shared_key_parcel_with,
     prefixed_hash, seal_shared_key_boxes, sign_shared_key_typed, AdHocTeamInput, AdHocTeamMaterial,
     PukBoxRandomness, SharedKeyBoxInput, SharedKeyDecapsulator,
@@ -334,7 +334,7 @@ impl FoksClient {
         tail: MembershipChainTail,
         passphrase: &PassphraseInfo,
     ) -> Result<foks_proto::PostGenericLinkArgument> {
-        let signer = derive_device_public(&credential.seed)?;
+        let signer = credential.public_material()?;
         let next_tree_location = random_bytes()?;
         let next_wire =
             foks_snowpack::encode(&foks_snowpack::Value::Binary(next_tree_location.to_vec()))?;
@@ -2058,7 +2058,7 @@ impl FoksClient {
         self.require_open_user_viewership(host, &credential.seed, &credential.certificate_chain)?;
         require_nonstale_shared_key(&authenticated_user.verified, Role::OWNER)?;
         let owner = current_owner_puk(&authenticated_user)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         let device = authenticated_user
             .verified
             .devices()
@@ -2343,7 +2343,7 @@ impl FoksClient {
         credential: &DeviceCredential,
         secrets: &AdHocTeamSecrets,
     ) -> Result<CreatedAdHocTeam> {
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         self.ensure_adhoc_team_operation_binding(host, &credential.uid, &device_id, secrets)?;
         let authenticated_user = self.authenticate_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated_user)?;

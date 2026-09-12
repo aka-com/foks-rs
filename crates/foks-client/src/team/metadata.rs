@@ -3,9 +3,7 @@
 use std::time::Duration;
 
 use foks_client_db::{HardStateStore, TeamMutationKind, TeamMutationOperation, TeamMutationState};
-use foks_crypto::{
-    derive_device_public, make_team_index_range_link, prefixed_hash, TeamMetadataInput,
-};
+use foks_crypto::{make_team_index_range_link, prefixed_hash, TeamMetadataInput};
 use foks_proto::{
     ChangeMetadata, EntityId, Rational, RationalRange, RoleType, TeamMetadataEditArgument,
     TreeRoot, ENTITY_NAMED_TEAM, MERKLE_ROOT_TYPE_ID, TREE_LOCATION_TYPE_ID,
@@ -91,7 +89,7 @@ impl FoksClient {
         team.clone().require_type(ENTITY_NAMED_TEAM)?;
         let user = self.authenticate_and_pin(host, credential)?;
         let owner = current_owner_puk(&user)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         let authenticated =
             self.load_and_pin_team(host, credential, &user.verified, &user.puks, team)?;
         let actor_public = user_key_for_seed(&user.verified, &owner.seed)?;

@@ -300,6 +300,16 @@ impl TestEnvironment {
 
     pub fn arm_fault(&self, fault: TestFault) -> u64 {
         let (point, protocol, method) = match fault {
+            TestFault::RevokeAfterCommitBeforeResponse => (
+                foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
+                "User",
+                "revokeDevice",
+            ),
+            TestFault::ProvisionAfterCommitBeforeResponse => (
+                foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
+                "User",
+                "provisionDevice",
+            ),
             TestFault::RenameAfterCommitBeforeResponse => (
                 foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
                 "User",
@@ -376,6 +386,8 @@ impl TestEnvironment {
 
 #[derive(Clone, Copy, Debug)]
 pub enum TestFault {
+    RevokeAfterCommitBeforeResponse,
+    ProvisionAfterCommitBeforeResponse,
     RenameAfterCommitBeforeResponse,
     SignupBeforeCommit,
     SignupAfterCommitBeforeResponse,
@@ -398,6 +410,7 @@ pub enum TestProfile {
     QueuePressure,
     TightIo,
     ProductionBenchmark,
+    RealtimePollCapacity,
     RateLimited,
     BackupAutomation,
 }
@@ -438,10 +451,17 @@ impl TestProfile {
             | Self::QueuePressure
             | Self::TightIo
             | Self::ProductionBenchmark
+            | Self::RealtimePollCapacity
             | Self::RateLimited
             | Self::BackupAutomation => foks_server_db::Config::default(),
         };
         let limits = foks_server::SessionLimits {
+            // Isolate poll admission from the independently bounded writer/read pools.
+            maximum_in_flight_requests: if matches!(self, Self::RealtimePollCapacity) {
+                4
+            } else {
+                foks_server::SessionLimits::default().maximum_in_flight_requests
+            },
             // TightIo intentionally uses one runtime worker: listener boundary
             // tests then prove a slow persistent session cannot occupy it.
             worker_threads: if matches!(self, Self::TightIo | Self::ProductionBenchmark) {

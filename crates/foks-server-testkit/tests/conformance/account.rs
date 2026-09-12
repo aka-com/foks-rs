@@ -231,6 +231,7 @@ fn rename_rejects_foreign_expired_and_racing_intent() {
     let expired = prepare(&f, c, "accountexpired", 0x63);
     f.environment.advance_clock(11 * 60 * 1_000_000);
     let renewed = DeviceCredential {
+        key_kind: foks_client::SoftwareKeyKind::Device,
         uid: c.uid.clone(),
         seed: foks_proto::SecretSeed::new(*c.seed.as_bytes()),
         certificate_chain: f

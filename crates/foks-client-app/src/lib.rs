@@ -56,6 +56,10 @@ pub use foks_protocol_metadata::PINNED_PROTOCOL_METADATA_SHA256;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("bot token is locked; load the original token into this agent session")]
+    BotTokenLocked,
+    #[error("invalid bot token")]
+    BotToken,
     #[error("invalid FOKS profile: {0}")]
     InvalidProfile(&'static str),
     #[error("FOKS profile already exists")]
@@ -185,6 +189,11 @@ pub use yubi::{
     YubiRevocationReport, YubiSignupInput, YubiSubkeyRecoveryReport,
 };
 
+mod bot_token;
+pub use bot_token::{
+    BotEnrollmentAction, BotEnrollmentOutcome, BotEnrollmentReport, BotRevocationReport,
+    BotSelection,
+};
 mod account;
 mod account_conveniences;
 pub use account_conveniences::{RenameAction, RenameReport};
@@ -1519,6 +1528,7 @@ mod tests {
     fn account_vault_validates_binding_and_lists_aliases() {
         let mut store = MemorySecretStore::default();
         let credential = DeviceCredential {
+            key_kind: foks_client::SoftwareKeyKind::Device,
             uid: EntityId::from_bytes({
                 let mut bytes = vec![0; 33];
                 bytes[0] = ENTITY_USER;

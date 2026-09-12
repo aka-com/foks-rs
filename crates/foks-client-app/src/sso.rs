@@ -93,8 +93,8 @@ impl CheckedProfileSession<'_> {
         if login {
             match vault.account(alias) {
                 Ok(a) => Ok(SsoIntent {
-                    uid: a.credential.uid,
-                    device: derive_device_public(&a.credential.seed)?.id,
+                    uid: a.credential.uid.clone(),
+                    device: a.credential.public_material()?.id,
                     for_login: true,
                 }),
                 Err(Error::AccountMissing) => {

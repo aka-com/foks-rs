@@ -442,6 +442,7 @@ impl FoksClient {
         let certificate_chain =
             self.fetch_device_certificate_chain(host, &uid, &secrets.device_seed)?;
         let credential = DeviceCredential {
+            key_kind: crate::SoftwareKeyKind::Device,
             uid,
             seed: secrets.device_seed,
             certificate_chain,

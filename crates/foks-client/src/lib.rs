@@ -16,12 +16,11 @@ use foks_client_db::{
 };
 use foks_crypto::{
     derive_device_public, derive_shared_verify_key, derive_subkey_id, make_software_eldest_link,
-    make_software_provision_link, make_software_puk_rotation_link, make_software_revoke_link,
-    open_puk_parcel_for_role, open_puk_parcel_with_for_role, open_puk_seed_chain, prefixed_hash,
-    seal_initial_puk_box, seal_puk_seed_chain_box, seal_software_puk_boxes, DevicePublicMaterial,
-    InitialPukBoxRandomness, PukBoxRandomness, PukRotation, SoftwareEldestInput,
-    SoftwareEldestMaterial, SoftwareProvisionInput, SoftwarePukBoxInput, UserMutationBase,
-    YubiDevice,
+    make_software_puk_rotation_link, make_software_revoke_link, open_puk_parcel_with_for_role,
+    open_puk_seed_chain, prefixed_hash, seal_initial_puk_box, seal_puk_seed_chain_box,
+    seal_software_puk_boxes, DevicePublicMaterial, InitialPukBoxRandomness, PukBoxRandomness,
+    PukRotation, SoftwareEldestInput, SoftwareEldestMaterial, SoftwareProvisionInput,
+    SoftwarePukBoxInput, UserMutationBase, YubiDevice,
 };
 use foks_proto::{
     ClientVersionExt, DeviceLabel, DeviceLabelNameAndCommitmentKey, DeviceNagInfo, DeviceType,
@@ -65,6 +64,7 @@ pub(crate) const TEAM_MUTATION_OPERATION_ID_TYPE_ID: u64 = 0x11ad_72e6_d590_82f1
 pub(crate) const TEAM_MUTATION_REQUEST_HASH_TYPE_ID: u64 = 0x4d1f_b849_724a_f9c4;
 
 mod account_conveniences;
+mod bot_token;
 pub use account_conveniences::*;
 mod account;
 mod sso;

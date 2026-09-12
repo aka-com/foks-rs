@@ -16,6 +16,12 @@ impl FoksClient {
         username: &str,
         protected: &mut impl ProtectedMutationStore,
     ) -> Result<UsernameChangeProgress> {
+        if matches!(credential, FederationCredential::Software(c) if c.key_kind == SoftwareKeyKind::BotToken)
+        {
+            return Err(Error::AccountRequest(
+                "username changes require a permanent account credential",
+            ));
+        }
         if username.len() > 256 {
             return Err(Error::AccountRequest("username exceeds 256 bytes"));
         }

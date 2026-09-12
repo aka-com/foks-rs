@@ -308,6 +308,7 @@ fn superseded_member_edit_releases_its_journal_and_protected_material() {
     let mut protected = MemoryProtectedStore::default();
     protected.put_if_absent(&key, b"lost-race frame").unwrap();
     let credential = DeviceCredential {
+        key_kind: crate::SoftwareKeyKind::Device,
         uid: actor,
         seed: SecretSeed::new([0x71; 32]),
         certificate_chain: Vec::new(),

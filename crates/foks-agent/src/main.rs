@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 mod account;
+mod bot_token;
 mod chat;
 mod chat_poll;
 mod data;
@@ -1124,6 +1125,16 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
     }
     if let Some(error) = error.downcast_ref::<foks_client_app::Error>() {
         match error {
+            foks_client_app::Error::BotTokenLocked => {
+                return Response::error(
+                    id,
+                    ErrorCode::BotTokenLocked,
+                    "Bot token is locked; load the original token into this agent session.",
+                )
+            }
+            foks_client_app::Error::BotToken => {
+                return Response::error(id, ErrorCode::BotToken, "Invalid bot token.")
+            }
             foks_client_app::Error::CapabilityDenied(capability) => {
                 let capability = serde_json::to_value(capability)
                     .ok()
@@ -2279,11 +2290,11 @@ fn dispatch_result(
                 let accounts = (|| -> Result<_, Box<dyn std::error::Error>> {
                     let mut accounts = Vec::new();
                     for alias in vault.aliases()? {
-                        let loaded = vault.account(&alias)?;
+                        let username = vault.account_display_name(&alias)?;
                         accounts.push(AccountSummary {
                             profile: profile.clone(),
                             alias,
-                            username: loaded.username,
+                            username,
                         });
                     }
                     let aliases = accounts
@@ -2343,11 +2354,11 @@ fn dispatch_result(
             with_vault(state_dir, &session, |session, vault| {
                 let mut accounts = Vec::new();
                 for alias in vault.aliases()? {
-                    let loaded = vault.account(&alias)?;
+                    let username = vault.account_display_name(&alias)?;
                     accounts.push(AccountSummary {
                         profile: profile.clone(),
                         alias,
-                        username: loaded.username,
+                        username,
                     });
                 }
                 let aliases = accounts
@@ -2387,6 +2398,19 @@ fn dispatch_result(
             account_alias,
             action,
         } => account::rename(
+            state_dir,
+            &registry,
+            &profile,
+            &account_alias,
+            action,
+            timeout,
+            cancellation,
+        ),
+        Operation::BotAccount {
+            profile,
+            account_alias,
+            action,
+        } => bot_token::handle(
             state_dir,
             &registry,
             &profile,
@@ -4194,7 +4218,11 @@ fn with_vault<T>(
             &session.paths().credential_store,
             derive_vault_key(&master),
         )?;
-        operation(session, &mut AccountVault::new(&mut store))
+        {
+            let mut vault = AccountVault::new(&mut store);
+            bot_token::attach(session, &mut vault)?;
+            operation(session, &mut vault)
+        }
     })
 }
 
@@ -4214,7 +4242,11 @@ fn with_vault_and_master(
             &session.paths().credential_store,
             derive_vault_key(&master),
         )?;
-        operation(session, &mut AccountVault::new(&mut store), &master)
+        {
+            let mut vault = AccountVault::new(&mut store);
+            bot_token::attach(session, &mut vault)?;
+            operation(session, &mut vault, &master)
+        }
     })
 }
 

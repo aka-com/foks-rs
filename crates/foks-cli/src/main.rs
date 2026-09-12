@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 mod account_conveniences;
+mod bot_token;
 mod mcp;
 mod sso;
 
@@ -137,6 +138,8 @@ enum ProfileGeneration {
 
 #[derive(clap::Subcommand)]
 enum AccountCommand {
+    #[command(subcommand)]
+    Bot(bot_token::BotCommand),
     #[command(subcommand)]
     Rename(account_conveniences::RenameCommand),
     List {
@@ -797,6 +800,7 @@ fn account_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let registry = ProfileRegistry::open(state_dir)?;
     match command {
+        AccountCommand::Bot(command) => bot_token::run(state_dir, command),
         AccountCommand::Rename(command) => account_conveniences::run(state_dir, command),
         AccountCommand::List { profile } => {
             let session = ProfileSession::open(&registry, &profile)?;
@@ -844,11 +848,15 @@ fn account_command(
             })
         }
         AccountCommand::Sync { profile, alias } => {
-            let session = ProfileSession::open(&registry, &profile)?;
-            with_vault(state_dir, &session, |session, vault, _master| {
-                let report = session.sync_account(&alias, vault)?;
-                output(json, &report, "account synchronized")
-            })
+            mcp::ensure_agent(state_dir)?;
+            let response = foks_agent_client::AgentClient::new(state_dir.join("foks-rs.sock"))
+                .call(foks_agent_proto::Operation::SyncAccount { profile, alias })?;
+            match response.result {
+                foks_agent_proto::ResponseResult::Success { value } => {
+                    output(json, &value, "account synchronized")
+                }
+                foks_agent_proto::ResponseResult::Error { message, .. } => Err(message.into()),
+            }
         }
     }
 }

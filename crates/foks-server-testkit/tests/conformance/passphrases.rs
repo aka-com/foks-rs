@@ -61,6 +61,7 @@ pub(crate) fn signup_set_change_and_public_login_cover_the_passphrase_lifecycle(
     let secondary = TestClient::new(&fixture.environment, "passphrase-secondary").unwrap();
     let secondary_host = secondary.probe_and_pin().unwrap().pinned;
     let secondary_credential = DeviceCredential {
+        key_kind: foks_client::SoftwareKeyKind::Device,
         uid: later.credential.uid.clone(),
         seed: SecretSeed::new([0xa1; 32]),
         certificate_chain: later.credential.certificate_chain.clone(),

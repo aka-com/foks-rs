@@ -110,7 +110,7 @@ pub(crate) enum Response {
 }
 impl RealtimeService {
     pub(crate) fn actor(principal: &Principal, host: &[u8]) -> Result<RealtimeActor, RpcStatus> {
-        principal.require_ordinary_device()?;
+        principal.require_interactive_device()?;
         Ok(RealtimeActor {
             host: host.to_vec(),
             uid: principal.uid().to_vec(),

@@ -53,3 +53,6 @@ mod sso;
 
 #[path = "conformance/account.rs"]
 mod account;
+
+#[path = "conformance/bot_token.rs"]
+mod bot_token;

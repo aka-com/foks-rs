@@ -141,10 +141,14 @@ pub(crate) fn issue_uid_lookup_challenge(
     clock: &Arc<dyn foks_server_db::Clock>,
     entropy: &dyn Entropy,
 ) -> Result<Vec<u8>, RpcStatus> {
-    let entity = foks_rpc::arguments::decode_uid_lookup_challenge(argument)
-        .map_err(bad_arguments)?
-        .require_type(foks_proto::ENTITY_BACKUP_KEY)
-        .map_err(bad_arguments)?;
+    let entity =
+        foks_rpc::arguments::decode_uid_lookup_challenge(argument).map_err(bad_arguments)?;
+    if !matches!(
+        entity.entity_type(),
+        foks_proto::ENTITY_BACKUP_KEY | foks_proto::ENTITY_BOT_TOKEN_KEY
+    ) {
+        return Err(bad_arguments("unsupported lookup credential kind"));
+    }
     issue_recovery_challenge(entity, host, writer, keys, clock, entropy)
 }
 
@@ -455,8 +459,10 @@ pub(crate) fn lookup_uid_by_device(
 ) -> Result<Vec<u8>, RpcStatus> {
     let request =
         foks_rpc::arguments::decode_lookup_uid_by_device(argument).map_err(bad_arguments)?;
-    if request.entity.entity_type() != foks_proto::ENTITY_BACKUP_KEY
-        || request.challenge.payload.entity != request.entity
+    if !matches!(
+        request.entity.entity_type(),
+        foks_proto::ENTITY_BACKUP_KEY | foks_proto::ENTITY_BOT_TOKEN_KEY
+    ) || request.challenge.payload.entity != request.entity
         || request.challenge.payload.host != *host
     {
         return Err(lookup_failed());

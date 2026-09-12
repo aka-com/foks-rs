@@ -2000,26 +2000,19 @@ pub fn make_software_provision_link_from_backup_credential(
     )
 }
 
-fn make_provision_link(
+fn key_provision_unsigned(
     input: &SoftwareProvisionInput<'_>,
-    existing_device_seed: &SecretSeed,
-    existing_entity_type: u8,
-    new_entity_type: u8,
-    new_device_seed: &SecretSeed,
-    introduced_puk: Option<&SecretSeed>,
-) -> Result<SoftwareProvisionMaterial> {
-    let existing = derive_public_material(existing_device_seed, existing_entity_type)?;
-    let device = derive_public_material(new_device_seed, new_entity_type)?;
-    let introduced = introduced_puk
-        .map(|seed| derive_shared_public(seed, foks_proto::ENTITY_PUK_VERIFY))
-        .transpose()?;
+    existing: &EntityId,
+    device: &DevicePublicMaterial,
+    introduced: Option<&SharedPublicMaterial>,
+) -> Result<UnsignedUserLink> {
     let label = input.device_label;
     let label_bytes = encode(&Value::Array(vec![
         Value::Unsigned(label.device_type.protocol_value()),
         Value::Text(label.normalized_name.clone()),
         Value::Unsigned(label.serial),
     ]))?;
-    let shared_keys = match introduced.as_ref() {
+    let shared_keys = match introduced {
         Some(key) => {
             vec![UserSharedKey {
                 generation: 1,
@@ -2038,7 +2031,7 @@ fn make_provision_link(
         next_location_commitment: tree_location_commitment(&input.base.next_tree_location)?,
         uid: input.base.uid.clone(),
         host: input.base.host.clone(),
-        signer: existing.id,
+        signer: existing.clone(),
         changes: vec![UserMemberChange {
             role: input.role,
             entity: device.id.clone(),
@@ -2056,7 +2049,81 @@ fn make_provision_link(
             &input.device_name_commitment_key,
         ))],
     };
-    let unsigned = UnsignedUserLink::user_group_change(&change)?;
+    UnsignedUserLink::user_group_change(&change).map_err(Into::into)
+}
+
+/// Software token/device provisioning shares the exact group-change construction.
+pub fn make_software_key_provision_link(
+    input: &SoftwareProvisionInput<'_>,
+    existing_seed: &SecretSeed,
+    existing_kind: SoftwareKeyKind,
+    new_seed: &SecretSeed,
+    new_kind: SoftwareKeyKind,
+    introduced_puk: Option<&SecretSeed>,
+) -> Result<SoftwareProvisionMaterial> {
+    make_provision_link(
+        input,
+        existing_seed,
+        existing_kind.entity_type(),
+        new_kind.entity_type(),
+        new_seed,
+        introduced_puk,
+    )
+}
+
+/// A hardware owner countersigns enrollment of a software bot key.
+pub fn make_bot_provision_link_from_yubi(
+    input: &SoftwareProvisionInput<'_>,
+    parent: &dyn YubiDevice,
+    bot: &BotToken,
+    introduced_puk: Option<&SecretSeed>,
+) -> Result<SoftwareProvisionMaterial> {
+    let device = bot.public_material()?;
+    let introduced = introduced_puk
+        .map(|s| derive_shared_public(s, foks_proto::ENTITY_PUK_VERIFY))
+        .transpose()?;
+    let unsigned = key_provision_unsigned(input, parent.entity_id(), &device, introduced.as_ref())?;
+    let mut signatures = Vec::new();
+    if let Some(seed) = introduced_puk {
+        signatures.push(sign_seed_typed(
+            seed,
+            LINK_OUTER_V1_TYPE_ID,
+            &unsigned.signing_bytes(&signatures)?,
+        )?);
+    }
+    signatures.push(sign_seed_typed(
+        &bot.derived_seed(),
+        LINK_OUTER_V1_TYPE_ID,
+        &unsigned.signing_bytes(&signatures)?,
+    )?);
+    signatures.push(sign_yubi_typed(
+        parent,
+        LINK_OUTER_V1_TYPE_ID,
+        &unsigned.signing_bytes(&signatures)?,
+    )?);
+    Ok(SoftwareProvisionMaterial {
+        link: unsigned.finish(signatures)?,
+        device,
+        introduced_puk: introduced,
+        device_name_commitment_key: input.device_name_commitment_key,
+        next_tree_location: input.base.next_tree_location,
+    })
+}
+
+fn make_provision_link(
+    input: &SoftwareProvisionInput<'_>,
+    existing_device_seed: &SecretSeed,
+    existing_entity_type: u8,
+    new_entity_type: u8,
+    new_device_seed: &SecretSeed,
+    introduced_puk: Option<&SecretSeed>,
+) -> Result<SoftwareProvisionMaterial> {
+    let existing = derive_public_material(existing_device_seed, existing_entity_type)?;
+    let device = derive_public_material(new_device_seed, new_entity_type)?;
+    let introduced = introduced_puk
+        .map(|seed| derive_shared_public(seed, foks_proto::ENTITY_PUK_VERIFY))
+        .transpose()?;
+    let unsigned = key_provision_unsigned(input, &existing.id, &device, introduced.as_ref())?;
     let mut signatures = Vec::new();
     if let Some(seed) = introduced_puk {
         signatures.push(sign_seed_typed(
@@ -2183,6 +2250,22 @@ pub fn make_yubi_puk_rotation_link(
     parent: &dyn YubiDevice,
     rotations: &[PukRotation<'_>],
 ) -> Result<UserLink> {
+    make_yubi_puk_change_link(base, parent, None, rotations)
+}
+pub fn make_yubi_revoke_link(
+    base: &UserMutationBase<'_>,
+    parent: &dyn YubiDevice,
+    target: &EntityId,
+    rotations: &[PukRotation<'_>],
+) -> Result<UserLink> {
+    make_yubi_puk_change_link(base, parent, Some(target), rotations)
+}
+fn make_yubi_puk_change_link(
+    base: &UserMutationBase<'_>,
+    parent: &dyn YubiDevice,
+    target: Option<&EntityId>,
+    rotations: &[PukRotation<'_>],
+) -> Result<UserLink> {
     if rotations.is_empty() {
         return Err(Error::PukBinding);
     }
@@ -2210,7 +2293,17 @@ pub fn make_yubi_puk_rotation_link(
         uid: base.uid.clone(),
         host: base.host.clone(),
         signer: parent.entity_id().clone(),
-        changes: Vec::new(),
+        changes: target
+            .map(|target| {
+                vec![UserMemberChange {
+                    role: Role::NONE,
+                    entity: target.clone(),
+                    scoped_host: None,
+                    source_role: Role::NONE,
+                    keys: UserMemberKeys::None,
+                }]
+            })
+            .unwrap_or_default(),
         shared_keys,
         metadata: Vec::new(),
     };
@@ -3997,12 +4090,38 @@ fn open_hybrid_box(
     ))
 }
 
-struct SoftwareDecapsulator<'a> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SoftwareKeyKind {
+    Device,
+    BotToken,
+}
+impl SoftwareKeyKind {
+    pub fn entity_type(self) -> u8 {
+        match self {
+            Self::Device => foks_proto::ENTITY_DEVICE,
+            Self::BotToken => foks_proto::ENTITY_BOT_TOKEN_KEY,
+        }
+    }
+}
+pub fn derive_software_public(
+    seed: &SecretSeed,
+    kind: SoftwareKeyKind,
+) -> Result<DevicePublicMaterial> {
+    derive_public_material(seed, kind.entity_type())
+}
+
+pub struct SoftwareDecapsulator<'a> {
     seed: &'a SecretSeed,
     public: DevicePublicMaterial,
 }
 
 impl<'a> SoftwareDecapsulator<'a> {
+    pub fn for_kind(seed: &'a SecretSeed, kind: SoftwareKeyKind) -> Result<Self> {
+        Ok(Self {
+            seed,
+            public: derive_software_public(seed, kind)?,
+        })
+    }
     fn new(seed: &'a SecretSeed) -> Result<Self> {
         Ok(Self {
             seed,

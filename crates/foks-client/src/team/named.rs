@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use foks_client_db::{HardStateStore, TeamMutationKind, TeamMutationOperation, TeamMutationState};
 use foks_crypto::{
-    derive_device_public, derive_shared_public, derive_subkey_id, make_single_owner_named_team,
+    derive_shared_public, derive_subkey_id, make_single_owner_named_team,
     make_single_owner_named_team_yubi, named_team_id_from_admin_seed, prefixed_hash,
     seal_shared_key_boxes, seal_team_removal_key, NamedTeamInput, NamedTeamMaterial,
     PukBoxRandomness, SharedKeyBoxInput,
@@ -84,7 +84,7 @@ impl FoksClient {
         })?;
         require_nonstale_shared_key(&authenticated_user.verified, Role::OWNER)?;
         let owner = current_owner_puk(&authenticated_user)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         let device = authenticated_user
             .verified
             .devices()
@@ -185,7 +185,7 @@ impl FoksClient {
         team_name_utf8: &str,
         secrets: &NamedTeamSecrets,
     ) -> Result<CreatedNamedTeam> {
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         self.ensure_named_team_operation_binding(host, &credential.uid, &device_id, secrets)?;
         let authenticated_user = self.authenticate_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated_user)?;

@@ -1,3 +1,4 @@
+import { BotPanel } from '../components/bot-panel';
 import { RenamePanel } from '../components/rename-panel';
 import { SsoPanel } from '../components/sso-panel';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -837,6 +838,15 @@ export function SettingsScreen({
                     bridge.fixtureWorld && enteredScene === 'settings-account',
                   )}
                 />
+                {accountStores(world).map((store) => (
+                  <BotPanel
+                    key={`bot-${store.id}`}
+                    bridge={bridge}
+                    profile={store.server}
+                    account={store.account}
+                    onComplete={() => onRefresh('Bot account updated')}
+                  />
+                ))}
                 {accountStores(world).map((store) => (
                   <RenamePanel
                     key={`rename-${store.id}`}

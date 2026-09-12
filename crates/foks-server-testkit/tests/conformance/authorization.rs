@@ -46,6 +46,7 @@ pub(crate) fn authorization_and_unsupported_success() {
         ..
     } = other.credential;
     let unbound = foks_client::DeviceCredential {
+        key_kind: foks_client::SoftwareKeyKind::Device,
         uid: created.credential.uid.clone(),
         seed,
         certificate_chain,

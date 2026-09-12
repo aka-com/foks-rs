@@ -9,7 +9,7 @@ pub use types::*;
 
 use foks_client_db::{HardStateStore, TeamMutationKind, TeamMutationOperation, TeamMutationState};
 use foks_crypto::{
-    derive_device_public, derive_shared_public, derive_subkey_id, make_change_team_member_link,
+    derive_shared_public, derive_subkey_id, make_change_team_member_link,
     make_change_team_members_link, make_team_removal_proof, prefixed_hash, seal_puk_seed_chain_box,
     team_removal_key_commitment, ChangeTeamMemberEntryInput, ChangeTeamMemberInput,
     ChangeTeamMembersInput, SharedPublicMaterial, TeamPtkRotation,
@@ -474,7 +474,7 @@ impl FoksClient {
             team,
         )?;
         let actor_puk = team_actor_puk(&authenticated_user, &authenticated_team)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         let remaining = request
             .remaining_users
             .iter()
@@ -579,7 +579,7 @@ impl FoksClient {
             team,
         )?;
         let actor_puk = team_actor_puk(&authenticated_user, &authenticated_team)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         let remaining = request
             .remaining_users
             .iter()
@@ -676,7 +676,7 @@ impl FoksClient {
             team,
         )?;
         let owner = team_actor_puk(&authenticated_user, &authenticated_team)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         self.change_with_material(
             host,
             &credential.uid,
@@ -713,7 +713,7 @@ impl FoksClient {
             team,
         )?;
         let owner = team_actor_puk(&authenticated_user, &authenticated_team)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         self.change_with_material(
             host,
             &credential.uid,
@@ -802,7 +802,7 @@ impl FoksClient {
         let actor_puk = team_actor_puk(&authenticated_user, &authenticated_team)?;
         let actor_source =
             user_key_history_for_seed(&authenticated_user.verified, &actor_puk.seed)?.clone();
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         self.refresh_team_member_keys_with_material(
             host,
             &credential.uid,
@@ -906,7 +906,7 @@ impl FoksClient {
             ));
         }
         let actor = local_team_refresh_actor(actor_team, actor_recipient, target_team)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         self.refresh_team_member_keys_with_material(
             host,
             &credential.uid,
@@ -2201,7 +2201,7 @@ impl FoksClient {
             recovery.team,
         )?;
         let actor_puk = team_actor_puk(&authenticated_user, &authenticated_team)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         self.resume_change_with_material(
             host,
             &credential.uid,
@@ -2239,7 +2239,7 @@ impl FoksClient {
             recovery.team,
         )?;
         let actor_puk = team_actor_puk(&authenticated_user, &authenticated_team)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         let change = ChangeTeamMemberRequest {
             target: request.target,
             destination_role: Role::NONE,
@@ -2471,7 +2471,7 @@ impl FoksClient {
             recovery.team,
         )?;
         let actor_puk = team_actor_puk(&authenticated_user, &authenticated_team)?;
-        let device_id = derive_device_public(&credential.seed)?.id;
+        let device_id = credential.public_material()?.id;
         self.resume_removal_with_material(
             host,
             &credential.uid,

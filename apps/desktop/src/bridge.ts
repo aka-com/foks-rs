@@ -1,3 +1,4 @@
+import { decodeBotReply, type BotAction, type BotReply } from './bot-contract';
 import {
   decodeRenameProgress,
   type RenameAction,
@@ -558,6 +559,11 @@ export interface FirstRunFixture {
 export type Unlisten = () => void;
 
 export interface Bridge {
+  botAccount(
+    profile: string,
+    accountAlias: string,
+    action: BotAction,
+  ): Promise<BotReply>;
   renameAccount(
     profile: string,
     accountAlias: string,
@@ -2064,6 +2070,12 @@ export const tauriBridge: Bridge = {
   rerunGroupAdmission: (storeId, operationId) =>
     checked('rerun_group_admission', { storeId, operationId }, decodeMutation),
   chatLocal: (action) => checked('chat_local', { action }, decodeLocalSession),
+  botAccount: (profile, accountAlias, action) =>
+    checked(
+      'bot_account_request',
+      { profile, accountAlias, action },
+      decodeBotReply,
+    ),
   renameAccount: (profile, accountAlias, action) =>
     checked(
       'rename_account_request',

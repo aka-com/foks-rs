@@ -8,6 +8,7 @@ pub(crate) enum CredentialKind {
     SoftwareDevice,
     DelegatedSubkey,
     BackupKey,
+    BotToken,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +41,7 @@ impl Principal {
             foks_proto::ENTITY_DEVICE => CredentialKind::SoftwareDevice,
             foks_proto::ENTITY_SUBKEY => CredentialKind::DelegatedSubkey,
             foks_proto::ENTITY_BACKUP_KEY => CredentialKind::BackupKey,
+            foks_proto::ENTITY_BOT_TOKEN_KEY => CredentialKind::BotToken,
             _ => {
                 return Err(Error::Config(
                     "authenticated peer certificate has an unsupported credential kind",
@@ -72,10 +74,23 @@ impl Principal {
         &self.credential_id
     }
 
+    pub(crate) fn require_interactive_device(
+        &self,
+    ) -> std::result::Result<(), foks_rpc::RpcStatus> {
+        if self.kind == CredentialKind::BotToken {
+            return Err(foks_rpc::RpcStatus::PermissionDenied(
+                "bot chat is not enabled".into(),
+            ));
+        }
+        self.require_ordinary_device()
+    }
+
     pub(crate) fn require_ordinary_device(&self) -> std::result::Result<(), foks_rpc::RpcStatus> {
         if matches!(
             self.kind,
-            CredentialKind::SoftwareDevice | CredentialKind::DelegatedSubkey
+            CredentialKind::SoftwareDevice
+                | CredentialKind::DelegatedSubkey
+                | CredentialKind::BotToken
         ) {
             Ok(())
         } else {

@@ -55,7 +55,7 @@ test('prepare requires explicit confirmation and uncertain outcomes are checked 
       _p: string,
       _a: string,
       action: import('../src/rename-contract').RenameAction | null,
-    ) => {
+    ): Promise<RenameProgress[]> => {
       actions.push(action?.action ?? 'list');
       return [
         {

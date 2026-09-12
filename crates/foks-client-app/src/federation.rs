@@ -753,9 +753,7 @@ impl CheckedProfileSession<'_> {
             || pending.local_host_id != context.host.host_id().as_bytes()
             || pending.actor_uid != context.account.credential.uid.as_bytes()
             || pending.actor_device_id
-                != foks_crypto::derive_device_public(&context.account.credential.seed)?
-                    .id
-                    .as_bytes()
+                != context.account.credential.public_material()?.id.as_bytes()
             || pending.actor_source_role.role()? != actor_member.source_role
             || pending.actor_generation != actor_member.generation
             || pending.remote_team_id != requested_team.as_bytes()

@@ -85,4 +85,57 @@ fn durable_rename_against_go() {
             MutationState::Finalized
         );
     }
+    for (index, role) in [foks_proto::Role::OWNER, foks_proto::Role::member(0)]
+        .into_iter()
+        .enumerate()
+    {
+        let token = foks_crypto::BotToken::generate().unwrap();
+        let mut op = client
+            .prepare_bot_enrollment(&host, credential, role, &token, &mut protected)
+            .unwrap();
+        op = client
+            .bot_enrollment_progress(&host, credential, op.operation_id, true, &mut protected)
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while op.state != MutationState::RemoteVerified {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "bot proof not published"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            op = client
+                .bot_enrollment_progress(&host, credential, op.operation_id, false, &mut protected)
+                .unwrap();
+        }
+        assert_eq!(op.attempt_count, 1);
+        MutationCoordinator::new(&db, &mut protected)
+            .finalize(&op.operation_id)
+            .unwrap();
+        let bot = client.load_bot_token(&host, &token).unwrap();
+        let auth = client.authenticate_and_pin(&host, &bot).unwrap();
+        assert_eq!(auth.puks.last().unwrap().role, role);
+        client.kv_usage(&host, &bot, None).unwrap();
+        if index == 0 {
+            let permanent = client
+                .provision_software_device(
+                    &host,
+                    &bot,
+                    foks_client::SoftwareDeviceProvisionRequest {
+                        device_name: "bot permanent".into(),
+                        role,
+                        serial: 1,
+                    },
+                    foks_client::NewSoftwareDeviceSecrets::new(
+                        SecretSeed::new([88; 32]),
+                        None,
+                        [0x36; 17],
+                    ),
+                    &mut protected,
+                )
+                .unwrap();
+            assert_eq!(client.ping(&host, &permanent.credential).unwrap(), bot.uid);
+        } else {
+            assert!(!auth.puks.iter().any(|k| k.role == foks_proto::Role::OWNER));
+        }
+    }
 }

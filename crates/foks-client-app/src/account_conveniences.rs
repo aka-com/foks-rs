@@ -49,10 +49,7 @@ impl CheckedProfileSession<'_> {
     ) -> Result<Vec<RenameReport>> {
         self.profile.require(Capability::DeviceAdministration)?;
         let (uid, device) = match vault.account(alias) {
-            Ok(a) => (
-                a.credential.uid,
-                derive_device_public(&a.credential.seed)?.id,
-            ),
+            Ok(a) => (a.credential.uid.clone(), a.credential.public_material()?.id),
             Err(Error::AccountMissing) => {
                 let a = vault.yubi_account(alias)?;
                 (
@@ -112,7 +109,7 @@ impl CheckedProfileSession<'_> {
             .map(|a| a.credential.uid.clone())
             .unwrap_or_else(|| hardware.as_ref().unwrap().uid.clone());
         let device = match &software {
-            Some(a) => derive_device_public(&a.credential.seed)?.id,
+            Some(a) => a.credential.public_material()?.id,
             None => EntityId::from_bytes(
                 [
                     vec![foks_proto::ENTITY_YUBI],

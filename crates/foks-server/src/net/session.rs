@@ -816,7 +816,10 @@ impl ServerData {
         let device = EntityId::from_bytes(device_id.clone()).map_err(bad_arguments)?;
         if !matches!(
             device.entity_type(),
-            foks_proto::ENTITY_DEVICE | foks_proto::ENTITY_BACKUP_KEY | foks_proto::ENTITY_SUBKEY
+            foks_proto::ENTITY_DEVICE
+                | foks_proto::ENTITY_BACKUP_KEY
+                | foks_proto::ENTITY_SUBKEY
+                | foks_proto::ENTITY_BOT_TOKEN_KEY
         ) {
             return Err(bad_arguments("unsupported certificate credential kind"));
         }

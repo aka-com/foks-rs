@@ -67,6 +67,16 @@ impl BotToken {
                 .expect("canonical fixed bin8"),
         )
     }
+    pub fn sign_registration_challenge(
+        &self,
+        challenge: &foks_proto::RegistrationChallenge,
+    ) -> crate::Result<foks_proto::Signature> {
+        crate::sign_seed_typed(
+            &self.derived_seed(),
+            foks_proto::REG_CHALLENGE_PAYLOAD_TYPE_ID,
+            &challenge.payload.encoded()?,
+        )
+    }
     pub fn public_material(&self) -> crate::Result<crate::DevicePublicMaterial> {
         crate::derive_public_material(&self.derived_seed(), ENTITY_BOT_TOKEN_KEY)
     }

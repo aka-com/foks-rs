@@ -64,7 +64,7 @@ impl FoksClient {
             return Err(Error::AccountRequest("backup key requires a PUK role"));
         }
         let authenticated = self.authenticate_and_pin(host, existing)?;
-        let signer = derive_device_public(&existing.seed)?;
+        let signer = existing.public_material()?;
         let enrolled_signer = authenticated
             .verified
             .devices()
@@ -370,6 +370,7 @@ impl FoksClient {
             let certificate_chain =
                 self.fetch_device_certificate_chain(host, &backup.uid, &secrets.device_seed)?;
             let credential = DeviceCredential {
+                key_kind: crate::SoftwareKeyKind::Device,
                 uid: backup.uid,
                 seed: secrets.device_seed,
                 certificate_chain,
@@ -477,6 +478,7 @@ impl FoksClient {
                 Err(error) => return Err(error),
             };
         let credential = DeviceCredential {
+            key_kind: crate::SoftwareKeyKind::Device,
             uid: backup.uid,
             seed: secrets.device_seed,
             certificate_chain,
@@ -493,7 +495,7 @@ impl FoksClient {
         })
     }
 
-    fn fetch_key_certificate_chain(
+    pub(crate) fn fetch_key_certificate_chain(
         &self,
         host: &PinnedHost,
         uid: &EntityId,

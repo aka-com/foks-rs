@@ -206,6 +206,7 @@ fn unsigned_newer_merkle_root_is_rejected_before_user_state_is_used() {
         .fetch_device_certificate_chain(&pinned, &uid, &pki.seed)
         .unwrap();
     let credential = DeviceCredential {
+        key_kind: crate::SoftwareKeyKind::Device,
         uid: uid.clone(),
         seed: pki.seed,
         certificate_chain: certificates,
@@ -295,6 +296,7 @@ fn realtime_sequence_scenario(status_error: bool) {
         panic!()
     };
     let credential = DeviceCredential {
+        key_kind: crate::SoftwareKeyKind::Device,
         uid: entity("uid.snowp"),
         seed: pki.seed,
         certificate_chain: certs
@@ -413,6 +415,7 @@ fn realtime_timeout_closes_stream_and_rejects_subsequent_calls() {
         panic!()
     };
     let credential = DeviceCredential {
+        key_kind: crate::SoftwareKeyKind::Device,
         uid: entity("uid.snowp"),
         seed: pki.seed,
         certificate_chain: certs

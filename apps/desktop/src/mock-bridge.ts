@@ -766,6 +766,10 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       available: false,
       settings: { enabled: false, previews: false, overrides: {} },
     }),
+    botAccount: async () => ({
+      rows: [],
+      message: 'Bot credentials require a connected agent.',
+    }),
     renameAccount: async (_profile, accountAlias, action) =>
       action
         ? [
