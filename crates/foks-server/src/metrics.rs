@@ -37,6 +37,10 @@ struct DurationMetricSnapshot {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ServerMetricsSnapshot {
+    pub admin_cleanup_attempts: u64,
+    pub admin_cleanup_failures: u64,
+    pub admin_reclaimed_records: u64,
+
     pub requests_started: u64,
     pub responses_completed: u64,
     pub connections_accepted: u64,
@@ -72,6 +76,10 @@ pub struct ServerMetricsSnapshot {
 
 #[derive(Default)]
 pub struct ServerMetrics {
+    admin_cleanup_attempts: AtomicU64,
+    admin_cleanup_failures: AtomicU64,
+    admin_reclaimed_records: AtomicU64,
+
     requests_started: AtomicU64,
     responses_completed: AtomicU64,
     connections_accepted: AtomicU64,
@@ -100,11 +108,28 @@ pub struct ServerMetrics {
 }
 
 impl ServerMetrics {
+    pub(crate) fn admin_cleanup_attempted(&self) {
+        self.admin_cleanup_attempts.fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn admin_cleanup_failed(&self) {
+        self.admin_cleanup_failures.fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn admin_cleanup_succeeded(&self, r: &foks_server_db::WebCleanup) {
+        self.admin_reclaimed_records.fetch_add(
+            r.tickets + r.confirmations + r.sessions + r.nonces + r.audit,
+            Ordering::Relaxed,
+        );
+    }
+
     pub fn snapshot(&self) -> ServerMetricsSnapshot {
         let request_duration = self.request_duration.snapshot();
         let handler_duration = self.handler_duration.snapshot();
         let backup_duration = self.backup_duration.snapshot();
         ServerMetricsSnapshot {
+            admin_cleanup_attempts: self.admin_cleanup_attempts.load(Ordering::Relaxed),
+            admin_cleanup_failures: self.admin_cleanup_failures.load(Ordering::Relaxed),
+            admin_reclaimed_records: self.admin_reclaimed_records.load(Ordering::Relaxed),
+
             requests_started: self.requests_started.load(Ordering::Relaxed),
             responses_completed: self.responses_completed.load(Ordering::Relaxed),
             connections_accepted: self.connections_accepted.load(Ordering::Relaxed),

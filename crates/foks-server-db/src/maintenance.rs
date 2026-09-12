@@ -48,35 +48,35 @@ impl Database {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute(
-            "DELETE FROM sso_sessions WHERE expires_at_ms<=?1",
+            "DELETE FROM sso_sessions WHERE rowid IN (SELECT rowid FROM sso_sessions WHERE expires_at_ms<=?1 LIMIT 128)",
             [sql_integer(now / 1000)?],
         )?;
         let reservations = transaction.execute(
-            "DELETE FROM names WHERE uid IS NULL AND expires_at <= ?1",
+            "DELETE FROM names WHERE rowid IN (SELECT rowid FROM names WHERE uid IS NULL AND expires_at <= ?1 LIMIT 128)",
             [sql_integer(now)?],
         )?;
         let team_reservations = transaction.execute(
-            "DELETE FROM team_names WHERE team_id IS NULL AND expires_at <= ?1",
+            "DELETE FROM team_names WHERE rowid IN (SELECT rowid FROM team_names WHERE team_id IS NULL AND expires_at <= ?1 LIMIT 128)",
             [sql_integer(now)?],
         )?;
         let receipts = transaction.execute(
-            "DELETE FROM request_receipts WHERE expires_at <= ?1",
+            "DELETE FROM request_receipts WHERE rowid IN (SELECT rowid FROM request_receipts WHERE expires_at <= ?1 LIMIT 128)",
             [sql_integer(now)?],
         )?;
         let challenges = transaction.execute(
-            "DELETE FROM recovery_challenges WHERE expires_at <= ?1 OR consumed = 1",
+            "DELETE FROM recovery_challenges WHERE rowid IN (SELECT rowid FROM recovery_challenges WHERE expires_at <= ?1 OR consumed = 1 LIMIT 128)",
             [sql_integer(now)?],
         )?;
         let team_view_tokens = transaction.execute(
-            "DELETE FROM team_view_tokens WHERE expires_at <= ?1",
+            "DELETE FROM team_view_tokens WHERE rowid IN (SELECT rowid FROM team_view_tokens WHERE expires_at <= ?1 LIMIT 128)",
             [sql_integer(now)?],
         )?;
         let team_view_challenges = transaction.execute(
-            "DELETE FROM team_view_challenges WHERE expires_at <= ?1",
+            "DELETE FROM team_view_challenges WHERE rowid IN (SELECT rowid FROM team_view_challenges WHERE expires_at <= ?1 LIMIT 128)",
             [sql_integer(now)?],
         )?;
         let team_admin_tokens = transaction.execute(
-            "DELETE FROM team_admin_tokens WHERE expires_at <= ?1",
+            "DELETE FROM team_admin_tokens WHERE rowid IN (SELECT rowid FROM team_admin_tokens WHERE expires_at <= ?1 LIMIT 128)",
             [sql_integer(now)?],
         )?;
         // Lock expiry is evaluated against the timeout supplied by the next
@@ -84,7 +84,7 @@ impl Database {
         let locks = 0;
         let uploads = uploads::reclaim(&transaction, abandon_uploads_before)?;
         let log_sends = transaction.execute(
-            "DELETE FROM log_sends WHERE created_at <= ?1",
+            "DELETE FROM log_sends WHERE rowid IN (SELECT rowid FROM log_sends WHERE created_at <= ?1 LIMIT 128)",
             [sql_integer(now.saturating_sub(24 * 60 * 60 * 1_000_000))?],
         )?;
         // Active federation rows remain renewable after bearer expiry, and revoked

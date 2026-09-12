@@ -44,3 +44,5 @@ pub use standalone::{
     BackupSchedule, RunningStandaloneServer, StandaloneConfig,
 };
 pub use writer::{DatabaseWriterGuard, GuardedDatabase, Writer, WriterHandle, WriterMetrics};
+
+pub mod web_admin;

@@ -407,6 +407,8 @@ tools/foks-client/check.sh
 Organization authentication setup, operational policy and acceptance guidance are
 in [OIDC.md](OIDC.md).
 
-The Go-compatible web-administration handoff is a client feature for hosts that
-already expose `User.newWebAdminPanelURL` and `User.checkURL`. This standalone
-server does not issue those sessions and has no local web-administration product.
+The optional Rust-hosted administration application supports explicit host operator
+grants, signup invites/policy and browser-session management. It preserves the
+pinned native handoff RPCs and exchanges tickets once for short-lived browser
+sessions. See [ADMINISTRATION.md](ADMINISTRATION.md) for HTTPS deployment, bootstrap,
+authority and backup/restore rules. It is disabled by default.

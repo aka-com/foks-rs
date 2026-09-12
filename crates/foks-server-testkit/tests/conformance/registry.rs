@@ -24,6 +24,20 @@ struct DeclaredRoute {
 
 const COVERAGE: &[Coverage] = &[
     Coverage {
+        name: "web_admin",
+        run: crate::web_admin::https_native_handoff_invites_cas_and_server_logout,
+        routes: &[("User", "newWebAdminPanelURL"), ("User", "checkURL")],
+    },
+    Coverage {
+        name: "oidc_identity",
+        run: crate::sso::migration_two_accounts_owner_proofs_late_link_and_erased_token_receipt,
+        routes: &[
+            ("Identity", "fennecCapabilities"),
+            ("Identity", "fennecChallenge"),
+            ("Identity", "fennecProve"),
+        ],
+    },
+    Coverage {
         name: "team_remote_invitations",
         run: crate::team_invitations::team_remote_invitations,
         routes: &[

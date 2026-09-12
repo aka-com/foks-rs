@@ -73,6 +73,8 @@ enum Command {
     Invite(InviteCommand),
     #[command(subcommand)]
     Oidc(OidcCommand),
+    #[command(subcommand)]
+    Admin(AdminCommand),
 }
 
 #[derive(clap::Subcommand)]
@@ -272,6 +274,8 @@ struct InitArguments {
 
 #[derive(clap::Args)]
 struct ServeArguments {
+    #[arg(skip)]
+    web_admin: Option<foks_server::web_admin::WebAdminConfig>,
     #[arg(long, default_value = "")]
     vhost_management_host: String,
     #[arg(skip)]
@@ -391,6 +395,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::RetireCapabilityKeys { config } => retire_capability_keys(config),
         Command::Invite(command) => invite_command(command),
         Command::Oidc(command) => oidc_command(command),
+        Command::Admin(command) => admin_command(command),
     }
 }
 
@@ -517,6 +522,7 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     foks_server::installation::validate_artifacts(&config)?;
     serve(ServeArguments {
         oidc: config.oidc,
+        web_admin: config.web_admin,
         vhost_management_host: config.vhost_management_host,
         canonical_name: config.canonical_name,
         database: config.database,
@@ -550,6 +556,26 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 fn config_check(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let config = foks_server::installation::load_config(path)?;
     foks_server::installation::validate_artifacts(&config)?;
+    if let Some(admin) = &config.web_admin {
+        match std::net::TcpListener::bind(admin.listen) {
+            Ok(listener) => {
+                drop(listener);
+                println!("admin_listener_bind=available");
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                println!("admin_listener_bind=busy (stop the running service before rebinding)")
+            }
+            Err(error) => return Err(error.into()),
+        }
+        if config.database.exists() {
+            let count = foks_server_db::ReadDatabase::open(&config.database, Default::default())?
+                .admin_operator_count()?;
+            println!("admin_active_operators={count}");
+            if count == 0 {
+                println!("No host operator configured; only self-session pages are available.");
+            }
+        }
+    }
     println!("FOKS server configuration and artifacts are valid");
     if let Some(oidc) = &config.oidc {
         println!(
@@ -595,6 +621,7 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
         u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros())?;
     let server = foks_server::start_standalone(StandaloneConfig {
         vhost_management_host: arguments.vhost_management_host,
+        web_admin: arguments.web_admin,
         oidc: arguments
             .oidc
             .clone()
@@ -861,4 +888,64 @@ fn read_public_certificate(path: &Path) -> std::io::Result<CertificateDer<'stati
         ));
     }
     Ok(CertificateDer::from(bytes))
+}
+
+#[derive(clap::Subcommand)]
+enum AdminCommand {
+    Grant(AdminGrantArguments),
+    Revoke(AdminGrantArguments),
+    List {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        after: Option<String>,
+    },
+}
+#[derive(clap::Args)]
+struct AdminGrantArguments {
+    #[arg(long)]
+    config: PathBuf,
+    #[arg(long)]
+    uid: String,
+    #[arg(long)]
+    reason: String,
+}
+fn admin_command(command: AdminCommand) -> Result<(), Box<dyn std::error::Error>> {
+    use foks_server::web_admin::operator;
+    let (args, active) = match command {
+        AdminCommand::List { config, after } => {
+            let config = foks_server::installation::load_config(config)?;
+            let after = after.as_deref().map(oidc_hex::<33>).transpose()?;
+            let grants =
+                operator::grants(&config, after.as_ref().map(|v| v.as_slice()).unwrap_or(&[]))?;
+            if grants.is_empty() {
+                println!("No host operator grants in this page.");
+            }
+            for g in grants {
+                println!(
+                    "host={} uid={} account={} active={} revision={}",
+                    encode_hex(&g.host),
+                    encode_hex(&g.uid),
+                    g.username,
+                    g.active,
+                    g.revision
+                );
+            }
+            return Ok(());
+        }
+        AdminCommand::Grant(args) => (args, true),
+        AdminCommand::Revoke(args) => (args, false),
+    };
+    let config = foks_server::installation::load_config(args.config)?;
+    let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros())?;
+    let g = operator::set_grant(&config, &oidc_hex(&args.uid)?, active, &args.reason, now)?;
+    println!(
+        "host={} uid={} account={} active={} revision={}",
+        encode_hex(&g.host),
+        encode_hex(&g.uid),
+        g.username,
+        g.active,
+        g.revision
+    );
+    Ok(())
 }

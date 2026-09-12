@@ -15,6 +15,7 @@ use crate::Writer;
 use crate::{Config, ReadDatabaseConfig, Result, SessionLimits};
 
 pub struct StandaloneConfig {
+    pub web_admin: Option<crate::web_admin::WebAdminConfig>,
     pub vhost_management_host: String,
     pub oidc: Option<(crate::sso::OidcOperatorConfig, foks_oidc::NetworkPolicy)>,
     pub database_path: PathBuf,
@@ -44,6 +45,7 @@ pub struct RunningStandaloneServer {
     // Drop first so the backup thread cannot outlive the shared key-provider
     // lock held by `server` and race an offline rotation.
     backup: Option<crate::operations::BackupScheduler>,
+    web_admin_http: Option<crate::web_admin::WebAdminHttpServer>,
     oidc_http: Option<crate::sso::OidcHttpServer>,
     server: RunningServer,
     bootstrap: BootstrapState,
@@ -506,6 +508,7 @@ impl RunningStandaloneServer {
             &self.writer.handle(),
             Arc::clone(&self.clock),
             Arc::clone(&self.metrics),
+            self.web_admin_http.as_ref().map(|http| http.service()),
         )
     }
 
@@ -516,6 +519,10 @@ impl RunningStandaloneServer {
 
     pub fn metrics(&self) -> crate::ServerMetricsSnapshot {
         self.metrics.snapshot()
+    }
+
+    pub fn web_admin_address(&self) -> Option<SocketAddr> {
+        self.web_admin_http.as_ref().map(|v| v.address())
     }
 
     pub fn management_address(&self) -> SocketAddr {
@@ -551,6 +558,9 @@ impl RunningStandaloneServer {
 
     pub fn shutdown(mut self) -> Result<()> {
         self.management.mark_not_ready();
+        if let Some(http) = self.web_admin_http.take() {
+            http.shutdown()?;
+        }
         if let Some(backup) = self.backup.take() {
             backup.shutdown()?;
         }
@@ -668,6 +678,28 @@ pub(crate) fn host_key_backup_files(
 
 pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneServer> {
     config.limits.validate()?;
+    if let Some(admin) = &config.web_admin {
+        admin.validate()?;
+        if config.limits.maximum_read_connections < 3 || config.maximum_pending_writes < 2 {
+            return Err(crate::Error::Config(
+                "admin requires at least three read connections and two writer slots",
+            ));
+        }
+        if [
+            config.probe_address,
+            config.public_address,
+            config.authenticated_address,
+            config.management_address,
+        ]
+        .contains(&admin.listen)
+            || config
+                .oidc
+                .as_ref()
+                .is_some_and(|(v, _)| v.listen == admin.listen)
+        {
+            return Err(crate::Error::Config("admin listener collision"));
+        }
+    }
     crate::operations::ManagementServer::validate_address(config.management_address)?;
     let key_directory = config.key_directory.clone();
     let keys = Arc::new(DirectoryKeyProvider::open(
@@ -715,11 +747,6 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     let tls = build_host_tls(keys.as_ref(), &input.canonical_name)?;
     let writer_handle = writer.handle();
     let metrics = Arc::new(crate::ServerMetrics::default());
-    let maintenance = Maintenance::start(
-        writer_handle.clone(),
-        Arc::clone(&config.clock),
-        Arc::clone(&metrics),
-    );
     let backup_schedule = config.backup;
 
     let sso = if let Some((operator, policy)) = config.oidc {
@@ -763,14 +790,46 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         })?;
         None
     };
+    let mut rpc_limits = config.limits;
+    let web_admin = if let Some(admin) = config.web_admin {
+        rpc_limits.maximum_read_connections -= 2;
+        let clock = Arc::new(crate::web_admin::AdminClock::new(
+            config.clock.clone(),
+            Arc::new(crate::web_admin::SuspendClock),
+            config.entropy.clone(),
+        )?);
+        Some(crate::web_admin::WebAdminService::new(
+            admin,
+            clock,
+            ReadDatabaseConfig {
+                path: config.database_path.clone(),
+                database: database_config.clone(),
+            },
+            writer_handle.clone(),
+            config.entropy.clone(),
+        )?)
+    } else {
+        None
+    };
     let oidc_http = sso
         .as_ref()
         .map(|service| crate::sso::OidcHttpServer::start(service.clone()))
         .transpose()?;
+    let web_admin_http = web_admin
+        .as_ref()
+        .map(|service| crate::web_admin::WebAdminHttpServer::start(service.clone()))
+        .transpose()?;
+    let maintenance = Maintenance::start(
+        writer_handle.clone(),
+        config.clock.clone(),
+        metrics.clone(),
+        web_admin.clone(),
+    );
     let server = RunningServer::start_bound(
         Config {
             vhost_management_host: config.vhost_management_host.clone(),
             sso,
+            web_admin,
             probe_address: config.probe_address,
             public_address: config.public_address,
             authenticated_address: config.authenticated_address,
@@ -790,7 +849,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
             diagnostics: config.diagnostics,
             metrics: Arc::clone(&metrics),
             rate_limits: config.rate_limits,
-            limits: config.limits,
+            limits: rpc_limits,
         },
         listeners,
     )?;
@@ -816,6 +875,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         .transpose()?;
     management.mark_ready();
     Ok(RunningStandaloneServer {
+        web_admin_http,
         oidc_http,
         backup,
         server,

@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("browser ticket belongs to another account")]
+    WebWrongUser,
     #[error("SQLite storage failed: {0}")]
     Sql(#[from] rusqlite::Error),
     #[error("database application id {found:#x} is not a FOKS server store")]

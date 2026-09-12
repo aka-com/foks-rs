@@ -9,8 +9,14 @@ pub(crate) struct AccountFixture {
 }
 impl AccountFixture {
     pub(crate) fn start() -> Self {
+        Self::start_with_admin(None)
+    }
+    pub(crate) fn start_with_admin(admin: Option<foks_server_testkit::WebAdminConfig>) -> Self {
         let environment = TestEnvironment::new().unwrap();
-        let server = environment.start_server().unwrap();
+        let server = match admin {
+            Some(admin) => environment.start_web_admin_server(admin, None).unwrap(),
+            None => environment.start_server().unwrap(),
+        };
         let state = environment.client_path("sso-app", "state").unwrap();
         let root = environment.client_path("sso-app", "root.der").unwrap();
         environment.write_probe_root(&root).unwrap();

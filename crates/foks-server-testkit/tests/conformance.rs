@@ -59,3 +59,6 @@ mod bot_token;
 
 #[path = "conformance/team_invitations.rs"]
 mod team_invitations;
+
+#[path = "conformance/web_admin.rs"]
+mod web_admin;

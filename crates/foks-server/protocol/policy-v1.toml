@@ -4,6 +4,7 @@ version = 1
 baseline = "foks-v0.1.9"
 
 [status_aliases]
+wrong_user = "WRONG_USER_ERROR"
 team_invite_pending = "TEAM_INVITE_ALREADY_ACCEPTED_ERROR"
 no_change = "NO_CHANGE_ERROR"
 oauth2 = "OAUTH2_ERROR"
@@ -1910,3 +1911,29 @@ statuses = ["ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
 max_request_bytes = 16384
 supported = true
 coverage = ["oidc_identity"]
+
+[[route]]
+protocol = "User"
+method = "newWebAdminPanelURL"
+position_constant = "USER_NEW_WEB_ADMIN_PANEL_URL_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+supported = true
+request = "Void"
+result = "URLString"
+max_request_bytes = 64
+statuses = ["oauth2_auth", "ok", "unsupported", "permission_denied", "rate_limited", "tx_retry"]
+coverage = ["web_admin"]
+
+[[route]]
+protocol = "User"
+method = "checkURL"
+position_constant = "USER_CHECK_URL_METHOD_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+supported = true
+request = "URLString"
+result = "Void"
+max_request_bytes = 16384
+statuses = ["oauth2_auth", "ok", "unsupported", "bad_args", "wrong_user", "expired", "permission_denied", "rate_limited", "tx_retry"]
+coverage = ["web_admin"]

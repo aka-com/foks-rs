@@ -64,6 +64,7 @@ timeout = 1009
 tx_retry = 1014
 unsupported = 1020
 user_not_found = 1027
+wrong_user = 1018
 
 [[protocol]]
 name = "Probe"
@@ -2340,3 +2341,37 @@ statuses = ["ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
 max_request_bytes = 16384
 supported = true
 coverage = ["oidc_identity"]
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "newWebAdminPanelURL"
+position = 21
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "Void"
+result = "URLString"
+upstream_result = "lib.URLString"
+argument_header = true
+result_header = true
+statuses = ["oauth2_auth", "ok", "unsupported", "permission_denied", "rate_limited", "tx_retry"]
+max_request_bytes = 64
+supported = true
+coverage = ["web_admin"]
+
+[[route]]
+protocol = "User"
+protocol_id = 0x823f0899
+method = "checkURL"
+position = 22
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "URLString"
+result = "Void"
+upstream_result = "void"
+argument_header = true
+result_header = true
+statuses = ["oauth2_auth", "ok", "unsupported", "bad_args", "wrong_user", "expired", "permission_denied", "rate_limited", "tx_retry"]
+max_request_bytes = 16384
+supported = true
+coverage = ["web_admin"]

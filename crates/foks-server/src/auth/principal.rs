@@ -79,7 +79,7 @@ impl Principal {
     ) -> std::result::Result<(), foks_rpc::RpcStatus> {
         if self.kind == CredentialKind::BotToken {
             return Err(foks_rpc::RpcStatus::PermissionDenied(
-                "bot chat is not enabled".into(),
+                "interactive device authentication required".into(),
             ));
         }
         self.require_ordinary_device()

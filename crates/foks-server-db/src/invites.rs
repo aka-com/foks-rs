@@ -10,7 +10,7 @@ pub enum InviteRegime {
 }
 
 impl InviteRegime {
-    fn from_sql(value: i64) -> Result<Self> {
+    pub(crate) fn from_sql(value: i64) -> Result<Self> {
         match value {
             1 => Ok(Self::Required),
             2 => Ok(Self::Optional),
@@ -31,7 +31,7 @@ pub enum InviteKind {
 }
 
 impl InviteKind {
-    fn from_sql(value: i64) -> Result<Self> {
+    pub(crate) fn from_sql(value: i64) -> Result<Self> {
         match value {
             1 => Ok(Self::Standard),
             2 => Ok(Self::MultiUse),
@@ -42,6 +42,7 @@ impl InviteKind {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InvitePolicy {
+    pub revision: u64,
     pub regime: InviteRegime,
 }
 
@@ -65,6 +66,7 @@ pub struct IssuedInvite {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InviteSnapshot {
+    pub configuration_revision: u64,
     pub invite_id: [u8; 16],
     pub kind: InviteKind,
     pub active: bool,
@@ -82,7 +84,7 @@ impl Database {
 
     pub fn set_invite_regime(&mut self, regime: InviteRegime) -> Result<()> {
         self.connection.execute(
-            "UPDATE signup_policy SET invite_regime = ?1 WHERE singleton = 1",
+            "UPDATE signup_policy SET invite_regime = ?1, revision=revision+1 WHERE singleton = 1",
             [regime as i64],
         )?;
         Ok(())
@@ -99,40 +101,21 @@ impl Database {
         expires_at: Option<u64>,
         now: u64,
     ) -> Result<IssuedInvite> {
-        if issuer_uid.is_some_and(|uid| uid.len() != 33)
-            || expires_at.is_some_and(|expiry| expiry <= now)
-            || matches!(kind, InviteKind::Standard) && max_uses != Some(1)
-            || matches!(kind, InviteKind::MultiUse) && max_uses == Some(0)
-        {
-            return Err(Error::Invalid("invite issuance"));
-        }
-        self.connection.execute(
-            "INSERT INTO signup_invites
-             (invite_id, code_hash, kind, issuer_uid, state, max_uses, use_count,
-              expires_at, created_at, disabled_at)
-             VALUES (?1, ?2, ?3, ?4, 1, ?5, 0, ?6, ?7, NULL)",
-            params![
-                invite_id,
-                code_hash,
-                kind as i64,
-                issuer_uid,
-                max_uses.map(sql_integer).transpose()?,
-                expires_at.map(sql_integer).transpose()?,
-                sql_integer(now)?,
-            ],
-        )?;
-        Ok(IssuedInvite {
-            invite_id: *invite_id,
+        issue(
+            &self.connection,
+            invite_id,
+            code_hash,
             kind,
+            issuer_uid,
             max_uses,
             expires_at,
-            created_at: now,
-        })
+            now,
+        )
     }
 
     pub fn disable_invite(&mut self, code_hash: &[u8; 32], now: u64) -> Result<bool> {
         Ok(self.connection.execute(
-            "UPDATE signup_invites SET state = 2, disabled_at = ?2
+            "UPDATE signup_invites SET state = 2, disabled_at = ?2, configuration_revision=configuration_revision+1
              WHERE code_hash = ?1 AND state = 1",
             params![code_hash, sql_integer(now)?],
         )? == 1)
@@ -220,13 +203,14 @@ pub(crate) fn record_redemption(
     Ok(())
 }
 
-fn invite_policy(connection: &Connection) -> Result<InvitePolicy> {
-    let regime = connection.query_row(
-        "SELECT invite_regime FROM signup_policy WHERE singleton = 1",
+pub(crate) fn invite_policy(connection: &Connection) -> Result<InvitePolicy> {
+    let (regime, revision) = connection.query_row(
+        "SELECT invite_regime,revision FROM signup_policy WHERE singleton = 1",
         [],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get::<_, i64>(1)?)),
     )?;
     Ok(InvitePolicy {
+        revision: crate::error::unsigned(revision)?,
         regime: InviteRegime::from_sql(regime)?,
     })
 }
@@ -252,7 +236,7 @@ fn invite_available(
 
 fn invites(connection: &Connection) -> Result<Vec<InviteSnapshot>> {
     let mut statement = connection.prepare(
-        "SELECT invite_id, kind, state, max_uses, use_count, expires_at, created_at, disabled_at
+        "SELECT invite_id, kind, state, max_uses, use_count, expires_at, created_at, disabled_at, configuration_revision
          FROM signup_invites ORDER BY created_at, invite_id",
     )?;
     let rows = statement.query_map([], |row| {
@@ -265,14 +249,17 @@ fn invites(connection: &Connection) -> Result<Vec<InviteSnapshot>> {
             row.get::<_, Option<i64>>(5)?,
             row.get::<_, i64>(6)?,
             row.get::<_, Option<i64>>(7)?,
+            row.get::<_, i64>(8)?,
         ))
     })?;
     rows.map(|row| {
-        let (id, kind, state, max_uses, use_count, expires_at, created_at, disabled_at) = row?;
+        let (id, kind, state, max_uses, use_count, expires_at, created_at, disabled_at, revision) =
+            row?;
         let invite_id = id
             .try_into()
             .map_err(|_| Error::Invalid("stored invite ID"))?;
         Ok(InviteSnapshot {
+            configuration_revision: crate::error::unsigned(revision)?,
             invite_id,
             kind: InviteKind::from_sql(kind)?,
             active: state == 1,
@@ -284,4 +271,78 @@ fn invites(connection: &Connection) -> Result<Vec<InviteSnapshot>> {
         })
     })
     .collect()
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn issue(
+    connection: &Connection,
+    invite_id: &[u8; 16],
+    code_hash: &[u8; 32],
+    kind: InviteKind,
+    issuer_uid: Option<&[u8]>,
+    max_uses: Option<u64>,
+    expires_at: Option<u64>,
+    now: u64,
+) -> Result<IssuedInvite> {
+    if issuer_uid.is_some_and(|uid| uid.len() != 33)
+        || expires_at.is_some_and(|expiry| expiry <= now)
+        || matches!(kind, InviteKind::Standard) && max_uses != Some(1)
+        || matches!(kind, InviteKind::MultiUse) && max_uses == Some(0)
+    {
+        return Err(Error::Invalid("invite issuance"));
+    }
+    connection.execute(
+        "INSERT INTO signup_invites
+             (invite_id, code_hash, kind, issuer_uid, state, max_uses, use_count,
+              expires_at, created_at, disabled_at)
+             VALUES (?1, ?2, ?3, ?4, 1, ?5, 0, ?6, ?7, NULL)",
+        params![
+            invite_id,
+            code_hash,
+            kind as i64,
+            issuer_uid,
+            max_uses.map(sql_integer).transpose()?,
+            expires_at.map(sql_integer).transpose()?,
+            sql_integer(now)?,
+        ],
+    )?;
+    Ok(IssuedInvite {
+        invite_id: *invite_id,
+        kind,
+        max_uses,
+        expires_at,
+        created_at: now,
+    })
+}
+
+pub(crate) fn set_regime_cas(c: &Connection, regime: InviteRegime, expected: u64) -> Result<()> {
+    if c.execute("UPDATE signup_policy SET invite_regime=?1,revision=revision+1 WHERE singleton=1 AND revision=?2",params![regime as u8,sql_integer(expected)?])? !=1 { return Err(Error::ReceiptConflict); }
+    Ok(())
+}
+pub(crate) fn disable_id_cas(c: &Connection, id: &[u8; 16], expected: u64, now: u64) -> Result<()> {
+    if c.execute("UPDATE signup_invites SET state=2,disabled_at=?3,configuration_revision=configuration_revision+1 WHERE invite_id=?1 AND state=1 AND configuration_revision=?2",params![id,sql_integer(expected)?,sql_integer(now)?])? !=1 {return Err(Error::ReceiptConflict);}
+    Ok(())
+}
+pub(crate) fn page(c: &Connection, after: &[u8], limit: usize) -> Result<Vec<InviteSnapshot>> {
+    if limit == 0 || limit > 100 || ![0, 16].contains(&after.len()) {
+        return Err(Error::Invalid("invite page"));
+    }
+    let mut q=c.prepare("SELECT invite_id,kind,state,max_uses,use_count,expires_at,created_at,disabled_at,configuration_revision FROM signup_invites WHERE invite_id>?1 ORDER BY invite_id LIMIT ?2")?;
+    let rows = q.query_map(params![after, limit as i64], |r| {
+        Ok(InviteSnapshot {
+            invite_id: r.get(0)?,
+            kind: match r.get::<_, u8>(1)? {
+                1 => InviteKind::Standard,
+                2 => InviteKind::MultiUse,
+                _ => return Err(rusqlite::Error::InvalidQuery),
+            },
+            active: r.get::<_, u8>(2)? == 1,
+            max_uses: r.get::<_, Option<i64>>(3)?.map(|v| v as u64),
+            use_count: r.get::<_, i64>(4)? as u64,
+            expires_at: r.get::<_, Option<i64>>(5)?.map(|v| v as u64),
+            created_at: r.get::<_, i64>(6)? as u64,
+            disabled_at: r.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+            configuration_revision: r.get::<_, i64>(8)? as u64,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }

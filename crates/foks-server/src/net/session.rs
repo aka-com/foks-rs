@@ -29,6 +29,7 @@ use crate::{Entropy, Result, SessionLimits, WriterHandle};
 #[derive(Clone)]
 pub(crate) struct ServerData {
     vhost_management_host: String,
+    web_admin: Option<Arc<crate::web_admin::WebAdminService>>,
     sso: Option<Arc<crate::sso::SsoService>>,
     peer_ip: Option<std::net::IpAddr>,
     probe_response: Arc<[u8]>,
@@ -131,6 +132,7 @@ impl ServerData {
             .to_owned();
         Ok(Self {
             sso: config.sso.clone(),
+            web_admin: config.web_admin.clone(),
             vhost_management_host: config.vhost_management_host.clone(),
             peer_ip: None,
             probe_response,

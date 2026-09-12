@@ -19,6 +19,7 @@ pub(crate) struct EnvironmentInner {
     pub(crate) backup: Option<foks_server::BackupSchedule>,
     pub(crate) addresses: Mutex<Option<foks_server::ServerAddresses>>,
     pub(crate) running: Mutex<bool>,
+    pub(crate) writer: Mutex<Option<foks_server::WriterHandle>>,
 }
 
 #[derive(Clone)]
@@ -74,6 +75,7 @@ impl TestEnvironment {
                 backup,
                 addresses: Mutex::new(addresses),
                 running: Mutex::new(false),
+                writer: Mutex::new(None),
             }),
         })
     }
@@ -113,6 +115,13 @@ impl TestEnvironment {
         authority: &str,
     ) -> foks_server::Result<crate::InProcessServer> {
         crate::InProcessServer::start_with_management(self.clone(), None, authority.to_owned())
+    }
+    pub fn start_web_admin_server(
+        &self,
+        admin: foks_server::web_admin::WebAdminConfig,
+        oidc: Option<foks_server::sso::OidcOperatorConfig>,
+    ) -> foks_server::Result<crate::InProcessServer> {
+        crate::InProcessServer::start_with_services(self.clone(), oidc, String::new(), Some(admin))
     }
     pub fn start_server(&self) -> foks_server::Result<crate::InProcessServer> {
         crate::InProcessServer::start(self.clone())
@@ -238,16 +247,45 @@ impl TestEnvironment {
         self.inner.clock.set(microseconds);
     }
 
+    // Hold the lifecycle reservation through the operation so a live writer cannot
+    // disappear, or an offline database become live, between selection and use.
+    fn mutate_database<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut foks_server_db::Database) -> foks_server::Result<T> + Send + 'static,
+    ) -> foks_server::Result<T> {
+        let running = self
+            .inner
+            .running
+            .lock()
+            .expect("test server lifecycle lock");
+        if *running {
+            let writer = self
+                .inner
+                .writer
+                .lock()
+                .expect("test writer lock")
+                .clone()
+                .ok_or(foks_server::Error::Config("test writer is not ready"))?;
+            writer.call(operation)
+        } else {
+            let guard = foks_server::DatabaseWriterGuard::acquire(self.inner.paths.database())?;
+            let mut database = guard.open_database(self.inner.database_config.clone())?;
+            operation(&mut database)
+        }
+    }
+
     #[doc(hidden)]
     pub fn issue_standard_invite(
         &self,
         expires_at: Option<u64>,
     ) -> foks_server::Result<foks_server::invites::IssuedSignupInvite> {
-        foks_server::invites::issue_standard_invite(
-            self.inner.paths.database(),
-            self.inner.database_config.clone(),
+        use foks_server::Entropy as _;
+        let mut raw = [0; 10];
+        foks_server::OsEntropy.fill(&mut raw)?;
+        self.issue_invite(
+            foks_proto::InviteCode::Standard(raw.to_vec()),
+            Some(1),
             expires_at,
-            foks_server_db::Clock::now_micros(self.inner.clock.as_ref())?,
         )
     }
 
@@ -258,14 +296,34 @@ impl TestEnvironment {
         max_uses: Option<u64>,
         expires_at: Option<u64>,
     ) -> foks_server::Result<foks_server::invites::IssuedSignupInvite> {
-        foks_server::invites::issue_multiuse_invite(
-            self.inner.paths.database(),
-            self.inner.database_config.clone(),
-            code,
+        self.issue_invite(
+            foks_proto::InviteCode::from_user_input(code, false)?,
             max_uses,
             expires_at,
-            foks_server_db::Clock::now_micros(self.inner.clock.as_ref())?,
         )
+    }
+
+    fn issue_invite(
+        &self,
+        code: foks_proto::InviteCode,
+        max_uses: Option<u64>,
+        expires_at: Option<u64>,
+    ) -> foks_server::Result<foks_server::invites::IssuedSignupInvite> {
+        use foks_server::Entropy as _;
+        let hash = foks_server::invites::invite_fingerprint(&code)?;
+        let kind = foks_server::invites::invite_kind(&code)?;
+        let display = code.to_user_string()?;
+        let mut id = [0; 16];
+        foks_server::OsEntropy.fill(&mut id)?;
+        let clock = Arc::clone(&self.inner.clock);
+        self.mutate_database(move |db| {
+            let now = foks_server_db::Clock::now_micros(clock.as_ref())?;
+            let record = db.issue_invite(&id, &hash, kind, None, max_uses, expires_at, now)?;
+            Ok(foks_server::invites::IssuedSignupInvite {
+                code: display,
+                record,
+            })
+        })
     }
 
     #[doc(hidden)]
@@ -273,21 +331,17 @@ impl TestEnvironment {
         &self,
         regime: foks_server_db::InviteRegime,
     ) -> foks_server::Result<()> {
-        foks_server::invites::set_invite_regime(
-            self.inner.paths.database(),
-            self.inner.database_config.clone(),
-            regime,
-        )
+        self.mutate_database(move |db| Ok(db.set_invite_regime(regime)?))
     }
 
     #[doc(hidden)]
     pub fn disable_invite(&self, code: &str) -> foks_server::Result<bool> {
-        foks_server::invites::disable_invite(
-            self.inner.paths.database(),
-            self.inner.database_config.clone(),
-            code,
-            foks_server_db::Clock::now_micros(self.inner.clock.as_ref())?,
-        )
+        let code = foks_proto::InviteCode::from_user_input(code, false)?;
+        let hash = foks_server::invites::invite_fingerprint(&code)?;
+        let clock = Arc::clone(&self.inner.clock);
+        self.mutate_database(move |db| {
+            Ok(db.disable_invite(&hash, foks_server_db::Clock::now_micros(clock.as_ref())?)?)
+        })
     }
 
     #[doc(hidden)]

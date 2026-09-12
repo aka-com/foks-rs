@@ -6,10 +6,19 @@ use crate::{Error, Result};
 
 const INVITE_CODE_HASH_TYPE_ID: u64 = 0xd6d9_3407_464f_4b53;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct IssuedSignupInvite {
     pub code: String,
     pub record: foks_server_db::IssuedInvite,
+}
+
+impl std::fmt::Debug for IssuedSignupInvite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IssuedSignupInvite")
+            .field("code", &"<redacted>")
+            .field("record", &self.record)
+            .finish()
+    }
 }
 
 pub fn invite_fingerprint(code: &InviteCode) -> Result<[u8; 32]> {
@@ -77,7 +86,8 @@ fn issue_invite(
     let mut invite_id = [0u8; 16];
     getrandom::fill(&mut invite_id).map_err(|_| Error::Config("OS randomness unavailable"))?;
     let display = code.to_user_string()?;
-    let mut database = foks_server_db::Database::open(database_path, database_config)?;
+    let guard = crate::DatabaseWriterGuard::acquire(database_path.as_ref())?;
+    let mut database = guard.open_database(database_config)?;
     let record = database.issue_invite(&invite_id, &hash, kind, None, max_uses, expires_at, now)?;
     Ok(IssuedSignupInvite {
         code: display,
@@ -93,10 +103,10 @@ pub fn disable_invite(
 ) -> Result<bool> {
     let code = InviteCode::from_user_input(code, false)?;
     let hash = invite_fingerprint(&code)?;
-    Ok(
-        foks_server_db::Database::open(database_path, database_config)?
-            .disable_invite(&hash, now)?,
-    )
+    let guard = crate::DatabaseWriterGuard::acquire(database_path.as_ref())?;
+    Ok(guard
+        .open_database(database_config)?
+        .disable_invite(&hash, now)?)
 }
 
 pub fn set_invite_regime(
@@ -104,7 +114,10 @@ pub fn set_invite_regime(
     database_config: foks_server_db::Config,
     regime: foks_server_db::InviteRegime,
 ) -> Result<()> {
-    foks_server_db::Database::open(database_path, database_config)?.set_invite_regime(regime)?;
+    let guard = crate::DatabaseWriterGuard::acquire(database_path.as_ref())?;
+    guard
+        .open_database(database_config)?
+        .set_invite_regime(regime)?;
     Ok(())
 }
 

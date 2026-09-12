@@ -17,5 +17,6 @@ pub use account::TestAccountSpec;
 pub use binary::{BinaryExit, BinaryServer};
 pub use client::TestClient;
 pub use environment::{TestEnvironment, TestFault, TestProfile};
+pub use foks_server::web_admin::WebAdminConfig;
 pub use process::{InProcessServer, IsolatedTestServer, ProbeOverrideServer};
 pub use scheduling::WriterQueuePressure;

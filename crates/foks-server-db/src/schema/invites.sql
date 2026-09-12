@@ -1,5 +1,6 @@
 CREATE TABLE signup_policy (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    revision INTEGER NOT NULL DEFAULT 1 CHECK(revision>0),
     invite_regime INTEGER NOT NULL CHECK (invite_regime IN (1, 2))
 ) STRICT;
 
@@ -10,6 +11,7 @@ CREATE TABLE signup_invites (
     code_hash BLOB NOT NULL UNIQUE CHECK (length(code_hash) = 32),
     kind INTEGER NOT NULL CHECK (kind IN (1, 2)),
     issuer_uid BLOB CHECK (issuer_uid IS NULL OR length(issuer_uid) = 33),
+    configuration_revision INTEGER NOT NULL DEFAULT 1 CHECK(configuration_revision>0),
     state INTEGER NOT NULL CHECK (state IN (1, 2)),
     max_uses INTEGER CHECK (max_uses IS NULL OR max_uses >= 1),
     use_count INTEGER NOT NULL DEFAULT 0 CHECK (use_count >= 0),

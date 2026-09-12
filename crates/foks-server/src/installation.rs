@@ -14,6 +14,8 @@ const MAXIMUM_CONFIG_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct InstallationConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_admin: Option<crate::web_admin::WebAdminConfig>,
     #[serde(default)]
     pub vhost_management_host: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -38,6 +40,22 @@ impl InstallationConfig {
     pub fn validate(&self) -> crate::Result<()> {
         validate_hostname(&self.canonical_name)?;
         crate::config::validate_vhost_management_host(&self.vhost_management_host)?;
+        if let Some(admin) = &self.web_admin {
+            admin.validate()?;
+            if [
+                self.probe_address,
+                self.public_address,
+                self.authenticated_address,
+                self.management_address,
+            ]
+            .contains(&admin.listen)
+                || self.oidc.as_ref().is_some_and(|v| v.listen == admin.listen)
+            {
+                return Err(crate::Error::Config(
+                    "admin listener must have a distinct address",
+                ));
+            }
+        }
         if let Some(oidc) = &self.oidc {
             oidc.validate(foks_oidc::NetworkPolicy::default())?;
             if [
@@ -150,6 +168,7 @@ pub fn initialize(
     let config = InstallationConfig {
         vhost_management_host: String::new(),
         oidc: None,
+        web_admin: None,
         version: INSTALLATION_VERSION,
         canonical_name: canonical_name.to_owned(),
         database: data.join("foks-server.sqlite"),

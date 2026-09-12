@@ -107,3 +107,6 @@ pub use user_mutation::{
     UserMutationFailurePoint, UsernameMutation,
 };
 pub use yubi::{SubkeyChallengeResult, YubiManagementKeySnapshot};
+
+mod web_admin;
+pub use web_admin::*;

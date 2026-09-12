@@ -18,6 +18,7 @@ impl Maintenance {
         writer: WriterHandle,
         clock: Arc<dyn foks_server_db::Clock>,
         metrics: Arc<ServerMetrics>,
+        admin: Option<Arc<crate::web_admin::WebAdminService>>,
     ) -> Self {
         let (stop, receiver) = mpsc::sync_channel(1);
         let thread = thread::spawn(move || loop {
@@ -26,7 +27,12 @@ impl Maintenance {
                 Err(RecvTimeoutError::Timeout) => {
                     // Failures and committed reclamation counts are recorded by
                     // the shared entry point; the next tick retries durable work.
-                    let _ = run(&writer, Arc::clone(&clock), Arc::clone(&metrics));
+                    let _ = run(
+                        &writer,
+                        Arc::clone(&clock),
+                        Arc::clone(&metrics),
+                        admin.clone(),
+                    );
                 }
             }
         });
@@ -59,6 +65,7 @@ pub(crate) fn run(
     writer: &WriterHandle,
     clock: Arc<dyn foks_server_db::Clock>,
     metrics: Arc<ServerMetrics>,
+    admin: Option<Arc<crate::web_admin::WebAdminService>>,
 ) -> Result<(
     foks_server_db::MaintenanceReport,
     foks_server_db::CheckpointReport,
@@ -69,6 +76,20 @@ pub(crate) fn run(
         let cutoff = now.saturating_sub(ABANDONED_UPLOAD_AGE_MICROS);
         let report = database.run_maintenance(now, cutoff)?;
         worker_metrics.uploads_reclaimed(&report);
+        if let Some(admin) = admin {
+            worker_metrics.admin_cleanup_attempted();
+            match admin
+                .clock
+                .sample()
+                .and_then(|now| Ok(database.web_cleanup(now)?))
+            {
+                Ok(report) => worker_metrics.admin_cleanup_succeeded(&report),
+                Err(error) => {
+                    worker_metrics.admin_cleanup_failed();
+                    return Err(error);
+                }
+            }
+        }
         let checkpoint = database.checkpoint()?;
         worker_metrics.maintenance_succeeded(now / 1_000_000);
         Ok((report, checkpoint))
@@ -105,7 +126,8 @@ mod tests {
             assert!(run(
                 &writer.handle(),
                 Arc::new(FixedClock(u64::MAX)),
-                Arc::clone(&metrics)
+                Arc::clone(&metrics),
+                None
             )
             .is_err());
         }
@@ -118,6 +140,7 @@ mod tests {
             &writer.handle(),
             Arc::new(FixedClock(1_000_000)),
             Arc::clone(&metrics),
+            None,
         )
         .unwrap();
         let recovered = metrics.snapshot();

@@ -410,6 +410,25 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
                 || metrics.upload_cleanup_deferred_passes >= 60
         ),
     );
+    {
+        use std::fmt::Write as _;
+        for (name, value) in [
+            (
+                "foks_admin_cleanup_attempts_total",
+                metrics.admin_cleanup_attempts,
+            ),
+            (
+                "foks_admin_cleanup_failures_total",
+                metrics.admin_cleanup_failures,
+            ),
+            (
+                "foks_admin_reclaimed_records_total",
+                metrics.admin_reclaimed_records,
+            ),
+        ] {
+            let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
+        }
+    }
     // Independent read snapshot; metrics never enqueue a policy mutation.
     let sample = (|| -> crate::Result<Option<foks_server_db::SsoRolloutStatus>> {
         let db = foks_server_db::ReadDatabase::open(database_path, Default::default())?;

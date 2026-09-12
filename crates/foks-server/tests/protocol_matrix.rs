@@ -259,6 +259,7 @@ fn protocol_contract_is_valid_and_exactly_registered() {
             ("device_already_provisioned".to_owned(), 1072),
             ("duplicate".to_owned(), 1001),
             ("expired".to_owned(), 1062),
+            ("wrong_user".to_owned(), 1018),
             ("kex_bad_secret".to_owned(), 1032),
             ("key_not_found".to_owned(), 1025),
             ("kv_noent".to_owned(), 8016),

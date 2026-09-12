@@ -25,6 +25,14 @@ impl InProcessServer {
         oidc: Option<foks_server::sso::OidcOperatorConfig>,
         management: String,
     ) -> foks_server::Result<Self> {
+        Self::start_with_services(environment, oidc, management, None)
+    }
+    pub(crate) fn start_with_services(
+        environment: TestEnvironment,
+        oidc: Option<foks_server::sso::OidcOperatorConfig>,
+        management: String,
+        web_admin: Option<foks_server::web_admin::WebAdminConfig>,
+    ) -> foks_server::Result<Self> {
         {
             let mut running = environment
                 .inner
@@ -40,6 +48,7 @@ impl InProcessServer {
             environment.configured_addresses();
         let result = foks_server::start_standalone(StandaloneConfig {
             vhost_management_host: management,
+            web_admin,
             oidc: oidc.map(|config| (config, foks_oidc::NetworkPolicy::loopback_test())),
             database_path: environment.inner.paths.database().to_path_buf(),
             key_directory: environment.inner.paths.keys().to_path_buf(),
@@ -92,6 +101,7 @@ impl InProcessServer {
         }
         *retained = Some(addresses);
         drop(retained);
+        *environment.inner.writer.lock().expect("test writer lock") = Some(server.writer_handle());
         Ok(Self {
             environment,
             server: Some(server),
@@ -208,6 +218,10 @@ impl InProcessServer {
         self.server().run_maintenance()
     }
 
+    pub fn web_admin_address(&self) -> Option<std::net::SocketAddr> {
+        self.server().web_admin_address()
+    }
+
     pub fn writer_handle(&self) -> foks_server::WriterHandle {
         self.server().writer_handle()
     }
@@ -237,17 +251,27 @@ impl InProcessServer {
     }
 
     fn shutdown_inner(&mut self) -> foks_server::Result<()> {
+        if self.server.is_none() {
+            return Ok(());
+        }
+        let mut running = self
+            .environment
+            .inner
+            .running
+            .lock()
+            .expect("test server lifecycle lock");
+        self.environment
+            .inner
+            .writer
+            .lock()
+            .expect("test writer lock")
+            .take();
         let result = self
             .server
             .take()
             .map(RunningStandaloneServer::shutdown)
             .unwrap_or(Ok(()));
-        *self
-            .environment
-            .inner
-            .running
-            .lock()
-            .expect("test server lifecycle lock") = false;
+        *running = false;
         result
     }
 }
@@ -285,6 +309,7 @@ impl ProbeOverrideServer {
         let result = foks_server::net::start(foks_server::Config {
             vhost_management_host: String::new(),
             sso: None,
+            web_admin: None,
             probe_address,
             public_address,
             authenticated_address,

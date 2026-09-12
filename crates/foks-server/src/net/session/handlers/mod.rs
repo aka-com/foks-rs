@@ -10,6 +10,7 @@ mod realtime;
 mod registration;
 mod team;
 mod user;
+mod web_admin;
 
 use foks_rpc::RpcStatus;
 
@@ -26,6 +27,7 @@ pub(super) fn response(
     use RouteId::*;
 
     match call.route.id {
+        UserNewWebAdminPanelURL | UserCheckURL => web_admin::response(data, call, principal),
         IdentityFennecCapabilities | IdentityFennecChallenge | IdentityFennecProve => {
             identity::response(data, call)
         }

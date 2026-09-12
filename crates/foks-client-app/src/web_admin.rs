@@ -116,7 +116,28 @@ mod tests {
     use super::*;
     use crate::test_support::AccountFixture;
     #[test]
-    fn admin_policy_is_bound_to_account_and_local_server_is_honestly_unsupported() {
+    fn configured_rust_host_uses_the_account_bound_native_handoff() {
+        let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listen = reservation.local_addr().unwrap();
+        drop(reservation);
+        let f = AccountFixture::start_with_admin(Some(foks_server_testkit::WebAdminConfig {
+            origin: "https://admin.example".into(),
+            listen,
+        }));
+        f.run(|s, v, k| s.create_account("work", "adminenabled", "laptop", "", "", None, v, k));
+        f.run(|s, v, _| {
+            s.configure_web_admin("work", "https://admin.example/", v)?;
+            let handoff = s.web_admin_handoff("work", None, v)?;
+            assert_eq!(handoff.destination, "https://admin.example/");
+            assert!(handoff
+                .navigation
+                .expose()
+                .starts_with("https://admin.example/?session="));
+            Ok(())
+        });
+    }
+    #[test]
+    fn admin_policy_is_bound_to_account_and_disabled_server_is_unsupported() {
         let f = AccountFixture::start();
         f.run(|s, v, k| s.create_account("work", "adminowner", "laptop", "", "", None, v, k));
         f.run(|s, v, _| {

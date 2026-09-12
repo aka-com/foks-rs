@@ -8,6 +8,7 @@ use crate::{Entropy, RateLimitConfig, WriterHandle};
 #[derive(Clone)]
 pub struct Config {
     pub vhost_management_host: String,
+    pub web_admin: Option<Arc<crate::web_admin::WebAdminService>>,
     pub sso: Option<Arc<crate::sso::SsoService>>,
     pub probe_address: SocketAddr,
     pub public_address: SocketAddr,

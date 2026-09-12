@@ -1349,6 +1349,9 @@ pub(crate) fn client_chat_multi_team_refresh_budget() {
         let started = std::time::Instant::now();
         let mut calls = 0;
         for (chat, connection) in &mut sessions {
+            // A different team's setup/refresh can exceed the server idle limit.
+            // Measure each refresh over a fresh transport, as the product does.
+            *connection = chat.connection().unwrap();
             let mut counted = Count {
                 connection,
                 calls: 0,
@@ -1420,6 +1423,7 @@ pub(crate) fn client_chat_multi_team_refresh_budget() {
         }
     }
     let (chat, connection) = &mut sessions[0];
+    *connection = chat.connection().unwrap();
     let bad = chat.list_channels(connection).unwrap().channels[0]
         .metadata
         .id;
@@ -1461,6 +1465,7 @@ pub(crate) fn client_chat_multi_team_refresh_budget() {
     );
     assert_eq!(next.blocked_channels, vec![bad]);
     let (other, connection) = &mut sessions[1];
+    *connection = other.connection().unwrap();
     assert_eq!(
         other
             .sync_inbox(connection, &mut soft)
