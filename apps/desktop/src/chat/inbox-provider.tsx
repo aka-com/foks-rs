@@ -1,3 +1,5 @@
+import type { Location } from '../location';
+import { NotificationProvider } from './notification-provider';
 import {
   createContext,
   useContext,
@@ -14,10 +16,12 @@ export function ChatInboxProvider({
   bridge,
   world,
   children,
+  onNavigate,
 }: {
   bridge: Bridge;
   world: World;
   children: ReactNode;
+  onNavigate?: (location: Location) => void;
 }) {
   const service = useMemo(() => new ChatInboxService(bridge), [bridge]);
   useEffect(() => service.updateStores(world), [service, world]);
@@ -25,7 +29,17 @@ export function ChatInboxProvider({
     service.start();
     return () => service.stop();
   }, [service]);
-  return <Context.Provider value={service}>{children}</Context.Provider>;
+  return (
+    <Context.Provider value={service}>
+      <NotificationProvider
+        bridge={bridge}
+        service={service}
+        onNavigate={onNavigate}
+      >
+        {children}
+      </NotificationProvider>
+    </Context.Provider>
+  );
 }
 export function useChatInbox() {
   const service = useContext(Context);

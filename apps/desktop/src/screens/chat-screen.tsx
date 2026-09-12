@@ -1,3 +1,5 @@
+import { useChatInbox } from '../chat/inbox-provider';
+import { NotificationSettings } from '../chat/notification-provider';
 import { ChatThread } from '../chat/chat-thread';
 import { PendingRow } from '../chat/pending-row';
 import { channelTitle } from '../chat/presentation';
@@ -55,6 +57,7 @@ export function ChatScreen({
   onNavigate: (location: Location) => void;
 }): ReactNode {
   const store = storeOf(world, location.ref);
+  const { snapshot } = useChatInbox();
   const {
     channels,
     conversations,
@@ -371,26 +374,35 @@ export function ChatScreen({
               </p>
             </div>
           ) : channel ? (
-            <ChatThread
-              key={`${channel.id}:${channel.readable}`}
-              channel={channel}
-              actor={actor}
-              senderNames={senderNames}
-              request={request}
-              refreshPending={refreshPending}
-              revision={channelRevisions?.get(channel.id) ?? 0}
-              readThrough={activeConversation?.read_through ?? null}
-              markRead={markRead}
-              history={history}
-              acceptHistory={acceptHistory}
-              blockHistory={blockHistory}
-              pending={pending.filter(
-                (op) =>
-                  op.kind !== 'create-channel' &&
-                  !op.observed &&
-                  op.channel === channel.id,
-              )}
-            />
+            <>
+              <NotificationSettings
+                storeId={storeId}
+                scope={snapshot.get(storeId)?.scope}
+                channel={channel.id}
+              />
+              <ChatThread
+                bridge={bridge}
+                storeId={storeId}
+                key={`${channel.id}:${channel.readable}`}
+                channel={channel}
+                actor={actor}
+                senderNames={senderNames}
+                request={request}
+                refreshPending={refreshPending}
+                revision={channelRevisions?.get(channel.id) ?? 0}
+                readThrough={activeConversation?.read_through ?? null}
+                markRead={markRead}
+                history={history}
+                acceptHistory={acceptHistory}
+                blockHistory={blockHistory}
+                pending={pending.filter(
+                  (op) =>
+                    op.kind !== 'create-channel' &&
+                    !op.observed &&
+                    op.channel === channel.id,
+                )}
+              />
+            </>
           ) : loading ? (
             <div className="empty" aria-busy="true">
               <p>Loading conversations…</p>

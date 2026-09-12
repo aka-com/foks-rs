@@ -175,6 +175,7 @@ pub fn run() {
         // The webview has no direct clipboard permissions.
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(AppState::new(Arc::clone(&agent)))
+        .manage(commands::chat_local::LocalState::default())
         .manage(Arc::new(applock::AppLock::new()))
         .invoke_handler(tauri::generate_handler![
             commands::application::agent_status,
@@ -239,6 +240,8 @@ pub fn run() {
             commands::accounts::list_accounts,
             commands::groups::list_group_details,
             commands::chat::chat_request,
+            commands::chat_local::chat_local,
+            commands::chat::open_chat_link,
             commands::chat::cancel_chat_requests,
             commands::groups::list_parties,
             commands::groups::list_federation,
@@ -274,6 +277,7 @@ pub fn run() {
         .setup(move |app| {
             #[cfg(target_os = "macos")]
             install_macos_menu(app)?;
+            commands::chat_local::platform::install(app.handle());
             // Verify agent reachability before handling requests; exit with a dialog if unreachable.
             startup::require_agent(app, &agent);
             if let Some(window) = app.get_webview_window(MAIN) {

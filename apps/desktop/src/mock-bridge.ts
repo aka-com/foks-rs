@@ -760,6 +760,12 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       entry.active = true;
       return { applied: true };
     },
+    chatLocal: async () => ({
+      epoch: '0'.repeat(32),
+      available: false,
+      settings: { enabled: false, previews: false, overrides: {} },
+    }),
+    openChatLink: async () => ({ ok: true }),
     copyText: async () => ({ ok: true }),
     initializeClientState: async () => ({ phase: 'Ready' }),
     discoverGoProfiles: async () => ({ installed: false, candidates: [] }),
@@ -1181,6 +1187,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       return () => pathListeners.delete(listener);
     },
     onWindowState: async () => () => {},
+    onChatNotification: async () => () => {},
     onOpenSettings: async () => () => {},
   };
 }

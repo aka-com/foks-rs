@@ -1,3 +1,5 @@
+import { MessageText } from './message-text';
+import type { Bridge } from '../bridge';
 import { Fragment, useId } from 'react';
 import type { ReactNode } from 'react';
 import { Band, Button, Chip, Icon } from '../components';
@@ -17,6 +19,8 @@ import {
 } from './presentation';
 export function ChatThread({
   channel,
+  bridge,
+  storeId,
   actor,
   senderNames,
   request,
@@ -29,6 +33,8 @@ export function ChatThread({
   blockHistory,
   pending,
 }: {
+  bridge: Bridge;
+  storeId: string;
   history: import('./conversation-model').HistoryWindow | null;
   blockHistory: (channel: string) => void;
   channel: ChatChannel;
@@ -133,6 +139,8 @@ export function ChatThread({
           <div className="chat-messages-wrap">
             <div
               className="chat-messages"
+              data-chat-channel={channel.id}
+              data-chat-store={storeId}
               ref={scroller}
               onScroll={onScroll}
               aria-label="Message history"
@@ -194,19 +202,15 @@ export function ChatThread({
                           {messageTime(m.insert_time)}
                         </time>
                       </header>
-                      <p
-                        className={
-                          m.content.kind === 'text'
-                            ? undefined
-                            : 'chat-unsupported'
-                        }
-                      >
-                        {m.content.kind === 'text'
-                          ? m.content.text
-                          : m.content.kind === 'oversized'
+                      {m.content.kind === 'text' ? (
+                        <MessageText text={m.content.text} actions={bridge} />
+                      ) : (
+                        <p className="chat-unsupported">
+                          {m.content.kind === 'oversized'
                             ? 'This message exceeds the desktop display limit.'
                             : 'This message type is not supported yet.'}
-                      </p>
+                        </p>
+                      )}
                     </article>
                   </Fragment>
                 );
@@ -217,7 +221,7 @@ export function ChatThread({
                   key={op.id}
                   data-operation={op.id}
                 >
-                  {op.text && <p>{op.text}</p>}
+                  {op.text && <MessageText text={op.text} actions={bridge} />}
                   <PendingRow
                     operation={op}
                     channelName={undefined}

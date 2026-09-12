@@ -1107,8 +1107,11 @@ pub async fn reset_server(
         MutationKind::Guarded,
     )
     .await?;
-    reset_result_response(value, &expected)
-        .map_err(|error| ambiguous_mutation_response(&state, error.message))
+    let result = reset_result_response(value, &expected)
+        .map_err(|error| ambiguous_mutation_response(&state, error.message))?;
+    super::chat_local::forget_profile(&app, &expected)
+        .map_err(|error| ambiguous_mutation_response(&state, error.message))?;
+    Ok(result)
 }
 
 #[tauri::command]

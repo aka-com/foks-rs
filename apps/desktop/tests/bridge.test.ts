@@ -108,6 +108,22 @@ test('decodeCatalog parses catalog payload and preserves store IDs', () => {
   assert.equal(decoded.items[0]?.store, decoded.stores[0]?.id);
 });
 
+test('decodeCatalog preserves unavailable sizes without inventing zero', () => {
+  const decoded = decodeCatalog({
+    ...catalog,
+    items: [{ ...catalog.items[0], size: null }],
+  });
+  assert.equal(decoded.items[0].size, null);
+  assert.throws(
+    () =>
+      decodeCatalog({
+        ...catalog,
+        items: [{ ...catalog.items[0], size: undefined }],
+      }),
+    /size/,
+  );
+});
+
 test('decodeCatalog enforces schema validation and rejects malformed fields', () => {
   assert.throws(
     () =>

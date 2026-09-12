@@ -451,7 +451,11 @@ function AddedDetails({
           <b>Version</b>
           <span>{item.version}</span>
           <b>Size</b>
-          <span>{plural(item.size, 'byte')}</span>
+          <span>
+            {item.size === null
+              ? 'Size unavailable'
+              : plural(item.size, 'byte')}
+          </span>
           <b>Read permission</b>
           <Chip>{roleText(item.read)}</Chip>
           <b>Write permission</b>

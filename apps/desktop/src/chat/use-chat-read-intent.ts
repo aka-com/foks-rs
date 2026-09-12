@@ -1,3 +1,4 @@
+import { focusedWindow } from './visibility';
 import { useEffect, useRef, useState } from 'react';
 import type { ChatMessage } from '../chat-contract';
 import { failure } from './actions';
@@ -33,8 +34,7 @@ export function useChatReadIntent(
         !enabled ||
         !latest ||
         !atBottom ||
-        document.visibilityState === 'hidden' ||
-        !document.hasFocus() ||
+        !focusedWindow() ||
         BigInt(latest) <= BigInt(markedThrough.current) ||
         BigInt(latest) <= BigInt(markingThrough.current)
       )
@@ -43,8 +43,7 @@ export function useChatReadIntent(
         if (
           !enabled ||
           !atBottom ||
-          document.visibilityState === 'hidden' ||
-          !document.hasFocus() ||
+          !focusedWindow() ||
           BigInt(latest) <= BigInt(markedThrough.current) ||
           BigInt(latest) <= BigInt(markingThrough.current)
         )

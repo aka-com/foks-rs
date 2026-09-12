@@ -902,4 +902,41 @@ fn exercise_chat(socket: &Path, team_id: &str, probe: &str, certificate: &Path) 
         ..owner.clone()
     };
     assert!(foks_desktop::chat_request(&client, wrong, A::Channels).is_err());
+    // Optional bounded manual-desktop fixture. Only synthetic test accounts are
+    // used. The operator owns a private control directory; no production agent is
+    // contacted. Removing `ready` ends the fixture, touching `send` emits one
+    // message from the second test account. Normal CI does not enter this branch.
+    if let Some(control) = std::env::var_os("FOKS_DESKTOP_REVIEW_DIR") {
+        let control = PathBuf::from(control);
+        private_directory(&control);
+        private_file(&control.join("ready"), socket.to_string_lossy().as_bytes());
+        let deadline = Instant::now() + Duration::from_secs(1800);
+        let mut sent = 0u32;
+        while control.join("ready").exists() && Instant::now() < deadline {
+            if control.join("send").exists() && sent < 20 {
+                std::fs::remove_file(control.join("send")).unwrap();
+                sent += 1;
+                let R::Operation { operation } = chat(
+                    &guest,
+                    A::PrepareMessage {
+                        submission: format!("{:032x}", 1000 + sent),
+                        channel: channel.clone(),
+                        text: SecretString::new(format!(
+                            "Desktop notification test {sent}: **verified Basic text**"
+                        )),
+                    },
+                ) else {
+                    panic!("expected manual fixture preparation")
+                };
+                chat(
+                    &guest,
+                    A::Attempt {
+                        operation: operation.id,
+                    },
+                );
+                private_file(&control.join("sent"), sent.to_string().as_bytes());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
 }

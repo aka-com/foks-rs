@@ -269,13 +269,8 @@ function operationReceipt(value: unknown): ChatOperation['receipt'] {
   }
   return fail();
 }
-export function decodeChatReply(
-  value: unknown,
-  storeId: string,
-  action: ChatAction,
-): ChatReply {
-  const v = object(value, ['scope', 'result']);
-  const scope = object(v.scope, ['store', 'host', 'actor']);
+export function decodeChatScope(value: unknown, storeId: string): ChatScope {
+  const scope = object(value, ['store', 'host', 'actor']);
   const store = object(scope.store, [
     'profile',
     'account_alias',
@@ -306,6 +301,15 @@ export function decodeChatReply(
     host: entity(scope.host, '02'),
     actor: entity(scope.actor, '01'),
   };
+  return resolved;
+}
+export function decodeChatReply(
+  value: unknown,
+  storeId: string,
+  action: ChatAction,
+): ChatReply {
+  const v = object(value, ['scope', 'result']);
+  const resolved = decodeChatScope(v.scope, storeId);
   const r = object(v.result);
   let result: ChatResult;
   if (r.kind === 'channels' && action.action === 'channels') {

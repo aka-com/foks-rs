@@ -397,3 +397,49 @@
     padding-top: 32px;
   }
 }
+
+.chat-message-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.chat-message-text pre {
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre;
+}
+.chat-message-text blockquote {
+  border-left: 2px solid currentColor;
+  padding-left: 12px;
+  margin-left: 0;
+}
+.chat-message-text [role='status'] {
+  margin-inline: 8px;
+}
+
+.chat-local-settings {
+  flex: none;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12px;
+}
+.chat-local-settings summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.chat-local-settings label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.chat-local-settings input {
+  accent-color: var(--accent);
+}
+.chat-local-settings p {
+  color: var(--muted);
+  margin: 10px 0 0;
+}
+.chat-local-settings [role='alert'] {
+  color: var(--danger-ink);
+}

@@ -175,7 +175,7 @@ fn download_streams_files_larger_than_the_reveal_limit_in_bound_chunks() {
 }
 
 #[test]
-fn catalog_dto_rejects_unknown_kinds_and_missing_non_directory_sizes() {
+fn catalog_dto_rejects_unknown_kinds_and_preserves_unknown_sizes() {
     let account = foks_agent_proto::AccountStoreRef {
         profile: "foks.example".to_owned(),
         account_alias: "personal".to_owned(),
@@ -204,14 +204,16 @@ fn catalog_dto_rejects_unknown_kinds_and_missing_non_directory_sizes() {
     );
     snapshot.items[0].metadata.node_type = "small-file".to_owned();
     snapshot.items[0].metadata.size = None;
-    assert_eq!(
-        CatalogDto::from_snapshot(&snapshot).unwrap_err().code,
-        "invalid-response"
-    );
-    snapshot.items[0].metadata.node_type = "directory".to_owned();
+    for kind in ["small-file", "file", "symlink", "directory"] {
+        snapshot.items[0].metadata.node_type = kind.to_owned();
+        let dto = CatalogDto::from_snapshot(&snapshot).unwrap();
+        assert_eq!(dto.items[0].size, None);
+        assert!(serde_json::to_value(&dto).unwrap()["items"][0]["size"].is_null());
+    }
+    snapshot.items[0].metadata.size = Some(0);
     assert_eq!(
         CatalogDto::from_snapshot(&snapshot).unwrap().items[0].size,
-        0
+        Some(0)
     );
 
     snapshot.stores = vec![CatalogStoreSummary::Team {

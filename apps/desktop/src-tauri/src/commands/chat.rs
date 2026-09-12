@@ -75,6 +75,7 @@ pub async fn chat_request(
         error.fatal = true;
         return Err(error);
     }
+    super::chat_local::remember(webview.app_handle(), &store_id, &reply.scope, generation);
     Ok(reply)
 }
 
@@ -140,5 +141,81 @@ mod tests {
         let mutation = require_catalog_generation(7, 8, true).unwrap_err();
         assert!(mutation.ambiguous);
         assert!(!mutation.fatal);
+    }
+}
+
+/// Explicit user navigation only. Never navigate the privileged webview remotely.
+#[tauri::command]
+pub async fn open_chat_link(
+    webview: tauri::Webview,
+    url: String,
+) -> Result<serde_json::Value, AgentError> {
+    require_main_window(&webview)?;
+    crate::applock::require_unlocked(webview.app_handle())?;
+    let parsed = safe_external_url(&url).ok_or_else(|| invalid_request("Invalid chat link."))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        let command = "open";
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let command = "xdg-open";
+        #[cfg(not(unix))]
+        return Err(invalid_request(
+            "Opening links is unavailable on this platform.",
+        ));
+        #[cfg(unix)]
+        {
+            let status = std::process::Command::new(command)
+                .arg(parsed.as_str())
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map_err(|_| invalid_request("Could not open the link."))?;
+            if !status.success() {
+                return Err(invalid_request("Could not open the link."));
+            }
+            Ok(serde_json::json!({"ok": true}))
+        }
+    })
+    .await
+    .map_err(|_| invalid_request("Link opening was interrupted."))?
+}
+
+fn safe_external_url(input: &str) -> Option<url::Url> {
+    if input.len() > 2048
+        || input
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '\\')
+    {
+        return None;
+    }
+    let parsed = url::Url::parse(input).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return None;
+    }
+    Some(parsed)
+}
+
+#[cfg(test)]
+mod link_tests {
+    #[test]
+    fn rejects_executable_obfuscated_and_credential_urls() {
+        for bad in [
+            "javascript:alert(1)",
+            "java\nscript:alert(1)",
+            "data:text/html,a",
+            "file:///tmp/a",
+            "https://user@example.com",
+            " https://example.com",
+            "https:\\example.com",
+            "javascript%3Aalert(1)",
+        ] {
+            assert!(super::safe_external_url(bad).is_none(), "{bad}");
+        }
+        assert!(super::safe_external_url("https://example.com/a?q=b#c").is_some());
     }
 }

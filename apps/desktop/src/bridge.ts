@@ -1,3 +1,8 @@
+import {
+  decodeLocalSession,
+  type LocalAction,
+  type LocalSession,
+} from './chat/local-contract';
 /**
  * The only seam between the FOKS webview and the local agent.
  *
@@ -79,7 +84,7 @@ export interface ItemDto {
   store: StoreRef;
   path: string;
   kind: NodeKind;
-  size: number;
+  size: number | null;
   version: number;
   read: RoleDto;
   write: RoleDto;
@@ -604,6 +609,8 @@ export interface Bridge {
     storeId: StoreRef,
     operationId: string,
   ): Promise<MutationResponse>;
+  chatLocal(action: LocalAction): Promise<LocalSession>;
+  openChatLink(url: string): Promise<CopyResponse>;
   copyText(text: string): Promise<CopyResponse>;
   initializeClientState(): Promise<AgentStatus>;
   discoverGoProfiles(): Promise<GoProfileDiscovery>;
@@ -736,6 +743,9 @@ export interface Bridge {
   onDropHover(listener: (event: DropHoverEvent) => void): Promise<Unlisten>;
   onDropPaths(listener: (paths: string[]) => void): Promise<Unlisten>;
   onWindowState(listener: (event: WindowStateEvent) => void): Promise<Unlisten>;
+  onChatNotification(
+    listener: (kind: 'activate' | 'error') => void,
+  ): Promise<Unlisten>;
   onOpenSettings(listener: () => void): Promise<Unlisten>;
 }
 
@@ -909,7 +919,7 @@ function decodeItem(value: unknown, at: string): ItemDto {
     store: string(item.store, `${at}.store`),
     path: string(item.path, `${at}.path`),
     kind: kind as NodeKind,
-    size: integer(item.size, `${at}.size`),
+    size: nullableInteger(item.size, `${at}.size`),
     version: integer(item.version, `${at}.version`),
     read: decodeRole(item.read, `${at}.read`),
     write: decodeRole(item.write, `${at}.write`),
@@ -2028,6 +2038,8 @@ export const tauriBridge: Bridge = {
     ),
   rerunGroupAdmission: (storeId, operationId) =>
     checked('rerun_group_admission', { storeId, operationId }, decodeMutation),
+  chatLocal: (action) => checked('chat_local', { action }, decodeLocalSession),
+  openChatLink: (url) => checked('open_chat_link', { url }, decodeCopy),
   copyText: (text) => checked('copy_text', { text }, decodeCopy),
   initializeClientState: () =>
     checked('initialize_client_state', undefined, decodeAgentStatus),
@@ -2235,6 +2247,23 @@ export const tauriBridge: Bridge = {
     listen<unknown>('foks://window-state', (event) => {
       listener(decodeWindowState(event.payload));
     }),
+  onChatNotification: async (listener) => {
+    const activation = await listen('foks://chat-notification', () =>
+      listener('activate'),
+    );
+    try {
+      const error = await listen('foks://chat-notification-error', () =>
+        listener('error'),
+      );
+      return () => {
+        activation();
+        error();
+      };
+    } catch (cause) {
+      activation();
+      throw cause;
+    }
+  },
   onOpenSettings: async (listener) => listen('foks://open-settings', listener),
 };
 

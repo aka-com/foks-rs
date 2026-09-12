@@ -195,7 +195,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
             store: "opaque-store-ref".to_owned(),
             path: "/wifi/password".to_owned(),
             kind: "Secret",
-            size: 42,
+            size: Some(42),
             version: 7,
             read: KvRole::Member { visibility: -16384 }.into(),
             write: KvRole::Admin.into(),

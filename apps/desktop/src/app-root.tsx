@@ -352,6 +352,11 @@ function VaultShell({
     return storeAtScene({ ...scene, selection: initialSelection });
   });
   const locations = store ?? fallback;
+  const navigateFromNotification = useCallback(
+    (location: Parameters<LocationStore['navigate']>[0]) =>
+      locations.navigate(location),
+    [locations],
+  );
   const state = useLocationState(locations);
   const [latest, setLatest] = useState(world);
   const [refreshingWorld, setRefreshingWorld] = useState(false);
@@ -832,6 +837,7 @@ function VaultShell({
         key={`inbox:${concealSignal}`}
         bridge={bridge}
         world={shown}
+        onNavigate={navigateFromNotification}
       >
         {shell}
       </ChatInboxProvider>

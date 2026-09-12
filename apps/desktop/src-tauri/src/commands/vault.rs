@@ -48,7 +48,7 @@ pub struct ItemDto {
     pub store: String,
     pub path: String,
     pub kind: &'static str,
-    pub size: u64,
+    pub size: Option<u64>,
     pub version: u64,
     pub read: RoleDto,
     pub write: RoleDto,
@@ -214,17 +214,6 @@ fn store_dto(store: &CatalogStoreSummary) -> Result<StoreDto, AgentError> {
 }
 
 fn item_dto(item: &CatalogItem) -> Result<ItemDto, AgentError> {
-    let size = match (item.metadata.node_type.as_str(), item.metadata.size) {
-        ("directory", size) => size.unwrap_or(0),
-        (_, Some(size)) => size,
-        _ => {
-            return Err(AgentError::new(
-                "invalid-response",
-                "The agent response is missing the item size.",
-                false,
-            ));
-        }
-    };
     Ok(ItemDto {
         store: store_id(&item.store),
         path: item.metadata.path.clone(),
@@ -241,7 +230,8 @@ fn item_dto(item: &CatalogItem) -> Result<ItemDto, AgentError> {
                 ));
             }
         },
-        size,
+        // Catalog metadata intentionally omits plaintext content sizes.
+        size: item.metadata.size,
         version: item.metadata.version,
         read: item.metadata.read_role.into(),
         write: item.metadata.write_role.into(),

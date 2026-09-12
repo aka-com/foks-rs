@@ -62,6 +62,7 @@ async function setup(
   if (!portalRoot) throw new Error('missing overlay root');
   const overlayRoot = portalRoot;
   function Host() {
+    const [visible, setVisible] = useState(showChat);
     const [location, setLocation] = useState<Location>({
       kind: 'team-chat',
       ref: 'team:eng',
@@ -75,7 +76,7 @@ async function setup(
         children: createElement(ChatInboxProvider, {
           bridge,
           world: enabledWorld,
-          children: showChat
+          children: visible
             ? createElement(ChatScreen, {
                 world: enabledWorld,
                 bridge,
@@ -89,7 +90,13 @@ async function setup(
                 world: enabledWorld,
                 location: { kind: 'all' },
                 alerts: 0,
-                onNavigate,
+                onNavigate: (next: Location) => {
+                  onNavigate(next);
+                  if (next.kind === 'team-chat') {
+                    setLocation(next);
+                    setVisible(true);
+                  }
+                },
               }),
         }),
       }),
@@ -1074,3 +1081,59 @@ for (const fault of ['history', 'preview', 'scope'] as const) {
     assert.ok(syncs > 0);
   });
 }
+
+test('opening chat from a populated shell establishes history ownership before child effects', async () => {
+  await setup(
+    (base) => ({
+      ...base,
+      chat: async (store, action, view) => {
+        const reply = await base.chat(store, action, view);
+        if (reply.result.kind === 'inbox')
+          reply.result.conversations = reply.result.conversations.map((c) => ({
+            ...c,
+            unread: '1',
+          }));
+        return reply;
+      },
+    }),
+    false,
+    () => {},
+    false,
+  );
+  // The unread badge proves that the inbox snapshot populated before mount.
+  await ui.screen.findByLabelText('1 unread');
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: /Engineering chat/ }),
+  );
+  await ui.screen.findByText('Team chat is ready.');
+  assert.equal(ui.screen.queryByText('Conversation closed.'), null);
+});
+
+test('denied notification permission restores retryable settings without enabling alerts', async () => {
+  let configurations = 0;
+  await setup((base) => ({
+    ...base,
+    chatLocal: async (action) => {
+      if (action.action === 'configure') {
+        configurations++;
+        throw new Error('Permission denied for test');
+      }
+      return {
+        epoch: 'aa'.repeat(16),
+        available: true,
+        settings: { enabled: false, previews: false, overrides: {} },
+      };
+    },
+  }));
+  const enable = ui.screen.getByRole('checkbox', {
+    name: 'Enable desktop alerts on this device',
+    hidden: true,
+  });
+  ui.fireEvent.click(enable);
+  await ui.screen.findByText('Permission denied for test');
+  await ui.waitFor(() =>
+    assert.equal((enable as HTMLInputElement).disabled, false),
+  );
+  assert.equal((enable as HTMLInputElement).checked, false);
+  assert.equal(configurations, 1);
+});

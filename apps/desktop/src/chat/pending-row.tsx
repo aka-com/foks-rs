@@ -6,7 +6,7 @@ import { shortId } from '../model';
 import { failure } from './actions';
 const PENDING_STATE: Record<ChatOperation['state'], string> = {
   prepared: 'prepared',
-  uncertain: 'Checking delivery',
+  uncertain: 'Delivery unknown',
   confirmed: 'confirmed',
   rejected: 'rejected',
   cancelled: 'cancelled',
@@ -90,6 +90,12 @@ export function PendingRow({
           ? 'Delivery status is unavailable. This saved operation will be checked using the same ID.'
           : pendingExplanation(op)}
       </p>
+      {op.kind === 'send-message' && op.text === undefined && (
+        <p>
+          Saved text is unavailable in this view. The original operation
+          identity is retained; checking delivery will not resend it.
+        </p>
+      )}
       <div className="chat-pending-actions">
         {(op.state === 'prepared' || op.state === 'uncertain') && (
           <Button

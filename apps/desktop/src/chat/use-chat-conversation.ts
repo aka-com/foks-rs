@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge } from '../bridge';
 import type {
@@ -231,12 +237,13 @@ export function useChatConversation(
     },
     [update],
   );
-  useEffect(() => {
+  // Cached channels can mount a child history effect immediately. Establish
+  // request ownership before passive effects in that child run.
+  useLayoutEffect(() => {
     const client = chatClient(bridge, profile, storeId);
     owner.current = client;
     schedule.current = new RecoverySchedule();
     statusChecks.current = new Map();
-    void refresh();
     return () => {
       owner.current = null;
       client.dispose();
@@ -245,7 +252,10 @@ export function useChatConversation(
       recovery.current = null;
       resolvedScope.current = null;
     };
-  }, [bridge, profile, storeId, refresh, cancelHistory, dispatch]);
+  }, [bridge, profile, storeId, cancelHistory, dispatch]);
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
   useEffect(() => {
     if (inbox?.data) {
       for (const channel of inbox.blockedChannels) cancelHistory(channel);

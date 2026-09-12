@@ -69,7 +69,7 @@ export interface Item {
   store: StoreRef;
   path: string;
   kind: NodeKind;
-  size: number;
+  size: number | null;
   version: number;
   read: RoleWire;
   write: RoleWire;
