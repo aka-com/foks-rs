@@ -1346,6 +1346,8 @@ pub(crate) async fn serve(
     limits: SessionLimits,
     mut stop: watch::Receiver<bool>,
 ) -> Result<()> {
+    // Small request/response TLS records must not wait for delayed TCP ACKs.
+    stream.set_nodelay(true)?;
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::clone(tls));
     let handshake = tokio::select! {
         result = stop.changed() => {

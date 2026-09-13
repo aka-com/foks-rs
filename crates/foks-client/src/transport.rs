@@ -600,6 +600,9 @@ impl FoksClient {
                 )
             }))
         })?;
+        // RPCs exchange small TLS records. Do not hold a request behind the
+        // peer's delayed acknowledgement of the preceding handshake record.
+        tcp.set_nodelay(true).map_err(map_io_error)?;
         Ok(ControlledTcpStream {
             inner: tcp,
             control: control.clone(),

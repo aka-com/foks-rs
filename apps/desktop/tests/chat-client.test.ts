@@ -51,7 +51,7 @@ test('owner rejects changed actor and action result binding', async () => {
   client.dispose();
 });
 
-test('poll bypasses queued work and only history may request background admission', async () => {
+test('poll bypasses queued work and only bounded notification history may request background admission', async () => {
   const { scheduleProfileWork } =
     await import('../src/scheduling/profile-work');
   let release!: () => void;
@@ -82,6 +82,21 @@ test('poll bypasses queued work and only history may request background admissio
   await assert.rejects(
     client.request(
       { action: 'pending' },
+      {
+        key: 'key',
+        owner: {},
+        generation: 1,
+        signal: new AbortController().signal,
+        current: () => true,
+        cancel: () => {},
+        preemptible: false,
+      },
+    ),
+    { code: 'chat-integrity' },
+  );
+  await assert.rejects(
+    client.request(
+      { action: 'history', channel: 'channel', before: null },
       {
         key: 'key',
         owner: {},

@@ -20,7 +20,11 @@ export interface TeamInbox {
   error: string;
   stale: boolean;
   revision: number;
+  /** Advances only after an accepted authorized team synchronization. */
+  authorizationRevision?: number;
   channelRevisions: ReadonlyMap<string, number>;
+  /** Conservative invalidation for active threads on degraded Basic projections. */
+  channelRefreshRevisions?: ReadonlyMap<string, number>;
   blockedChannels: ReadonlySet<string>;
 }
 export interface ChatClock {
@@ -97,6 +101,9 @@ export class ChatInboxService {
       data: entry.data ? freezeDto(structuredClone(entry.data)) : undefined,
       blockedChannels: readonlySet(entry.blockedChannels),
       channelRevisions: readonlyMap(entry.channelRevisions),
+      channelRefreshRevisions: readonlyMap(
+        entry.channelRefreshRevisions ?? entry.channelRevisions,
+      ),
     });
     this.snapshot = readonlyMap(new Map(this.snapshot).set(id, accepted));
     for (const listener of this.listeners) listener();
@@ -300,6 +307,12 @@ export class ChatInboxService {
         old?.data,
         data,
         old?.channelRevisions ?? new Map(),
+        false,
+      );
+      const refreshRevisions = contentRevisions(
+        old?.data,
+        data,
+        old?.channelRefreshRevisions ?? old?.channelRevisions ?? new Map(),
       );
       const changed = [...revisions].some(
         ([id, value]) => old?.channelRevisions.get(id) !== value,
@@ -317,6 +330,8 @@ export class ChatInboxService {
         stale: false,
         revision: (old?.revision ?? 0) + Number(changed),
         channelRevisions: revisions,
+        channelRefreshRevisions: refreshRevisions,
+        authorizationRevision: (old?.authorizationRevision ?? 0) + 1,
       });
       team.retry = 250;
       team.due = team.dirty ? 0 : this.clock.now() + 25_000;

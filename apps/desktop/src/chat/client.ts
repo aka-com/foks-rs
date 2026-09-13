@@ -14,16 +14,9 @@ import { submissionId } from './actions';
 
 import { cancelled, integrity } from './errors';
 export { cancelled, integrity, channelIntegrity } from './errors';
-export function sameScope(a: ChatScope, b: ChatScope): boolean {
-  return (
-    a.host === b.host &&
-    a.actor === b.actor &&
-    a.store.profile === b.store.profile &&
-    a.store.account_alias === b.store.account_alias &&
-    a.store.team_alias === b.store.team_alias &&
-    a.store.team_id === b.store.team_id
-  );
-}
+import { sameScope } from './scope';
+export { sameScope } from './scope';
+
 const kinds = {
   'operation-body': 'operation-body',
   channels: 'channels',
@@ -58,11 +51,7 @@ export function chatClient(bridge: Bridge, profile: string, storeId: string) {
     action: A,
     background?: BackgroundHistoryWork,
   ): Promise<ReplyFor<A>> => {
-    if (
-      background &&
-      action.action !== 'history' &&
-      action.action !== 'notification-history'
-    )
+    if (background && action.action !== 'notification-history')
       throw integrity(
         'Only notification history may use background scheduling.',
       );

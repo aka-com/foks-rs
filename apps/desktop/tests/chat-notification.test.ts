@@ -106,6 +106,7 @@ test('consumer baselines verified history, filters own messages and never writes
             stale: false,
             scope,
             revision,
+            channelRevisions: new Map([['c', revision]]),
             blockedChannels: new Set(),
             data: {
               channels: [channel],
@@ -188,6 +189,7 @@ test('consumer rotates beyond 64 channels despite an always-failing first channe
             stale: false,
             scope,
             revision: 1,
+            channelRevisions: new Map(channels.map((c) => [c.id, 1])),
             blockedChannels: new Set(),
             data: { channels, conversations: [] },
           },
@@ -260,6 +262,7 @@ test('closing consumer during history discards late authorized plaintext', async
             stale: false,
             scope,
             revision: 1,
+            channelRevisions: new Map([['c', 1]]),
             blockedChannels: new Set(),
             data: {
               channels: [{ id: 'c', readable: true }],

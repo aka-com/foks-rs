@@ -100,3 +100,17 @@ test('published collection views and nested DTOs expose no mutation path', () =>
   assert.equal('add' in set, false);
   set.forEach((_value, _key, collection) => assert.equal(collection, set));
 });
+test('notification content does not advance for unchanged degraded projection', () => {
+  const old = inbox(),
+    next = structuredClone(old);
+  next.degraded = true;
+  const versions = new Map([[old.channels[0].id, 5]]);
+  assert.equal(
+    contentRevisions(old, next, versions, false).get(old.channels[0].id),
+    5,
+  );
+  assert.equal(
+    contentRevisions(old, next, versions).get(old.channels[0].id),
+    6,
+  );
+});

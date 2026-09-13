@@ -46,6 +46,7 @@ export function contentRevisions(
   previous: Inbox | undefined,
   incoming: Inbox,
   revisions: ReadonlyMap<string, number>,
+  conservativeDegraded = true,
 ): ReadonlyMap<string, number> {
   const channels = new Map(previous?.channels.map((c) => [c.id, c]));
   const conversations = new Map(
@@ -62,7 +63,7 @@ export function contentRevisions(
       const changed =
         !old ||
         !sameReadAuthority(old, channel) ||
-        incoming.degraded ||
+        (conservativeDegraded && incoming.degraded) ||
         !!a !== !!b ||
         (!!a &&
           !!b &&
