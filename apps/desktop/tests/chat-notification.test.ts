@@ -119,7 +119,7 @@ test('consumer baselines verified history, filters own messages and never writes
   };
   const bridge = {
     chat: async (_store: string, action: { action: string }) => {
-      assert.equal(action.action, 'history');
+      assert.equal(action.action, 'notification-history');
       historyCalls++;
       return {
         scope,
@@ -199,7 +199,7 @@ test('consumer rotates beyond 64 channels despite an always-failing first channe
       _store: string,
       action: { action: string; channel: string },
     ) => {
-      assert.equal(action.action, 'history');
+      assert.equal(action.action, 'notification-history');
       checked.add(action.channel);
       if (action.channel === '0')
         throw {

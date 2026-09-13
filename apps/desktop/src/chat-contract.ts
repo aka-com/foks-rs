@@ -22,6 +22,7 @@ export type ChatAction =
   | { action: 'mark-read'; channel: string; sequence: string }
   | { action: 'poll-inbox'; since: string; timeout_milliseconds: number }
   | { action: 'history'; channel: string; before: string | null }
+  | { action: 'notification-history'; channel: string; before: string | null }
   | {
       action: 'prepare-channel';
       submission: string;
@@ -318,7 +319,10 @@ export function decodeChatReply(
     if (new Set(channels.map((c) => c.id)).size !== channels.length)
       return fail();
     result = { kind: 'channels', channels, version: sequence(r.version) };
-  } else if (r.kind === 'history' && action.action === 'history') {
+  } else if (
+    r.kind === 'history' &&
+    (action.action === 'history' || action.action === 'notification-history')
+  ) {
     object(r, [
       'kind',
       'channel',
@@ -352,6 +356,14 @@ export function decodeChatReply(
         content: content(m.content, CHAT_TEXT_BYTES),
       };
     });
+    if (
+      action.action === 'notification-history' &&
+      messages.some(
+        (m) =>
+          m.content.kind === 'text' && Array.from(m.content.text).length > 256,
+      )
+    )
+      fail();
     if (
       new Set(messages.map((m) => m.id)).size !== messages.length ||
       new Set(messages.map((m) => m.sequence)).size !== messages.length

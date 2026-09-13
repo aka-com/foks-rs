@@ -231,3 +231,37 @@ test('shared Rust and TypeScript chat reply fixtures agree', async () => {
       );
   }
 });
+
+test('notification history accepts only bounded snippets and retains history scope validation', () => {
+  const reply = {
+    scope: {
+      store,
+      host: '02' + 'ab'.repeat(32),
+      actor: '01' + 'ab'.repeat(32),
+    },
+    result: {
+      kind: 'history',
+      channel,
+      before: null,
+      missing_predecessors: [],
+      messages: [
+        {
+          id: 'cd'.repeat(16),
+          sequence: '1',
+          sender: null,
+          send_time: '1',
+          insert_time: '1',
+          content: { kind: 'text', text: '😀'.repeat(256) },
+        },
+      ],
+    },
+  };
+  const action = {
+    action: 'notification-history' as const,
+    channel,
+    before: null,
+  };
+  assert.equal(decodeChatReply(reply, storeId, action).result.kind, 'history');
+  reply.result.messages[0].content.text += 'x';
+  assert.throws(() => decodeChatReply(reply, storeId, action));
+});

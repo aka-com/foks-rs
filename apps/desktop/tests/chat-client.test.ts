@@ -50,3 +50,51 @@ test('owner rejects changed actor and action result binding', async () => {
   });
   client.dispose();
 });
+
+test('poll bypasses queued work and only history may request background admission', async () => {
+  const { scheduleProfileWork } =
+    await import('../src/scheduling/profile-work');
+  let release!: () => void;
+  const bridge = {
+    chat: async () => ({ scope: reply.scope, result: { kind: 'poll' } }),
+    cancelChat: async () => {},
+  } as unknown as Bridge;
+  const hold = scheduleProfileWork(
+    bridge,
+    'p',
+    () =>
+      new Promise<void>((r) => {
+        release = r;
+      }),
+  );
+  await new Promise((r) => setImmediate(r));
+  const client = chatClient(bridge, 'p', 't');
+  assert.equal(
+    (
+      await client.request({
+        action: 'poll-inbox',
+        since: '0',
+        timeout_milliseconds: 1,
+      })
+    ).result.kind,
+    'poll',
+  );
+  await assert.rejects(
+    client.request(
+      { action: 'pending' },
+      {
+        key: 'key',
+        owner: {},
+        generation: 1,
+        signal: new AbortController().signal,
+        current: () => true,
+        cancel: () => {},
+        preemptible: false,
+      },
+    ),
+    { code: 'chat-integrity' },
+  );
+  release();
+  await hold;
+  client.dispose();
+});

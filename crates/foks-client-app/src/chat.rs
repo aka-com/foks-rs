@@ -177,6 +177,35 @@ impl CheckedProfileSession<'_> {
             Ok(chat.read_recent(&mut chat.connection()?, channel, limit)?)
         })
     }
+    /// Each of two notification pages has a 512 KiB pre-decryption budget.
+    pub fn read_notification_chat(
+        &self,
+        team_alias: &str,
+        channel: RtChannelId,
+        end: Option<u64>,
+        width: u64,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<ChatHistory> {
+        if !(1..=50).contains(&width) {
+            return Err(Error::InvalidConfig(
+                "notification history width must be 1 to 50",
+            ));
+        }
+        self.with_chat(team_alias, vault, |chat| {
+            chat.limit_history_bytes(512 * 1024)?;
+            let mut connection = chat.connection()?;
+            Ok(if let Some(end) = end {
+                chat.read_thread(
+                    &mut connection,
+                    channel,
+                    end.saturating_sub(width - 1).max(1),
+                    end,
+                )?
+            } else {
+                chat.read_recent(&mut connection, channel, width)?
+            })
+        })
+    }
     pub fn read_chat_thread(
         &self,
         team_alias: &str,

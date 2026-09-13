@@ -26,6 +26,7 @@ pub struct ChatSession<'a> {
     team: Option<AuthenticatedTeamOutcome>,
     pub(super) team_id: EntityId,
     pub(super) role: Role,
+    pub(super) history_byte_limit: usize,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChatChannel {
@@ -60,10 +61,20 @@ impl FoksClient {
             team_id: team.clone(),
             team: None,
             role: Role::NONE,
+            history_byte_limit: ChatLimits::HISTORY_BYTES,
         })
     }
 }
 impl ChatSession<'_> {
+    /// Restrict a local history consumer without changing remote protocol semantics.
+    pub fn limit_history_bytes(&mut self, limit: usize) -> Result<()> {
+        if limit == 0 || limit > ChatLimits::HISTORY_BYTES {
+            return Err(Error::ChatInvalidInput("invalid history byte budget"));
+        }
+        self.history_byte_limit = limit;
+        Ok(())
+    }
+
     pub fn connection(&self) -> Result<RealtimeConnection> {
         self.client.realtime_connection(self.host, self.credential)
     }

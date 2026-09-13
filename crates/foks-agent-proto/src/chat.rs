@@ -12,6 +12,11 @@ pub enum ChatAction {
         channel: String,
         before: Option<String>,
     },
+    /// Read-only notification page with a stricter native plaintext budget.
+    NotificationHistory {
+        channel: String,
+        before: Option<String>,
+    },
     Inbox,
     SyncInbox {
         /// Volatile channel quarantines owned by this unlocked desktop lifetime.
@@ -61,6 +66,7 @@ impl ChatAction {
             self,
             Self::Channels
                 | Self::History { .. }
+                | Self::NotificationHistory { .. }
                 | Self::Inbox
                 | Self::SyncInbox { .. }
                 | Self::PollInbox { .. }
@@ -71,7 +77,7 @@ impl ChatAction {
     }
     pub fn validate(&self) -> bool {
         match self {
-            Self::History { channel, before } => {
+            Self::History { channel, before } | Self::NotificationHistory { channel, before } => {
                 valid_chat_id(channel)
                     && before
                         .as_ref()

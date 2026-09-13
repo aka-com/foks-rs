@@ -1,4 +1,8 @@
 import { enqueueProfileWork } from '../bridge';
+import {
+  scheduleProfileWork,
+  type BackgroundHistoryWork,
+} from '../scheduling/profile-work';
 import type { Bridge } from '../bridge';
 import type {
   ChatAction,
@@ -24,6 +28,7 @@ const kinds = {
   'operation-body': 'operation-body',
   channels: 'channels',
   history: 'history',
+  'notification-history': 'history',
   inbox: 'inbox',
   'sync-inbox': 'inbox',
   'poll-inbox': 'poll',
@@ -51,7 +56,16 @@ export function chatClient(bridge: Bridge, profile: string, storeId: string) {
   let scope: ChatScope | null = null;
   const request = async <A extends ChatAction>(
     action: A,
+    background?: BackgroundHistoryWork,
   ): Promise<ReplyFor<A>> => {
+    if (
+      background &&
+      action.action !== 'history' &&
+      action.action !== 'notification-history'
+    )
+      throw integrity(
+        'Only notification history may use background scheduling.',
+      );
     const work = async () => {
       if (closed) throw cancelled();
       const reply = await bridge.chat(storeId, action, view);
@@ -65,7 +79,9 @@ export function chatClient(bridge: Bridge, profile: string, storeId: string) {
     };
     return action.action === 'poll-inbox'
       ? work()
-      : enqueueProfileWork(bridge, profile, work);
+      : background
+        ? scheduleProfileWork(bridge, profile, work, background)
+        : enqueueProfileWork(bridge, profile, work);
   };
   return {
     request,

@@ -24,6 +24,8 @@ export class NotificationConsumer {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private off: () => void;
   private rotation = 0;
+  private generation = 0;
+  private lifetime = new AbortController();
   constructor(
     private bridge: Bridge,
     private service: ChatInboxService,
@@ -36,6 +38,8 @@ export class NotificationConsumer {
   }
   stop() {
     this.stopped = true;
+    this.generation++;
+    this.lifetime.abort();
     this.off();
     clearTimeout(this.timer);
     for (const job of this.jobs.values()) job.dispose();
@@ -171,11 +175,22 @@ export class NotificationConsumer {
     };
     // Release full history bodies at this boundary; retain only bounded snippets.
     const read = async (before: string | null) => {
-      const reply = await client.request({
-        action: 'history',
-        channel: item.channel,
-        before,
-      });
+      const reply = await client.request(
+        {
+          action: 'notification-history',
+          channel: item.channel,
+          before,
+        },
+        {
+          key: JSON.stringify([item.scope, item.channel]),
+          owner: client,
+          generation: this.generation,
+          signal: this.lifetime.signal,
+          current: () => !!current(),
+          cancel: () => client.dispose(),
+          preemptible: false,
+        },
+      );
       return {
         ...reply,
         result: {
@@ -282,6 +297,7 @@ export class NotificationConsumer {
     } catch (cause) {
       if (!current()) return;
       const error = normalizeCommandError(cause);
+      if (error.code === 'cancelled') return;
       p.failures = Math.min(p.failures + 1, 6);
       p.due = this.now() + Math.min(1000 * 2 ** (p.failures - 1), 30000);
       if (error.code === 'chat-channel-integrity')

@@ -295,12 +295,20 @@ pub(super) fn dispatch(
                 "chat polling requires dedicated dispatch",
             )))
         }
-        ChatAction::History { channel, before } => {
+        action @ (ChatAction::History { .. } | ChatAction::NotificationHistory { .. }) => {
+            let notification = matches!(action, ChatAction::NotificationHistory { .. });
+            let (ChatAction::History { channel, before }
+            | ChatAction::NotificationHistory { channel, before }) = action
+            else {
+                unreachable!()
+            };
             let channel_id = RtChannelId(id(&channel)?);
             let end = before.as_deref().and_then(chat_sequence).map(|n| n - 1);
             let mut width = CHAT_PAGE_ROWS as u64;
             loop {
-                let history = if let Some(end) = end {
+                let history = if notification {
+                    session.read_notification_chat(team, channel_id, end, width, vault)
+                } else if let Some(end) = end {
                     session.read_chat_thread(
                         team,
                         channel_id,
@@ -365,7 +373,13 @@ pub(super) fn dispatch(
                                     if text.len() <= CHAT_TEXT_BYTES =>
                                 {
                                     ChatContent::Text {
-                                        text: SecretString::new(text.as_str()),
+                                        text: if notification {
+                                            SecretString::new(
+                                                text.chars().take(256).collect::<String>(),
+                                            )
+                                        } else {
+                                            SecretString::new(text.as_str())
+                                        },
                                     }
                                 }
                                 foks_client::ChatContent::Text(_) => ChatContent::Oversized,

@@ -1,3 +1,4 @@
+import { scheduleProfileWork } from './scheduling/profile-work';
 import {
   decodeInvitationReply,
   type InvitationAction,
@@ -823,7 +824,6 @@ const pendingServerStatuses = new WeakMap<
   Bridge,
   Map<string, Promise<ServerStatusSnapshot>>
 >();
-const profileWork = new WeakMap<Bridge, Map<string, Promise<void>>>();
 
 /**
  * Queues profile-scoped requests sequentially to prevent concurrent
@@ -834,26 +834,7 @@ export function enqueueProfileWork<T>(
   profile: string,
   work: () => Promise<T>,
 ): Promise<T> {
-  let queues = profileWork.get(bridge);
-  if (!queues) {
-    queues = new Map();
-    profileWork.set(bridge, queues);
-  }
-  const previous = queues.get(profile) ?? Promise.resolve();
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  queues.set(profile, gate);
-  return previous
-    .catch(() => undefined)
-    .then(async () => {
-      try {
-        return await work();
-      } finally {
-        release();
-      }
-    });
+  return scheduleProfileWork(bridge, profile, work);
 }
 
 export function sharedServerStatus(

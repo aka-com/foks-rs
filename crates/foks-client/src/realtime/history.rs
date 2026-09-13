@@ -136,11 +136,12 @@ impl ChatSession<'_> {
         md: &RtChannelMetadata,
         rows: Vec<RtMessage>,
     ) -> Result<ChatHistory> {
-        if rows.len() > ChatLimits::HISTORY_ROWS
-            || rows.iter().try_fold(0usize, |sum, m| {
-                Ok::<_, Error>(sum.saturating_add(m.encoded()?.len()))
-            })? > ChatLimits::HISTORY_BYTES
-        {
+        // Encoded ciphertext bounds plaintext before decryption. Restricted consumers
+        // reserve the same budget for predecessor verification, not only result rows.
+        let mut encoded_bytes = rows.iter().try_fold(0usize, |sum, m| {
+            Ok::<_, Error>(sum.saturating_add(m.encoded()?.len()))
+        })?;
+        if rows.len() > ChatLimits::HISTORY_ROWS || encoded_bytes > self.history_byte_limit {
             return Err(Error::ChatLimit("history page limit"));
         }
         let scope = self.scope(md.id);
@@ -209,6 +210,15 @@ impl ChatSession<'_> {
             for m in page.sequences {
                 if !requested.contains(&m.sequence) || !seen.insert(m.sequence) {
                     return Err(Error::ChatChannelIntegrity("unrequested predecessor"));
+                }
+                if self.history_byte_limit < ChatLimits::HISTORY_BYTES {
+                    let size = m.encoded()?.len();
+                    if encoded_bytes.saturating_add(size) > self.history_byte_limit {
+                        // Keep this predecessor missing: incomplete evidence cannot
+                        // become a verified continuity claim merely to fit a budget.
+                        continue;
+                    }
+                    encoded_bytes += size;
                 }
                 observed.push(anchor(&m)?);
                 if matches!(self.open_message(md, &m)?, ChatContent::Text(_)) {

@@ -103,7 +103,10 @@ export function mockChat(world?: World) {
         channels: [...team.channels],
         version: String(team.channels.length),
       };
-    else if (action.action === 'history') {
+    else if (
+      action.action === 'history' ||
+      action.action === 'notification-history'
+    ) {
       const rows = (team.messages.get(action.channel) ?? [])
         .filter(
           (m) =>

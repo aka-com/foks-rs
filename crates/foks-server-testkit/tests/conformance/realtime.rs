@@ -572,6 +572,26 @@ pub(crate) fn realtime_text() {
     let Response::Thread(page) = writer.call(&history).unwrap() else {
         panic!()
     };
+    let mut bounded = fixture
+        .client
+        .foks()
+        .chat_session(fixture.host(), &owner.credential, &created.team)
+        .unwrap();
+    bounded.limit_history_bytes(1).unwrap();
+    assert!(matches!(
+        bounded.read_recent(&mut writer, md.id, 2),
+        Err(foks_client::Error::ChatLimit(_))
+    ));
+    bounded.limit_history_bytes(512 * 1024).unwrap();
+    assert_eq!(
+        bounded
+            .read_recent(&mut writer, md.id, 2)
+            .unwrap()
+            .messages
+            .len(),
+        2
+    );
+
     assert_eq!(page.ranges[0].messages.len(), 2);
     assert_eq!(page.sequences.len(), 1);
     let RtMessageWrapper::Encrypted(boxed) = &page.sequences[0].wrapper else {

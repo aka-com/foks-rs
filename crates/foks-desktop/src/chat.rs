@@ -103,6 +103,10 @@ pub fn validate_chat_reply(
             ChatAction::History {
                 channel: expected,
                 before: bound,
+            }
+            | ChatAction::NotificationHistory {
+                channel: expected,
+                before: bound,
             },
             ChatResult::History {
                 channel,
@@ -135,6 +139,11 @@ pub fn validate_chat_reply(
                         && chat_sequence(&m.send_time).is_some()
                         && chat_sequence(&m.insert_time).is_some()
                         && valid_content(&m.content, CHAT_TEXT_BYTES)
+                        && (!matches!(action, ChatAction::NotificationHistory { .. })
+                            || match &m.content {
+                                ChatContent::Text { text } => text.expose().chars().count() <= 256,
+                                _ => true,
+                            })
                 })
                 && *before
                     == messages
