@@ -1156,11 +1156,30 @@ body {
   line-height: 1.5;
 }
 
-.first-run-main .pcard .btns {
+/* Panel action rows and inline fields */
+.pcard .btns {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: auto;
   padding-top: 6px;
+}
+
+.pcard .check-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.pcard .check-row input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.pcard .local-field-card {
+  margin: 2px 0;
 }
 
 .first-run-main .recovery-fields .fr {
@@ -1300,6 +1319,106 @@ body {
 
 .first-run-main .crit b {
   display: block;
+}
+
+/* First-run pane layout */
+.first-run-main .pane .status {
+  margin: -4px 0 14px;
+  max-width: 70ch;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.first-run-main .pane .actions {
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.first-run-main .pane .crit + .actions {
+  margin-top: 0;
+}
+
+.first-run-main .pane .local-field-card + .actions {
+  margin-top: 14px;
+}
+
+/* Secondary action card */
+.first-run-main .alt-path {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 22px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.first-run-main .alt-path .t {
+  min-width: 0;
+}
+
+.first-run-main .alt-path .t b {
+  display: block;
+  font-weight: 600;
+}
+
+.first-run-main .alt-path .t span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.first-run-main .alt-path .btn {
+  flex: none;
+}
+
+.first-run-main .alt-path.warning {
+  border-color: var(--amber-border);
+  background: var(--amber-wash);
+  color: var(--amber-ink);
+}
+
+.first-run-main .alt-path.warning .t span {
+  color: var(--amber-ink);
+}
+
+/* Inline notice bands */
+.first-run-main .pane .band {
+  align-items: center;
+  margin: 14px 0 0;
+}
+
+.first-run-main .bandstrip .band {
+  align-items: center;
+  max-width: 700px;
+}
+
+.first-run-main .pane .band.info {
+  background: var(--accent-wash);
+  border-color: var(--accent-border);
+  color: var(--ink-2);
+}
+
+/* Button loading spinner */
+.btn .spin {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: btn-spin 0.8s linear infinite;
+}
+
+@keyframes btn-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .go-profile-connect .crit {
@@ -1458,6 +1577,26 @@ body {
 
 .app-lock-card .app-lock-error {
   color: var(--danger-ink);
+}
+
+.app-lock-card .acts2 {
+  display: flex;
+  align-self: stretch;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.app-lock-card .acts2 .btn {
+  flex: 1;
+}
+
+.app-lock-card .copybox {
+  align-self: stretch;
+  margin: 0 0 10px;
+}
+
+.app-lock-card .copybox .btn {
+  align-self: center;
 }
 
 /* Popover menus */

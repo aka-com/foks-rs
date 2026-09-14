@@ -224,6 +224,38 @@ for (const code of ['agent-lost', 'version-mismatch']) {
   });
 }
 
+test('first-run keeps a newly verified server across shell navigation', async () => {
+  const harness = await discoveryRecoveryHarness();
+  let checks = 0;
+  const rendered = harness.render({
+    discoverGoProfiles: async () => ({ installed: false, candidates: [] }),
+    checkAndAddProfile: async (profile, probe) => {
+      checks++;
+      return {
+        profile,
+        hostId: `02${'7'.repeat(64)}`,
+        lookupName: probe,
+        canonicalName: 'foks.app',
+        acceptance: 'inserted',
+        chain: 1,
+        epoch: 1,
+      };
+    },
+  });
+  await rendered.findByText('How are you joining?');
+  ui.fireEvent.click(
+    rendered.getByRole('radio', { name: /Set up my own account/ }),
+  );
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Continue' }));
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Use the official FOKS server' }),
+  );
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Use this server' }));
+
+  await ui.waitFor(() => assert.equal(checks, 1));
+  await rendered.findByRole('button', { name: 'Details' });
+});
+
 for (const failure of [
   discoveryFailure('scan-failed'),
   new Error('Malformed discovery response'),
@@ -258,7 +290,8 @@ test('joining choices continue without a next-steps module', async () => {
     ui.fireEvent.click(view.getByRole('radio', { name }));
     assert.equal(view.queryByText(/What happens next/i), null);
     assert.equal(
-      (view.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled,
+      (view.getByRole('button', { name: 'Continue' }) as HTMLButtonElement)
+        .disabled,
       false,
     );
   }
@@ -314,9 +347,10 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
   await ui.waitFor(() =>
     assert.ok(rendered.getByText('Select an FOKS account')),
   );
-  assert.ok(
-    scans >= 2,
-    'Strict Mode replays discovery after cancelling its first effect',
+  assert.equal(
+    scans,
+    1,
+    'Strict Mode shares discovery rather than issuing a duplicate read',
   );
   ui.fireEvent.click(rendered.getByRole('radio', { name: /cli-owner/ }));
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Continue' }));
@@ -603,7 +637,9 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
     }),
   );
   await view.findByText('How are you joining?');
-  ui.fireEvent.click(view.getByRole('radio', { name: /Set up my own account/ }));
+  ui.fireEvent.click(
+    view.getByRole('radio', { name: /Set up my own account/ }),
+  );
   ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
   ui.fireEvent.click(
     view.getByRole('button', { name: 'Use the official FOKS server' }),
@@ -726,14 +762,6 @@ test('first-run account navigation, server edits, and connection errors stay sco
     copyError.closest('.pcard')?.querySelector('h3')?.textContent,
     'Copy this Mac’s CLI device',
   );
-  ui.fireEvent.click(view.getByRole('button', { name: 'Resume pairing' }));
-  const pairError = await view.findByText(
-    'Refresh the setup status before resuming this operation.',
-  );
-  assert.equal(
-    pairError.closest('.pcard')?.querySelector('h3')?.textContent,
-    'Use the CLI to approve this as a new device',
-  );
   ui.fireEvent.change(view.getByLabelText('Backup phrase'), {
     target: { value: 'one two three' },
   });
@@ -750,7 +778,14 @@ test('first-run account navigation, server edits, and connection errors stay sco
   assert.ok(view.getByPlaceholderText('Your Mac'));
   ui.fireEvent.click(view.getByRole('button', { name: 'Back' }));
   assert.ok(view.getByText('Add this Mac to your account'));
-  ui.fireEvent.click(view.getByRole('button', { name: 'Leave setup' }));
+  ui.fireEvent.click(view.getByRole('button', { name: 'Resume pairing' }));
+  await view.findByRole('heading', { name: 'Check account setup' });
+  assert.equal(view.queryByRole('button', { name: 'Recover' }), null);
+  assert.equal(
+    view.queryByRole('button', { name: 'Copy existing device' }),
+    null,
+  );
+  ui.fireEvent.click(view.getByRole('button', { name: 'Finish later' }));
   assert.deepEqual(navigations.at(-1), { kind: 'all' });
 });
 

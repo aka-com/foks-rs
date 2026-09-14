@@ -12,6 +12,7 @@ export const FIRST_RUN_STATES = [
   'account',
   'existing',
   'identity-pending',
+  'operation-pending',
   'protect',
   'phrase',
   'waiting',
@@ -33,12 +34,19 @@ export interface FirstRunGroupIdentity {
 }
 
 export interface FirstRunCheckpoint {
-  readonly version: 2;
+  readonly version: 3;
   readonly path: FirstRunPath;
   readonly state: FirstRunStateName;
   readonly managedLocal: boolean;
   readonly profile?: CheckedProfileResponse;
   readonly serverAddress?: string;
+  /** Nonsecret intent retained until a command acknowledges its outcome. */
+  readonly provisioning?: ProvisioningIntent;
+  readonly sso?: {
+    readonly operationId: string;
+    readonly alias: string;
+    readonly hardware: boolean;
+  };
   /** Acknowledged provisioning; never replay it while identity is loading. */
   readonly provisionedAccount?: {
     readonly alias: string;
@@ -53,8 +61,19 @@ export interface FirstRunCheckpoint {
   readonly backupCommitted: boolean;
   readonly protectSkipped: boolean;
   readonly group?: FirstRunGroupIdentity;
+  readonly selectedGroup?: FirstRunGroupIdentity;
   readonly added: boolean;
   readonly returning: boolean;
+}
+
+export interface ProvisioningIntent {
+  readonly id: string;
+  readonly kind: 'signup' | 'recovery' | 'copy' | 'pairing' | 'sso';
+  readonly alias: string;
+  readonly deviceName: string;
+  readonly back: 'account' | 'existing';
+  readonly candidateId?: string;
+  readonly ssoOperationId?: string;
 }
 
 export type FirstRunEvent =
@@ -88,6 +107,8 @@ export type FirstRunEvent =
   | { type: 'skip-protect' }
   | { type: 'finish-local'; skipped: boolean }
   | { type: 'group-discovered'; group: FirstRunGroupIdentity }
+  | { type: 'discard-provisioning' }
+  | { type: 'discard-provisioned-account' }
   | { type: 'reenter' };
 
 export function initialFirstRun(
@@ -95,7 +116,7 @@ export function initialFirstRun(
   state: FirstRunStateName = 'who',
 ): FirstRunCheckpoint {
   return {
-    version: 2,
+    version: 3,
     path,
     state,
     managedLocal: state === 'local' || state === 'local-done',
@@ -112,6 +133,25 @@ export function transitionFirstRun(
   state: FirstRunCheckpoint,
   event: FirstRunEvent,
 ): FirstRunCheckpoint {
+  if (event.type === 'discard-provisioning') {
+    if (!state.provisioning) return state;
+    return {
+      ...state,
+      state: state.provisioning.back,
+      provisioning: undefined,
+      sso: undefined,
+    };
+  }
+  if (event.type === 'discard-provisioned-account') {
+    if (!state.provisionedAccount) return state;
+    return {
+      ...state,
+      state: state.returning ? 'existing' : 'account',
+      provisionedAccount: undefined,
+      sso: undefined,
+    };
+  }
+  if (state.provisioning) return state;
   if (
     state.provisionedAccount &&
     (event.type !== 'account-complete' ||
@@ -210,12 +250,15 @@ const ROOT_KEYS = new Set([
   'managedLocal',
   'profile',
   'serverAddress',
+  'provisioning',
+  'sso',
   'account',
   'provisionedAccount',
   'passphraseSet',
   'backupCommitted',
   'protectSkipped',
   'group',
+  'selectedGroup',
   'added',
   'returning',
 ]);
@@ -270,7 +313,7 @@ function safeResumeState(state: FirstRunStateName): FirstRunStateName {
 /** Serialize safe checkpoint fields to storage, excluding sensitive secrets. */
 export function encodeFirstRunCheckpoint(state: FirstRunCheckpoint): string {
   return JSON.stringify({
-    version: 2,
+    version: 3,
     path: state.path,
     state: safeResumeState(state.state),
     managedLocal: state.managedLocal,
@@ -278,10 +321,13 @@ export function encodeFirstRunCheckpoint(state: FirstRunCheckpoint): string {
     serverAddress: state.serverAddress,
     account: state.account,
     provisionedAccount: state.provisionedAccount,
+    provisioning: state.provisioning,
+    sso: state.sso,
     passphraseSet: state.passphraseSet,
     backupCommitted: state.backupCommitted,
     protectSkipped: state.protectSkipped,
     group: state.group,
+    selectedGroup: state.selectedGroup,
     added: state.added,
     returning: state.returning,
   });
@@ -296,13 +342,66 @@ export function decodeFirstRunCheckpoint(
     if (!record(parsed) || !exactKeys(parsed, ROOT_KEYS)) return null;
     const item = parsed;
     if (
-      item.version !== 2 ||
+      (item.version !== 3 && item.version !== 2) ||
       !isPath(item.path) ||
       !isFirstRunState(item.state) ||
       item.state === 'boot'
     )
       return null;
     const base = initialFirstRun(item.path, safeResumeState(item.state));
+    let sso: FirstRunCheckpoint['sso'];
+    if (item.sso !== undefined) {
+      const value = item.sso;
+      if (
+        item.version !== 3 ||
+        !record(value) ||
+        !exactKeys(value, new Set(['operationId', 'alias', 'hardware'])) ||
+        typeof value.operationId !== 'string' ||
+        !/^[a-f0-9]{32}$/.test(value.operationId) ||
+        !localName(value.alias) ||
+        typeof value.hardware !== 'boolean'
+      )
+        return null;
+      sso = {
+        operationId: value.operationId,
+        alias: value.alias,
+        hardware: value.hardware,
+      };
+    }
+    let provisioning: ProvisioningIntent | undefined;
+    if (item.provisioning !== undefined) {
+      const candidate = item.provisioning;
+      if (
+        item.version !== 3 ||
+        !record(candidate) ||
+        !exactKeys(
+          candidate,
+          new Set([
+            'id',
+            'kind',
+            'alias',
+            'deviceName',
+            'back',
+            'candidateId',
+            'ssoOperationId',
+          ]),
+        ) ||
+        !boundedText(candidate.id, 64) ||
+        !localName(candidate.alias) ||
+        !boundedText(candidate.deviceName, 256) ||
+        !['signup', 'recovery', 'copy', 'pairing', 'sso'].includes(
+          String(candidate.kind),
+        ) ||
+        !['account', 'existing'].includes(String(candidate.back)) ||
+        (candidate.candidateId !== undefined &&
+          !boundedText(candidate.candidateId, 512)) ||
+        (candidate.ssoOperationId !== undefined &&
+          (typeof candidate.ssoOperationId !== 'string' ||
+            !/^[a-f0-9]{32}$/.test(candidate.ssoOperationId)))
+      )
+        return null;
+      provisioning = candidate as unknown as ProvisioningIntent;
+    }
     let profile: CheckedProfileResponse | undefined;
     if (item.profile !== undefined) {
       const candidate = item.profile;
@@ -389,6 +488,29 @@ export function decodeFirstRunCheckpoint(
         teamIdHex: candidate.teamIdHex,
       };
     }
+    let selectedGroup: FirstRunGroupIdentity | undefined;
+    if (item.selectedGroup !== undefined) {
+      const candidate = item.selectedGroup;
+      if (
+        item.version !== 3 ||
+        !record(candidate) ||
+        !exactKeys(candidate, GROUP_KEYS) ||
+        !boundedText(candidate.name, 256) ||
+        !localName(candidate.alias) ||
+        (candidate.kind !== 'named' && candidate.kind !== 'adhoc') ||
+        typeof candidate.teamIdHex !== 'string' ||
+        !new RegExp(
+          `^${candidate.kind === 'named' ? '03' : '14'}[0-9a-f]{64}$`,
+        ).test(candidate.teamIdHex)
+      )
+        return null;
+      selectedGroup = {
+        name: candidate.name,
+        alias: candidate.alias,
+        kind: candidate.kind,
+        teamIdHex: candidate.teamIdHex,
+      };
+    }
     const flags = [
       item.managedLocal,
       item.passphraseSet,
@@ -404,6 +526,9 @@ export function decodeFirstRunCheckpoint(
     )
       return null;
     const state = safeResumeState(item.state);
+    if (Boolean(provisioning) !== (state === 'operation-pending')) return null;
+    if (provisioning && (!profile || account || provisionedAccount))
+      return null;
     if (Boolean(provisionedAccount) !== (state === 'identity-pending'))
       return null;
     if (provisionedAccount && (!profile || account)) return null;
@@ -426,6 +551,7 @@ export function decodeFirstRunCheckpoint(
     if (needsProfile && (!profile || item.serverAddress === undefined))
       return null;
     if (account && !profile) return null;
+    if (sso && !profile) return null;
     if (needsAccount && !account) return null;
     if (
       (item.passphraseSet === true ||
@@ -437,6 +563,7 @@ export function decodeFirstRunCheckpoint(
     )
       return null;
     if (group && !account) return null;
+    if (selectedGroup && (!account || item.path !== 'invited')) return null;
     if (
       item.protectSkipped === true &&
       (item.passphraseSet === true || item.backupCommitted === true)
@@ -466,10 +593,13 @@ export function decodeFirstRunCheckpoint(
         typeof item.serverAddress === 'string' ? item.serverAddress : undefined,
       account,
       provisionedAccount,
+      ...(provisioning ? { provisioning } : {}),
+      ...(sso ? { sso } : {}),
       passphraseSet: item.passphraseSet as boolean,
       backupCommitted: item.backupCommitted as boolean,
       protectSkipped: item.protectSkipped as boolean,
       group,
+      ...(selectedGroup ? { selectedGroup } : {}),
       added: item.added as boolean,
       returning: item.returning as boolean,
     };
@@ -500,6 +630,7 @@ export function reconcileFirstRunCheckpoint(
   // Missing or incomplete inventory cannot undo an acknowledged mutation.
   // Identity resolution checks the saved host/profile binding separately.
   if (saved.provisionedAccount) return saved;
+  if (saved.provisioning) return saved;
   if (saved.profile && facts.profile === 'missing') {
     return {
       ...initialFirstRun(saved.path, 'address'),
@@ -526,6 +657,7 @@ export function reconcileFirstRunCheckpoint(
       ...saved,
       state: 'waiting',
       group: undefined,
+      selectedGroup: saved.group,
       added: false,
     };
   }

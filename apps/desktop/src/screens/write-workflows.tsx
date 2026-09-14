@@ -715,9 +715,7 @@ function NewSheet({
         ) : null}
         <Toggle label="Advanced" className="sheet-advanced">
           <Inset>{field('Path', path, setPath, DRAFT_PATH[itemKind])}</Inset>
-          <p className="hint">
-            The item will be saved at this vault path.
-          </p>
+          <p className="hint">The item will be saved at this vault path.</p>
         </Toggle>
       </>
     </Sheet>
@@ -792,6 +790,75 @@ function ExistsSheet({
   );
 }
 
+function AgentLostDialog({
+  message,
+  bridge,
+  onRetryAgent,
+  onReconnected,
+}: {
+  message?: string;
+  bridge: Bridge;
+  onRetryAgent: () => Promise<void>;
+  onReconnected: () => void;
+}): ReactNode {
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  return (
+    <Dialog
+      className="stopwrap"
+      role="alertdialog"
+      aria-label="Connection to background service lost"
+    >
+      <div className="notice stop">
+        <h2>Connection to background service lost</h2>
+        <p>
+          The background service stopped responding. Click Retry to reconnect.
+        </p>
+        {message ? <p className="fn">{message}</p> : null}
+        {failure ? (
+          <p className="fn" role="alert">
+            {failure}
+          </p>
+        ) : null}
+        <div className="acts2">
+          <Button
+            variant="primary"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setFailure(null);
+              void (async () => {
+                try {
+                  await onRetryAgent();
+                  onReconnected();
+                } catch (error) {
+                  setFailure(normalizeCommandError(error).message);
+                } finally {
+                  setBusy(false);
+                }
+              })();
+            }}
+          >
+            Retry
+          </Button>
+          <Button
+            disabled={busy}
+            onClick={() => {
+              void bridge
+                .quitApp()
+                .catch((error) =>
+                  setFailure(normalizeCommandError(error).message),
+                );
+            }}
+          >
+            Quit FOKS
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 export function WriteOverlay({
   world,
   bridge,
@@ -824,36 +891,12 @@ export function WriteOverlay({
   if (!workflow) return null;
   if (workflow.kind === 'agent-lost')
     return (
-      <Dialog
-        className="stopwrap"
-        role="alertdialog"
-        aria-label="Connection to background service lost"
-      >
-        <div className="notice stop">
-          <h2>Connection to background service lost</h2>
-          <p>
-            The local background service stopped responding. Reconnect to
-            resume.
-          </p>
-          <div className="acts2">
-            <Button
-              variant="primary"
-              onClick={() => {
-                void (async () => {
-                  try {
-                    await onRetryAgent();
-                    setWorkflow(null);
-                  } catch (error) {
-                    onError(error);
-                  }
-                })();
-              }}
-            >
-              Retry
-            </Button>
-          </div>
-        </div>
-      </Dialog>
+      <AgentLostDialog
+        message={workflow.message}
+        bridge={bridge}
+        onRetryAgent={onRetryAgent}
+        onReconnected={() => setWorkflow(null)}
+      />
     );
   if (workflow.kind === 'new')
     return (

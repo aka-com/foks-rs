@@ -20,6 +20,11 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
    * Toggle pressed state. When defined, applies `.on` and `aria-pressed`.
    */
   on?: boolean;
+  /**
+   * Show a spinner before the label while the button's operation runs. Pair
+   * with `disabled` and a progress label such as "Creating…".
+   */
+  busy?: boolean;
   /** Optional ref passed to the underlying button element. */
   ref?: Ref<HTMLButtonElement>;
 }
@@ -37,6 +42,7 @@ export function Button({
   danger,
   icon,
   on,
+  busy = false,
   className,
   children,
   type = 'button',
@@ -61,7 +67,9 @@ export function Button({
       type={type}
       className={classes}
       aria-pressed={on === undefined ? undefined : on}
+      aria-busy={busy || undefined}
     >
+      {busy ? <span className="spin" aria-hidden="true" /> : null}
       {icon ? <Icon name={icon} /> : null}
       {children}
     </button>

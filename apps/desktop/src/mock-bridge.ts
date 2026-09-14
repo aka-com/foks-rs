@@ -33,6 +33,10 @@ export class VersionMismatchError extends Error {
   }
 }
 
+export type AppLifecycleRequest = 'restart' | 'quit';
+
+export const mockAppLifecycleRequests: AppLifecycleRequest[] = [];
+
 export function mockBridge(world: World = FIXTURE): Bridge {
   const ssoModes = new Map<string, import('./sso-contract').SsoPurpose>();
   const stores: Store[] = world.stores.map((store) => ({ ...store }));
@@ -396,6 +400,12 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     unlockApp: async () => {
       appLocked = false;
       return appLockState();
+    },
+    restartApp: async () => {
+      mockAppLifecycleRequests.push('restart');
+    },
+    quitApp: async () => {
+      mockAppLifecycleRequests.push('quit');
     },
     agentStatus: () => Promise.resolve({ ...world.agent }),
     appInfo: async () => ({

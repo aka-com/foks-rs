@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FIXTURE } from '../src/fixture';
-import { resolveProvisionedIdentity } from '../src/first-run-identity';
+import {
+  resolveProvisionedIdentity,
+  provisionedIdentityProblem,
+} from '../src/first-run-identity';
 import {
   initialFirstRun,
   transitionFirstRun,
@@ -33,6 +36,41 @@ const world = {
     server.id === 'personal' ? { ...server, host_id: profile.hostId } : server,
   ),
 };
+
+test('identity conflicts distinguish incomplete inventory from missing and inconsistent records', () => {
+  assert.equal(
+    provisionedIdentityProblem(
+      { ...world, profileInventoryStatus: 'unavailable', servers: [] },
+      pending,
+    ),
+    'inventory-unavailable',
+  );
+  assert.equal(
+    provisionedIdentityProblem({ ...world, servers: [] }, pending),
+    'profile-missing',
+  );
+  assert.equal(
+    provisionedIdentityProblem({ ...world, accounts: [] }, pending),
+    'account-missing',
+  );
+  assert.equal(
+    provisionedIdentityProblem(
+      { ...world, accounts: [...world.accounts, world.accounts[0]] },
+      pending,
+    ),
+    'duplicate-records',
+  );
+  assert.equal(
+    provisionedIdentityProblem(
+      {
+        ...world,
+        servers: world.servers.map((s) => ({ ...s, host_id: 'wrong' })),
+      },
+      pending,
+    ),
+    'host-mismatch',
+  );
+});
 
 test('acknowledged provisioning round-trips a secret-free pending checkpoint', () => {
   assert.equal(pending.state, 'identity-pending');

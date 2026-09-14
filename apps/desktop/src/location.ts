@@ -376,6 +376,7 @@ const FIRST_RUN_STATE_NAMES = [
   'added',
   'local-done',
   'identity-pending',
+  'operation-pending',
   'checklist-invited',
   'checklist-own',
 ] as const;

@@ -10,6 +10,7 @@ pub(crate) mod chat_local;
 mod context;
 pub(crate) mod enrollment;
 mod execution;
+pub(crate) mod first_run;
 pub(crate) mod groups;
 pub(crate) mod invitations;
 pub(crate) mod portability;

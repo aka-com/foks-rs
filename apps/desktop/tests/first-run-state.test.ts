@@ -9,6 +9,7 @@ import {
   reconcileFirstRunCheckpoint,
   transitionFirstRun,
 } from '../src/first-run-state';
+import type { FirstRunEvent } from '../src/first-run-state';
 
 const checked = {
   profile: 'work',
@@ -59,7 +60,7 @@ test('re-entering first-run resets server and account state', () => {
 
 test('bootstrap is not persisted as onboarding progress', () => {
   const encoded = encodeFirstRunCheckpoint(initialFirstRun('invited', 'boot'));
-  assert.equal(parsedCheckpoint(encoded).version, 2);
+  assert.equal(parsedCheckpoint(encoded).version, 3);
   assert.equal(parsedCheckpoint(encoded).state, 'who');
   assert.equal('initialized' in parsedCheckpoint(encoded), false);
   assert.equal(decodeFirstRunCheckpoint(encoded)?.state, 'who');
@@ -500,4 +501,113 @@ test('confirmed missing prerequisites rewind to the earliest valid resume point'
   assert.equal(groupMissing.account, saved.account);
   assert.equal(groupMissing.group, undefined);
   assert.equal(groupMissing.added, false);
+});
+
+test('discarding an uncertain attempt is the only event that clears provisioning', () => {
+  const pending = {
+    ...initialFirstRun('own', 'operation-pending'),
+    profile: checked,
+    serverAddress: 'foks.example',
+    sso: { operationId: 'a'.repeat(32), alias: 'personal', hardware: false },
+    provisioning: {
+      id: 'attempt-1',
+      kind: 'copy' as const,
+      alias: 'personal',
+      deviceName: 'Mac',
+      back: 'account' as const,
+    },
+  };
+  const blocked: FirstRunEvent[] = [
+    { type: 'go', state: 'account' },
+    { type: 'choose', path: 'own' },
+    { type: 'server-edited', address: 'other.example' },
+    { type: 'account-provisioned', alias: 'personal', deviceName: 'Mac' },
+    {
+      type: 'account-complete',
+      alias: 'personal',
+      username: 'rae',
+      deviceName: 'Mac',
+    },
+    { type: 'discard-provisioned-account' },
+    { type: 'reenter' },
+  ];
+  for (const event of blocked)
+    assert.equal(transitionFirstRun(pending, event), pending);
+  const discarded = transitionFirstRun(pending, {
+    type: 'discard-provisioning',
+  });
+  assert.equal(discarded.state, 'account');
+  assert.equal(discarded.provisioning, undefined);
+  assert.equal(discarded.sso, undefined);
+  assert.equal(discarded.account, undefined);
+  assert.equal(discarded.provisionedAccount, undefined);
+  assert.equal(discarded.profile, checked);
+  assert.equal(
+    transitionFirstRun(discarded, { type: 'discard-provisioning' }),
+    discarded,
+  );
+  const restored = decodeFirstRunCheckpoint(
+    encodeFirstRunCheckpoint(discarded),
+  );
+  assert.ok(restored);
+  assert.equal(restored.state, 'account');
+  assert.equal(restored.provisioning, undefined);
+  assert.equal(restored.sso, undefined);
+  assert.equal(restored.account, undefined);
+  assert.equal(restored.serverAddress, 'foks.example');
+  const returning = transitionFirstRun(
+    { ...pending, returning: true },
+    { type: 'discard-provisioning' },
+  );
+  assert.equal(returning.state, 'account');
+});
+
+test('discarding a connected account returns to the account step without adopting it', () => {
+  const pending = {
+    ...initialFirstRun('own', 'identity-pending'),
+    profile: checked,
+    serverAddress: 'foks.example',
+    sso: { operationId: 'b'.repeat(32), alias: 'personal', hardware: false },
+    provisionedAccount: { alias: 'personal', deviceName: 'Mac' },
+  };
+  const blocked: FirstRunEvent[] = [
+    { type: 'go', state: 'account' },
+    { type: 'choose', path: 'own' },
+    { type: 'server-edited', address: 'other.example' },
+    {
+      type: 'account-complete',
+      alias: 'other',
+      username: 'rae',
+      deviceName: 'Mac',
+    },
+    { type: 'discard-provisioning' },
+    { type: 'reenter' },
+  ];
+  for (const event of blocked)
+    assert.equal(transitionFirstRun(pending, event), pending);
+  const discarded = transitionFirstRun(pending, {
+    type: 'discard-provisioned-account',
+  });
+  assert.equal(discarded.state, 'account');
+  assert.equal(discarded.provisionedAccount, undefined);
+  assert.equal(discarded.sso, undefined);
+  assert.equal(discarded.account, undefined);
+  assert.equal(discarded.passphraseSet, false);
+  assert.equal(
+    transitionFirstRun(discarded, { type: 'discard-provisioned-account' }),
+    discarded,
+  );
+  const restored = decodeFirstRunCheckpoint(
+    encodeFirstRunCheckpoint(discarded),
+  );
+  assert.ok(restored);
+  assert.equal(restored.state, 'account');
+  assert.equal(restored.provisionedAccount, undefined);
+  assert.equal(restored.account, undefined);
+  const returning = transitionFirstRun(
+    { ...pending, returning: true },
+    { type: 'discard-provisioned-account' },
+  );
+  assert.equal(returning.state, 'existing');
+  assert.ok(decodeFirstRunCheckpoint(encodeFirstRunCheckpoint(returning)));
 });

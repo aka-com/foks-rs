@@ -49,10 +49,7 @@ import type {
   StoreRef,
   World,
 } from './model';
-import {
-  profileInventoryComplete,
-  serverFactAvailability,
-} from './model';
+import { profileInventoryComplete, serverFactAvailability } from './model';
 
 declare global {
   interface Window {
@@ -81,11 +78,7 @@ export interface CommandError {
 
 export type MaintenanceKind = 'export' | 'import' | 'verify' | 'relocate';
 export type MaintenancePhase =
-  | 'selecting'
-  | 'confirming'
-  | 'quiescing'
-  | 'running'
-  | 'restoring';
+  'selecting' | 'confirming' | 'quiescing' | 'running' | 'restoring';
 export type MaintenanceOperationOutcome =
   | { status: 'cancelled' }
   | { status: 'completed' }
@@ -355,6 +348,27 @@ export interface FirstRunAccountRequest {
   invite: string;
   passphrase?: string;
   passphraseConfirmation?: string;
+}
+
+export interface TrackedAccountAttempt {
+  id: string;
+  profile: string;
+  hostId: string;
+  alias: string;
+  deviceName: string;
+  candidateId?: string;
+  kind: 'signup' | 'recovery' | 'copy' | 'pairing';
+}
+
+export interface TrackedAccountRequest {
+  attempt: TrackedAccountAttempt;
+  resume: boolean;
+  deviceName: string;
+  username?: string;
+  email?: string;
+  invite?: string;
+  phrase?: string;
+  candidateId?: string;
 }
 
 export interface FirstRunPassphraseRequest {
@@ -702,6 +716,8 @@ export interface Bridge {
   windowState(): Promise<WindowStateEvent>;
   lockApp(): Promise<AppLockState>;
   unlockApp(): Promise<AppLockState>;
+  restartApp(): Promise<void>;
+  quitApp(): Promise<void>;
   agentStatus(): Promise<AgentStatus>;
   appInfo(): Promise<AppInfo>;
   /** Returns the full catalog including stores. Mutually exclusive with `listStores`. */
@@ -765,6 +781,12 @@ export interface Bridge {
     probe: string,
   ): Promise<CheckedProfileResponse>;
   listPendingOperations(profile: string): Promise<PendingOperation[]>;
+  runFirstRunAccountOperation?(
+    request: TrackedAccountRequest,
+  ): Promise<MutationResponse>;
+  firstRunOperationStatus?(
+    attempt: TrackedAccountAttempt,
+  ): Promise<'complete' | 'rejected' | 'unknown' | 'running'>;
   createFirstRunAccount(
     request: FirstRunAccountRequest,
   ): Promise<MutationResponse>;
@@ -802,7 +824,10 @@ export interface Bridge {
     profile: string,
     accountAlias: string,
   ): Promise<GroupDiscoveryResponse>;
-  describeServerStatus(profile: string): Promise<ServerStatusSnapshot>;
+  describeServerStatus(
+    profile: string,
+    fresh?: boolean,
+  ): Promise<ServerStatusSnapshot>;
   checkServer(profile: string): Promise<CheckedServer>;
   addServer(
     profileName: string,
@@ -912,20 +937,22 @@ export function enqueueProfileWork<T>(
 export function sharedServerStatus(
   bridge: Bridge,
   profile: string,
+  fresh = false,
 ): Promise<ServerStatusSnapshot> {
   let statuses = pendingServerStatuses.get(bridge);
   if (!statuses) {
     statuses = new Map();
     pendingServerStatuses.set(bridge, statuses);
   }
-  const active = statuses.get(profile);
+  const key = `${profile}:${fresh ? 'fresh' : 'cached'}`;
+  const active = statuses.get(key);
   if (active) return active;
   const pending = enqueueProfileWork(bridge, profile, () =>
-    bridge.describeServerStatus(profile),
+    bridge.describeServerStatus(profile, fresh),
   );
-  statuses.set(profile, pending);
+  statuses.set(key, pending);
   const clear = (): void => {
-    if (statuses.get(profile) === pending) statuses.delete(profile);
+    if (statuses.get(key) === pending) statuses.delete(key);
   };
   void pending.then(clear, clear);
   return pending;
@@ -1250,9 +1277,13 @@ export function decodeMaintenanceSnapshot(value: unknown): MaintenanceSnapshot {
   if (state === 'active') {
     const phase = string(item.phase, `${at}.phase`);
     if (
-      !['selecting', 'confirming', 'quiescing', 'running', 'restoring'].includes(
-        phase,
-      )
+      ![
+        'selecting',
+        'confirming',
+        'quiescing',
+        'running',
+        'restoring',
+      ].includes(phase)
     )
       throw new Error(`${at}.phase is invalid`);
     return {
@@ -2056,7 +2087,9 @@ function isHardStateSchemaFailure(error: CommandError): boolean {
   return error.code === 'unsupported-schema';
 }
 
-function restrictionFromError(error: CommandError): ServerRestriction | undefined {
+function restrictionFromError(
+  error: CommandError,
+): ServerRestriction | undefined {
   if (error.code === 'unsupported-schema')
     return { kind: 'schema-incompatible', error };
   if (error.code === 'import-verification-required')
@@ -2105,7 +2138,9 @@ function notificationsOf(
   };
   const notes: Notification[] = servers.flatMap((server) => {
     const availability = serverFactAvailability(server, [], { nowSeconds });
-    const copy = availability.available ? undefined : stopped[availability.reason];
+    const copy = availability.available
+      ? undefined
+      : stopped[availability.reason];
     return copy
       ? [
           {
@@ -2162,6 +2197,35 @@ export function decodeAgentStatus(value: unknown): AgentStatus {
 }
 
 export const tauriBridge: Bridge = {
+  runFirstRunAccountOperation: (request) =>
+    checked('run_first_run_account_operation', { request }, (value) => {
+      const result = decodeMutation(value);
+      if (!result.applied)
+        throw new Error(
+          'Account setup did not acknowledge completion. Check its status.',
+        );
+      return result;
+    }),
+  firstRunOperationStatus: (attempt) =>
+    checked('first_run_operation_status', { attempt }, (value) => {
+      const result = record(value, 'first_run_operation_status');
+      const binding = record(
+        result.attempt,
+        'first_run_operation_status.attempt',
+      );
+      if (
+        Object.entries(attempt).some(
+          ([key, value]) => binding[key] !== value,
+        ) ||
+        !['complete', 'rejected', 'unknown', 'running'].includes(
+          String(result.outcome),
+        )
+      )
+        throw new Error(
+          'Account setup status belongs to a different operation.',
+        );
+      return result.outcome as 'complete' | 'rejected' | 'unknown' | 'running';
+    }),
   cancelChat: (viewId) => invoke<void>('cancel_chat_requests', { viewId }),
   chat: (storeId, action, viewId) =>
     checked('chat_request', { storeId, action, viewId }, (value) =>
@@ -2172,6 +2236,8 @@ export const tauriBridge: Bridge = {
   windowState: () => checked('get_window_state', undefined, decodeWindowState),
   lockApp: () => checked('lock_app', undefined, decodeAppLockState),
   unlockApp: () => checked('unlock_app', undefined, decodeAppLockState),
+  restartApp: () => invoke<void>('restart_app'),
+  quitApp: () => invoke<void>('quit_app'),
   agentStatus: () => checked('agent_status', undefined, decodeAgentStatus),
   appInfo: () => checked('app_info', undefined, decodeAppInfo),
   listCatalog: () => checked('list_catalog', undefined, decodeCatalog),
@@ -2444,8 +2510,12 @@ export const tauriBridge: Bridge = {
     ),
   discoverGroups: (profile, accountAlias) =>
     checked('discover_groups', { profile, accountAlias }, decodeGroupDiscovery),
-  describeServerStatus: (profile) =>
-    checked('describe_server_status', { profile }, decodeServerStatus),
+  describeServerStatus: (profile, fresh) =>
+    checked(
+      'describe_server_status',
+      { profile, ...(fresh ? { fresh: true } : {}) },
+      decodeServerStatus,
+    ),
   checkServer: (profile) =>
     checked('check_server', { profile }, decodeCheckedServer),
   addServer: (profileName, probe) =>
@@ -2762,11 +2832,17 @@ export async function loadWorld(
     );
   }
   const profileInventory = response.profiles.map((profile) => {
-    const inventory = response.inventory.find((entry) => entry.profile === profile);
+    const inventory = response.inventory.find(
+      (entry) => entry.profile === profile,
+    );
     return {
       profile,
-      accounts: inventory?.accountsComplete ? ('complete' as const) : ('unavailable' as const),
-      teams: inventory?.teamsComplete ? ('complete' as const) : ('unavailable' as const),
+      accounts: inventory?.accountsComplete
+        ? ('complete' as const)
+        : ('unavailable' as const),
+      teams: inventory?.teamsComplete
+        ? ('complete' as const)
+        : ('unavailable' as const),
     };
   });
   // When a server profile is blocked, skip roster queries for that server.
@@ -2826,8 +2902,7 @@ export async function loadWorld(
     if (!bridge.native) return server;
     const previous = base?.servers.find((entry) => entry.id === server.id);
     const scopedFailures = response.failures.filter(
-      (failure) =>
-        failure.scope === 'profile' && failure.profile === server.id,
+      (failure) => failure.scope === 'profile' && failure.profile === server.id,
     );
     const restrictions: ServerRestriction[] = scopedFailures.flatMap(
       (failure) => {
@@ -2883,7 +2958,9 @@ export async function loadWorld(
       };
     return {
       ...server,
-      trust: status.host ? { status: 'verified' as const } : { status: 'unprobed' as const },
+      trust: status.host
+        ? { status: 'verified' as const }
+        : { status: 'unprobed' as const },
       compatibility: status.leaseRequired
         ? status.leaseExpiresAt === null
           ? { status: 'required-unavailable' as const }

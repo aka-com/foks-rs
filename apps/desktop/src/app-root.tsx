@@ -25,7 +25,7 @@ import {
   maintenanceOutcomeMessage,
   type AgentLifecycle,
 } from './agent-lifecycle';
-import { Button } from './components';
+import { Button, CopyBox } from './components';
 import {
   FIRST_RUN_CHECKPOINT_KEY,
   completedFirstRunSteps,
@@ -33,6 +33,7 @@ import {
   firstRunStepCount,
 } from './first-run-state';
 import type { FirstRunCheckpoint } from './first-run-state';
+import { FIRST_RUN_PROGRESS_EVENT } from './first-run-operations';
 import {
   LocationStore,
   decodeScene,
@@ -104,6 +105,131 @@ function incompleteFirstRunCheckpoint(): FirstRunCheckpoint | null {
   } catch {
     return null;
   }
+}
+
+type AgentStop = Extract<
+  AgentLifecycle,
+  {
+    state:
+      | 'maintenance'
+      | 'restart-required'
+      | 'recovery-required'
+      | 'restoration-failed';
+  }
+>;
+
+function recoveryCommands(root: string): readonly string[] {
+  return [
+    `foks-rs --state-dir ${root} state status`,
+    `foks-rs --state-dir ${root} state recover`,
+  ];
+}
+
+function agentStopDetail(lifecycle: AgentStop): string {
+  switch (lifecycle.state) {
+    case 'maintenance':
+      return 'FOKS is paused while background maintenance completes.';
+    case 'recovery-required':
+      return `The data directory at ${lifecycle.root} requires recovery. Run the following commands before reopening FOKS:`;
+    case 'restart-required':
+      return `Please restart FOKS to open ${lifecycle.root}.`;
+    case 'restoration-failed':
+      return lifecycle.error.message;
+  }
+}
+
+function AgentStopNotice({
+  lifecycle,
+  bridge,
+  placement,
+  onRetryRestoration,
+}: {
+  lifecycle: AgentStop;
+  bridge: Bridge;
+  placement: 'startup' | 'shell';
+  onRetryRestoration: () => void;
+}): ReactNode {
+  const [failure, setFailure] = useState<string | null>(null);
+  const report = (error: unknown): void =>
+    setFailure(normalizeCommandError(error).message);
+  const label = agentLifecycleLabel(lifecycle);
+  const quit = (
+    <Button
+      onClick={() => {
+        void bridge.quitApp().catch(report);
+      }}
+    >
+      Quit FOKS
+    </Button>
+  );
+  const actions =
+    lifecycle.state === 'restart-required' ? (
+      <Button
+        variant="primary"
+        onClick={() => {
+          void bridge.restartApp().catch(report);
+        }}
+      >
+        Restart FOKS
+      </Button>
+    ) : lifecycle.state === 'recovery-required' ? (
+      quit
+    ) : lifecycle.state === 'restoration-failed' ? (
+      <>
+        <Button variant="primary" onClick={onRetryRestoration}>
+          Restart service
+        </Button>
+        {quit}
+      </>
+    ) : null;
+  const body = (
+    <>
+      {lifecycle.state !== 'maintenance' ? (
+        <p>{maintenanceOutcomeMessage(lifecycle.operation)}</p>
+      ) : null}
+      <p>{agentStopDetail(lifecycle)}</p>
+      {lifecycle.state === 'recovery-required'
+        ? recoveryCommands(lifecycle.root).map((command) => (
+            <CopyBox
+              key={command}
+              text={command}
+              onCopy={(text) => {
+                void bridge.copyText(text).catch(report);
+              }}
+            >
+              <code>{command}</code>
+            </CopyBox>
+          ))
+        : null}
+      {failure ? (
+        <p
+          className={placement === 'startup' ? 'app-lock-error' : 'fn'}
+          role="alert"
+        >
+          {failure}
+        </p>
+      ) : null}
+      {actions ? <div className="acts2">{actions}</div> : null}
+    </>
+  );
+  if (placement === 'startup') {
+    return (
+      <div className="app-lock" role="alertdialog" aria-label={label}>
+        <div className="app-lock-card">
+          <h1>{label}</h1>
+          {body}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <Dialog className="stopwrap" role="alertdialog" aria-label={label}>
+      <div className="notice stop">
+        <h2>{label}</h2>
+        {body}
+      </div>
+    </Dialog>
+  );
 }
 
 export interface AppProps {
@@ -264,7 +390,7 @@ export function App({ world, bridge, store, leaseClock }: AppProps): ReactNode {
               ? appInfo.managedProfile
               : null;
           if (alive) {
-            setManagedProfile(localProfile);
+            setManagedProfile(appInfo.managedProfile ?? null);
             setFirstRunStart(localProfile ? 'local' : 'who');
           }
         } else if (alive) {
@@ -386,52 +512,35 @@ export function App({ world, bridge, store, leaseClock }: AppProps): ReactNode {
   }
   if (!loaded || !activeBridge || !agentController) {
     if (
-      agentLifecycle.state === 'recovery-required' ||
-      agentLifecycle.state === 'restart-required' ||
-      agentLifecycle.state === 'restoration-failed'
+      activeBridge &&
+      (agentLifecycle.state === 'recovery-required' ||
+        agentLifecycle.state === 'restart-required' ||
+        agentLifecycle.state === 'restoration-failed')
     ) {
-      const recovery = agentLifecycle.state === 'recovery-required';
-      const restoration = agentLifecycle.state === 'restoration-failed';
       return (
-        <div className="app-lock" role="alertdialog">
-          <div className="app-lock-card">
-            <h1>{agentLifecycleLabel(agentLifecycle)}</h1>
-            <p>{maintenanceOutcomeMessage(agentLifecycle.operation)}</p>
-            <p>
-              {recovery
-                ? `Client state at ${agentLifecycle.root} needs explicit recovery. Run the supported “state status” and “state recover” CLI commands before reopening FOKS.`
-                : restoration
-                  ? agentLifecycle.error.message
-                  : `FOKS must restart before it can open ${agentLifecycle.root}.`}
-            </p>
-            {restoration ? (
-              <Button
-                variant="primary"
-                onClick={() => {
-                  void agentController
-                    ?.establish(true)
-                    .then(() => setBootEpoch((value) => value + 1))
-                    .catch((error) => {
-                      // A successful native restoration publishes a newer
-                      // maintenance snapshot while retryAgentConnection is
-                      // still awaited. That transition intentionally makes
-                      // this older establish attempt stale; the startup
-                      // listener above owns the boot continuation.
-                      const current = agentController.snapshot();
-                      if (
-                        current.state === 'checking' ||
-                        current.state === 'ready'
-                      )
-                        return;
-                      setLoadError(normalizeCommandError(error).message);
-                    });
-                }}
-              >
-                Retry service restart
-              </Button>
-            ) : null}
-          </div>
-        </div>
+        <AgentStopNotice
+          lifecycle={agentLifecycle}
+          bridge={activeBridge}
+          placement="startup"
+          onRetryRestoration={() => {
+            const controller = agentController;
+            if (!controller) return;
+            void controller
+              .establish(true)
+              .then(() => setBootEpoch((value) => value + 1))
+              .catch((error) => {
+                // A successful native restoration publishes a newer
+                // maintenance snapshot while retryAgentConnection is
+                // still awaited. That transition intentionally makes
+                // this older establish attempt stale; the startup
+                // listener above owns the boot continuation.
+                const current = controller.snapshot();
+                if (current.state === 'checking' || current.state === 'ready')
+                  return;
+                setLoadError(normalizeCommandError(error).message);
+              });
+          }}
+        />
       );
     }
     return (
@@ -507,6 +616,12 @@ function VaultShell({
   );
   const state = useLocationState(locations);
   const [latest, setLatest] = useState(world);
+  const [, updateSetupProgress] = useState(0);
+  useEffect(() => {
+    const update = () => updateSetupProgress((value) => value + 1);
+    window.addEventListener(FIRST_RUN_PROGRESS_EVENT, update);
+    return () => window.removeEventListener(FIRST_RUN_PROGRESS_EVENT, update);
+  }, []);
   const latestRef = useRef(latest);
   latestRef.current = latest;
   const [observedExpiredLeases, setObservedExpiredLeases] = useState(
@@ -548,17 +663,21 @@ function VaultShell({
       : (new URLSearchParams(window.location.search).get('state') ?? ''),
   );
 
-  // Apply URL query lease overrides to the active world snapshot.
+  const fixtureFirstRunBoot = Boolean(
+    bridge.firstRunFixture &&
+    state.location.kind === 'first-run' &&
+    state.location.step === 'boot',
+  );
+  // Apply URL query lease overrides to the active world snapshot. Ordinary
+  // navigation must not manufacture a new world: first-run treats a changed
+  // snapshot as authoritative inventory and could otherwise rewind a server
+  // profile that the preceding command just created.
   const shown = useMemo(() => {
     const reconciled = { ...latest, observedExpiredLeases };
     const leased =
       scene.lease === 'lapsed' ? applyLease(reconciled, 'lapsed') : reconciled;
     const demonstrated = demoAvailabilityFacts(leased, namedState);
-    if (
-      bridge.firstRunFixture &&
-      state.location.kind === 'first-run' &&
-      state.location.step === 'boot'
-    ) {
+    if (fixtureFirstRunBoot) {
       return {
         ...demonstrated,
         agent: { state: 'bootstrap' as const, step: 'create-state' },
@@ -566,12 +685,11 @@ function VaultShell({
     }
     return demonstrated;
   }, [
-    bridge.firstRunFixture,
+    fixtureFirstRunBoot,
     latest,
     namedState,
     observedExpiredLeases,
     scene.lease,
-    state.location,
   ]);
 
   useEffect(() => setLatest(world), [world]);
@@ -722,18 +840,18 @@ function VaultShell({
           return next;
         });
         if (foregroundRefreshAllowed.current)
-          void refreshWorldRef.current(true).catch((error: unknown) =>
-            commandErrorRef.current(error),
-          );
+          void refreshWorldRef
+            .current(true)
+            .catch((error: unknown) => commandErrorRef.current(error));
       },
     );
     expiryCoordinator.current = coordinator;
     const reconcileForeground = (): void => {
       coordinator.foreground();
       if (foregroundRefreshAllowed.current)
-        void refreshWorldRef.current().catch((error: unknown) =>
-          commandErrorRef.current(error),
-        );
+        void refreshWorldRef
+          .current()
+          .catch((error: unknown) => commandErrorRef.current(error));
     };
     const reconcileVisible = (): void => {
       if (!document.hidden) reconcileForeground();
@@ -793,7 +911,9 @@ function VaultShell({
     if (!bridge.native) return;
     let alive = true;
     let stop: (() => void) | undefined;
-    const apply = (snapshot: Awaited<ReturnType<Bridge['clientStateMaintenanceStatus']>>): void => {
+    const apply = (
+      snapshot: Awaited<ReturnType<Bridge['clientStateMaintenanceStatus']>>,
+    ): void => {
       if (!alive) return;
       if (!agentController.applyMaintenance(snapshot)) return;
       if (snapshot.state === 'idle') return;
@@ -962,9 +1082,9 @@ function VaultShell({
     !(here.kind === 'store' && !storeReadable(shown, here.ref)) &&
     !(state.selection && !storeReadable(shown, state.selection.store));
   const selectedAccessGeneration = state.selection
-    ? accessGenerations.get(
+    ? (accessGenerations.get(
         storeOf(shown, state.selection.store)?.server ?? '',
-      ) ?? 0
+      ) ?? 0)
     : 0;
   const screen = listsItems(here) ? (
     <ItemsScreen
@@ -1120,7 +1240,9 @@ function VaultShell({
               agentLifecycle.state === 'ready' &&
               agentCatalogReady
             }
-            onRetryAgent={() => recoverAgentReadiness(false)}
+            onRetryAgent={() =>
+              recoverAgentReadiness(agentLifecycle.state === 'disconnected')
+            }
             onAgentReadinessFailure={handleAgentReadinessFailure}
             automaticEntry={automaticFirstRun}
             managedProfile={managedProfile ?? undefined}
@@ -1178,39 +1300,14 @@ function VaultShell({
       agentLifecycle.state === 'restart-required' ||
       agentLifecycle.state === 'recovery-required' ||
       agentLifecycle.state === 'restoration-failed' ? (
-        <Dialog
-          className="stopwrap"
-          role="alertdialog"
-          aria-label={agentLifecycleLabel(agentLifecycle)}
-        >
-          <div className="notice stop">
-            <h2>{agentLifecycleLabel(agentLifecycle)}</h2>
-            {agentLifecycle.state !== 'maintenance' ? (
-              <p>{maintenanceOutcomeMessage(agentLifecycle.operation)}</p>
-            ) : null}
-            <p>
-              {agentLifecycle.state === 'maintenance'
-                ? 'FOKS has paused local-agent access while protected state maintenance finishes.'
-                : agentLifecycle.state === 'recovery-required'
-                  ? `Client state at ${agentLifecycle.root} needs explicit recovery. Run the supported “state status” and “state recover” CLI commands before reopening FOKS.`
-                  : agentLifecycle.state === 'restart-required'
-                    ? `FOKS must restart before it can open ${agentLifecycle.root}.`
-                    : agentLifecycle.error.message}
-            </p>
-            {agentLifecycle.state === 'restoration-failed' ? (
-              <div className="acts2">
-                <Button
-                  variant="primary"
-                  onClick={() => {
-                    void recoverAgentReadiness(true).catch(commandError);
-                  }}
-                >
-                  Retry service restart
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        </Dialog>
+        <AgentStopNotice
+          lifecycle={agentLifecycle}
+          bridge={bridge}
+          placement="shell"
+          onRetryRestoration={() => {
+            void recoverAgentReadiness(true).catch(commandError);
+          }}
+        />
       ) : null}
       <WriteOverlay
         world={shown}

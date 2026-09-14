@@ -163,16 +163,307 @@ test('completed local setup explains unavailable inventory and offers a retry th
   assert.ok(rendered.view.getByText('Setup is complete'));
   assert.equal(rendered.view.queryByText('Your Personal vault is ready'), null);
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Retry loading Personal' }),
+    rendered.view.getByRole('button', {
+      name: 'Retry loading Personal vault',
+    }),
   );
   await rendered.view.findByText('Inventory unavailable');
   assert.equal(h.saved()?.state, 'local-done');
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Retry loading Personal' }),
+    rendered.view.getByRole('button', {
+      name: 'Retry loading Personal vault',
+    }),
   );
   await rendered.view.findByRole('button', { name: 'Open Personal' });
   assert.equal(refreshes, 2);
   assert.equal(h.saved()?.account?.alias, 'personal');
+});
+
+test('uncertain signup requires explicit pending-operation resume even when the alias already exists', async () => {
+  const h = await harness();
+  let creates = 0;
+  let resumes = 0;
+  const bridge: Bridge = {
+    ...h.bridge,
+    createFirstRunAccount: async () => {
+      creates++;
+      throw {
+        code: 'ambiguous',
+        message: 'Lost reply',
+        ambiguous: true,
+        retryable: false,
+        fatal: false,
+      };
+    },
+    listPendingOperations: async () => [
+      { kind: 'account-signup', alias: 'personal' },
+    ],
+    resumeFirstRunAccount: async () => {
+      resumes++;
+      return { applied: true };
+    },
+  };
+  // The pending row becomes available only after the first attempt.
+  bridge.listPendingOperations = async () =>
+    creates ? [{ kind: 'account-signup', alias: 'personal' }] : [];
+  const rendered = h.render(
+    { ...h.checkpoint, account: undefined, state: 'account' },
+    {
+      bridge,
+      world: h.complete,
+      onRefreshWorld: async () => h.complete,
+    },
+  );
+  ui.fireEvent.change(rendered.view.getByPlaceholderText('yourname'), {
+    target: { value: 'personal' },
+  });
+  ui.fireEvent.click(
+    rendered.view.getByRole('button', { name: 'Create my account' }),
+  );
+  await rendered.view.findByRole('button', { name: 'Resume account setup' });
+  assert.equal(h.saved()?.state, 'operation-pending');
+  assert.equal(resumes, 0);
+  ui.fireEvent.click(
+    rendered.view.getByRole('button', { name: 'Resume account setup' }),
+  );
+  await rendered.view.findByRole('button', { name: 'Show recovery phrase' });
+  assert.equal(creates, 1);
+  assert.equal(resumes, 1);
+});
+
+test('slow CLI discovery can be skipped and late results do not reopen the chooser', async () => {
+  const h = await harness();
+  const discovery =
+    deferred<Awaited<ReturnType<Bridge['discoverGoProfiles']>>>();
+  let slow!: () => void;
+  const original = window.setTimeout.bind(window);
+  window.setTimeout = ((callback: () => void, delay?: number) => {
+    if (delay === 8000) {
+      slow = callback;
+      return 0;
+    }
+    return original(callback, delay);
+  }) as typeof window.setTimeout;
+  try {
+    const rendered = h.render(h.initialFirstRun('own', 'who'), {
+      bridge: { ...h.bridge, discoverGoProfiles: () => discovery.promise },
+    });
+    await ui.act(async () => slow());
+    assert.ok(rendered.view.getByText(/taking longer than expected/));
+    ui.fireEvent.click(
+      rendered.view.getByRole('button', { name: 'Skip for now' }),
+    );
+    assert.ok(rendered.view.getByText('How are you joining?'));
+    await ui.act(async () =>
+      discovery.resolve({ installed: false, candidates: [] }),
+    );
+    assert.ok(rendered.view.getByText('How are you joining?'));
+  } finally {
+    window.setTimeout = original;
+  }
+});
+
+test('phrase preparation has an accessible back action outside the disabled controls', async () => {
+  const h = await harness();
+  const preparation = deferred<{ backupAlias: string; phrase: string }>();
+  const rendered = h.render(h.checkpoint, {
+    bridge: { ...h.bridge, prepareOwnerBackup: () => preparation.promise },
+  });
+  ui.fireEvent.click(
+    rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
+  );
+  const back = await rendered.view.findByRole('button', {
+    name: 'Back to recovery options',
+  });
+  assert.equal(back.closest('[inert]'), null);
+  ui.fireEvent.click(back);
+  await ui.act(async () =>
+    preparation.resolve({ backupAlias: 'paper', phrase: 'late secret' }),
+  );
+  assert.equal(rendered.view.queryByText('late secret'), null);
+  assert.ok(
+    rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
+  );
+});
+
+test('multiple groups refresh the catalog and preserve a selected unavailable vault across restart', async () => {
+  const h = await harness();
+  const groups = ['one', 'two'].map((alias, index) => ({
+    alias,
+    accountAlias: 'personal',
+    teamIdHex: `03${String(index + 1).repeat(64)}`,
+    kind: 'named' as const,
+    name: alias,
+    active: true,
+  }));
+  const forces: Array<boolean | undefined> = [];
+  const checkpoint = {
+    ...h.checkpoint,
+    path: 'invited' as const,
+    managedLocal: false,
+    state: 'waiting' as const,
+  };
+  const rendered = h.render(checkpoint, {
+    location: { kind: 'first-run', path: 'invited', step: 'waiting' },
+    world: h.complete,
+    bridge: {
+      ...h.bridge,
+      discoverGroups: async () => ({ accountAlias: 'personal', groups }),
+    },
+    onRefreshWorld: async (force) => {
+      forces.push(force);
+      return h.complete;
+    },
+  });
+  ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Check now' }));
+  await rendered.view.findByText('Choose an existing group');
+  assert.deepEqual(forces, [true]);
+  ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Open “two”' }));
+  assert.ok(rendered.view.getByRole('button', { name: 'Retry loading group' }));
+  const saved = h.saved()!;
+  assert.equal(saved.selectedGroup?.teamIdHex, groups[1].teamIdHex);
+  assert.equal(saved.added, false);
+  ui.cleanup();
+  const resumed = h.render(saved, {
+    world: h.complete,
+    location: { kind: 'first-run', path: 'invited', step: 'waiting' },
+  });
+  assert.ok(resumed.view.getByText('two'));
+  assert.ok(resumed.view.getByRole('button', { name: 'Retry loading group' }));
+});
+
+test('zero groups still force catalog reconciliation', async () => {
+  const h = await harness();
+  let refreshes = 0;
+  const rendered = h.render(
+    { ...h.checkpoint, path: 'invited', managedLocal: false, state: 'waiting' },
+    {
+      location: { kind: 'first-run', path: 'invited', step: 'waiting' },
+      bridge: {
+        ...h.bridge,
+        discoverGroups: async () => ({ accountAlias: 'personal', groups: [] }),
+      },
+      onRefreshWorld: async (force) => {
+        assert.equal(force, true);
+        refreshes++;
+        return h.complete;
+      },
+    },
+  );
+  ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Check now' }));
+  await rendered.view.findByText(/No active groups found yet/);
+  assert.equal(refreshes, 1);
+});
+
+test('local-server retry probes again despite a stale failed connectivity snapshot', async () => {
+  const h = await harness();
+  let probes = 0;
+  let refreshes = 0;
+  const failure = {
+    code: 'io',
+    message: 'Service stopped',
+    ambiguous: false,
+    fatal: false,
+    retryable: true,
+  };
+  const stale = {
+    ...h.complete,
+    servers: h.complete.servers.map((server) => ({
+      ...server,
+      passiveStatus: {
+        status: 'failed' as const,
+        source: 'describe-server-status' as const,
+        error: failure,
+      },
+    })),
+  };
+  const rendered = h.render(h.initialFirstRun('own', 'local'), {
+    managedProfile: 'personal',
+    world: stale,
+    location: { kind: 'first-run', step: 'local', path: 'own' },
+    bridge: {
+      ...h.bridge,
+      describeServerStatus: async (_profile, fresh) => {
+        assert.equal(
+          fresh,
+          true,
+          'the native catalog cache must also be bypassed',
+        );
+        probes++;
+        if (probes === 1) throw failure;
+        return {
+          profile: 'personal',
+          configuredProbe: 'localhost:4430',
+          host: h.checkpoint.profile!,
+          leaseRequired: false,
+          leaseExpiresAt: null,
+          chatAvailable: false,
+        };
+      },
+    },
+    onRefreshWorld: async (force) => {
+      assert.equal(force, true);
+      refreshes++;
+      return h.complete;
+    },
+  });
+  await rendered.view.findByText('Service stopped');
+  ui.fireEvent.click(
+    rendered.view.getByRole('button', { name: 'Check again' }),
+  );
+  await rendered.view.findByText('Ready');
+  assert.equal(probes, 2);
+  assert.equal(refreshes, 1);
+  assert.equal(
+    (
+      rendered.view.getByRole('button', {
+        name: 'Continue',
+      }) as HTMLButtonElement
+    ).disabled,
+    false,
+  );
+});
+
+test('a native receipt confirms a lost reply without replaying account creation', async () => {
+  const h = await harness();
+  let mutations = 0;
+  let attemptId: string | undefined;
+  const rendered = h.render(
+    { ...h.checkpoint, account: undefined, state: 'account' },
+    {
+      world: h.complete,
+      onRefreshWorld: async () => h.complete,
+      bridge: {
+        ...h.bridge,
+        runFirstRunAccountOperation: async (request) => {
+          mutations++;
+          attemptId = request.attempt.id;
+          assert.equal(h.saved()?.provisioning?.id, attemptId);
+          throw {
+            code: 'ambiguous',
+            message: 'Lost desktop reply',
+            ambiguous: true,
+            retryable: false,
+            fatal: false,
+          };
+        },
+        firstRunOperationStatus: async (attempt) => {
+          assert.equal(attempt.id, attemptId);
+          assert.equal(attempt.hostId, h.checkpoint.profile!.hostId);
+          return 'complete';
+        },
+      },
+    },
+  );
+  ui.fireEvent.change(rendered.view.getByPlaceholderText('yourname'), {
+    target: { value: 'personal' },
+  });
+  ui.fireEvent.click(
+    rendered.view.getByRole('button', { name: 'Create my account' }),
+  );
+  await rendered.view.findByRole('button', { name: 'Show recovery phrase' });
+  assert.equal(mutations, 1);
+  assert.equal(h.saved()?.state, 'protect');
 });
 
 for (const cancellation of ['conceal', 'hidden', 'readiness'] as const) {
@@ -194,7 +485,9 @@ for (const cancellation of ['conceal', 'hidden', 'readiness'] as const) {
     );
     await ui.waitFor(() =>
       assert.ok(
-        rendered.view.container.querySelector('main')?.hasAttribute('inert'),
+        rendered.view.container
+          .querySelector('[data-setup-controls]')
+          ?.hasAttribute('inert'),
       ),
     );
     if (cancellation === 'conceal') rendered.rerender({ concealSignal: 1 });
@@ -213,7 +506,9 @@ for (const cancellation of ['conceal', 'hidden', 'readiness'] as const) {
     }
     await ui.waitFor(() =>
       assert.equal(
-        rendered.view.container.querySelector('main')?.hasAttribute('inert'),
+        rendered.view.container
+          .querySelector('[data-setup-controls]')
+          ?.hasAttribute('inert'),
         false,
       ),
     );
@@ -231,7 +526,9 @@ for (const cancellation of ['conceal', 'hidden', 'readiness'] as const) {
     });
     assert.equal(rendered.view.queryByText('OLD SECRET'), null);
     assert.ok(
-      rendered.view.container.querySelector('main')?.hasAttribute('inert'),
+      rendered.view.container
+        .querySelector('[data-setup-controls]')
+        ?.hasAttribute('inert'),
       'old completion must not release the new operation',
     );
     await ui.act(async () => {
@@ -239,7 +536,9 @@ for (const cancellation of ['conceal', 'hidden', 'readiness'] as const) {
     });
     await ui.waitFor(() =>
       assert.equal(
-        rendered.view.container.querySelector('main')?.hasAttribute('inert'),
+        rendered.view.container
+          .querySelector('[data-setup-controls]')
+          ?.hasAttribute('inert'),
         false,
       ),
     );
@@ -302,9 +601,6 @@ test('acknowledged signup is persisted before refresh and resumes read-only afte
     },
   });
   assert.ok(resumed.view.getByText('Your account is connected'));
-  ui.fireEvent.click(
-    resumed.view.getByRole('button', { name: 'Retry loading account' }),
-  );
   await resumed.view.findByRole('button', { name: 'Show recovery phrase' });
   assert.equal(mutations, 1);
   assert.equal(refreshes, 2);
@@ -389,6 +685,7 @@ for (const method of ['copy', 'pair', 'resume-pair'] as const) {
   test(`CLI ${method} acknowledgement is retained when identity inventory stays unavailable`, async () => {
     const h = await harness();
     let mutations = 0;
+    const refreshForces: Array<boolean | undefined> = [];
     const bridge: Bridge = {
       ...h.bridge,
       discoverGoProfiles: async () => ({
@@ -430,7 +727,13 @@ for (const method of ['copy', 'pair', 'resume-pair'] as const) {
         };
       },
     };
-    const rendered = h.render(h.initialFirstRun('own', 'who'), { bridge });
+    const rendered = h.render(h.initialFirstRun('own', 'who'), {
+      bridge,
+      onRefreshWorld: async (force) => {
+        refreshForces.push(force);
+        return h.unknown;
+      },
+    });
     await rendered.view.findByText('Select an FOKS account');
     ui.fireEvent.click(rendered.view.getByRole('radio', { name: /personal/ }));
     ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Continue' }));
@@ -471,6 +774,7 @@ for (const method of ['copy', 'pair', 'resume-pair'] as const) {
       false,
     );
     assert.equal(mutations, 1);
+    assert.deepEqual(refreshForces, [true]);
   });
 }
 
@@ -489,9 +793,6 @@ test('late identity refresh cannot complete onboarding after readiness is lost',
     onRefreshWorld: () => result.promise,
     onRetryAgent: async () => {},
   });
-  ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Retry loading account' }),
-  );
   rendered.rerender({ agentReady: false });
   await ui.act(async () => {
     result.resolve(h.complete);
@@ -546,10 +847,8 @@ test('pending identity survives an empty refresh and is adopted from authoritati
     },
   );
   const rendered = h.render(pending);
-  ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Retry loading account' }),
-  );
-  await rendered.view.findByText(/The account details are not available yet/);
+  await rendered.view.findByText(/Couldn’t load your account details/);
+  assert.ok(rendered.view.getByRole('button', { name: 'Finish later' }));
   assert.equal(h.saved()?.state, 'identity-pending');
   ui.cleanup();
   const resumed = h.render(pending, {
@@ -561,4 +860,241 @@ test('pending identity survives an empty refresh and is adopted from authoritati
     resumed.view.queryByRole('button', { name: 'Create my account' }),
     null,
   );
+});
+
+function pendingOperation(
+  checkpoint: FirstRunCheckpoint,
+  kind: 'signup' | 'copy',
+  id: string,
+): FirstRunCheckpoint {
+  return {
+    ...checkpoint,
+    account: undefined,
+    state: 'operation-pending',
+    provisioning: {
+      id,
+      kind,
+      alias: 'personal',
+      deviceName: 'Mac',
+      back: 'account',
+    },
+  };
+}
+
+test('allows starting over when unconfirmed setup has no resume path', async () => {
+  const h = await harness();
+  let mutations = 0;
+  const absent = {
+    ...h.complete,
+    accounts: h.complete.accounts.filter((row) => row.server !== 'personal'),
+  };
+  const rendered = h.render(pendingOperation(h.checkpoint, 'copy', 'copy-1'), {
+    world: absent,
+    onRefreshWorld: async () => absent,
+    bridge: {
+      ...h.bridge,
+      listPendingOperations: async () => [],
+      firstRunOperationStatus: async () => 'unknown' as const,
+      runFirstRunAccountOperation: async () => {
+        mutations++;
+        return { applied: true };
+      },
+      createFirstRunAccount: async () => {
+        mutations++;
+        return { applied: true };
+      },
+    },
+  });
+  ui.fireEvent.click(
+    await rendered.view.findByRole('button', { name: 'Start over' }),
+  );
+  assert.ok(rendered.view.getByRole('button', { name: 'Create my account' }));
+  assert.equal(h.saved()?.state, 'account');
+  assert.equal(h.saved()?.provisioning, undefined);
+  assert.equal(mutations, 0);
+});
+
+test('an unreadable receipt still probes pending operations and reports the receipt failure', async () => {
+  const h = await harness();
+  const absent = {
+    ...h.complete,
+    accounts: h.complete.accounts.filter((row) => row.server !== 'personal'),
+  };
+  const rendered = h.render(
+    pendingOperation(h.checkpoint, 'signup', 'signup-1'),
+    {
+      world: absent,
+      onRefreshWorld: async () => absent,
+      bridge: {
+        ...h.bridge,
+        listPendingOperations: async () => [
+          { kind: 'account-signup', alias: 'personal' },
+        ],
+        firstRunOperationStatus: async () => {
+          throw {
+            code: 'invalid-request',
+            message:
+              'This setup attempt does not match the current account or workspace.',
+            ambiguous: false,
+            retryable: false,
+            fatal: false,
+          };
+        },
+      },
+    },
+  );
+  await rendered.view.findByRole('button', { name: 'Resume account setup' });
+  assert.ok(
+    rendered.view.getByText(
+      /\(Details: This setup attempt does not match the current account or workspace\.\)/,
+    ),
+  );
+  assert.equal(
+    rendered.view.queryByRole('button', { name: 'Start over' }),
+    null,
+  );
+  assert.equal(
+    rendered.view.queryByRole('button', {
+      name: 'Continue with existing account',
+    }),
+    null,
+  );
+});
+
+test('allows continuing with an existing account when a receipt cannot be read', async () => {
+  const h = await harness();
+  let mutations = 0;
+  const rendered = h.render(
+    pendingOperation(h.checkpoint, 'signup', 'signup-2'),
+    {
+      world: h.complete,
+      onRefreshWorld: async () => h.complete,
+      bridge: {
+        ...h.bridge,
+        listPendingOperations: async () => [],
+        firstRunOperationStatus: async () => {
+          throw {
+            code: 'io',
+            message: 'The setup receipt could not be read.',
+            ambiguous: false,
+            retryable: true,
+            fatal: false,
+          };
+        },
+        runFirstRunAccountOperation: async () => {
+          mutations++;
+          return { applied: true };
+        },
+        createFirstRunAccount: async () => {
+          mutations++;
+          return { applied: true };
+        },
+        resumeFirstRunAccount: async () => {
+          mutations++;
+          return { applied: true };
+        },
+      },
+    },
+  );
+  const adopt = await rendered.view.findByRole('button', {
+    name: 'Continue with existing account',
+  });
+  assert.equal(h.saved()?.state, 'operation-pending');
+  assert.equal(h.saved()?.account, undefined);
+  assert.ok(
+    rendered.view.getByText(
+      /An account with this username already exists on this server/,
+    ),
+  );
+  ui.fireEvent.click(adopt);
+  await rendered.view.findByRole('button', { name: 'Show recovery phrase' });
+  assert.equal(h.saved()?.state, 'protect');
+  assert.equal(h.saved()?.account?.username, 'rae');
+  assert.equal(mutations, 0);
+});
+
+test('shows option to set up a different account when identity is missing', async () => {
+  const h = await harness();
+  let mutations = 0;
+  const absent = {
+    ...h.complete,
+    accounts: h.complete.accounts.filter((row) => row.server !== 'personal'),
+  };
+  const pending = h.transitionFirstRun(
+    { ...h.checkpoint, account: undefined, state: 'account' },
+    { type: 'account-provisioned', alias: 'personal', deviceName: 'Mac' },
+  );
+  const bridge: Bridge = {
+    ...h.bridge,
+    createFirstRunAccount: async () => {
+      mutations++;
+      return { applied: true };
+    },
+    runFirstRunAccountOperation: async () => {
+      mutations++;
+      return { applied: true };
+    },
+  };
+  const rendered = h.render(pending, {
+    bridge,
+    world: absent,
+    onRefreshWorld: async () => absent,
+  });
+  ui.fireEvent.click(
+    await rendered.view.findByRole('button', {
+      name: 'Set up a different account',
+    }),
+  );
+  assert.ok(rendered.view.getByRole('button', { name: 'Create my account' }));
+  assert.equal(h.saved()?.state, 'account');
+  assert.equal(h.saved()?.provisionedAccount, undefined);
+  assert.equal(mutations, 0);
+  ui.cleanup();
+  const unavailable = h.render(pending, { bridge });
+  await unavailable.view.findByText(/Couldn’t load your account details/);
+  assert.equal(
+    unavailable.view.queryByRole('button', {
+      name: 'Set up a different account',
+    }),
+    null,
+  );
+});
+
+test('a pending operation is confirmed on mount without any click', async () => {
+  const h = await harness();
+  const rendered = h.render(
+    pendingOperation(h.checkpoint, 'signup', 'signup-3'),
+    {
+      world: h.complete,
+      onRefreshWorld: async () => h.complete,
+      bridge: {
+        ...h.bridge,
+        firstRunOperationStatus: async () => 'complete' as const,
+      },
+    },
+  );
+  await rendered.view.findByRole('button', { name: 'Show recovery phrase' });
+  assert.equal(h.saved()?.state, 'protect');
+  assert.equal(h.saved()?.provisioning, undefined);
+});
+
+test('cannot discard account setup while it is still running', async () => {
+  const h = await harness();
+  const rendered = h.render(
+    pendingOperation(h.checkpoint, 'signup', 'signup-4'),
+    {
+      world: h.complete,
+      onRefreshWorld: async () => h.complete,
+      bridge: {
+        ...h.bridge,
+        firstRunOperationStatus: async () => 'running' as const,
+      },
+    },
+  );
+  await rendered.view.findByText(/Account setup is still running/);
+  assert.equal(
+    rendered.view.queryByRole('button', { name: 'Start over' }),
+    null,
+  );
+  assert.equal(h.saved()?.state, 'operation-pending');
 });

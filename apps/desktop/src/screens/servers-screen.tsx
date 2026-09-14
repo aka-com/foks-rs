@@ -702,11 +702,6 @@ function ServerList({
           </Inset>
         </>
       ) : null}
-      <div className="sfoot">
-        <Icon name="shield" />
-        FOKS verifies the server’s identity against its pinned certificate
-        before every operation.
-      </div>
     </>
   );
 }

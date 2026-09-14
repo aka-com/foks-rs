@@ -144,11 +144,11 @@ pub(super) fn recovery_response(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GoProfilePairingRequest {
-    candidate_id: String,
-    profile: String,
-    target_alias: String,
-    device_name: String,
-    phrase: String,
+    pub(super) candidate_id: String,
+    pub(super) profile: String,
+    pub(super) target_alias: String,
+    pub(super) device_name: String,
+    pub(super) phrase: String,
 }
 
 #[derive(Deserialize)]

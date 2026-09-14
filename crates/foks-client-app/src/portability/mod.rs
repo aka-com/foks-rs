@@ -13,7 +13,7 @@ pub use relocation::{
 };
 
 mod selection;
-pub use selection::{default_desktop_state_root, selected_desktop_state_root};
+pub use selection::{default_desktop_state_root, selected_desktop_state_root, state_identity};
 
 mod archive_manifest;
 mod export;

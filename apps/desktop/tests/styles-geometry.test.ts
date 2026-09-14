@@ -118,6 +118,10 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
     /\.path\{[^}]*padding:8px 20px;[^}]*border-bottom:1px solid var\(--line-soft\)/,
   );
   assert.match(shell, /\.header-action\{[^}]*margin-left:auto;[^}]*flex:none/);
+  assert.match(
+    shell,
+    /\.settings-main>\.settings-inset\+\.band\{margin-top:6px\}/,
+  );
   // Title row flex shrinkage preserves action button visibility in headers.
   assert.match(shell, /\.loc\{[^}]*flex:1 1 auto/);
   assert.match(shell, /\.loc-copy\{[^}]*white-space:nowrap/);

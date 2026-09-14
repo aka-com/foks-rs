@@ -47,6 +47,13 @@ fn read(base: &Path) -> Result<Option<Selection>> {
     crate::validate_name(&selection.state_id)?;
     Ok(Some(selection))
 }
+/// Reads the stable client state ID at `root` without acquiring a lock.
+pub fn state_identity(root: impl AsRef<Path>) -> Result<String> {
+    let state = crate::checkpoint::inspect_state_file(root.as_ref())?.ok_or(
+        Error::InvalidConfig("client state is not initialized in the specified directory"),
+    )?;
+    Ok(state.state_id)
+}
 /// Invalid or unavailable selected state never falls back to a fresh default root.
 pub fn selected_desktop_state_root() -> Result<PathBuf> {
     resolve(&lock_directory()?, default_desktop_state_root()?)
@@ -142,6 +149,19 @@ mod tests {
         std::fs::rename(&root, dir.path().join("substituted")).unwrap();
         assert!(resolve(dir.path(), default.clone()).is_err());
         assert!(!default.exists());
+    }
+    #[test]
+    fn state_identity_reads_the_envelope_and_requires_initialized_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        crate::prepare_private_directory(&root).unwrap();
+        assert!(state_identity(&root).is_err());
+        crate::create_private_config(
+            &root.join(crate::STATE_CONFIG_FILE),
+            b"version = 3\nstate_id = \"aabb\"\ncredential_backend = \"native\"\n",
+        )
+        .unwrap();
+        assert_eq!(state_identity(&root).unwrap(), "aabb");
     }
     #[test]
     fn malformed_selection_is_not_a_missing_selection() {

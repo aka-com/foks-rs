@@ -39,6 +39,39 @@ test('browser credentials and unknown fields are rejected at the JS boundary', (
   assert.throws(() => decodeSsoProgress({ ...progress, operationId: 'other' }));
   assert.throws(() => decodeSsoProgress({ ...progress, state: 'invented' }));
 });
+test('reopening a saved accepted signup uses status without replaying signup', async () => {
+  const { SsoPanel } = (await vite.ssrLoadModule(
+    '/src/components/sso-panel.tsx',
+  )) as typeof import('../src/components/sso-panel');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  for (const state of ['complete', 'service-unavailable'] as const) {
+    const actions: string[] = [];
+    let completed = 0;
+    const view = ui.render(
+      createElement(SsoPanel, {
+        bridge: {
+          ...mockBridge(),
+          sso: async (_profile, _alias, action) => {
+            actions.push(action.action);
+            return { ...progress, purpose: 'signup', state };
+          },
+        },
+        profile: 'host',
+        account: 'work',
+        login: false,
+        initialOperationId: progress.operationId!,
+        onComplete: () => {
+          completed++;
+        },
+      }),
+    );
+    await ui.waitFor(() => assert.equal(completed, 1));
+    assert.deepEqual(actions, ['status']);
+    view.unmount();
+  }
+});
 test('consent, signed completion and usable access are distinct; no automatic operation replay', async () => {
   const { SsoPanel } = (await vite.ssrLoadModule(
     '/src/components/sso-panel.tsx',

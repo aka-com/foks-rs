@@ -36,6 +36,19 @@ inside the same main window, with its sidebar replaced by the setup-step list.
 Its versioned local checkpoint contains only nonsecret progress and display facts;
 invite, passphrase, recovery phrase and prepared backup phrase values are held
 only in their live form or one-time sheet and are never encoded. Reopening
+preserves acknowledged-but-unloaded accounts and uncertain account operations.
+The v3 checkpoint retains the existing storage key and reads v2 checkpoints;
+it adds nonsecret operation identifiers, SSO progress, and a selected group.
+Native account-operation receipts in `account-operation-receipts-v1` tie each
+attempt to its client state ID, pinned host, account alias, and operation
+inputs.
+An acknowledged receipt permits loading the account; a missing or uncertain
+receipt never permits replaying creation or treating an existing alias as proof
+of success. If a receipt cannot be read but the alias already exists on the
+host, setup prompts you to continue with that existing account instead of
+linking it automatically. Leaving setup does not cancel an in-flight account
+operation.
+Reopening
 queries the agent's authenticated pending-operation list before showing a
 Resume action. Set up again returns to the first question without discarding
 completed steps. Creating the first group advances only after a fresh catalog

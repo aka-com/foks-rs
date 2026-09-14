@@ -977,6 +977,7 @@ pub async fn describe_server_status(
     webview: tauri::Webview,
     state: State<'_, AppState>,
     profile: String,
+    fresh: Option<bool>,
 ) -> Result<ServerStatusSnapshotDto, AgentError> {
     require_main_window(&webview)?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
@@ -986,6 +987,7 @@ pub async fn describe_server_status(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_ref()
+        .filter(|_| !fresh.unwrap_or(false))
         .and_then(|catalog| {
             catalog
                 .profile_overviews

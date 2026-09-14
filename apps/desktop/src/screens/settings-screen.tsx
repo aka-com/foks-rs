@@ -90,10 +90,10 @@ const SECTIONS: readonly {
   label: string;
   icon: 'file' | 'key' | 'vault' | 'server' | 'people' | 'info';
 }[] = [
-  { id: 'macs', label: 'Recovery devices', icon: 'file' },
-  { id: 'keys', label: 'Security keys', icon: 'key' },
   { id: 'account', label: 'Accounts', icon: 'vault' },
   { id: 'servers', label: 'Servers', icon: 'server' },
+  { id: 'macs', label: 'Recovery devices', icon: 'file' },
+  { id: 'keys', label: 'Security keys', icon: 'key' },
   { id: 'groups', label: 'Groups', icon: 'people' },
   { id: 'about', label: 'About', icon: 'info' },
 ];
@@ -295,7 +295,7 @@ export function SettingsScreen({
   // Capture initial fixture scene once; the shell canonicalizes the route to 'settings' on mount.
   const [enteredScene] = useState(scene);
   const section =
-    location.section === 'phrase' ? 'macs' : (location.section ?? 'macs');
+    location.section === 'phrase' ? 'macs' : (location.section ?? 'account');
   const stores = accountStores(world);
   // Select account by exact StoreRef to avoid ambiguous profile-local aliases.
   const requested = location.store;
@@ -699,6 +699,7 @@ export function SettingsScreen({
                 world={world}
                 stopped={selectedStopped}
                 loading={macsLoading}
+                onConnectGoProfile={() => setSheet('go-profile')}
                 onSwitch={(store) =>
                   onNavigate({
                     kind: 'settings',
@@ -725,6 +726,7 @@ export function SettingsScreen({
               <KeysSection
                 yubi={yubi}
                 cards={cards}
+                accountConfigured={selected !== undefined}
                 stopped={selectedStopped}
                 loading={keysLoading}
                 onSheet={setSheet}
@@ -1147,6 +1149,28 @@ function UnavailableAccount({
   );
 }
 
+function NoAvailableAccount({
+  onConnectGoProfile,
+}: {
+  onConnectGoProfile: () => void;
+}): ReactNode {
+  return (
+    <Notice
+      title="No available account on this Mac"
+      actions={
+        <Button variant="primary" onClick={onConnectGoProfile}>
+          Connect existing account
+        </Button>
+      }
+    >
+      <p>
+        Add and verify a server, then create or recover an account, or connect
+        an existing FOKS account on your device.
+      </p>
+    </Notice>
+  );
+}
+
 function MacsSection({
   stores,
   selected,
@@ -1155,6 +1179,7 @@ function MacsSection({
   world,
   stopped,
   loading,
+  onConnectGoProfile,
   onSwitch,
   onSheet,
   onPair,
@@ -1168,6 +1193,7 @@ function MacsSection({
   world: World;
   stopped: boolean;
   loading: boolean;
+  onConnectGoProfile: () => void;
   onSwitch: (store: AccountStore) => void;
   onSheet: (sheet: Sheet) => void;
   onPair: (mode: 'offer' | 'accept') => void;
@@ -1175,11 +1201,7 @@ function MacsSection({
   onRevokeBackup: (backup: BackupEnrollment) => void;
 }): ReactNode {
   if (!selected)
-    return (
-      <Notice title="No available account on this Mac">
-        <p>Add and verify a server, then create or recover an account.</p>
-      </Notice>
-    );
+    return <NoAvailableAccount onConnectGoProfile={onConnectGoProfile} />;
   const account = world.accounts.find((entry) => entry.store === selected.id);
   return (
     <>
@@ -1366,6 +1388,7 @@ type SimpleYubiAction =
 function KeysSection({
   yubi,
   cards,
+  accountConfigured,
   stopped,
   loading,
   onSheet,
@@ -1373,6 +1396,7 @@ function KeysSection({
 }: {
   yubi: YubiEnrollment[];
   cards: { serial: number }[];
+  accountConfigured: boolean;
   stopped: boolean;
   loading: boolean;
   onSheet: (sheet: Sheet) => void;
@@ -1456,9 +1480,17 @@ function KeysSection({
         )}
       </Inset>
       {stopped ? (
-        <Band severity="crit" label="Security-key access is stopped">
-          Restore account access in Server settings before changing these
-          settings.
+        <Band
+          severity="crit"
+          label={
+            accountConfigured
+              ? 'Security-key access is stopped'
+              : 'No account configured'
+          }
+        >
+          {accountConfigured
+            ? 'Restore account access in Server settings before changing these settings.'
+            : 'Add or recover an account before configuring security keys.'}
         </Band>
       ) : null}
       <SectionLabel>Add</SectionLabel>
@@ -1566,21 +1598,7 @@ function AccountSection({
 }): ReactNode {
   const stores = accountStores(world);
   if (!stores.length) {
-    return (
-      <Notice
-        title="No available account on this Mac"
-        actions={
-          <Button variant="primary" onClick={onConnectGoProfile}>
-            Connect from FOKS CLI…
-          </Button>
-        }
-      >
-        <p>
-          Add and verify a server, then create or recover an account, or connect
-          an existing account from the FOKS CLI.
-        </p>
-      </Notice>
-    );
+    return <NoAvailableAccount onConnectGoProfile={onConnectGoProfile} />;
   }
   return (
     <>

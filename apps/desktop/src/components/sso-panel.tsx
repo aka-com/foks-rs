@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import type { SsoAction, SsoProgress } from '../sso-contract';
@@ -42,6 +43,14 @@ interface Props {
   invite?: string;
   disabled?: boolean;
   onComplete: () => void | Promise<void>;
+  initialOperationId?: string;
+  initialHardware?: boolean;
+  onProgress?: (progress: SsoProgress, hardware: boolean) => void;
+  executeSignup?: (
+    action: SsoAction,
+    operation: () => Promise<SsoProgress>,
+  ) => Promise<SsoProgress>;
+  resumeOnly?: boolean;
 }
 export function SsoPanel({
   bridge,
@@ -52,26 +61,74 @@ export function SsoPanel({
   invite = '',
   disabled = false,
   onComplete,
+  initialOperationId,
+  initialHardware = false,
+  onProgress,
+  executeSignup,
+  resumeOnly = false,
 }: Props) {
   const [progress, setProgress] = useState<SsoProgress | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pin, setPin] = useState('');
-  const [hardware, setHardware] = useState(false);
+  const [hardware, setHardware] = useState(initialHardware);
   const [serial, setSerial] = useState('');
   const owner = `${profile}/${account}/${login}`;
   const active = useRef(owner);
+  const complete = useRef(onComplete);
+  useEffect(() => {
+    complete.current = onComplete;
+  }, [onComplete]);
   useEffect(() => {
     active.current = owner;
     return () => {
       active.current = '';
     };
   }, [owner]);
+  useEffect(() => {
+    if (!initialOperationId) return;
+    let alive = true;
+    setBusy(true);
+    void bridge
+      .sso(profile, account, {
+        action: 'status',
+        operation_id: initialOperationId,
+      })
+      .then((p) => {
+        if (!alive) return;
+        if (
+          p.accountAlias !== account ||
+          p.operationId !== initialOperationId ||
+          (!login && p.purpose !== 'signup')
+        )
+          throw new Error('Authentication belongs to a different account.');
+        setProgress(p);
+        if (
+          !login &&
+          (p.state === 'complete' || p.state === 'service-unavailable')
+        )
+          return complete.current();
+      })
+      .catch((e) => {
+        if (alive) setError(normalizeCommandError(e).message);
+      })
+      .finally(() => {
+        if (alive) setBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [bridge, profile, account, initialOperationId, login]);
   const run = async (action: SsoAction) => {
     setBusy(true);
     setError(null);
     try {
-      const p = await bridge.sso(profile, account, action);
+      const submit =
+        action.action === 'finish-signup' ||
+        action.action === 'finish-yubi-signup';
+      const p = await (submit && executeSignup
+        ? executeSignup(action, () => bridge.sso(profile, account, action))
+        : bridge.sso(profile, account, action));
       if (active.current !== owner) return;
       if (
         p.accountAlias !== account ||
@@ -83,6 +140,7 @@ export function SsoPanel({
       )
         throw new Error('Authentication belongs to a different account.');
       setProgress(p);
+      onProgress?.(p, hardware);
       if (p.state === 'complete' && p.serviceAccess) {
         setPin('');
         await onComplete();
@@ -95,6 +153,50 @@ export function SsoPanel({
   };
   const blocked =
     busy || disabled || !account || (!login && !deviceName.trim());
+  const finishable =
+    progress !== null &&
+    !progress.accountStatus &&
+    [
+      'ready',
+      'submitting',
+      'submission-unknown',
+      'hardware-verification-required',
+    ].includes(progress.state);
+  const pollable =
+    progress !== null &&
+    !progress.accountStatus &&
+    ['waiting', 'provider-unavailable'].includes(progress.state);
+  const cancellable =
+    !resumeOnly &&
+    progress !== null &&
+    !progress.accountStatus &&
+    ['prepared', 'waiting', 'ready', 'denied', 'provider-unavailable'].includes(
+      progress.state,
+    );
+  const beginDisabled =
+    blocked ||
+    resumeOnly ||
+    (!login && hardware && (!/^[1-9][0-9]{0,9}$/.test(serial) || !pin));
+  // Priority order for the primary action: completion, browser authentication,
+  // then initiation.
+  const primary: 'finish' | 'browser' | 'begin' = finishable
+    ? 'finish'
+    : progress?.browserAvailable
+      ? 'browser'
+      : 'begin';
+  const pinField = (label: string): ReactNode => (
+    <div className="local-field-card">
+      <label className="local-field-row">
+        <span>{label}</span>
+        <input
+          type="password"
+          autoComplete="off"
+          value={pin}
+          onChange={(e) => setPin(e.target.value)}
+        />
+      </label>
+    </div>
+  );
   return (
     <section className="pcard" aria-label="Organization sign-in">
       <h3>
@@ -117,17 +219,50 @@ export function SsoPanel({
           {error}
         </p>
       )}
-      {login && (
+      {login && pinField('Security key PIN (for an enrolled key)')}
+      {!login && (
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={hardware}
+            disabled={busy || Boolean(progress)}
+            onChange={(e) => setHardware(e.target.checked)}
+          />
+          Create keys on a security key
+        </label>
+      )}
+      {!login && hardware && (
         <>
-          <label>
-            Security key PIN (for an enrolled key)
-            <input
-              type="password"
-              autoComplete="off"
-              value={pin}
-              onChange={(e) => setPin(e.target.value)}
-            />
-          </label>
+          <div className="local-field-card">
+            <label className="local-field-row">
+              <span>Card serial</span>
+              <input
+                value={serial}
+                inputMode="numeric"
+                onChange={(e) => setSerial(e.target.value)}
+              />
+            </label>
+            <label className="local-field-row">
+              <span>Security key PIN</span>
+              <input
+                type="password"
+                autoComplete="off"
+                value={pin}
+                onChange={(e) => setPin(e.target.value)}
+              />
+            </label>
+          </div>
+          <p>
+            Uses signing slot 130 and encryption slot 131. Existing keys in
+            these slots are checked before preparation.
+          </p>
+        </>
+      )}
+      {finishable &&
+        login &&
+        pinField('Security key PIN (only for an enrolled key)')}
+      <div className="btns">
+        {login && (
           <Button
             disabled={blocked}
             onClick={() => {
@@ -141,94 +276,55 @@ export function SsoPanel({
           >
             Check account linkage
           </Button>
-        </>
-      )}
-      {!login && (
-        <label>
-          <input
-            type="checkbox"
-            checked={hardware}
-            disabled={busy || Boolean(progress)}
-            onChange={(e) => setHardware(e.target.checked)}
-          />{' '}
-          Create keys on a security key
-        </label>
-      )}
-      {!login && hardware && (
-        <>
-          <label>
-            Card serial
-            <input
-              value={serial}
-              inputMode="numeric"
-              onChange={(e) => setSerial(e.target.value)}
-            />
-          </label>
-          <label>
-            Security key PIN
-            <input
-              type="password"
-              autoComplete="off"
-              value={pin}
-              onChange={(e) => setPin(e.target.value)}
-            />
-          </label>
-          <p>
-            Uses signing slot 130 and encryption slot 131. Existing keys in
-            these slots are checked before preparation.
-          </p>
-        </>
-      )}
-      <Button
-        disabled={
-          blocked ||
-          (!login && hardware && (!/^[1-9][0-9]{0,9}$/.test(serial) || !pin))
-        }
-        onClick={() => {
-          const action: SsoAction =
-            !login && hardware
-              ? {
-                  action: 'begin-yubi-signup',
-                  card_serial: Number(serial),
-                  signing_slot: 130,
-                  pq_slot: 131,
-                  pin,
-                  device_name: deviceName,
-                  invite,
-                }
-              : {
-                  action: 'begin',
-                  purpose: !login
-                    ? 'signup'
-                    : (progress?.purpose ?? 'reauthenticate'),
-                  pin: login ? pin || null : null,
-                };
-          setPin('');
-          void run(action);
-        }}
-      >
-        {progress?.purpose === 'link-existing'
-          ? 'Link existing account'
-          : progress
-            ? 'Begin or resume sign-in'
-            : 'Continue with organization'}
-      </Button>
-      {progress?.browserAvailable && (
-        <Button
-          disabled={blocked}
-          onClick={() =>
-            void bridge
-              .openSsoBrowser(profile, account, progress.operationId!)
-              .catch((e) => setError(normalizeCommandError(e).message))
-          }
-        >
-          Open sign-in browser
-        </Button>
-      )}
-      {progress &&
-        !progress.accountStatus &&
-        ['waiting', 'provider-unavailable'].includes(progress.state) &&
-        !progress.accountStatus && (
+        )}
+        {!resumeOnly && (
+          <Button
+            variant={primary === 'begin' ? 'primary' : 'plain'}
+            disabled={beginDisabled}
+            onClick={() => {
+              const action: SsoAction =
+                !login && hardware
+                  ? {
+                      action: 'begin-yubi-signup',
+                      card_serial: Number(serial),
+                      signing_slot: 130,
+                      pq_slot: 131,
+                      pin,
+                      device_name: deviceName,
+                      invite,
+                    }
+                  : {
+                      action: 'begin',
+                      purpose: !login
+                        ? 'signup'
+                        : (progress?.purpose ?? 'reauthenticate'),
+                      pin: login ? pin || null : null,
+                    };
+              setPin('');
+              void run(action);
+            }}
+          >
+            {progress?.purpose === 'link-existing'
+              ? 'Link existing account'
+              : progress
+                ? 'Begin or resume sign-in'
+                : 'Continue with organization'}
+          </Button>
+        )}
+        {progress?.browserAvailable && (
+          <Button
+            variant={primary === 'browser' ? 'primary' : 'plain'}
+            disabled={blocked}
+            onClick={() =>
+              void bridge
+                .openSsoBrowser(profile, account, progress.operationId!)
+                .catch((e) => setError(normalizeCommandError(e).message))
+            }
+          >
+            Open sign-in browser
+          </Button>
+        )}
+        {pollable && (
           <Button
             disabled={blocked}
             onClick={() =>
@@ -238,66 +334,39 @@ export function SsoPanel({
             Check sign-in
           </Button>
         )}
-      {progress &&
-        !progress.accountStatus &&
-        [
-          'ready',
-          'submitting',
-          'submission-unknown',
-          'hardware-verification-required',
-        ].includes(progress.state) && (
-          <>
-            {login && (
-              <label>
-                Security key PIN (only for an enrolled key)
-                <input
-                  type="password"
-                  autoComplete="off"
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                />
-              </label>
-            )}
-            <Button
-              disabled={blocked}
-              onClick={() => {
-                const action: SsoAction =
-                  !login && hardware
+        {finishable && (
+          <Button
+            variant="primary"
+            disabled={blocked}
+            onClick={() => {
+              const action: SsoAction =
+                !login && hardware
+                  ? {
+                      action: 'finish-yubi-signup',
+                      operation_id: progress.operationId!,
+                      pin,
+                    }
+                  : login
                     ? {
-                        action: 'finish-yubi-signup',
+                        action: 'finish-login',
                         operation_id: progress.operationId!,
-                        pin,
+                        pin: pin || null,
                       }
-                    : login
-                      ? {
-                          action: 'finish-login',
-                          operation_id: progress.operationId!,
-                          pin: pin || null,
-                        }
-                      : {
-                          action: 'finish-signup',
-                          operation_id: progress.operationId!,
-                          device_name: deviceName,
-                          invite,
-                          passphrase: null,
-                        };
-                setPin('');
-                void run(action);
-              }}
-            >
-              Finish sign-in
-            </Button>
-          </>
+                    : {
+                        action: 'finish-signup',
+                        operation_id: progress.operationId!,
+                        device_name: deviceName,
+                        invite,
+                        passphrase: null,
+                      };
+              setPin('');
+              void run(action);
+            }}
+          >
+            Finish sign-in
+          </Button>
         )}
-      {progress &&
-        !progress.accountStatus &&
-        [
-          'prepared',
-          'waiting',
-          'ready',
-          'denied',
-          'provider-unavailable',
-        ].includes(progress.state) && (
+        {cancellable && (
           <Button
             disabled={blocked}
             onClick={() =>
@@ -310,16 +379,20 @@ export function SsoPanel({
             Cancel sign-in
           </Button>
         )}
-      {progress && !progress.accountStatus && (
-        <Button
-          disabled={blocked}
-          onClick={() =>
-            void run({ action: 'status', operation_id: progress.operationId! })
-          }
-        >
-          Refresh status
-        </Button>
-      )}
+        {progress && !progress.accountStatus && (
+          <Button
+            disabled={blocked}
+            onClick={() =>
+              void run({
+                action: 'status',
+                operation_id: progress.operationId!,
+              })
+            }
+          >
+            Refresh status
+          </Button>
+        )}
+      </div>
     </section>
   );
 }

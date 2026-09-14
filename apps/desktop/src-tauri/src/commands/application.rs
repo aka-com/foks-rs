@@ -146,3 +146,16 @@ pub fn take_agent_connection_loss(
     require_main_window(&webview)?;
     Ok(state.agent.take_connection_failure())
 }
+
+#[tauri::command]
+pub fn restart_app(app: tauri::AppHandle, webview: tauri::Webview) -> Result<(), AgentError> {
+    require_main_window(&webview)?;
+    app.restart()
+}
+
+#[tauri::command]
+pub fn quit_app(app: tauri::AppHandle, webview: tauri::Webview) -> Result<(), AgentError> {
+    require_main_window(&webview)?;
+    app.exit(0);
+    Ok(())
+}

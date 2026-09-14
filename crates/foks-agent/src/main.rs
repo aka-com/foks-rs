@@ -1220,6 +1220,13 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
             foks_client_app::Error::Io(io) if io.kind() == std::io::ErrorKind::WouldBlock => {
                 return Response::error(id, ErrorCode::ProfileBusy, error.to_string());
             }
+            foks_client_app::Error::AccountExists => {
+                return Response::error(
+                    id,
+                    ErrorCode::Conflict,
+                    "an account with this username already exists",
+                );
+            }
             foks_client_app::Error::KvConflict => {
                 return Response::error(
                     id,
@@ -4670,6 +4677,17 @@ mod tests {
         assert!(message.contains("unsupported soft-state cache schema version"));
         assert!(message.contains("/private/foks/profiles/local/soft.sqlite3"));
         assert!(message.contains("cache must be recreated"));
+    }
+
+    #[test]
+    fn duplicate_account_alias_maps_to_conflict() {
+        let error = foks_client_app::Error::AccountExists;
+        let response = dispatch_error_response(11, &error);
+        let foks_agent_proto::ResponseResult::Error { code, message, .. } = response.result else {
+            panic!("duplicate alias returned success");
+        };
+        assert_eq!(code, ErrorCode::Conflict);
+        assert!(message.contains("already exists"));
     }
 
     #[test]
