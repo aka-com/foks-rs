@@ -28,26 +28,13 @@ body {
   box-shadow: none;
 }
 
-/* Titlebar inset for native window controls */
-#root > .native-window > .titlebar {
-  padding-left: 5.5rem;
+/* Window controls drag strip spacing */
+#root > .native-window .traffic {
+  min-height: 38px;
 }
 
-#root > .native-window.window-chrome-hidden > .titlebar {
-  padding-left: 14px;
-}
-
-#root > .window > .titlebar .brand {
-  transform: translateY(1px);
-}
-
-#root > .window > .titlebar > .agent {
-  margin-right: 0.25rem;
-  transform: translateY(1px);
-}
-
-#root > .window > .titlebar > .global-refresh {
-  transform: translateY(1px);
+#root > .native-window.window-chrome-hidden .traffic {
+  min-height: 32px;
 }
 
 .inset.drop-hover,
@@ -731,7 +718,6 @@ body {
 .pcard,
 .fcard,
 .local-quiet-card,
-.app-lock-card,
 .local-field-card,
 .local-more,
 .local-recovery-card,
@@ -758,6 +744,12 @@ body {
 }
 
 /* Onboarding flow layout overrides */
+
+/* First run traffic strip offset */
+.first-run-main {
+  padding-top: 32px;
+}
+
 .first-run-main .body.pb {
   padding-bottom: 24px;
 }

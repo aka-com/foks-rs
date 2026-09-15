@@ -1062,7 +1062,6 @@ function DeviceDetail({
   onRevokeBackup: (backup: BackupEnrollment) => void;
   onRevokeKey: (entry: YubiEnrollment) => void;
 }): ReactNode {
-  const back = { label: 'Devices', onBack };
   const why = stopped.stopped ? stopped.reason : undefined;
   if (!entry)
     return (
@@ -1070,7 +1069,6 @@ function DeviceDetail({
         <PageHeader
           title="Devices"
           subtitle={accountSubtitle(snapshot, store)}
-          back={back}
         />
         <div className="body">
           <div className="settings-main">
@@ -1121,7 +1119,6 @@ function DeviceDetail({
             ? `${entry.kind} · on ${serverName(snapshot, store)}`
             : `${entry.kind} · ${accountSubtitle(snapshot, store)}`
         }
-        back={back}
         action={
           entry.current ? (
             <Chip tone="you">

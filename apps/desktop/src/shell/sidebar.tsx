@@ -2,24 +2,30 @@
  * The navigation rail.
  *
  * Six fixed tabs — Accounts, Chat, Files, Teams, Devices, Settings — under an
- * account header that names the active account and opens the account menu.
- * The rail does not enumerate stores; Files and Teams list them on their own
- * pages. Control-Tab walks the six tabs.
+ * account header that names the active account and opens the account menu, and
+ * over the agent light at the foot. The rail's top is the window's traffic-light
+ * strip: there is no title bar above it. The rail does not enumerate stores;
+ * Files and Teams list them on their own pages. Control-Tab walks the six tabs.
+ *
+ * The rail is 200px open and 56px collapsed, and collapsing is a width the
+ * reader chooses from the topbar: it never expands on hover or focus.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Menu, Popover } from '/kit/overlay-primitives';
-import { Chip, Icon } from '../components';
+import { Icon } from '../components';
 import {
   chatAvailable,
   serverDisplayName,
   serverName,
   storeAvailability,
   storeDescription,
+  storeDescriptionState,
   storeHues,
   storeNavigationOrder,
 } from '../model';
-import type { AccountStore, AgentSnapshot } from '../model';
+import type { AccountStore, AgentSnapshot, StoreRef } from '../model';
+import type { AgentLifecycle } from '../agent-lifecycle';
 import type { FoksIconName } from '../icons';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { teamUnread } from '../chat/unread';
@@ -84,15 +90,87 @@ export function nextSidebarCycleLocation(
   return places[(index + delta + places.length) % places.length];
 }
 
+/* --------------------------------------------------------- window controls -- */
+
+/**
+ * The strip the window is dragged by, at the top of the rail. macOS draws its
+ * own controls over the native window's strip, so the fake lights are the web
+ * mock's alone; either way the strip reserves the height they occupy.
+ */
+export function TrafficStrip({
+  native = false,
+}: {
+  native?: boolean;
+}): ReactNode {
+  return (
+    <div className="traffic" data-tauri-drag-region="">
+      {native ? null : (
+        <span className="lights" aria-hidden="true">
+          <span className="light" />
+          <span className="light" />
+          <span className="light" />
+        </span>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ agent light -- */
+
+/** Connection states displayed in the rail footer. */
+export type RailAgentState = 'ready' | 'starting' | 'stopped' | 'locked';
+
+const AGENT_LABEL: Readonly<Record<RailAgentState, string>> = {
+  ready: 'Connected',
+  starting: 'Connecting…',
+  stopped: 'Offline',
+  locked: 'Locked',
+};
+
+/**
+ * What the light says about a lifecycle. The internal step names — bootstrap,
+ * initializing, the maintenance operation — are all one word to the reader:
+ * the agent is starting.
+ */
+export function railAgentState(
+  lifecycle: AgentLifecycle['state'],
+  snapshotAgent?: AgentSnapshot['agent']['state'],
+): RailAgentState {
+  if (snapshotAgent === 'bootstrap') return 'starting';
+  switch (lifecycle) {
+    case 'ready':
+      return 'ready';
+    case 'checking':
+    case 'bootstrap':
+    case 'initializing':
+    case 'maintenance':
+      return 'starting';
+    default:
+      return 'stopped';
+  }
+}
+
+function AgentLight({ state }: { state: RailAgentState }): ReactNode {
+  const label = AGENT_LABEL[state];
+  return (
+    <div className={`status agent-${state}`} title={label}>
+      <i aria-hidden="true" />
+      <span className="t">{label}</span>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------- rows -- */
+
 export interface NavRowProps {
   active: boolean;
   glyph?: ReactNode;
   name: string;
-  /** The amber issue dot. Survives the collapsed rail, where labels do not. */
-  dot?: boolean;
   /** Tooltip. The rail sets it only while collapsed, where the label is gone. */
   title?: string;
   tail?: ReactNode;
+  /** A blocked shell draws its tabs but does not let them be used. */
+  disabled?: boolean;
   onSelect: () => void;
 }
 
@@ -100,9 +178,9 @@ export function NavRow({
   active,
   glyph,
   name,
-  dot = false,
   title,
   tail,
+  disabled = false,
   onSelect,
 }: NavRowProps): ReactNode {
   return (
@@ -110,33 +188,28 @@ export function NavRow({
       type="button"
       className={active ? 'nav on' : 'nav'}
       title={title}
+      disabled={disabled || undefined}
       aria-current={active ? 'page' : undefined}
-      onClick={(event) => {
-        onSelect();
-        // A mouse click reports `detail > 0`; blur so `:focus-within` does not
-        // hold a collapsed rail open. Keyboard activation reports 0 and keeps
-        // focus.
-        if (event.detail > 0) event.currentTarget.blur();
-      }}
+      onClick={onSelect}
     >
       {glyph}
       <span className="t">{name}</span>
-      {dot ? <span className="dot" /> : null}
       {tail}
     </button>
   );
 }
 
 export interface SidebarProps {
-  snapshot: AgentSnapshot;
+  /** Absent while the agent is starting: the rail draws its frame regardless. */
+  snapshot?: AgentSnapshot;
   location: Location;
-  account?: string;
-  /** How many things need attention. Draws the Accounts tab's dot. */
+  account?: StoreRef;
+  /** How many things need attention. Draws the dot on the account avatar. */
   attention?: number;
   onNavigate: (location: Location) => void;
   onTabNavigate?: (tab: RailTab) => void;
   /**
-   * Rows between the tabs and the footer. First run puts its progress there;
+   * Rows between the tabs and the foot. First run puts its progress there;
    * the shell has no additional status to display at that point.
    */
   status?: ReactNode;
@@ -147,59 +220,39 @@ export interface SidebarProps {
   onReenter?: () => void;
   /** Arms the application lock. Omitted where no lock command is reachable. */
   onLock?: () => void;
-  /** Collapsed to the icon-only rail. */
+  /** Collapsed to the 56px icon-only track. The topbar owns the toggle. */
   collapsed?: boolean;
-  /** A width the reader chose: hover no longer expands the rail, focus still does. */
-  pinned?: boolean;
-  /** Renders the collapse toggle as the footer's last row when provided. */
   onToggleCollapsed?: () => void;
-}
-
-/** The footer row that collapses and expands the rail. */
-function CollapseToggle({
-  collapsed,
-  onToggle,
-}: {
-  collapsed: boolean;
-  onToggle: () => void;
-}): ReactNode {
-  const name = collapsed ? 'Expand' : 'Collapse';
-  return (
-    <button
-      type="button"
-      className="nav side-collapse"
-      aria-expanded={!collapsed}
-      title={name}
-      onClick={(event) => {
-        onToggle();
-        // Blur on mouse activation so the rail does not stay open through
-        // `:focus-within`.
-        if (event.detail > 0) event.currentTarget.blur();
-      }}
-    >
-      <Icon name={collapsed ? 'panel-hollow' : 'panel-filled'} />
-      <span className="t">{name}</span>
-    </button>
-  );
+  /** Connection status displayed in the rail footer. */
+  agent?: RailAgentState;
+  /** The OS draws the window controls over the strip, so no lights are faked. */
+  nativeChrome?: boolean;
+  /** A blocking state: the header and the tabs are dimmed and inert. */
+  blocked?: boolean;
 }
 
 /**
  * The rail's account header and its menu: the accounts on this Mac grouped by
  * server, then the two commands that are not a place — adding an account and
- * locking the app.
+ * locking the app. The attention dot rides the avatar and opens the Accounts
+ * tab, which is where the list of things to attend to lives.
  */
 function AccountHeader({
   snapshot,
   location,
   account,
+  attention,
   onNavigate,
+  onTabNavigate,
   onReenter,
   onLock,
 }: {
   snapshot: AgentSnapshot;
   location: Location;
-  account?: string;
+  account?: StoreRef;
+  attention: number;
   onNavigate: (location: Location) => void;
+  onTabNavigate?: (tab: RailTab) => void;
   onReenter?: () => void;
   onLock?: () => void;
 }): ReactNode {
@@ -240,24 +293,9 @@ function AccountHeader({
   // The same hue the Files and Teams rows draw each store's mark in, so an
   // account's initial is white on its own colour rather than on nothing.
   const hues = storeHues(storeNavigationOrder(snapshot));
-  /**
-   * Closes the menu. A mouse click leaves the header focused — the menu hands
-   * focus back to its anchor once it has unmounted — and a focused header holds
-   * a collapsed rail open through `:focus-within`, so mouse activation ends
-   * with a blur, as `NavRow` does. The menu queues that restore as a microtask
-   * while the click is still being handled, so the blur is queued from inside a
-   * microtask of its own to land after it. Keyboard activation (`detail === 0`)
-   * keeps focus where the reader put it.
-   */
-  const close = (event?: { detail: number }): void => {
-    setOpen(false);
-    if (!event || event.detail === 0) return;
-    queueMicrotask(() => {
-      queueMicrotask(() => anchorRef.current?.blur());
-    });
-  };
+  const close = (): void => setOpen(false);
   return (
-    <>
+    <div className="rail-head">
       <button
         type="button"
         ref={anchorRef}
@@ -266,10 +304,7 @@ function AccountHeader({
         aria-expanded={open}
         aria-label={`${username} · ${server}`}
         title={`${username} · ${server}`}
-        onClick={(event) => {
-          if (open) close(event);
-          else setOpen(true);
-        }}
+        onClick={() => setOpen(!open)}
       >
         <span className="avatar" aria-hidden="true">
           {username.slice(0, 1).toUpperCase()}
@@ -282,18 +317,38 @@ function AccountHeader({
           <Icon name="chev" />
         </span>
       </button>
+      {attention > 0 ? (
+        <button
+          type="button"
+          className="attn"
+          aria-label={
+            attention === 1
+              ? '1 thing needs attention'
+              : `${attention} things need attention`
+          }
+          title={
+            attention === 1
+              ? '1 thing needs attention'
+              : `${attention} things need attention`
+          }
+          onClick={() => {
+            if (onTabNavigate) onTabNavigate('people');
+            else onNavigate({ kind: 'people' });
+          }}
+        />
+      ) : null}
       {open ? (
         <Popover
           anchorRef={anchorRef}
           className="menu-portal"
           align="start"
           gap={4}
-          onClose={() => close()}
+          onClose={close}
         >
           <Menu
             className="menu rail-account-menu"
             anchorRef={anchorRef}
-            onClose={() => close()}
+            onClose={close}
             aria-label="Accounts on this Mac"
           >
             {servers.map((serverId) => (
@@ -305,48 +360,103 @@ function AccountHeader({
                     );
                     if (!entry) return serverId;
                     const name = serverDisplayName(entry);
-                    return entry.label ? `${name} · ${entry.name}` : name;
+                    // Only the label a reader gave the server is a section
+                    // heading. The host keeps its own case: uppercasing a
+                    // hostname reads wrong, and it is what wrapped this caption
+                    // onto a second line.
+                    return entry.label ? (
+                      <>
+                        {name}
+                        <span className="host">{` · ${entry.name}`}</span>
+                      </>
+                    ) : (
+                      name
+                    );
                   })()}
                 </div>
                 {accounts
                   .filter((store) => store.server === serverId)
                   .map((store) => {
+                    const state = storeDescriptionState(snapshot, store);
                     const stopped = !storeAvailability(snapshot, store)
                       .available;
+                    const checkIn =
+                      state === 'check-in-expired' ||
+                      state === 'check-in-unavailable';
                     return (
-                      <button
-                        type="button"
-                        key={store.id}
-                        className={
-                          store.id === active?.id ? 'on' : stopped ? 'off' : ''
-                        }
-                        title={
-                          stopped
-                            ? storeDescription(snapshot, store)
-                            : usernameOf(store)
-                        }
-                        onClick={(event) => {
-                          close(event);
-                          selectAccount(store);
-                        }}
-                      >
-                        <span
-                          className="av team"
-                          style={{ background: hues.get(store.id) }}
-                          aria-hidden="true"
+                      <div key={store.id}>
+                        <button
+                          type="button"
+                          className={[
+                            'acct',
+                            store.id === active?.id ? 'on' : '',
+                            stopped ? 'off' : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}
+                          title={
+                            stopped
+                              ? storeDescription(snapshot, store)
+                              : usernameOf(store)
+                          }
+                          onClick={() => {
+                            close();
+                            selectAccount(store);
+                          }}
                         >
-                          {usernameOf(store).slice(0, 1).toUpperCase()}
-                        </span>
-                        <span className="t">
-                          {usernameOf(store)}
-                          <small>{store.account}</small>
-                        </span>
+                          <span
+                            className="av team"
+                            style={{ background: hues.get(store.id) }}
+                            aria-hidden="true"
+                          >
+                            {usernameOf(store).slice(0, 1).toUpperCase()}
+                          </span>
+                          <span className="t">
+                            {usernameOf(store)}
+                            <small>{store.account}</small>
+                          </span>
+                          <span
+                            className={
+                              store.id === active?.id ? 'tick' : 'tick off'
+                            }
+                            aria-label={
+                              store.id === active?.id
+                                ? 'Current account'
+                                : undefined
+                            }
+                          >
+                            <Icon name="check" />
+                          </span>
+                        </button>
                         {stopped ? (
-                          <Chip tone="warn">
-                            {storeDescription(snapshot, store)}
-                          </Chip>
+                          <div className="warnline">
+                            <Icon name="alert" />
+                            {/* Place the recovery action after the explanation.
+                                A separate flex column leaves insufficient room
+                                for the reason at this width. */}
+                            <span className="t">
+                              {checkIn
+                                ? 'Stores are locked until you check this server.'
+                                : storeDescription(snapshot, store)}{' '}
+                              <button
+                                type="button"
+                                className="lnk"
+                                onClick={() => {
+                                  close();
+                                  onNavigate({
+                                    kind: 'settings',
+                                    section: 'servers',
+                                    profile: store.server,
+                                    store: store.id,
+                                  });
+                                }}
+                              >
+                                {checkIn ? 'Check in' : 'Server settings'}
+                              </button>
+                            </span>
+                          </div>
                         ) : null}
-                      </button>
+                      </div>
                     );
                   })}
               </div>
@@ -354,8 +464,8 @@ function AccountHeader({
             <div className="menu-separator" />
             <button
               type="button"
-              onClick={(event) => {
-                close(event);
+              onClick={() => {
+                close();
                 if (onReenter) onReenter();
                 else onNavigate({ kind: 'first-run', step: 'who' });
               }}
@@ -366,8 +476,8 @@ function AccountHeader({
             {onLock ? (
               <button
                 type="button"
-                onClick={(event) => {
-                  close(event);
+                onClick={() => {
+                  close();
                   onLock();
                 }}
               >
@@ -378,7 +488,7 @@ function AccountHeader({
           </Menu>
         </Popover>
       ) : null}
-    </>
+    </div>
   );
 }
 
@@ -421,13 +531,15 @@ export function Sidebar({
   onReenter,
   onLock,
   collapsed = false,
-  pinned = false,
-  onToggleCollapsed,
+  agent = 'ready',
+  nativeChrome = false,
+  blocked = false,
 }: SidebarProps): ReactNode {
   const chatInbox = useSidebarInbox();
-  const unread = railChatUnread(snapshot, chatInbox);
+  const unread = snapshot ? railChatUnread(snapshot, chatInbox) : null;
   const here = railTabOf(location);
   useEffect(() => {
+    if (blocked) return;
     const onKeyDown = (event: KeyboardEvent): void => {
       if (
         event.key !== 'Tab' ||
@@ -445,67 +557,72 @@ export function Sidebar({
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [location, onNavigate, onTabNavigate]);
+  }, [blocked, location, onNavigate, onTabNavigate]);
 
   return (
     <nav
-      className={[
-        'side',
-        'rail',
-        collapsed ? 'is-narrow' : '',
-        pinned ? 'is-pinned' : '',
-      ]
+      className={['side', 'rail', collapsed ? 'is-narrow' : '']
         .filter(Boolean)
         .join(' ')}
       aria-label="Main Navigation"
     >
-      <AccountHeader
-        snapshot={snapshot}
-        location={location}
-        account={account}
-        onNavigate={onNavigate}
-        onReenter={onReenter}
-        onLock={onLock}
-      />
-      <div className="rail-tabs">
-        {RAIL_TABS.map((tab) => (
-          <NavRow
-            key={tab.id}
-            active={here === tab.id}
-            glyph={<Icon name={tab.icon} />}
-            name={tab.label}
-            // The expanded rail already reads the label; a tooltip repeating it
-            // is noise.
-            title={collapsed ? tab.label : undefined}
-            dot={tab.id === 'people' && attention > 0}
-            tail={
-              tab.id === 'chat' && unread ? (
-                <span
-                  className="chat-unread"
-                  aria-label={unread.description}
-                  title={unread.description}
-                >
-                  {unread.label}
-                </span>
-              ) : undefined
-            }
-            onSelect={() => {
-              if (onTabNavigate) onTabNavigate(tab.id);
-              else onNavigate(tabLocation(tab));
-            }}
+      <TrafficStrip native={nativeChrome} />
+      <div className={blocked ? 'rail-body is-blocked' : 'rail-body'}>
+        {snapshot ? (
+          <AccountHeader
+            snapshot={snapshot}
+            location={location}
+            account={account}
+            attention={attention}
+            onNavigate={onNavigate}
+            onTabNavigate={onTabNavigate}
+            onReenter={onReenter}
+            onLock={onLock}
           />
-        ))}
+        ) : (
+          // No account is known yet. The header keeps its height so the tabs
+          // below it do not move once one is.
+          <div className="rail-head">
+            <div className="who who-empty">
+              <span className="avatar" aria-hidden="true" />
+            </div>
+          </div>
+        )}
+        <div className="rail-tabs">
+          {RAIL_TABS.map((tab) => (
+            <NavRow
+              key={tab.id}
+              active={here === tab.id}
+              glyph={<Icon name={tab.icon} />}
+              name={tab.label}
+              // The expanded rail already reads the label; a tooltip repeating
+              // it is noise.
+              title={collapsed ? tab.label : undefined}
+              disabled={blocked}
+              tail={
+                tab.id === 'chat' && unread ? (
+                  <span
+                    className="chat-unread"
+                    aria-label={unread.description}
+                    title={unread.description}
+                  >
+                    {unread.label}
+                  </span>
+                ) : undefined
+              }
+              onSelect={() => {
+                if (onTabNavigate) onTabNavigate(tab.id);
+                else onNavigate(tabLocation(tab));
+              }}
+            />
+          ))}
+        </div>
       </div>
       <div className="side-bottom">
         {status}
-        {onToggleCollapsed ? (
-          <div className="foot">
-            <CollapseToggle
-              collapsed={collapsed}
-              onToggle={onToggleCollapsed}
-            />
-          </div>
-        ) : null}
+        <div className="foot">
+          <AgentLight state={agent} />
+        </div>
       </div>
     </nav>
   );

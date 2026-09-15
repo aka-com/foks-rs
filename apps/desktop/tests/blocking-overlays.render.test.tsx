@@ -112,7 +112,7 @@ async function startupOverlay(
   };
   const rendered = ui.render(createElement(App, { bridge }));
   await ui.waitFor(() => {
-    assert.ok(document.querySelector('.app-lock-card'));
+    assert.ok(document.querySelector('.stopcard'));
   });
   return { rendered, bridge };
 }
@@ -141,7 +141,7 @@ async function shellOverlay(
   };
   const rendered = ui.render(createElement(App, { bridge }));
   await ui.waitFor(() => {
-    assert.ok(document.querySelector('.app'));
+    assert.ok(document.querySelector('.side.rail .who .t'));
   });
   current = snapshot;
   await ui.act(async () => {
@@ -149,7 +149,7 @@ async function shellOverlay(
     await Promise.resolve();
   });
   await ui.waitFor(() => {
-    assert.ok(document.querySelector('.stopwrap'));
+    assert.ok(document.querySelector('.stopveil'));
   });
   return { rendered, bridge };
 }
@@ -244,7 +244,7 @@ test('restart-required restarts the app from the mounted shell', async () => {
     },
   });
   assert.match(
-    document.querySelector('.stopwrap')?.textContent ?? '',
+    document.querySelector('.stopveil')?.textContent ?? '',
     /Please restart FOKS to open \/moved\/foks-rs\./,
   );
   const restart = await rendered.findByRole('button', { name: 'Restart FOKS' });
@@ -408,7 +408,7 @@ test('active maintenance overlay renders no action buttons', async () => {
     kind: 'export',
     phase: 'running',
   });
-  const dialog = document.querySelector('.stopwrap');
+  const dialog = document.querySelector('.stopveil');
   assert.ok(dialog);
   assert.match(dialog.textContent ?? '', /export · running/i);
   assert.equal(dialog.querySelectorAll('button').length, 0);

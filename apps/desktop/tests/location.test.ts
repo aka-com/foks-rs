@@ -15,6 +15,7 @@ import {
   encodeLocation,
   getState,
   locationHref,
+  parentLocation,
   railTabOf,
   sameLocation,
   setUrl,
@@ -902,4 +903,56 @@ test('remembered device pages follow a new acting account without reusing a key 
     kind: 'devices',
     store: 'acct:personal',
   });
+});
+
+/* ---------------------------------------------------------------- parents -- */
+
+test('a page inside a tab knows the page it returns to', () => {
+  assert.deepEqual(parentLocation({ kind: 'all' }), { kind: 'files' });
+  assert.deepEqual(parentLocation({ kind: 'store', ref: 'team:eng' }), {
+    kind: 'files',
+  });
+  assert.deepEqual(
+    parentLocation({ kind: 'group-settings', ref: 'team:eng', tab: 'people' }),
+    { kind: 'teams' },
+  );
+  // A device's own page returns to the list, keeping the account it was read
+  // through and the section it was listed under.
+  assert.deepEqual(
+    parentLocation({
+      kind: 'devices',
+      store: 'acct:work',
+      section: 'keys',
+      device: 'yubi:work',
+    }),
+    { kind: 'devices', section: 'keys', store: 'acct:work' },
+  );
+  assert.deepEqual(
+    parentLocation({ kind: 'devices', store: 'acct:work', section: 'keys' }),
+    { kind: 'devices', store: 'acct:work' },
+  );
+  assert.deepEqual(
+    parentLocation({
+      kind: 'settings',
+      section: 'servers',
+      profile: 'personal',
+      store: 'acct:personal',
+    }),
+    { kind: 'settings', store: 'acct:personal' },
+  );
+});
+
+test('a tab root has no parent, and neither does an account parameter', () => {
+  for (const location of [
+    { kind: 'files' },
+    { kind: 'teams', store: 'acct:work' },
+    { kind: 'people', store: 'acct:personal' },
+    { kind: 'devices', store: 'acct:work' },
+    { kind: 'settings', store: 'acct:work' },
+    // The Chat tab resolves a conversation for every address, so there is no
+    // channel-less page to go back to.
+    { kind: 'chat', ref: 'team:household', channel: 'a'.repeat(32) },
+    { kind: 'first-run', step: 'who' },
+  ] as Location[])
+    assert.equal(parentLocation(location), null, `${location.kind} is a root`);
 });

@@ -24,14 +24,6 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 
 /* Window container */
 .window{position:relative;width:min(1180px,96vw);height:min(760px,88vh);background:var(--main-surface);border-radius:var(--radius-lg);border:1px solid rgba(0,0,0,.16);box-shadow:0 24px 60px rgba(15,20,45,.26),0 2px 8px rgba(15,20,45,.12);overflow:hidden;display:flex;flex-direction:column}
-.titlebar{height:44px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--surface);border-bottom:1px solid var(--line-soft);user-select:none}
-.lights{display:flex;gap:8px;margin-right:6px}.light{width:12px;height:12px;border-radius:50%}
-.light.r{background:#ff5f57}.light.y{background:#febc2e}.light.g{background:#28c840}
-.titlebar .brand{font-weight:700;font-size:13.5px;letter-spacing:-.01em}
-.titlebar .spacer{flex:1}
-.agent{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
-.agent i{width:7px;height:7px;border-radius:50%;background:var(--ok-solid)}
-.agent.warn i{background:var(--warning-dot)}.agent.lost i{background:var(--danger)}
 /* The shell grid. Its layout custom properties are declared here rather than
    on `:root` because they describe this grid alone. The sidebar animates its
    own width instead of the grid track, which avoids interpolating
@@ -39,7 +31,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .app{flex:1;min-height:0;display:grid;position:relative;--side-track:auto;--side-w-open:224px;--side-w:var(--side-w-open);--side-pad:10px;--side-head-pad:10px;--side-open-content:calc(var(--side-w-open) - var(--side-pad) * 2);--details-w:300px;grid-template-columns:var(--side-track) minmax(0,1fr);transition:grid-template-columns .2s ease}
 .app.with-details{grid-template-columns:var(--side-track) minmax(0,1fr) var(--details-w)}
 /* Collapsed rail width */
-.window:has(>.app.side-narrow){--side-w:46px}
+.app.side-narrow{--side-w:56px}
 @media (prefers-reduced-motion:reduce){.app{transition:none}}
 
 /* Sidebar */
@@ -63,115 +55,116 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side .foot .nav{font-size:13px}
 
 /* Collapsed rail. Collapsing is CSS only: the DOM is identical in both states,
-   and the width is the one the reader chose from the rail — the rail does not
+   and the width is the one the reader chose from the topbar — the rail does not
    expand on hover or on focus. */
 .side{width:var(--side-w);transition:width .18s ease;overflow-x:hidden}
 /* Adjacent row spacing */
 .side .nav+.nav{margin-top:3px}
 .side .nav{white-space:nowrap}
 .side .nav .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:1;transition:opacity .12s ease .04s}
-/* Row padding is identical across states so the glyphs stay put. `overflow:
-   clip` plus a clip margin lets a count dot draw the half that hangs outside
-   the rail; the collapsed rail does not scroll. */
-.side.is-narrow:not(:hover):not(:focus-within),
-.side.is-narrow.is-pinned:not(:focus-within){overflow:clip;overflow-clip-margin:12px}
+/* Narrow rail clip */
+.side.is-narrow{overflow:clip;overflow-clip-margin:12px}
 /* Label hide transition */
-.side.is-narrow:not(:hover):not(:focus-within) .nav .t,
-.side.is-narrow.is-pinned:not(:focus-within) .nav .t{flex:0 0 0;width:0;overflow:hidden;opacity:0;transition:opacity .1s ease}
-.side.is-narrow:not(:hover):not(:focus-within) h6,
-.side.is-narrow.is-pinned:not(:focus-within) h6{height:0;padding-top:0;padding-bottom:0;opacity:0}
+.side.is-narrow .nav .t{flex:0 0 0;width:0;overflow:hidden;opacity:0;transition:opacity .1s ease}
+.side.is-narrow h6{height:0;padding-top:0;padding-bottom:0;opacity:0}
 /* Center the glyph: drop the row gap and the horizontal padding so a hidden
    label cannot shift it. */
-.side.is-narrow:not(:hover):not(:focus-within) .nav,
-.side.is-narrow.is-pinned:not(:focus-within) .nav{position:relative;justify-content:center;padding-left:0;padding-right:0;gap:0}
-.side.is-narrow:not(:hover):not(:focus-within) .fn,
-.side.is-narrow.is-pinned:not(:focus-within) .fn{display:none}
+.side.is-narrow .nav{position:relative;justify-content:center;padding-left:0;padding-right:0;gap:0}
+.side.is-narrow .fn{display:none}
 /* A count becomes a 7px dot on the glyph's top-right corner. `font-size:0`
    drops the text visually and leaves it in the accessibility tree. */
-.side.is-narrow:not(:hover):not(:focus-within) .nav>.badge,
-.side.is-narrow.is-pinned:not(:focus-within) .nav>.badge,
-.side.is-narrow:not(:hover):not(:focus-within) .nav>.chat-unread,
-.side.is-narrow.is-pinned:not(:focus-within) .nav>.chat-unread{position:absolute;top:calc(50% - 8.5px);left:calc(50% + 9px);right:auto;transform:translate(-50%,-50%);width:7px;min-width:0;height:7px;padding:0;border-radius:var(--radius-pill);font-size:0;line-height:0;overflow:hidden;margin:0;box-shadow:0 0 0 1.5px var(--surface)}
-.side.is-narrow:not(:hover):not(:focus-within) .nav.on>.badge,
-.side.is-narrow.is-pinned:not(:focus-within) .nav.on>.badge{box-shadow:0 0 0 1.5px var(--accent-wash-2)}
-.side.is-narrow:not(:hover):not(:focus-within) .nav .dot,
-.side.is-narrow.is-pinned:not(:focus-within) .nav .dot{position:absolute;bottom:3px;right:3px}
-/* The expanded rail floats over the main column; its grid track stays pinned
-   to the collapsed width below. */
-.side.is-narrow{position:relative;z-index:5;scrollbar-width:none}
-.side.is-narrow::-webkit-scrollbar{display:none}
-.side.is-narrow:not(.is-pinned):hover,
-.side.is-narrow:focus-within{width:var(--side-w-open);overflow-x:hidden;overflow-y:auto;box-shadow:0 10px 28px rgba(15,20,45,.07);border-right-color:var(--line)}
-.app:has(>.side.is-narrow){--side-track:var(--side-w)}
-/* Children are laid out at the open content width while collapsed, so a peek
-   reveals rather than reflows. Headings size their content box, so they get
-   the padding-adjusted width. */
-.side.is-narrow:not(.is-pinned):hover>:not(h6),
-.side.is-narrow:focus-within>:not(h6){width:var(--side-open-content)}
-.side.is-narrow:not(.is-pinned):hover>h6,
-.side.is-narrow:focus-within>h6{width:calc(var(--side-open-content) - var(--side-head-pad) * 2)}
-.side .side-collapse{color:var(--faint)}
-.side .side-collapse .ic{color:inherit}
+.side.is-narrow .nav>.badge{position:absolute;top:calc(50% - 8.5px);left:calc(50% + 9px);right:auto;transform:translate(-50%,-50%);width:7px;min-width:0;height:7px;padding:0;border-radius:var(--radius-pill);font-size:0;line-height:0;overflow:hidden;margin:0;box-shadow:0 0 0 1.5px var(--surface)}
+.side.is-narrow .nav.on>.badge{box-shadow:0 0 0 1.5px var(--accent-wash-2)}
 @media (prefers-reduced-motion:reduce){
   .side,.side h6,.side .nav .t,.side .nav .t small{transition:none}
 }
 
 /* ---------- the navigation rail ----------
-   `.side.rail` is the six-tab rail. First run replaces it with its own step
-   list, which is `.side` alone, so every blue rule below is scoped to `.rail`
-   and the collapse machinery above is shared. The rail is 200px open and
-   `--side-w` (56px) collapsed. */
+   `.side.rail` is the six-tab rail: the window's drag strip, the account
+   header, the tabs, and the agent light at the foot. There is no title bar
+   above it. First run replaces it with its own step list, which is `.side`
+   alone, so every blue rule below is scoped to `.rail` and the collapse
+   machinery above is shared. The rail is 200px open and 56px collapsed, and it
+   never expands on hover: the width is the one the topbar's toggle chose. */
 .app:has(>.side.rail){--side-w-open:200px}
 .side.rail{--rail-badge:var(--unread);background:var(--rail);border-right-color:rgba(0,0,0,.12);color:var(--rail-ink);padding:0;overflow-x:hidden;overflow-y:auto;user-select:none}
-.side.rail .nav{color:var(--rail-ink);border-radius:0;border-left:3px solid transparent;padding:10px 16px 10px 13px;gap:12px;font-weight:500}
+/* Window drag strip */
+.traffic{flex:none;display:flex;align-items:center;min-height:32px;padding:14px 14px 6px}
+.traffic .lights{display:flex;gap:8px}
+.traffic .light{width:12px;height:12px;border-radius:50%;background:rgba(255,255,255,.35)}
+/* First run's step list is the pale sidebar, and it bleeds the strip out to
+   the pane's own edges rather than sitting inside its padding. */
+.side:not(.rail) .traffic{margin:-12px calc(var(--side-pad) * -1) 0}
+.side:not(.rail) .traffic .light{background:rgba(0,0,0,.12)}
+.side.rail .nav{color:var(--rail-ink);border-radius:0;border-left:3px solid transparent;padding:11px 18px;gap:14px;font-size:14px;font-weight:500}
 .side.rail .nav:hover{background:rgba(255,255,255,.08);color:#fff}
 .side.rail .nav.on{background:var(--rail-active);border-left-color:#fff;color:#fff;font-weight:600}
-.side.rail .nav .ic,.side.rail .nav.on .ic{color:inherit}
+.side.rail .nav .ic,.side.rail .nav.on .ic{color:inherit;font-size:20px;width:20px}
 .side.rail .nav+.nav{margin-top:0}
-.side.rail .nav .dot,.side.rail .nav .chat-unread{margin-left:auto}
-.side.rail .nav .dot{width:8px;height:8px;background:var(--rail-badge)}
-.side.rail .nav .chat-unread{min-width:20px;height:20px;padding:0 6px;border-radius:var(--radius-pill);background:var(--rail-badge);color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center}
-.side.rail .rail-tabs{display:flex;flex-direction:column;padding:8px 0}
-/* The account header: the active account's username, its server, a chevron. */
-.side.rail .who{display:flex;align-items:center;gap:9px;width:100%;padding:12px 13px 14px;border-bottom:1px solid var(--rail-line);text-align:left;color:inherit}
+.side.rail .nav .chat-unread{margin-left:auto;min-width:20px;height:20px;padding:0 6px;border-radius:var(--radius-pill);background:var(--rail-badge);color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center}
+.side.rail .rail-tabs{display:flex;flex-direction:column;padding:10px 0}
+/* The header and the tabs, dimmed together while a blocking state owns the
+   window: the frame is drawn, and none of it acts. */
+.side.rail .rail-body.is-blocked{opacity:.45;pointer-events:none}
+/* Account header */
+.side.rail .rail-head{position:relative;border-bottom:1px solid var(--rail-line)}
+.side.rail .who{display:flex;align-items:center;gap:10px;width:100%;padding:10px 14px 14px;text-align:left;color:inherit}
 .side.rail .who:hover,.side.rail .who[aria-expanded="true"]{background:rgba(255,255,255,.1)}
-.side.rail .who .avatar{width:30px;height:30px;flex:none;border-radius:50%;background:#fff;color:var(--rail);font-weight:700;font-size:12.5px;display:grid;place-items:center}
+.side.rail .who .avatar{width:32px;height:32px;flex:none;border-radius:50%;background:#fff;color:var(--rail);font-weight:700;font-size:13px;display:grid;place-items:center}
+.side.rail .who.who-empty .avatar{background:rgba(255,255,255,.35)}
 .side.rail .who .t{flex:1;min-width:0;line-height:1.2;overflow:hidden}
 .side.rail .who .t b{display:block;color:#fff;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .side.rail .who .t small{display:block;font-size:12px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .side.rail .who .chev{display:grid;place-items:center;opacity:.8;flex:none}
+.side.rail .attn{position:absolute;left:38px;top:7px;width:11px;height:11px;padding:0;border-radius:50%;background:var(--unread);border:2px solid var(--rail)}
+.side.rail .attn:hover{background:#ff8a4a}
 /* Status slot */
-.side.rail .side-bottom{padding-bottom:6px}
+.side.rail .side-bottom{padding-bottom:0}
 .side.rail .side-bottom>.nav{font-size:12.5px;padding:8px 8px 8px 12px;gap:7px}
 .side.rail .side-bottom>.nav .ic{font-size:15px;width:16px}
 .side.rail .side-bottom>.nav .badge{flex:none;padding:0 5px;font-size:12px}
 .side.rail .side-note{margin:8px 13px 2px;font-size:12px;line-height:1.45;color:var(--rail-ink);opacity:.85}
-.side.rail .foot{border-top:1px solid var(--rail-line);padding-top:6px}
-.side.rail .foot .nav,.side.rail .side-collapse{color:var(--rail-ink);opacity:.85}
-.side.rail .foot .nav:hover,.side.rail .side-collapse:hover{opacity:1}
+.side.rail .foot{border-top:1px solid var(--rail-line);padding-top:0}
 .side.rail h6{color:rgba(255,255,255,.7);padding-left:16px}
 .side.rail .badge{color:#fff;background:rgba(255,255,255,.2)}
-/* Collapsed: the header centers its avatar and the labels leave with the
-   shared `.side.is-narrow` rules. */
-.side.rail.is-narrow:not(:hover):not(:focus-within) .who,
-.side.rail.is-narrow.is-pinned:not(:focus-within) .who{justify-content:center;padding-left:0;padding-right:0;gap:0}
-.side.rail.is-narrow:not(:hover):not(:focus-within) .who .t,
-.side.rail.is-narrow.is-pinned:not(:focus-within) .who .t,
-.side.rail.is-narrow:not(:hover):not(:focus-within) .who .chev,
-.side.rail.is-narrow.is-pinned:not(:focus-within) .who .chev{display:none}
-.side.rail.is-narrow:not(:hover):not(:focus-within) .nav,
-.side.rail.is-narrow.is-pinned:not(:focus-within) .nav{border-left-color:transparent}
-.side.rail.is-narrow:not(:hover):not(:focus-within) .nav>.chat-unread,
-.side.rail.is-narrow.is-pinned:not(:focus-within) .nav>.chat-unread{background:var(--rail-badge);box-shadow:0 0 0 1.5px var(--rail)}
-/* The account menu: the app's `.menu` draws the box; these are its rows. */
-.rail-account-menu{width:244px}
-.rail-account-menu .cap{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
-.rail-account-menu button .av{border-color:#fff}
-.rail-account-menu button.off{opacity:.55}
-.rail-account-menu button .t{flex:1;min-width:0;line-height:1.25}
-.rail-account-menu button .chip{flex:none;margin-left:auto;font-size:12px}
-.rail-account-menu button .t small{display:block;font-size:12px;font-weight:400;color:var(--muted)}
-.rail-account-menu button.on .t small{color:inherit;opacity:.8}
+/* Agent status indicator */
+.side.rail .status{display:flex;align-items:center;gap:8px;padding:10px 18px 14px;font-size:12px;color:var(--rail-ink);opacity:.78}
+.side.rail .status i{width:7px;height:7px;border-radius:50%;background:var(--ok-solid);flex:none}
+.side.rail .status .t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:normal;color:inherit}
+.side.rail .status.agent-starting i{background:var(--warning-dot);animation:rail-pulse 1.1s ease-in-out infinite}
+.side.rail .status.agent-stopped i{background:#ff5f57}
+.side.rail .status.agent-locked i{background:rgba(255,255,255,.5)}
+@keyframes rail-pulse{0%,100%{opacity:.25}50%{opacity:1}}
+@media (prefers-reduced-motion:reduce){.side.rail .status.agent-starting i{animation:none}}
+/* Collapsed: the header centers its avatar, the labels leave with the shared
+   `.side.is-narrow` rules, and the unread count rides the glyph's corner as a
+   count rather than shrinking to a dot. */
+.side.rail.is-narrow .traffic{padding:14px 6px 6px}
+.side.rail.is-narrow .traffic .lights{gap:5px}
+.side.rail.is-narrow .who{justify-content:center;padding-left:0;padding-right:0;gap:0}
+.side.rail.is-narrow .who .t,.side.rail.is-narrow .who .chev{display:none}
+.side.rail.is-narrow .attn{left:36px}
+.side.rail.is-narrow .nav>.chat-unread{position:absolute;top:2px;left:calc(50% + 2px);margin:0;box-shadow:0 0 0 2px var(--rail)}
+.side.rail.is-narrow .status{justify-content:center;padding-left:0;padding-right:0;gap:0}
+.side.rail.is-narrow .status .t{display:none}
+/* Account menu */
+.rail-account-menu{width:296px}
+.rail-account-menu .cap{font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rail-account-menu .cap .host{font-weight:500;letter-spacing:0;text-transform:none;color:var(--faint)}
+.rail-account-menu .acct{align-items:flex-start;gap:9px}
+.rail-account-menu .acct .av{border-color:#fff;margin-top:1px}
+.rail-account-menu .acct .t{flex:1;min-width:0;line-height:1.3}
+.rail-account-menu .acct .t small{display:block;font-size:12px;font-weight:400;color:var(--muted)}
+.rail-account-menu .acct.on .t small{color:inherit;opacity:.8}
+.rail-account-menu .acct .tick{flex:none;margin-top:2px;color:var(--accent-ink);font-size:15px}
+.rail-account-menu .acct.on .tick{color:inherit}
+.rail-account-menu .acct .tick.off{visibility:hidden}
+.rail-account-menu .acct.off .av,.rail-account-menu .acct.off .t{opacity:.5}
+.rail-account-menu .warnline{display:flex;align-items:flex-start;gap:5px;margin:-2px 10px 6px 45px;color:var(--amber-ink);font-size:12px;line-height:1.4}
+.rail-account-menu .warnline .ic{flex:none;margin-top:2px;font-size:13px}
+.rail-account-menu .warnline .t{flex:1;min-width:0}
+/* Inline link button */
+.rail-account-menu .warnline .lnk{display:inline;width:auto;color:inherit;font-size:12px;font-weight:600;text-decoration:underline;padding:0}
 .menu .menu-separator{border-top:1px solid var(--line-soft);margin:6px 0}
 
 /* Scrollbars. The thumb shows while the pointer is over a pane, and for 700ms
@@ -194,19 +187,38 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 
 /* Main content area */
 .main{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;background:#fff;container-type:inline-size}
-.path{display:flex;align-items:center;gap:10px;padding:8px 20px;min-height:48px;border-bottom:1px solid var(--line-soft);background:#fff}
+/* Topbar */
+.topbar{height:44px;flex:none;display:flex;align-items:center;gap:8px;padding:0 20px 0 16px;border-bottom:1px solid var(--line-soft);user-select:none}
+.topbar .back{width:28px;height:28px;flex:none;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--muted);font-size:17px}
+.topbar .back:hover{background:var(--hover);color:var(--ink)}
+.topbar .back[disabled]{opacity:.35;cursor:default}
+.topbar .back[disabled]:hover{background:none;color:var(--muted)}
+/* Breadcrumbs */
+.topbar .crumbs{display:block;min-width:0;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topbar .crumbs b{color:var(--ink);font-weight:600}
+/* Breadcrumb separator */
+.topbar .crumbs .sep{display:inline;transform:none;font-style:normal;margin:0 5px;color:var(--faint)}
+.topbar .grow{flex:1 1 20px;min-width:8px;align-self:stretch}
+/* Search button */
+.topbar .topsearch{display:flex;align-items:center;gap:8px;flex:0 1 240px;width:240px;min-width:120px;height:32px;padding:0 10px;border-radius:var(--radius-md);background:var(--surface);border:1px solid transparent;color:var(--muted);font-size:13px;transition:background .12s ease,border-color .12s ease,color .12s ease}
+.topbar .topsearch:hover{background:var(--btn-hover);border-color:var(--line-mid);color:var(--ink)}
+.topbar .topsearch[disabled]{opacity:.55;cursor:default}
+.topbar .topsearch[disabled]:hover{background:var(--surface)}
+.topbar .topsearch .ic{font-size:16px;flex:none}
+.topbar .topsearch .t{flex:1;min-width:0;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topbar .topsearch kbd{flex:none;font:12px var(--sans);color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:1px 5px;background:#fff}
+.topbar .btn{flex:none}
+.topbar .btn.icon{width:30px;height:30px}
+/* Page header */
+.path{display:flex;align-items:center;gap:10px;padding:14px 20px 10px;background:#fff}
 .header-action{display:flex;align-items:center;gap:6px;margin-left:auto;flex:none}
 .header-action .btn.cap{height:28px;font-size:13px;flex:none}
 /* Header title layout */
 .loc{display:flex;align-items:center;gap:9px;min-width:0;flex:1 1 auto}
 .loc-copy{min-width:0;flex:1 1 auto;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.loc h1{display:inline;font-size:15px;font-weight:650;letter-spacing:-.01em}
-.loc small{display:inline;font-size:12.5px;color:var(--muted);margin-left:9px}
+.loc h1{display:inline;font-size:20px;font-weight:700;letter-spacing:-.01em}
+.loc small{display:inline;font-size:13px;color:var(--muted);margin-left:9px}
 .loc .btn{height:28px;font-size:13px;flex:none}
-/* The header's back chevron: an items page returns to Files, a group page to
-   Teams. */
-.path .page-back{width:28px;height:28px;flex:none;align-self:center;margin-right:2px;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--muted);font-size:17px}
-.path .page-back:hover{background:var(--hover);color:var(--ink)}
 .search{position:relative;width:230px;flex:0 6 230px;min-width:124px}
 .search input{width:100%;height:32px;border:1px solid var(--line-field);border-radius:var(--radius-md);padding:0 54px 0 32px;background:var(--surface);outline:none}
 .search input:focus{border-color:var(--accent-border);background:#fff;box-shadow:0 0 0 3px var(--accent-wash)}
@@ -345,6 +357,29 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .notice h2{font-size:17px;font-weight:650;letter-spacing:-.01em;margin-bottom:8px}
 .notice p{color:var(--ink-3);margin-bottom:10px}.notice p:last-of-type{margin-bottom:0}.notice .fn{font-size:12.5px;color:var(--muted);margin-top:10px}
 .notice .acts2{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:14px}
+/* The "needs attention" card at the top of Accounts (screens/people-screen).
+   One amber card holding the count in its head and one row per thing to
+   attend to: what the reader loses, where it is, and the button that clears
+   it. The card sits inside `.settings-main`, which already holds the page's
+   margins, so it carries none of its own horizontally. */
+.people-attention .attn-card{margin:4px 0 14px;border:1px solid var(--amber-border);border-radius:var(--radius-lg);background:var(--amber-wash);overflow:hidden}
+.attn-head{display:flex;align-items:center;gap:8px;padding:10px 14px;font-weight:600}
+.attn-head .ic{font-size:16px;flex:none;color:var(--warning-dot)}
+.attn-head .grow{flex:1}
+.attn-head .n{flex:none;font-size:12px;font-weight:600;color:var(--amber-ink);background:rgba(255,190,50,.28);border-radius:var(--radius-pill);padding:1px 8px}
+.attn-row{display:flex;align-items:flex-start;gap:11px;padding:11px 14px;border-top:1px solid var(--amber-border)}
+.attn-row .mk{width:26px;height:26px;flex:none;border-radius:var(--radius-sm);display:grid;place-items:center;background:rgba(255,190,50,.3);color:var(--amber-ink)}
+.attn-row .mk .ic{font-size:15px}
+.attn-row .t{flex:1;min-width:0}
+.attn-row .t b{display:block;font-weight:600}
+.attn-row .t small{display:block;margin-top:1px;font-size:12.5px;line-height:1.4;color:var(--muted-2)}
+/* The place the action opens, named as the reader would read it aloud. */
+.attn-row .t .go{display:inline-block;margin-top:4px;padding:0;font-size:12px;color:var(--accent-ink)}
+.attn-row .t .go:hover{text-decoration:underline}
+.attn-row .attn-acts{display:flex;align-items:center;gap:6px;flex:none}
+/* Nothing to attend to: one green line, not an empty card. */
+.people-attention .allclear{display:flex;align-items:center;gap:8px;margin:4px 0 14px;padding:10px 14px;border-radius:var(--radius-lg);background:var(--ok-wash);color:var(--ok-ink);font-weight:500}
+.people-attention .allclear .ic{font-size:16px;flex:none}
 .notice .acts2 .btn{line-height:1}
 .notice.info{border-color:var(--line);background:var(--surface)}
 .notice.info .who{color:var(--muted)}
@@ -378,6 +413,34 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 /* Full-window error overlay when backend connection is lost */
 .stopwrap{position:absolute;inset:44px 0 0 0;background:var(--main-surface);z-index:12;display:flex;flex-direction:column;overflow:auto;padding:0 20px}
 .stopwrap .notice{margin-top:120px}
+
+/* ---------- blocking states ----------
+   Three takeovers, each leaving as much of the shell readable as it safely
+   can. Starting draws the frame and puts the spinner in the content area; a
+   stopped agent veils the page below the topbar, so the reader can still see
+   which page they were on; the lock covers the rail as well, because the rail
+   names accounts and counts unread messages. */
+.booting{flex:1;min-height:0;display:grid;place-items:center;align-content:center;gap:12px;padding:20px;text-align:center;color:var(--muted)}
+.booting b{color:var(--ink);font-weight:600;font-size:15px}
+.booting .line{font-size:12.5px;max-width:420px}
+.booting .spin{width:26px;height:26px;border:2.5px solid var(--line-mid);border-top-color:var(--accent);border-radius:50%;animation:btn-spin .8s linear infinite}
+@media (prefers-reduced-motion:reduce){.booting .spin{animation:none}}
+.stopveil{position:absolute;inset:44px 0 0 var(--side-w);z-index:15;display:grid;place-items:center;padding:20px;background:color-mix(in srgb,var(--main-surface) 84%,transparent);backdrop-filter:blur(2px)}
+.stopcard{display:block;width:min(470px,100%);max-height:100%;overflow:auto;padding:22px 24px;background:var(--main-surface);box-shadow:var(--shadow-sheet)}
+.stopcard h2{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:17px;font-weight:650;letter-spacing:-.01em}
+.stopcard h2 .ic{flex:none;font-size:18px;color:var(--danger-ink)}
+.stopcard p{margin-bottom:10px;color:var(--ink-3);line-height:1.5}
+.stopcard p.calm{margin-top:12px;color:var(--muted);font-size:12.5px}
+.stopcard .copybox{margin-bottom:6px}
+.stopcard .acts2{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.lock-back{position:absolute;inset:0;z-index:40;display:grid;place-items:center;padding:20px;background:rgba(28,30,44,.55);backdrop-filter:blur(6px)}
+.lockcard{display:block;width:min(400px,100%);padding:26px 26px 22px;text-align:center;background:var(--main-surface);box-shadow:var(--shadow-sheet)}
+.lockcard .glyph{width:56px;height:56px;margin:0 auto 14px;border-radius:50%;display:grid;place-items:center;background:var(--accent-wash-2);color:var(--accent-ink);font-size:26px}
+.lockcard .glyph.warn{background:var(--danger-wash);color:var(--danger-ink)}
+.lockcard h2{margin-bottom:6px;font-size:18px;font-weight:650;letter-spacing:-.01em}
+.lockcard p{margin-bottom:16px;color:var(--muted-2);line-height:1.5}
+.lockcard .action-error{margin:-6px 0 14px}
+.lockcard .btn{width:100%;height:34px;justify-content:center}
 
 /* Multi-step flow pane */
 .pane{max-width:700px;padding-top:6px}.pane.wide{max-width:880px}

@@ -482,10 +482,35 @@ test('an attention card carries the route to where it is resolved', async () => 
     ref: 'team:eng',
     tab: 'people',
   });
-  // A card that leads somewhere says where, and keeps the agent's own word
-  // for what it is asking.
-  assert.ok(rendered.getByText('Required action: Restore access'));
-  assert.ok(rendered.getByText('Required action: Check status'));
+  // A row that leads somewhere names the place, rather than repeating the
+  // agent's word for the action.
+  assert.ok(
+    rendered.getByRole('button', { name: 'Teams › Engineering › Members' }),
+  );
+  assert.equal(rendered.queryByText(/^Required action/), null);
+  // The place the row names is the place its action button opens.
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      rendered.getByRole('button', { name: 'Settings › Servers › Acme' }),
+    );
+  });
+  assert.deepEqual(chosen.at(-1), {
+    kind: 'settings',
+    section: 'servers',
+    profile: 'acme',
+  });
+});
+
+test('with nothing open the card is one line and no count', async () => {
+  const snapshot = await fixture();
+  const { rendered } = await renderPeople({ ...snapshot, notifications: [] });
+
+  assert.ok(rendered.getByText('Nothing needs attention.'));
+  assert.equal(rendered.queryByText('Needs attention'), null);
+  assert.equal(
+    rendered.container.querySelector('.people-attention .attn-card'),
+    null,
+  );
 });
 
 test('a team note with the same alias on two profiles routes to neither', async () => {

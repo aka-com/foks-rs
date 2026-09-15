@@ -25,7 +25,7 @@ import {
   maintenanceOutcomeMessage,
   type AgentLifecycle,
 } from './agent-lifecycle';
-import { Button, CopyBox } from './components';
+import { Button, CopyBox, Icon } from './components';
 import {
   FIRST_RUN_CHECKPOINT_KEY,
   completedFirstRunSteps,
@@ -59,12 +59,15 @@ import {
 import type { Item, AgentSnapshot } from './model';
 import { reconcileMutationFailure } from './mutation-recovery';
 import type { MutationFailureHandler } from './mutation-recovery';
-import { Sidebar } from './shell/sidebar';
+import { Sidebar, railAgentState } from './shell/sidebar';
+import type { RailAgentState } from './shell/sidebar';
+import { Topbar } from './shell/topbar';
+import { SearchPalette, useSearchShortcut } from './shell/search-palette';
+import type { SearchChannel } from './shell/search-palette';
+import { useSidebarInbox } from './chat/inbox-provider';
 import {
   rememberSideCollapsed,
-  rememberSidePinned,
   storedSideCollapsedPref,
-  storedSidePinnedPref,
 } from './sidebar-prefs';
 import { PeopleScreen } from './screens/people-screen';
 import { DevicesScreen } from './screens/devices-screen';
@@ -96,9 +99,6 @@ import {
   systemLeaseExpiryClock,
 } from './scheduling/lease-expiry';
 import type { LeaseExpiryClock } from './scheduling/lease-expiry';
-
-/** The app's name, as the title bar and the first-run sidebar write it. */
-export const APP_NAME = 'FOKS';
 
 /** The scene the address bar asks for, or the shell's own starting point. */
 function initialScene(): Scene {
@@ -178,14 +178,18 @@ function AgentStopNotice({
   );
   const actions =
     lifecycle.state === 'restart-required' ? (
-      <Button
-        variant="primary"
-        onClick={() => {
-          void bridge.restartApp().catch(report);
-        }}
-      >
-        Restart FOKS
-      </Button>
+      // A blocking restart state provides both restart and quit actions.
+      <>
+        <Button
+          variant="primary"
+          onClick={() => {
+            void bridge.restartApp().catch(report);
+          }}
+        >
+          Restart FOKS
+        </Button>
+        {quit}
+      </>
     ) : lifecycle.state === 'recovery-required' ? (
       quit
     ) : lifecycle.state === 'restoration-failed' ? (
@@ -215,34 +219,151 @@ function AgentStopNotice({
             </CopyBox>
           ))
         : null}
+      {lifecycle.state === 'restart-required' ? (
+        <p className="calm">
+          Your vaults remain on this Mac and on their configured servers.
+        </p>
+      ) : null}
       {failure ? (
-        <p
-          className={placement === 'startup' ? 'app-lock-error' : 'fn'}
-          role="alert"
-        >
+        <p className="action-error" role="alert">
           {failure}
         </p>
       ) : null}
       {actions ? <div className="acts2">{actions}</div> : null}
     </>
   );
+  const card = (
+    <div className="card stopcard">
+      <h2>
+        <Icon name="alert" />
+        {label}
+      </h2>
+      {body}
+    </div>
+  );
+  // Before the shell mounts there is no overlay environment to isolate the
+  // background from, and the frame behind this card is already inert.
   if (placement === 'startup') {
     return (
-      <div className="app-lock" role="alertdialog" aria-label={label}>
-        <div className="app-lock-card">
-          <h1>{label}</h1>
-          {body}
-        </div>
+      <div
+        className="stopveil"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={label}
+      >
+        {card}
       </div>
     );
   }
   return (
-    <Dialog className="stopwrap" role="alertdialog" aria-label={label}>
-      <div className="notice stop">
-        <h2>{label}</h2>
-        {body}
-      </div>
+    <Dialog className="stopveil" role="alertdialog" aria-label={label}>
+      {card}
     </Dialog>
+  );
+}
+
+/**
+ * The shell's frame with nothing in it: the rail and the topbar, dimmed and
+ * inert, around whatever a blocking state puts in the content area. Starting,
+ * stopped and locked all draw it, so the window keeps its shape from the first
+ * paint to the first page.
+ */
+function BlockedShell({
+  bridge,
+  agent,
+  children,
+  overlay,
+}: {
+  bridge?: Bridge | null;
+  agent: RailAgentState;
+  children?: ReactNode;
+  overlay?: ReactNode;
+}): ReactNode {
+  const nowhere = (): void => undefined;
+  return (
+    <div
+      className={[
+        'window',
+        bridge?.native ? 'native-window' : 'web-mock-window',
+      ].join(' ')}
+    >
+      <div className="app">
+        <Sidebar
+          location={{ kind: 'files' }}
+          onNavigate={nowhere}
+          agent={agent}
+          nativeChrome={Boolean(bridge?.native)}
+          blocked
+        />
+        <main className="main">
+          <Topbar
+            location={{ kind: 'files' }}
+            onNavigate={nowhere}
+            collapsed={false}
+            blocked
+          />
+          {children}
+        </main>
+        {overlay}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Mounts the search palette inside the chat inbox provider to share cached
+ * channel names and keep search results consistent with rail unread badges.
+ */
+function ShellSearch({
+  snapshot,
+  open,
+  onClose,
+  onNavigate,
+  onOpenItem,
+}: {
+  snapshot: AgentSnapshot;
+  open: boolean;
+  onClose: () => void;
+  onNavigate: (location: Location) => void;
+  onOpenItem: (store: string, path: string) => void;
+}): ReactNode {
+  const inbox = useSidebarInbox();
+  const channels = useMemo(() => {
+    const found: SearchChannel[] = [];
+    for (const [store, team] of inbox)
+      for (const conversation of team.data?.conversations ?? []) {
+        if (conversation.hidden) continue;
+        found.push({
+          store,
+          name: conversation.channel.name,
+          id: conversation.channel.id,
+        });
+      }
+    return found;
+  }, [inbox]);
+  return (
+    <SearchPalette
+      snapshot={snapshot}
+      open={open}
+      onClose={onClose}
+      onNavigate={onNavigate}
+      onOpenItem={onOpenItem}
+      channels={channels}
+    />
+  );
+}
+
+/** The content area while the agent starts. */
+function StartingScreen(): ReactNode {
+  return (
+    <div className="booting" role="status">
+      <span className="spin" aria-hidden="true" />
+      <b>Starting the FOKS agent…</b>
+      <span className="line">
+        Startup usually takes a few seconds. Your vaults remain encrypted until
+        startup completes.
+      </span>
+    </div>
   );
 }
 
@@ -460,75 +581,95 @@ export function App({
         ? 'Touch ID or your Mac password'
         : 'your operating-system password';
     return (
-      <div
-        className="app-lock"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="app-lock-title"
-      >
-        <div className="app-lock-card">
-          <h1 id="app-lock-title">Unlock FOKS</h1>
-          <p>Authenticate with {mechanism} to unlock FOKS.</p>
-          {lockError ? (
-            <p className="app-lock-error" role="alert">
-              {lockError}
-            </p>
-          ) : null}
-          <Button
-            variant="primary"
-            disabled={unlocking}
-            onClick={() => {
-              setUnlocking(true);
-              setLockError(null);
-              void activeBridge
-                .unlockApp()
-                .then(
-                  (next) => {
-                    if (next.locked) {
-                      setLockState(next);
-                      return;
-                    }
-                    setLockState(null);
-                    setActiveBridge(null);
-                    setBootEpoch((value) => value + 1);
-                  },
-                  (error) => setLockError(normalizeCommandError(error).message),
-                )
-                .finally(() => setUnlocking(false));
-            }}
+      <BlockedShell
+        bridge={activeBridge}
+        agent="locked"
+        overlay={
+          <div
+            className="lock-back"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="app-lock-title"
           >
-            Unlock
-          </Button>
-        </div>
-      </div>
+            <div className="card lockcard">
+              <span className="glyph" aria-hidden="true">
+                <Icon name="shield" />
+              </span>
+              <h2 id="app-lock-title">FOKS is locked</h2>
+              <p>Authenticate with {mechanism} to unlock FOKS.</p>
+              {lockError ? (
+                <p className="action-error" role="alert">
+                  {lockError}
+                </p>
+              ) : null}
+              <Button
+                variant="primary"
+                disabled={unlocking}
+                onClick={() => {
+                  setUnlocking(true);
+                  setLockError(null);
+                  void activeBridge
+                    .unlockApp()
+                    .then(
+                      (next) => {
+                        if (next.locked) {
+                          setLockState(next);
+                          return;
+                        }
+                        setLockState(null);
+                        setActiveBridge(null);
+                        setBootEpoch((value) => value + 1);
+                      },
+                      (error) =>
+                        setLockError(normalizeCommandError(error).message),
+                    )
+                    .finally(() => setUnlocking(false));
+                }}
+              >
+                Unlock
+              </Button>
+            </div>
+          </div>
+        }
+      />
     );
   }
 
   if (loadError) {
     return (
-      <div
-        className="app-lock"
-        role="alertdialog"
-        aria-labelledby="app-boot-error-title"
-      >
-        <div className="app-lock-card">
-          <h1 id="app-boot-error-title">Couldn’t load FOKS</h1>
-          <p className="app-lock-error" role="alert">
-            {loadError}
-          </p>
-          <Button
-            variant="primary"
-            onClick={() => {
-              setLoadError(null);
-              setLoaded(null);
-              setActiveBridge(null);
-              setBootEpoch((value) => value + 1);
-            }}
+      <BlockedShell
+        bridge={activeBridge}
+        agent="stopped"
+        overlay={
+          <div
+            className="lock-back"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="app-boot-error-title"
           >
-            Retry
-          </Button>
-        </div>
-      </div>
+            <div className="card lockcard">
+              <span className="glyph warn" aria-hidden="true">
+                <Icon name="alert" />
+              </span>
+              <h2 id="app-boot-error-title">Couldn’t load FOKS</h2>
+              <p className="action-error" role="alert">
+                {loadError}
+              </p>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  setLoadError(null);
+                  setLoaded(null);
+                  setActiveBridge(null);
+                  setBootEpoch((value) => value + 1);
+                }}
+              >
+                Retry
+              </Button>
+            </div>
+          </div>
+        }
+      />
     );
   }
   if (!loaded || !activeBridge || !agentController) {
@@ -539,38 +680,44 @@ export function App({
         agentLifecycle.state === 'restoration-failed')
     ) {
       return (
-        <AgentStopNotice
-          lifecycle={agentLifecycle}
+        <BlockedShell
           bridge={activeBridge}
-          placement="startup"
-          onRetryRestoration={() => {
-            const controller = agentController;
-            if (!controller) return;
-            void controller
-              .establish(true)
-              .then(() => setBootEpoch((value) => value + 1))
-              .catch((error) => {
-                // A successful native restoration publishes a newer
-                // maintenance snapshot while retryAgentConnection is
-                // still awaited. That transition intentionally makes
-                // this older establish attempt stale; the startup
-                // listener above owns the boot continuation.
-                const current = controller.snapshot();
-                if (current.state === 'checking' || current.state === 'ready')
-                  return;
-                setLoadError(normalizeCommandError(error).message);
-              });
-          }}
+          agent="stopped"
+          overlay={
+            <AgentStopNotice
+              lifecycle={agentLifecycle}
+              bridge={activeBridge}
+              placement="startup"
+              onRetryRestoration={() => {
+                const controller = agentController;
+                if (!controller) return;
+                void controller
+                  .establish(true)
+                  .then(() => setBootEpoch((value) => value + 1))
+                  .catch((error) => {
+                    // A successful native restoration publishes a newer
+                    // maintenance snapshot while retryAgentConnection is
+                    // still awaited. That transition intentionally makes
+                    // this older establish attempt stale; the startup
+                    // listener above owns the boot continuation.
+                    const current = controller.snapshot();
+                    if (
+                      current.state === 'checking' ||
+                      current.state === 'ready'
+                    )
+                      return;
+                    setLoadError(normalizeCommandError(error).message);
+                  });
+              }}
+            />
+          }
         />
       );
     }
     return (
-      <div className="app-loading" role="status">
-        <span className="spin" aria-hidden="true" />
-        {agentLifecycle.state === 'checking'
-          ? 'Connecting to the local agent…'
-          : `${agentLifecycleLabel(agentLifecycle)}…`}
-      </div>
+      <BlockedShell bridge={activeBridge} agent="starting">
+        <StartingScreen />
+      </BlockedShell>
     );
   }
   return (
@@ -628,16 +775,15 @@ function VaultShell({
     () => scene.selection ?? demoSelection(scene.demo, agentSnapshot),
   );
   const [sideCollapsed, setSideCollapsed] = useState(storedSideCollapsedPref);
-  const [sidePinned, setSidePinned] = useState(storedSidePinnedPref);
-  // The manual toggle is the only writer of the stored preference, and it
-  // pins the rail: a width chosen by hand is not undone by the next hover.
+  // The topbar's toggle is the only writer of the stored preference; the
+  // details panel's reaction below changes the width without recording it.
   const toggleSidebar = useCallback(() => {
     const collapsed = !sideCollapsed;
     setSideCollapsed(collapsed);
     rememberSideCollapsed(collapsed);
-    setSidePinned(true);
-    rememberSidePinned(true);
   }, [sideCollapsed]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  useSearchShortcut(() => setSearchOpen(true));
   const [fallback] = useState(() => {
     return storeAtScene({ ...scene, selection: initialSelection });
   });
@@ -1351,53 +1497,6 @@ function VaultShell({
         .filter(Boolean)
         .join(' ')}
     >
-      <div className="titlebar" data-tauri-drag-region="">
-        {bridge.native ? null : (
-          <span className="lights" aria-hidden="true">
-            <span className="light r" />
-            <span className="light y" />
-            <span className="light g" />
-          </span>
-        )}
-        <span className="brand" data-tauri-drag-region="">
-          {APP_NAME}
-        </span>
-        <span className="spacer" data-tauri-drag-region="" />
-        <span
-          className={
-            shown.agent.state === 'ready' && agentLifecycle.state === 'ready'
-              ? 'agent'
-              : 'agent warn'
-          }
-          data-tauri-drag-region=""
-        >
-          <i data-tauri-drag-region="" />
-          {/* Local agent connection and readiness status */}
-          Agent{' '}
-          {shown.agent.state === 'bootstrap' ||
-          agentLifecycle.state === 'bootstrap' ||
-          agentLifecycle.state === 'initializing'
-            ? 'starting'
-            : agentLifecycle.state === 'ready'
-              ? 'ready'
-              : agentLifecycleLabel(agentLifecycle).toLowerCase()}
-        </span>
-        <Button
-          variant="quiet"
-          className="global-refresh"
-          icon="again"
-          aria-label={
-            refreshingSnapshot ? 'Refreshing vaults and groups' : 'Refresh'
-          }
-          title={
-            refreshingSnapshot
-              ? 'Refreshing vaults and groups'
-              : 'Refresh vaults and groups'
-          }
-          disabled={refreshingSnapshot}
-          onClick={refreshAll}
-        />
-      </div>
       <div
         className={[
           'app',
@@ -1462,10 +1561,22 @@ function VaultShell({
                 ) : undefined
               }
               collapsed={sideCollapsed}
-              pinned={sidePinned}
-              onToggleCollapsed={toggleSidebar}
+              agent={railAgentState(agentLifecycle.state, shown.agent.state)}
+              nativeChrome={bridge.native}
             />
-            <main className="main">{screen}</main>
+            <main className="main">
+              <Topbar
+                snapshot={shown}
+                location={here}
+                onNavigate={(location) => locations.navigate(location)}
+                onSearch={() => setSearchOpen(true)}
+                collapsed={sideCollapsed}
+                onToggleCollapsed={toggleSidebar}
+                refreshing={refreshingSnapshot}
+                onRefresh={refreshAll}
+              />
+              {screen}
+            </main>
           </>
         )}
         {here.kind !== 'first-run' && detailsShown ? (
@@ -1495,20 +1606,29 @@ function VaultShell({
             resumeDraft={resumeDraft}
           />
         ) : null}
+        {agentLifecycle.state === 'maintenance' ||
+        agentLifecycle.state === 'restart-required' ||
+        agentLifecycle.state === 'recovery-required' ||
+        agentLifecycle.state === 'restoration-failed' ? (
+          <AgentStopNotice
+            lifecycle={agentLifecycle}
+            bridge={bridge}
+            placement="shell"
+            onRetryRestoration={() => {
+              void recoverAgentReadiness(true).catch(commandError);
+            }}
+          />
+        ) : null}
       </div>
-      {agentLifecycle.state === 'maintenance' ||
-      agentLifecycle.state === 'restart-required' ||
-      agentLifecycle.state === 'recovery-required' ||
-      agentLifecycle.state === 'restoration-failed' ? (
-        <AgentStopNotice
-          lifecycle={agentLifecycle}
-          bridge={bridge}
-          placement="shell"
-          onRetryRestoration={() => {
-            void recoverAgentReadiness(true).catch(commandError);
-          }}
-        />
-      ) : null}
+      <ShellSearch
+        snapshot={shown}
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onNavigate={(location) => locations.navigate(location)}
+        onOpenItem={(storeId, path) =>
+          locations.select({ store: storeId, path })
+        }
+      />
       <WriteOverlay
         snapshot={shown}
         accessNow={accessNow}

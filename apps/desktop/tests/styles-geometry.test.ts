@@ -158,16 +158,21 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
   // Layout tokens live on `.app`, never on `:root`.
   assert.match(shell, /\.app\{[^}]*--side-w-open:224px[;}]/);
   assert.match(shell, /\.app\{[^}]*--details-w:300px[;}]/);
-  assert.match(shell, /\.app\.side-narrow\{--side-w:3\.5rem\}/);
-  // The collapsed rail and its toggle are declared.
+  assert.match(shell, /\.app\.side-narrow\{--side-w:56px\}/);
+  // The collapsed rail is a fixed track: no hover or focus expansion.
   assert.match(shell, /\.side\.is-narrow[^{]*\{/);
-  assert.match(shell, /\.side \.side-collapse\{color:var\(--faint\)\}/);
-  // Allow main column flex shrinking to prevent horizontal window overflow.
-  assert.match(shell, /\.main\{[^}]*min-width:0[^}]*\}/);
+  assert.doesNotMatch(shell, /\.side\.is-narrow[^{]*:hover/);
+  assert.doesNotMatch(shell, /is-pinned/);
+  // The topbar carries the shell's own controls and the only hairline above
+  // the page; the page header below it carries none.
   assert.match(
     shell,
-    /\.path\{[^}]*padding:8px 20px;[^}]*border-bottom:1px solid var\(--line-soft\)/,
+    /\.topbar\{height:44px;[^}]*border-bottom:1px solid var\(--line-soft\)/,
   );
+  assert.match(shell, /\.topbar \.topsearch\{[^}]*width:240px/);
+  // Allow main column flex shrinking to prevent horizontal window overflow.
+  assert.match(shell, /\.main\{[^}]*min-width:0[^}]*\}/);
+  assert.match(shell, /\.path\{[^}]*padding:14px 20px 10px;/);
   assert.match(shell, /\.header-action\{[^}]*margin-left:auto;[^}]*flex:none/);
   assert.match(
     shell,
@@ -177,7 +182,7 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
   assert.match(shell, /\.loc\{[^}]*flex:1 1 auto/);
   assert.match(shell, /\.loc-copy\{[^}]*white-space:nowrap/);
   assert.match(shell, /\.header-action \.btn\.cap\{height:28px;font-size:13px/);
-  assert.match(shell, /\.loc h1\{display:inline;/);
+  assert.match(shell, /\.loc h1\{display:inline;font-size:20px;font-weight:700/);
   assert.match(shell, /\.loc small\{display:inline;/);
   // Ensure CSS row height matches the virtual list row estimate.
   assert.match(shell, /\.row\{height:50px;/);
@@ -281,7 +286,6 @@ test('app stylesheet uses design tokens and declares no hardcoded colors', async
     app,
     /\.first-run-main \.account-form \.fr input\s*\{[^}]*align-self: stretch;[^}]*width: 100%;[^}]*padding: 0 14px;/,
   );
-  assert.match(app, /\.app-lock-card p\s*\{[^}]*margin-bottom: 20px;/);
   // A roster table is a list of flex rows, not a grid with a header row: no
   // column template, and no `.hdr` rule, survives for `.rt`.
   assert.match(app, /\.rt\.bare \.prow\s*\{[^}]*display: flex;/);
@@ -291,18 +295,14 @@ test('app stylesheet uses design tokens and declares no hardcoded colors', async
   assert.match(app, /\.inset\.danger\s*\{[^}]*overflow: visible/);
 });
 
-test('desktop titlebar applies left padding to clear macOS window controls', async () => {
+test('the rail reserves the strip macOS draws its window controls on', async () => {
   const app = await readSource('../src/styles/app.css', import.meta.url);
+  // There is no title bar: the rail's own drag strip is where the controls go.
+  const shell = await readSource(SHELL, import.meta.url);
+  assert.doesNotMatch(shell, /\.titlebar/);
+  assert.match(app, /#root > \.native-window \.traffic\s*\{[^}]*min-height: 38px;/);
   assert.match(
     app,
-    /#root > \.native-window > \.titlebar\s*\{[^}]*padding-left: 5\.5rem;/,
-  );
-  assert.match(
-    app,
-    /#root > \.window > \.titlebar \.brand\s*\{[^}]*transform: translateY\(1px\);/,
-  );
-  assert.match(
-    app,
-    /#root > \.window > \.titlebar > \.agent\s*\{[^}]*margin-right: 0\.25rem;[^}]*transform: translateY\(1px\);/,
+    /#root > \.native-window\.window-chrome-hidden \.traffic\s*\{[^}]*min-height: 32px;/,
   );
 });

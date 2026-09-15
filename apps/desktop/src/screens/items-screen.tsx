@@ -724,12 +724,6 @@ export function ItemsScreen({
   const head = (
     <PageHeader
       {...header}
-      back={{
-        label: 'Files home',
-        onBack: () => {
-          locations.navigate({ kind: 'files' });
-        },
-      }}
       query={state.query}
       onQuery={(query) => {
         locations.search(query);
@@ -776,10 +770,6 @@ export function ItemsScreen({
   if (store && storeDescriptionState(snapshot, store) !== 'normal') {
     return (
       <StoreAccessTakeover
-        back={{
-          label: 'Files home',
-          onBack: () => locations.navigate({ kind: 'files' }),
-        }}
         snapshot={snapshot}
         store={store}
         onOpenServer={(profile) =>

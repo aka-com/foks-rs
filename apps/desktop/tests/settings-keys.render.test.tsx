@@ -745,11 +745,17 @@ test('the local device detail page disables device removal', async () => {
     ui.fireEvent.click(page.getByRole('button', { name: 'Open Settings' }));
   });
   assert.deepEqual(chosen.at(-1), { kind: 'settings', section: 'about' });
-  // The header's chevron returns to the list this page was opened from.
-  await ui.act(async () => {
-    ui.fireEvent.click(page.getByRole('button', { name: 'Devices' }));
-  });
-  assert.deepEqual(chosen.at(-1), { kind: 'devices', store: 'acct:personal' });
+  // The way back to the list is the topbar's chevron, which the shell draws
+  // from the location alone.
+  const { parentLocation } = await import('../src/location');
+  assert.deepEqual(
+    parentLocation({
+      kind: 'devices',
+      store: 'acct:personal',
+      device: deviceId(snapshot, 0),
+    }),
+    { kind: 'devices', store: 'acct:personal' },
+  );
 });
 
 test('a paper key and an enrollment each carry their own page', async () => {

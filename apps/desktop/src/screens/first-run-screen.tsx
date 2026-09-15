@@ -80,7 +80,7 @@ import {
 } from '../first-run-failure';
 import type { FoksIconName } from '../icons';
 import type { Location } from '../location';
-import { NavRow, Sidebar } from '../shell/sidebar';
+import { NavRow, Sidebar, TrafficStrip } from '../shell/sidebar';
 import {
   formatRole,
   kindOf,
@@ -363,6 +363,7 @@ function initialCheckpoint(
 function SetupSidebar({
   checkpoint,
   pendingPath,
+  native = false,
   onCancel,
   cancelDisabled = false,
   onAnotherServer,
@@ -370,6 +371,8 @@ function SetupSidebar({
   recoverEnabled = false,
 }: {
   checkpoint: FirstRunCheckpoint;
+  /** The OS draws the window controls over the step list's own drag strip. */
+  native?: boolean;
   /** Path selected on the 'who' screen before confirmation. */
   pendingPath?: FirstRunPath | null;
   onCancel?: () => void;
@@ -383,6 +386,7 @@ function SetupSidebar({
     const labels = ['Local server', 'Create account', 'Account recovery'];
     return (
       <nav className="side setup-side" aria-label="Setup steps">
+        <TrafficStrip native={native} />
         <div className="setup-steps">
           {labels.map((label, index) => (
             <div
@@ -452,6 +456,7 @@ function SetupSidebar({
   ];
   return (
     <nav className="side setup-side" aria-label="Setup steps">
+      <TrafficStrip native={native} />
       <div className="setup-steps">
         {labels.map((label, index) => (
           <div
@@ -534,10 +539,12 @@ function FirstRunAppSidebar({
   checkpoint,
   groupName,
   location,
+  native,
   onNavigate,
   onReenter,
 }: {
   snapshot: AgentSnapshot;
+  native: boolean;
   checkpoint: FirstRunCheckpoint;
   groupName: string;
   location: Location;
@@ -565,6 +572,7 @@ function FirstRunAppSidebar({
       snapshot={snapshot}
       location={location}
       attention={checkpoint.path === 'invited' && !checkpoint.added ? 1 : 0}
+      nativeChrome={native}
       onNavigate={onNavigate}
       status={status}
       onReenter={onReenter}
@@ -4491,6 +4499,7 @@ export function FirstRunExperience({
       {appMode ? (
         <FirstRunAppSidebar
           snapshot={snapshot}
+          native={Boolean(bridge.native)}
           checkpoint={checkpoint}
           groupName={checkpoint.group?.name ?? group}
           location={location}
@@ -4500,6 +4509,7 @@ export function FirstRunExperience({
       ) : (
         <SetupSidebar
           checkpoint={checkpoint}
+          native={Boolean(bridge.native)}
           pendingPath={pendingPath}
           onAnotherServer={
             !busy &&

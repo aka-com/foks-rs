@@ -546,11 +546,13 @@ test('Finish setup resumes the existing incomplete group', async () => {
   assert.deepEqual(resumed, ['team:homelab']);
 });
 
-test('an unavailable group keeps a route to Teams home', async () => {
-  const destinations: Location[] = [];
-  const rendered = await group('team:removed', 'people', {
-    onNavigate: (location) => destinations.push(location),
-  });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Teams home' }));
-  assert.deepEqual(destinations, [{ kind: 'teams' }]);
+test('an unavailable group displays its status and retains parent navigation', async () => {
+  const rendered = await group('team:removed', 'people');
+  assert.ok(rendered.getByRole('heading', { name: 'Group unavailable' }));
+  // The topbar derives parent navigation from the location.
+  const { parentLocation } = await import('../src/location');
+  assert.deepEqual(
+    parentLocation({ kind: 'group-settings', ref: 'team:removed' }),
+    { kind: 'teams' },
+  );
 });

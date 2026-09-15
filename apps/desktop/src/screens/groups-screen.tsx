@@ -2009,14 +2009,7 @@ export function GroupSettingsScreen({
   if (!store || store.kind !== 'team') {
     return (
       <>
-        <PageHeader
-          title="Group unavailable"
-          subtitle=""
-          back={{
-            label: 'Teams home',
-            onBack: () => onNavigate({ kind: 'teams' }),
-          }}
-        />
+        <PageHeader title="Group unavailable" subtitle="" />
         <div className="body">
           <Notice title="This group is no longer available">
             Refresh the catalog or choose another group from Teams.

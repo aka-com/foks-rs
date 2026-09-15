@@ -27,9 +27,11 @@ test.before(async () => {
     server: { middlewareMode: true, hmr: false, ws: false, watch: null },
   });
   await vite.ssrLoadModule('/src/main.tsx');
+  // The frame is drawn before the snapshot arrives, so the account header is
+  // what says the shell has finished booting.
   await testingLibrary.waitFor(() => {
     assert.ok(document.querySelector('.app'));
-    assert.equal(document.querySelector('.app-loading'), null);
+    assert.ok(document.querySelector('.side.rail .who .t b'));
   });
 });
 
@@ -37,20 +39,22 @@ test.after(async () => {
   await vite.close();
 });
 
-test('renders shell frame with application brand name', () => {
+test('the window is the rail and the content column, with no title bar', () => {
   assert.ok(
     document.querySelector('.window'),
     'window container element should exist',
   );
-  assert.equal(document.querySelector('.titlebar .brand')?.textContent, 'FOKS');
+  assert.equal(document.querySelector('.titlebar'), null);
+  // The window's drag strip is the top of the rail; the web mock draws the
+  // three controls macOS would draw itself.
   assert.equal(
-    document.querySelectorAll('.web-mock-window .lights .light').length,
+    document.querySelectorAll('.web-mock-window .side.rail .traffic .light')
+      .length,
     3,
   );
   // Verify main navigation landmark exists.
   assert.ok(document.querySelector('nav.side[aria-label="Main Navigation"]'));
-  assert.ok(document.querySelector('main.main'));
-  // Brand name is rendered in the title bar rather than sidebar navigation.
+  assert.ok(document.querySelector('main.main > .topbar'));
   assert.equal(document.querySelector('.side .appname'), null);
 });
 
@@ -64,11 +68,23 @@ test('the rail draws the six tabs, the unread badge and the attention dot', () =
     tabs.map((tab) => tab.querySelector('.t')?.textContent),
     ['Accounts', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
   );
-  // The fixture's two open notifications light the Accounts dot.
-  assert.ok(tabs[0].querySelector('.dot'), 'Accounts carries the attention dot');
+  // The fixture's two open notifications light the dot on the avatar, which is
+  // the only place attention is advertised.
+  const dot = document.querySelector('.side.rail .attn');
+  assert.ok(dot, 'the account avatar carries the attention dot');
+  assert.equal(dot.getAttribute('aria-label'), '2 things need attention');
+  assert.equal(document.querySelector('.rail-tabs .dot'), null);
   // Files is the tab that owns All items, the shell's starting location.
   assert.equal(tabs[2].getAttribute('aria-current'), 'page');
   assert.equal(tabs[0].getAttribute('aria-current'), null);
+});
+
+test('the status light reports a connected service at the rail foot', () => {
+  const light = document.querySelector('.side.rail .status');
+  assert.ok(light);
+  assert.ok(light.classList.contains('agent-ready'));
+  assert.equal(light.textContent, 'Connected');
+  assert.equal(light.getAttribute('title'), 'Connected');
 });
 
 test('the account header names the active account and opens its menu', async () => {
@@ -125,7 +141,7 @@ test('a tab navigates, and Control-Tab walks the six of them', async () => {
     assert.equal(document.querySelector('.loc h1')?.textContent, 'All items');
   });
   testingLibrary.fireEvent.click(
-    testingLibrary.screen.getByRole('button', { name: 'Files home' }),
+    testingLibrary.screen.getByRole('button', { name: 'Back' }),
   );
 });
 
@@ -150,10 +166,15 @@ test('the Files roots page lists the stores the rail used to enumerate', async (
   await testingLibrary.waitFor(() => {
     assert.equal(document.querySelector('.loc h1')?.textContent, 'Engineering');
   });
-  // The items page returns to the roots page it was opened from.
-  const back = document.querySelector<HTMLButtonElement>('.path .page-back');
-  assert.ok(back, 'the items header carries a back chevron');
-  assert.equal(back.getAttribute('aria-label'), 'Files home');
+  // The topbar names where the reader is, and its chevron returns to the tab's
+  // root page.
+  assert.equal(
+    document.querySelector('.topbar .crumbs')?.textContent,
+    'Files›Engineering',
+  );
+  const back = document.querySelector<HTMLButtonElement>('.topbar .back');
+  assert.ok(back, 'the topbar carries the back chevron');
+  assert.equal(back.disabled, false);
   testingLibrary.fireEvent.click(back);
   await testingLibrary.waitFor(() => {
     assert.equal(document.querySelector('.loc h1')?.textContent, 'Files');

@@ -1,13 +1,15 @@
 /**
  * The Accounts tab: what needs attention, then the accounts on this Mac.
  *
- * `AttentionList` is the page that used to be called Alerts. Each card keeps
- * its severity, title and detail and carries its action at the right end: the
- * catalog note retries, and every other note opens the place where it is
- * resolved. Under it, the account switcher chooses which account the page is
- * about, and that account's facts and workflows are rows with their action at
- * the right — the rows Settings › Accounts had, with the same panels behind
- * them.
+ * `AttentionList` is the page that used to be called Alerts. It is one amber
+ * card: a head that names the region and counts the open notes, then a row per
+ * note. Each row describes the issue's effect, identifies where to resolve it,
+ * and provides the action at the right end. The catalog action retries; every
+ * other action opens the relevant page. With no notes
+ * the card is replaced by a single green line. Under it, the account switcher
+ * chooses which account the page is about, and that account's facts and
+ * workflows are rows with their action at the right — the rows Settings ›
+ * Accounts had, with the same panels behind them.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -38,6 +40,7 @@ import {
   partiesOf,
   plural,
   roleName,
+  serverDisplayName,
   serverName,
   shortId,
   storeAttentionState,
@@ -52,6 +55,7 @@ import type {
   Notification,
   TeamStore,
 } from '../model';
+import type { FoksIconName } from '../icons';
 import type { Location } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
@@ -87,6 +91,19 @@ interface AttentionListProps {
 
 function canRetry(note: Notification): boolean {
   return note.action === 'Retry' && note.id.startsWith('catalog-');
+}
+
+/**
+ * The glyph on a row's mark, chosen by what the note is about: a group whose
+ * setup is unfinished, a group's membership in another group, or a server this
+ * Mac has not checked in with. A note of any other kind keeps the generic
+ * warning glyph.
+ */
+function markGlyph(note: Notification): FoksIconName {
+  if (note.id.startsWith('team-')) return 'flag';
+  if (note.id.startsWith('fed-')) return 'people';
+  if (note.id.startsWith('lease-')) return 'server';
+  return 'alert';
 }
 
 /**
@@ -126,7 +143,7 @@ function destinationOf(
     if (!server) return null;
     return {
       label: 'Open the server',
-      where: 'Settings › Servers',
+      where: `Settings › Servers › ${serverDisplayName(server)}`,
       location: { kind: 'settings', section: 'servers', profile: server.id },
     };
   }
@@ -182,70 +199,86 @@ function AttentionList({
   };
 
   return (
-    <div
+    <section
       className="people-attention"
-      role="region"
       aria-labelledby="people-attention-label"
     >
-      <SectionLabel id="people-attention-label">
-        {notes.length ? `Needs attention · ${notes.length}` : 'Needs attention'}
-      </SectionLabel>
       {notes.length ? (
-        <div className="cards">
+        <div className="attn-card">
+          {/* The card's head is the region's label: there is no separate
+              section label over it. */}
+          <div className="attn-head">
+            <Icon name="alert" />
+            <span id="people-attention-label">Needs attention</span>
+            <span className="grow" />
+            <span className="n">{notes.length}</span>
+          </div>
           {notes.map((note) => {
             const destination = canRetry(note)
               ? null
               : destinationOf(snapshot, note);
             return (
-              <div className="card" key={note.id}>
+              <div className="attn-row" key={note.id}>
                 {/* The severity is a colour, so it is also a name: a reader
                     who cannot see the colour is told the same thing. */}
                 <span
-                  className={`sev ${note.severity}`}
+                  className="mk"
                   role="img"
                   aria-label={SEVERITY_LABELS[note.severity]}
-                />
-                <div>
-                  <h3>{note.title}</h3>
-                  <p>{note.detail}</p>
-                  {/* Display the required action for linked notifications.
-                      Unlinked notifications show the action in a chip instead. */}
-                  {destination && note.action ? (
-                    <p className="go">Required action: {note.action}</p>
+                >
+                  <Icon name={markGlyph(note)} />
+                </span>
+                <div className="t">
+                  <b>{note.title}</b>
+                  <small>{note.detail}</small>
+                  {/* The same place the action button opens, named as the
+                      reader would read the path aloud. */}
+                  {destination ? (
+                    <button
+                      type="button"
+                      className="go"
+                      onClick={() => onNavigate(destination.location)}
+                    >
+                      {destination.where}
+                    </button>
                   ) : null}
                 </div>
-                {canRetry(note) ? (
-                  <Button
-                    variant="primary"
-                    disabled={busy.has(note.id)}
-                    title="Retry loading catalog"
-                    onClick={() => retry(note)}
-                  >
-                    {note.action}
-                  </Button>
-                ) : destination ? (
-                  <Button
-                    variant="primary"
-                    onClick={() => onNavigate(destination.location)}
-                  >
-                    {destination.label}
-                  </Button>
-                ) : note.action ? (
-                  <Chip tone="warn" title={ACTION_UNAVAILABLE}>
-                    {note.action}
-                  </Chip>
-                ) : null}
+                {/* Not the design's `.acts`: that class is the hover-only
+                    icon strip a tile carries, and it hides what it holds. */}
+                <div className="attn-acts">
+                  {canRetry(note) ? (
+                    <Button
+                      variant="primary"
+                      disabled={busy.has(note.id)}
+                      title="Retry loading catalog"
+                      onClick={() => retry(note)}
+                    >
+                      {note.action}
+                    </Button>
+                  ) : destination ? (
+                    <Button
+                      variant="primary"
+                      onClick={() => onNavigate(destination.location)}
+                    >
+                      {destination.label}
+                    </Button>
+                  ) : note.action ? (
+                    <Chip tone="warn" title={ACTION_UNAVAILABLE}>
+                      {note.action}
+                    </Chip>
+                  ) : null}
+                </div>
               </div>
             );
           })}
         </div>
       ) : (
-        <p className="fn">
-          Nothing needs attention. All accounts and connections are operating
-          normally.
+        <p className="allclear">
+          <Icon name="check" />
+          <span id="people-attention-label">Nothing needs attention.</span>
         </p>
       )}
-    </div>
+    </section>
   );
 }
 

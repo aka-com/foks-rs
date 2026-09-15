@@ -112,8 +112,9 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
     assert.equal(rendered.queryByText('foks_team_token_7f31ac09'), null);
     assert.ok(rendered.getAllByText('Check-in expired').length > 0);
   });
-  // The rail does not list stores; the healthy neighbour is a row on Files.
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Files home' }));
+  // The rail does not list stores; the healthy neighbour is a row on Files,
+  // which the topbar's back chevron returns to.
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Back' }));
   const personal = await ui.waitFor(() => {
     const row = (rendered.getAllByRole('button') as HTMLButtonElement[]).find(
       (button) => button.textContent?.includes('Personal'),
@@ -391,10 +392,12 @@ test('a forced expiry refresh waits for the in-flight foreground load', async ()
   };
   const clock = new Clock();
   clock.seconds = start;
-  const rendered = ui.render(
+  ui.render(
     createElement(App, { snapshot: agentSnapshot, bridge, leaseClock: clock }),
   );
-  await rendered.findByRole('button', { name: /Refresh/ });
+  // The shell renders synchronously from the injected snapshot; the catalog
+  // refresh this test drives is the shell's, not a control on the page.
+  await ui.waitFor(() => assert.ok(document.querySelector('.app')));
   Object.defineProperty(document, 'hidden', {
     configurable: true,
     value: false,

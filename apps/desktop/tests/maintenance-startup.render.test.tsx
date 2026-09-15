@@ -69,9 +69,12 @@ test('startup paused by maintenance resumes from the terminal native event', asy
   };
 
   const rendered = ui.render(createElement(App, { bridge }));
+  // The frame is drawn from the first paint; maintenance holds the content
+  // area at the starting screen, which names no internal operation.
   await ui.waitFor(() => {
-    assert.match(document.body.textContent ?? '', /verify · running/i);
+    assert.match(document.body.textContent ?? '', /Starting the FOKS agent…/);
   });
+  assert.equal(document.querySelector('.side.rail .who .t'), null);
   assert.equal(statusCalls, 0);
   assert.equal(catalogCalls, 0);
 
@@ -131,10 +134,11 @@ test('mounted shell ignores duplicate maintenance completion side effects', asyn
     },
   };
   const rendered = ui.render(createElement(App, { bridge }));
+  // The rail draws before a snapshot loads, so the account header is what says
+  // the shell itself has mounted.
   await ui.waitFor(() => {
-    assert.ok(document.querySelector('.app'));
+    assert.ok(document.querySelector('.side.rail .who .t'));
   });
-  assert.ok(document.querySelector('.app'));
   assert.equal(listeners.size, 1);
 
   snapshot = {
@@ -148,7 +152,7 @@ test('mounted shell ignores duplicate maintenance completion side effects', asyn
     for (const listener of listeners) listener(snapshot);
   });
   assert.match(
-    document.querySelector('.stopwrap')?.textContent ?? '',
+    document.querySelector('.stopveil')?.textContent ?? '',
     /export · running/i,
   );
 
@@ -165,7 +169,7 @@ test('mounted shell ignores duplicate maintenance completion side effects', asyn
     await Promise.resolve();
     await Promise.resolve();
   });
-  assert.equal(document.querySelector('.stopwrap'), null);
+  assert.equal(document.querySelector('.stopveil'), null);
   const callsAfterCompletion = { statusCalls, catalogCalls };
   await ui.act(async () => {
     for (const listener of listeners) listener(snapshot);
@@ -259,7 +263,9 @@ test('startup restoration retry continues through catalog load into the shell', 
     await Promise.resolve();
     await Promise.resolve();
   });
-  await ui.waitFor(() => assert.ok(document.querySelector('.app')));
+  await ui.waitFor(() =>
+    assert.ok(document.querySelector('.side.rail .who .t')),
+  );
   assert.ok(statusCalls >= 1);
   assert.ok(catalogCalls >= 1);
   assert.equal(listeners.size, 1);
@@ -318,9 +324,9 @@ test('maintenance invalidates a pending startup catalog before shell handoff', a
     await Promise.resolve();
   });
   await ui.waitFor(() => {
-    assert.match(document.body.textContent ?? '', /relocate · running/i);
+    assert.match(document.body.textContent ?? '', /Starting the FOKS agent…/);
   });
-  assert.equal(document.querySelector('.app'), null);
+  assert.equal(document.querySelector('.side.rail .who .t'), null);
   assert.equal(
     catalogCalls,
     1,
@@ -339,7 +345,9 @@ test('maintenance invalidates a pending startup catalog before shell handoff', a
     for (const listener of listeners) listener(snapshot);
     await Promise.resolve();
   });
-  await ui.waitFor(() => assert.ok(document.querySelector('.app')));
+  await ui.waitFor(() =>
+    assert.ok(document.querySelector('.side.rail .who .t')),
+  );
   assert.ok(catalogCalls >= 2);
   assert.equal(listeners.size, 1);
   rendered.unmount();

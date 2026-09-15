@@ -137,6 +137,49 @@ export function railTabOf(location: Location): RailTab | null {
   }
 }
 
+/**
+ * The page the topbar's back chevron returns to, or `null` at a tab's root.
+ *
+ * Only an address that opens something *inside* a tab has a parent: an items
+ * page under Files, a group page under Teams, a section or a device page under
+ * Settings and Devices. The `store` parameter that People, Teams, Devices and
+ * Settings carry names the account the page acts as — every address of those
+ * tabs carries one — so it never makes a page below the tab's root. Chat has no
+ * parent either: the tab resolves a conversation for every address it is given,
+ * so there is no channel-less page to return to.
+ */
+export function parentLocation(location: Location): Location | null {
+  switch (location.kind) {
+    case 'all':
+    case 'store':
+      return { kind: 'files' };
+    case 'group-settings':
+      return { kind: 'teams' };
+    case 'devices':
+      if (location.device)
+        return {
+          kind: 'devices',
+          ...(location.section ? { section: location.section } : {}),
+          ...(location.store ? { store: location.store } : {}),
+        };
+      if (location.section)
+        return {
+          kind: 'devices',
+          ...(location.store ? { store: location.store } : {}),
+        };
+      return null;
+    case 'settings':
+      if (location.section || location.profile)
+        return {
+          kind: 'settings',
+          ...(location.store ? { store: location.store } : {}),
+        };
+      return null;
+    default:
+      return null;
+  }
+}
+
 /** The chat location the Chat tab last opened, for the rail's Chat tab. */
 let openedChat: Extract<Location, { kind: 'chat' }> | null = null;
 

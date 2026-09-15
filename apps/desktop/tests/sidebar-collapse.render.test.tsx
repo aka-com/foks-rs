@@ -1,10 +1,11 @@
 /**
- * The collapsible sidebar: the manual toggle and its stored preference, the
- * blur-on-mouse rule, and the layout reaction to the details panel.
+ * The collapsible rail: the topbar's toggle and its stored preference, and the
+ * layout reaction to the details panel.
  *
  * Assertions read the DOM and `localStorage` rather than shell state, because
  * both are the contract: collapsing is CSS driven by `.side.is-narrow`, and the
- * preference outlives the process.
+ * preference outlives the process. The rail no longer expands on hover or on
+ * focus, so the width in the DOM is the whole of the behaviour.
  */
 
 import assert from 'node:assert/strict';
@@ -78,13 +79,16 @@ async function shell(
     }),
   );
   await ui.waitFor(() => assert.ok(document.querySelector('.app')));
+  await ui.waitFor(() => assert.ok(document.querySelector('nav.side')));
   return rendered;
 }
 
-/** The sidebar's collapse toggle. */
+/** The topbar's collapse toggle. */
 function toggle(): HTMLButtonElement {
-  const button = document.querySelector<HTMLButtonElement>('.side-collapse');
-  assert.ok(button, 'the footer draws the collapse toggle');
+  const button = document.querySelector<HTMLButtonElement>(
+    '.topbar .side-collapse',
+  );
+  assert.ok(button, 'the topbar draws the collapse toggle');
   return button;
 }
 
@@ -97,6 +101,7 @@ test('the toggle collapses the rail, flips its label, and stores the preference'
     false,
   );
   assert.equal(toggle().getAttribute('aria-expanded'), 'true');
+  assert.equal(toggle().title, 'Collapse rail');
 
   ui.fireEvent.click(toggle());
   await ui.waitFor(() => {
@@ -104,7 +109,7 @@ test('the toggle collapses the rail, flips its label, and stores the preference'
   });
   assert.ok(document.querySelector('.app.side-narrow'));
   assert.equal(toggle().getAttribute('aria-expanded'), 'false');
-  assert.equal(toggle().title, 'Expand');
+  assert.equal(toggle().title, 'Expand rail');
   assert.equal(window.localStorage.getItem('sideCollapsed'), '1');
   // Collapsing is CSS: every row is still in the document.
   assert.equal(document.querySelectorAll('.side .nav').length, rows);
@@ -114,46 +119,25 @@ test('the toggle collapses the rail, flips its label, and stores the preference'
     assert.equal(document.querySelector('.side.is-narrow'), null);
   });
   assert.equal(window.localStorage.getItem('sideCollapsed'), '0');
-  assert.equal(window.localStorage.getItem('sidePinned'), '1');
 });
 
-test('a width chosen by hand pins the rail, and a mouse activation drops focus', async () => {
+test('a collapsed rail stays collapsed under the pointer and the keyboard', async () => {
   await shell();
-  assert.equal(
-    document.querySelector('.side')?.classList.contains('is-pinned'),
-    false,
-  );
-
-  toggle().focus();
-  ui.fireEvent.click(toggle(), { detail: 1 });
+  ui.fireEvent.click(toggle());
   await ui.waitFor(() => {
-    assert.ok(document.querySelector('.side.is-pinned'));
+    assert.ok(document.querySelector('.side.is-narrow'));
   });
-  assert.equal(window.localStorage.getItem('sidePinned'), '1');
-  // A mouse click must not hold the rail open through `:focus-within`.
-  assert.notEqual(document.activeElement, toggle());
-
-  toggle().focus();
-  ui.fireEvent.click(toggle(), { detail: 0 });
-  await ui.waitFor(() => {
-    assert.equal(document.querySelector('.side.is-narrow'), null);
-  });
-  // Keyboard activation keeps focus, so the rail stays reachable.
-  assert.equal(document.activeElement, toggle());
-});
-
-test('a row activated with the mouse drops focus, and with the keyboard keeps it', async () => {
-  await shell();
-  const row = [
-    ...document.querySelectorAll<HTMLButtonElement>('.side .nav'),
-  ].find((candidate) => candidate.textContent?.startsWith('Accounts'));
-  assert.ok(row);
-  row.focus();
-  ui.fireEvent.click(row, { detail: 1 });
-  assert.notEqual(document.activeElement, row);
-  row.focus();
-  ui.fireEvent.click(row, { detail: 0 });
-  assert.equal(document.activeElement, row);
+  const rail = document.querySelector<HTMLElement>('.side.rail');
+  assert.ok(rail);
+  const tab = rail.querySelector<HTMLButtonElement>('.rail-tabs .nav');
+  assert.ok(tab);
+  // Nothing widens the rail but the toggle: the hover and focus expansions the
+  // store tree needed are gone.
+  ui.fireEvent.mouseOver(rail);
+  tab.focus();
+  assert.equal(document.activeElement, tab);
+  assert.ok(document.querySelector('.side.is-narrow'));
+  assert.ok(document.querySelector('.app.side-narrow'));
 });
 
 test('opening details collapses the rail and closing it restores the chosen width', async () => {

@@ -9,7 +9,6 @@ import {
   storeHeadingDescription,
 } from '../model';
 import type { Store, StoreDescriptionState, AgentSnapshot } from '../model';
-import type { PageHeaderProps } from '../shell/page-header';
 import { PageHeader } from '../shell/page-header';
 
 export type AccessProblem = Exclude<StoreDescriptionState, 'normal'>;
@@ -109,7 +108,6 @@ export interface StoreAccessTakeoverProps {
   onOpenServer: (profile: string) => void;
   onFinishSetup: () => void;
   headerAction?: ReactNode;
-  back?: PageHeaderProps['back'];
   noHeader?: boolean;
   /**
    * `band` draws the message as a full-width alert with its one action at the
@@ -124,7 +122,6 @@ export function StoreAccessTakeover({
   onOpenServer,
   onFinishSetup,
   headerAction,
-  back,
   noHeader = false,
   variant = 'notice',
 }: StoreAccessTakeoverProps): ReactNode {
@@ -147,7 +144,6 @@ export function StoreAccessTakeover({
     <>
       {noHeader ? null : (
         <PageHeader
-          back={back}
           title={store.name}
           subtitle={storeHeadingDescription(snapshot, store)}
           action={

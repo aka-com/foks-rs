@@ -1,6 +1,6 @@
 /**
- * The navigation rail: six tabs, the summed chat badge, the attention dot,
- * Control-Tab, and the account menu's own commands.
+ * The navigation rail: six tabs, the summed chat badge, the attention dot on
+ * the account avatar, Control-Tab, and the account menu's own commands.
  *
  * The rail is rendered directly rather than through the shell so the inbox and
  * the lock command can be driven from the test.
@@ -99,8 +99,6 @@ async function rail(
             journal.locks += 1;
           },
           collapsed,
-          pinned: false,
-          onToggleCollapsed: () => {},
         }),
       }),
     }),
@@ -127,8 +125,8 @@ test('the rail draws six tabs and marks the one that owns the location', async (
   assert.equal(tabs().filter((tab) => tab.className.includes('on')).length, 1);
 });
 
-test('Chat carries the summed unread and Accounts the attention dot', async () => {
-  const { rendered } = await rail({ kind: 'all' }, '2', 3);
+test('Chat displays total unread and the avatar displays an attention indicator', async () => {
+  const { journal } = await rail({ kind: 'all' }, '2', 3);
   // The badge is one number over every team whose chat this Mac can read: the
   // fixture's two readable groups, two unread apiece.
   const badge = await ui.waitFor(() => {
@@ -139,8 +137,14 @@ test('Chat carries the summed unread and Accounts the attention dot', async () =
   });
   assert.equal(badge.textContent, '4');
   assert.equal(badge.getAttribute('aria-label'), '4 unread');
-  assert.ok(tabs()[0].querySelector('.dot'), 'Accounts carries the dot');
-  assert.equal(rendered.container.querySelectorAll('.nav .dot').length, 1);
+  // Attention is advertised on the account avatar, not on a tab, and the dot
+  // is the control that opens the list.
+  const dot = document.querySelector<HTMLButtonElement>('.side.rail .attn');
+  assert.ok(dot, 'the avatar carries the dot');
+  assert.equal(dot.getAttribute('aria-label'), '3 things need attention');
+  assert.equal(document.querySelector('.rail-tabs .dot'), null);
+  ui.fireEvent.click(dot);
+  assert.deepEqual(journal.navigations.at(-1), { kind: 'people' });
 });
 
 test('no unread and nothing to attend to leaves both marks off', async () => {
@@ -149,7 +153,15 @@ test('no unread and nothing to attend to leaves both marks off', async () => {
     assert.ok(document.querySelector('.side.rail .rail-tabs .nav'));
   });
   assert.equal(document.querySelector('.side.rail .chat-unread'), null);
-  assert.equal(document.querySelector('.side.rail .nav .dot'), null);
+  assert.equal(document.querySelector('.side.rail .attn'), null);
+});
+
+test('the rail foot reports the connection, and says nothing about the step', async () => {
+  await rail({ kind: 'all' });
+  const light = document.querySelector('.side.rail .status');
+  assert.ok(light, 'the rail foot draws the agent light');
+  assert.equal(light.textContent, 'Connected');
+  assert.ok(light.classList.contains('agent-ready'));
 });
 
 test('a tab click and Control-Tab both navigate over the six tabs', async () => {
@@ -282,48 +294,33 @@ test('the account menu switches account, adds one, and locks the app', async () 
   assert.equal(journal.locks, 1);
 });
 
-test('closing the account menu with the mouse leaves the header unfocused', async () => {
-  await rail({ kind: 'people', store: 'acct:personal' });
+test('a stopped account is dimmed and carries the way to restore it', async () => {
+  const { journal } = await rail({ kind: 'people', store: 'acct:personal' });
   const header = document.querySelector<HTMLButtonElement>('.side.rail .who');
   assert.ok(header);
-
-  // A mouse click reports `detail > 0`. The menu hands focus back to its
-  // anchor when it closes; a focused header would hold a collapsed rail open
-  // through `:focus-within`, so the rail blurs it again.
-  ui.fireEvent.click(header, { detail: 1 });
+  ui.fireEvent.click(header);
   const menu = await ui.waitFor(() => {
     const node = document.querySelector<HTMLElement>('[role="menu"]');
     assert.ok(node);
     return node;
   });
-  const lock = [...menu.querySelectorAll('button')].find(
-    (button) => button.textContent === 'Lock',
+  // The current account is the one with the mark at the right end.
+  const current = [...menu.querySelectorAll('.acct')].find((row) =>
+    row.textContent?.includes('satoshi'),
   );
-  assert.ok(lock);
-  ui.fireEvent.click(lock, { detail: 1 });
-  // Two microtask turns: the menu's own restore, then the rail's blur.
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  assert.notEqual(document.activeElement, header);
-
-  // Keyboard activation reports `detail === 0` and keeps focus where the
-  // reader left it, so the rail stays open for the next key.
-  ui.fireEvent.click(header);
-  const again = await ui.waitFor(() => {
-    const node = document.querySelector<HTMLElement>('[role="menu"]');
-    assert.ok(node);
-    return node;
-  });
-  const escape = [...again.querySelectorAll('button')].find(
-    (button) => button.textContent === 'Lock',
+  assert.ok(current);
+  assert.ok(current.classList.contains('on'));
+  assert.equal(
+    current.querySelector('.tick')?.getAttribute('aria-label'),
+    'Current account',
   );
-  assert.ok(escape);
-  ui.fireEvent.click(escape);
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  assert.equal(document.activeElement, header);
+  const others = [...menu.querySelectorAll('.acct')].filter(
+    (row) => row !== current,
+  );
+  assert.ok(others.every((row) => row.querySelector('.tick.off')));
+  // Nothing in the fixture is stopped, so no account carries the amber line.
+  assert.equal(menu.querySelector('.warnline'), null);
+  assert.equal(journal.navigations.length, 0);
 });
 
 test('the rail names the account through which the selected group is accessed', async () => {
