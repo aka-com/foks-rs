@@ -5,7 +5,7 @@
  * with an attached dropdown menu.
  */
 
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import type { MouseEvent, ReactNode, RefObject } from 'react';
 import { Menu, Popover } from '/kit/overlay-primitives';
 import { Button } from './button';
@@ -44,18 +44,27 @@ export function MenuItem({
   children,
 }: MenuItemProps): ReactNode {
   const inert = reason !== undefined;
+  const descriptionId = useId();
   return (
-    <button
-      type="button"
-      className={danger ? 'danger' : undefined}
-      aria-disabled={inert ? true : undefined}
-      tabIndex={inert ? -1 : undefined}
-      title={reason ?? title}
-      onClick={inert ? undefined : onClick}
-    >
-      {icon ? <Icon name={icon} /> : null}
-      {children}
-    </button>
+    <>
+      <button
+        type="button"
+        className={danger ? 'danger' : undefined}
+        aria-disabled={inert ? true : undefined}
+        aria-describedby={inert ? descriptionId : undefined}
+        tabIndex={inert ? -1 : undefined}
+        title={reason ?? title}
+        onClick={inert ? undefined : onClick}
+      >
+        {icon ? <Icon name={icon} /> : null}
+        {children}
+      </button>
+      {reason ? (
+        <span id={descriptionId} className="offscreen">
+          {reason}
+        </span>
+      ) : null}
+    </>
   );
 }
 

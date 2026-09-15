@@ -183,11 +183,11 @@ test('a Teams row in an abnormal state carries the same chip, and opens group se
   const homelab = row('Homelab');
   assert.ok(homelab.className.split(' ').includes('off'));
   assert.equal(stateChip(homelab), 'Setup incomplete');
-  // The caption says what the object is and where it lives; the chip beside
-  // it says what is wrong.
+  // The Shares section above already says what the object is, so the caption
+  // says only where it lives; the chip beside it says what is wrong.
   assert.equal(
     homelab.querySelector('.name small')?.textContent,
-    'Ad-hoc share · foks.example.net',
+    'foks.example.net',
   );
 
   const eng = row('Engineering');
@@ -206,12 +206,12 @@ test('a Teams row in an abnormal state carries the same chip, and opens group se
 test('a Teams row says the server, the roster summary and your role', async () => {
   await teams();
   const eng = row('Engineering');
-  // One account per server on this Mac, so the kind and the server say all
-  // the caption has to; the account is named only where two hold accounts on
-  // the same server.
+  // One account per server on this Mac, so the server says all the caption
+  // has to; the account is named only where two hold accounts on the same
+  // server, and the kind only where no section label already says it.
   assert.equal(
     eng.querySelector('.name small')?.textContent,
-    'Named group · foks.acme-corp.com',
+    'foks.acme-corp.com',
   );
   // The roster the group's own details call loaded on refresh, split the way
   // the group page splits it: people, machines and admitted groups.
@@ -250,6 +250,9 @@ test('the Teams page carries one check row per account store', async () => {
 test('checking an account store reports its result on that row', async () => {
   const rendered = await teams();
   const work = row('foks.acme-corp.com');
+  const status = work.querySelector('[role="status"]');
+  assert.ok(status, 'the live region exists before the result arrives');
+  assert.equal(status.textContent, '');
   const check = [...work.querySelectorAll('button')].find(
     (button) => button.textContent === 'Check for groups',
   );
@@ -456,7 +459,7 @@ test('creating and joining act as the account the address names', async () => {
   );
 });
 
-test('an account row invites onto its own server', async () => {
+test('an account row invites as its own account, and the sheet can change it', async () => {
   const rendered = await teams();
   const work = row('foks.acme-corp.com');
   const invite = [...work.querySelectorAll('button')].find(
@@ -466,9 +469,115 @@ test('an account row invites onto its own server', async () => {
   await ui.act(async () => {
     ui.fireEvent.click(invite);
   });
-  assert.ok(
-    rendered.getByRole('heading', {
-      name: 'Invite someone to foks.acme-corp.com',
-    }),
+  assert.ok(rendered.getByRole('heading', { name: 'Invite someone' }));
+  // The account is the first choice on the sheet, seeded to the row it was
+  // opened from, and it is what the consequence line and the message say.
+  const picker = document.querySelector(
+    '[role="radiogroup"][aria-label="Invite as"]',
+  );
+  assert.ok(picker);
+  assert.equal(
+    picker.querySelector('[aria-checked="true"] .t b')?.textContent,
+    'vitalik',
+  );
+  assert.match(
+    document.querySelector('.band.info')?.textContent ?? '',
+    /You are inviting as vitalik, on foks\.acme-corp\.com/,
+  );
+  assert.match(
+    document.querySelector('.copybox .v')?.textContent ?? '',
+    /enter foks\.acme-corp\.com/,
+  );
+  assert.match(
+    document.querySelector('.copybox .v')?.textContent ?? '',
+    /Ask me for the FOKS installer and install it/,
+  );
+  assert.doesNotMatch(document.body.textContent ?? '', /foks\.app\/download/);
+  assert.match(
+    document.body.textContent ?? '',
+    /may require a signup code; get that code from the server administrator/,
+  );
+
+  // Choosing the other account rewrites the band, the group list and the
+  // message: an invitation is to one server, and this is which.
+  const other = [
+    ...picker.querySelectorAll<HTMLButtonElement>('[role="radio"]'),
+  ].find((node) => node.querySelector('.t b')?.textContent === 'satoshi');
+  assert.ok(other);
+  await ui.act(async () => {
+    ui.fireEvent.click(other);
+  });
+  assert.match(
+    document.querySelector('.band.info')?.textContent ?? '',
+    /You are inviting as satoshi, on foks\.example\.net/,
+  );
+  const groups = document.querySelector(
+    '[role="radiogroup"][aria-label="Which group you plan to add them to"]',
+  );
+  assert.ok(groups);
+  assert.deepEqual(
+    [...groups.querySelectorAll('[role="radio"] .t b')].map(
+      (node) => node.textContent,
+    ),
+    ['No group yet', 'Household'],
+  );
+});
+
+test('a group row invites as the account that holds the group, naming it', async () => {
+  const rendered = await teams();
+  openRowMenu('Engineering');
+  await ui.act(async () => {
+    ui.fireEvent.click(menuItem('Engineering', 'Invite someone…'));
+  });
+  assert.ok(rendered.getByRole('heading', { name: 'Invite someone' }));
+  assert.equal(
+    document.querySelector(
+      '[role="radiogroup"][aria-label="Which group you plan to add them to"] [aria-checked="true"] .t b',
+    )?.textContent,
+    'Engineering',
+  );
+  // The message names the group, and says the one step that grants access.
+  const message = document.querySelector('.copybox .v')?.textContent ?? '';
+  assert.match(message, /I'd like to add you to Engineering on FOKS\./);
+  assert.match(message, /FOKS does not use invite links/);
+});
+
+test('the per-account checks are folded into one row', async () => {
+  const rendered = await teams();
+  const disclosure = rendered.getByRole('button', {
+    name: /Check other servers for groups/,
+  });
+  // Folded by default: discovery is an occasional per-server action.
+  assert.equal(disclosure.getAttribute('aria-expanded'), 'false');
+  const body = document.getElementById('teams-servers');
+  assert.ok(body);
+  assert.equal(body.hasAttribute('hidden'), true);
+  // The head counts what it holds rather than listing it.
+  assert.equal(disclosure.querySelector('.tail')?.textContent, '2 servers');
+  await ui.act(async () => {
+    ui.fireEvent.click(disclosure);
+  });
+  assert.equal(disclosure.getAttribute('aria-expanded'), 'true');
+  assert.equal(body.hasAttribute('hidden'), false);
+  assert.equal(rendered.getAllByText('Check for groups').length, 2);
+});
+
+test('a lapsed account opens the checks rather than hiding its state', async () => {
+  const { applyLease } = (await vite.ssrLoadModule(
+    '/src/model/lease.ts',
+  )) as typeof import('../src/model/lease');
+  const rendered = await teams(() => {}, {
+    snapshot: applyLease(await fixture(), 'lapsed'),
+  });
+  // The row is the only report of that state, so it is not folded away.
+  assert.equal(
+    rendered
+      .getByRole('button', { name: /Check other servers for groups/ })
+      .getAttribute('aria-expanded'),
+    'true',
+  );
+  assert.equal(
+    document.getElementById('teams-servers')?.hasAttribute('hidden'),
+    false,
   );
 });

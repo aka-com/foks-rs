@@ -60,6 +60,32 @@ test('navigating to the current location preserves selection', () => {
   assert.deepEqual(next.selection, selected.selection);
 });
 
+test('a replacing navigation keeps what the place was showing', () => {
+  const showing: LocationState = {
+    ...INITIAL_STATE,
+    location: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+    selection: { store: 'team:eng', path: '/deploy/staging-token' },
+    folder: '/deploy',
+    query: 'token',
+  };
+  // Walking the group page's tab strip is a move inside the page the reader
+  // is on, not an arrival somewhere new, so it stands in place of the last
+  // rather than clearing what that page had open.
+  const next = transition(showing, {
+    type: 'navigate',
+    location: { kind: 'group-settings', ref: 'team:eng', tab: 'channels' },
+    replace: true,
+  });
+  assert.deepEqual(next.location, {
+    kind: 'group-settings',
+    ref: 'team:eng',
+    tab: 'channels',
+  });
+  assert.deepEqual(next.selection, showing.selection);
+  assert.equal(next.folder, '/deploy');
+  assert.equal(next.query, 'token');
+});
+
 test('a no-op action returns the same state object', () => {
   const state = at({ kind: 'all' });
   assert.equal(transition(state, { type: 'search', query: '' }), state);
@@ -206,6 +232,8 @@ const ROUND_TRIP: Location[] = [
   { kind: 'devices', store: 'acct:personal', device: '04a779c40674' },
   { kind: 'devices', store: 'acct:personal', device: 'yubi:primary key' },
   { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  { kind: 'group-settings', ref: 'team:eng', tab: 'channels' },
+  { kind: 'group-settings', ref: 'team:eng', tab: 'files' },
   { kind: 'group-settings', ref: 'team:eng', tab: 'settings' },
   { kind: 'settings', section: 'servers' },
   { kind: 'settings', section: 'servers', profile: 'acme' },
@@ -617,6 +645,33 @@ test('removed group tabs route to People or the group vault', () => {
     decodeLocation('?state=group-settings&store=team:eng&tab=federation'),
     { kind: 'group-settings', ref: 'team:eng' },
   );
+});
+
+test('a group page addresses each of its four tabs', () => {
+  for (const tab of ['people', 'channels', 'files', 'settings'] as const)
+    assert.deepEqual(
+      decodeLocation(`?state=group-settings&store=team:eng&tab=${tab}`),
+      { kind: 'group-settings', ref: 'team:eng', tab },
+    );
+  // The two tabs the group page grew have their own mock state names, and a
+  // `tab=` on an alias still wins over the tab the alias names. Channels
+  // opens on the group that has channels: Engineering's server offers no
+  // chat, so that scene would be the reason rather than the tab.
+  assert.deepEqual(decodeLocation('?state=group-channels'), {
+    kind: 'group-settings',
+    ref: 'team:household',
+    tab: 'channels',
+  });
+  assert.deepEqual(decodeLocation('?state=group-files'), {
+    kind: 'group-settings',
+    ref: 'team:eng',
+    tab: 'files',
+  });
+  assert.deepEqual(decodeLocation('?state=group-people&tab=files'), {
+    kind: 'group-settings',
+    ref: 'team:eng',
+    tab: 'files',
+  });
 });
 
 test('path-specific first-run review states keep the path the mock defines', () => {

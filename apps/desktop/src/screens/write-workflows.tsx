@@ -631,7 +631,9 @@ function NewSheet({
             </InsetRow>
           )}
         </Inset>
-        {store && blocked ? <Band>{`${store.name}: ${blocked}`}</Band> : null}
+        {store && blocked ? (
+          <Band live>{`${store.name}: ${blocked}`}</Band>
+        ) : null}
         {store ? (
           <AccessBlock
             snapshot={snapshot}

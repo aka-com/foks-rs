@@ -62,13 +62,13 @@ import {
   readAccountAndProfileKeys,
 } from './device-model';
 import type { DeviceEntry, DeviceLists } from './device-model';
-import { GroupMark } from './groups-screen';
+import { GroupMark } from './group-mark';
 import { GoProfileConnectSheet } from './go-profile-connect';
 
 const ACTION_UNAVAILABLE =
   'Resolve this in Settings › Servers, or in the group’s settings.';
 
-/** The severity mark's name, for a reader who cannot see its colour. */
+/** The accessible name for the severity indicator. */
 const SEVERITY_LABELS: Record<Notification['severity'], string> = {
   crit: 'Critical',
   warn: 'Warning',
@@ -90,9 +90,8 @@ function canRetry(note: Notification): boolean {
 }
 
 /**
- * The group's page, opened on the Members tab. The page states both of the
- * things a note sends the reader for on arrival: the setup band with Finish
- * setup, and the admission state on the Members tab it opens on.
+ * Returns navigation parameters for the group's Members tab, where setup
+ * status and membership admission details can be reviewed and completed.
  */
 function openGroup(group: TeamStore): Destination {
   return {
@@ -209,15 +208,10 @@ function AttentionList({
                 <div>
                   <h3>{note.title}</h3>
                   <p>{note.detail}</p>
-                  {/* Where the button leads, and the agent's own word for the
-                      operation, kept verbatim. With nowhere to go there is no
-                      caption: the chip beside the card carries that wording
-                      instead, and repeating it here would say it twice. */}
+                  {/* Display the required action for linked notifications.
+                      Unlinked notifications show the action in a chip instead. */}
                   {destination && note.action ? (
-                    <p className="go">
-                      {destination.where} · the agent reports this as “
-                      {note.action}”
-                    </p>
+                    <p className="go">Required action: {note.action}</p>
                   ) : null}
                 </div>
                 {canRetry(note) ? (
@@ -730,9 +724,9 @@ function AccountPanel({
         </InsetRow>
       </Inset>
       <p className="fn">
-        Organization sign-in, Bot accounts, Web admin and Join a group stay
-        available while access is stopped: each of them is a way to get access
-        back. The username change does not.
+        Account recovery options (Organization sign-in, Bot accounts, Web admin,
+        and Join a group) remain available while access is suspended. Changing a
+        username is disabled until access is restored.
       </p>
     </>
   );
@@ -886,9 +880,9 @@ function DeviceSummary({
               {stopped
                 ? 'Devices and keys are listed again once the server is checked.'
                 : loading
-                  ? 'The agent is answering with this account’s devices, paper keys and security keys.'
+                  ? 'Loading devices, paper keys, and security keys…'
                   : failed
-                    ? 'The agent did not answer with them. Nothing is known about this account’s keys until it does.'
+                    ? 'Could not retrieve keys from the background service. Please retry or check service status.'
                     : keys.length
                       ? keys.map((entry) => entry.name).join(' · ')
                       : 'Nothing is listed for this account on this Mac.'}

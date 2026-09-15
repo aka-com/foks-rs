@@ -1,12 +1,13 @@
 /**
  * New chat: pick a team, then pick or create a channel in it.
  *
- * Chat lives in a named team, so there is no one-to-one conversation to start:
- * step one is the team and step two is the channel. A team this Mac cannot
- * chat in is listed with its reason rather than hidden, because the reason is
- * what a reader needs. Creating a channel is the agent's durable preparation —
- * one submission identifier, retried rather than repeated — and the fields and
- * the audience are the ones `prepare-channel` carries.
+ * Chat supports channels in named teams, not one-to-one conversations. The
+ * default flow selects a team and then a channel. When opened for a specific
+ * team, the sheet skips team selection, opens the create step, and shows
+ * Cancel instead of Back. Unavailable teams remain listed with an explanation.
+ * Channel creation uses the agent's durable preparation: one submission
+ * identifier is retried rather than repeated, with the fields and audience
+ * accepted by `prepare-channel`.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -49,7 +50,7 @@ import {
   normalizeChannelName,
 } from '../chat/presentation';
 import { chatTeams, noChatReason, noChatTeams } from './chat-teams';
-import { GroupMark } from './groups-screen';
+import { GroupMark } from './group-mark';
 
 /** A team the sheet offers, and why it cannot be offered. */
 interface TeamChoice {
@@ -91,12 +92,16 @@ export function NewChatSheet({
   onUnresolved?: (unresolved: boolean) => void;
 }): ReactNode {
   const { service, snapshot: inbox } = useChatInbox();
+  // A sheet opened on a team is that team's: there is no step behind it to go
+  // back to, so it opens on the channel it was asked for — the create step —
+  // and leaves by being cancelled.
+  const fixedTeam = team !== undefined;
   const [chosen, setChosen] = useState<StoreRef | undefined>(team);
   const [step, setStep] = useState<'team' | 'channel'>(
     team ? 'channel' : 'team',
   );
   const [channel, setChannel] = useState<string | undefined>();
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(fixedTeam);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [admin, setAdmin] = useState(false);
@@ -379,8 +384,14 @@ export function NewChatSheet({
       dismissible={!locked}
       footer={
         <>
-          <Button disabled={locked} onClick={step === 'team' ? onClose : back}>
-            {step === 'team' ? 'Cancel' : 'Back'}
+          {/* Back belongs to the step behind this one. A sheet opened on one
+              team has none — the cross-team picker is not where it came
+              from — so its left button leaves instead. */}
+          <Button
+            disabled={locked}
+            onClick={step === 'team' || fixedTeam ? onClose : back}
+          >
+            {step === 'team' || fixedTeam ? 'Cancel' : 'Back'}
           </Button>
           {step === 'team' ? (
             <Button
@@ -400,7 +411,7 @@ export function NewChatSheet({
               {busy
                 ? 'Creating…'
                 : outstanding
-                  ? 'Recover preparation'
+                  ? 'Retry channel creation'
                   : 'Create channel'}
             </Button>
           ) : (
@@ -442,8 +453,7 @@ export function NewChatSheet({
         ) : (
           <form
             className="chat-create"
-            // Enter is the button: it is refused by exactly what refuses the
-            // button, rather than sending what the button would not.
+            // Submit on Enter only when the Create button is enabled.
             onSubmit={(event) => {
               event.preventDefault();
               if (creating && !createDisabled) void create();
@@ -453,7 +463,7 @@ export function NewChatSheet({
               against: the reason stands where the channels would be. */}
             {picked?.reason && (
               <p role="alert" className="action-error">
-                {picked.store.name} cannot be chatted in right now:{' '}
+                Chat is currently unavailable for {picked.store.name}:{' '}
                 {picked.reason}
               </p>
             )}

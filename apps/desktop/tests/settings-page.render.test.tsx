@@ -309,7 +309,12 @@ test('a lapsed server says its check-in expired and offers the check', async () 
     where: { profile: 'acme' },
   });
 
-  assert.ok(rendered.getByText('Check-in expired.'));
+  // The band leads with the condition, which the row's chip also names.
+  assert.ok(
+    [...document.querySelectorAll('.band b')].some(
+      (node) => node.textContent === 'Check-in expired',
+    ),
+  );
   assert.ok(rendered.getByRole('button', { name: 'Check now' }));
   assert.ok(rendered.getByText('Hidden while locked'));
 });
@@ -319,7 +324,7 @@ test('a never-checked server says what a check would discover', async () => {
     where: { profile: 'partner' },
   });
 
-  assert.ok(rendered.getByText('Not checked yet.'));
+  assert.ok(rendered.getByText('Not checked yet'));
   assert.ok(rendered.getByText('Discovered upon first verification'));
   assert.ok(rendered.getByText('Not verified yet'));
 });

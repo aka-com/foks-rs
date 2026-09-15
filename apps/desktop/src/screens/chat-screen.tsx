@@ -305,11 +305,9 @@ export function ChatScreen({
                 op.channel === channel.id,
             )}
           />
-        ) : // A channel the location names that this team does not list yet is
-        // not an unavailable channel while the team is being synchronized
-        // again: a channel created in this window is exactly that, and saying
-        // it is unavailable a moment after creating it is the pane calling the
-        // reader's own work missing.
+        ) : // Show a loading indicator if the requested channel is not yet listed
+        // but the team is actively resynchronizing (such as immediately after
+        // channel creation), avoiding premature 'unavailable' warnings.
         loading || (location.channel && resyncing) ? (
           <div className="empty" aria-busy="true">
             <p>Loading {team.name}…</p>

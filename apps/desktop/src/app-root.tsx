@@ -1269,7 +1269,12 @@ function VaultShell({
       snapshot={shown}
       bridge={bridge}
       location={here}
-      onNavigate={(location) => locations.navigate(location)}
+      // The Channels tab reads chat, so it decides availability on the shell's
+      // own clock and guards a new channel on the same access generation the
+      // Chat tab does.
+      accessNow={accessNow}
+      accessGenerations={accessGenerations}
+      onNavigate={(location, options) => locations.navigate(location, options)}
       onApplied={refresh}
       onError={commandError}
       onMutationError={mutationError}

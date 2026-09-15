@@ -19,7 +19,7 @@ import {
 import type { AgentSnapshot, Store } from '../model';
 import type { Location } from '../location';
 import { PageHeader } from '../shell/page-header';
-import { GroupMark } from './groups-screen';
+import { GroupMark } from './group-mark';
 
 export interface FilesScreenProps {
   snapshot: AgentSnapshot;

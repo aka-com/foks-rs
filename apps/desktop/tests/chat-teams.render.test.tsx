@@ -770,10 +770,16 @@ test('New chat picks a team, states why one cannot be picked, and opens a channe
   const sheet = await ui.screen.findByRole('dialog', { name: 'New chat' });
   assert.ok(sheet);
   // A team whose server offers no chat is offered inert with its reason, not
-  // hidden: the reason is what the reader needs.
+  // hidden: the reason is what the reader needs, so the card is marked
+  // `aria-disabled` rather than `disabled` and the keyboard still reaches it.
   const engineering = ui.screen.getByRole('radio', { name: /^Engineering/ });
-  assert.equal((engineering as HTMLButtonElement).disabled, true);
+  assert.equal((engineering as HTMLButtonElement).disabled, false);
+  assert.equal(engineering.getAttribute('aria-disabled'), 'true');
+  assert.equal(engineering.tabIndex, 0);
   assert.match(engineering.textContent ?? '', /Chat not offered on /);
+  // Inert means inert: pressing it does not choose the team.
+  ui.fireEvent.click(engineering);
+  assert.equal(engineering.getAttribute('aria-checked'), 'false');
   ui.fireEvent.click(ui.screen.getByRole('radio', { name: /^Household/ }));
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Continue' }));
   ui.fireEvent.click(await ui.screen.findByRole('radio', { name: /#general/ }));
@@ -1092,7 +1098,7 @@ test('an interrupted attempt recovers the same preparation rather than a second'
   // The agent has taken the preparation, so what is offered is a recovery of
   // that one rather than another run at creating the channel.
   const recover = await ui.screen.findByRole('button', {
-    name: 'Recover preparation',
+    name: 'Retry channel creation',
   });
   await ui.screen.findByText('The reply was lost.');
   await ui.screen.findByText(/Recover retries the same request/);
@@ -1159,7 +1165,7 @@ function holdingFirst(
   };
 }
 
-test('a newer message elsewhere does not move the reader off the open conversation', async () => {
+test('newer messages in other teams do not switch away from the active conversation', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   const clock = new Clock();
   let newer = false;
@@ -1258,7 +1264,7 @@ test('a team that goes out of reach while step two is open refuses it and says w
   // The reason stands where the channels would be, and nothing is submitted
   // against a team this Mac cannot reach.
   await ui.screen.findByText(
-    'Engineering cannot be chatted in right now: Check-in expired',
+    'Chat is currently unavailable for Engineering: Check-in expired',
   );
   await ui.screen.findByText('Loading channels…');
   assert.equal(
@@ -1410,7 +1416,7 @@ test('a team switch keeps a New chat whose submission is unresolved', async () =
     assert.equal(head('Household').getAttribute('aria-current'), 'page'),
   );
   assert.ok(ui.screen.getByRole('dialog', { name: 'New channel' }));
-  assert.ok(ui.screen.getByRole('button', { name: 'Recover preparation' }));
+  assert.ok(ui.screen.getByRole('button', { name: 'Retry channel creation' }));
 });
 
 test('an ambiguous access failure keeps the submission a recovery re-issues', async () => {
@@ -1451,7 +1457,7 @@ test('an ambiguous access failure keeps the submission a recovery re-issues', as
   // so the recovery is not disabled by the team's own state.
   const recover = () =>
     ui.screen.getByRole<HTMLButtonElement>('button', {
-      name: 'Recover preparation',
+      name: 'Retry channel creation',
     });
   assert.equal(recover().disabled, false);
   ui.fireEvent.click(recover());
@@ -1504,7 +1510,7 @@ test('a channel is not attempted once the server’s access generation has moved
   held.release();
   await ui.screen.findByText(/Access changed after the channel was sent/);
   assert.deepEqual(attempts, []);
-  await ui.screen.findByRole('button', { name: 'Recover preparation' });
+  await ui.screen.findByRole('button', { name: 'Retry channel creation' });
 });
 
 test('a channel preparation under a changed identity stops chat and frees the sheet', async () => {

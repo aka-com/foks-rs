@@ -782,9 +782,9 @@ function ResetMacSheet({
     );
   const stores = accountStores(snapshot);
 
-  // Each server answers with its own lifetime, so the sentence waits until
-  // every preview has answered and then says what they actually said. There
-  // is no default to fall back on: an invented number is a promise.
+  // Each server may configure a different reset preview token TTL. Display the
+  // expiration notice only after all server previews have responded, without
+  // assuming a fallback duration.
   const lifetimes = servers.map(
     (server) => previews.get(server.id)?.expiresInSeconds,
   );
@@ -796,12 +796,12 @@ function ResetMacSheet({
     ? null
     : agreed !== undefined
       ? `Each reset confirmation expires in ${agreed} seconds and can be used once. Reopen this dialog to generate new ones.`
-      : `Each reset confirmation can be used once and expires on its own server’s terms: ${servers
+      : `Each reset confirmation can be used once and has a server-specific expiration duration: ${servers
           .map(
             (server) =>
-              `${server.name} in ${previews.get(server.id)?.expiresInSeconds} seconds`,
+              `${server.name} (${previews.get(server.id)?.expiresInSeconds} seconds)`,
           )
-          .join(', ')}. Reopen this dialog to generate new ones.`;
+          .join(', ')}. Reopen this dialog to generate new confirmations.`;
 
   return (
     <SheetDialog

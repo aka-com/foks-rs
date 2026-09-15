@@ -22,7 +22,20 @@ export type SettingsSection = 'servers' | 'about' | 'credentials';
 /** Which pane of the Devices tab is open. */
 export type DevicesSection = 'macs' | 'keys';
 
-export type GroupSettingsTab = 'people' | 'settings';
+/**
+ * Which tab of a group's page an address points at. `people` is the Members
+ * roster, `channels` the group's chat channels, `files` the group's vault
+ * view, and `settings` the group's settings.
+ */
+export type GroupSettingsTab = 'people' | 'channels' | 'files' | 'settings';
+
+/** The tabs in the order the group page's strip draws them. */
+export const GROUP_SETTINGS_TABS: readonly GroupSettingsTab[] = [
+  'people',
+  'channels',
+  'files',
+  'settings',
+];
 
 /** A step in the first-run state machine. */
 export type FirstRunStep = string;
@@ -163,8 +176,18 @@ export const INITIAL_STATE: LocationState = {
 
 /* ------------------------------------------------------------ transition -- */
 
+/**
+ * How a navigation is recorded. A replacement is a move inside the place the
+ * reader is already in — a tab of the page they are on — rather than an
+ * arrival somewhere new, so it keeps what that place was showing instead of
+ * standing a fresh navigation in its stead.
+ */
+export interface NavigateOptions {
+  replace?: boolean;
+}
+
 export type LocationAction =
-  | { type: 'navigate'; location: Location }
+  | { type: 'navigate'; location: Location; replace?: boolean }
   | { type: 'select'; selection: Selection }
   | { type: 'search'; query: string }
   | { type: 'view'; view: ViewMode }
@@ -210,19 +233,21 @@ export function transition(
 ): LocationState {
   switch (action.type) {
     case 'navigate':
-      return sameLocation(state.location, action.location)
-        ? state
-        : {
-            ...state,
-            location: action.location,
-            selection: null,
-            folder: '',
-            closedFolders: [],
-            query:
-              action.location.kind === 'chat' || state.location.kind === 'chat'
-                ? ''
-                : state.query,
-          };
+      if (sameLocation(state.location, action.location)) return state;
+      // A replacement moves within the place the reader is in, so the item
+      // they had selected and the folder they had open are still theirs.
+      if (action.replace) return { ...state, location: action.location };
+      return {
+        ...state,
+        location: action.location,
+        selection: null,
+        folder: '',
+        closedFolders: [],
+        query:
+          action.location.kind === 'chat' || state.location.kind === 'chat'
+            ? ''
+            : state.query,
+      };
     case 'select':
       // Selecting an item automatically opens the details panel; deselecting keeps the panel open.
       return {
@@ -314,6 +339,14 @@ const STATE_ALIASES: Readonly<Record<string, Location>> = {
   // `people` is the People tab, decoded above; the mock's People *tab of a
   // group* is `group-people`, alongside `party` and `federation`.
   'group-people': { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  // Engineering's server offers no chat, so its Channels tab is the reason
+  // rather than the tab: the scene opens on the group that has channels.
+  'group-channels': {
+    kind: 'group-settings',
+    ref: 'team:household',
+    tab: 'channels',
+  },
+  'group-files': { kind: 'group-settings', ref: 'team:eng', tab: 'files' },
   party: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   federation: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   items: { kind: 'store', ref: 'team:eng' },
@@ -540,7 +573,7 @@ export function decodeLocation(search: string): Location | null {
     const ref = params.get('store');
     const tab = params.get('tab');
     const resolvedTab =
-      tab && (['people', 'settings'] as const).includes(tab as GroupSettingsTab)
+      tab && GROUP_SETTINGS_TABS.includes(tab as GroupSettingsTab)
         ? (tab as GroupSettingsTab)
         : undefined;
     return ref
@@ -643,7 +676,7 @@ export function decodeLocation(search: string): Location | null {
   if (alias?.kind === 'group-settings') {
     const tab = params.get('tab');
     const resolvedTab =
-      tab && (['people', 'settings'] as const).includes(tab as GroupSettingsTab)
+      tab && GROUP_SETTINGS_TABS.includes(tab as GroupSettingsTab)
         ? (tab as GroupSettingsTab)
         : alias.tab;
     return { ...alias, ...(resolvedTab ? { tab: resolvedTab } : {}) };
@@ -906,8 +939,12 @@ export class LocationStore {
     return next;
   }
 
-  navigate(location: Location): void {
-    this.dispatch({ type: 'navigate', location });
+  navigate(location: Location, options: NavigateOptions = {}): void {
+    this.dispatch({
+      type: 'navigate',
+      location,
+      ...(options.replace ? { replace: true } : {}),
+    });
   }
 
   select(selection: Selection): void {

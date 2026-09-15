@@ -554,8 +554,8 @@ function FirstRunAppSidebar({
       />
       {checkpoint.path === 'invited' && !checkpoint.added ? (
         <p className="side-note">
-          {groupName} will appear under Teams once your access is approved.
-          FOKS checks for group access at launch. You can also click Check now.
+          {groupName} will appear under Teams once your access is approved. FOKS
+          checks for group access at launch. You can also click Check now.
         </p>
       ) : null}
     </>
@@ -4343,7 +4343,7 @@ export function FirstRunExperience({
         {recoverySet ? null : (
           <div className="checklist-notice">
             <Band
-              label={`Only this Mac can recover ${checkpoint.account?.username}.`}
+              label={`Only this Mac can recover ${checkpoint.account?.username}`}
               action={
                 <Button
                   size="sm"

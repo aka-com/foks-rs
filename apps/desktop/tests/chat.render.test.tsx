@@ -499,7 +499,7 @@ test('ambiguous channel preparation keeps its sheet and submission until recover
   ui.fireEvent.keyDown(document, { key: 'Escape' });
   assert.ok(ui.screen.getByRole('dialog', { name: 'New channel' }));
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Recover preparation' }),
+    ui.screen.getByRole('button', { name: 'Retry channel creation' }),
   );
   await ui.screen.findByRole('button', { name: /#recoverable/ });
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));

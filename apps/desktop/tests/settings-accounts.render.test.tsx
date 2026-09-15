@@ -486,16 +486,8 @@ test('an attention card carries the route to where it is resolved', async () => 
   });
   // A card that leads somewhere says where, and keeps the agent's own word
   // for what it is asking.
-  assert.ok(
-    rendered.getByText(
-      'Teams › Engineering › Members · the agent reports this as “Restore access”',
-    ),
-  );
-  assert.ok(
-    rendered.getByText(
-      'Settings › Servers · the agent reports this as “Check status”',
-    ),
-  );
+  assert.ok(rendered.getByText('Required action: Restore access'));
+  assert.ok(rendered.getByText('Required action: Check status'));
 });
 
 test('a team note with the same alias on two profiles routes to neither', async () => {
@@ -559,7 +551,7 @@ test('an admission already restored does not route the note either', async () =>
   );
 });
 
-test('a note with nowhere to go still says what the agent asks for', async () => {
+test('unlinked notifications display the agent action label as a chip', async () => {
   const snapshot = await fixture();
   const orphan: AgentSnapshot = {
     ...snapshot,

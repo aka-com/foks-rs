@@ -10,9 +10,9 @@ import {
 import type { Store, StoreDescriptionState, AgentSnapshot } from '../model';
 import { PageHeader } from '../shell/page-header';
 
-type AccessProblem = Exclude<StoreDescriptionState, 'normal'>;
+export type AccessProblem = Exclude<StoreDescriptionState, 'normal'>;
 
-interface StoreAccessCopy {
+export interface StoreAccessCopy {
   title: string;
   detail: string;
   action: 'open-server' | 'review-server' | 'finish-setup';
@@ -24,7 +24,13 @@ function resourceSubject(store: Store): string {
     : `items in ${store.name}`;
 }
 
-function accessCopy(
+/**
+ * The one heading and sentence for a store that cannot be opened. Every place
+ * that states the condition — the takeover, the incomplete-group page,
+ * the Channels tab's band — reads it from here, so none of them can describe
+ * the same state differently.
+ */
+export function accessCopy(
   state: AccessProblem,
   store: Store,
   serverName: string,
@@ -88,8 +94,8 @@ function accessCopy(
       };
     case 'setup-incomplete':
       return {
-        title: 'Group setup incomplete',
-        detail: 'Items and members are unavailable until setup is finished.',
+        title: 'Setup incomplete',
+        detail: `${store.name} was created on ${serverName}, but key setup is incomplete on this Mac. Members and items are unavailable until setup finishes.`,
         action: 'finish-setup',
       };
   }

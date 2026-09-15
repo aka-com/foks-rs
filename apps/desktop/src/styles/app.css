@@ -82,19 +82,6 @@ body {
   align-items: center;
 }
 
-.main > .details .inset.rows .fr {
-  flex-wrap: wrap;
-  row-gap: 2px;
-}
-
-.main > .details .inset.rows .fr .k {
-  width: 100%;
-}
-
-.main > .details .inset.rows .fr .v {
-  flex: 1 1 60%;
-}
-
 /* Group hero header */
 .ghero {
   display: flex;
@@ -348,6 +335,20 @@ body {
   font-size: 13px;
 }
 
+/* Files tab doorway row */
+.settings-inset .fr.doorway .v {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Channel activity timestamp */
+.rowtail .when {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .kico.round {
   width: 30px;
   height: 30px;
@@ -425,6 +426,82 @@ body {
 .nav-rows .rowmenu {
   display: flex;
   flex: none;
+}
+
+/* The per-account checks are folded into one row: an occasional action, not a
+   landing surface. The head is a disclosure button, the body its rows. */
+.disc {
+  margin: 16px 0 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.disc-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  padding: 11px 14px;
+  cursor: pointer;
+}
+
+.disc-head:hover {
+  background: var(--hover);
+}
+
+.disc-head .chev {
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--muted);
+  transition: transform 0.12s ease;
+  transform: rotate(-90deg);
+}
+
+.disc.open .disc-head .chev {
+  transform: rotate(0deg);
+}
+
+.disc-head .name {
+  flex: 1;
+  min-width: 0;
+}
+
+.disc-head .name .tt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.disc-head .name small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.disc-head .tail {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.disc-head .tail .summary {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.disc-body {
+  border-top: 1px solid var(--line-soft);
+  padding: 2px 6px;
 }
 
 .callout {
@@ -1661,11 +1738,6 @@ body {
 
 .strike {
   text-decoration: line-through;
-}
-
-.msg {
-  white-space: pre-line;
-  line-height: 1.5;
 }
 
 .dz {

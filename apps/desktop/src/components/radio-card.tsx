@@ -37,7 +37,13 @@ export interface RadioCardProps {
   icon?: FoksIconName;
   onSelect?: () => void;
   disabled?: boolean;
-  /** Dimmed and inert — the design's `.radio.off`. */
+  /**
+   * Dimmed and inert — the design's `.radio.off`. The card keeps its place
+   * and does nothing: like a menu item that does not apply, it is marked
+   * `aria-disabled` rather than `disabled`, so the keyboard reaches it and
+   * reads why. `detail` is that reason, and carries it into the `title` as
+   * well, because WKWebView suppresses hover on a natively disabled control.
+   */
   off?: boolean;
   /** A trailing element, such as the store roster on a `store-choice`. */
   tail?: ReactNode;
@@ -70,8 +76,11 @@ export function RadioCard({
       role="radio"
       aria-checked={selected}
       className={classes}
-      disabled={disabled || off}
-      onClick={onSelect}
+      disabled={disabled}
+      aria-disabled={off ? true : undefined}
+      tabIndex={off ? 0 : undefined}
+      title={off && typeof detail === 'string' ? detail : undefined}
+      onClick={off ? undefined : onSelect}
     >
       <span className="rb" />
       {icon ? (

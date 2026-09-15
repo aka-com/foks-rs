@@ -91,7 +91,7 @@ export function AddDeviceSheet({
   const [choice, setChoice] = useState<AddChoice>('pair');
   return (
     <DeviceSheetFrame
-      title="Add a device or paper key"
+      title="Add a device, paper key, or security key"
       subtitle={subtitle}
       onClose={onClose}
       footer={
@@ -118,7 +118,7 @@ export function AddDeviceSheet({
         <RadioCard
           icon="laptop"
           title="Enter a pairing phrase"
-          detail="Add this Mac to the account, using the phrase the other Mac is showing."
+          detail="Add this Mac to the account by entering the pairing phrase displayed on your other device."
           selected={choice === 'pair-accept'}
           onSelect={() => setChoice('pair-accept')}
         />

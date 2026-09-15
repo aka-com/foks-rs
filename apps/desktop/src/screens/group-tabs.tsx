@@ -1,0 +1,429 @@
+/**
+ * The group's Channels and Files tabs, plus the page shown when group setup is
+ * incomplete.
+ *
+ * Channels lists the inbox service's data for this group and opens each row in
+ * Chat. Files links to the group's vault and displays the catalog item count.
+ * Both tabs explain empty states.
+ */
+
+import type { ReactNode } from 'react';
+import {
+  Band,
+  Button,
+  Chip,
+  Icon,
+  Inset,
+  InsetRow,
+  SectionLabel,
+} from '../components';
+import {
+  catalog,
+  chatAvailable,
+  plural,
+  serverAvailability,
+  serverOf,
+  storeDescriptionState,
+} from '../model';
+import type {
+  AgentSnapshot,
+  AvailabilityOptions,
+  AvailabilityReason,
+  TeamStore,
+} from '../model';
+import { useSidebarInbox } from '../chat/inbox-provider';
+import {
+  accessSummary,
+  channelMeta,
+  channelTitle,
+  listChannels,
+  previewTime,
+} from '../chat/presentation';
+import type { Location } from '../location';
+import { accessCopy } from './store-access';
+
+/** The items the catalog holds for one store. */
+export function itemCountOf(snapshot: AgentSnapshot, store: TeamStore): number {
+  return catalog(snapshot).filter((item) => item.store === store.id).length;
+}
+
+/**
+ * Why this group has no channel list at all, or `undefined` when it does. A
+ * server that does not offer chat is the one reason a group can never have
+ * one; the rest are states that pass.
+ */
+function noChannelsReason(
+  snapshot: AgentSnapshot,
+  store: TeamStore,
+): string | undefined {
+  if (store.team_kind !== 'named')
+    return 'An ad-hoc share has no chat: chat lives in a named group.';
+  const server = serverOf(snapshot, store.id);
+  if (!server) return 'This group’s server is not configured on this Mac.';
+  if (!server.capabilities.chat)
+    return `${server.name} does not offer chat, so this group has no channels.`;
+  return undefined;
+}
+
+/**
+ * Why chat cannot be reached for this group at the tab's own clock instant:
+ * the store's condition where it has one, else its server's. Both are the
+ * facts `StoreAccessTakeover` states, so the band says what the takeover
+ * would have said had the page been drawn a moment later.
+ */
+function unreachableReason(
+  snapshot: AgentSnapshot,
+  store: TeamStore,
+  options: AvailabilityOptions,
+): AvailabilityReason | undefined {
+  const state = storeDescriptionState(snapshot, store, options);
+  if (state !== 'normal') return state;
+  const server = serverOf(snapshot, store.id);
+  if (!server) return 'vault-unavailable';
+  const availability = serverAvailability(snapshot, server, options);
+  return availability.available ? undefined : availability.reason;
+}
+
+/**
+ * The group's chat channels, as the inbox service holds them: the name, what
+ * the channel says about itself, who can take part, and its unread count.
+ */
+export function ChannelsTab({
+  snapshot,
+  store,
+  accessOptions = {},
+  onNavigate,
+  onAddChannel,
+}: {
+  snapshot: AgentSnapshot;
+  store: TeamStore;
+  accessOptions?: AvailabilityOptions;
+  onNavigate: (location: Location) => void;
+  onAddChannel: () => void;
+}): ReactNode {
+  const inbox = useSidebarInbox();
+  const entry = inbox.get(store.id);
+  const offered = noChannelsReason(snapshot, store);
+  const reachable = chatAvailable(snapshot, store, accessOptions);
+  if (offered)
+    return (
+      <div className="roster">
+        <Band severity="info" label="No channels here">
+          {offered}
+        </Band>
+      </div>
+    );
+  if (!reachable) {
+    // Why, read off the same access decision the takeover states, on the tab's
+    // own clock: a lapse while this tab is open is a condition of the store or
+    // of its server, never the roster summary a store's description falls back
+    // to once nothing is wrong with it.
+    const state = unreachableReason(snapshot, store, accessOptions);
+    const serverName = serverOf(snapshot, store.id)?.name ?? store.server;
+    const copy = state ? accessCopy(state, store, serverName) : undefined;
+    return (
+      <div className="roster">
+        <Band label={copy?.title ?? 'Channels unavailable'}>
+          {copy?.detail ??
+            `${store.name}’s channels cannot be read until access to ${serverName} is restored.`}
+        </Band>
+      </div>
+    );
+  }
+  const failed =
+    entry !== undefined &&
+    (entry.state === 'unavailable' ||
+      entry.state === 'blocked' ||
+      (Boolean(entry.error) && !entry.data));
+  if (failed)
+    return (
+      <div className="roster">
+        <Band label="Channels unavailable">
+          {entry.error || 'This group’s channel list could not be read.'}
+        </Band>
+      </div>
+    );
+  const listed = entry?.data
+    ? listChannels(entry.data.channels, entry.data.conversations)
+    : undefined;
+  const now =
+    accessOptions.nowSeconds === undefined
+      ? Date.now()
+      : accessOptions.nowSeconds * 1000;
+  return (
+    <div className="roster">
+      {/* A synchronization that brought data and still could not finish
+          everything is a note over the rows it did bring, the way the Chat
+          column draws one, rather than a failure that replaces them. */}
+      {entry?.data && entry.error ? (
+        <Band severity="warn" label="Channels may be out of date">
+          {entry.error}
+        </Band>
+      ) : null}
+      <SectionLabel>
+        Channels
+        {listed === undefined ? null : (
+          <span className="count">— {plural(listed.length, 'channel')}</span>
+        )}
+      </SectionLabel>
+      {listed === undefined ? (
+        <p className="fn" role="status">
+          Loading channels…
+        </p>
+      ) : listed.length === 0 ? (
+        <div className="callout">
+          <span
+            className="kico"
+            style={{ background: 'var(--chip-bg)', color: 'var(--muted)' }}
+          >
+            <Icon name="chat" />
+          </span>
+          <span className="t">
+            <b>No channels yet.</b>
+          </span>
+        </div>
+      ) : (
+        <div className="rt bare">
+          {listed.map((option) => {
+            const meta = channelMeta(option, entry?.blockedChannels);
+            const about =
+              option.channel.description || accessSummary(option.channel);
+            const unread =
+              option.conversation && BigInt(option.conversation.unread) > 0n
+                ? option.conversation.unread
+                : null;
+            // When the channel was last active, as the inbox row draws it: the
+            // same stamp the Chat column reads, in the same words.
+            const preview = option.conversation?.preview;
+            const when = preview ? previewTime(preview.insert_time, now) : '';
+            return (
+              <div className="prow" key={option.channel.id}>
+                <span className="who2">
+                  <span
+                    className="kico round"
+                    style={{
+                      background: 'var(--chip-bg)',
+                      color: 'var(--muted)',
+                    }}
+                    aria-hidden="true"
+                  >
+                    <Icon name="chat" />
+                  </span>
+                  <span className="t">
+                    <b>
+                      <span>{channelTitle(option.channel)}</span>
+                    </b>
+                    <small>{meta ? `${meta} · ${about}` : about}</small>
+                  </span>
+                </span>
+                <span className="rowtail">
+                  {when ? <span className="when">{when}</span> : null}
+                  {unread ? <Chip tone="warn">{unread} unread</Chip> : null}
+                  <Button
+                    size="sm"
+                    aria-label={`Open ${channelTitle(option.channel)} in Chat`}
+                    onClick={() =>
+                      onNavigate({
+                        kind: 'chat',
+                        ref: store.id,
+                        channel: option.channel.id,
+                      })
+                    }
+                  >
+                    Open in Chat
+                  </Button>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div className="roster-actions">
+        <Button
+          icon="plus"
+          disabled={listed === undefined}
+          title={
+            listed === undefined
+              ? 'Wait for this group’s channels before adding one.'
+              : 'Create a channel in this group'
+          }
+          onClick={onAddChannel}
+        >
+          Add channel
+        </Button>
+      </div>
+      <p className="fn">
+        Channels are encrypted to the group key. A channel’s own read and write
+        roles decide who can take part in it.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Links to the group's vault without duplicating the file browser. The Files
+ * tab lists the items with the same roles.
+ */
+export function FilesTab({
+  snapshot,
+  store,
+  onNavigate,
+}: {
+  snapshot: AgentSnapshot;
+  store: TeamStore;
+  onNavigate: (location: Location) => void;
+}): ReactNode {
+  const items = itemCountOf(snapshot, store);
+  return (
+    <div className="roster">
+      <Inset className="settings-inset">
+        <InsetRow
+          className="doorway"
+          action={
+            <Button
+              variant="primary"
+              icon="out"
+              onClick={() => onNavigate({ kind: 'store', ref: store.id })}
+            >
+              Open in Files
+            </Button>
+          }
+        >
+          {/* Lead with the destination and use the Files folder mark,
+              corresponding to the Chat marks used by channel rows. */}
+          <span
+            className="kico"
+            style={{ background: 'var(--chip-bg)', color: 'var(--muted)' }}
+            aria-hidden="true"
+          >
+            <Icon name="folder" />
+          </span>
+          <span className="t">
+            <b>{store.name}’s items live in Files</b>
+            <small>
+              {items ? plural(items, 'item') : 'No items yet'} — passwords,
+              resources, files and links shared with this group. Roles here
+              decide who can read each one.
+            </small>
+          </span>
+        </InsetRow>
+      </Inset>
+      <p className="fn">Files for this group are managed in the Files tab.</p>
+    </div>
+  );
+}
+
+/**
+ * A group with incomplete setup has no members, channels, or items. This page
+ * explains the state and provides the available recovery actions, including
+ * the manual removal instructions.
+ */
+export function IncompleteGroupPage({
+  snapshot,
+  store,
+  onFinish,
+  onCopyId,
+  onNavigate,
+}: {
+  snapshot: AgentSnapshot;
+  store: TeamStore;
+  onFinish: () => void;
+  onCopyId: () => void;
+  onNavigate: (location: Location) => void;
+}): ReactNode {
+  const server = serverOf(snapshot, store.id);
+  const serverName = server?.name ?? store.server;
+  const account = snapshot.accounts.find(
+    (candidate) =>
+      candidate.alias === store.account && candidate.server === store.server,
+  );
+  // One sentence for this condition, wherever it is stated: the store page's
+  // takeover reads the same copy, so the two cannot describe it differently.
+  const copy = accessCopy('setup-incomplete', store, serverName);
+  return (
+    <div className="body">
+      <div className="groups-wrap">
+        <div className="roster">
+          <Band label={copy.title}>{copy.detail}</Band>
+          <Inset className="settings-inset">
+            <InsetRow
+              action={
+                <Button variant="primary" onClick={onFinish}>
+                  Finish setup
+                </Button>
+              }
+            >
+              <span className="t">
+                <b>Finish setup</b>
+                <small>
+                  Resumes setup for this incomplete group. The existing group
+                  is retained on the server, so no new group is created.
+                </small>
+              </span>
+            </InsetRow>
+            <InsetRow
+              action={
+                // Inert rather than natively disabled, like a menu item that
+                // does not apply: the keyboard still reaches it and reads why.
+                <Button
+                  variant="danger"
+                  aria-disabled
+                  title="No command removes a group whose setup never finished. Finish setup, or reset this Mac’s state for this server."
+                  onClick={undefined}
+                >
+                  Remove and rotate keys…
+                </Button>
+              }
+            >
+              <span className="t">
+                <b>Remove and rotate keys</b>
+                <small>
+                  No command removes a group whose setup never finished. Finish
+                  setup, or reset this Mac’s state for {serverName}.
+                </small>
+              </span>
+            </InsetRow>
+          </Inset>
+          <SectionLabel>What this Mac knows</SectionLabel>
+          <Inset>
+            <InsetRow label="Kind">
+              {store.team_kind === 'named'
+                ? 'Named group — people can be added and removed over time'
+                : 'Ad-hoc share — fixed membership, no name on the server'}
+            </InsetRow>
+            <InsetRow
+              label="Account"
+              action={
+                <Button
+                  size="sm"
+                  icon="out"
+                  onClick={() =>
+                    onNavigate({
+                      kind: 'settings',
+                      section: 'servers',
+                      profile: store.server,
+                    })
+                  }
+                >
+                  Open server
+                </Button>
+              }
+            >
+              {account?.username ?? store.account} on {serverName}
+            </InsetRow>
+            <InsetRow
+              label="Group ID"
+              action={
+                <Button size="sm" icon="copy" onClick={onCopyId}>
+                  Copy
+                </Button>
+              }
+            >
+              <code>{store.team_id_hex}</code>
+            </InsetRow>
+          </Inset>
+        </div>
+      </div>
+    </div>
+  );
+}

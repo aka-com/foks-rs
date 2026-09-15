@@ -371,7 +371,7 @@ test('the YubiKey scene still opens its sheet on Devices', async () => {
   );
   assert.ok(
     document.activeElement && dialog.contains(document.activeElement),
-    'the keyboard is inside the dialog',
+    'focus is contained within the dialog',
   );
   // Closing it hands the page back to the section the address named.
   await ui.act(async () => {
@@ -405,7 +405,7 @@ test('the paper-key scene opens the one-time reveal', async () => {
   await ui.waitFor(() => {
     assert.ok(
       document.activeElement && dialog.contains(document.activeElement),
-      'the keyboard is inside the dialog',
+      'focus is contained within the dialog',
     );
   });
 });
@@ -567,7 +567,7 @@ test('an unfinished enrollment says so and cannot be revoked', async () => {
   assert.ok(ui.within(listed).getByText('Enrolled'));
 });
 
-test('an address naming an account this Mac lost says so, and offers the ones it holds', async () => {
+test('navigating to an unavailable account displays an error and lists available accounts', async () => {
   const chosen: Location[] = [];
   const rendered = await renderDevices(await fixture(), {
     store: 'acct:nope',

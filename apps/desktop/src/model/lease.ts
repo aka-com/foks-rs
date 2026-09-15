@@ -297,14 +297,18 @@ export function storeAttentionState(
  * the server it lives on. The account it is held through is added only when
  * this Mac holds two accounts on that server, where the server alone would not
  * say which one this row belongs to; the server itself is dropped on a page
- * that is already about one server.
+ * that is already about one server, and the kind on a list whose own section
+ * label already says it.
  */
 export function teamCaption(
   snapshot: AgentSnapshot,
   store: TeamStore,
-  options: { shared?: boolean; server?: boolean } = {},
+  options: { shared?: boolean; server?: boolean; kind?: boolean } = {},
 ): string {
-  const parts = [store.team_kind === 'named' ? 'Named group' : 'Ad-hoc share'];
+  const parts =
+    options.kind === false
+      ? []
+      : [store.team_kind === 'named' ? 'Named group' : 'Ad-hoc share'];
   if (options.server !== false)
     parts.push(serverOf(snapshot, store.id)?.name ?? store.server);
   if (options.shared)

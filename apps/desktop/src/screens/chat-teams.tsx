@@ -42,7 +42,7 @@ import type { ListedChannel } from '../chat/presentation';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import type { TeamInbox } from '../chat/inbox-service';
 import { teamUnread } from '../chat/unread';
-import { GroupMark } from './groups-screen';
+import { GroupMark } from './group-mark';
 
 /** The server a store belongs to, whatever its state. */
 function serverFor(
@@ -373,9 +373,9 @@ export function ChatTeamColumn({
           New chat
         </Button>
       </div>
-      {/* What the search did, for a reader who cannot see the column narrow.
-          The region is always rendered, because a live region that arrives with
-          its text is not announced. */}
+      {/* Screen reader status announcement for search filtering results.
+          The element is rendered persistently to ensure aria-live announcements
+          fire. */}
       <p className="offscreen" role="status">
         {query
           ? `${listed + dimmed.length} of ${teams.length + withoutChat.length} teams match ${filter}.`

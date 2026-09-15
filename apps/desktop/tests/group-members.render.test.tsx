@@ -183,6 +183,12 @@ test('a row menu carries actions only, inert with the reason in the title', asyn
     blocked.getAttribute('title'),
     'An Admin cannot change another Admin or the Owner.',
   );
+  const descriptionId = blocked.getAttribute('aria-describedby');
+  assert.ok(descriptionId);
+  assert.equal(
+    document.getElementById(descriptionId)?.textContent,
+    'An Admin cannot change another Admin or the Owner.',
+  );
   // The menu says nothing beyond its actions.
   const menu = blocked.closest('.menu');
   assert.ok(menu);
@@ -198,6 +204,10 @@ test('a row menu carries actions only, inert with the reason in the title', asyn
 test('an admitted group is one row: role, admission state and its own actions', async () => {
   const rendered = await group(await fixture());
   const row = memberRow('homelab');
+  assert.equal(
+    row.querySelector('.kico.round')?.getAttribute('aria-hidden'),
+    'true',
+  );
   const chips = [...row.querySelectorAll('.chip')].map(
     (chip) => chip.textContent,
   );
@@ -332,6 +342,10 @@ test('a roster party with no admission record is listed, not dropped', async () 
   // The admission record is missing, so nothing matches the roster's group.
   await group({ ...snapshot, federation: [] });
   const row = memberRow('homelab');
+  assert.equal(
+    row.querySelector('.kico.round')?.getAttribute('aria-hidden'),
+    'true',
+  );
   assert.equal(row.querySelector('small')?.textContent, 'on foks.example.net');
   const chips = [...row.querySelectorAll('.chip')].map(
     (chip) => chip.textContent,
@@ -379,9 +393,14 @@ test('the group sections are a tablist the arrow keys walk', async () => {
   const tabs = document.querySelector('[role="tablist"]');
   assert.ok(tabs);
   assert.equal(tabs.getAttribute('aria-label'), 'Group sections');
-  const [members, settings] = [
-    ...tabs.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
-  ];
+  const strip = [...tabs.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+  // Four tabs, in the order the page's addresses name them.
+  assert.deepEqual(
+    strip.map((tab) => tab.getAttribute('data-tab')),
+    ['people', 'channels', 'files', 'settings'],
+  );
+  const [members, channels] = strip;
+  const settings = strip[3];
   // The open tab is the one in the page's tab order; the arrows reach the rest.
   assert.equal(members.getAttribute('aria-selected'), 'true');
   assert.equal(members.tabIndex, 0);
@@ -398,8 +417,12 @@ test('the group sections are a tablist the arrow keys walk', async () => {
     ui.fireEvent.keyDown(tabs, { key: 'ArrowRight' });
   });
   // Selection follows focus: the arrow both moves and opens.
+  assert.equal(channels.getAttribute('aria-selected'), 'true');
+  assert.equal(document.activeElement, channels);
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(tabs, { key: 'End' });
+  });
   assert.equal(settings.getAttribute('aria-selected'), 'true');
-  assert.equal(document.activeElement, settings);
   assert.ok(rendered.getByText('About this group'));
   assert.equal(
     document
@@ -445,11 +468,12 @@ test('each action follows the rows it adds to', async () => {
     (actions[1].querySelector('button')?.textContent ?? '').trim(),
     'Add a group…',
   );
-  // And the sheet it opens says what it will do, in its own words.
+  // And the sheet it opens says what it will do, in its own words, naming
+  // the group it was given rather than "group".
   await ui.act(async () => {
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a group…' }));
   });
-  assert.ok(rendered.getByRole('button', { name: 'Add group' }));
+  assert.ok(rendered.getByRole('button', { name: 'Add household' }));
   assert.equal(
     document.querySelector('.sheet .vis-value')?.textContent,
     'Visibility 0',
@@ -519,8 +543,7 @@ test('the Settings tab states the name, the join policy and why leaving is not o
     (row) => row.querySelector('.k')?.textContent === 'Join policy',
   );
   assert.ok(policy);
-  const reason =
-    'No command sets a join policy, opens a group to a server, or accepts a join request, so there is nothing to choose here yet.';
+  const reason = 'Configuring the join policy is not supported yet.';
   // The value states the policy, and the reason it cannot be changed is read
   // under it rather than hidden in a tooltip on a dead button.
   assert.equal(policy.querySelector('.v')?.textContent, `Invite only${reason}`);

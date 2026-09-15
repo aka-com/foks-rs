@@ -46,17 +46,19 @@ import type { Location } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
 import { useToast } from '/kit/toasts';
+import { GroupMark } from './group-mark';
 import {
   checkLabel,
   discoveryContext,
-  GroupMark,
-  GroupSheet,
   inviteUnavailableTitle,
   leaveReason,
   manageReason,
   unavailableTitle,
-} from './groups-screen';
-import type { DiscoveryContext, GroupSheetKind } from './groups-screen';
+} from './group-model';
+import type { DiscoveryContext } from './group-model';
+import { GroupSheet } from './groups-screen';
+import type { GroupSheetKind } from './groups-screen';
+import { InviteSheet } from './invite-sheet';
 
 /** Only what this page uses; the tab shares no state with Settings. */
 export interface TeamsScreenProps {
@@ -75,6 +77,57 @@ export interface TeamsScreenProps {
 interface ListSheet {
   kind: GroupSheetKind;
   store: Store;
+}
+
+/**
+ * The collapsed row that holds the per-account checks.
+ *
+ * Discovery is an occasional per-server action, not a landing surface, so the
+ * rows are folded away — unless one of the accounts is in a state the page
+ * would otherwise be hiding, in which case the disclosure opens on the state
+ * rather than making the reader find it.
+ */
+function CheckServers({
+  count,
+  open,
+  onToggle,
+  children,
+}: {
+  count: number;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}): ReactNode {
+  return (
+    <div className={open ? 'disc open' : 'disc'}>
+      <button
+        type="button"
+        className="disc-head"
+        aria-expanded={open}
+        aria-controls="teams-servers"
+        onClick={onToggle}
+      >
+        <span className="chev" aria-hidden="true">
+          <Icon name="chev" />
+        </span>
+        <span className="name">
+          <span className="tt">
+            <span>Check other servers for groups</span>
+          </span>
+          <small>
+            Check configured servers on demand for group updates. FOKS does not
+            poll servers in the background.
+          </small>
+        </span>
+        <span className="tail">
+          <span className="summary">{plural(count, 'server')}</span>
+        </span>
+      </button>
+      <div id="teams-servers" className="disc-body" hidden={!open}>
+        {children}
+      </div>
+    </div>
+  );
 }
 
 /** One group or share: mark, name, server, roster summary, role and state. */
@@ -114,7 +167,9 @@ function TeamRow({
           <span className="tt">
             <span>{store.name}</span>
           </span>
-          <small>{teamCaption(snapshot, store, { shared })}</small>
+          {/* The section above already says whether this is a group or a
+              share, so the caption says only where it lives. */}
+          <small>{teamCaption(snapshot, store, { shared, kind: false })}</small>
         </span>
         <span className="tail">
           {abnormal ? (
@@ -154,13 +209,15 @@ function AccountRow({
     (candidate) => candidate.store === store.id,
   );
   const available = Boolean(context?.available);
+  // The server this account signs in to, named as the row's heading. Its
+  // store's name is the account's, not a server's, so it is no fallback here.
+  const serverName = context?.server.name ?? store.server;
   const caption = account
     ? `as ${account.username} · ${store.account}`
     : 'This account is not signed in on this Mac.';
   // An account row says its state the way every other row does: a chip at the
   // end of the row, not a second caption under the name.
   const state = storeDescriptionState(snapshot, store);
-  const serverName = context?.server.name ?? store.name;
   return (
     <div className={available ? 'row flat' : 'row flat off'}>
       <span className="kic Store">
@@ -176,7 +233,11 @@ function AccountRow({
         {state === 'normal' ? null : (
           <Chip tone="warn">{storeDescription(snapshot, store)}</Chip>
         )}
-        {result ? <span className="summary">{result}</span> : null}
+        {/* This live region exists before a check finishes so updating its
+            contents is announced reliably. */}
+        <span className="summary" role="status">
+          {result ?? ''}
+        </span>
         <Button
           size="sm"
           aria-label={context ? checkLabel(context) : 'Check for groups'}
@@ -244,8 +305,21 @@ export function TeamsScreen({
   const [joining, setJoining] = useState<AccountStore | null>(() =>
     scene === 'join' ? (acting ?? null) : null,
   );
+  // The invitation is an account's; a group only names itself in the message.
+  const [inviting, setInviting] = useState<{
+    account: AccountStore;
+    group?: TeamStore;
+  } | null>(null);
   const [discovering, setDiscovering] = useState<StoreRef | null>(null);
   const [results, setResults] = useState<Readonly<Record<string, string>>>({});
+  // Collapsed by default. Open the disclosure whenever a contained account
+  // enters an abnormal state, including after mount. Once the user changes the
+  // disclosure state, preserve that selection.
+  const [checksToggled, setChecksToggled] = useState<boolean | null>(null);
+  const abnormalAccount = accounts.some(
+    (store) => storeDescriptionState(snapshot, store) !== 'normal',
+  );
+  const checksOpen = checksToggled ?? abnormalAccount;
   const canCreate = accounts.some((store) =>
     canCreateInStore(snapshot, store.id),
   );
@@ -309,9 +383,19 @@ export function TeamsScreen({
     const serverName = server?.name ?? store.server;
     const rosterReason = manageReason(snapshot, store, 'roster');
     const federationReason = manageReason(snapshot, store, 'federation');
-    const inviteReason = storeReadable(snapshot, store.id)
-      ? undefined
-      : inviteUnavailableTitle(serverName);
+    // The invitation is sent as the account that holds the group, so with no
+    // such account on this Mac there is nothing to send it as: the item says
+    // that rather than closing the menu and doing nothing.
+    const holder = accounts.find(
+      (candidate) =>
+        candidate.server === store.server &&
+        candidate.account === store.account,
+    );
+    const inviteReason = !holder
+      ? `No account on this Mac signs in to ${serverName}.`
+      : storeReadable(snapshot, store.id)
+        ? undefined
+        : inviteUnavailableTitle(serverName);
     return (
       <span className="rowmenu">
         <MenuButton
@@ -360,7 +444,7 @@ export function TeamsScreen({
                 reason={inviteReason}
                 onClick={() => {
                   close();
-                  setSheet({ kind: 'invite', store });
+                  if (holder) setInviting({ account: holder, group: store });
                 }}
               >
                 Invite someone…
@@ -469,22 +553,29 @@ export function TeamsScreen({
                 {teamRows(shares)}
               </>
             ) : null}
-            <SectionLabel>Servers</SectionLabel>
-            {accounts.length ? (
-              accounts.map((store) => (
-                <AccountRow
-                  key={store.id}
-                  snapshot={snapshot}
-                  store={store}
-                  busy={discovering === store.id}
-                  result={results[store.id]}
-                  onCheck={(context) => void discover(context)}
-                  onInvite={() => setSheet({ kind: 'invite', store })}
-                />
-              ))
-            ) : (
-              <p className="fn">No accounts configured on this Mac.</p>
-            )}
+            <CheckServers
+              // The row counts what it says it counts: the servers this Mac
+              // can ask, not the accounts it holds on them.
+              count={servers.size}
+              open={checksOpen}
+              onToggle={() => setChecksToggled(!checksOpen)}
+            >
+              {accounts.length ? (
+                accounts.map((store) => (
+                  <AccountRow
+                    key={store.id}
+                    snapshot={snapshot}
+                    store={store}
+                    busy={discovering === store.id}
+                    result={results[store.id]}
+                    onCheck={(context) => void discover(context)}
+                    onInvite={() => setInviting({ account: store })}
+                  />
+                ))
+              ) : (
+                <p className="fn">No accounts configured on this Mac.</p>
+              )}
+            </CheckServers>
             {canCreate ? null : (
               <p className="fn">
                 No available account can create a group right now. Add an
@@ -496,13 +587,33 @@ export function TeamsScreen({
       </div>
       {sheet ? (
         <GroupSheet
+          // Each half of the add sheet answers for itself: the band and the
+          // role given on one are not carried into the other.
+          key={sheet.kind}
           snapshot={snapshot}
           bridge={bridge}
           store={sheet.store}
           sheet={sheet.kind}
           target={null}
           onClose={() => setSheet(null)}
-          onSwitch={() => undefined}
+          // The add sheet's own switch between a person and another server's
+          // group: the sheet's store does not change, only what is added.
+          onSwitch={(next) => {
+            if (next) setSheet({ kind: next, store: sheet.store });
+          }}
+          onInvite={() => {
+            const holder = accounts.find(
+              (candidate) =>
+                candidate.server === sheet.store.server &&
+                candidate.account === sheet.store.account,
+            );
+            if (!holder) return;
+            setSheet(null);
+            setInviting({
+              account: holder,
+              ...(sheet.store.kind === 'team' ? { group: sheet.store } : {}),
+            });
+          }}
           onApplied={async (message, created) => {
             const next = await onRefreshSnapshot();
             toasts.show(message);
@@ -524,8 +635,17 @@ export function TeamsScreen({
             if (createdStore)
               onNavigate({ kind: 'store', ref: createdStore.id });
           }}
-          onError={onError}
           onMutationError={onMutationError}
+        />
+      ) : null}
+      {inviting ? (
+        <InviteSheet
+          snapshot={snapshot}
+          bridge={bridge}
+          account={inviting.account}
+          {...(inviting.group ? { group: inviting.group } : {})}
+          onClose={() => setInviting(null)}
+          onError={onError}
         />
       ) : null}
       {joining ? (

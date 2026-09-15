@@ -14,6 +14,7 @@ import {
   RadioCard,
   RadioGroup,
   SectionLabel,
+  SegmentedControl,
   SheetDialog,
   tabId,
   tabPanelId,
@@ -43,39 +44,52 @@ import {
   visibilityOf,
 } from '../model';
 import type {
-  Account,
   AccountStore,
+  AvailabilityOptions,
   FederationEntry,
   GroupDetailFailure,
   Item,
   Party,
-  Server,
   Store,
   StoreRef,
-  TeamStore,
   AgentSnapshot,
 } from '../model';
-import { enqueueProfileWork } from '../bridge';
+import { enqueueProfileWork, normalizeCommandError } from '../bridge';
 import type { Bridge, PendingOperation } from '../bridge';
 import type { RoleDto } from '../bridge';
-import type { GroupSettingsTab, Location } from '../location';
+import { useSidebarInbox } from '../chat/inbox-provider';
+import { listChannels } from '../chat/presentation';
+import { GROUP_SETTINGS_TABS } from '../location';
+import type { GroupSettingsTab, Location, NavigateOptions } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
+import { NewChatSheet } from './chat-new';
+import {
+  ChannelsTab,
+  FilesTab,
+  IncompleteGroupPage,
+  itemCountOf,
+} from './group-tabs';
+import { GroupMark } from './group-mark';
+import {
+  inviteUnavailableTitle,
+  leaveReason,
+  manageReason,
+} from './group-model';
+import { InviteSheet } from './invite-sheet';
 import { StoreAccessTakeover } from './store-access';
 import { useToast } from '/kit/toasts';
 
 type Tab = GroupSettingsTab;
-export type GroupSheetKind =
-  'invite' | 'add' | 'demote' | 'remove' | 'admit' | 'create';
+export type GroupSheetKind = 'add' | 'demote' | 'remove' | 'admit' | 'create';
 type Sheet = GroupSheetKind | null;
 
 const VIS_MIN = -32768;
 const VIS_MAX = 32767;
 /** The base the group page's tab and panel ids are derived from. */
 const GROUP_TABS = 'group-sections';
-/** Why the join policy cannot be changed: no command sets one. */
-const JOIN_POLICY_REASON =
-  'No command sets a join policy, opens a group to a server, or accepts a join request, so there is nothing to choose here yet.';
+/** Why the join policy cannot be changed. */
+const JOIN_POLICY_REASON = 'Configuring the join policy is not supported yet.';
 const stateName = (): string =>
   typeof window === 'undefined'
     ? ''
@@ -155,12 +169,6 @@ function RoleChip({
   );
 }
 
-function oxfordOr(names: readonly string[]): string {
-  if (names.length <= 1) return names[0] ?? '';
-  if (names.length === 2) return `${names[0]} or ${names[1]}`;
-  return `${names.slice(0, -1).join(', ')}, or ${names[names.length - 1]}`;
-}
-
 function sortRoster(parties: readonly Party[]): Party[] {
   return [...parties].sort((left, right) => {
     const rank =
@@ -173,42 +181,11 @@ function sortRoster(parties: readonly Party[]): Party[] {
 }
 
 function tabFromState(name: string): Tab {
-  return name === 'settings' || name === 'danger' || name === 'rekey-menu'
-    ? 'settings'
-    : 'people';
-}
-
-/**
- * A group's mark: its initial over a colour derived from its name, or the
- * inactive grey. One mark for a group everywhere it is listed, so the list row
- * and the page it opens agree.
- */
-export function GroupMark({
-  store,
-  size = 'md',
-}: {
-  store: Store;
-  /** `sm` is the list row's 26px mark; `md` a sheet's; `big` the page hero's. */
-  size?: 'sm' | 'md' | 'big';
-}): ReactNode {
-  return (
-    <span
-      className={['kico', size === 'sm' ? '' : size, 'group']
-        .filter(Boolean)
-        .join(' ')}
-      // The initial stands for the name beside it; a row that read "E
-      // Engineering" would say the name one and a half times.
-      aria-hidden="true"
-      style={{
-        background:
-          store.kind === 'team' && store.active === false
-            ? 'var(--c-none)'
-            : hue(store.name),
-      }}
-    >
-      {store.name.slice(0, 1)}
-    </span>
-  );
+  if (name === 'settings' || name === 'danger' || name === 'rekey-menu')
+    return 'settings';
+  if (name === 'group-channels') return 'channels';
+  if (name === 'group-files') return 'files';
+  return 'people';
 }
 
 function useCopyText(
@@ -225,65 +202,6 @@ function useCopyText(
     }
   };
 }
-
-/**
- * What discovery needs to run for one account, resolved from its exact
- * identity.
- *
- * `Account.store` is the identity; the alias is profile-local and two
- * profiles can each hold `personal`, so resolving by alias would sooner or
- * later authenticate the wrong account. Every relationship is re-checked
- * here and any inconsistency fails closed, because the caller is about to
- * write durable local bindings with whatever this returns.
- */
-export interface DiscoveryContext {
-  account: Account;
-  store: AccountStore;
-  server: Server;
-  /** Discovery reads the server, so a stopped server cannot be checked. */
-  available: boolean;
-}
-
-export function discoveryContext(
-  snapshot: AgentSnapshot,
-  ref: StoreRef | null,
-): DiscoveryContext | null {
-  if (!ref) return null;
-  const account = snapshot.accounts.find(
-    (candidate) => candidate.store === ref,
-  );
-  if (!account) return null;
-  const store = snapshot.stores.find(
-    (candidate) => candidate.id === account.store,
-  );
-  if (!store || store.kind !== 'account') return null;
-  if (account.alias !== store.account || account.server !== store.server)
-    return null;
-  const server = snapshot.servers.find(
-    (candidate) => candidate.id === store.server,
-  );
-  if (!server) return null;
-  return {
-    account,
-    store,
-    server,
-    available: storeReadable(snapshot, store.id),
-  };
-}
-
-/** One accessible name per button, since several read "Check for groups". */
-export const checkLabel = (context: DiscoveryContext): string =>
-  `Check for groups accessible to ${context.account.username} on ${context.server.name}`;
-
-export const unavailableTitle = (context: DiscoveryContext): string =>
-  `Restore access to ${context.server.name} before checking for groups.`;
-
-/**
- * Why an invitation cannot be written: the message names the server the
- * invitee joins, so it cannot be composed while that server is out of reach.
- */
-export const inviteUnavailableTitle = (serverName: string): string =>
-  `Restore access to ${serverName} before inviting someone.`;
 
 /**
  * What a member row's second line says: the kind of party, and nothing else.
@@ -318,76 +236,6 @@ function targetReason(
   )
     return 'An Admin cannot change another Admin or the Owner.';
   return 'This member cannot be changed from this Mac.';
-}
-
-/**
- * Why this Mac cannot change a group's roster, or the groups admitted into it —
- * `undefined` when it can. One rule for both the Teams list and the group page,
- * so a row's menu and the page it opens never disagree about what applies.
- */
-export function manageReason(
-  snapshot: AgentSnapshot,
-  store: TeamStore,
-  source: 'roster' | 'federation',
-): string | undefined {
-  if (store.team_kind !== 'named')
-    return 'Memberships can’t be changed in an ad-hoc group.';
-  if (store.active === false) return 'Finish setting up this group first.';
-  if (!storeReadable(snapshot, store.id))
-    return `Restore access to ${serverOf(snapshot, store.id)?.name ?? store.server} first.`;
-  if (groupDetailFailure(snapshot, store.id, source))
-    return source === 'roster'
-      ? 'The roster could not be read. Refresh before making changes.'
-      : 'The admitted groups could not be read. Refresh before making changes.';
-  // The role this Mac holds is a roster fact, so an unread roster is not
-  // evidence that it lacks one: an admission is refused for what failed to
-  // load, not for a permission nothing could have checked.
-  if (groupDetailFailure(snapshot, store.id, 'roster'))
-    return 'The roster could not be read. Refresh before making changes.';
-  const mine = partiesOf(snapshot, store.id).find(
-    (party) => party.label === 'you',
-  );
-  return mine && roleRank(mine.destination_role) >= 2
-    ? undefined
-    : 'Only an Admin or an Owner can change this group’s members.';
-}
-
-/** Whether this Mac can add to or change the group's roster. */
-export function rosterManageable(
-  snapshot: AgentSnapshot,
-  store: TeamStore,
-): boolean {
-  return manageReason(snapshot, store, 'roster') === undefined;
-}
-
-/** Whether this Mac can admit another group here, or drop one. */
-export function federationManageable(
-  snapshot: AgentSnapshot,
-  store: TeamStore,
-): boolean {
-  return manageReason(snapshot, store, 'federation') === undefined;
-}
-
-/**
- * Why leaving is unavailable: there is no leave command to offer. Which of the
- * two sentences applies can only be told from a roster that loaded — an empty
- * or unread roster is not evidence of sole ownership.
- */
-export function leaveReason(snapshot: AgentSnapshot, store: Store): string {
-  const roster = partiesOf(snapshot, store.id);
-  if (!roster.length || groupDetailFailure(snapshot, store.id, 'roster'))
-    return 'Leaving a group is not available yet.';
-  const seniors = roster
-    .filter(
-      (party) =>
-        party.party_kind === 'user' &&
-        party.label !== 'you' &&
-        roleRank(party.destination_role) >= 2,
-    )
-    .map((party) => partyName(party));
-  return seniors.length
-    ? `To leave this group, ask ${oxfordOr(seniors)} to remove your account.`
-    : 'As the sole owner, you must transfer ownership or delete the group to leave.';
 }
 
 /** The mark before a member's name: an initial, or a machine's glyph. */
@@ -491,29 +339,12 @@ function PartyRow({
   );
 }
 
-function SituationBand({
-  store,
-  tab,
-  onFinish,
-}: {
-  store: Store;
-  tab: Tab;
-  onFinish: () => void;
-}): ReactNode {
-  if (store.kind === 'team' && store.active === false) {
-    return (
-      <Band
-        label="Setup incomplete."
-        action={
-          <Button variant="primary" size="sm" onClick={onFinish}>
-            Finish setup
-          </Button>
-        }
-      >
-        Group members and items are unavailable until setup is finished.
-      </Band>
-    );
-  }
+/**
+ * The one standing condition a tab states before its own content. A group
+ * whose setup never finished never reaches a tab at all, so the only band left
+ * here is the ad-hoc share's fixed membership.
+ */
+function SituationBand({ store, tab }: { store: Store; tab: Tab }): ReactNode {
   if (
     store.kind === 'team' &&
     store.team_kind === 'adhoc' &&
@@ -635,7 +466,11 @@ function TeamPartyRow({
   return (
     <div className="prow">
       <span className="who2">
-        <span className="kico round" style={{ background: hue(name) }}>
+        <span
+          className="kico round"
+          style={{ background: hue(name) }}
+          aria-hidden="true"
+        >
           {name.slice(0, 1).toUpperCase()}
         </span>
         <span className="t">
@@ -705,6 +540,7 @@ function FederationRows({
               <span
                 className="kico round"
                 style={{ background: hue(entry.remote_team_alias) }}
+                aria-hidden="true"
               >
                 {entry.remote_team_alias.slice(0, 1).toUpperCase()}
               </span>
@@ -808,9 +644,9 @@ function MembersTab({
   snapshot,
   store,
   onSheet,
-  onFinish,
-  manageable,
-  federationManageable,
+  onInvite,
+  rosterReason,
+  federationReason,
   menuParty,
   failure,
   federationFailure,
@@ -822,9 +658,15 @@ function MembersTab({
   snapshot: AgentSnapshot;
   store: Store;
   onSheet: (sheet: Sheet, party?: Party) => void;
-  onFinish: () => void;
-  manageable: boolean;
-  federationManageable: boolean;
+  /** Absent when this Mac holds no account on the group's own server. */
+  onInvite?: () => void;
+  /**
+   * Why the roster cannot be added to, and why no group can be admitted —
+   * each button states its own reason, because the two are decided
+   * separately and one can apply while the other does not.
+   */
+  rosterReason?: string;
+  federationReason?: string;
   menuParty: string | null;
   failure?: GroupDetailFailure;
   federationFailure?: GroupDetailFailure;
@@ -833,12 +675,13 @@ function MembersTab({
   onRerun: (operationId: string) => void;
   onRemoveAdmission: (entry: FederationEntry) => void;
 }): ReactNode {
+  const manageable = rosterReason === undefined;
+  const federationManageable = federationReason === undefined;
   const parties = sortRoster(partiesOf(snapshot, store.id));
   const people = parties.filter(
     (party) => party.party_kind === 'user' && !isMachine(party),
   );
   const machines = parties.filter((party) => isMachine(party));
-  const inactive = store.kind === 'team' && store.active === false;
   const named = store.kind === 'team' && store.team_kind === 'named';
   const server = serverOf(snapshot, store.id);
   const serverName = server?.name ?? store.server;
@@ -854,12 +697,9 @@ function MembersTab({
       onSheet={onSheet}
     />
   );
-  const unavailableHint = failure
-    ? 'The roster could not be read. Refresh before making changes.'
-    : 'Not available for this group';
   return (
     <div className="roster">
-      <SituationBand store={store} tab="people" onFinish={onFinish} />
+      <SituationBand store={store} tab="people" />
       {failure ? (
         <Band
           label="Roster unavailable"
@@ -871,7 +711,7 @@ function MembersTab({
         >
           {failure.message}
         </Band>
-      ) : inactive ? null : (
+      ) : (
         <>
           <MemberSection title="People" count={peopleLabel(people.length)}>
             {people.length ? (
@@ -911,20 +751,23 @@ function MembersTab({
                 icon="plus"
                 disabled={!manageable}
                 title={
-                  manageable
-                    ? 'Add someone who already has an account on this server'
-                    : unavailableHint
+                  rosterReason ??
+                  'Add someone who already has an account on this server'
                 }
                 onClick={() => onSheet('add')}
               >
                 Add someone on {serverName}…
               </Button>
               <Button
-                disabled={!readable}
+                disabled={!readable || !onInvite}
                 title={
-                  readable ? undefined : inviteUnavailableTitle(serverName)
+                  !onInvite
+                    ? `No account on this Mac signs in to ${serverName}.`
+                    : readable
+                      ? undefined
+                      : inviteUnavailableTitle(serverName)
                 }
-                onClick={() => onSheet('invite')}
+                onClick={onInvite}
               >
                 Invite someone…
               </Button>
@@ -932,48 +775,43 @@ function MembersTab({
           ) : null}
         </>
       )}
-      {inactive ? null : (
-        <>
-          <SectionLabel>Groups on other servers</SectionLabel>
-          {federationFailure ? (
-            <Band
-              label="Federation unavailable"
-              action={
-                federationFailure.retryable ? (
-                  <Button onClick={onRetryFederation}>Refresh</Button>
-                ) : undefined
-              }
-            >
-              {federationFailure.message}
-            </Band>
-          ) : (
-            <FederationRows
-              snapshot={snapshot}
-              store={store}
-              onRerun={onRerun}
-              onRemove={onRemoveAdmission}
-              manageable={federationManageable}
-            />
-          )}
-          {/* And the admission action follows the admissions. */}
-          {named ? (
-            <div className="roster-actions">
-              <Button
-                icon="people"
-                disabled={!federationManageable}
-                title={
-                  federationManageable
-                    ? 'Give every member of another group a role here'
-                    : unavailableHint
-                }
-                onClick={() => onSheet('admit')}
-              >
-                Add a group…
-              </Button>
-            </div>
-          ) : null}
-        </>
+      <SectionLabel>Groups on other servers</SectionLabel>
+      {federationFailure ? (
+        <Band
+          label="Federation unavailable"
+          action={
+            federationFailure.retryable ? (
+              <Button onClick={onRetryFederation}>Refresh</Button>
+            ) : undefined
+          }
+        >
+          {federationFailure.message}
+        </Band>
+      ) : (
+        <FederationRows
+          snapshot={snapshot}
+          store={store}
+          onRerun={onRerun}
+          onRemove={onRemoveAdmission}
+          manageable={federationManageable}
+        />
       )}
+      {/* And the admission action follows the admissions. */}
+      {named ? (
+        <div className="roster-actions">
+          <Button
+            icon="people"
+            disabled={!federationManageable}
+            title={
+              federationReason ??
+              'Give every member of another group a role here'
+            }
+            onClick={() => onSheet('admit')}
+          >
+            Add a group…
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1071,7 +909,6 @@ function SettingsTab({
   onSheet,
   onNavigate,
   onCopy,
-  onFinish,
   manageable,
   rekeyOpen,
 }: {
@@ -1080,7 +917,6 @@ function SettingsTab({
   onSheet: (sheet: Sheet, party?: Party) => void;
   onNavigate: (location: Location) => void;
   onCopy: (text: string) => void;
-  onFinish: () => void;
   manageable: boolean;
   rekeyOpen: boolean;
 }): ReactNode {
@@ -1116,7 +952,7 @@ function SettingsTab({
   const total = itemsOf(snapshot, store.id).length;
   return (
     <div className="group-settings">
-      <SituationBand store={store} tab="settings" onFinish={onFinish} />
+      <SituationBand store={store} tab="settings" />
       <SectionLabel>About this group</SectionLabel>
       <Inset>
         <InsetRow label="Name">
@@ -1341,8 +1177,8 @@ export function GroupSheet({
   target,
   onClose,
   onSwitch,
+  onInvite,
   onApplied,
-  onError,
   onMutationError,
 }: {
   snapshot: AgentSnapshot;
@@ -1352,15 +1188,14 @@ export function GroupSheet({
   target: Party | null;
   onClose: () => void;
   onSwitch: (sheet: Sheet, target?: Party) => void;
+  /** Opens the invitation sheet, which belongs to an account, not a group. */
+  onInvite?: () => void;
   onApplied: (
     message: string,
     created?: { accountStoreId: StoreRef; teamAlias: string },
   ) => Promise<void>;
-  onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
 }): ReactNode {
-  const copy = useCopyText(bridge, onError);
-  const toasts = useToast();
   const [username, setUsername] = useState('jules.park');
   const [visibility, setVisibility] = useState(0);
   const callerParty = partiesOf(snapshot, store.id).find(
@@ -1402,33 +1237,7 @@ export function GroupSheet({
     snapshot,
     sheet === 'create' && creationAccount ? creationAccount.id : store.id,
   );
-  const ownerStore =
-    store.kind === 'team'
-      ? snapshot.stores.find(
-          (candidate) =>
-            candidate.kind === 'account' &&
-            candidate.server === store.server &&
-            candidate.account === store.account,
-        )
-      : undefined;
-  const ownerAccount = ownerStore
-    ? snapshot.accounts.find(
-        (account) =>
-          account.store === ownerStore.id ||
-          (account.server === ownerStore.server &&
-            account.alias === ownerStore.account),
-      )
-    : snapshot.accounts.find((account) => account.store === store.id);
-  // The username as the server holds it: the whole of it is what the reader
-  // types back, so it is not abbreviated here.
-  const inviter = ownerAccount?.username ?? 'the group Admin';
   const serverName = server?.name ?? store.server;
-  // The same command, aimed at whichever store opened the sheet: a group
-  // invites someone into that group, an account invites them onto its server.
-  const inviteMessage =
-    store.kind === 'team'
-      ? `I'd like to invite you to join ${store.name} on FOKS.\n\n1. Download FOKS: https://foks.app/download\n2. Add server: ${serverName}\n3. Create your account on the server\n4. Send your username to ${inviter}\n\nOnce added, ${store.name} will appear in your Teams list.`
-      : `I'd like to invite you to FOKS on ${serverName}.\n\n1. Download FOKS: https://foks.app/download\n2. Add server: ${serverName}\n3. Create your account on the server\n4. Send your username to ${inviter}\n\nOnce I add your username to a group, it will appear in your Teams list.`;
   const teamAlias = name
     .trim()
     .toLowerCase()
@@ -1442,18 +1251,18 @@ export function GroupSheet({
       : ['add', 'demote', 'remove'].includes(sheet)
         ? groupDetailFailure(snapshot, store.id, 'roster')
         : undefined;
-  const title =
-    sheet === 'invite'
-      ? `Invite someone to ${store.kind === 'team' ? store.name : serverName}`
-      : sheet === 'add'
-        ? `Add someone to ${store.name}`
-        : sheet === 'demote'
-          ? `Lower ${target ? `${partyName(target)}’s` : 'their'} role`
-          : sheet === 'remove'
-            ? `Remove ${target ? partyName(target) : 'them'} from ${store.name}?`
-            : sheet === 'admit'
-              ? `Add a group to ${store.name}`
-              : 'Create a group';
+  // Adding a person and admitting a group are the two halves of one sheet, so
+  // both read from the switch rather than from two separate titles.
+  const adding = sheet === 'add' || sheet === 'admit';
+  const title = adding
+    ? sheet === 'add'
+      ? `Add someone to ${store.name}`
+      : `Add a group to ${store.name}`
+    : sheet === 'demote'
+      ? `Lower ${target ? `${partyName(target)}’s` : 'their'} role`
+      : sheet === 'remove'
+        ? `Remove ${target ? partyName(target) : 'them'} from ${store.name}?`
+        : 'Create a group';
   const subtitle =
     sheet === 'create'
       ? // Creating acts as one account on one server, and the sheet says which:
@@ -1461,17 +1270,13 @@ export function GroupSheet({
         creationAccount
         ? accountSubtitle(snapshot, creationAccount)
         : 'No account on this Mac can create a group'
-      : sheet === 'invite'
-        ? 'Send instructions to help a new user set up their account'
-        : sheet === 'add'
-          ? 'Add an existing user from this server'
+      : sheet === 'add'
+        ? 'Members are added by username. Roles take effect the moment you add them.'
+        : sheet === 'admit'
+          ? 'Every member of that group gets the same role here'
           : sheet === 'demote'
             ? `${target ? roleText(target) : ''} in ${store.name} today`
-            : sheet === 'remove'
-              ? ''
-              : sheet === 'admit'
-                ? 'Every member of that group gets the same role here'
-                : server?.name;
+            : '';
   const [demotion, setDemotion] = useState<RoleDto | null>(() =>
     target ? demotionFor(target) : null,
   );
@@ -1481,14 +1286,28 @@ export function GroupSheet({
   useEffect(() => {
     if (sheet === 'demote') setDemotion(target ? demotionFor(target) : null);
   }, [sheet, target]);
+  // A username the roster already holds is a local fact, so the sheet refuses
+  // it before sending a request the agent would refuse. Everything else a
+  // username can be wrong about — unknown, ambiguous — only the server knows,
+  // so that refusal is the agent's own sentence, read back here.
+  const existing = partiesOf(snapshot, store.id).find(
+    (party) =>
+      party.party_kind === 'user' &&
+      (party.username ?? '').toLowerCase() === username.trim().toLowerCase(),
+  );
+  const [refused, setRefused] = useState('');
+  const addRefusal = username.trim()
+    ? existing
+      ? `${partyName(existing)} is already a member of ${store.name}. Change their role from the Members list instead.`
+      : refused
+    : '';
   const apply = async (): Promise<void> => {
     if (busy || requiredFailure) return;
+    if (sheet === 'add' && existing) return;
     setBusy(true);
+    setRefused('');
     try {
-      if (sheet === 'invite') {
-        await bridge.copyText(inviteMessage);
-        toasts.show('Message copied.');
-      } else if (sheet === 'add')
+      if (sheet === 'add')
         await bridge.addGroupMember({
           storeId: store.id,
           username: username.trim(),
@@ -1538,11 +1357,13 @@ export function GroupSheet({
         onClose();
         return;
       }
-      if (sheet !== 'invite') await onApplied(`${title} completed`);
+      await onApplied(`${title} completed`);
       onClose();
     } catch (error) {
-      if (sheet === 'invite') onError(error);
-      else await onMutationError(error);
+      // The sheet stays open on a refusal and states it where the field is,
+      // in the agent's own words, while the shell reconciles as it always has.
+      if (sheet === 'add') setRefused(normalizeCommandError(error).message);
+      await onMutationError(error);
     } finally {
       setBusy(false);
     }
@@ -1552,21 +1373,15 @@ export function GroupSheet({
       danger={sheet === 'remove'}
       onClose={onClose}
       dismissible={!busy}
-      width={sheet === 'invite' ? 'wide' : 'base'}
       glyph={
-        sheet === 'create' ? (
+        sheet === 'create' || store.kind !== 'team' ? (
           // The group does not exist yet, so it has no mark: a group's colour
           // and initial are earned at creation, not previewed over an account.
           <span className="kico md neutral">
             <Icon name="people" />
           </span>
-        ) : store.kind === 'team' ? (
-          <GroupMark store={store} />
         ) : (
-          // An account store opens the invite sheet for its server, not a group.
-          <span className="server-mark">
-            <Icon name="server" />
-          </span>
+          <GroupMark store={store} />
         )
       }
       title={title}
@@ -1596,7 +1411,7 @@ export function GroupSheet({
               disabled={
                 busy ||
                 Boolean(requiredFailure) ||
-                (sheet === 'add' && !username.trim()) ||
+                (sheet === 'add' && (!username.trim() || Boolean(existing))) ||
                 (sheet === 'demote' &&
                   (!target || !canTarget(snapshot, target) || !demotion)) ||
                 (sheet === 'admit' && !remote) ||
@@ -1604,16 +1419,14 @@ export function GroupSheet({
               }
               onClick={() => void apply()}
             >
-              {sheet === 'invite'
-                ? 'Copy message'
-                : sheet === 'add'
-                  ? `Add ${username.trim() || 'someone'}`
-                  : sheet === 'demote'
-                    ? 'Change role'
-                    : sheet === 'admit'
-                      ? 'Add group'
-                      : // The alias is what the server is asked to create.
-                        `Create ${teamAlias || 'group'}`}
+              {sheet === 'add'
+                ? `Add ${username.trim() || 'someone'}`
+                : sheet === 'demote'
+                  ? 'Change role'
+                  : sheet === 'admit'
+                    ? `Add ${remote?.alias ?? 'group'}`
+                    : // The alias is what the server is asked to create.
+                      `Create ${teamAlias || 'group'}`}
             </Button>
           )}
         </>
@@ -1631,112 +1444,129 @@ export function GroupSheet({
             </p>
           </Notice>
         ) : null}
-        {sheet === 'invite' ? (
-          <>
-            <p>
-              They need an account on {serverName} before you can add them. Send
-              this message, then add their username.
-            </p>
-            <Inset>
-              <InsetRow label="Message">
-                <span className="msg">{inviteMessage}</span>
-                <Button
-                  size="sm"
-                  onClick={() => void copy(inviteMessage, 'Message copied.')}
-                >
-                  Copy
-                </Button>
-              </InsetRow>
-            </Inset>
-            <SectionLabel>Message contents</SectionLabel>
-            <Inset className="rows">
-              <InsetRow label="Install link">
-                <code>https://foks.app/download</code>{' '}
-                <Chip tone="warn">placeholder</Chip>
-                <span className="hint">Temporary download address.</span>
-              </InsetRow>
-              <InsetRow label="Server">
-                <span>
-                  {server?.name}
-                  <span className="hint">
-                    They enter this address during setup.
-                  </span>
-                </span>
-              </InsetRow>
-              <InsetRow label="Signup invite">
-                <span>
-                  Optional
-                  <span className="hint">
-                    Required only if the server requires an invite.
-                  </span>
-                </span>
-              </InsetRow>
-              <InsetRow label="When they reply">
-                <span>Add their username as a Member, Admin, or Owner.</span>
-                {store.kind === 'team' ? (
-                  <Button size="sm" onClick={() => onSwitch('add')}>
-                    Add someone
-                  </Button>
-                ) : null}
-              </InsetRow>
-            </Inset>
-            <p className="hint">
-              Send this message to the person you want to invite.
-            </p>
-          </>
+        {/* Adding a person and admitting another server's group are the two
+            ways into this group, so they are one sheet with a switch rather
+            than two buttons over two tables. */}
+        {adding ? (
+          <SegmentedControl
+            label="What to add"
+            value={sheet}
+            items={[
+              { id: 'add' as const, label: 'A person or machine' },
+              { id: 'admit' as const, label: 'A group on another server' },
+            ]}
+            onChange={(next) => {
+              if (next !== sheet) onSwitch(next);
+            }}
+          />
         ) : null}
         {sheet === 'add' ? (
           <>
             <Inset>
-              <Field label="Username" value={username} onChange={setUsername} />
+              <Field
+                label="Username"
+                value={username}
+                // The agent's refusal was of the username that was sent, so a
+                // different one is not refused yet: the sentence goes with it.
+                onChange={(next) => {
+                  setUsername(next);
+                  setRefused('');
+                }}
+              />
+              <InsetRow label="Server">
+                <span>
+                  {serverName} <Chip>this group’s server</Chip>
+                  <span className="hint">
+                    People must already have an account here. Someone on another
+                    server can only join as part of a group — switch to “A group
+                    on another server” above.
+                  </span>
+                </span>
+              </InsetRow>
             </Inset>
+            {addRefusal ? (
+              <p role="alert" className="action-error">
+                {addRefusal}
+              </p>
+            ) : null}
+            {onInvite ? (
+              <p className="fn">
+                No account yet?{' '}
+                <Button size="sm" onClick={onInvite}>
+                  Invite them to {serverName}…
+                </Button>{' '}
+                You still add the username yourself when they reply.
+              </p>
+            ) : null}
             <SectionLabel>Role in {store.name}</SectionLabel>
             <Inset>
               <RadioGroup label={`Role in ${store.name}`}>
-                {(callerRank >= 3
-                  ? (['Member', 'Admin', 'Owner'] as const)
-                  : (['Member', 'Admin'] as const)
-                ).map((next) => (
-                  <RadioCard
-                    key={next}
-                    selected={role.role === next}
-                    onSelect={() =>
-                      setRole(
-                        next === 'Member'
-                          ? { role: next, visibility }
-                          : { role: next },
-                      )
-                    }
-                    title={next}
-                    detail={
-                      next === 'Member'
-                        ? 'Opens items at or above its visibility band. Visibility 0 is the default.'
-                        : next === 'Admin'
-                          ? 'Changes items and adds or removes people. Cannot change other Admins or the Owner.'
-                          : 'Everything, including deleting the group.'
-                    }
-                  />
-                ))}
+                {(['Owner', 'Admin', 'Member'] as const).map((next) => {
+                  // An Admin cannot make an Owner. The card keeps its place
+                  // and says why rather than vanishing from the list.
+                  const refusal =
+                    next === 'Owner' && callerRank < 3
+                      ? 'Only an Owner can add another Owner.'
+                      : '';
+                  return (
+                    <RadioCard
+                      key={next}
+                      selected={role.role === next}
+                      off={Boolean(refusal)}
+                      onSelect={() =>
+                        setRole(
+                          next === 'Member'
+                            ? { role: next, visibility }
+                            : { role: next },
+                        )
+                      }
+                      title={next}
+                      detail={
+                        refusal ||
+                        (next === 'Member'
+                          ? 'Opens items at or above its visibility band. Visibility 0 is the default.'
+                          : next === 'Admin'
+                            ? 'Changes items and adds or removes people. Cannot change other Admins or the Owner.'
+                            : 'Everything, including deleting the group.')
+                      }
+                    />
+                  );
+                })}
               </RadioGroup>
             </Inset>
             {role.role === 'Member' ? (
-              <div className="vis">
-                <Button
-                  size="sm"
-                  disabled={visibility <= VIS_MIN}
-                  onClick={() => setVisibility((value) => value - 1)}
+              <Inset>
+                <InsetRow
+                  label="Visibility"
+                  action={
+                    // The band the steppers change reads between them, so the
+                    // value is never separated from the controls that set it.
+                    <>
+                      <Button
+                        size="sm"
+                        aria-label="Lower the visibility band"
+                        disabled={visibility <= VIS_MIN}
+                        onClick={() => setVisibility((value) => value - 1)}
+                      >
+                        −
+                      </Button>
+                      <span className="vis-value">Visibility {visibility}</span>
+                      <Button
+                        size="sm"
+                        aria-label="Raise the visibility band"
+                        disabled={visibility >= VIS_MAX}
+                        onClick={() => setVisibility((value) => value + 1)}
+                      >
+                        +
+                      </Button>
+                    </>
+                  }
                 >
-                  −
-                </Button>
-                <span>Visibility {visibility}</span>
-                <Button
-                  size="sm"
-                  disabled={visibility >= VIS_MAX}
-                  onClick={() => setVisibility((value) => value + 1)}
-                >
-                  +
-                </Button>
-              </div>
+                  <span className="hint">
+                    Members open items at or above this band. 0 is the default.
+                  </span>
+                </InsetRow>
+              </Inset>
             ) : null}
             <p className="fn">
               They can access items allowed by their role immediately. No
@@ -1875,7 +1705,9 @@ export function GroupSheet({
               )}
             </Inset>
             <p className="fn">
-              You can add groups that are already visible from this device.
+              The command admits a group this Mac already holds, so the choice
+              is over the remote groups it holds: one on another server, active,
+              and reachable right now.
             </p>
             <SectionLabel>Role for its members</SectionLabel>
             <Inset>
@@ -1891,6 +1723,7 @@ export function GroupSheet({
                   <>
                     <Button
                       size="sm"
+                      aria-label="Lower the visibility band"
                       disabled={visibility <= VIS_MIN}
                       onClick={() => setVisibility((value) => value - 1)}
                     >
@@ -1899,6 +1732,7 @@ export function GroupSheet({
                     <span className="vis-value">Visibility {visibility}</span>
                     <Button
                       size="sm"
+                      aria-label="Raise the visibility band"
                       disabled={visibility >= VIS_MAX}
                       onClick={() => setVisibility((value) => value + 1)}
                     >
@@ -1908,9 +1742,21 @@ export function GroupSheet({
                 }
               />
             </Inset>
-            <Band severity="info">
-              {store.name} automatically syncs members from that group.
+            <Band severity="info" label="How admission works">
+              {store.name} asks{' '}
+              {remote
+                ? (serverOf(snapshot, remote.id)?.name ?? remote.server)
+                : 'that server'}{' '}
+              who is in {remote?.alias ?? 'that group'} and syncs that list.
+              People are added and removed there, not here, and one of them
+              cannot be changed or removed on their own: only the whole
+              admission can be removed, which rotates {store.name}’s key.
             </Band>
+            <p className="fn">
+              If the remote server becomes unreachable, the federated team
+              status changes to Inactive and its members cannot access items in
+              this team until connectivity is restored.
+            </p>
           </>
         ) : null}
         {sheet === 'create' ? (
@@ -1919,8 +1765,10 @@ export function GroupSheet({
               <Field label="Name" value={name} onChange={setName} />
             </Inset>
             <p className="fn">
-              Others find it as <code>{teamAlias || '…'}</code> on the server. A
-              name is fixed at creation.
+              Others find it as <code>{teamAlias || '…'}</code> on the server.
+              Lowercase letters, digits, dots and dashes, unique on that server.{' '}
+              <b>A name is fixed at creation</b> — renaming means creating a new
+              group and moving its items.
             </p>
             <SectionLabel>Server and account</SectionLabel>
             <Inset>
@@ -1932,7 +1780,7 @@ export function GroupSheet({
                       selected={account.id === accountStoreId}
                       onSelect={() => setAccountStoreId(account.id)}
                       title={serverOf(snapshot, account.id)?.name}
-                      detail={`as ${snapshot.accounts.find((candidate) => candidate.store === account.id || (candidate.alias === account.account && candidate.server === account.server))?.username ?? account.account}`}
+                      detail={`as ${snapshot.accounts.find((candidate) => candidate.store === account.id || (candidate.alias === account.account && candidate.server === account.server))?.username ?? account.account} · ${account.account} account`}
                     />
                   ))}
                 </RadioGroup>
@@ -1942,6 +1790,10 @@ export function GroupSheet({
                 </InsetRow>
               )}
             </Inset>
+            <p className="fn">
+              A group lives on one server. Only accounts on that server can be
+              added directly; other servers’ groups join by admission.
+            </p>
             <SectionLabel>Kind</SectionLabel>
             <Inset>
               <RadioGroup label="Kind">
@@ -1971,6 +1823,8 @@ export function GroupSettingsScreen({
   snapshot,
   bridge,
   location,
+  accessNow,
+  accessGenerations,
   onNavigate,
   onApplied: onSnapshotApplied,
   onError,
@@ -1979,25 +1833,47 @@ export function GroupSettingsScreen({
   snapshot: AgentSnapshot;
   bridge: Bridge;
   location: Extract<Location, { kind: 'group-settings' }>;
-  onNavigate: (location: Location) => void;
+  /** The shell's availability clock, which the Channels tab shares with Chat. */
+  accessNow?: () => number;
+  /** The shell's access generation per server, as a channel write reads it. */
+  accessGenerations?: ReadonlyMap<string, number>;
+  /**
+   * `replace` marks a move within this page — the tab strip — which the
+   * shell records in place of the last rather than behind it.
+   */
+  onNavigate: (location: Location, options?: NavigateOptions) => void;
   onApplied: (message: string) => Promise<void>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
 }): ReactNode {
   const copy = useCopyText(bridge, onError);
+  // The Channels tab reads the same per-group inbox entry the rail and the
+  // Chat column read, so the tab's count and its rows cannot disagree.
+  const inbox = useSidebarInbox();
   const initial = stateName();
   const [tab, setTab] = useState<Tab>(
     () => location.tab ?? tabFromState(initial),
   );
   const [sheet, setSheet] = useState<Sheet>(() =>
-    ['invite', 'add', 'demote', 'remove', 'admit', 'party-remove'].includes(
-      initial,
-    )
+    ['add', 'demote', 'remove', 'admit', 'party-remove'].includes(initial)
       ? initial === 'party-remove'
         ? 'remove'
         : (initial as Sheet)
       : null,
   );
+  // The invitation is an account's, not a group's, so it is its own sheet.
+  const [inviting, setInviting] = useState(initial === 'invite');
+  const [addingChannel, setAddingChannel] = useState(false);
+  // A New chat sheet whose submission is unresolved cannot be dismissed, and a
+  // store switch must not take it away either: a submission has to be settled
+  // where it was made.
+  const channelUnresolved = useRef(false);
+  // One clock for this render, the way the Chat tab reads its own: a memo
+  // would freeze the availability decision at the moment the tab mounted, so
+  // a check-in that lapses while the tab is open would never be noticed.
+  const accessOptions: AvailabilityOptions = accessNow
+    ? { nowSeconds: accessNow() }
+    : {};
   useEffect(() => {
     setTab(location.tab ?? 'people');
   }, [location.ref, location.tab]);
@@ -2136,19 +2012,16 @@ export function GroupSettingsScreen({
   const [rekeyArmed, setRekeyArmed] = useState(initial === 'rekey-menu');
   useEffect(() => {
     if (seenStore.current === storeId) return;
-    if (seenStore.current && storeId && seenStore.current !== storeId) {
+    if (seenStore.current) {
       setTab('people');
       setSheet(null);
       setTarget(null);
       setRemovalTarget(null);
       setRekeyArmed(false);
-    }
-    if (seenStore.current && !storeId) {
-      setTab('people');
-      setSheet(null);
-      setTarget(null);
-      setRemovalTarget(null);
-      setRekeyArmed(false);
+      setInviting(false);
+      // A channel preparation the agent may already hold is the exception:
+      // it is settled where it was made, so the sheet stays until it is.
+      if (!channelUnresolved.current) setAddingChannel(false);
     }
     seenStore.current = storeId;
   }, [storeId]);
@@ -2200,14 +2073,43 @@ export function GroupSettingsScreen({
   const callerParty = partiesOf(snapshot, store.id).find(
     (candidate) => candidate.label === 'you',
   );
-  const canManageRoster = rosterManageable(snapshot, store);
-  const canManageFederation = federationManageable(snapshot, store);
+  const rosterReason = manageReason(snapshot, store, 'roster');
+  const federationReason = manageReason(snapshot, store, 'federation');
+  const canManageRoster = rosterReason === undefined;
+  // The channels this group's inbox entry holds, or `undefined` while the
+  // service has not answered for it. A hidden conversation is listed on the
+  // tab but not counted on the strip, the way New chat counts.
+  const channelEntry = inbox.get(store.id);
+  const channelCount = channelEntry?.data
+    ? listChannels(
+        channelEntry.data.channels,
+        channelEntry.data.conversations,
+      ).filter((option) => !option.conversation?.hidden).length
+    : undefined;
+  // The account the invitation is sent as: the one that holds this group.
+  const groupAccount = snapshot.stores.find(
+    (candidate): candidate is AccountStore =>
+      candidate.kind === 'account' &&
+      candidate.server === store.server &&
+      candidate.account === store.account,
+  );
   const finishSetup = (): void => {
     void mutate(
       () => bridge.resumeGroupCreation(store.id),
       'Group creation resumed',
     );
   };
+  const inviteSheet =
+    inviting && groupAccount ? (
+      <InviteSheet
+        snapshot={snapshot}
+        bridge={bridge}
+        account={groupAccount}
+        group={store}
+        onClose={() => setInviting(false)}
+        onError={onError}
+      />
+    ) : null;
   return (
     <>
       <div className="ghero">
@@ -2308,6 +2210,16 @@ export function GroupSettingsScreen({
           }
           onFinishSetup={finishSetup}
         />
+      ) : inactive ? (
+        // A group with incomplete setup has no members, channels, items, or
+        // tabs. Show its status and recovery actions instead.
+        <IncompleteGroupPage
+          snapshot={snapshot}
+          store={store}
+          onFinish={finishSetup}
+          onCopyId={() => void copy(store.team_id_hex, 'Group ID copied.')}
+          onNavigate={onNavigate}
+        />
       ) : (
         <>
           {membershipPending.map((operation) => (
@@ -2345,18 +2257,42 @@ export function GroupSettingsScreen({
             value={tab}
             onChange={(next) => {
               setTab(next);
-              onNavigate({ kind: 'group-settings', ref: store.id, tab: next });
+              // Selection follows focus on the strip, so walking it with the
+              // arrows is one navigation per key. A tab is a place within this
+              // page rather than a page of its own, so each one replaces the
+              // last instead of stacking a step behind the reader.
+              onNavigate(
+                { kind: 'group-settings', ref: store.id, tab: next },
+                { replace: true },
+              );
             }}
-            items={[
-              {
-                id: 'people',
-                label: 'Members',
-                ...(rosterFailure || federationFailure
-                  ? {}
-                  : { count: memberCount }),
-              },
-              { id: 'settings', label: 'Settings' },
-            ]}
+            items={GROUP_SETTINGS_TABS.map((id) =>
+              id === 'people'
+                ? {
+                    id,
+                    label: 'Members',
+                    ...(rosterFailure || federationFailure
+                      ? {}
+                      : { count: memberCount }),
+                  }
+                : id === 'channels'
+                  ? {
+                      id,
+                      label: 'Channels',
+                      // The count is the service's, so it is drawn only once
+                      // the service has answered for this group.
+                      ...(channelCount === undefined
+                        ? {}
+                        : { count: channelCount }),
+                    }
+                  : id === 'files'
+                    ? {
+                        id,
+                        label: 'Files',
+                        count: itemCountOf(snapshot, store),
+                      }
+                    : { id, label: 'Settings' },
+            )}
           />
           {/* Fixed IDs associate each tab button with its tabpanel. */}
           <div
@@ -2371,9 +2307,11 @@ export function GroupSettingsScreen({
                   snapshot={snapshot}
                   store={store}
                   onSheet={openSheet}
-                  onFinish={finishSetup}
-                  manageable={canManageRoster}
-                  federationManageable={canManageFederation}
+                  {...(groupAccount
+                    ? { onInvite: () => setInviting(true) }
+                    : {})}
+                  {...(rosterReason ? { rosterReason } : {})}
+                  {...(federationReason ? { federationReason } : {})}
                   menuParty={menuParty}
                   failure={rosterFailure}
                   federationFailure={federationFailure}
@@ -2389,6 +2327,20 @@ export function GroupSettingsScreen({
                   }
                   onRemoveAdmission={setRemovalTarget}
                 />
+              ) : tab === 'channels' ? (
+                <ChannelsTab
+                  snapshot={snapshot}
+                  store={store}
+                  accessOptions={accessOptions}
+                  onNavigate={onNavigate}
+                  onAddChannel={() => setAddingChannel(true)}
+                />
+              ) : tab === 'files' ? (
+                <FilesTab
+                  snapshot={snapshot}
+                  store={store}
+                  onNavigate={onNavigate}
+                />
               ) : (
                 <SettingsTab
                   snapshot={snapshot}
@@ -2396,12 +2348,14 @@ export function GroupSettingsScreen({
                   onSheet={openSheet}
                   onNavigate={onNavigate}
                   onCopy={(text) => void copy(text, 'Group ID copied.')}
-                  onFinish={finishSetup}
                   manageable={canManageRoster}
                   rekeyOpen={rekeyArmed}
                 />
               )}
-              {tab === 'settings' || (!rosterFailure && !federationFailure) ? (
+              {/* The raw response belongs to the two tabs it is the response
+                  for: the roster under Members, the store under Settings. */}
+              {tab === 'settings' ||
+              (tab === 'people' && !rosterFailure && !federationFailure) ? (
                 <Toggle label="Inspect response">
                   <pre>
                     {JSON.stringify(
@@ -2426,6 +2380,11 @@ export function GroupSettingsScreen({
           ) : null}
           {sheet ? (
             <GroupSheet
+              // Adding a person and admitting a group are two halves of one
+              // sheet, but not one set of answers: the band, the role and the
+              // refusal belong to the half they were given on, so switching
+              // starts the other half rather than inheriting them.
+              key={sheet}
               snapshot={snapshot}
               bridge={bridge}
               store={store}
@@ -2433,13 +2392,49 @@ export function GroupSettingsScreen({
               target={targetParty}
               onClose={() => setSheet(null)}
               onSwitch={openSheet}
+              onInvite={
+                groupAccount
+                  ? () => {
+                      setSheet(null);
+                      setInviting(true);
+                    }
+                  : undefined
+              }
               onApplied={onApplied}
-              onError={onError}
               onMutationError={onMutationError}
+            />
+          ) : null}
+          {/* Creating a channel is the New chat sheet's own create step, aimed
+              at this group: one preparation, recovered where it was made. */}
+          {addingChannel ? (
+            <NewChatSheet
+              snapshot={snapshot}
+              bridge={bridge}
+              team={store.id}
+              accessOptions={accessOptions}
+              {...(accessNow ? { accessNow } : {})}
+              {...(accessGenerations ? { accessGenerations } : {})}
+              onUnresolved={(unresolved) => {
+                channelUnresolved.current = unresolved;
+              }}
+              onClose={() => {
+                channelUnresolved.current = false;
+                setAddingChannel(false);
+              }}
+              onOpen={(ref, channel) => {
+                channelUnresolved.current = false;
+                setAddingChannel(false);
+                onNavigate({
+                  kind: 'chat',
+                  ref,
+                  ...(channel ? { channel } : {}),
+                });
+              }}
             />
           ) : null}
         </>
       )}
+      {inviteSheet}
     </>
   );
 }

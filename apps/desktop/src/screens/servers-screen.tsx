@@ -41,7 +41,7 @@ import {
 import type { MutationFailureHandler } from '../mutation-recovery';
 import type { Server, StoreRef, TeamStore, AgentSnapshot } from '../model';
 import { AccountMark } from './account-switcher';
-import { GroupMark } from './groups-screen';
+import { GroupMark } from './group-mark';
 
 interface Props {
   snapshot: AgentSnapshot;
@@ -735,7 +735,7 @@ function StatusBand({
     return (
       <Band
         severity="info"
-        label="Not checked yet."
+        label="Not checked yet"
         action={
           <Button
             size="sm"
@@ -756,7 +756,7 @@ function StatusBand({
     return (
       <Band
         severity="crit"
-        label="Check-in expired."
+        label="Check-in expired"
         action={
           <Button
             variant="plain"
@@ -775,9 +775,10 @@ function StatusBand({
     );
   if (state === 'unavailable')
     return (
-      <Band severity="crit" label="Check-in status unknown.">
+      <Band severity="crit" label="Check-in status unknown">
         Cannot verify the status of this server. This server is locked until a
-        usable status is available. Check it from the header above.
+        valid status is confirmed. Use the Check button in the header to check
+        status.
       </Band>
     );
   if (state === 'blocked')
@@ -797,7 +798,7 @@ function StatusBand({
     );
   if (state === 'schema')
     return (
-      <Band severity="crit" label="Server schema incompatible.">
+      <Band severity="crit" label="Server schema incompatible">
         This client cannot safely read the server’s saved schema. Review the
         supported versions; FOKS will not reset this data automatically.
       </Band>
@@ -900,7 +901,7 @@ function ServerBody({
         onReset={onReset}
       />
       {checked?.serverVersion && !checked.serverVersion.compatible ? (
-        <Band severity="warn" label="Version mismatch.">
+        <Band severity="warn" label="Version mismatch">
           {versionMismatchText(checked.serverVersion)}
         </Band>
       ) : null}

@@ -283,9 +283,9 @@ export function DevicesScreen({
   const requestedSection = location.section;
   useEffect(() => {
     if (!requestedSection) return;
-    // A scene may open a sheet with the page — `settings-phrase` lands on the
-    // Macs section and opens the paper-key sheet. The address must not pull
-    // the keyboard out of that dialog; it takes the page when the sheet closes.
+    // If an initial scene immediately opens a dialog (e.g., `settings-phrase`),
+    // preserve focus within the dialog rather than shifting focus to the
+    // background section anchor until the dialog is closed.
     if (sheet) return;
     const anchor = anchors[requestedSection].current;
     if (!anchor) return;
@@ -1096,7 +1096,7 @@ function DeviceDetail({
                 {stopped.stopped
                   ? stopped.reason
                   : loading
-                    ? 'The agent is answering with this account’s devices, paper keys and security keys.'
+                    ? 'Loading devices, paper keys, and security keys…'
                     : 'The address names a key this account no longer holds on this Mac.'}
               </p>
             </Notice>
