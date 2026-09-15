@@ -826,3 +826,80 @@ test('getSnapshot is stable across reads, as useSyncExternalStore requires', () 
   store.navigate({ kind: 'people' });
   assert.equal(store.getSnapshot(), store.getSnapshot());
 });
+
+test('account context follows objects and persists across cross-account tabs', async () => {
+  const { FIXTURE } = await import('../src/fixture');
+  const navigation = new LocationStore();
+  navigation.setAccountStores(FIXTURE.stores);
+  navigation.navigate({ kind: 'people', store: 'acct:work' });
+  navigation.navigate({ kind: 'files' });
+  navigation.navigate({ kind: 'devices' });
+  assert.deepEqual(navigation.getSnapshot().location, {
+    kind: 'devices',
+    store: 'acct:work',
+  });
+  navigation.navigate({ kind: 'settings', section: 'notifications' });
+  assert.equal(navigation.getAccount(), 'acct:work');
+  navigation.navigate({ kind: 'chat', ref: 'team:household' });
+  assert.equal(navigation.getAccount(), 'acct:personal');
+  navigation.navigate({ kind: 'teams' });
+  assert.deepEqual(navigation.getSnapshot().location, {
+    kind: 'teams',
+    store: 'acct:personal',
+  });
+  navigation.navigate({ kind: 'group-settings', ref: 'team:eng' });
+  assert.equal(navigation.getAccount(), 'acct:work');
+  navigation.navigate({ kind: 'files' });
+  navigation.setAccountStores(
+    FIXTURE.stores.filter((store) => store.account !== 'work'),
+  );
+  navigation.navigate({ kind: 'devices' });
+  assert.equal(navigation.getAccount(), 'acct:personal');
+});
+
+test('rail tabs resume folders and sections without reopening item details', async () => {
+  const { FIXTURE } = await import('../src/fixture');
+  const navigation = new LocationStore();
+  navigation.setAccountStores(FIXTURE.stores);
+  navigation.navigate({ kind: 'store', ref: 'acct:work' });
+  navigation.setFolder('/deploy');
+  navigation.search('token');
+  navigation.select({ store: 'acct:work', path: '/deploy/token' });
+  navigation.navigateTab('settings');
+  navigation.navigate({ kind: 'settings', section: 'notifications' });
+  navigation.navigateTab('files');
+  assert.deepEqual(navigation.getSnapshot().location, {
+    kind: 'store',
+    ref: 'acct:work',
+  });
+  assert.equal(navigation.getSnapshot().folder, '/deploy');
+  assert.equal(navigation.getSnapshot().query, 'token');
+  assert.equal(navigation.getSnapshot().selection, null);
+  assert.equal(navigation.getSnapshot().details, false);
+  navigation.navigateTab('settings');
+  assert.deepEqual(navigation.getSnapshot().location, {
+    kind: 'settings',
+    section: 'notifications',
+    store: 'acct:work',
+  });
+  navigation.clearTabMemory();
+  navigation.navigateTab('files');
+  assert.deepEqual(navigation.getSnapshot().location, { kind: 'files' });
+});
+
+test('remembered device pages follow a new acting account without reusing a key id', async () => {
+  const { FIXTURE } = await import('../src/fixture');
+  const navigation = new LocationStore();
+  navigation.setAccountStores(FIXTURE.stores);
+  navigation.navigate({
+    kind: 'devices',
+    store: 'acct:work',
+    device: 'old-key',
+  });
+  navigation.navigate({ kind: 'people', store: 'acct:personal' });
+  navigation.navigateTab('devices');
+  assert.deepEqual(navigation.getSnapshot().location, {
+    kind: 'devices',
+    store: 'acct:personal',
+  });
+});

@@ -402,36 +402,76 @@ body {
   font-size: 12.5px;
 }
 
+/* Read-only nav row */
 .nav-rows .row.flat {
   cursor: default;
+  border-bottom: 0;
+  /* Disclosure inset alignment */
+  padding: 9px 8px;
 }
 
 .nav-rows .row.flat:hover {
   background: transparent;
 }
 
+.nav-rows .row.flat > .kic,
+.nav-rows .row.flat > .kico {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  font-size: 14px;
+}
+
+.nav-rows .row.flat > .kic .ic,
+.nav-rows .row.flat > .kico .ic {
+  font-size: 15px;
+}
+
 /* A group's row is the button that opens it; the row's menu sits beside that
-   button rather than inside it, so neither control nests in the other. */
+   button rather than inside it, so neither control nests in the other. The
+   separator and the hover belong to the pair, not to the button alone. */
 .nav-rows .rowline {
   display: flex;
   align-items: center;
   gap: 2px;
+  padding-right: 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.nav-rows .rowline:hover {
+  background: var(--wash);
 }
 
 .nav-rows .rowline .row {
   flex: 1;
   min-width: 0;
+  border-bottom: 0;
 }
 
+.nav-rows .rowline .row:hover {
+  background: transparent;
+}
+
+/* Row action menu */
 .nav-rows .rowmenu {
   display: flex;
   flex: none;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.nav-rows .rowline:hover .rowmenu,
+.nav-rows .rowmenu:focus-within,
+.nav-rows .rowmenu:has(button[aria-expanded='true']) {
+  opacity: 1;
 }
 
 /* The per-account checks are folded into one row: an occasional action, not a
    landing surface. The head is a disclosure button, the body its rows. */
 .disc {
-  margin: 16px 0 0;
+  /* The page around it is full-bleed, so the box carries the 20px inset the
+     rows draw for themselves. */
+  margin: 16px 20px 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   overflow: hidden;

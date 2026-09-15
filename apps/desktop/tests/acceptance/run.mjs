@@ -124,7 +124,7 @@ const TYPES = {
 };
 
 /** A static server over `root`, on a port the OS chooses. */
-async function serve(root) {
+export async function serve(root) {
   const server = createServer((request, response) => {
     const path = new URL(request.url, 'http://127.0.0.1').pathname;
     // Stub favicon request to avoid non-fatal console 404 errors during tests.
@@ -244,10 +244,10 @@ async function personaWalks(context, origin) {
       waitUntil: 'load',
     });
     await page.getByText('Team chat is ready.', { exact: true }).waitFor();
-    await page
-      .getByRole('button', { name: 'New channel', exact: true })
-      .first()
-      .click();
+    await page.getByRole('button', { name: 'New chat', exact: true }).click();
+    await page.getByRole('radio', { name: /^Household/ }).click();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.getByRole('radio', { name: /Create a channel/ }).click();
     await page
       .getByRole('textbox', { name: 'Channel name' })
       .fill('design-chat');
@@ -309,7 +309,7 @@ async function personaWalks(context, origin) {
     // Jun: the same service account is excluded by Admin, included by Member 0.
     const selection = encodeURIComponent('team:eng|/deploy/production-token');
     await page.goto(
-      `${origin}/?state=store&store=team%3Aeng&sel=${selection}`,
+      `${origin}/?state=store&store=team%3Aeng&sel=${selection}&view=list`,
       { waitUntil: 'load' },
     );
     const deployBot = page
@@ -426,7 +426,7 @@ async function groupWalk(context, origin) {
     // that order and with nothing else in it.
     await page.locator('.ghero .sub', { hasText: 'Owner' }).waitFor();
     const subtitle = (await page.locator('.ghero .sub').innerText()).trim();
-    if (subtitle !== 'foks.example.net · Owner')
+    if (subtitle !== 'Personal server · Owner')
       failures.push(`the group header subtitle read "${subtitle}"`);
 
     await page.goto(`${origin}/?state=party-remove`, { waitUntil: 'load' });
@@ -467,7 +467,9 @@ async function groupItemWalk(context, origin) {
     if (message.type() === 'error') failures.push(`console: ${message.text()}`);
   });
   try {
-    await page.goto(`${origin}/?state=group-new-text`, { waitUntil: 'load' });
+    await page.goto(`${origin}/?state=group-new-text&view=list`, {
+      waitUntil: 'load',
+    });
     // Select Admin role from the radiogroup.
     await page
       .getByRole('radiogroup', { name: 'Who can read' })
@@ -491,25 +493,18 @@ async function groupItemWalk(context, origin) {
       .locator('.body .row')
       .filter({ hasText: 'phase7_browser_key' });
     await created.waitFor();
-    const people = Number(count?.[1]);
-    if (
-      !(await created.locator('.shared').getAttribute('title'))?.includes(
-        'Readable by',
-      ) ||
-      (people > 2 &&
-        !(await created.locator('.shared .more').textContent())?.includes(
-          String(people - 2),
-        ))
-    ) {
-      failures.push(
-        'created group item did not retain its computed read-role count',
-      );
-    }
-
     await created.click();
     await page
       .locator('.details .dh h2', { hasText: 'phase7_browser_key' })
       .waitFor();
+    const readableParties = page.locator('.details .party').filter({
+      hasNotText: 'No read access',
+    });
+    if ((await readableParties.count()) !== Number(count?.[1])) {
+      failures.push(
+        'created group item did not retain its computed read-role count',
+      );
+    }
     await page.getByRole('button', { name: 'Edit', exact: true }).click();
     await page.locator('.details textarea').fill('edited browser value');
     await page
@@ -530,7 +525,9 @@ async function groupItemWalk(context, origin) {
     await toast(page, 'Deleted phase7_browser_key');
     await created.waitFor({ state: 'detached' });
 
-    await page.goto(`${origin}/?state=group-new-link`, { waitUntil: 'load' });
+    await page.goto(`${origin}/?state=group-new-link&view=list`, {
+      waitUntil: 'load',
+    });
     await page
       .getByRole('textbox', { name: 'Target path', exact: true })
       .fill('/deploy/staging-token');
@@ -542,7 +539,9 @@ async function groupItemWalk(context, origin) {
       .filter({ hasText: 'latest-key' })
       .waitFor();
 
-    await page.goto(`${origin}/?state=group-new-file`, { waitUntil: 'load' });
+    await page.goto(`${origin}/?state=group-new-file&view=list`, {
+      waitUntil: 'load',
+    });
     await page
       .getByRole('button', { name: 'Choose file and create', exact: true })
       .click();
@@ -697,7 +696,10 @@ async function firstRunWalk(context, origin) {
       .getByRole('button', { name: 'Check now', exact: true })
       .click();
     await page.locator('.notice', { hasText: 'Joined Engineering' }).waitFor();
-    await reloadAt('Joined Engineering');
+    // The mock bridge starts with fixture inventory on reload; the checkpoint
+    // survives, but the group created during this run does not. The app must
+    // retain the receipt and report that missing vault rather than invent it.
+    await reloadAt('Engineering: vault unavailable');
 
     const checkpoint = await page.evaluate(
       "window.localStorage.getItem('foks.first-run.v2') ?? ''",
@@ -731,13 +733,12 @@ async function adeWalk(context, origin) {
     await page.getByRole('button', { name: 'Check now', exact: true }).click();
     // Verify pinned server status after initial check.
     await toast(page, 'Server identity pinned');
-    await page.locator('.main', { hasText: 'Last checked: now' }).waitFor();
+    await page.locator('.hostid').first().waitFor();
 
     // Verify host ID consistency across the tooltip, check response, and display.
     await page
-      .locator('summary', { hasText: 'View diagnostic response' })
-      .click()
-      .catch(() => {});
+      .getByRole('button', { name: 'Inspect last check response', exact: true })
+      .click();
     const response = await page.locator('.main pre').first().textContent();
     const host = /"hostId":\s*"([0-9a-f]+)"/.exec(response ?? '')?.[1];
     if (!host) failures.push('Ade could not inspect the checked host id');
@@ -807,9 +808,11 @@ async function main() {
     deviceScaleFactor: 1,
   });
 
+  context.setDefaultTimeout(10000);
+
   let failed = 0;
   try {
-    for (const state of STATES) {
+    for (const state of process.argv.includes('--walks-only') ? [] : STATES) {
       const problems = await visit(
         context,
         `${site.origin}/?state=${state}`,
@@ -824,7 +827,9 @@ async function main() {
       }
     }
 
-    for (const state of GROUP_ITEM_STATES) {
+    for (const state of process.argv.includes('--walks-only')
+      ? []
+      : GROUP_ITEM_STATES) {
       const problems = await visit(
         context,
         `${site.origin}/?state=${state}`,
@@ -902,7 +907,9 @@ async function main() {
       console.log('ok   Phase 6 Ade trust / reset / recovery-key walk');
     }
 
-    for (const path of ['invited', 'own']) {
+    for (const path of process.argv.includes('--walks-only')
+      ? []
+      : ['invited', 'own']) {
       for (const state of FIRST_RUN_STATES) {
         const shot = `first-run-${path}-${state}.png`;
         const problems = await visit(
@@ -932,4 +939,4 @@ async function main() {
   }
 }
 
-await main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) await main();

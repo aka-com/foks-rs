@@ -52,7 +52,6 @@ import {
   checkLabel,
   discoveryContext,
   inviteUnavailableTitle,
-  leaveReason,
   manageReason,
   unavailableTitle,
 } from './group-model';
@@ -178,7 +177,17 @@ function TeamRow({
           ) : (
             <span className="summary">{description}</span>
           )}
-          {role ? <Chip className="role">{roleName(role)}</Chip> : null}
+          {/* The chip sits in a column of its own width so the roles down the
+              list line up; the chip itself keeps its own. */}
+          {role ? (
+            <span className="rolecell">
+              <Chip className="role">{roleName(role)}</Chip>
+            </span>
+          ) : null}
+          {/* The row opens the group, and says so at its end. */}
+          <span className="go" aria-hidden="true">
+            <Icon name="chev" />
+          </span>
         </span>
       </button>
       {menu}
@@ -468,8 +477,6 @@ export function TeamsScreen({
               >
                 Open in Files
               </MenuItem>
-              <hr />
-              <MenuItem reason={leaveReason(snapshot, store)}>Leave…</MenuItem>
             </>
           )}
         </MenuButton>
@@ -545,7 +552,32 @@ export function TeamsScreen({
             {groups.length ? (
               teamRows(groups)
             ) : (
-              <p className="fn">No groups on this Mac yet.</p>
+              <div className="empty">
+                <div className="big">
+                  <Icon name="people" />
+                </div>
+                <h2>No groups yet</h2>
+                <p>
+                  A group is a shared store with roles. Create one on a server
+                  this Mac holds an account on, or ask a server whether it
+                  already lists you in one.
+                </p>
+                <Button
+                  variant="primary"
+                  icon="plus"
+                  disabled={!canCreate || !acting}
+                  title={
+                    canCreate
+                      ? undefined
+                      : 'No available account can create a group'
+                  }
+                  onClick={() => {
+                    if (acting) setSheet({ kind: 'create', store: acting });
+                  }}
+                >
+                  Create a group
+                </Button>
+              </div>
             )}
             {shares.length ? (
               <>

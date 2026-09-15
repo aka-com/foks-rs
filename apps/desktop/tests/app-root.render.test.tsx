@@ -62,10 +62,10 @@ test('the rail draws the six tabs, the unread badge and the attention dot', () =
   ];
   assert.deepEqual(
     tabs.map((tab) => tab.querySelector('.t')?.textContent),
-    ['People', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
+    ['Accounts', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
   );
-  // The fixture's two open notifications light the People dot.
-  assert.ok(tabs[0].querySelector('.dot'), 'People carries the attention dot');
+  // The fixture's two open notifications light the Accounts dot.
+  assert.ok(tabs[0].querySelector('.dot'), 'Accounts carries the attention dot');
   // Files is the tab that owns All items, the shell's starting location.
   assert.equal(tabs[2].getAttribute('aria-current'), 'page');
   assert.equal(tabs[0].getAttribute('aria-current'), null);
@@ -122,8 +122,11 @@ test('a tab navigates, and Control-Tab walks the six of them', async () => {
 
   testingLibrary.fireEvent.click(tab('Files'));
   await testingLibrary.waitFor(() => {
-    assert.equal(document.querySelector('.loc h1')?.textContent, 'Files');
+    assert.equal(document.querySelector('.loc h1')?.textContent, 'All items');
   });
+  testingLibrary.fireEvent.click(
+    testingLibrary.screen.getByRole('button', { name: 'Files home' }),
+  );
 });
 
 test('the Files roots page lists the stores the rail used to enumerate', async () => {
@@ -150,7 +153,7 @@ test('the Files roots page lists the stores the rail used to enumerate', async (
   // The items page returns to the roots page it was opened from.
   const back = document.querySelector<HTMLButtonElement>('.path .page-back');
   assert.ok(back, 'the items header carries a back chevron');
-  assert.equal(back.getAttribute('aria-label'), 'Back to Files');
+  assert.equal(back.getAttribute('aria-label'), 'Files home');
   testingLibrary.fireEvent.click(back);
   await testingLibrary.waitFor(() => {
     assert.equal(document.querySelector('.loc h1')?.textContent, 'Files');
@@ -241,10 +244,10 @@ test('opens on All items, in the folder browser', async () => {
  * A StoreRef is the agent's own identifier for a store and is opaque: the real
  * agent answers with a JSON object, not the fixture's readable `acct:<alias>`.
  * The address may carry one — `?store=` has always encoded it — but no page may
- * draw one, so People, Devices and Settings are read for every ref the catalog
+ * draw one, so Accounts, Devices and Settings are read for every ref the catalog
  * holds, in their text and in the attributes a reader is shown.
  */
-test('People, Devices and Settings draw no StoreRef', async () => {
+test('Accounts, Devices and Settings draw no StoreRef', async () => {
   const { FIXTURE } = (await vite.ssrLoadModule(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
@@ -276,7 +279,7 @@ test('People, Devices and Settings draw no StoreRef', async () => {
     ].join(' ');
 
   for (const [name, settled] of [
-    ['People', 'Accounts on this Mac'],
+    ['Accounts', 'Accounts on this Mac'],
     ['Devices', 'Macs and device keys'],
     ['Settings', 'Danger zone'],
   ] as const) {

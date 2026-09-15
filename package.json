@@ -20,6 +20,7 @@
     "test": "npm run test:core",
     "test:foks-ui": "tsx --test --test-concurrency=1 apps/desktop/tests/*.test.ts apps/desktop/tests/*.test.tsx",
     "test:foks-desktop:real-agent": "bash scripts/test-foks-desktop-real-agent.sh",
+    "acceptance:foks-redesign": "VITE_FOKS_MOCK=1 npm run build:frontend && node apps/desktop/tests/acceptance/redesign.mjs",
     "acceptance:foks-ui": "VITE_FOKS_MOCK=1 npm run build:frontend && node apps/desktop/tests/acceptance/run.mjs",
     "test:rust:core": "cargo test --locked",
     "test:rust:full": "cargo test --locked --workspace",

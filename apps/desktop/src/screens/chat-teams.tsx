@@ -21,6 +21,7 @@ import { Button, Icon, SectionLabel } from '../components';
 import {
   chatAvailable,
   serverDisplayName,
+  teamCaption,
   storeDescription,
   storeNavigationOrder,
 } from '../model';
@@ -216,7 +217,6 @@ function teamRow(
     ? ''
     : storeDescription(snapshot, store, options);
   const unread = reachable ? teamUnread(entry) : null;
-  const server = serverFor(snapshot, store);
   return {
     store,
     entry,
@@ -231,7 +231,7 @@ function teamRow(
       : undefined,
     badge: reachable ? unread : { label: '!', description: unavailable },
     names: partyNames(snapshot, store.id),
-    server: server ? serverDisplayName(server) : store.server,
+    server: teamCaption(snapshot, store, { kind: false }),
   };
 }
 
@@ -343,6 +343,7 @@ export function ChatTeamColumn({
   });
   return (
     <aside className="chat-inbox" aria-label="Chat inbox">
+      <p className="chat-inbox-scope">All accounts on this Mac</p>
       <div className="chat-inbox-top">
         {/* The field names itself, so there is no label to wrap it in: an empty
             `<label>` would be a label with nothing in it. */}
@@ -487,6 +488,7 @@ function ConversationRow({
       <GroupMark store={row.store} size="sm" />
       <span className="t">
         <b>{row.store.name}</b>
+        <small className="chat-row-identity">{row.server}</small>
         <small>
           {row.status ||
             line ||
@@ -545,6 +547,7 @@ function TeamHeading({
           <b role="heading" aria-level={3}>
             {row.store.name}
           </b>
+          <small className="chat-row-identity">{row.server}</small>
           {row.status && <small>{row.status}</small>}
           {row.note && <small className="chat-row-note">{row.note}</small>}
         </span>

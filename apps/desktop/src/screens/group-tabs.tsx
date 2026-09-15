@@ -363,28 +363,6 @@ export function IncompleteGroupPage({
                 </small>
               </span>
             </InsetRow>
-            <InsetRow
-              action={
-                // Inert rather than natively disabled, like a menu item that
-                // does not apply: the keyboard still reaches it and reads why.
-                <Button
-                  variant="danger"
-                  aria-disabled
-                  title="No command removes a group whose setup never finished. Finish setup, or reset this Mac’s state for this server."
-                  onClick={undefined}
-                >
-                  Remove and rotate keys…
-                </Button>
-              }
-            >
-              <span className="t">
-                <b>Remove and rotate keys</b>
-                <small>
-                  No command removes a group whose setup never finished. Finish
-                  setup, or reset this Mac’s state for {serverName}.
-                </small>
-              </span>
-            </InsetRow>
           </Inset>
           <SectionLabel>What this Mac knows</SectionLabel>
           <Inset>

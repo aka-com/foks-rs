@@ -63,11 +63,14 @@ async function fixture(): Promise<AgentSnapshot> {
   return FIXTURE;
 }
 
-async function files(onNavigate: (location: Location) => void = () => {}) {
+async function files(
+  onNavigate: (location: Location) => void = () => {},
+  supplied?: AgentSnapshot,
+) {
   const { FilesScreen } = (await vite.ssrLoadModule(
     '/src/screens/files-screen.tsx',
   )) as typeof import('../src/screens/files-screen');
-  const snapshot = await fixture();
+  const snapshot = supplied ?? (await fixture());
   return ui.render(createElement(FilesScreen, { snapshot, onNavigate }));
 }
 
@@ -142,14 +145,17 @@ test('a Files row in an abnormal state carries a chip and is dimmed', async () =
     'Setup incomplete',
   );
   // The state is the chip, so the caption says only what the store is.
-  assert.equal(homelab.querySelector('.name small')?.textContent, 'Share');
+  assert.equal(
+    homelab.querySelector('.name small')?.textContent,
+    'Ad-hoc share · Personal server',
+  );
 
   const personal = row('Personal');
   assert.equal(personal.className, 'row');
   assert.equal(personal.querySelector('.tail .chip'), null);
   assert.equal(
     personal.querySelector('.name small')?.textContent,
-    'Vault · Personal server',
+    'Vault · satoshi on Personal server',
   );
 });
 
@@ -311,20 +317,7 @@ test('a Teams row menu says why an action does not apply', async () => {
   openRowMenu('Engineering');
   assert.equal(inert(menuItem('Engineering', 'Add someone on Acme…')), false);
   assert.equal(inert(menuItem('Engineering', 'Add a group…')), false);
-  // Leaving has no command at all, and the reason names who can remove you.
-  const leave = menuItem('Engineering', 'Leave…');
-  assert.equal(inert(leave), true);
-  assert.equal(
-    leave.getAttribute('title'),
-    'To leave this group, ask sam.ortiz or priya.n to remove your account.',
-  );
-
-  // The sole owner of a loaded roster gets the other sentence.
-  openRowMenu('Household');
-  assert.equal(
-    menuItem('Household', 'Leave…').getAttribute('title'),
-    'As the sole owner, you must transfer ownership or delete the group to leave.',
-  );
+  assert.equal(ui.screen.queryByRole('menuitem', { name: 'Leave…' }), null);
 
   // An ad-hoc share has no membership to change, and its setup is unfinished.
   openRowMenu('Homelab');
@@ -368,12 +361,6 @@ test('a roster failure gives the Teams row menu its own reasons', async () => {
   const admit = menuItem('Engineering', 'Add a group…');
   assert.equal(inert(admit), true);
   assert.equal(admit.getAttribute('title'), unread);
-  // An unread roster is not evidence of sole ownership, so neither sentence
-  // about who can remove you is offered.
-  assert.equal(
-    menuItem('Engineering', 'Leave…').getAttribute('title'),
-    'Leaving a group is not available yet.',
-  );
 });
 
 test('a server row whose access lapsed says so with a chip', async () => {
@@ -572,5 +559,31 @@ test('a lapsed account opens the checks rather than hiding its state', async () 
   assert.equal(
     document.getElementById('teams-servers')?.hasAttribute('hidden'),
     false,
+  );
+});
+
+test('same-named Files roots retain distinct server identities even with duplicate labels', async () => {
+  const snapshot = await fixture();
+  const destinations: Location[] = [];
+  await files((location) => destinations.push(location), {
+    ...snapshot,
+    servers: snapshot.servers.map((server) => ({ ...server, label: 'Work' })),
+    stores: snapshot.stores.map((store) =>
+      store.kind === 'team' ? { ...store, name: 'Engineering' } : store,
+    ),
+  });
+  const rows = [
+    ...document.querySelectorAll<HTMLButtonElement>('.nav-rows .row'),
+  ].filter((row) => row.querySelector('.tt')?.textContent === 'Engineering');
+  assert.ok(rows.some((row) => row.textContent?.includes('foks.example.net')));
+  assert.ok(
+    rows.some((row) => row.textContent?.includes('foks.acme-corp.com')),
+  );
+  for (const row of rows) ui.fireEvent.click(row);
+  assert.equal(
+    new Set(
+      destinations.map((location) => location.kind === 'store' && location.ref),
+    ).size,
+    rows.length,
   );
 });

@@ -517,14 +517,10 @@ test('a group whose setup never finished has no tabs, and two ways out', async (
   );
   assert.equal(band.textContent?.includes('Nothing runs while FOKS'), false);
   assert.ok(rendered.getByRole('button', { name: 'Finish setup' }));
-  // Nothing removes a half-made group, so the second way out keeps its place
-  // and says why, inert rather than natively disabled.
-  const remove = rendered.getByRole('button', {
-    name: 'Remove and rotate keys…',
-  });
-  assert.equal(remove.hasAttribute('disabled'), false);
-  assert.equal(remove.getAttribute('aria-disabled'), 'true');
-  assert.match(remove.getAttribute('title') ?? '', /^No command removes/);
+  assert.equal(
+    rendered.queryByRole('button', { name: 'Remove and rotate keys…' }),
+    null,
+  );
   // What the page can still say about the group it cannot open.
   const labels = [...document.querySelectorAll('.roster .inset .fr .k')].map(
     (node) => node.textContent,
@@ -548,4 +544,13 @@ test('Finish setup resumes the existing incomplete group', async () => {
   });
   // Resume the existing server-side group instead of creating another.
   assert.deepEqual(resumed, ['team:homelab']);
+});
+
+test('an unavailable group keeps a route to Teams home', async () => {
+  const destinations: Location[] = [];
+  const rendered = await group('team:removed', 'people', {
+    onNavigate: (location) => destinations.push(location),
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Teams home' }));
+  assert.deepEqual(destinations, [{ kind: 'teams' }]);
 });

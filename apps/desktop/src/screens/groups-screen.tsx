@@ -74,11 +74,7 @@ import {
   itemCountOf,
 } from './group-tabs';
 import { GroupMark } from './group-mark';
-import {
-  inviteUnavailableTitle,
-  leaveReason,
-  manageReason,
-} from './group-model';
+import { inviteUnavailableTitle, manageReason } from './group-model';
 import { InviteSheet } from './invite-sheet';
 import { StoreAccessTakeover } from './store-access';
 import { useToast } from '/kit/toasts';
@@ -92,7 +88,6 @@ const VIS_MAX = 32767;
 /** The base the group page's tab and panel ids are derived from. */
 const GROUP_TABS = 'group-sections';
 /** Why the join policy cannot be changed. */
-const JOIN_POLICY_REASON = 'Configuring the join policy is not supported yet.';
 const stateName = (): string =>
   typeof window === 'undefined'
     ? ''
@@ -1014,25 +1009,10 @@ function SettingsTab({
         <>
           <SectionLabel>Who can join</SectionLabel>
           <Inset>
-            <InsetRow
-              label="Join policy"
-              action={
-                // Inert rather than natively disabled, like a menu item that
-                // does not apply: the keyboard still reaches it and reads why.
-                <Button
-                  size="sm"
-                  aria-disabled
-                  title={JOIN_POLICY_REASON}
-                  onClick={undefined}
-                >
-                  Change…
-                </Button>
-              }
-            >
-              {/* The reason is read, not hovered: it is the row's own line. */}
-              <span>
-                Invite only
-                <span className="hint">{JOIN_POLICY_REASON}</span>
+            <InsetRow label="Join policy">
+              Invite only
+              <span className="hint">
+                An administrator adds members or approves membership requests.
               </span>
             </InsetRow>
           </Inset>
@@ -1077,37 +1057,6 @@ function SettingsTab({
             <small>
               Removing anyone rotates the group key and blocks their future
               reads. Copies already downloaded are not erased.
-            </small>
-          </span>
-        </InsetRow>
-        <InsetRow
-          action={
-            <Button
-              variant="danger"
-              disabled
-              title={leaveReason(snapshot, store)}
-            >
-              Leave…
-            </Button>
-          }
-        >
-          <span className="t">
-            <b>Leave {store.name}</b>
-            <small>{leaveReason(snapshot, store)}</small>
-          </span>
-        </InsetRow>
-        <InsetRow
-          action={
-            <Button variant="danger" disabled>
-              Delete…
-            </Button>
-          }
-        >
-          <span className="t">
-            <b>Delete {store.name}</b>
-            <small>
-              Permanently deletes the group and all shared items for all
-              members.
             </small>
           </span>
         </InsetRow>
@@ -2060,7 +2009,14 @@ export function GroupSettingsScreen({
   if (!store || store.kind !== 'team') {
     return (
       <>
-        <PageHeader title="Group unavailable" subtitle="" />
+        <PageHeader
+          title="Group unavailable"
+          subtitle=""
+          back={{
+            label: 'Teams home',
+            onBack: () => onNavigate({ kind: 'teams' }),
+          }}
+        />
         <div className="body">
           <Notice title="This group is no longer available">
             Refresh the catalog or choose another group from Teams.
@@ -2118,8 +2074,8 @@ export function GroupSettingsScreen({
         <button
           type="button"
           className="back"
-          title="Back to Teams"
-          aria-label="Back to Teams"
+          title="Teams home"
+          aria-label="Teams home"
           onClick={() => onNavigate({ kind: 'teams' })}
         >
           <Icon name="chev" />

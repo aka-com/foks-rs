@@ -120,14 +120,14 @@ test('the rail draws six tabs and marks the one that owns the location', async (
   await rail({ kind: 'group-settings', ref: 'team:eng' });
   assert.deepEqual(
     tabs().map((tab) => tab.querySelector('.t')?.textContent),
-    ['People', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
+    ['Accounts', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
   );
   // A group's settings page belongs to Teams.
   assert.equal(tabs()[3].getAttribute('aria-current'), 'page');
   assert.equal(tabs().filter((tab) => tab.className.includes('on')).length, 1);
 });
 
-test('Chat carries the summed unread and People the attention dot', async () => {
+test('Chat carries the summed unread and Accounts the attention dot', async () => {
   const { rendered } = await rail({ kind: 'all' }, '2', 3);
   // The badge is one number over every team whose chat this Mac can read: the
   // fixture's two readable groups, two unread apiece.
@@ -139,7 +139,7 @@ test('Chat carries the summed unread and People the attention dot', async () => 
   });
   assert.equal(badge.textContent, '4');
   assert.equal(badge.getAttribute('aria-label'), '4 unread');
-  assert.ok(tabs()[0].querySelector('.dot'), 'People carries the dot');
+  assert.ok(tabs()[0].querySelector('.dot'), 'Accounts carries the dot');
   assert.equal(rendered.container.querySelectorAll('.nav .dot').length, 1);
 });
 
@@ -182,7 +182,7 @@ test('a tab is titled only where its label is hidden', async () => {
   await rail({ kind: 'files' }, '0', 0, true);
   assert.deepEqual(
     tabs().map((tab) => tab.getAttribute('title')),
-    ['People', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
+    ['Accounts', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
   );
 });
 
@@ -324,4 +324,14 @@ test('closing the account menu with the mouse leaves the header unfocused', asyn
   await Promise.resolve();
   await Promise.resolve();
   assert.equal(document.activeElement, header);
+});
+
+test('the rail names the account through which the selected group is accessed', async () => {
+  await rail({ kind: 'group-settings', ref: 'team:eng' });
+  assert.match(
+    document.querySelector('.rail-account')?.textContent ??
+      document.querySelector('.who')?.textContent ??
+      '',
+    /vitalik/,
+  );
 });

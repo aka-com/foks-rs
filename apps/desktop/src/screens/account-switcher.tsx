@@ -1,5 +1,5 @@
 /**
- * The account switcher People, Devices and Settings' card credentials share.
+ * The account switcher Accounts, Devices and Settings' card credentials share.
  *
  * Each of them acts on one account at a time, and the address carries that
  * account's exact StoreRef, so the switcher navigates rather than holding

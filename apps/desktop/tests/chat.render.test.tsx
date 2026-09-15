@@ -184,25 +184,14 @@ test('the header search button moves to the column’s search field', async () =
   assert.equal(document.activeElement === field, true);
 });
 
-test('the composer draws what chat cannot do, inert and saying why', async () => {
+test('the composer exposes only supported actions', async () => {
   await setup();
-  for (const [label, reason] of [
-    ['Attach a file', /text only/],
-    ['Insert an emoji', /not available yet/],
-    ['Set an exploding timer', /no expiry to set/],
-  ] as const) {
-    const control = ui.screen.getByRole('button', { name: label });
-    // Inert, but reachable: a control whose only content is the reason it
-    // cannot be used has to be focusable to state that reason, so it carries
-    // `aria-disabled` rather than `disabled`.
-    assert.equal(control.getAttribute('aria-disabled'), 'true');
-    assert.equal(control.hasAttribute('disabled'), false);
-    assert.equal(control.getAttribute('tabindex'), '0');
-    assert.match(control.getAttribute('title') ?? '', reason);
-    const described = control.getAttribute('aria-describedby');
-    assert.ok(described, `${label} names its reason`);
-    assert.match(document.getElementById(described)?.textContent ?? '', reason);
-  }
+  for (const label of [
+    'Attach a file',
+    'Insert an emoji',
+    'Set an exploding timer',
+  ])
+    assert.equal(ui.screen.queryByRole('button', { name: label }), null);
   // The hint offers only markup the thread actually renders.
   assert.ok(ui.screen.getByText('**bold**'));
   assert.equal(ui.screen.queryByText('@user'), null);

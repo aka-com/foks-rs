@@ -126,7 +126,7 @@ cancelled, concealed or unmounted.
 - **alias**: Profile-local display label.
 - **profile**: Server configuration reference.
 - **StoreRef**: Canonical application store identifier (`id` on `Store`, `store` on `Account`). Two profiles
-  may both hold an account aliased `personal`, so People, Devices and Join
+  may both hold an account aliased `personal`, so Accounts, Devices and Join
   carry the StoreRef — `?state=devices&store=<StoreRef>` — and resolve
   exactly against it. Such an address with no store names this Mac's first
   account and is rewritten to that account's StoreRef; a StoreRef that no longer
@@ -259,7 +259,7 @@ authenticated in the catalog.
 | `src/app-root.tsx`         | App shell: window, rail, screen, details panel, deep links.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `src/components/`          | Components: Button, Chip, Tag, Badge, KindIcon, Inset, SectionLabel, Notice, Band, SegmentedControl, SplitButton, MenuButton, SearchField.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `src/shell/`               | Window chrome: `sidebar.tsx` (the rail), `page-header.tsx`, `toolbar.tsx`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `src/screens/`             | Screens: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx` (the group page, its Members and Settings tabs and the add/role/remove/create sheets), `group-tabs.tsx` (the Channels and Files tabs and the unfinished-group page), `group-model.ts` (the permission rules and reasons the Teams list and the group page share), `group-mark.tsx` (the one mark a group carries everywhere), `invite-sheet.tsx` (the per-account invitation), `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx` (`ServersSection`, the server list Settings draws, and one server's page), `settings-screen.tsx` (the one Settings page), `devices-screen.tsx` (one account's Macs and device keys, paper keys and security key enrollments, and one key's own page), `device-sheets.tsx` (the sheets Devices and Settings share), `device-model.ts` (the four per-account key calls and the one row model People and Devices share), `account-switcher.tsx` (the switcher People, Devices and Settings share), `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `people-screen.tsx` (the attention list and the account profile: teams, devices, keys and the account rows), `files-screen.tsx` (the roots page), `teams-screen.tsx`, `chat-tab.tsx` (the Chat tab: the inbox column, the open conversation and the info panel), `chat-teams.tsx` (the cross-team inbox column), `chat-new.tsx` (the two-step New chat sheet), `chat-screen.tsx` (one team's conversation), `chat-info.tsx` (the channel info panel), `scope.ts` (what is listed, in what order). |
+| `src/screens/`             | Screens: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx` (the group page, its Members and Settings tabs and the add/role/remove/create sheets), `group-tabs.tsx` (the Channels and Files tabs and the unfinished-group page), `group-model.ts` (the permission rules and reasons the Teams list and the group page share), `group-mark.tsx` (the one mark a group carries everywhere), `invite-sheet.tsx` (the per-account invitation), `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx` (`ServersSection`, the server list Settings draws, and one server's page), `settings-screen.tsx` (the one Settings page), `devices-screen.tsx` (one account's Macs and device keys, paper keys and security key enrollments, and one key's own page), `device-sheets.tsx` (the sheets Devices and Settings share), `device-model.ts` (the four per-account key calls and the one row model Accounts and Devices share), `account-switcher.tsx` (the switcher Accounts, Devices and Settings share), `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `people-screen.tsx` (the attention list and the account profile: teams, devices, keys and the account rows), `files-screen.tsx` (the roots page), `teams-screen.tsx`, `chat-tab.tsx` (the Chat tab: the inbox column, the open conversation and the info panel), `chat-teams.tsx` (the cross-team inbox column), `chat-new.tsx` (the two-step New chat sheet), `chat-screen.tsx` (one team's conversation), `chat-info.tsx` (the channel info panel), `scope.ts` (what is listed, in what order). |
 | `src/bridge.ts`            | The typed `Bridge` interface and the Tauri implementation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `src/mock-bridge.ts`       | The same interface, using the fixture.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `src/fixture.ts`           | The stable desktop fixture, as typed data.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -279,17 +279,24 @@ authenticated in the catalog.
 `nav.side.rail` is a fixed six-tab rail, 200px wide and blue
 (`--rail`, `--rail-ink`, `--rail-line`, `--rail-active` in
 `apps/desktop/kit/tokens.css`). It does not enumerate stores. Its tabs are
-People, Chat, Files, Teams, Devices and Settings; `railTabOf(location)` in
+Accounts, Chat, Files, Teams, Devices and Settings; `railTabOf(location)` in
 `src/location.ts` decides which one a location belongs to, so All items and a
 store page mark Files, a group's settings page marks Teams, and a team chat
 marks Chat. Chat carries one badge summing the unread across every team whose
 chat this Mac can read, in the same orange every unread count uses
-(`--unread`); People carries a dot while anything needs attention. Chat's tab
+(`--unread`); Accounts carries a dot while anything needs attention. Chat's tab
 goes to `chatTabLocation()` — the team and channel the Chat tab last had open.
-Control-Tab walks the six tabs.
+Control-Tab walks the six tabs. Returning to a tab restores its last page,
+folder and filters; account-specific pages follow the acting account. Item
+details are closed on return. A conceal clears this in-memory tab history.
+The Files home and Teams home chevrons open their roots explicitly; they are
+not browser-history Back buttons. URLs restore the current scene on reload,
+without creating a browser history stack.
 
-Above the tabs, the account header names the active account — the one the
-location's `store` parameter names, else the first account store — and opens a
+Above the tabs, the account header names the acting account. Account-specific
+tabs retain that account when switching tabs. Opening a group, chat or vault
+uses the account through which that object is held. Files, Chat and Teams
+still list all accounts on this Mac. The header and opens a
 menu of the accounts on this Mac grouped by server, "Add an account or
 server…" (the first-run flow) and "Lock" (the command Settings › About also
 offers). An account whose access has stopped carries a chip naming the state.
@@ -310,7 +317,7 @@ and has no toggle; the blue styling is scoped to `.side.rail` for that reason.
 
 ### What each tab is
 
-People is the list of what needs attention — the page that used to be called
+Accounts is the list of what needs attention — the page that used to be called
 Alerts — over one account. Each attention card keeps its severity — as a
 colour and as an accessible name — its title and its detail, and displays the
 exact action label reported by the agent (formatted as "Required action: …")
@@ -372,7 +379,7 @@ shares — the group mark, name, server, the roster summary the per-group
 account holds and a chip for an abnormal state — and the row itself is the
 button that opens that group's page, which returns here. One caption builder
 writes the line under a group's name wherever one is listed — on Teams, on
-People and on a server's page: what the object is ("Named group", "Ad-hoc
+Accounts and on a server's page: what the object is ("Named group", "Ad-hoc
 share"), then the server it lives on, and the account it is held through only
 where this Mac holds two accounts on that server. Each part is dropped where
 the surface already says it: the server on a page that is about one server, the
@@ -380,7 +387,7 @@ kind on Teams, whose Groups and Shares section labels say it one row above.
 The tab and its headings say Teams; the object in
 body copy is a group. Beside the row, not inside it, sits a menu of that
 group's actions; an action that does not apply stays, inert, with its reason in
-the item's `title` — Leave always, the server-dependent entries while its
+the item's `title` — the server-dependent entries while its
 server is out of reach, and Send setup instructions… where this Mac holds no account on
 the group's own server to send it as. Below the
 list, the per-account checks are folded into one disclosure row, "Check other
@@ -502,7 +509,7 @@ carries a Check in its header, and the band a never-checked or lapsed server
 draws offers the same check beside the reason. Under the check-in rows, one
 disclosure — Inspect last check response — holds the whole diagnostic
 response. Then the page answers what stops if this server lapses: Accounts on
-this server (the account's mark, username and alias, with People) and Teams on
+this server (the account's mark, username and alias, with Accounts) and Teams on
 this server (each group or share on it, the same caption the other lists
 write, its roster summary or its
 state chip, and a row action that opens it; with none, "No groups on this
@@ -512,7 +519,7 @@ danger zone keeps two rows, because `forget_server` and `reset_server` are two
 commands with two outcomes.
 A store's abnormal state
 is a chip at the end of its row on each of the four lists that draw one —
-Files, Teams, People's Teams you're in, and a server's page —
+Files, Teams, Accounts’ Teams you're in, and a server's page —
 rather than a caption under its name. One model function, `storeAttentionState`,
 decides it for all four, so a group whose roster could not be read draws the
 chip rather than printing "Roster unavailable" where the roster summary goes;
@@ -533,10 +540,8 @@ account can be created, which nothing this Mac holds reports — the note under
 the message says only that one may; an invitation preview's expiry and inviter, which the Join
 sheet does not claim; a Recent-items list on a group's Files tab, which would
 be a second file browser over the same catalog; and a Created-by line and a
-"server checked" chip on Settings. Leave and Delete stay inert with today's
-reasons, and Remove and rotate keys on an unfinished group is inert for the
-same reason: `expel_federated_group` removes an admission, not a half-made
-group of this Mac's own. The annotation strips in the mocks describe the
+"server checked" chip on Settings. Unsupported Leave, Delete and unfinished-group
+removal actions are omitted. The annotation strips in the mocks describe the
 design rather than the group and are not built either.
 
 Item pages open in the folder browser. The toolbar's list / grid / folders
@@ -695,14 +700,10 @@ the chat contract's own role text is stripped by `roleTextWithoutBand`, which is
 named for what it does so the two cannot be confused), the per-device alert
 settings that used to be a strip above every thread, and "Manage in Teams".
 Leaving, muting, renaming and deleting a channel have no `ChatAction`, so the
-panel does not draw them and says so once at its foot.
+panel does not draw them.
 
-The composer draws the attach, emoji and exploding-timer controls the reader
-knows from other chat apps, inert, each with the reason in its `title` and in a
-visually hidden description: chat carries text only, `ChatAction` has no
-attachment or expiry, and there is no emoji picker. They carry `aria-disabled`
-rather than `disabled` and stay in the tab order, because a control whose only
-content is the reason it cannot be used has to be reachable to state it. Under
+The composer exposes text entry and delivery actions. Attachments, an emoji
+picker and message expiry are omitted until supported. Under
 it, a hint line offers only the markup the thread renders (`**bold**`,
 `*italics*`, `` `code` ``, `> quote`, `- list`, `[label](https://…)`); mentions
 are not among them.
@@ -732,15 +733,8 @@ the ⓘ panel, and the mock's "Join a team" button, which has no FOKS equivalent
 of which live in Teams, so the column's foot keeps the one "Create or join a
 team" button.
 
-Two things are built differently from the mock rather than left out. The
-conversation header carries a Refresh beside the mock's search, files and ⓘ: the
-history, the channel list and the saved work are projections that can go stale
-behind the live connection the mock assumes, and nothing else in the pane asks
-for them again. And the timer, attach and emoji controls sit together at the
-left of the row under the text box, beside the send hint, rather than flanking
-the text box inside one bordered field as the mock draws them — they are inert,
-and a reader reaching past them for the box they sit inside would be reaching
-past three controls that do nothing.
+The conversation header carries Refresh alongside search, files and ⓘ, because
+the history, channel list and saved work can become stale.
 
 ### `apps/desktop/kit`
 
@@ -814,6 +808,15 @@ wrong mock.
 It drives Chromium, never the WebKit webview the app ships in, so it validates
 layout and logic and nothing about the runtime.
 
+The redesign journey gate is `npm run acceptance:foks-redesign`. It exercises
+account switching, invitation administration, device notification preferences,
+Teams → Chat → Files navigation and per-tab restoration at **1280×860** and
+**960×860**. The narrow run uses the keyboard throughout and checks that the
+channel-info overlay covers the conversation rather than squeezing it. It saves
+`redesign-*.png` screenshots alongside the other acceptance artifacts.
+See [the review follow-up log](../../SHELL_RAIL_REVIEW_FIXES.md) for changes,
+self-review notes and validation.
+
 Layer 4 is the Rust command layer. Runtime-dependent app lock, clipboard
 concealment/clearing, native picker/drop streaming and webview resident-set
 behavior are tested there or manually, not in Chromium.
@@ -848,10 +851,10 @@ kept so deep links defined in the design specification resolve to this location.
 | `folders`                                                                              | All items                               | `view=folders`; store roots and folders are derived from catalog paths                                  |
 | `lease`                                                                                | Work (Acme)                             | `lease=lapsed` — the whole snapshot, not a place                                                        |
 | `inactive`                                                                             | Homelab                                 | group reports inactive; Resume creation uses its resumable operation                                    |
-| `alerts`                                                                               | People, on its attention list           | `lease=lapsed`, so the list has its critical entry                                                      |
+| `alerts`                                                                               | Accounts, on its attention list           | `lease=lapsed`, so the list has its critical entry                                                      |
 | `agent-lost`                                                                           | Full window stop                        | Retry reconnects and refreshes without replay                                                           |
 | `groups`                                                                               | Teams                                   | the list, then the collapsed Check-other-servers row; `store=` names the account create/join act as     |
-| `people`                                                                               | People                                  | the attention list over one account's panel; `store=` names the account                                 |
+| `people`                                                                               | Accounts                                  | the attention list over one account's panel; `store=` names the account                                 |
 | `group-people` · `party` · `federation`                                                | Engineering group page                  | Members tab; `party` opens a member row's menu                                                          |
 | `group-channels`                                                                       | Household group page                    | Channels tab, on the group whose server offers chat; `tab=channels` reaches it on any group             |
 | `group-files`                                                                          | Engineering group page                  | Files tab; `tab=files` reaches it on any group                                                          |
@@ -876,7 +879,7 @@ kept so deep links defined in the design specification resolve to this location.
 | `settings-macs` · `settings-macs-work` · `settings-phrase`                             | Devices                                 | Macs, pairing and the one-time paper-key reveal; `settings-macs-work` names the exact `acct:work` store |
 | `settings-keys` · `settings-enrol`                                                     | Devices                                 | the Security key enrollments section and the YubiKey account sheet                                      |
 | `devices&store=<StoreRef>&device=<key>`                                                | Devices › one key                       | that key's own page; `device=` is the key id, or `yubi:<alias>` for an enrollment                       |
-| `settings-account`                                                                     | People                                  | the account panel and its workflows                                                                     |
+| `settings-account`                                                                     | Accounts                                  | the account panel and its workflows                                                                     |
 | `settings-agent` · `settings-about`                                                    | Settings                                | the About section: agent status, socket, version                                                        |
 
 `decodeLocation` returns `null` for display mode, item selection, or lease
@@ -889,3 +892,10 @@ from the default, so an ordinary `?state=all` stays `?state=all`.
 
 Search query text is intentionally omitted from the URL address state so that
 active filter queries persist across store navigation transitions within a session.
+
+Cross-server collections use the same server-name disambiguation and account
+captions. Files roots and Chat team rows show their server visibly; a group
+held through multiple accounts on one server also names its holding account.
+Duplicate server labels include the underlying profile name. Server details and
+setup instructions retain the configured address rather than substituting a
+local display name for it.

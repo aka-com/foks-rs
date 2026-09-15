@@ -17,33 +17,6 @@ import {
   messageDate,
   messageTime,
 } from './presentation';
-import type { FoksIconName } from '../icons';
-
-/** The composer controls no `ChatAction` reaches, and why each one is inert. */
-const INERT_TOOLS: readonly {
-  icon: FoksIconName;
-  label: string;
-  reason: string;
-}[] = [
-  {
-    icon: 'attach',
-    label: 'Attach a file',
-    reason: 'Attachments are not available: chat carries text only.',
-  },
-  {
-    icon: 'smile',
-    label: 'Insert an emoji',
-    reason:
-      'The emoji picker is not available yet. Typed emoji are sent as text.',
-  },
-  {
-    icon: 'timer',
-    label: 'Set an exploding timer',
-    reason:
-      'Exploding messages are not available: the agent has no expiry to set.',
-  },
-];
-
 export function ChatThread({
   channel,
   teamName,
@@ -374,31 +347,6 @@ export function ChatThread({
                 }}
               />
               <div className="chat-composer-row">
-                {/* Attachments, emoji and exploding messages have no
-                    `ChatAction`: they are drawn inert, each saying so, rather
-                    than left out of a composer readers know from elsewhere.
-                    `aria-disabled` rather than `disabled`, because a control
-                    whose only content is the reason it cannot be used has to
-                    be reachable by keyboard to state it. */}
-                <span className="chat-composer-tools">
-                  {INERT_TOOLS.map((tool) => (
-                    <Fragment key={tool.icon}>
-                      <Button
-                        variant="quiet"
-                        icon={tool.icon}
-                        aria-disabled="true"
-                        tabIndex={0}
-                        aria-label={tool.label}
-                        aria-describedby={`${hintId}-${tool.icon}`}
-                        title={tool.reason}
-                        onClick={(event) => event.preventDefault()}
-                      />
-                      <span id={`${hintId}-${tool.icon}`} className="offscreen">
-                        {tool.reason}
-                      </span>
-                    </Fragment>
-                  ))}
-                </span>
                 <small id={hintId}>
                   {recovering
                     ? 'The reply to this message was lost. Recover it to send the same text once.'

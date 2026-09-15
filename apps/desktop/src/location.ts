@@ -7,7 +7,7 @@
  */
 
 import { useSyncExternalStore } from 'react';
-import type { LeaseState, StoreRef } from './model/types';
+import type { AccountStore, LeaseState, Store, StoreRef } from './model/types';
 
 /* ------------------------------------------------------------- location -- */
 
@@ -86,6 +86,33 @@ export type Location =
       profile?: string;
     }
   | { kind: 'first-run'; step: FirstRunStep; path?: FirstRunPath };
+
+/** Resolve the account through which a page's object is accessed. */
+export function accountAtLocation(
+  stores: readonly Store[],
+  location: Location,
+  fallback?: StoreRef,
+): AccountStore | undefined {
+  const accounts = stores.filter(
+    (store): store is AccountStore => store.kind === 'account',
+  );
+  if ('store' in location && location.store)
+    return accounts.find((account) => account.id === location.store);
+  if ('ref' in location && location.ref) {
+    const target = stores.find((store) => store.id === location.ref);
+    return (
+      target &&
+      accounts.find(
+        (account) =>
+          account.server === target.server &&
+          account.account === target.account,
+      )
+    );
+  }
+  if (location.kind === 'settings' && location.profile)
+    return accounts.find((account) => account.server === location.profile);
+  return accounts.find((account) => account.id === fallback) ?? accounts[0];
+}
 
 /** The rail tab that owns a location, or `null` for first run. */
 export function railTabOf(location: Location): RailTab | null {
@@ -917,6 +944,77 @@ export function sceneOf(state: LocationState, lease: LeaseState): Scene {
  */
 export class LocationStore {
   private current: LocationState;
+  private stores: readonly Store[] = [];
+  private actingAccount?: StoreRef;
+  private hasInventory = false;
+  private readonly tabs = new Map<RailTab, LocationState>();
+
+  clearTabMemory(): void {
+    this.tabs.clear();
+  }
+
+  /** Rail tabs resume their last page; explicit home links still open roots. */
+  navigateTab(tab: RailTab): void {
+    if (railTabOf(this.current.location) === tab) return;
+    const defaults: Record<RailTab, Location> = {
+      people: { kind: 'people' },
+      chat: chatTabLocation(),
+      files: { kind: 'files' },
+      teams: { kind: 'teams' },
+      devices: { kind: 'devices' },
+      settings: { kind: 'settings' },
+    };
+    let saved = this.tabs.get(tab);
+    let location = saved?.location ?? defaults[tab];
+    const target = 'ref' in location ? location.ref : undefined;
+    if (
+      this.hasInventory &&
+      target &&
+      !this.stores.some((store) => store.id === target)
+    ) {
+      saved = undefined;
+      location = tab === 'chat' ? { kind: 'chat' } : defaults[tab];
+    }
+    if (
+      location.kind === 'people' ||
+      location.kind === 'teams' ||
+      location.kind === 'devices' ||
+      location.kind === 'settings'
+    ) {
+      const account = this.getAccount();
+      const changed = location.store !== account;
+      location = { ...location, store: account };
+      if (changed && location.kind === 'devices') delete location.device;
+      if (changed && location.kind === 'settings') delete location.profile;
+    }
+    location = this.accountLocation(location);
+    const next = transition(this.current, { type: 'navigate', location });
+    this.publish(
+      saved
+        ? { ...saved, location, selection: null, details: false }
+        : { ...next, query: '', details: false },
+    );
+  }
+
+  /** Inventory is refreshed by the shell; a removed account is never reused. */
+  setAccountStores(stores: readonly Store[]): void {
+    this.hasInventory = true;
+    this.stores = stores;
+    this.actingAccount = accountAtLocation(
+      stores,
+      this.current.location,
+      this.actingAccount,
+    )?.id;
+  }
+
+  getAccount(): StoreRef | undefined {
+    return accountAtLocation(
+      this.stores,
+      this.current.location,
+      this.actingAccount,
+    )?.id;
+  }
+
   private readonly listeners = new Set<() => void>();
 
   constructor(initial: LocationState = INITIAL_STATE) {
@@ -935,16 +1033,38 @@ export class LocationStore {
   /** Apply an action. Publishes only when the state actually changed. */
   dispatch(action: LocationAction): LocationState {
     const next = transition(this.current, action);
+    return this.publish(next);
+  }
+
+  private publish(next: LocationState): LocationState {
     if (next === this.current) return next;
+    const tab = railTabOf(this.current.location);
+    if (tab) this.tabs.set(tab, this.current);
     this.current = next;
     for (const listener of this.listeners) listener();
     return next;
   }
 
+  private accountLocation(location: Location): Location {
+    const account = accountAtLocation(this.stores, location, this.getAccount());
+    if (account) {
+      this.actingAccount = account.id;
+      if (
+        (location.kind === 'people' ||
+          location.kind === 'devices' ||
+          location.kind === 'settings' ||
+          location.kind === 'teams') &&
+        !location.store
+      )
+        location = { ...location, store: account.id };
+    }
+    return location;
+  }
+
   navigate(location: Location, options: NavigateOptions = {}): void {
     this.dispatch({
       type: 'navigate',
-      location,
+      location: this.accountLocation(location),
       ...(options.replace ? { replace: true } : {}),
     });
   }

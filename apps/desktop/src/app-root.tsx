@@ -680,7 +680,8 @@ function VaultShell({
   useEffect(() => {
     if (!concealSignal) return;
     rememberChatLocation(null);
-  }, [concealSignal]);
+    locations.clearTabMemory();
+  }, [concealSignal, locations]);
   const [accessGenerations, setAccessGenerations] = useState<
     ReadonlyMap<string, number>
   >(() => new Map());
@@ -736,6 +737,10 @@ function VaultShell({
     scene.lease,
   ]);
 
+  useEffect(
+    () => locations.setAccountStores(shown.stores),
+    [locations, shown.stores],
+  );
   useEffect(() => setLatest(agentSnapshot), [agentSnapshot]);
 
   useEffect(() => {
@@ -1431,7 +1436,9 @@ function VaultShell({
             <Sidebar
               snapshot={shown}
               location={here}
+              account={locations.getAccount()}
               attention={notesNow(shown).length}
+              onTabNavigate={(tab) => locations.navigateTab(tab)}
               onNavigate={(location) => {
                 locations.navigate(location);
               }}

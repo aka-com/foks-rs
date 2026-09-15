@@ -8,7 +8,6 @@
 import {
   groupDetailFailure,
   partiesOf,
-  partyName,
   roleRank,
   serverDisplayName,
   serverName,
@@ -19,7 +18,6 @@ import type {
   AccountStore,
   AgentSnapshot,
   Server,
-  Store,
   StoreRef,
   TeamStore,
 } from '../model';
@@ -83,12 +81,6 @@ export const unavailableTitle = (context: DiscoveryContext): string =>
 export const inviteUnavailableTitle = (serverName: string): string =>
   `Restore access to ${serverName} before inviting someone.`;
 
-function oxfordOr(names: readonly string[]): string {
-  if (names.length <= 1) return names[0] ?? '';
-  if (names.length === 2) return `${names[0]} or ${names[1]}`;
-  return `${names.slice(0, -1).join(', ')}, or ${names[names.length - 1]}`;
-}
-
 /**
  * Why this Mac cannot change a group's roster, or the groups admitted into it —
  * `undefined` when it can. One rule for both the Teams list and the group page,
@@ -135,26 +127,4 @@ export function federationManageable(
   store: TeamStore,
 ): boolean {
   return manageReason(snapshot, store, 'federation') === undefined;
-}
-
-/**
- * Why leaving is unavailable: there is no leave command to offer. Which of the
- * two sentences applies can only be told from a roster that loaded — an empty
- * or unread roster is not evidence of sole ownership.
- */
-export function leaveReason(snapshot: AgentSnapshot, store: Store): string {
-  const roster = partiesOf(snapshot, store.id);
-  if (!roster.length || groupDetailFailure(snapshot, store.id, 'roster'))
-    return 'Leaving a group is not available yet.';
-  const seniors = roster
-    .filter(
-      (party) =>
-        party.party_kind === 'user' &&
-        party.label !== 'you' &&
-        roleRank(party.destination_role) >= 2,
-    )
-    .map((party) => partyName(party));
-  return seniors.length
-    ? `To leave this group, ask ${oxfordOr(seniors)} to remove your account.`
-    : 'As the sole owner, you must transfer ownership or delete the group to leave.';
 }

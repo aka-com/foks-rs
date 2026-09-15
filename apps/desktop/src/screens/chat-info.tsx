@@ -145,9 +145,6 @@ export function ChannelInfoPanel({
           />
         </section>
       )}
-      <p className="chat-info-foot">
-        Leaving, muting, renaming and deleting a channel are not available.
-      </p>
     </aside>
   );
 }

@@ -594,7 +594,7 @@ export function RecoverSheet({
     >
       <p>
         Recovery adds this Mac as an authorized device. If interrupted, you can
-        resume recovery from People’s Needs attention list using the same
+        resume recovery from Needs attention in Accounts using the same
         phrase.
       </p>
       <Inset>

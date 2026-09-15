@@ -725,7 +725,7 @@ export function ItemsScreen({
     <PageHeader
       {...header}
       back={{
-        label: 'Back to Files',
+        label: 'Files home',
         onBack: () => {
           locations.navigate({ kind: 'files' });
         },
@@ -776,6 +776,10 @@ export function ItemsScreen({
   if (store && storeDescriptionState(snapshot, store) !== 'normal') {
     return (
       <StoreAccessTakeover
+        back={{
+          label: 'Files home',
+          onBack: () => locations.navigate({ kind: 'files' }),
+        }}
         snapshot={snapshot}
         store={store}
         onOpenServer={(profile) =>

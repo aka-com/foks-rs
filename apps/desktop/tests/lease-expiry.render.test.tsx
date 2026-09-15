@@ -113,7 +113,7 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
     assert.ok(rendered.getAllByText('Check-in expired').length > 0);
   });
   // The rail does not list stores; the healthy neighbour is a row on Files.
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Files' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Files home' }));
   const personal = await ui.waitFor(() => {
     const row = (rendered.getAllByRole('button') as HTMLButtonElement[]).find(
       (button) => button.textContent?.includes('Personal'),

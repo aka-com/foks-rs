@@ -1,5 +1,5 @@
 /**
- * The People tab: what needs attention, then the accounts on this Mac.
+ * The Accounts tab: what needs attention, then the accounts on this Mac.
  *
  * `AttentionList` is the page that used to be called Alerts. Each card keeps
  * its severity, title and detail and carries its action at the right end: the
@@ -401,7 +401,7 @@ export function PeopleScreen({
   return (
     <>
       <PageHeader
-        title="People"
+        title="Accounts"
         subtitle={subtitle}
         action={
           <Button onClick={() => setSheet('go-profile')}>
@@ -571,9 +571,8 @@ function AccountPanel({
   const keys = deviceEntries(lists);
   return (
     <>
-      {/* The profile band: the account's mark over the colour the rail and
-          the switcher give it, and the four facts that name it. */}
-      <div className="pband" aria-hidden="true" />
+      {/* The profile head: the account's mark and the four facts that name
+          it, on one row. */}
       <div className="phead">
         <AccountMark name={username ?? store.account} size="big" />
         <span className="t">

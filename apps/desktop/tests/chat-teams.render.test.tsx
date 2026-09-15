@@ -467,7 +467,7 @@ test('a team with no conversation mounted carries its preview and unread count',
   assert.equal(badge.getAttribute('aria-label'), '2 unread');
   assert.equal(badge.textContent, '2');
   assert.equal(
-    head('Household').querySelector('small')?.textContent,
+    head('Household').querySelector('small:not(.chat-row-identity)')?.textContent,
     'Team member: Team chat is ready.',
   );
   assert.ok(head('Household').querySelector('.when')?.textContent);
@@ -488,7 +488,7 @@ test('a team whose server offers no chat sits under No chat with the reason', as
   // The initial stands for the name beside it, so it is not read out twice.
   assert.equal(mark.getAttribute('aria-hidden'), 'true');
   assert.match(
-    engineering.querySelector('small')?.textContent ?? '',
+    engineering.querySelector('small:not(.chat-row-identity)')?.textContent ?? '',
     /^Chat not offered on /,
   );
   const labels = [...document.querySelectorAll('.sec')].map(
@@ -516,7 +516,7 @@ test('a team with a lapsed server check-in remains listed with recovery actions'
   // The row states the reason rather than a preview it cannot have, in the
   // words the rest of the shell uses for that store.
   assert.equal(
-    engineering.querySelector('small')?.textContent,
+    engineering.querySelector('small:not(.chat-row-identity)')?.textContent,
     'Check-in expired',
   );
   assert.equal(
@@ -846,7 +846,7 @@ test('a synchronization that succeeded but could not finish keeps its preview', 
   );
   await ui.waitFor(() =>
     assert.equal(
-      head('Engineering').querySelector('small')?.textContent,
+      head('Engineering').querySelector('small:not(.chat-row-identity)')?.textContent,
       'Team member: Team chat is ready.',
     ),
   );
@@ -867,7 +867,7 @@ test('a synchronization that succeeded but could not finish keeps its preview', 
   // A team that is not the open one keeps its preview just the same.
   const household = head('Household');
   assert.equal(
-    household.querySelector('small')?.textContent,
+    household.querySelector('small:not(.chat-row-identity)')?.textContent,
     'Team member: Team chat is ready.',
   );
   assert.equal(
@@ -949,12 +949,12 @@ test('muted and hidden conversations stay listed and say what they are', async (
     assert.deepEqual(channels(), ['#general', '#chores', '#archive']),
   );
   const chores = channelRow('#chores');
-  assert.equal(chores.querySelector('small')?.textContent, 'Muted');
+  assert.equal(chores.querySelector('small:not(.chat-row-identity)')?.textContent, 'Muted');
   const choresBadge = chores.querySelector('.chat-unread');
   assert.equal(choresBadge?.textContent, '3');
   assert.ok(choresBadge?.classList.contains('muted'));
   assert.equal(
-    channelRow('#archive').querySelector('small')?.textContent,
+    channelRow('#archive').querySelector('small:not(.chat-row-identity)')?.textContent,
     'Hidden',
   );
   // The single-row team draws the same things its channel row would: the count

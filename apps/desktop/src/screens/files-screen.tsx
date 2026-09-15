@@ -10,6 +10,8 @@
 import type { ReactNode } from 'react';
 import { Chip, Icon, SectionLabel } from '../components';
 import {
+  accountSubtitle,
+  teamCaption,
   storeAttentionState,
   storeDescription,
   storeDescriptionState,
@@ -47,14 +49,10 @@ function StoreRow({
   // the row is not dimmed for it.
   const abnormal = storeAttentionState(snapshot, store) !== 'normal';
   const available = storeDescriptionState(snapshot, store) === 'normal';
-  const kindWord =
-    store.kind === 'account'
-      ? 'Vault'
-      : store.team_kind === 'adhoc'
-        ? 'Share'
-        : 'Group';
   const caption =
-    !abnormal && description ? `${kindWord} · ${description}` : kindWord;
+    store.kind === 'account'
+      ? `Vault · ${accountSubtitle(snapshot, store)}`
+      : teamCaption(snapshot, store);
   return (
     <button
       type="button"
@@ -79,6 +77,10 @@ function StoreRow({
       </span>
       <span className="tail">
         {abnormal ? <Chip tone="warn">{description}</Chip> : null}
+        {/* The row opens the store, and says so at its end. */}
+        <span className="go" aria-hidden="true">
+          <Icon name="chev" />
+        </span>
       </span>
     </button>
   );
@@ -130,7 +132,11 @@ export function FilesScreen({
                 </span>
                 <small>Every store on this Mac</small>
               </span>
-              <span className="tail" />
+              <span className="tail">
+                <span className="go" aria-hidden="true">
+                  <Icon name="chev" />
+                </span>
+              </span>
             </button>
             <SectionLabel>Vaults</SectionLabel>
             {vaults.length ? rows(vaults) : <p className="fn">No vaults yet</p>}

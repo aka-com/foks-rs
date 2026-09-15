@@ -1,5 +1,7 @@
 /** A deterministic command bridge for render and browser acceptance tests. */
 
+import { notificationKey } from './chat/local-contract';
+import { mockInvitations } from './invitation-mock';
 import { mockChat } from './chat-mock';
 import type {
   Bridge,
@@ -184,6 +186,11 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       'orbit velvet lantern cactus mirror harbor pistol thumb copper fossil meadow rotate silent wagon bright ladder ivory',
   };
   let appLocked = false;
+  const notificationSettings = {
+    enabled: false,
+    previews: false,
+    overrides: {} as Record<string, boolean>,
+  };
   const appLockState = () => ({
     locked: appLocked,
     available: true,
@@ -812,18 +819,33 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       entry.active = true;
       return { applied: true };
     },
-    chatLocal: async () => ({
-      epoch: '0'.repeat(32),
-      available: false,
-      settings: { enabled: false, previews: false, overrides: {} },
-    }),
+    chatLocal: async (action) => {
+      if (action.action === 'configure') {
+        if (action.enabled !== undefined)
+          notificationSettings.enabled = action.enabled;
+        if (action.previews !== undefined)
+          notificationSettings.previews = action.previews;
+        if (action.scope && action.channel) {
+          const key = await notificationKey(action.scope, action.channel);
+          if (action.mode === null) delete notificationSettings.overrides[key];
+          else if (action.mode !== undefined)
+            notificationSettings.overrides[key] = action.mode;
+        }
+      }
+      return {
+        epoch: '0'.repeat(32),
+        available: true,
+        settings: {
+          ...notificationSettings,
+          overrides: { ...notificationSettings.overrides },
+        },
+      };
+    },
     configureWebAdmin: async () => ({ ok: true }),
     openWebAdmin: async () => {
       throw new Error('Host administration requires a connected host.');
     },
-    invitation: async () => {
-      throw new Error('Invitations require a connected agent.');
-    },
+    invitation: mockInvitations(stores),
     botAccount: async () => ({
       rows: [],
       message: 'Bot credentials require a connected agent.',

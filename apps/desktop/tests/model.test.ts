@@ -793,3 +793,20 @@ test('every fixture admission names a profile, not an address', () => {
     );
   }
 });
+
+test('team captions identify the holding account when a server has multiple accounts', () => {
+  const store = FIXTURE.stores.find((store) => store.id === 'team:household');
+  const account = FIXTURE.stores.find((store) => store.id === 'acct:personal');
+  assert.ok(store?.kind === 'team' && account?.kind === 'account');
+  const snapshot = {
+    ...FIXTURE,
+    stores: [
+      ...FIXTURE.stores,
+      { ...account, id: 'acct:other', account: 'other' },
+    ],
+  };
+  assert.equal(
+    teamCaption(snapshot, store),
+    'Named group · Personal server · as satoshi',
+  );
+});

@@ -990,3 +990,10 @@
 .chat-local-settings [role='alert'] {
   color: var(--danger-ink);
 }
+
+.chat-inbox-scope {
+  margin: 0;
+  padding: 8px 12px 0;
+  color: var(--muted);
+  font-size: 12px;
+}

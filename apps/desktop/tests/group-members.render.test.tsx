@@ -604,25 +604,13 @@ test('the Settings tab states the name, the join policy and why leaving is not o
     (row) => row.querySelector('.k')?.textContent === 'Join policy',
   );
   assert.ok(policy);
-  const reason = 'Configuring the join policy is not supported yet.';
-  // The value states the policy, and the reason it cannot be changed is read
-  // under it rather than hidden in a tooltip on a dead button.
-  assert.equal(policy.querySelector('.v')?.textContent, `Invite only${reason}`);
-  assert.equal(policy.querySelector('.v .hint')?.textContent, reason);
-  // The button keeps its place, inert like a menu item that does not apply:
-  // `aria-disabled`, not `disabled`, so the keyboard reaches the reason.
-  const change = policy.querySelector('button');
-  assert.equal(change?.hasAttribute('disabled'), false);
-  assert.equal(change?.getAttribute('aria-disabled'), 'true');
-  assert.equal(change?.getAttribute('title'), reason);
+  assert.match(policy.textContent ?? '', /Invite only/);
+  assert.equal(policy.querySelector('button'), null);
   // The role reads the way every other role on this page reads.
   const account = rows.find(
     (row) => row.querySelector('.k')?.textContent === 'Your account',
   );
   assert.equal(account?.querySelector('.v')?.textContent, 'vitalik · Admin');
-  const leave = rendered.getByRole('button', { name: 'Leave…' });
-  assert.equal(
-    leave.getAttribute('title'),
-    'To leave this group, ask sam.ortiz or priya.n to remove your account.',
-  );
+  assert.equal(rendered.queryByRole('button', { name: 'Leave…' }), null);
+  assert.equal(rendered.queryByRole('button', { name: 'Delete…' }), null);
 });

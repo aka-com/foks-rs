@@ -393,7 +393,7 @@ export function DevicesScreen({
     );
 
   // Devices is per account, so a Mac with none has nothing to list; the
-  // account is made on People, where accounts are.
+  // account is made on Accounts, where accounts are.
   if (!selected)
     return (
       <>
@@ -407,7 +407,7 @@ export function DevicesScreen({
                   variant="primary"
                   onClick={() => onNavigate({ kind: 'people' })}
                 >
-                  Open People
+                  Open Accounts
                 </Button>
               }
             >

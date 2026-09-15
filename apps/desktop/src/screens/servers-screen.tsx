@@ -624,6 +624,9 @@ function ServerRow({
           <span>{serverDisplayName(server)}</span>
           {server.label ? <em>{server.name}</em> : null}
         </b>
+        {server.configuredProbe !== server.name && (
+          <small>{server.configuredProbe}</small>
+        )}
         <small>
           <StatusLine
             state={state}
@@ -857,7 +860,7 @@ function ServerBody({
   onForget: () => void;
   onCopy: (text: string) => void;
   onOpenGroup: (store: TeamStore) => void;
-  /** The account on this server, on People, where an account is managed. */
+  /** The account on this server, on Accounts, where an account is managed. */
   onOpenAccount: (store: StoreRef) => void;
 }): ReactNode {
   const state = resolveServerUiState(agentSnapshot, server);
@@ -996,7 +999,7 @@ function ServerBody({
             className="devrow"
             action={
               <Button size="sm" onClick={() => onOpenAccount(account.store)}>
-                People
+                Accounts
               </Button>
             }
           >
@@ -1073,7 +1076,7 @@ function ServerBody({
         <Inset className="settings-inset middle">
           <InsetRow label="Profile">{server.id}</InsetRow>
           <InsetRow label="Address">
-            {status?.configuredProbe ?? 'Status unavailable'}
+            {status?.configuredProbe ?? server.configuredProbe}
           </InsetRow>
           <InsetRow
             label="Host ID"
@@ -1107,7 +1110,7 @@ function ServerBody({
         <Inset className="settings-inset middle">
           <InsetRow label="Profile">{server.id}</InsetRow>
           <InsetRow label="Address">
-            {status?.configuredProbe ?? 'Status unavailable'}
+            {status?.configuredProbe ?? server.configuredProbe}
           </InsetRow>
           <InsetRow label="Host ID">
             <span className="stopped">

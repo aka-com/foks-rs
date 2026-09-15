@@ -1,7 +1,7 @@
 /**
  * The Settings tab: one scrolling page, with no sub-navigation.
  *
- * What is left once People holds the accounts, Devices holds the keys and
+ * What is left once Accounts holds the accounts, Devices holds the keys and
  * Teams holds the groups: the servers this Mac talks to, the credentials you
  * type, what this application and its agent are, and the one reset that acts
  * on this Mac. A `section=` address scrolls to and focuses its section, and

@@ -146,7 +146,7 @@ test('a row activated with the mouse drops focus, and with the keyboard keeps it
   await shell();
   const row = [
     ...document.querySelectorAll<HTMLButtonElement>('.side .nav'),
-  ].find((candidate) => candidate.textContent?.startsWith('People'));
+  ].find((candidate) => candidate.textContent?.startsWith('Accounts'));
   assert.ok(row);
   row.focus();
   ui.fireEvent.click(row, { detail: 1 });
@@ -214,7 +214,7 @@ test('every tab draws a glyph, so all six survive the collapsed rail', async () 
   const tabs = [...document.querySelectorAll('.side.rail .rail-tabs .nav')];
   assert.deepEqual(
     tabs.map((tab) => tab.querySelector('.t')?.textContent),
-    ['People', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
+    ['Accounts', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
   );
   for (const tab of tabs)
     assert.ok(tab.querySelector('.ic'), `${tab.textContent} has a glyph`);

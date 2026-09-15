@@ -1,7 +1,7 @@
 /**
  * The navigation rail.
  *
- * Six fixed tabs — People, Chat, Files, Teams, Devices, Settings — under an
+ * Six fixed tabs — Accounts, Chat, Files, Teams, Devices, Settings — under an
  * account header that names the active account and opens the account menu.
  * The rail does not enumerate stores; Files and Teams list them on their own
  * pages. Control-Tab walks the six tabs.
@@ -13,6 +13,7 @@ import { Chip, Icon } from '../components';
 import {
   chatAvailable,
   serverDisplayName,
+  serverName,
   storeAvailability,
   storeDescription,
   storeHues,
@@ -22,7 +23,7 @@ import type { AccountStore, AgentSnapshot } from '../model';
 import type { FoksIconName } from '../icons';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { teamUnread } from '../chat/unread';
-import { chatTabLocation, railTabOf } from '../location';
+import { accountAtLocation, chatTabLocation, railTabOf } from '../location';
 import type { Location, RailTab } from '../location';
 
 interface RailTabSpec {
@@ -35,7 +36,7 @@ interface RailTabSpec {
 const RAIL_TABS: readonly RailTabSpec[] = [
   {
     id: 'people',
-    label: 'People',
+    label: 'Accounts',
     icon: 'person',
     location: { kind: 'people' },
   },
@@ -129,9 +130,11 @@ export function NavRow({
 export interface SidebarProps {
   snapshot: AgentSnapshot;
   location: Location;
-  /** How many things need attention. Draws the People tab's dot. */
+  account?: string;
+  /** How many things need attention. Draws the Accounts tab's dot. */
   attention?: number;
   onNavigate: (location: Location) => void;
+  onTabNavigate?: (tab: RailTab) => void;
   /**
    * Rows between the tabs and the footer. First run puts its progress there;
    * the shell has no additional status to display at that point.
@@ -180,21 +183,6 @@ function CollapseToggle({
   );
 }
 
-/** The account a `store` parameter names, else the first account store. */
-function activeAccount(
-  snapshot: AgentSnapshot,
-  location: Location,
-): AccountStore | undefined {
-  const accounts = snapshot.stores.filter(
-    (store): store is AccountStore => store.kind === 'account',
-  );
-  const named =
-    'store' in location && location.store
-      ? accounts.find((store) => store.id === location.store)
-      : undefined;
-  return named ?? accounts[0];
-}
-
 /**
  * The rail's account header and its menu: the accounts on this Mac grouped by
  * server, then the two commands that are not a place — adding an account and
@@ -203,37 +191,45 @@ function activeAccount(
 function AccountHeader({
   snapshot,
   location,
+  account,
   onNavigate,
   onReenter,
   onLock,
 }: {
   snapshot: AgentSnapshot;
   location: Location;
+  account?: string;
   onNavigate: (location: Location) => void;
   onReenter?: () => void;
   onLock?: () => void;
 }): ReactNode {
   const anchorRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  const active = activeAccount(snapshot, location);
+  const active = accountAtLocation(snapshot.stores, location, account);
   const accounts = snapshot.stores.filter(
     (store): store is AccountStore => store.kind === 'account',
   );
   const usernameOf = (store: AccountStore): string =>
     snapshot.accounts.find((entry) => entry.store === store.id)?.username ??
     store.account;
-  const serverNameOf = (store: AccountStore): string => {
-    const server = snapshot.servers.find((entry) => entry.id === store.server);
-    return server ? serverDisplayName(server) : store.server;
-  };
   const username = active ? usernameOf(active) : 'No account';
-  const server = active ? serverNameOf(active) : 'None on this Mac';
-  // Selecting an account keeps the page the reader is on when that page acts
-  // on one account, and opens People otherwise.
+  const server = active ? serverName(snapshot, active) : 'None on this Mac';
+  // Preserve account-scoped locations when selecting an account; otherwise,
+  // open Accounts.
   const selectAccount = (store: AccountStore): void => {
-    if (
-      location.kind === 'devices' ||
-      location.kind === 'settings' ||
+    if (location.kind === 'devices') {
+      onNavigate({
+        kind: 'devices',
+        store: store.id,
+        section: location.section,
+      });
+    } else if (location.kind === 'settings') {
+      onNavigate({
+        kind: 'settings',
+        section: location.section,
+        store: store.id,
+      });
+    } else if (
       // Teams is account-scoped, so preserve the Teams location.
       location.kind === 'teams'
     )
@@ -417,8 +413,10 @@ function railChatUnread(
 export function Sidebar({
   snapshot,
   location,
+  account,
   attention = 0,
   onNavigate,
+  onTabNavigate,
   status,
   onReenter,
   onLock,
@@ -441,11 +439,13 @@ export function Sidebar({
       const next = nextSidebarCycleLocation(location, event.shiftKey ? -1 : 1);
       if (!next) return;
       event.preventDefault();
-      onNavigate(next);
+      const tab = railTabOf(next);
+      if (onTabNavigate && tab) onTabNavigate(tab);
+      else onNavigate(next);
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [location, onNavigate]);
+  }, [location, onNavigate, onTabNavigate]);
 
   return (
     <nav
@@ -462,6 +462,7 @@ export function Sidebar({
       <AccountHeader
         snapshot={snapshot}
         location={location}
+        account={account}
         onNavigate={onNavigate}
         onReenter={onReenter}
         onLock={onLock}
@@ -489,7 +490,8 @@ export function Sidebar({
               ) : undefined
             }
             onSelect={() => {
-              onNavigate(tabLocation(tab));
+              if (onTabNavigate) onTabNavigate(tab.id);
+              else onNavigate(tabLocation(tab));
             }}
           />
         ))}
