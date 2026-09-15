@@ -39,9 +39,15 @@ export function ChatThread({
   history,
   blockHistory,
   pending,
+  drafts,
 }: {
   bridge: Bridge;
   storeId: string;
+  /**
+   * The team's unsent messages, keyed by channel. The pane owns the map, so a
+   * draft outlives the remount a channel switch is.
+   */
+  drafts?: import('./use-chat-composer').ChannelDrafts;
   history: import('./conversation-model').HistoryWindow | null;
   blockHistory: (channel: string) => void;
   channel: ChatChannel;
@@ -94,7 +100,7 @@ export function ChatThread({
     overLimit,
     nearLimit,
     recovering,
-  } = useChatComposer(channel, request, refreshPending, load);
+  } = useChatComposer(channel, request, refreshPending, load, drafts, storeId);
   const hintId = useId();
   const newFrom = useChatReadIntent(
     channel.id,

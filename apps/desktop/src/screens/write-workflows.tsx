@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { Dialog, DismissibleDialog } from '/kit/overlay-primitives';
 import {
@@ -49,12 +49,37 @@ import type {
 } from '../model';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, KvRoleInput } from '../bridge';
+import type { GuardVerdict } from '../location';
+import { NavigationPrompt, useSheetGuard } from '../navigation-guard';
 import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { useToast } from '/kit/toasts';
 import { editableValue } from './edit-value';
 
 export type NewKind = Exclude<ItemKind, 'Folder'>;
+
+/** Default item kind used when opening the new-item sheet without one. */
+export const DEFAULT_NEW_KIND: NewKind = 'Password';
+
+/** Refusal shown when navigating while a save request is in flight. */
+const SAVING_REFUSAL = 'Wait for the item to finish saving.';
+
+/**
+ * Returns confirmation options for discarding an unsaved draft, shared by
+ * navigation guards, Escape handling, and backdrop dismissal.
+ */
+function discardNewItem(
+  itemKind: NewKind,
+  onConfirm?: () => void,
+): Extract<GuardVerdict, { verdict: 'prompt' }> {
+  return {
+    verdict: 'prompt',
+    title: 'Discard new item?',
+    body: `Your new ${kindLabel(itemKind).toLowerCase()} has not been saved.`,
+    confirm: 'Discard',
+    ...(onConfirm ? { onConfirm } : {}),
+  };
+}
 
 /** Group items default to team-readable content that only admins can change. */
 export const DEFAULT_READ_ROLE: KvRoleInput = 'Member:0';
@@ -484,6 +509,48 @@ function NewSheet({
     onError: (error) => setFileError(normalizeCommandError(error).message),
   });
 
+  /* --------------------------------------------------- unsaved new item -- */
+
+  // Track the initial path to detect unsaved changes. Site and Name fields
+  // account for path changes, and changing the item kind alone does not create
+  // unsaved content.
+  const openedPath = useRef(path).current;
+  const hasContent =
+    Boolean(
+      site ||
+      username ||
+      password ||
+      website ||
+      value ||
+      resourceName ||
+      target ||
+      sourcePath,
+    ) || path !== openedPath;
+  const close = useCallback(() => setWorkflow(null), [setWorkflow]);
+  // Save requests in flight cannot be aborted. Pending drafts require user
+  // confirmation before any action that unmounts the sheet.
+  useSheetGuard(
+    saving
+      ? { verdict: 'refuse', reason: SAVING_REFUSAL }
+      : hasContent
+        ? discardNewItem(itemKind, close)
+        : null,
+  );
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const toasts = useToast();
+  // Escape and the backdrop are answered the same way a navigation is.
+  const dismiss = (): void => {
+    if (saving) {
+      toasts.show(SAVING_REFUSAL, { tone: 'warning' });
+      return;
+    }
+    if (hasContent) {
+      setConfirmingDiscard(true);
+      return;
+    }
+    setWorkflow(null);
+  };
+
   const pathName = path.split('/').at(-1) ?? '';
   const submit = async (): Promise<void> => {
     if (
@@ -590,7 +657,7 @@ function NewSheet({
       mono={mono}
     />
   );
-  return (
+  const sheet = (
     <Sheet
       width="mid"
       glyph={<KindIcon kind={itemKind} />}
@@ -717,6 +784,24 @@ function NewSheet({
       </>
     </Sheet>
   );
+  return (
+    <>
+      <DismissibleDialog
+        className="backdrop"
+        aria-label={`New ${kindLabel(itemKind).toLowerCase()}`}
+        onDismiss={dismiss}
+      >
+        {sheet}
+      </DismissibleDialog>
+      {confirmingDiscard ? (
+        <NavigationPrompt
+          verdict={discardNewItem(itemKind)}
+          onConfirm={close}
+          onCancel={() => setConfirmingDiscard(false)}
+        />
+      ) : null}
+    </>
+  );
 }
 
 function ExistsSheet({
@@ -738,7 +823,13 @@ function ExistsSheet({
     (item) => item.store === workflow.storeId && item.path === workflow.path,
   );
   const version = clash?.version;
-  return (
+  // This step still holds the draft the new-item sheet carried here, so it is
+  // abandoned under the same confirmation, from a navigation or from Escape
+  // and the backdrop.
+  const close = useCallback(() => setWorkflow(null), [setWorkflow]);
+  useSheetGuard(discardNewItem(workflow.itemKind, close));
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const sheet = (
     <Sheet
       glyph={
         clash ? <KindIcon kind={kindOf(clash) as FilterKind} /> : undefined
@@ -783,6 +874,24 @@ function ExistsSheet({
         </p>
       </>
     </Sheet>
+  );
+  return (
+    <>
+      <DismissibleDialog
+        className="backdrop"
+        aria-label="Item path already exists"
+        onDismiss={() => setConfirmingDiscard(true)}
+      >
+        {sheet}
+      </DismissibleDialog>
+      {confirmingDiscard ? (
+        <NavigationPrompt
+          verdict={discardNewItem(workflow.itemKind)}
+          onConfirm={close}
+          onCancel={() => setConfirmingDiscard(false)}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -894,40 +1003,32 @@ export function WriteOverlay({
         onReconnected={() => setWorkflow(null)}
       />
     );
+  // The sheet supplies its own dialog: Escape and the backdrop are decided by
+  // the draft it holds, the same state its navigation guard answers from.
   if (workflow.kind === 'new')
     return (
-      <DismissibleDialog
-        className="backdrop"
-        aria-label={`New ${kindLabel(workflow.itemKind).toLowerCase()}`}
-        onDismiss={() => setWorkflow(null)}
-      >
-        <NewSheet
-          snapshot={snapshot}
-          bridge={bridge}
-          workflow={workflow}
-          setWorkflow={setWorkflow}
-          onApplied={onApplied}
-          onError={(error) => onError(error)}
-          onMutationError={onMutationError}
-          accessNow={accessNow}
-        />
-      </DismissibleDialog>
+      <NewSheet
+        snapshot={snapshot}
+        bridge={bridge}
+        workflow={workflow}
+        setWorkflow={setWorkflow}
+        onApplied={onApplied}
+        onError={(error) => onError(error)}
+        onMutationError={onMutationError}
+        accessNow={accessNow}
+      />
     );
+  // The already-exists step carries the same draft, so it supplies its own
+  // dialog for the same reason.
   if (workflow.kind === 'exists')
     return (
-      <DismissibleDialog
-        className="backdrop"
-        aria-label="Item path already exists"
-        onDismiss={() => setWorkflow(null)}
-      >
-        <ExistsSheet
-          snapshot={snapshot}
-          workflow={workflow}
-          setWorkflow={setWorkflow}
-          onOpenExisting={onOpenExisting}
-          onError={(error) => onError(error)}
-        />
-      </DismissibleDialog>
+      <ExistsSheet
+        snapshot={snapshot}
+        workflow={workflow}
+        setWorkflow={setWorkflow}
+        onOpenExisting={onOpenExisting}
+        onError={(error) => onError(error)}
+      />
     );
   if (workflow.kind === 'conflict')
     return (

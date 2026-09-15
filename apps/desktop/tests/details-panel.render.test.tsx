@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createElement, StrictMode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import type { Bridge, ReadItemResponse } from '../src/bridge';
-import type { Selection } from '../src/location';
+import type { GuardVerdict, LocationStore, Selection } from '../src/location';
 import type { DetailsPanelProps } from '../src/screens/details-panel';
 import { installDom } from './lib/dom-harness';
 
@@ -30,10 +30,15 @@ async function setup(
   selectItem?: (
     item: DetailsPanelProps['snapshot']['items'][number],
   ) => boolean,
+  /** Present when the panel is mounted under a store's guard registry. */
+  store?: LocationStore,
 ) {
   const { DetailsPanel } = (await vite.ssrLoadModule(
     '/src/screens/details-panel.tsx',
   )) as typeof import('../src/screens/details-panel');
+  const { NavigationGuardProvider } = (await vite.ssrLoadModule(
+    '/src/navigation-guard.tsx',
+  )) as typeof import('../src/navigation-guard');
   const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
     '/kit/toasts.tsx',
   )) as typeof import('../kit/toasts');
@@ -63,14 +68,18 @@ async function setup(
     onCommandError: () => {},
     onMutationError: async () => {},
   };
+  const panel = () =>
+    createElement(ToastProvider, {
+      controller: new ToastController(),
+      children: createElement(DetailsPanel, props),
+    });
   const draw = () =>
     createElement(
       StrictMode,
       null,
-      createElement(ToastProvider, {
-        controller: new ToastController(),
-        children: createElement(DetailsPanel, props),
-      }),
+      store
+        ? createElement(NavigationGuardProvider, { store, children: panel() })
+        : panel(),
     );
   return { props, draw, selected, link, bridge };
 }
@@ -266,4 +275,141 @@ test('a login edits in structured fields and serializes through the existing dra
   await ui.waitFor(() => assert.match(saved, /username: satoshi-next/));
   assert.match(saved, /password: correct horse/);
   assert.match(saved, /url: https:\/\/github\.com\/login/);
+});
+
+/* ------------------------------------------------- the unsaved-edit guard -- */
+
+/** The shell's prompter, reduced to what these tests ask of it. */
+function prompts() {
+  type Asked = Extract<GuardVerdict, { verdict: 'prompt' }>;
+  const asked: Asked[] = [];
+  const answers: ((confirmed: boolean) => void)[] = [];
+  return {
+    asked,
+    answer: async (index: number, confirmed: boolean) => {
+      await ui.act(async () => {
+        answers[index]?.(confirmed);
+        await Promise.resolve();
+      });
+    },
+    prompter: (verdict: Asked) => {
+      asked.push(verdict);
+      return new Promise<boolean>((resolve) => answers.push(resolve));
+    },
+  };
+}
+
+/** The panel with the login's editor open, under `store`'s guards. */
+async function editingLogin(store: LocationStore) {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+    store,
+  );
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
+  const username = await r.findByLabelText('User name');
+  return { p, r, username };
+}
+
+/** Runs the navigation the guard is asked about. */
+async function leave(store: LocationStore): Promise<void> {
+  await ui.act(async () => {
+    store.navigate({ kind: 'files' });
+    await Promise.resolve();
+  });
+}
+
+async function guardStore(): Promise<LocationStore> {
+  const { LocationStore } = (await vite.ssrLoadModule(
+    '/src/location.ts',
+  )) as typeof import('../src/location');
+  return new LocationStore();
+}
+
+test('an unchanged editor closes without a discard prompt', async () => {
+  const store = await guardStore();
+  const { asked, prompter } = prompts();
+  store.setPrompter(prompter);
+  const { username } = await editingLogin(store);
+  assert.ok(username);
+
+  await leave(store);
+  assert.deepEqual(asked, []);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+});
+
+test('unsaved edits ask before a navigation, naming the item', async () => {
+  const store = await guardStore();
+  const { asked, prompter } = prompts();
+  store.setPrompter(prompter);
+  const { username } = await editingLogin(store);
+  ui.fireEvent.change(username, { target: { value: 'satoshi-next' } });
+
+  await leave(store);
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0]?.title, 'Discard changes?');
+  assert.equal(asked[0]?.body, 'Your edits to github.com have not been saved.');
+  assert.equal(asked[0]?.confirm, 'Discard');
+  // Nothing moves while the question is open.
+  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+});
+
+test('confirming the discard closes the editor and makes the move', async () => {
+  const store = await guardStore();
+  const { answer, prompter } = prompts();
+  store.setPrompter(prompter);
+  const { r, username } = await editingLogin(store);
+  ui.fireEvent.change(username, { target: { value: 'satoshi-next' } });
+
+  await leave(store);
+  await answer(0, true);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+  // The panel the navigation lands on is clean: the editor is gone.
+  await ui.waitFor(() => assert.ok(r.getByRole('button', { name: 'Edit' })));
+  assert.equal(r.queryByLabelText('User name'), null);
+});
+
+test('cancelling the discard keeps the draft and the reader in place', async () => {
+  const store = await guardStore();
+  const { answer, prompter } = prompts();
+  store.setPrompter(prompter);
+  const { r, username } = await editingLogin(store);
+  ui.fireEvent.change(username, { target: { value: 'satoshi-next' } });
+
+  await leave(store);
+  await answer(0, false);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+  assert.equal(
+    (r.getByLabelText('User name') as HTMLInputElement).value,
+    'satoshi-next',
+  );
+});
+
+test('reselecting the item being edited asks nothing; another item asks', async () => {
+  const store = await guardStore();
+  const { asked, prompter } = prompts();
+  store.setPrompter(prompter);
+  const { p, username } = await editingLogin(store);
+  ui.fireEvent.change(username, { target: { value: 'satoshi-next' } });
+  const edited = p.props.selection;
+  assert.ok(edited);
+  const other = p.props.snapshot.items.find(
+    (item) => item.store !== edited.store || item.path !== edited.path,
+  );
+  assert.ok(other);
+
+  await ui.act(async () => {
+    store.select(edited);
+    await Promise.resolve();
+  });
+  assert.deepEqual(asked, []);
+  assert.deepEqual(store.getSnapshot().selection, edited);
+
+  await ui.act(async () => {
+    store.select({ store: other.store, path: other.path });
+    await Promise.resolve();
+  });
+  assert.equal(asked.length, 1);
+  assert.deepEqual(store.getSnapshot().selection, edited);
 });

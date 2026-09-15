@@ -339,6 +339,21 @@ trigger with its ⌘K hint, the rail's collapse toggle and the catalog refresh.
 Its empty parts carry `data-tauri-drag-region`, because the rail's strip alone
 does not reach across the window. First run draws no topbar.
 
+Swiping right with two fingers on the trackpad navigates to the parent location
+of the current page, matching the back chevron (`src/shell/swipe-back.ts`). The webview's own back/forward gestures stay off —
+the app records its scene with `history.replaceState` only, so the back-forward
+list holds one entry — and with them off the swipe arrives as `wheel` events
+carrying `deltaX`, on macOS and on the Linux and Windows webviews alike. The
+gesture is read from that stream: modified and ctrl-wheel (pinch-zoom) events
+are skipped, `|deltaX|` must exceed twice `|deltaY|`, an ancestor pane that can
+take the horizontal scroll itself keeps it, and 120px of back-directed travel
+in events no more than 120ms apart navigates once. The back navigation gesture
+is throttled until wheel events cease for 300ms, preventing trackpad inertia
+from triggering multiple page transitions. The gesture is disabled at the
+navigation root or when a modal dialog is open.
+The page changes in one step: there is no animation and no rubber-band preview
+of the page behind.
+
 ### Blocking states
 
 Three takeovers leave as much of the shell readable as they safely can, and the
@@ -821,6 +836,63 @@ places.
 `index.html`. If dark theme support is added to FOKS, it should be declared in
 this stylesheet.
 
+## Navigation guards
+
+No sheet is addressable by the location, so any navigation unmounts whatever
+workflow is open on the page. Every entry point — the rail's tabs, Control-Tab,
+the topbar's back chevron, the account switcher, the ⌘K palette, attention
+links, the trackpad's back swipe — reaches the same three methods on
+`LocationStore`: `navigate`, `navigateTab` and `select`. Guards allow the active
+screen to intercept and validate all three before they take effect.
+
+A guard is a function of one intent — a navigation's address, or the item a
+selection is about to open — returning one of three answers:
+
+- `null` allows the move. This is the only answer with no visible effect, and
+  a screen with nothing to protect returns it for every intent.
+- `{ verdict: 'prompt', title, body, confirm, onConfirm? }` displays a
+  confirmation dialog. The shell draws the confirmation `NavigationPrompt` — the discard
+  dialog under the guard's own words, with `confirm` on the danger button and
+  Cancel holding focus. Confirming runs `onConfirm` and then makes the move;
+  Cancel, Escape and the backdrop leave both alone.
+- `{ verdict: 'refuse', reason }` stops the move outright and shows `reason` in
+  a toast. It is for a state that cannot be abandoned at all — a write the
+  agent has already been given — not for an operation the user may choose to
+  discard.
+
+Guards are registered with `useNavigationGuard` from `src/navigation-guard.tsx`
+and are asked in registration order. Any guard refusal immediately halts navigation. If no
+guard refuses, the first prompt is displayed only after every guard has been
+evaluated, so a confirmed prompt can never bypass another guard’s refusal.
+A guard must be a pure answer: it may not navigate, write state, or start work
+of its own.
+
+`navigationVerdict(intent)` runs the same guards without acting on anything. A
+caller that has to stay inert rather than raise a dialog asks it first: the
+back swipe is a trackpad movement, not a decision, so a page it would have to
+ask about is a page it does not go to.
+
+`{ force: true }` skips the guards. It belongs to a move the shell makes on its
+own behalf and no screen may refuse:
+
+- the navigation a guard's own prompt was just confirmed for, so confirming
+  cannot ask again;
+- a redirect away from an inaccessible view, such as a lapsed lease, a store
+  removed from inventory, or concealment that ends a session;
+- a canonicalizing replacement that stays on the same page, such as a default
+  route resolving to an account's exact `StoreRef`;
+- a workflow applying its own resolution as it closes, such as the write
+  overlay selecting the item whose path it just resolved.
+
+All user navigation requests pass through the guards, including the rail tabs
+and the ⌘K palette. A palette item result is one move rather than two:
+`navigateAndSelect` opens the store page with the item selected on it, so a
+held-back navigation cannot leave another page's item in the details panel.
+
+Two shortcuts sit on the document, where an open dialog cannot intercept them,
+so they test `anyDialogOpen()` themselves: Control-Tab in `shell/sidebar.tsx`
+and ⌘K in `shell/search-palette.tsx` do nothing while a dialog owns the window.
+
 ## Testing
 
 The unit and render-test layers live in `tests/`:
@@ -828,7 +900,11 @@ The unit and render-test layers live in `tests/`:
 - `model.test.ts` — verifies reader calculations, role arithmetic, and store
   aggregation invariants against expected baseline values.
 - `location.test.ts` — pure transitions and the `?state=` round trip, including
-  the original design-state names used by the Playwright walks.
+  the original design-state names used by the Playwright walks, and the guard
+  mechanism: verdict order, what `force` skips, and a prompt superseded by a
+  second navigation.
+- `navigation-guard.render.test.tsx` — the confirmation a `prompt` verdict
+  raises, and what confirming, cancelling and Escape each do behind it.
 - `react-boundary.test.ts` — the negative invariants: no raw-HTML sink
   (the mock's whole render layer is `innerHTML`, and none of it came along), no
   `window.__TAURI__`, the Tauri API imported in one file, the model free of the

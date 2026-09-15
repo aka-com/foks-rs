@@ -56,7 +56,7 @@ import type {
   TeamStore,
 } from '../model';
 import type { FoksIconName } from '../icons';
-import type { Location } from '../location';
+import type { Location, NavigateOptions } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
 import { AccountMark, AccountSwitcher } from './account-switcher';
@@ -286,7 +286,13 @@ export interface PeopleScreenProps {
   snapshot: AgentSnapshot;
   bridge: Bridge;
   location: Extract<Location, { kind: 'people' }>;
-  onNavigate: (location: Location) => void;
+  /**
+   * `force` marks the replacement this page makes on its own behalf — the
+   * default route resolving to an account's exact `StoreRef` — which is the
+   * page already on screen writing its own address and not a move any panel
+   * may answer for.
+   */
+  onNavigate: (location: Location, options?: NavigateOptions) => void;
   onRefresh: (message: string) => Promise<void>;
   onRefreshSnapshot: () => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
@@ -343,10 +349,12 @@ export function PeopleScreen({
     };
   }, []);
 
-  // Canonicalize the default route to the first account's exact StoreRef.
+  // Normalize the route to the active account's StoreRef. Because the
+  // destination matches the current location, navigation guards are bypassed
+  // and active dialogs remain open.
   useEffect(() => {
     if (location.store || !selected) return;
-    onNavigate({ ...location, store: selected.id });
+    onNavigate({ ...location, store: selected.id }, { force: true });
   }, [location, onNavigate, selected]);
 
   // A catalog the agent has replaced mid-read is recovered by the shell's own

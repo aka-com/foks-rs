@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { normalizeCommandError, type Bridge } from '../bridge';
+import { useSheetGuard } from '../navigation-guard';
 import type {
   InvitationAction,
   InvitationReply,
@@ -100,6 +101,29 @@ export function InvitationPanel({
       if (active.current === identity) setBusy(false);
     }
   };
+  // An approval, a rejection and a created invitation are all answers this
+  // panel is the only report of: the reply carries the invitation itself, or
+  // the state the request reached. What is only typed is asked about instead.
+  useSheetGuard(
+    busy
+      ? { verdict: 'refuse', reason: 'Wait for the invitation to finish.' }
+      : invite || remote || sourceTeam || pin
+        ? {
+            verdict: 'prompt',
+            title: 'Discard invitation details?',
+            body: 'What is typed here has not been sent to the server.',
+            confirm: 'Discard',
+            onConfirm: () => {
+              setInvite('');
+              setRemote('');
+              setSourceTeam('');
+              setPin('');
+              setPreview(null);
+              presentation?.onClose();
+            },
+          }
+        : null,
+  );
   const reports = reply ? (Array.isArray(reply) ? reply : [reply]) : [];
   const requestMembership = () => {
     if (sourceTeam)

@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Menu, Popover } from '/kit/overlay-primitives';
+import { Menu, Popover, anyDialogOpen } from '/kit/overlay-primitives';
 import { Icon } from '../components';
 import {
   chatAvailable,
@@ -548,6 +548,10 @@ export function Sidebar({
         event.altKey
       )
         return;
+      // This listener runs on document, beyond a dialog's event boundary.
+      // Disable sidebar tab cycling while a dialog is open so the underlying
+      // view does not change.
+      if (anyDialogOpen()) return;
       const next = nextSidebarCycleLocation(location, event.shiftKey ? -1 : 1);
       if (!next) return;
       event.preventDefault();

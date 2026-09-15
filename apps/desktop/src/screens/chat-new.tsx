@@ -10,7 +10,7 @@
  * accepted by `prepare-channel`.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Button,
@@ -30,6 +30,8 @@ import {
   CHAT_NAME_MAX_CHARS,
   CHAT_NAME_MIN_CHARS,
 } from '../chat-limits';
+import type { NavigationGuard } from '../location';
+import { useNavigationGuard } from '../navigation-guard';
 import { chatAvailable, serverDisplayName, storeDescription } from '../model';
 import type {
   AgentSnapshot,
@@ -229,6 +231,40 @@ export function NewChatSheet({
     !channelsKnown ||
     Boolean(picked?.reason);
   const createDisabled = busy || (!outstanding && unsendable);
+  // Read by the guard when it is asked, so typing re-registers nothing. The
+  // latch above keeps the sheet mounted through a team switch; the guard is
+  // the same answer, given to the moves that would take the whole tab away.
+  const guardState = useRef({ typed: false, name: '', locked: false });
+  guardState.current = {
+    typed: creating && Boolean(name.trim() || description.trim()),
+    name: name.trim(),
+    locked,
+  };
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const formGuard = useCallback<NavigationGuard>(() => {
+    const { typed, name: typedName, locked: inFlight } = guardState.current;
+    // A submission the agent may already hold has to be settled in the sheet
+    // that made it: this is the one state the reader cannot choose to drop.
+    if (inFlight)
+      return {
+        verdict: 'refuse',
+        reason: 'Wait for the channel to finish being created.',
+      };
+    if (!typed) return null;
+    return {
+      verdict: 'prompt',
+      title: 'Discard the new channel?',
+      body: typedName
+        ? `#${normalizeChannelName(typedName)} has not been created and will be lost.`
+        : 'This channel has not been created and will be lost.',
+      confirm: 'Discard',
+      // Discard the form as well as allowing navigation. The sheet remains
+      // mounted through team switches and would otherwise retain the text.
+      onConfirm: () => closeRef.current(),
+    };
+  }, []);
+  useNavigationGuard(formGuard);
   const create = async () => {
     if (sending.current || !picked) return;
     const store = picked.store;

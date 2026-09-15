@@ -16,7 +16,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 
-import { DismissibleDialog } from '/kit/overlay-primitives';
+import { DismissibleDialog, anyDialogOpen } from '/kit/overlay-primitives';
 import { Icon } from '../components/icon';
 import { GroupMark } from '../screens/group-mark';
 import {
@@ -355,6 +355,10 @@ export function useSearchShortcut(onOpen: () => void): void {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
       if (event.key.toLowerCase() !== 'k') return;
+      // This listener runs on document, beyond a dialog's event boundary.
+      // Disable the shortcut while any dialog is open, including the palette
+      // itself.
+      if (anyDialogOpen()) return;
       event.preventDefault();
       onOpenRef.current();
     };
@@ -377,9 +381,10 @@ export interface SearchPaletteProps {
    */
   onNavigate: (location: Location) => void;
   /**
-   * Selects the item a result names, after the navigation to its store page.
-   * Selection is not part of `Location`, so without this an item result opens
-   * its store and nothing is selected.
+   * Opens an item by navigating to its store and selecting it. Selection is not
+   * part of `Location`, so one callback applies navigation and selection
+   * together when a caller guards navigation. Without this callback, an item
+   * result opens the store without selecting the item.
    */
   onOpenItem?: (store: StoreRef, path: string) => void;
   /** The channels the caller knows; the palette loads none of its own. */
@@ -471,8 +476,8 @@ function SearchSheet({
     const { target } = entry;
     switch (target.kind) {
       case 'item':
-        onNavigate({ kind: 'store', ref: target.store });
-        onOpenItem?.(target.store, target.path);
+        if (onOpenItem) onOpenItem(target.store, target.path);
+        else onNavigate({ kind: 'store', ref: target.store });
         return;
       case 'store':
         onNavigate({ kind: 'store', ref: target.ref });

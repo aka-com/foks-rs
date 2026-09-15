@@ -24,6 +24,7 @@ import {
   SheetDialog,
 } from '../components';
 import type { Location, SettingsSection } from '../location';
+import { useSheetGuard } from '../navigation-guard';
 import {
   accountStopped,
   accountStores,
@@ -787,6 +788,15 @@ function ResetMacSheet({
     })();
   }, [bridge, servers]);
   useEffect(load, [load]);
+
+  // Reset executes sequentially per server using single-use confirmation
+  // tokens. Navigating away during execution would prevent status updates.
+  // Typed server names confirm execution and are not persisted.
+  useSheetGuard(
+    busy
+      ? { verdict: 'refuse', reason: 'Wait for the reset to finish.' }
+      : null,
+  );
 
   const ready =
     !loading &&

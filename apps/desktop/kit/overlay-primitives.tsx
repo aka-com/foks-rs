@@ -58,6 +58,20 @@ interface OverlayEnvironment {
   dialogs: Set<HTMLElement>;
 }
 
+/**
+ * Tracks mounted dialogs across overlay providers. Individual providers track
+ * their dialogs separately for focus restoration.
+ */
+const mountedDialogs = new Set<HTMLElement>();
+
+/**
+ * Returns whether any modal dialog is open. Shell-level input handlers use
+ * this to suspend shortcuts and gestures while a modal is active.
+ */
+export function anyDialogOpen(): boolean {
+  return mountedDialogs.size > 0;
+}
+
 const OverlayContext = createContext<OverlayEnvironment | null>(null);
 
 export function OverlayProvider({
@@ -159,6 +173,7 @@ export function Dialog({
       ...Array.from(dialogs, isolate),
     ];
     dialogs.add(dialog);
+    mountedDialogs.add(dialog);
     const initial =
       dialog.querySelector<HTMLElement>(
         '[data-dialog-autofocus="true"], [data-sheet-autofocus="true"]',
@@ -168,6 +183,7 @@ export function Dialog({
     initial.focus();
     return () => {
       dialogs.delete(dialog);
+      mountedDialogs.delete(dialog);
       for (const release of releases.reverse()) release();
       queueMicrotask(() => {
         if (!dialog.isConnected && opener && canRestoreFocus(opener, dialogs))

@@ -8,7 +8,11 @@ import { ChatInboxProvider } from './chat/inbox-provider';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Dialog, OverlayProvider } from '/kit/overlay-primitives';
+import {
+  Dialog,
+  OverlayProvider,
+  anyDialogOpen,
+} from '/kit/overlay-primitives';
 import { ToastController, ToastProvider } from '/kit/toasts';
 import {
   discoverUnboundTeams,
@@ -37,6 +41,7 @@ import { FIRST_RUN_PROGRESS_EVENT } from './first-run-operations';
 import {
   LocationStore,
   decodeScene,
+  parentLocation,
   rememberChatLocation,
   sceneHref,
   sceneOf,
@@ -45,6 +50,11 @@ import {
 } from './location';
 import { INITIAL_SCENE } from './location';
 import type { Location, Scene } from './location';
+import {
+  NavigationGuardProvider,
+  NavigationPrompt,
+  type NavigationPromptVerdict,
+} from './navigation-guard';
 import {
   applyLease,
   isLogin,
@@ -64,6 +74,7 @@ import type { RailAgentState } from './shell/sidebar';
 import { Topbar } from './shell/topbar';
 import { SearchPalette, useSearchShortcut } from './shell/search-palette';
 import type { SearchChannel } from './shell/search-palette';
+import { mountSwipeBack } from './shell/swipe-back';
 import { useSidebarInbox } from './chat/inbox-provider';
 import {
   rememberSideCollapsed,
@@ -734,6 +745,12 @@ export function App({
   );
 }
 
+/** A `prompt` verdict on screen, with the promise the store is waiting on. */
+interface PendingPrompt {
+  verdict: NavigationPromptVerdict;
+  settle: (confirmed: boolean) => void;
+}
+
 interface VaultShellProps {
   snapshot: AgentSnapshot;
   bridge: Bridge;
@@ -817,7 +834,53 @@ function VaultShell({
       agentSnapshot,
     ),
   );
+  // The new-item sheet is not addressable, so it does not outlive the page it
+  // was opened over. A draft with something in it has already been confirmed
+  // by the sheet's own guard, which closes the workflow as it confirms; this
+  // closes the one that had nothing to ask about.
+  const sheetLocation = useRef(state.location);
+  useEffect(() => {
+    if (sheetLocation.current === state.location) return;
+    sheetLocation.current = state.location;
+    setWorkflow((current) => (current?.kind === 'new' ? null : current));
+  }, [state.location]);
   const [toasts] = useState(() => new ToastController());
+  // Handles navigation guard outcomes: `prompt` renders the confirmation dialog
+  // below, and `refuse` displays an alert toast. The active pending navigation is
+  // stored in a ref as well as in state so a newer intent can cancel it without
+  // a stale closure.
+  const [prompt, setPrompt] = useState<PendingPrompt | null>(null);
+  const promptRef = useRef<PendingPrompt | null>(null);
+  const settlePrompt = useCallback((confirmed: boolean) => {
+    const open = promptRef.current;
+    if (!open) return;
+    promptRef.current = null;
+    setPrompt(null);
+    open.settle(confirmed);
+  }, []);
+  useEffect(() => {
+    locations.setPrompter(
+      (verdict) =>
+        new Promise<boolean>((resolve) => {
+          const open = promptRef.current;
+          const next = { verdict, settle: resolve };
+          promptRef.current = next;
+          setPrompt(next);
+          // Replace any existing confirmation prompt and resolve its promise
+          // as cancelled.
+          open?.settle(false);
+        }),
+    );
+    locations.setRefusalHandler((reason) => {
+      toasts.show(reason, { tone: 'warning' });
+    });
+    return () => {
+      locations.setPrompter(null);
+      locations.setRefusalHandler(null);
+      // Resolve any pending navigation prompt as cancelled on unmount.
+      settlePrompt(false);
+    };
+  }, [locations, settlePrompt, toasts]);
   const [concealSignal, setConcealSignal] = useState(0);
   // A conceal ends the session the remembered chat belonged to: the account
   // that comes back may not have that team on this Mac, so the rail's Chat tab
@@ -1313,6 +1376,37 @@ function VaultShell({
   }, [locations]);
 
   const here = state.location;
+  // Handle trackpad back gestures consistently with the topbar back button.
+  // The destination is read through a ref so the listener mounts once. Suppress
+  // gestures while a dialog is open or a navigation guard blocks the target to
+  // avoid opening confirmation dialogs or displaying errors from gestures.
+  const hereRef = useRef(here);
+  hereRef.current = here;
+  useEffect(
+    () =>
+      mountSwipeBack({
+        target: () => parentLocation(hereRef.current),
+        enabled: () => {
+          if (anyDialogOpen()) return false;
+          const parent = parentLocation(hereRef.current);
+          return (
+            parent !== null &&
+            locations.navigationVerdict({
+              kind: 'navigate',
+              location: parent,
+            }) === null
+          );
+        },
+        navigate: (location) => locations.navigate(location),
+      }),
+    [locations],
+  );
+  // A prompt asks whether to leave the page it was raised on. If the shell
+  // left it some other way, the question no longer applies.
+  useEffect(() => {
+    settlePrompt(false);
+  }, [here, settlePrompt]);
+
   const pendingFirstRun = incompleteFirstRunCheckpoint();
   const detailsShown =
     state.details &&
@@ -1412,7 +1506,7 @@ function VaultShell({
       // with no `ref` the tab is the only thing that knows which team that is,
       // so it is handed the whole map and picks from the `ref` it resolved.
       accessGenerations={accessGenerations}
-      onNavigate={(location) => locations.navigate(location)}
+      onNavigate={(location, options) => locations.navigate(location, options)}
     />
   ) : here.kind === 'group-settings' ? (
     <GroupSettingsScreen
@@ -1443,7 +1537,7 @@ function VaultShell({
       snapshot={shown}
       bridge={bridge}
       location={here}
-      onNavigate={(location) => locations.navigate(location)}
+      onNavigate={(location, options) => locations.navigate(location, options)}
       onRefresh={refresh}
       onRefreshSnapshot={refreshSnapshot}
       onError={commandError}
@@ -1471,7 +1565,7 @@ function VaultShell({
       bridge={bridge}
       location={here}
       scene={enteredScene}
-      onNavigate={(location) => locations.navigate(location)}
+      onNavigate={(location, options) => locations.navigate(location, options)}
       onRefresh={refresh}
       onRefreshSnapshot={refreshSnapshot}
       onError={commandError}
@@ -1626,7 +1720,10 @@ function VaultShell({
         onClose={() => setSearchOpen(false)}
         onNavigate={(location) => locations.navigate(location)}
         onOpenItem={(storeId, path) =>
-          locations.select({ store: storeId, path })
+          locations.navigateAndSelect(
+            { kind: 'store', ref: storeId },
+            { store: storeId, path },
+          )
         }
       />
       <WriteOverlay
@@ -1666,9 +1763,21 @@ function VaultShell({
             );
           }
           setLatest(next);
-          locations.select({ store: current.store, path: current.path });
+          // The write workflow resolved this destination and is closing, so
+          // underlying screens must not block this navigation.
+          locations.select(
+            { store: current.store, path: current.path },
+            { force: true },
+          );
         }}
       />
+      {prompt ? (
+        <NavigationPrompt
+          verdict={prompt.verdict}
+          onConfirm={() => settlePrompt(true)}
+          onCancel={() => settlePrompt(false)}
+        />
+      ) : null}
     </div>
   );
 
@@ -1682,7 +1791,9 @@ function VaultShell({
         clock={chatClock}
         accessNow={accessNow}
       >
-        {shell}
+        <NavigationGuardProvider store={locations}>
+          {shell}
+        </NavigationGuardProvider>
       </ChatInboxProvider>
     </ToastProvider>
   );

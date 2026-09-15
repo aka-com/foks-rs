@@ -21,7 +21,13 @@ import {
   setUrl,
   transition,
 } from '../src/location';
-import type { Location, LocationState } from '../src/location';
+import type {
+  Location,
+  LocationState,
+  NavigationGuard,
+  NavigationIntent,
+  NavigationPrompter,
+} from '../src/location';
 
 const at = (location: Location): LocationState => ({
   ...INITIAL_STATE,
@@ -955,4 +961,251 @@ test('a tab root has no parent, and neither does an account parameter', () => {
     { kind: 'first-run', step: 'who' },
   ] as Location[])
     assert.equal(parentLocation(location), null, `${location.kind} is a root`);
+});
+
+/* ---------------------------------------------------------------- guards -- */
+
+/** Lets the prompter's promise and the dispatch behind it settle. */
+const settled = (): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, 0));
+
+/** A guard that prompts for every intent, with a countable `onConfirm`. */
+function prompting(onConfirm?: () => void): NavigationGuard {
+  return () => ({
+    verdict: 'prompt',
+    title: 'Discard unsaved changes?',
+    body: 'Your draft has not been saved.',
+    confirm: 'Discard changes',
+    ...(onConfirm ? { onConfirm } : {}),
+  });
+}
+
+/** Collects the prompts raised, handing back the answer for each. */
+function prompts(): {
+  asked: string[];
+  answer: (index: number, confirmed: boolean) => void;
+  prompter: NavigationPrompter;
+} {
+  const asked: string[] = [];
+  const answers: ((confirmed: boolean) => void)[] = [];
+  return {
+    asked,
+    answer: (index, confirmed) => answers[index](confirmed),
+    prompter: (verdict) => {
+      asked.push(verdict.title);
+      return new Promise<boolean>((resolve) => answers.push(resolve));
+    },
+  };
+}
+
+test('with no guards registered a navigation is unchanged', () => {
+  const store = new LocationStore();
+  store.navigate({ kind: 'files' });
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+  assert.equal(
+    store.navigationVerdict({
+      kind: 'navigate',
+      location: at({ kind: 'teams' }).location,
+    }),
+    null,
+  );
+});
+
+test('guards are asked in registration order and the first verdict decides', () => {
+  const store = new LocationStore();
+  const asked: string[] = [];
+  const refused: string[] = [];
+  store.setRefusalHandler((reason) => refused.push(reason));
+  store.registerGuard(() => {
+    asked.push('first');
+    return null;
+  });
+  store.registerGuard(() => {
+    asked.push('second');
+    return { verdict: 'refuse', reason: 'A key is being enrolled.' };
+  });
+  store.registerGuard(() => {
+    asked.push('third');
+    return { verdict: 'refuse', reason: 'never reached' };
+  });
+  store.navigate({ kind: 'files' });
+  // The third guard is never asked, and nothing moved.
+  assert.deepEqual(asked, ['first', 'second']);
+  assert.deepEqual(refused, ['A key is being enrolled.']);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+});
+
+test('a refusal from a later guard outranks an earlier prompt', () => {
+  const store = new LocationStore();
+  const refused: string[] = [];
+  let prompted = 0;
+  store.setRefusalHandler((reason) => refused.push(reason));
+  store.setPrompter(() => {
+    prompted++;
+    return Promise.resolve(true);
+  });
+  store.registerGuard(() => ({
+    verdict: 'prompt',
+    title: 'Discard message?',
+    body: 'Your unsent message will be lost.',
+    confirm: 'Discard',
+  }));
+  store.registerGuard(() => ({
+    verdict: 'refuse',
+    reason: 'Wait for the channel to finish being created.',
+  }));
+  assert.equal(
+    store.navigationVerdict({ kind: 'navigate', location: { kind: 'files' } })
+      ?.verdict,
+    'refuse',
+  );
+  store.navigate({ kind: 'files' });
+  assert.equal(prompted, 0);
+  assert.deepEqual(refused, ['Wait for the channel to finish being created.']);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+});
+
+test('unregistering a guard takes it out of the order', () => {
+  const store = new LocationStore();
+  const off = store.registerGuard(() => ({
+    verdict: 'refuse',
+    reason: 'no',
+  }));
+  store.navigate({ kind: 'files' });
+  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+  off();
+  store.navigate({ kind: 'files' });
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+});
+
+test('a confirmed prompt runs onConfirm, then the navigation', async () => {
+  const store = new LocationStore();
+  const order: string[] = [];
+  store.registerGuard(prompting(() => order.push('onConfirm')));
+  const { asked, answer, prompter } = prompts();
+  store.setPrompter(prompter);
+  store.navigate({ kind: 'files' });
+  // The prompt is up and nothing has moved yet.
+  assert.deepEqual(asked, ['Discard unsaved changes?']);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+  answer(0, true);
+  await settled();
+  assert.deepEqual(order, ['onConfirm']);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+});
+
+test('a cancelled prompt leaves the location and onConfirm alone', async () => {
+  const store = new LocationStore();
+  let confirms = 0;
+  store.registerGuard(prompting(() => (confirms += 1)));
+  const { answer, prompter } = prompts();
+  store.setPrompter(prompter);
+  store.navigate({ kind: 'files' });
+  answer(0, false);
+  await settled();
+  assert.equal(confirms, 0);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+});
+
+test('a prompt with no prompter installed allows the navigation', () => {
+  const store = new LocationStore();
+  store.registerGuard(prompting());
+  store.navigate({ kind: 'files' });
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+});
+
+test('force bypasses the guards on navigate, navigateTab and select', () => {
+  const store = new LocationStore();
+  let asked = 0;
+  store.registerGuard(() => {
+    asked += 1;
+    return { verdict: 'refuse', reason: 'no' };
+  });
+  store.navigate({ kind: 'files' }, { force: true });
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+  store.select({ store: 'team:eng', path: '/a' }, { force: true });
+  assert.deepEqual(store.getSnapshot().selection, {
+    store: 'team:eng',
+    path: '/a',
+  });
+  store.navigateTab('teams', { force: true });
+  // No inventory is loaded here, so the tab carries no acting account.
+  assert.deepEqual(store.getSnapshot().location, {
+    kind: 'teams',
+    store: undefined,
+  });
+  assert.equal(asked, 0);
+});
+
+test('a rail tab and a selection are guarded like any other move', () => {
+  const store = new LocationStore();
+  const seen: NavigationIntent[] = [];
+  store.registerGuard((intent) => {
+    seen.push(intent);
+    return { verdict: 'refuse', reason: 'no' };
+  });
+  store.navigateTab('teams');
+  store.select({ store: 'team:eng', path: '/a' });
+  assert.deepEqual(seen, [
+    { kind: 'navigate', location: { kind: 'teams', store: undefined } },
+    { kind: 'select', selection: { store: 'team:eng', path: '/a' } },
+  ]);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+  assert.equal(store.getSnapshot().selection, null);
+});
+
+test('navigationVerdict answers without moving or prompting', () => {
+  const store = new LocationStore();
+  store.registerGuard(prompting());
+  const { asked, prompter } = prompts();
+  store.setPrompter(prompter);
+  const verdict = store.navigationVerdict({
+    kind: 'navigate',
+    location: { kind: 'files' },
+  });
+  assert.equal(verdict?.verdict, 'prompt');
+  assert.deepEqual(asked, []);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+});
+
+test('a second navigation supersedes the prompt already up', async () => {
+  const store = new LocationStore();
+  store.registerGuard(prompting());
+  const { asked, answer, prompter } = prompts();
+  store.setPrompter(prompter);
+  store.navigate({ kind: 'files' });
+  store.navigate({ kind: 'teams' });
+  // The newer intent is asked about in its own right.
+  assert.equal(asked.length, 2);
+  // Confirming the superseded prompt moves nothing: its intent is gone.
+  answer(0, true);
+  await settled();
+  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+  answer(1, true);
+  await settled();
+  assert.deepEqual(store.getSnapshot().location, { kind: 'teams' });
+});
+
+test('an item opens its page and selects on it, or neither', async () => {
+  const store = new LocationStore();
+  store.registerGuard(prompting());
+  const { answer, prompter } = prompts();
+  store.setPrompter(prompter);
+  store.navigateAndSelect(
+    { kind: 'store', ref: 'team:eng' },
+    { store: 'team:eng', path: '/deploy/token' },
+  );
+  // Neither half is applied while the question is open.
+  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+  assert.equal(store.getSnapshot().selection, null);
+  answer(0, true);
+  await settled();
+  assert.deepEqual(store.getSnapshot().location, {
+    kind: 'store',
+    ref: 'team:eng',
+  });
+  assert.deepEqual(store.getSnapshot().selection, {
+    store: 'team:eng',
+    path: '/deploy/token',
+  });
 });

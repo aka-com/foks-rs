@@ -36,7 +36,8 @@ import {
   storeOf,
 } from '../model';
 import type { Item, Party, RoleWire, AgentSnapshot } from '../model';
-import type { Selection } from '../location';
+import type { NavigationGuard, Selection } from '../location';
+import { useNavigationGuard } from '../navigation-guard';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, ItemRequest, ReadItemResponse } from '../bridge';
 import { useFileDrop } from '../file-drop';
@@ -258,6 +259,10 @@ export function DetailsPanel({
   const [editError, setEditError] = useState<string | null>(null);
   const [binaryFile, setBinaryFile] = useState(false);
   const concealEpoch = useRef(0);
+  // The value the editor opened from, against which `editValue` is unsaved
+  // work. `null` while no editor is open, and for a draft restored from a
+  // conflict, whose stored counterpart is by definition not what it holds.
+  const editBaseline = useRef<string | null>(null);
   // Epoch of the retained draft already restored, preventing duplicate restores on refresh.
   const appliedDraft = useRef<number | null>(null);
   // Current item key ref to avoid stale closures in asynchronous callbacks.
@@ -350,6 +355,7 @@ export function DetailsPanel({
     setRead(null);
     setEditing(false);
     setEditValue('');
+    editBaseline.current = null;
     setEditPasswordShown(false);
     setReplacementPath(null);
     setEditError(null);
@@ -384,6 +390,7 @@ export function DetailsPanel({
     concealEpoch.current += 1;
     setRead(null);
     setEditValue('');
+    editBaseline.current = null;
     setEditing(false);
     setEditPasswordShown(false);
     setReplacementPath(null);
@@ -402,6 +409,7 @@ export function DetailsPanel({
     if (appliedDraft.current === resumeDraft.epoch) return;
     appliedDraft.current = resumeDraft.epoch;
     setEditValue(resumeDraft.value);
+    editBaseline.current = null;
     setEditing(true);
   }, [item, resumeDraft]);
 
@@ -423,6 +431,61 @@ export function DetailsPanel({
     },
     onError: (error) => setEditError(normalizeCommandError(error).message),
   });
+
+  /* ------------------------------------------------------- unsaved edits -- */
+
+  /** Takes the editor down, so a confirmed move lands on a clean panel. */
+  const clearEdit = useCallback(() => {
+    setEditing(false);
+    setEditValue('');
+    editBaseline.current = null;
+    setEditPasswordShown(false);
+    setReplacementPath(null);
+    setEditError(null);
+  }, []);
+
+  // An open editor holding the stored value is not unsaved work; a chosen
+  // replacement file is, since the file editor carries no text of its own.
+  const editDirty =
+    editing &&
+    (replacementPath !== null ||
+      editBaseline.current === null ||
+      editValue !== editBaseline.current);
+  // Read by the guard when it is asked, so typing re-registers nothing.
+  const editGuardState = useRef({
+    dirty: false,
+    name: '',
+    selection: null as Selection,
+  });
+  editGuardState.current = {
+    dirty: editDirty,
+    name: item ? nameOf(item.path) : '',
+    selection: item ? { store: item.store, path: item.path } : null,
+  };
+  const editGuard = useCallback<NavigationGuard>(
+    (intent) => {
+      const { dirty, name, selection } = editGuardState.current;
+      if (!dirty) return null;
+      // Reselecting the item being edited leaves the editor on screen.
+      if (
+        intent.kind === 'select' &&
+        intent.selection &&
+        selection &&
+        intent.selection.store === selection.store &&
+        intent.selection.path === selection.path
+      )
+        return null;
+      return {
+        verdict: 'prompt',
+        title: 'Discard changes?',
+        body: `Your edits to ${name} have not been saved.`,
+        confirm: 'Discard',
+        onConfirm: clearEdit,
+      };
+    },
+    [clearEdit],
+  );
+  useNavigationGuard(editGuard);
 
   if (!item) {
     return (
@@ -483,6 +546,7 @@ export function DetailsPanel({
   const beginEdit = async (): Promise<void> => {
     if (!request || !accessAvailable()) return;
     if (fileMode) {
+      editBaseline.current = '';
       setEditing(true);
       return;
     }
@@ -505,7 +569,9 @@ export function DetailsPanel({
       );
       assertExactRead(request, response);
       if (!current()) return;
-      setEditValue(editableValue(item, response.value));
+      const opened = editableValue(item, response.value);
+      setEditValue(opened);
+      editBaseline.current = opened;
       setEditPasswordShown(false);
       setEditing(true);
       setRead(null);
@@ -515,6 +581,7 @@ export function DetailsPanel({
       if (typed.code === 'not-text' && item.kind === 'Secret') {
         setBinaryFile(true);
         setRead(null);
+        editBaseline.current = '';
         setEditing(true);
       } else {
         onCommandError(error, item);
@@ -539,6 +606,7 @@ export function DetailsPanel({
       } else {
         await bridge.editTextItem({ ...request, value: editValue });
       }
+      editBaseline.current = null;
       setEditing(false);
       await onApplied('Changes saved');
     } catch (error) {
@@ -863,7 +931,7 @@ export function DetailsPanel({
         <div className={editing ? 'eact' : 'detail-actions'}>
           {editing ? (
             <>
-              <Button disabled={saving} onClick={() => setEditing(false)}>
+              <Button disabled={saving} onClick={clearEdit}>
                 Cancel
               </Button>
               <Button

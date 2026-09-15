@@ -15,6 +15,7 @@ import {
   SectionLabel,
   SheetDialog,
 } from '../components';
+import { useSheetGuard } from '../navigation-guard';
 import { GoProfileChooser } from './go-profile-chooser';
 
 interface Props {
@@ -48,11 +49,14 @@ export function GoProfileConnectSheet({
   const [phrase, setPhrase] = useState('');
   const [checked, setChecked] = useState<CheckedProfileResponse | null>(null);
   const [method, setMethod] = useState<'pair' | 'copy'>('pair');
-  const [busy, setBusy] = useState(false);
+  // Differentiate local scanning from network onboarding operations so the UI
+  // can report specific progress.
+  const [work, setWork] = useState<'scan' | 'connect' | null>(null);
+  const busy = work !== null;
   const [error, setError] = useState<string | null>(null);
 
   const scan = (): void => {
-    setBusy(true);
+    setWork('scan');
     setError(null);
     void bridge
       .discoverGoProfiles()
@@ -61,12 +65,12 @@ export function GoProfileConnectSheet({
         setError(normalizeCommandError(failure).message);
         onError(failure);
       })
-      .finally(() => setBusy(false));
+      .finally(() => setWork(null));
   };
 
   useEffect(() => {
     let alive = true;
-    setBusy(true);
+    setWork('scan');
     setError(null);
     void bridge
       .discoverGoProfiles()
@@ -79,7 +83,7 @@ export function GoProfileConnectSheet({
         onError(failure);
       })
       .finally(() => {
-        if (alive) setBusy(false);
+        if (alive) setWork(null);
       });
     return () => {
       alive = false;
@@ -115,7 +119,7 @@ export function GoProfileConnectSheet({
 
   const check = async (): Promise<void> => {
     if (!selected || !server.trim() || !profileName.trim()) return;
-    setBusy(true);
+    setWork('connect');
     setError(null);
     try {
       const result = await bridge.checkAndAddGoProfile(
@@ -133,7 +137,7 @@ export function GoProfileConnectSheet({
       setError(normalizeCommandError(failure).message);
       onError(failure);
     } finally {
-      setBusy(false);
+      setWork(null);
     }
   };
 
@@ -142,7 +146,7 @@ export function GoProfileConnectSheet({
     if (!resume && !phrase.trim()) return;
     const submitted = phrase;
     setPhrase('');
-    setBusy(true);
+    setWork('connect');
     setError(null);
     try {
       const result = resume
@@ -167,13 +171,13 @@ export function GoProfileConnectSheet({
       setError(normalizeCommandError(failure).message);
       onError(failure);
     } finally {
-      setBusy(false);
+      setWork(null);
     }
   };
 
   const copy = async (): Promise<void> => {
     if (!selected?.copyable || !checked || !alias.trim()) return;
-    setBusy(true);
+    setWork('connect');
     setError(null);
     try {
       const result = await bridge.copyGoProfileDevice(
@@ -190,9 +194,29 @@ export function GoProfileConnectSheet({
       setError(normalizeCommandError(failure).message);
       onError(failure);
     } finally {
-      setBusy(false);
+      setWork(null);
     }
   };
+
+  // Server checks add a local profile; pairing and credential copying add an
+  // account. If pairing has not started, prompt before dismissing typed pairing
+  // input.
+  useSheetGuard(
+    work === 'connect'
+      ? { verdict: 'refuse', reason: 'Wait for the CLI connection to finish.' }
+      : phrase
+        ? {
+            verdict: 'prompt',
+            title: 'Discard pairing code?',
+            body: 'The pairing code typed here has not been submitted.',
+            confirm: 'Discard',
+            onConfirm: () => {
+              setPhrase('');
+              onClose();
+            },
+          }
+        : null,
+  );
 
   const candidates =
     discovery?.candidates.filter(

@@ -10,6 +10,7 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { enqueueProfileWork } from '../bridge';
+import { useSheetGuard } from '../navigation-guard';
 import type {
   AccountDevice,
   BackupEnrollment,
@@ -214,6 +215,17 @@ export function PhraseSheet({
     setWritten(false);
     onClose();
   };
+  // The words are shown once and are held nowhere else, so a navigation that
+  // took this sheet with it would take them too. That is not a loss the reader
+  // can be asked to confirm blind: they are sent back to the sheet to write
+  // the phrase down or drop it there.
+  useSheetGuard(
+    phrase
+      ? { verdict: 'refuse', reason: 'Save or dismiss the paper key first.' }
+      : busy
+        ? { verdict: 'refuse', reason: 'Wait for the paper key to finish.' }
+        : null,
+  );
   return (
     <DeviceSheetFrame
       title={phrase ? 'Save paper key' : 'Create paper key'}
@@ -360,6 +372,25 @@ export function PairSheet({
       .catch(onError)
       .finally(() => setBusy(false));
   };
+  // An offer the agent is holding, and a call already sent, are both a pairing
+  // that has to be ended where it was begun. A phrase typed into the accept
+  // form is only typing: it can be asked about and typed again.
+  useSheetGuard(
+    busy || offer
+      ? { verdict: 'refuse', reason: 'Finish or cancel the pairing first.' }
+      : phrase
+        ? {
+            verdict: 'prompt',
+            title: 'Discard pairing phrase?',
+            body: 'The pairing phrase typed here has not been submitted.',
+            confirm: 'Discard',
+            onConfirm: () => {
+              setPhrase('');
+              onClose();
+            },
+          }
+        : null,
+  );
   return (
     <DeviceSheetFrame
       title="Set up another Mac"
@@ -561,6 +592,24 @@ export function RecoverSheet({
   const [device, setDevice] = useState('This Mac');
   const [phrase, setPhrase] = useState('');
   const [busy, setBusy] = useState(false);
+  // Recovery adds a device: once the phrase has been sent, the sheet is where
+  // its answer arrives. Before that it holds only what was typed.
+  useSheetGuard(
+    busy
+      ? { verdict: 'refuse', reason: 'Wait for the recovery to finish.' }
+      : phrase
+        ? {
+            verdict: 'prompt',
+            title: 'Discard paper key phrase?',
+            body: 'The paper key phrase typed here has not been submitted.',
+            confirm: 'Discard',
+            onConfirm: () => {
+              setPhrase('');
+              onClose();
+            },
+          }
+        : null,
+  );
   return (
     <DeviceSheetFrame
       title="Recover on this Mac"
@@ -594,8 +643,7 @@ export function RecoverSheet({
     >
       <p>
         Recovery adds this Mac as an authorized device. If interrupted, you can
-        resume recovery from Needs attention in Accounts using the same
-        phrase.
+        resume recovery from Needs attention in Accounts using the same phrase.
       </p>
       <Inset>
         <Field label="Local alias" value={target} onChange={setTarget} />
@@ -647,6 +695,25 @@ export function EnrollSheet({
     setPin('');
     setPuk('');
   };
+  // The card is written in a single operation that cannot be resumed, so the
+  // sheet answers for a move away while it runs. Before it runs, the PIN and
+  // the unlock code are values the reader can enter again.
+  useSheetGuard(
+    busy
+      ? { verdict: 'refuse', reason: 'Wait for the card setup to finish.' }
+      : pin || puk || invite
+        ? {
+            verdict: 'prompt',
+            title: 'Discard card credentials?',
+            body: 'The PIN and unlock code typed here have not been submitted.',
+            confirm: 'Discard',
+            onConfirm: () => {
+              clear();
+              onClose();
+            },
+          }
+        : null,
+  );
   const slot = (value: string): number | null =>
     /^0x[0-9a-fA-F]{2}$/.test(value)
       ? Number.parseInt(value.slice(2), 16)
@@ -841,6 +908,23 @@ export function ProvisionSheet({
     setPin('');
     setPuk('');
   };
+  // Provisioning writes the card in one operation, as enrollment does.
+  useSheetGuard(
+    busy
+      ? { verdict: 'refuse', reason: 'Wait for the card setup to finish.' }
+      : pin || puk
+        ? {
+            verdict: 'prompt',
+            title: 'Discard card credentials?',
+            body: 'The PIN and unlock code typed here have not been submitted.',
+            confirm: 'Discard',
+            onConfirm: () => {
+              clear();
+              onClose();
+            },
+          }
+        : null,
+  );
   const valid = Boolean(
     cards.some((card) => card.serial === serial) &&
     targetAlias.trim() &&
@@ -983,6 +1067,29 @@ export function YubiActionSheet({
       : action === 'change-puk'
         ? 'New PUK'
         : 'Passphrase';
+  // The card is the only thing that knows whether a command it was given has
+  // been applied, so a command already sent is not abandoned from here.
+  useSheetGuard(
+    busy
+      ? {
+          verdict: 'refuse',
+          reason: 'Wait for the security key operation to finish.',
+        }
+      : pin || other || confirmation
+        ? {
+            verdict: 'prompt',
+            title: 'Discard card credentials?',
+            body: 'The values typed here have not been submitted.',
+            confirm: 'Discard',
+            onConfirm: () => {
+              setPin('');
+              setOther('');
+              setConfirmation('');
+              onClose();
+            },
+          }
+        : null,
+  );
   const submit = (): void => {
     let command: YubiCommand;
     switch (action) {
@@ -1154,6 +1261,14 @@ export function RevokeSheet({
 }): ReactNode {
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
+  // A revocation rotates account keys and cannot be taken back, so the sheet
+  // that started it is where its answer is read. The typed alias above it is a
+  // confirmation, not content: nothing is lost by typing it again.
+  useSheetGuard(
+    busy
+      ? { verdict: 'refuse', reason: 'Wait for the revocation to finish.' }
+      : null,
+  );
   return (
     <DeviceSheetFrame
       title={`Revoke ${alias}?`}
@@ -1237,6 +1352,12 @@ export function RevokeBackupSheet({
 }): ReactNode {
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
+  // Revoking a paper key rotates every account key it could read.
+  useSheetGuard(
+    busy
+      ? { verdict: 'refuse', reason: 'Wait for the revocation to finish.' }
+      : null,
+  );
   return (
     <DeviceSheetFrame
       title={`Revoke ${backup.backupAlias}?`}
@@ -1314,6 +1435,12 @@ export function RemoveDeviceSheet({
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
   const expected = device.name ?? device.id;
+  // Removing a device is a write the agent has already been given.
+  useSheetGuard(
+    busy
+      ? { verdict: 'refuse', reason: 'Wait for the removal to finish.' }
+      : null,
+  );
   return (
     <DeviceSheetFrame
       title={`Remove ${device.name ?? 'device'}?`}
@@ -1412,6 +1539,30 @@ export function PassphraseSheet({
       .catch(onError)
       .finally(() => setBusy(false));
   };
+  // A passphrase that is being set or changed is a write in flight; one that
+  // has only been typed is worth a question, since it was typed twice.
+  useSheetGuard(
+    busy
+      ? {
+          verdict: 'refuse',
+          reason: `Wait for the passphrase ${
+            mode === 'verify' ? 'check' : 'change'
+          } to finish.`,
+        }
+      : passphrase || confirmation
+        ? {
+            verdict: 'prompt',
+            title: 'Discard passphrase?',
+            body: 'The passphrase typed here has not been submitted.',
+            confirm: 'Discard',
+            onConfirm: () => {
+              setPassphrase('');
+              setConfirmation('');
+              onClose();
+            },
+          }
+        : null,
+  );
   return (
     <DeviceSheetFrame
       title="Account passphrase"

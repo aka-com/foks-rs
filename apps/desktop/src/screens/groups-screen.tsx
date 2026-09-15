@@ -65,6 +65,7 @@ import { listChannels } from '../chat/presentation';
 import { GROUP_SETTINGS_TABS } from '../location';
 import type { GroupSettingsTab, Location, NavigateOptions } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
+import { useSheetGuard } from '../navigation-guard';
 import { PageHeader } from '../shell/page-header';
 import { NewChatSheet } from './chat-new';
 import {
@@ -85,6 +86,13 @@ type Sheet = GroupSheetKind | null;
 
 const VIS_MIN = -32768;
 const VIS_MAX = 32767;
+/**
+ * What the two typed fields of the group sheets are drawn with. A field still
+ * reading its suggestion has not been typed into, so nothing is asked about
+ * it when the reader leaves.
+ */
+const SUGGESTED_MEMBER = 'jules.park';
+const SUGGESTED_GROUP = 'Platform';
 /** The base the group page's tab and panel ids are derived from. */
 const GROUP_TABS = 'group-sections';
 /** Why the join policy cannot be changed. */
@@ -1153,7 +1161,7 @@ export function GroupSheet({
   ) => Promise<void>;
   onMutationError: MutationFailureHandler;
 }): ReactNode {
-  const [username, setUsername] = useState('jules.park');
+  const [username, setUsername] = useState(SUGGESTED_MEMBER);
   const [visibility, setVisibility] = useState(0);
   const callerParty = partiesOf(snapshot, store.id).find(
     (candidate) => candidate.label === 'you',
@@ -1164,7 +1172,7 @@ export function GroupSheet({
     visibility: 0,
   });
   const [busy, setBusy] = useState(false);
-  const [name, setName] = useState('Platform');
+  const [name, setName] = useState(SUGGESTED_GROUP);
   const [createKind, setCreateKind] = useState<'named' | 'adhoc'>('named');
   const creationAccounts = snapshot.stores.filter(
     (candidate): candidate is AccountStore =>
@@ -1254,6 +1262,37 @@ export function GroupSheet({
       ? `${partyName(existing)} is already a member of ${store.name}. Change their role from the Members list instead.`
       : refused
     : '';
+  // Once a membership change or a group creation has been sent, the agent
+  // holds it. Interrupted operations appear as pending and can resume from this
+  // page. Typed input that has not been submitted requires confirmation before
+  // dismissal.
+  useSheetGuard(
+    busy
+      ? null
+      : sheet === 'add' && username.trim() && username !== SUGGESTED_MEMBER
+        ? {
+            verdict: 'prompt',
+            title: 'Discard this member?',
+            body: `${username.trim()} has not been added to ${store.name}.`,
+            confirm: 'Discard',
+            onConfirm: () => {
+              setUsername(SUGGESTED_MEMBER);
+              onClose();
+            },
+          }
+        : sheet === 'create' && name.trim() && name !== SUGGESTED_GROUP
+          ? {
+              verdict: 'prompt',
+              title: 'Discard this group?',
+              body: `${name.trim()} has not been created.`,
+              confirm: 'Discard',
+              onConfirm: () => {
+                setName(SUGGESTED_GROUP);
+                onClose();
+              },
+            }
+          : null,
+  );
   const apply = async (): Promise<void> => {
     if (busy || requiredFailure) return;
     if (sheet === 'add' && existing) return;

@@ -21,7 +21,7 @@ import type {
   TeamStore,
 } from '../model';
 import type { Bridge } from '../bridge';
-import type { Location } from '../location';
+import type { Location, NavigateOptions } from '../location';
 import { rememberChatLocation, rememberedChatRef } from '../location';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelTitle, listChannels, openChannel } from '../chat/presentation';
@@ -40,7 +40,11 @@ export interface ChatTabProps {
   snapshot: AgentSnapshot;
   bridge: Bridge;
   location: Extract<Location, { kind: 'chat' }>;
-  onNavigate: (location: Location) => void;
+  /**
+   * The options are carried for the tab's own resolution of `{kind:'chat'}`,
+   * which is forced: everything the reader asks for goes through the guards.
+   */
+  onNavigate: (location: Location, options?: NavigateOptions) => void;
   accessNow?: () => number;
   /**
    * The shell's access generation per server. The tab resolves which team it
@@ -138,6 +142,12 @@ export function ChatTab({
       openingChannel
         ? { kind: 'chat', ref: openingRef, channel: openingChannel }
         : { kind: 'chat', ref: openingRef },
+      // Resolving `{kind:'chat'}` into the team and channel it stands for is
+      // the tab canonicalizing the address of the page already open, not a
+      // move the reader asked for, so no screen is asked about it. A guard
+      // that prompted here would put a question between the reader and a Chat
+      // tab that has not finished opening.
+      { force: true },
     );
   }, [location.ref, location.channel, openingRef, openingChannel, onNavigate]);
   // A half-finished New chat belongs to the team it was opened in: a switch —

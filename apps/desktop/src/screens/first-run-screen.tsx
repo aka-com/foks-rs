@@ -13,6 +13,8 @@ import {
 } from '../first-run-operations';
 import type { ProvisioningIntent } from '../first-run-state';
 import { sharedSetupRead, useSlowSetup } from '../first-run-loading';
+import { useNavigationGuard } from '../navigation-guard';
+import type { NavigationGuard } from '../location';
 import {
   useCallback,
   useEffect,
@@ -150,6 +152,18 @@ const localStepOf = (state: FirstRunStateName): number => {
   if (state === 'protect' || state === 'phrase') return 2;
   return 3;
 };
+
+/**
+ * Terminal first-run states where account setup is complete, all user input is
+ * committed, and navigation to the main application is active. These states do
+ * not prompt for confirmation when navigating away.
+ */
+const FIRST_RUN_SETTLED: readonly FirstRunStateName[] = [
+  'added',
+  'local-done',
+  'checklist-invited',
+  'checklist-own',
+];
 
 /** Delay between automatic retries of a transient identity refresh failure. */
 const IDENTITY_RETRY_DELAY_MS = 2_000;
@@ -1888,6 +1902,21 @@ export function FirstRunExperience({
     return progress;
   };
 
+  /**
+   * Whether a secret is visible when the guard is evaluated. `clearSecrets`
+   * updates this value before sidebar navigation, so the verdict reflects the
+   * cleared state without waiting for another render.
+   */
+  const secretsHeld = useRef(false);
+  secretsHeld.current = Boolean(
+    invite ||
+    passphrase ||
+    confirmation ||
+    recoveryPhrase ||
+    pairingPhrase ||
+    backupPhrase,
+  );
+
   const clearSecrets = useCallback((): void => {
     phraseOwner.current = null;
     setPhraseOperation(null);
@@ -1899,7 +1928,37 @@ export function FirstRunExperience({
     backupPreparation.current = null;
     setBackupPhrase(null);
     setPhraseWritten(false);
+    secretsHeld.current = false;
   }, []);
+
+  /**
+   * Why the sidebar's Leave setup is inert: a write is out that this screen is
+   * the only report of. A provisioning that has been acknowledged is not one
+   * of them — that is what Finish later leaves behind.
+   */
+  const leaveDisabled =
+    mutationBusy &&
+    busyOperation !== 'server-check' &&
+    !checkpoint.provisioning;
+
+  /**
+   * Setup is left through the sidebar, which clears what was typed on the way
+   * out. The rail and Control-Tab are not on screen until the end steps, but
+   * ⌘K and the back swipe are, and neither of them clears anything: a step
+   * holding a secret or an unfinished write answers for them here. A move
+   * within setup is the step machine publishing its own address, and the end
+   * steps are past everything this protects.
+   */
+  const setupGuard = useCallback<NavigationGuard>(
+    (intent) =>
+      (intent.kind === 'navigate' && intent.location.kind === 'first-run') ||
+      FIRST_RUN_SETTLED.includes(state) ||
+      (!secretsHeld.current && !leaveDisabled)
+        ? null
+        : { verdict: 'refuse', reason: 'Finish or leave setup first.' },
+    [leaveDisabled, state],
+  );
+  useNavigationGuard(setupGuard);
 
   useLayoutEffect(() => {
     if (agentReady) return;
@@ -4528,16 +4587,12 @@ export function FirstRunExperience({
               : undefined
           }
           recoverEnabled={Boolean(managedReport)}
-          cancelDisabled={
-            mutationBusy &&
-            busyOperation !== 'server-check' &&
-            !checkpoint.provisioning
-          }
+          cancelDisabled={leaveDisabled}
           onCancel={() => {
-            if (state === 'phrase') {
-              clearSecrets();
-              send({ type: 'go', state: 'protect' });
-            }
+            // Clear entered values before navigating so the guard allows the
+            // exit.
+            clearSecrets();
+            if (state === 'phrase') send({ type: 'go', state: 'protect' });
             onNavigate({ kind: 'all' });
           }}
         />

@@ -50,11 +50,15 @@ interface Journal {
  * Mounts the palette behind the shortcut, exactly as the shell will: a host
  * that owns the `open` flag and hands the palette its `onClose`.
  */
-async function palette(open = false) {
+async function palette(
+  open = false,
+  /** Mount another modal dialog beside the palette, as a sheet would be. */
+  dialog = false,
+) {
   const { SearchPalette, useSearchShortcut } = (await vite.ssrLoadModule(
     '/src/shell/search-palette.tsx',
   )) as typeof import('../src/shell/search-palette');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
+  const { Dialog, OverlayProvider } = (await vite.ssrLoadModule(
     '/kit/overlay-primitives.tsx',
   )) as typeof import('../kit/overlay-primitives');
   const { FIXTURE } = (await vite.ssrLoadModule(
@@ -89,7 +93,12 @@ async function palette(open = false) {
     createElement(OverlayProvider, {
       backgroundRef: { current: null },
       portalRoot,
-      children: createElement(Host),
+      children: [
+        createElement(Host, { key: 'host' }),
+        dialog
+          ? createElement(Dialog, { key: 'dialog', children: 'A sheet' })
+          : null,
+      ],
     }),
   );
   return { rendered, journal };
@@ -137,6 +146,15 @@ test('the palette draws nothing until ⌘K opens it', async () => {
   // Ctrl-K is the same shortcut away from a Mac; it reopens without complaint.
   ui.fireEvent.keyDown(document, { key: 'K', ctrlKey: true });
   assert.ok(document.querySelector('.pal'));
+});
+
+test('⌘K does not open the palette while another modal is active', async () => {
+  await palette(false, true);
+  assert.ok(document.querySelector('[role="dialog"]'), 'the sheet is up');
+  ui.fireEvent.keyDown(document, { key: 'k', metaKey: true });
+  // The document-level shortcut checks modal state because the active dialog
+  // cannot intercept the listener before it runs.
+  assert.equal(document.querySelector('.pal'), null);
 });
 
 test('results are grouped by kind and counted for a screen reader', async () => {
@@ -208,15 +226,13 @@ test('Enter opens the highlighted row and closes the palette', async () => {
   const { journal } = await palette(true);
   type('production-token');
   ui.fireEvent.keyDown(field(), { key: 'Enter' });
-  // An item opens its store page, and the selection follows separately.
-  assert.deepEqual(journal.navigations.at(-1), {
-    kind: 'store',
-    ref: 'team:eng',
-  });
+  // Send the store and item selection through one callback so the host can apply
+  // them atomically after navigation-guard evaluation.
   assert.deepEqual(journal.items.at(-1), {
     store: 'team:eng',
     path: '/deploy/production-token',
   });
+  assert.deepEqual(journal.navigations, []);
   assert.equal(journal.closes, 1);
   assert.equal(document.querySelector('.pal'), null);
 });

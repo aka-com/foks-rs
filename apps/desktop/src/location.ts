@@ -248,13 +248,63 @@ export const INITIAL_STATE: LocationState = {
 /* ------------------------------------------------------------ transition -- */
 
 /**
+ * Options common to the operations the guards see. `force` skips them. It
+ * marks a move the shell makes rather than one the reader asked for — a
+ * redirect out of a place that is no longer readable, a replacement that
+ * canonicalizes the address of the page already open, or the navigation a
+ * confirmed prompt was raised for — which no screen may refuse.
+ */
+export interface GuardedOptions {
+  force?: boolean;
+}
+
+/**
  * How a navigation is recorded. A replacement is a move inside the place the
  * reader is already in — a tab of the page they are on — rather than an
  * arrival somewhere new, so it keeps what that place was showing instead of
  * standing a fresh navigation in its stead.
  */
-export interface NavigateOptions {
+export interface NavigateOptions extends GuardedOptions {
   replace?: boolean;
+}
+
+/* --------------------------------------------------------------- guards -- */
+
+/**
+ * What a guard is asked about: the address a navigation is headed for, or the
+ * item a selection is about to open. Both unmount whatever the current page
+ * has on screen, so both are offered.
+ */
+export type NavigationIntent =
+  | { kind: 'navigate'; location: Location }
+  | { kind: 'select'; selection: Selection };
+
+/**
+ * Navigation guard result. `null` allows navigation, `prompt` requests user
+ * confirmation, and `refuse` blocks navigation with an explanatory reason.
+ * `onConfirm` runs once before confirmed navigation.
+ */
+export type GuardVerdict =
+  | null
+  | {
+      verdict: 'prompt';
+      title: string;
+      body: string;
+      confirm: string;
+      onConfirm?: () => void;
+    }
+  | { verdict: 'refuse'; reason: string };
+
+/** A screen's answer for one intent. Registered with `registerGuard`. */
+export type NavigationGuard = (intent: NavigationIntent) => GuardVerdict;
+
+/**
+ * Displays a confirmation dialog for a `prompt` verdict. Resolves true to
+ * continue navigation and false to cancel. Without an installed prompter,
+ * prompt verdicts allow navigation.
+ */
+export interface NavigationPrompter {
+  (verdict: Extract<GuardVerdict, { verdict: 'prompt' }>): Promise<boolean>;
 }
 
 export type LocationAction =
@@ -996,9 +1046,16 @@ export class LocationStore {
     this.tabs.clear();
   }
 
-  /** Rail tabs resume their last page; explicit home links still open roots. */
-  navigateTab(tab: RailTab): void {
-    if (railTabOf(this.current.location) === tab) return;
+  /**
+   * Where a rail tab goes, and the state it resumes there, without moving.
+   * `null` when the tab already owns the current page. Pure: the acting
+   * account is recorded by the navigation itself, not by working out its
+   * destination, so a guard can be asked before anything changes.
+   */
+  private tabTarget(
+    tab: RailTab,
+  ): { location: Location; saved?: LocationState } | null {
+    if (railTabOf(this.current.location) === tab) return null;
     const defaults: Record<RailTab, Location> = {
       people: { kind: 'people' },
       chat: chatTabLocation(),
@@ -1030,12 +1087,29 @@ export class LocationStore {
       if (changed && location.kind === 'devices') delete location.device;
       if (changed && location.kind === 'settings') delete location.profile;
     }
-    location = this.accountLocation(location);
-    const next = transition(this.current, { type: 'navigate', location });
-    this.publish(
-      saved
-        ? { ...saved, location, selection: null, details: false }
-        : { ...next, query: '', details: false },
+    return {
+      location: this.resolvedLocation(location),
+      ...(saved ? { saved } : {}),
+    };
+  }
+
+  /** Rail tabs resume their last page; explicit home links still open roots. */
+  navigateTab(tab: RailTab, options: GuardedOptions = {}): void {
+    const target = this.tabTarget(tab);
+    if (!target) return;
+    const apply = (): void => {
+      const location = this.accountLocation(target.location);
+      const next = transition(this.current, { type: 'navigate', location });
+      this.publish(
+        target.saved
+          ? { ...target.saved, location, selection: null, details: false }
+          : { ...next, query: '', details: false },
+      );
+    };
+    this.guarded(
+      { kind: 'navigate', location: target.location },
+      apply,
+      options,
     );
   }
 
@@ -1088,32 +1162,176 @@ export class LocationStore {
     return next;
   }
 
-  private accountLocation(location: Location): Location {
+  /**
+   * The address a navigation lands on, with the account it is read through
+   * filled in. Pure — `accountLocation` is the same resolution, and also
+   * records that account as the acting one.
+   */
+  private resolvedLocation(location: Location): Location {
     const account = accountAtLocation(this.stores, location, this.getAccount());
-    if (account) {
-      this.actingAccount = account.id;
-      if (
-        (location.kind === 'people' ||
-          location.kind === 'devices' ||
-          location.kind === 'settings' ||
-          location.kind === 'teams') &&
-        !location.store
-      )
-        location = { ...location, store: account.id };
-    }
+    if (
+      account &&
+      (location.kind === 'people' ||
+        location.kind === 'devices' ||
+        location.kind === 'settings' ||
+        location.kind === 'teams') &&
+      !location.store
+    )
+      return { ...location, store: account.id };
     return location;
   }
 
-  navigate(location: Location, options: NavigateOptions = {}): void {
-    this.dispatch({
-      type: 'navigate',
-      location: this.accountLocation(location),
-      ...(options.replace ? { replace: true } : {}),
-    });
+  private accountLocation(location: Location): Location {
+    const account = accountAtLocation(this.stores, location, this.getAccount());
+    if (account) this.actingAccount = account.id;
+    return this.resolvedLocation(location);
   }
 
-  select(selection: Selection): void {
-    this.dispatch({ type: 'select', selection });
+  /* ------------------------------------------------------------- guards -- */
+
+  private readonly guards: NavigationGuard[] = [];
+  private prompter: NavigationPrompter | null = null;
+  private refusalHandler: ((reason: string) => void) | null = null;
+  /**
+   * The prompt on screen, if any. Every guarded operation replaces it: the
+   * newer intent is the one the reader is asking for, so the older prompt's
+   * answer, whenever it arrives, is discarded.
+   */
+  private pendingPrompt: object | null = null;
+
+  /**
+   * Registers a guard, returning the function that takes it off again. Guards
+   * are asked in registration order and the first non-null verdict decides.
+   */
+  registerGuard(guard: NavigationGuard): () => void {
+    this.guards.push(guard);
+    return () => {
+      const at = this.guards.indexOf(guard);
+      if (at >= 0) this.guards.splice(at, 1);
+    };
+  }
+
+  /**
+   * What the guards say about an intent, without acting on it. A caller that
+   * must stay inert rather than raise a prompt — the trackpad's back swipe —
+   * asks this first.
+   */
+  navigationVerdict(intent: NavigationIntent): GuardVerdict {
+    // A refusal terminates validation immediately. Prompts remain provisional
+    // until every guard has been evaluated because a subsequent guard may
+    // still reject navigation.
+    let prompt: GuardVerdict = null;
+    for (const guard of [...this.guards]) {
+      const verdict = guard(intent);
+      if (verdict?.verdict === 'refuse') return verdict;
+      if (verdict && !prompt) prompt = verdict;
+    }
+    return prompt;
+  }
+
+  /** The dialog a `prompt` verdict is put to the reader through. */
+  setPrompter(prompter: NavigationPrompter | null): void {
+    this.prompter = prompter;
+  }
+
+  /** Where a `refuse` verdict's reason is shown. */
+  setRefusalHandler(handler: ((reason: string) => void) | null): void {
+    this.refusalHandler = handler;
+  }
+
+  /**
+   * Runs the guards over `intent` and applies `apply` once they are satisfied:
+   * now for an allowed or forced move, and when the prompt is confirmed for a
+   * prompted one. The caller's signature stays synchronous either way.
+   */
+  private guarded(
+    intent: NavigationIntent,
+    apply: () => void,
+    options: GuardedOptions,
+  ): void {
+    const verdict = options.force ? null : this.navigationVerdict(intent);
+    // A refusal changes nothing, including an open prompt about another move.
+    if (verdict?.verdict === 'refuse') {
+      this.refusalHandler?.(verdict.reason);
+      return;
+    }
+    // Anything else supersedes that prompt: its answer no longer applies.
+    this.pendingPrompt = null;
+    if (!verdict) {
+      apply();
+      return;
+    }
+    const prompter = this.prompter;
+    if (!prompter) {
+      apply();
+      return;
+    }
+    const token = {};
+    this.pendingPrompt = token;
+    void prompter(verdict).then(
+      (confirmed) => {
+        if (this.pendingPrompt !== token) return;
+        this.pendingPrompt = null;
+        if (!confirmed) return;
+        verdict.onConfirm?.();
+        apply();
+      },
+      () => {
+        if (this.pendingPrompt === token) this.pendingPrompt = null;
+      },
+    );
+  }
+
+  navigate(location: Location, options: NavigateOptions = {}): void {
+    const apply = (): void => {
+      this.dispatch({
+        type: 'navigate',
+        location: this.accountLocation(location),
+        ...(options.replace ? { replace: true } : {}),
+      });
+    };
+    this.guarded(
+      { kind: 'navigate', location: this.resolvedLocation(location) },
+      apply,
+      options,
+    );
+  }
+
+  /**
+   * Opens `location` with `selection` showing on it, as one guarded move. The
+   * ⌘K palette's item results go through this: a guard that holds the
+   * navigation back must hold the selection with it, or the reader would be
+   * left on the page they were on with another page's item in the details
+   * panel. The guards see the navigation; the selection arrives with it.
+   */
+  navigateAndSelect(
+    location: Location,
+    selection: Selection,
+    options: NavigateOptions = {},
+  ): void {
+    const apply = (): void => {
+      this.dispatch({
+        type: 'navigate',
+        location: this.accountLocation(location),
+        ...(options.replace ? { replace: true } : {}),
+      });
+      this.dispatch({ type: 'select', selection });
+    };
+    this.guarded(
+      { kind: 'navigate', location: this.resolvedLocation(location) },
+      apply,
+      options,
+    );
+  }
+
+  select(selection: Selection, options: GuardedOptions = {}): void {
+    this.guarded(
+      { kind: 'select', selection },
+      () => {
+        this.dispatch({ type: 'select', selection });
+      },
+      options,
+    );
   }
 
   search(query: string): void {

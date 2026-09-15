@@ -46,12 +46,14 @@ async function rail(
   unread = '0',
   attention = 0,
   collapsed = false,
+  /** Mount a modal dialog beside the rail, as a sheet or the palette would. */
+  dialog = false,
 ) {
   const { Sidebar } = await vite.ssrLoadModule('/src/shell/sidebar.tsx');
   const { ChatInboxProvider } = await vite.ssrLoadModule(
     '/src/chat/inbox-provider.tsx',
   );
-  const { OverlayProvider } = (await vite.ssrLoadModule(
+  const { Dialog, OverlayProvider } = (await vite.ssrLoadModule(
     '/kit/overlay-primitives.tsx',
   )) as typeof import('../kit/overlay-primitives');
   const { FIXTURE } = (await vite.ssrLoadModule(
@@ -87,20 +89,26 @@ async function rail(
     createElement(OverlayProvider, {
       backgroundRef: { current: null },
       portalRoot,
-      children: createElement(ChatInboxProvider, {
-        bridge,
-        snapshot,
-        children: createElement(Sidebar, {
+      children: [
+        createElement(ChatInboxProvider, {
+          key: 'inbox',
+          bridge,
           snapshot,
-          location,
-          attention,
-          onNavigate: (next: Location) => journal.navigations.push(next),
-          onLock: () => {
-            journal.locks += 1;
-          },
-          collapsed,
+          children: createElement(Sidebar, {
+            snapshot,
+            location,
+            attention,
+            onNavigate: (next: Location) => journal.navigations.push(next),
+            onLock: () => {
+              journal.locks += 1;
+            },
+            collapsed,
+          }),
         }),
-      }),
+        dialog
+          ? createElement(Dialog, { key: 'dialog', children: 'A sheet' })
+          : null,
+      ],
     }),
   );
   return { rendered, journal, snapshot };
@@ -182,6 +190,20 @@ test('a tab click and Control-Tab both navigate over the six tabs', async () => 
   const before = journal.navigations.length;
   ui.fireEvent.keyDown(document, { key: 'Tab' });
   assert.equal(journal.navigations.length, before);
+});
+
+test('Control-Tab is disabled while a modal dialog is open', async () => {
+  const { journal } = await rail({ kind: 'files' }, '0', 0, false, true);
+  assert.ok(document.querySelector('[role="dialog"]'), 'the sheet is up');
+  ui.fireEvent.keyDown(document, { key: 'Tab', ctrlKey: true });
+  ui.fireEvent.keyDown(document, {
+    key: 'Tab',
+    ctrlKey: true,
+    shiftKey: true,
+  });
+  // Modal state disables document-level tab shortcuts that the dialog cannot
+  // intercept before they run.
+  assert.deepEqual(journal.navigations, []);
 });
 
 test('a tab is titled only where its label is hidden', async () => {

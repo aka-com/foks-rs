@@ -30,6 +30,7 @@ import {
   Toggle,
 } from '../components';
 import type { Location } from '../location';
+import { useSheetGuard } from '../navigation-guard';
 import {
   plural,
   serverAvailability,
@@ -365,6 +366,15 @@ export function ServersSection({
       setBusy(false);
     }
   };
+
+  // A check pins or advances the server's identity and then reads its signed
+  // status back; the section is where both answers are stated. Nothing else
+  // here is typed, so this is the only thing the section answers for.
+  useSheetGuard(
+    busy
+      ? { verdict: 'refuse', reason: 'Wait for the server check to finish.' }
+      : null,
+  );
 
   const currentHost = selected
     ? (checked.get(selected.id) ?? statuses.get(selected.id)?.host ?? null)
@@ -1354,6 +1364,13 @@ function ResetSheet({
     token.current = preview?.token ?? null;
     setAvailable(Boolean(preview?.token));
   }, [preview?.token]);
+  // The reset spends its one token and deletes local keys; the sheet is where
+  // it says whether it did.
+  useSheetGuard(
+    busy
+      ? { verdict: 'refuse', reason: 'Wait for the reset to finish.' }
+      : null,
+  );
   return (
     <SheetFrame
       title={`Erase local credentials for ${serverDisplayName(server)}?`}
@@ -1495,6 +1512,12 @@ function ForgetSheet({
 }): ReactNode {
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
+  // Forgetting a server deletes what this Mac holds for it.
+  useSheetGuard(
+    busy
+      ? { verdict: 'refuse', reason: 'Wait for the removal to finish.' }
+      : null,
+  );
   return (
     <SheetFrame
       title={`Remove local data for ${serverDisplayName(server)}?`}
