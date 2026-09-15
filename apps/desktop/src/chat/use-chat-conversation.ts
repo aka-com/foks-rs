@@ -228,9 +228,6 @@ export function useChatConversation(
       .catch(() => {});
     return work;
   }, [request, service, storeId]);
-  const syncInbox = useCallback(async () => {
-    service.invalidate(storeId);
-  }, [service, storeId]);
   const refresh = useCallback(async () => {
     const client = owner.current;
     setError('');
@@ -336,7 +333,6 @@ export function useChatConversation(
     request,
     refresh,
     refreshPending,
-    syncInbox,
     markRead,
     acceptHistory,
     blockHistory,

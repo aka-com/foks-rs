@@ -37,6 +37,7 @@ import { FIRST_RUN_PROGRESS_EVENT } from './first-run-operations';
 import {
   LocationStore,
   decodeScene,
+  rememberChatLocation,
   sceneHref,
   sceneOf,
   storeAtScene,
@@ -70,6 +71,7 @@ import { DetailsPanel } from './screens/details-panel';
 import { ItemsScreen } from './screens/items-screen';
 import type { DropUpload } from './screens/items-screen';
 import { ChatTab } from './screens/chat-tab';
+import { firstChatTeam } from './screens/chat-teams';
 import { FilesScreen } from './screens/files-screen';
 import { TeamsScreen } from './screens/teams-screen';
 import { GroupSettingsScreen } from './screens/groups-screen';
@@ -671,6 +673,14 @@ function VaultShell({
   );
   const [toasts] = useState(() => new ToastController());
   const [concealSignal, setConcealSignal] = useState(0);
+  // A conceal ends the session the remembered chat belonged to: the account
+  // that comes back may not have that team on this Mac, so the rail's Chat tab
+  // runs the first-team fallback again instead of reopening it. The Chat tab
+  // is keyed by the same signal, so its own memory is written after this.
+  useEffect(() => {
+    if (!concealSignal) return;
+    rememberChatLocation(null);
+  }, [concealSignal]);
   const [accessGenerations, setAccessGenerations] = useState<
     ReadonlyMap<string, number>
   >(() => new Map());
@@ -1235,21 +1245,22 @@ function VaultShell({
       dropEnabled={workflow === null}
       accessNow={accessNow}
     />
-  ) : here.kind === 'team-chat' || here.kind === 'chat' ? (
+  ) : here.kind === 'chat' ? (
+    // The tab owns the team column and keeps it across a switch; the
+    // conversation beside it is what remounts with the team.
     <ChatTab
-      key={
-        here.kind === 'team-chat'
-          ? `chat:${here.ref}:${concealSignal}`
-          : `chat:none:${concealSignal}`
-      }
+      key={`chat:${concealSignal}`}
       snapshot={shown}
       bridge={bridge}
       location={here}
       accessNow={accessNow}
+      // The generation belongs to the server of the team the tab opens, which
+      // with no `ref` is the team the tab falls back to.
       accessGeneration={
-        here.kind === 'team-chat'
-          ? (accessGenerations.get(storeOf(shown, here.ref)?.server ?? '') ?? 0)
-          : 0
+        accessGenerations.get(
+          storeOf(shown, here.ref ?? firstChatTeam(shown)?.id ?? '')?.server ??
+            '',
+        ) ?? 0
       }
       onNavigate={(location) => locations.navigate(location)}
     />
@@ -1276,10 +1287,19 @@ function VaultShell({
       location={here}
     />
   ) : here.kind === 'teams' ? (
+    // Teams shares no state with Settings, so it is given exactly the props it
+    // declares rather than the settings bundle.
     <TeamsScreen
       key={`teams:${concealSignal}`}
-      {...settingsProps}
+      snapshot={shown}
+      bridge={bridge}
       location={here}
+      scene={namedState}
+      onNavigate={(location) => locations.navigate(location)}
+      onRefresh={refresh}
+      onRefreshSnapshot={refreshSnapshot}
+      onError={commandError}
+      onMutationError={mutationError}
     />
   ) : here.kind === 'devices' ? (
     <SettingsScreen

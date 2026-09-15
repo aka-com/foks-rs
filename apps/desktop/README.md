@@ -24,11 +24,32 @@ inline `small-file` encoding, a value that fails the explicit text read is
 presented with Download and native Replace actions without changing the wire
 or database format.
 
-Group settings is opened from the Teams list and loads the agent's roster
-and federation facts, computes every people, group and readable-item count, and
-exposes the operations the command layer can perform. Group creation, discovery
-and account-specific invite messages live under Teams, below the list; a group
-that needs attention says so on its own row, not a second time under it. Member changes are restricted to unique, locally manageable usernames.
+A group's page is opened from the Teams list and loads the agent's roster and
+federation facts in one call. Its header is the group mark, its name and
+"server · Role"; it has two tabs, Members and Settings, drawn as a tablist
+whose arrows walk the strip and whose open tab names the panel below it.
+Members splits the one roster into People, Machines and Groups on other
+servers: a row carries the
+name, a "you" chip, the kind of party as its only second line, and one role
+chip with the visibility band inside it ("Member (0)"). Each row's menu holds
+that row's actions and nothing else — an action that does not apply stays, and
+is marked `aria-disabled` rather than `disabled` so the keyboard reaches it and
+reads the reason in its `title` — and an admitted group's row adds its
+admission state, Restore access and Remove admission. A roster party that names
+another group is listed under Groups on other servers rather than dropped,
+once: with a "No admission record" chip where no record on this Mac matches it,
+and an "Ambiguous admission" chip where several do, in which case those records
+are not listed again beside it. Add someone on `<server>`… and Invite someone…
+follow the people and machine rows and go with them when the roster could not
+be read; Add a group… follows the admitted ones. Settings states the group's
+name with "A name is fixed at creation.", and a Who can join row whose only
+value is Invite only, with the reason nothing can be chosen read under it and
+Change… inert rather than disabled. Group
+creation, discovery and account-specific invite messages live on the Teams page
+itself; joining is the sheet the Teams header opens, and the Members tab no
+longer repeats it inline. A group that needs attention says so on its own row,
+not a second time under it. Member changes are restricted to unique, locally
+manageable usernames.
 An inactive or ambiguous federation admission has no extra payload. Active ad-hoc
 groups retain read-only roster facts but suppress member and federation actions.
 Native clipboard hygiene uses `copy_text`. First run is a location
@@ -203,7 +224,7 @@ authenticated in the catalog.
 | `src/app-root.tsx`         | App shell: window, rail, screen, details panel, deep links.                                                                                                                                                                                                                                                                                                              |
 | `src/components/`          | Components: Button, Chip, Tag, Badge, KindIcon, Inset, SectionLabel, Notice, Band, SegmentedControl, SplitButton, MenuButton, SearchField.                                                                                                                                                                                                                   |
 | `src/shell/`               | Window chrome: `sidebar.tsx` (the rail), `page-header.tsx`, `toolbar.tsx`.                                                                                                                                                                                                                                                                                                             |
-| `src/screens/`             | Screens: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx`, `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx`, `settings-screen.tsx`, `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `people-screen.tsx` (the attention list and the accounts pane), `files-screen.tsx` (the roots page), `teams-screen.tsx`, `chat-tab.tsx` (the team strip over `chat-screen.tsx`), `scope.ts` (what is listed, in what order).     |
+| `src/screens/`             | Screens: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx`, `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx`, `settings-screen.tsx`, `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `people-screen.tsx` (the attention list and the accounts pane), `files-screen.tsx` (the roots page), `teams-screen.tsx`, `chat-tab.tsx` (the Chat tab: the team column, the open conversation and the info panel), `chat-teams.tsx` (the team column), `chat-screen.tsx` (one team's conversation), `chat-info.tsx` (the channel info panel), `scope.ts` (what is listed, in what order).     |
 | `src/bridge.ts`            | The typed `Bridge` interface and the Tauri implementation.                                                                                                                                                                                                                                                                                                                  |
 | `src/mock-bridge.ts`       | The same interface, using the fixture.                                                                                                                                                                                                                                                                                                                                      |
 | `src/fixture.ts`           | The stable desktop fixture, as typed data.                                                                                                                                                                                                                                                                                                                                  |
@@ -227,7 +248,9 @@ People, Chat, Files, Teams, Devices and Settings; `railTabOf(location)` in
 `src/location.ts` decides which one a location belongs to, so All items and a
 store page mark Files, a group's settings page marks Teams, and a team chat
 marks Chat. Chat carries one badge summing the unread across every team whose
-chat this Mac can read; People carries a dot while anything needs attention.
+chat this Mac can read, in the same orange every unread count uses
+(`--unread`); People carries a dot while anything needs attention. Chat's tab
+goes to `chatTabLocation()` — the team and channel the Chat tab last had open.
 Control-Tab walks the six tabs.
 
 Above the tabs, the account header names the active account — the one the
@@ -253,21 +276,96 @@ and has no toggle; the blue styling is scoped to `.side.rail` for that reason.
 ### What each tab is
 
 People is the list of what needs attention — the page that used to be called
-Alerts — over the accounts pane. Chat is a strip of team chips over the
+Alerts — over the accounts pane. Chat is a team column beside one team's
 conversation; the tab with no team chosen opens the first team that has chat,
-and says so when no group has one. Files is a roots page listing All items and
+and says how chat gets turned on when no team has one. Files is a roots page listing All items and
 then the vaults, groups and shares, each row opening its item page; an item
-page returns here through the header's back chevron. Teams lists the groups
-and shares over the pane that creates and finds them, and a row opens that
-group's settings, which return here. Creating and discovering act as one
-account — the one `?state=teams&store=<StoreRef>` names, else this Mac's
-first — so the account menu keeps the page when it switches. Devices is the recovery-devices and
+page returns here through the header's back chevron. Teams lists the groups and
+shares — the group mark, name, server, the roster summary the per-group
+`list_group_details` call loaded on the last refresh, the role this Mac's
+account holds and a chip for an abnormal state — and the row itself is the
+button that opens that group's page, which returns here. The caption is the
+server alone, and names the account as well only where this Mac holds two
+accounts on that server. Beside the row, not inside it, sits a menu of that
+group's actions; an action that does not apply stays, inert, with its reason in
+the item's `title` — Leave always, and the server-dependent entries while its
+server is out of reach. Below the
+list is one row per account store: what its server lists when Check for groups
+is pressed, reported on the row itself and nowhere else, an Invite someone…
+entry, and the same abnormal-state chip at the row's end. The header
+carries Create a group and Join a group…, which opens the existing invitation
+panel. Creating, inviting and joining act as one account — the one
+`?state=teams&store=<StoreRef>` names, else this Mac's first — and the Create
+sheet opens on that account, seeded to it and saying who is creating the group
+on which server, so the account
+menu keeps the page when it switches. Devices is the recovery-devices and
 security-keys panes. Settings is Servers and About. A store's abnormal state
 is a chip at the end of its row on Files, Teams and in the account menu,
-rather than a caption under its name.
+rather than a caption under its name. A group carries one mark everywhere it
+is listed — the same initial over the same colour on Files, on Teams, in the
+Chat team column and on its own page — while an account vault keeps its vault
+glyph. Two notes in the Teams mock are
+deliberately not built: the strip explaining that a group page has no Channels
+or Files tab, and the band explaining that it has two tabs. Both describe the
+design rather than the group, and the page already shows what it has.
 
 Item pages open in the folder browser. The toolbar's list / grid / folders
 toggle still chooses, and the choice survives the next navigation.
+
+### The Chat tab
+
+One location: `{ kind: 'chat', ref?, channel? }`, where `ref` is the team whose
+inbox is mounted and `channel` the open conversation. `?state=chat&store=…` is
+its deep link, and `?state=team-chat&store=…`, the name it had before the team
+column, still decodes to it; a `channel` with no `store` is dropped, because a
+channel belongs to the team that names it. With no `ref`, `chat-tab.tsx`
+resolves the first team that has chat and navigates to it, so the tab never
+rests on a location with no team, and a dismissible note in the pane says which
+team it opened and why, until the reader picks a team or dismisses it. The tab
+remembers the team and channel it had open, and the rail's Chat tab returns
+there rather than re-running the fallback. A conceal forgets that memory,
+because the account that comes back may not have the team on this Mac; a
+location naming a team without chat leaves it alone unless the remembered team
+is the one that lost chat.
+
+`chat-tab.tsx` owns the layout — the column, the conversation and the info
+panel — so a team switch replaces only the conversation. The column
+(`chat-teams.tsx`) lists every named team whose server offers chat as a heading
+button with a mark, its server, an unread badge, a gear that opens its group
+settings, and, on the open team, a `+` that creates a channel there; the gear
+and the `+` are the heading's siblings, so the keyboard reaches each of them.
+Exactly one team is open and lists its channels, and its row carries
+`aria-current` rather than `aria-expanded`, because the row selects a team and
+cannot fold one away; the rest are collapsed to
+"3 channels · 2 unread" read from `useSidebarInbox().get(storeId)` and
+`teamUnread` — the same per-team facts the rail's badge sums, so no inbox is
+mounted for a team that is not open. Only a plain count is interpolated there;
+the states `teamUnread` also reports ("…", "!", "3+") stay in the badge and its
+description. A team this Mac cannot reach right now carries its own reason
+("Check-in expired") instead of the count, and a collapsed team whose inbox
+failed carries that error instead of "Loading channels…"; the open team's
+channel list says "Channels unavailable." rather than "No channels yet", since
+the pane beside it already states the error and carries the retry. Named teams
+whose server offers no
+chat sit dimmed at the foot under "No chat" with the reason; shares are not
+listed. Unread counts are the rail's orange wherever they appear.
+
+The conversation is `chat-screen.tsx`: the header reads "Team · #channel" with
+the description and access line ("Member can read and write" — the visibility
+band is a FOKS internal and is not drawn, except when the read and write roles
+differ by the band alone, where the band is the only thing that tells them
+apart), and carries one Refresh that reloads
+the history, the channel list and the saved work, Team files, and the ⓘ that
+opens `chat-info.tsx` — the channel's description, who can take part, the team
+roster with its size and roles, and the per-device alert settings that used to
+be a strip above every thread. Leaving, muting, renaming and deleting a channel
+have no `ChatAction`, so the panel does not draw them. When the team's server
+check-in has lapsed the column stays and the pane carries the notice, with
+"Check in" opening that server in Settings › Servers; every other unavailable
+state is stated without an action, because no button in Chat resolves it, and
+"Open another team" is offered only when another team can actually be opened. A
+location naming a team that has no chat says so in the pane rather than waiting
+for an inbox that will not arrive.
 
 ### `apps/desktop/kit`
 
@@ -377,16 +475,16 @@ kept so deep links defined in the design specification resolve to this location.
 | `inactive`                                                                  | Homelab                                     | group reports inactive; Resume creation uses its resumable operation                                          |
 | `alerts`                                                                    | People, on its attention list                | `lease=lapsed`, so the list has its critical entry                                                            |
 | `agent-lost`                                                                | Full window stop                            | Retry reconnects and refreshes without replay                                                                 |
-| `groups`                                                                    | Teams                                       | the list, then the create, discovery and invite sections; `store=` names the account they act as              |
+| `groups`                                                                    | Teams                                       | the list, then one check-and-invite row per account store; `store=` names the account they act as             |
 | `people`                                                                    | People                                      | the attention list over the accounts pane; `store=` names the account                                         |
-| `group-people` · `party` · `federation`                                     | Engineering Group settings                  | People tab, with federation below the roster, or party panel                                                  |
-| `danger`                                                                    | Engineering Group settings                  | Settings tab                                                                                                  |
+| `group-people` · `party` · `federation`                                     | Engineering group page                      | Members tab; `party` opens a member row's menu                                                                |
+| `danger`                                                                    | Engineering group page                      | Settings tab                                                                                                  |
 | `store` · `items`                                                           | Engineering                                 | group vault                                                                                                   |
-| `invite` · `add` · `demote` · `remove` · `admit`                            | Engineering Group settings                  | the named Group sheet                                                                                         |
-| `create`                                                                    | Teams                                       | named/ad-hoc Create group sheet, defaulting to Work (Acme)                                                    |
-| `groups-lease` · `groups-inactive`                                          | Engineering Group settings or Homelab vault | distinct lease/inactive takeovers                                                                             |
-| `manage`                                                                    | Household Group settings                    | People tab, without a Manage overlay                                                                          |
-| `party-remove`                                                              | Engineering Group settings                  | the non-local removal refusal                                                                                 |
+| `invite` · `add` · `demote` · `remove` · `admit`                            | Engineering group page                      | the named Group sheet                                                                                         |
+| `create`                                                                    | Teams                                       | named/ad-hoc Create group sheet on the acting account; `store=` names it, else this Mac's first               |
+| `groups-lease` · `groups-inactive`                                          | Engineering group page or Homelab vault     | distinct lease/inactive takeovers                                                                             |
+| `manage`                                                                    | Household group page                        | Members tab, without a Manage overlay                                                                         |
+| `party-remove`                                                              | Engineering group page                      | the non-local removal refusal                                                                                 |
 | `join`                                                                      | Teams                                       | account-specific discovery and invite choices                                                                 |
 | `join-invite`                                                               | Teams                                       | invite sheet opened on the exact `acct:work` fixture store                                                    |
 | `boot` · `who` · `address` · `no-address` · `checked` · `compare` · `error` | First run, steps 0–2                        | `path=invited` or `path=own` selects the setup route                                                          |

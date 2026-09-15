@@ -16,6 +16,49 @@ import type { FoksIconName } from '../icons';
 /** Receives a callback that closes the containing menu. */
 export type MenuContent = (close: () => void) => ReactNode;
 
+export interface MenuItemProps {
+  /**
+   * Why the action does not apply here. An item with a reason keeps its place
+   * in the menu but does nothing: it is marked `aria-disabled` rather than
+   * `disabled`, so the keyboard can reach it and read the reason out. A
+   * natively disabled control is skipped by the roving selector, and
+   * WKWebView suppresses hover — and so the `title` — on one.
+   */
+  reason?: string;
+  /** The design's destructive item. */
+  danger?: boolean;
+  /** The glyph before the label. */
+  icon?: FoksIconName;
+  /** What the item says when it applies. */
+  title?: string;
+  onClick?: () => void;
+  children: ReactNode;
+}
+
+export function MenuItem({
+  reason,
+  danger = false,
+  icon,
+  title,
+  onClick,
+  children,
+}: MenuItemProps): ReactNode {
+  const inert = reason !== undefined;
+  return (
+    <button
+      type="button"
+      className={danger ? 'danger' : undefined}
+      aria-disabled={inert ? true : undefined}
+      tabIndex={inert ? -1 : undefined}
+      title={reason ?? title}
+      onClick={inert ? undefined : onClick}
+    >
+      {icon ? <Icon name={icon} /> : null}
+      {children}
+    </button>
+  );
+}
+
 function AnchoredMenu({
   anchorRef,
   label,
@@ -43,10 +86,16 @@ function AnchoredMenu({
         onClose={close}
         aria-label={label}
         onClick={(event: MouseEvent<HTMLDivElement>) => {
-          // Selecting an enabled menu item closes the menu. Disabled items do
-          // not close it.
+          // Selecting an enabled menu item closes the menu. An item that does
+          // not apply — marked `aria-disabled` so it keeps its place in the
+          // keyboard order and can say why — does not close it.
           const target = event.target instanceof Element ? event.target : null;
-          if (target?.closest('button:not([disabled])')) close();
+          if (
+            target?.closest(
+              'button:not([disabled]):not([aria-disabled="true"])',
+            )
+          )
+            close();
         }}
       >
         {children(close)}

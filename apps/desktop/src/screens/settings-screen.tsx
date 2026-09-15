@@ -33,27 +33,14 @@ import {
 import type { CardOption } from '../components';
 import type { DevicesSection, Location, SettingsSection } from '../location';
 import {
-  canCreateInStore,
   serverAvailability,
   storeDescription,
   storeAvailability,
 } from '../model';
-import type {
-  AccountStore,
-  StoreRef,
-  TeamStore,
-  AgentSnapshot,
-} from '../model';
+import type { AccountStore, AgentSnapshot } from '../model';
 import { PageHeader } from '../shell/page-header';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { agentLifecycleLabel, type AgentLifecycle } from '../agent-lifecycle';
-import {
-  checkLabel,
-  discoveryContext,
-  GroupSheet,
-  unavailableTitle,
-} from './groups-screen';
-import type { DiscoveryContext } from './groups-screen';
 import { GoProfileConnectSheet } from './go-profile-connect';
 import { ServersSection } from './servers-screen';
 
@@ -61,14 +48,14 @@ import { ServersSection } from './servers-screen';
  * Which tab this screen is the body of. Each variant names its own title, the
  * panes its sub-nav offers, and the location kind its navigation writes.
  */
-export type SettingsVariant = 'settings' | 'devices' | 'people' | 'teams';
+export type SettingsVariant = 'settings' | 'devices' | 'people';
 
 /** A pane of the settings body. Several are tabs of their own now. */
-type Pane = 'account' | 'servers' | 'macs' | 'keys' | 'groups' | 'about';
+type Pane = 'account' | 'servers' | 'macs' | 'keys' | 'about';
 
 export type SettingsLocation = Extract<
   Location,
-  { kind: 'settings' | 'devices' | 'people' | 'teams' }
+  { kind: 'settings' | 'devices' | 'people' }
 >;
 
 export interface SettingsScreenProps {
@@ -115,7 +102,6 @@ const SECTIONS: readonly {
   { id: 'servers', label: 'Servers', icon: 'server' },
   { id: 'macs', label: 'Recovery devices', icon: 'file' },
   { id: 'keys', label: 'Security keys', icon: 'key' },
-  { id: 'groups', label: 'Groups', icon: 'people' },
   { id: 'about', label: 'About', icon: 'info' },
 ];
 
@@ -141,11 +127,6 @@ const VARIANTS: Readonly<
     subtitle: 'Your accounts on this Mac, and anything that needs attention',
     panes: ['account'],
   },
-  teams: {
-    title: 'Teams',
-    subtitle: 'Groups and shares on this Mac',
-    panes: ['groups'],
-  },
 };
 
 function isCatalogRequired(error: unknown): boolean {
@@ -162,111 +143,15 @@ function accountStores(snapshot: AgentSnapshot): AccountStore[] {
  * The line under a sheet title: who the workflow acts as, and where. The
  * title itself never carries the account alias.
  */
-function accountSubtitle(snapshot: AgentSnapshot, store: AccountStore): string {
+export function accountSubtitle(
+  snapshot: AgentSnapshot,
+  store: AccountStore,
+): string {
   const username = snapshot.accounts.find(
     (entry) => entry.store === store.id,
   )?.username;
   const server = snapshot.servers.find((entry) => entry.id === store.server);
   return `${username ?? store.account} on ${server?.name ?? store.server}`;
-}
-
-/**
- * The Teams tab's pane: creating a group and finding the ones a server already
- * lists. A group that needs attention is not repeated here — the Teams rows
- * above carry its state as a chip on the row itself.
- */
-function GroupsSection({
-  snapshot,
-  discovering,
-  onDiscover,
-  onCreate,
-}: {
-  snapshot: AgentSnapshot;
-  discovering: StoreRef | null;
-  onDiscover: (context: DiscoveryContext) => Promise<void>;
-  onCreate: () => void;
-}): ReactNode {
-  const accounts = accountStores(snapshot);
-  const canCreate = accounts.some((store) =>
-    canCreateInStore(snapshot, store.id),
-  );
-  return (
-    <>
-      <SectionLabel>Create a group</SectionLabel>
-      <Inset className="settings-inset middle">
-        <InsetRow
-          label="New group"
-          action={
-            <Button
-              size="sm"
-              icon="plus"
-              variant="primary"
-              disabled={!canCreate}
-              title={
-                canCreate
-                  ? undefined
-                  : 'No available account can create a group'
-              }
-              onClick={onCreate}
-            >
-              Create group…
-            </Button>
-          }
-        />
-      </Inset>
-      {canCreate ? null : (
-        <p className="fn">
-          No available account can create a group right now. Add an account, or
-          restore access to a server.
-        </p>
-      )}
-      <SectionLabel>Find groups</SectionLabel>
-      <Inset className="settings-inset">
-        {accounts.length ? (
-          accounts.map((store) => {
-            const context = discoveryContext(snapshot, store.id);
-            const busy = discovering === store.id;
-            const account = snapshot.accounts.find(
-              (candidate) => candidate.store === store.id,
-            );
-            return (
-              <InsetRow
-                key={store.id}
-                label={context?.server.name ?? store.name}
-                action={
-                  <Button
-                    size="sm"
-                    aria-label={
-                      context ? checkLabel(context) : 'Check for groups'
-                    }
-                    title={
-                      context && !context.available
-                        ? unavailableTitle(context)
-                        : 'Ask the server which groups this account belongs to.'
-                    }
-                    disabled={!context || !context.available || busy}
-                    onClick={() => {
-                      if (context) void onDiscover(context);
-                    }}
-                  >
-                    {busy ? 'Checking…' : 'Check for groups'}
-                  </Button>
-                }
-              >
-                <small>
-                  {account
-                    ? `Groups the server lists for ${account.username} appear on Teams.`
-                    : 'This account is not signed in on this Mac.'}
-                </small>
-              </InsetRow>
-            );
-          })
-        ) : (
-          <InsetRow label="None">No accounts configured on this Mac.</InsetRow>
-        )}
-      </Inset>
-    </>
-  );
 }
 
 export function SettingsScreen({
@@ -329,8 +214,6 @@ export function SettingsScreen({
   >(new Map());
   const [macsLoaded, setMacsLoaded] = useState(false);
   const [keysLoaded, setKeysLoaded] = useState(false);
-  const [groupCreate, setGroupCreate] = useState(enteredScene === 'create');
-  const [discovering, setDiscovering] = useState<StoreRef | null>(null);
   const toasts = useToast();
   // Track open modal state to suppress background catalog reloads while sheets are active.
   const sheetOpen = useRef(sheet);
@@ -350,36 +233,6 @@ export function SettingsScreen({
   // Profile of the currently selected account, or empty if none selected.
   const profile = selected?.server ?? '';
 
-  // Ask one account's server which groups it belongs to. Discovery writes
-  // durable local bindings, so it runs through the profile work queue and any
-  // failure is reconciled like a mutation rather than replayed blindly.
-  const discover = useCallback(
-    async (context: DiscoveryContext): Promise<void> => {
-      setDiscovering(context.store.id);
-      try {
-        const result = await enqueueProfileWork(bridge, context.server.id, () =>
-          bridge.discoverGroups(context.server.id, context.account.alias),
-        );
-        if (result.accountAlias !== context.account.alias) {
-          throw new Error(
-            'Group discovery returned data for a different account.',
-          );
-        }
-        const found = result.groups.filter((group) => group.active).length;
-        await onRefresh(
-          found
-            ? `Found ${found} group${found === 1 ? '' : 's'} for ${context.account.username}.`
-            : `No groups found for ${context.account.username}.`,
-        );
-      } catch (error) {
-        await onMutationError(error);
-      } finally {
-        setDiscovering(null);
-      }
-    },
-    [bridge, onMutationError, onRefresh],
-  );
-
   useEffect(() => {
     const conceal = (): void => {
       // Browser sign-in must retain its operation while the browser has focus.
@@ -390,7 +243,6 @@ export function SettingsScreen({
       setAccountSheetStore(null);
       setRemoveDevice(null);
       setRevokeBackup(null);
-      setGroupCreate(false);
     };
     const concealWhenHidden = (): void => {
       if (document.hidden) conceal();
@@ -403,11 +255,9 @@ export function SettingsScreen({
     };
   }, []);
 
-  // Canonicalize the default route to the first account's exact StoreRef. Teams
-  // is addressable without an account — its list is the whole Mac's — so an
-  // address that names none is left alone and the first account is implied.
+  // Canonicalize the default route to the first account's exact StoreRef.
   useEffect(() => {
-    if (location.kind === 'teams' || location.store || !selected) return;
+    if (location.store || !selected) return;
     onNavigate({ ...location, store: selected.id });
   }, [location, onNavigate, selected]);
 
@@ -592,10 +442,6 @@ export function SettingsScreen({
   // Move within this tab, retaining the selected account. A pane belongs to
   // exactly one tab, so the variant decides the location kind.
   const go = (next: Pane, store = selected?.id): void => {
-    if (variant === 'teams') {
-      onNavigate({ kind: 'teams', ...(store ? { store } : {}) });
-      return;
-    }
     if (variant === 'people') {
       onNavigate({ kind: 'people', ...(store ? { store } : {}) });
       return;
@@ -635,8 +481,6 @@ export function SettingsScreen({
   const keysLoading = Boolean(
     selected && !unavailable && !selectedStopped && !keysLoaded,
   );
-  // Create and discovery act as the account the address names, else the first.
-  const createContext = selected ?? stores[0];
   return (
     <>
       <PageHeader
@@ -740,14 +584,6 @@ export function SettingsScreen({
                 onRefresh={onRefresh}
                 onError={onError}
                 onMutationError={onMutationError}
-              />
-            ) : null}
-            {section === 'groups' ? (
-              <GroupsSection
-                snapshot={snapshot}
-                discovering={discovering}
-                onDiscover={discover}
-                onCreate={() => setGroupCreate(true)}
               />
             ) : null}
             {section === 'about' ? (
@@ -982,40 +818,6 @@ export function SettingsScreen({
             await applied(`Revoked backup phrase ${alias}`);
           }}
           onError={(error) => void onMutationError(error)}
-        />
-      ) : null}
-      {groupCreate && createContext ? (
-        <GroupSheet
-          snapshot={snapshot}
-          bridge={bridge}
-          store={createContext}
-          sheet="create"
-          target={null}
-          onClose={() => setGroupCreate(false)}
-          onSwitch={() => undefined}
-          onApplied={async (message, created) => {
-            const next = await onRefreshSnapshot();
-            toasts.show(message);
-            if (!created) return;
-            const accountStore = next.stores.find(
-              (candidate) =>
-                candidate.id === created.accountStoreId &&
-                candidate.kind === 'account',
-            );
-            const createdStore = accountStore
-              ? next.stores.find(
-                  (candidate): candidate is TeamStore =>
-                    candidate.kind === 'team' &&
-                    candidate.server === accountStore.server &&
-                    candidate.account === accountStore.account &&
-                    candidate.alias === created.teamAlias,
-                )
-              : undefined;
-            if (createdStore)
-              onNavigate({ kind: 'store', ref: createdStore.id });
-          }}
-          onError={onError}
-          onMutationError={onMutationError}
         />
       ) : null}
     </>
@@ -1432,7 +1234,7 @@ function KeysSection({
           }
         >
           {accountConfigured
-            ? 'Restore account access in Server settings before changing these settings.'
+            ? 'Restore account access in Settings › Servers before changing these settings.'
             : 'Add or recover an account before configuring security keys.'}
         </Band>
       ) : null}

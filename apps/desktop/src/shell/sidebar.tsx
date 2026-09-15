@@ -11,33 +11,18 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Menu, Popover } from '/kit/overlay-primitives';
 import { Chip, Icon } from '../components';
 import {
-  serverChatAvailable,
+  chatAvailable,
   storeAvailability,
   storeDescription,
   storeHues,
   storeNavigationOrder,
-  storeReadable,
 } from '../model';
-import type { AccountStore, AgentSnapshot, Store } from '../model';
+import type { AccountStore, AgentSnapshot } from '../model';
 import type { FoksIconName } from '../icons';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { teamUnread } from '../chat/unread';
-import { railTabOf } from '../location';
+import { chatTabLocation, railTabOf } from '../location';
 import type { Location, RailTab } from '../location';
-
-/** Whether a store is a team whose server offers chat this account can read. */
-export function chatAvailable(snapshot: AgentSnapshot, store: Store): boolean {
-  return (
-    store.kind === 'team' &&
-    store.team_kind === 'named' &&
-    store.active !== false &&
-    storeReadable(snapshot, store.id) &&
-    snapshot.servers.some(
-      (server) =>
-        server.id === store.server && serverChatAvailable(snapshot, server),
-    )
-  );
-}
 
 interface RailTabSpec {
   id: RailTab;
@@ -70,9 +55,17 @@ const RAIL_TABS: readonly RailTabSpec[] = [
   },
 ];
 
+/**
+ * Where a tab goes. Chat returns to the team and channel it last had open, so
+ * leaving Chat and coming back does not re-run the first-team fallback.
+ */
+function tabLocation(tab: RailTabSpec): Location {
+  return tab.id === 'chat' ? chatTabLocation() : tab.location;
+}
+
 /** Control-Tab destinations in rail order. */
 export function sidebarCycleLocations(): Location[] {
-  return RAIL_TABS.map((tab) => tab.location);
+  return RAIL_TABS.map(tabLocation);
 }
 
 export function nextSidebarCycleLocation(
@@ -488,7 +481,7 @@ export function Sidebar({
               ) : undefined
             }
             onSelect={() => {
-              onNavigate(tab.location);
+              onNavigate(tabLocation(tab));
             }}
           />
         ))}

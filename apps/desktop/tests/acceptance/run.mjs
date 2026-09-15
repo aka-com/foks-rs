@@ -252,7 +252,7 @@ async function personaWalks(context, origin) {
       .getByRole('button', { name: 'Create channel', exact: true })
       .click();
     await page.getByRole('dialog').waitFor({ state: 'detached' });
-    await page.getByRole('button', { name: '# design-chat' }).click();
+    await page.getByRole('button', { name: '#design-chat' }).click();
     await page
       .getByRole('textbox', { name: 'Message', exact: true })
       .fill('Browser walkthrough message');
@@ -271,7 +271,8 @@ async function personaWalks(context, origin) {
       'chat overflowed the viewport',
     );
     await page.screenshot({ path: join(SHOTS, 'team-chat.png') });
-    await page.getByRole('button', { name: 'Files', exact: true }).click();
+    // The header's folder icon is where "Files" used to be a labelled button.
+    await page.getByRole('button', { name: 'Team files', exact: true }).click();
     check(
       !new URL(page.url()).searchParams.has('channel'),
       'chat channel leaked into file navigation',
@@ -394,8 +395,15 @@ async function groupWalk(context, origin) {
     await page.getByRole('button', { name: 'Add phase4.person' }).click();
     await page.locator('.rt .prow', { hasText: 'phase4.person' }).waitFor();
 
+    // A member's actions live in that row's menu, which the scene opens. The
+    // menu is named for the member it acts on, since every row has one.
     await page.goto(`${origin}/?state=party`, { waitUntil: 'load' });
-    await page.locator('.details', { hasText: 'deploy-bot' }).waitFor();
+    await page.locator('.rt .prow', { hasText: 'deploy-bot' }).waitFor();
+    await page
+      .locator('.menu[aria-label="Actions for deploy-bot"]', {
+        hasText: 'Lower role',
+      })
+      .waitFor();
 
     await page.goto(`${origin}/?state=federation`, { waitUntil: 'load' });
     const inactive = page.locator('.rt.fed .prow', { hasText: 'Inactive' });
@@ -411,7 +419,12 @@ async function groupWalk(context, origin) {
       .getByRole('button', { name: 'Group settings', exact: true })
       .click();
     await page.locator('.ghero', { hasText: 'Household' }).waitFor();
-    await page.locator('.ghero .sub', { hasText: 'Group settings' }).waitFor();
+    // The subtitle is the server and the bare role this account holds, in
+    // that order and with nothing else in it.
+    await page.locator('.ghero .sub', { hasText: 'Owner' }).waitFor();
+    const subtitle = (await page.locator('.ghero .sub').innerText()).trim();
+    if (subtitle !== 'foks.example.net · Owner')
+      failures.push(`the group header subtitle read "${subtitle}"`);
 
     await page.goto(`${origin}/?state=party-remove`, { waitUntil: 'load' });
     const remove = page.getByRole('button', {

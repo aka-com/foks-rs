@@ -38,6 +38,9 @@
   --wash: rgba(0, 0, 0, 0.025);
   --backdrop: rgba(20, 20, 30, 0.28);
 
+  /* unread */
+  --unread: #ff6f21;
+
   /* navigation rail */
   --rail: #4c6be1;
   --rail-ink: rgba(255, 255, 255, 0.82);

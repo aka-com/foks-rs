@@ -209,10 +209,12 @@ test('readersOf returns null for account store items', () => {
   );
 });
 
-test('peopleGroups formats counts of individuals and teams separately', () => {
+test('peopleGroups formats counts of individuals, machines and teams separately', () => {
+  // A machine is a party like any other, but it is not a person: the summary
+  // splits it out so a list row and the group page agree on "4 people".
   assert.equal(
     peopleGroups(partiesOf(FIXTURE, 'team:eng')),
-    '5 people · 1 group',
+    '4 people · 1 machine · 1 group',
   );
   assert.equal(peopleGroups(partiesOf(FIXTURE, 'team:household')), '2 people');
   assert.equal(peopleGroups([]), '0 people');

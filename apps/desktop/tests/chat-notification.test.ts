@@ -314,6 +314,84 @@ test('closing consumer during history discards late authorized plaintext', async
   }
 });
 
+test('activating a notification opens the Chat tab on that team and channel', async () => {
+  const { installDom } = await import('./lib/dom-harness');
+  installDom({
+    url: 'http://localhost/',
+    body: '<div id="root"></div>',
+    timers: true,
+    act: true,
+  });
+  const ui = await import('@testing-library/react');
+  const { createElement } = await import('react');
+  const { createServer } = await import('vite');
+  // The provider is JSX, so it is loaded the way the render tests load one.
+  const vite = await createServer({
+    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
+    appType: 'custom',
+    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
+  });
+  const { NotificationProvider } = (await vite.ssrLoadModule(
+    '/src/chat/notification-provider.tsx',
+  )) as typeof import('../src/chat/notification-provider');
+  const session = {
+    epoch: 'a'.repeat(32),
+    available: true,
+    settings: { enabled: true, previews: false, overrides: {} },
+  };
+  const activation = { storeId: 'team:eng', channel: 'cd'.repeat(16), scope };
+  let taken = false;
+  const navigations: unknown[] = [];
+  const bridge = {
+    chatLocal: async (action: { action: string }) => {
+      if (action.action !== 'take-activation') return session;
+      const once = taken ? undefined : activation;
+      taken = true;
+      return { ...session, activation: once };
+    },
+    onChatNotification: async () => () => {},
+    // The history read is the proof the activation still resolves; only its
+    // scope decides whether the navigation happens.
+    chat: async (_store: string, action: { action: string }) => {
+      assert.equal(action.action, 'history');
+      return {
+        scope,
+        result: {
+          kind: 'history',
+          channel: activation.channel,
+          messages: [],
+          before: null,
+          missing_predecessors: [],
+        },
+      };
+    },
+    cancelChat: async () => {},
+  };
+  const service = {
+    subscribe: () => () => {},
+    getSnapshot: () => new Map(),
+  };
+  try {
+    ui.render(
+      createElement(NotificationProvider, {
+        bridge: bridge as unknown as import('../src/bridge').Bridge,
+        service:
+          service as unknown as import('../src/chat/inbox-service').ChatInboxService,
+        onNavigate: (location: unknown) => navigations.push(location),
+        children: null,
+      }),
+    );
+    await ui.waitFor(() =>
+      assert.deepEqual(navigations, [
+        { kind: 'chat', ref: activation.storeId, channel: activation.channel },
+      ]),
+    );
+  } finally {
+    ui.cleanup();
+    await vite.close();
+  }
+});
+
 test('notification activation validates the full store binding before navigation', () => {
   const store = {
     profile: 'p',

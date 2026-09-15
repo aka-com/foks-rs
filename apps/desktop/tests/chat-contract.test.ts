@@ -22,7 +22,7 @@ const storeId = JSON.stringify({
 });
 const channel = 'ab'.repeat(16);
 test('chat navigation round trips and clears vault-only state', () => {
-  const location = { kind: 'team-chat' as const, ref: storeId, channel };
+  const location = { kind: 'chat' as const, ref: storeId, channel };
   const encoded = encodeLocation(location);
   const params = new URLSearchParams({ state: encoded.state });
   for (const [k, v] of Object.entries(encoded.params))

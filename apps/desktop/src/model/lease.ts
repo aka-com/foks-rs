@@ -250,8 +250,9 @@ export type StoreDescriptionState = 'normal' | AvailabilityReason;
 export function storeDescriptionState(
   snapshot: AgentSnapshot,
   store: Store,
+  options: AvailabilityOptions = {},
 ): StoreDescriptionState {
-  const availability = storeAvailability(snapshot, store);
+  const availability = storeAvailability(snapshot, store, options);
   return availability.available ? 'normal' : availability.reason;
 }
 
@@ -269,8 +270,9 @@ export function groupDetailFailure(
 export function storeDescription(
   snapshot: AgentSnapshot,
   store: Store,
+  options: AvailabilityOptions = {},
 ): string {
-  const state = storeDescriptionState(snapshot, store);
+  const state = storeDescriptionState(snapshot, store, options);
   if (state === 'setup-incomplete') return 'Setup incomplete';
   if (state === 'verification-required') return 'Verification required';
   if (state === 'verification-failed') return 'Verification failed';
@@ -326,6 +328,25 @@ export function serverChatAvailable(
   return (
     server.capabilities.chat &&
     serverAvailability(snapshot, server, options).available
+  );
+}
+
+/** Whether a store is a team whose server offers chat this account can read. */
+export function chatAvailable(
+  snapshot: AgentSnapshot,
+  store: Store,
+  options: AvailabilityOptions = {},
+): boolean {
+  return (
+    store.kind === 'team' &&
+    store.team_kind === 'named' &&
+    store.active !== false &&
+    storeReadable(snapshot, store.id, options) &&
+    snapshot.servers.some(
+      (server) =>
+        server.id === store.server &&
+        serverChatAvailable(snapshot, server, options),
+    )
   );
 }
 

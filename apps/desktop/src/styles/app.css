@@ -233,62 +233,13 @@ body {
   max-width: 880px;
 }
 
-.rhead {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 14px 0 6px;
-}
-
-.rhead h2 {
-  font-size: 14px;
-  font-weight: 650;
-}
-
-.rhead .n {
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.rhead .right {
-  margin-left: auto;
-  display: flex;
-  gap: 6px;
-}
-
-.rhead .btn {
-  height: 28px;
-  font-size: 13px;
-}
-
 .rt {
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
-.rt .hdr,
-.rt .prow {
-  display: grid;
-  /* Who · Role · the row's overflow. The roster used to spend a fourth
-     column on an item count; the role and the access level it carries are
-     one reading, so they share one cell. */
-  grid-template-columns: minmax(0, 1fr) 168px 36px;
-  gap: 12px;
-  align-items: center;
-  padding: 0 12px;
-}
-
-.rt .hdr {
-  height: 30px;
-  font-size: 11.5px;
-  color: var(--faint);
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line-soft);
-}
-
+/* Roster table rows */
 .rt .prow {
   min-height: 54px;
   border-top: 1px solid var(--line-soft);
@@ -303,14 +254,6 @@ body {
 
 .rt .prow:hover {
   background: var(--hover);
-}
-
-.rt .prow.sel {
-  background: var(--accent-wash);
-}
-
-.rt .prow.dim > *:not(.acts) {
-  opacity: 0.55;
 }
 
 .who2 {
@@ -355,58 +298,133 @@ body {
   min-width: 0;
 }
 
-.rolecell small {
-  font-size: 11.5px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.reads {
-  font-size: 13px;
-  color: var(--ink-3);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.25;
-}
-
-.reads small {
-  display: block;
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-.rt .acts {
-  display: flex;
-  justify-content: flex-end;
-  opacity: 0;
-  transition: opacity 0.12s;
-}
-
-.rt .prow:hover .acts,
-.rt .prow.sel .acts,
-.rt .prow:focus-within .acts,
-.rt .prow .acts.open {
-  opacity: 1;
-}
-
-.rt .acts button {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  display: grid;
-  place-items: center;
-  color: var(--ink-3);
-  font-size: 16px;
-}
-
-.rt .acts button:hover {
-  background: var(--hover);
-}
-
 .rfoot {
   font-size: 12.5px;
   color: var(--muted);
   margin: 10px 2px 0;
   line-height: 1.5;
+}
+
+/* Member roster sections */
+.sec .count {
+  margin-left: 6px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.rt.bare {
+  border: 0;
+  border-radius: 0;
+}
+
+.rt.bare .prow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 0 4px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.rt.bare .prow:first-of-type {
+  border-top: 0;
+}
+
+.rt.bare .prow .who2 {
+  flex: 1;
+}
+
+.rowtail {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.rowtail .btn {
+  height: 28px;
+  font-size: 13px;
+}
+
+.kico.round {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-size: 12px;
+}
+
+.kico.round .ic {
+  font-size: 15px;
+}
+
+.roster-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* A tab's footnote is a line of quiet text, under the content or, in an
+   action row, beside the button it explains. */
+.roster p.fn {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 10px 2px 0;
+}
+
+.roster-actions p.fn {
+  margin: 0;
+}
+
+/* Menu action styling */
+.menu button.danger {
+  color: var(--danger-ink);
+}
+
+/* Disabled menu items */
+.menu button[disabled],
+.menu button[aria-disabled='true'] {
+  color: var(--faint);
+  cursor: default;
+}
+
+.menu button[disabled]:hover,
+.menu button[aria-disabled='true']:hover {
+  background: transparent;
+}
+
+/* Teams list summary */
+.nav-rows .row .tail .summary {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.nav-rows .row.flat {
+  cursor: default;
+}
+
+.nav-rows .row.flat:hover {
+  background: transparent;
+}
+
+/* A group's row is the button that opens it; the row's menu sits beside that
+   button rather than inside it, so neither control nests in the other. */
+.nav-rows .rowline {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.nav-rows .rowline .row {
+  flex: 1;
+  min-width: 0;
+}
+
+.nav-rows .rowmenu {
+  display: flex;
+  flex: none;
 }
 
 .callout {
@@ -439,66 +457,6 @@ body {
 .callout .btn {
   height: 28px;
   font-size: 13px;
-}
-
-.rt.fed .hdr,
-.rt.fed .prow {
-  grid-template-columns: minmax(0, 1fr) 150px 168px 80px 150px;
-}
-
-.cellact {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.rt.items .hdr,
-.rt.items .prow {
-  grid-template-columns: minmax(0, 1fr) 118px 118px 96px 64px;
-}
-
-.vern {
-  font-size: 13px;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rt.items .prow {
-  min-height: 48px;
-}
-
-.ipath {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  font-weight: 500;
-}
-
-.ipath span {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ipath .pchip {
-  font-weight: 400;
-}
-
-.readby {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  font-size: 12.5px;
-  color: var(--muted);
-}
-
-.readby .chip {
-  font-variant-numeric: tabular-nums;
-  cursor: default;
 }
 
 .rlist {
@@ -561,6 +519,12 @@ body {
   margin-top: 6px;
 }
 
+/* Field hint */
+.group-settings .inset .fr .v .hint {
+  display: block;
+  margin: 2px 0 0;
+}
+
 .group-settings p.fn,
 .settings-main p.fn,
 .settings-main .fn {
@@ -597,6 +561,16 @@ body {
 
 .kico.invite {
   background: var(--accent);
+}
+
+/* Placeholder mark */
+.kico.neutral {
+  background: var(--chip-bg);
+  color: var(--chip-ink);
+}
+
+.kico.neutral .ic {
+  color: inherit;
 }
 
 .copybox {

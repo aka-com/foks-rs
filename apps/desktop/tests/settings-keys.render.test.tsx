@@ -150,7 +150,7 @@ test('security-key settings retain recovery guidance for a stopped account', asy
   assert.ok(rendered.getByText('Security-key access is stopped'));
   assert.ok(
     rendered.getByText(
-      'Restore account access in Server settings before changing these settings.',
+      'Restore account access in Settings › Servers before changing these settings.',
     ),
   );
   assert.equal(rendered.queryByText('No account configured'), null);

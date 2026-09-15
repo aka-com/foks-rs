@@ -1,7 +1,7 @@
 /** Full-page error and recovery view displayed when a store cannot be accessed. */
 
 import type { ReactNode } from 'react';
-import { Button, Notice } from '../components';
+import { Band, Button, Notice } from '../components';
 import {
   serverOf,
   storeDescriptionState,
@@ -102,6 +102,11 @@ export interface StoreAccessTakeoverProps {
   onFinishSetup: () => void;
   headerAction?: ReactNode;
   noHeader?: boolean;
+  /**
+   * `band` draws the message as a full-width alert with its one action at the
+   * right end, on the alert's centre line — the group page's treatment.
+   */
+  variant?: 'notice' | 'band';
 }
 
 export function StoreAccessTakeover({
@@ -111,6 +116,7 @@ export function StoreAccessTakeover({
   onFinishSetup,
   headerAction,
   noHeader = false,
+  variant = 'notice',
 }: StoreAccessTakeoverProps): ReactNode {
   const state = storeDescriptionState(snapshot, store);
   if (state === 'normal') return null;
@@ -142,13 +148,29 @@ export function StoreAccessTakeover({
         />
       )}
       <div className="body">
-        <Notice
-          severity={state === 'setup-incomplete' ? 'warn' : 'crit'}
-          title={copy.title}
-          actions={action}
-        >
-          <p>{copy.detail}</p>
-        </Notice>
+        {variant === 'band' ? (
+          // The takeover replaces the page's content, so what it says is a
+          // heading of that page; the band draws the same words as its lead-in,
+          // which is a phrase in a sentence rather than a heading.
+          <>
+            <h2 className="offscreen">{copy.title}</h2>
+            <Band
+              severity={state === 'setup-incomplete' ? 'warn' : 'crit'}
+              label={copy.title}
+              action={action}
+            >
+              {copy.detail}
+            </Band>
+          </>
+        ) : (
+          <Notice
+            severity={state === 'setup-incomplete' ? 'warn' : 'crit'}
+            title={copy.title}
+            actions={action}
+          >
+            <p>{copy.detail}</p>
+          </Notice>
+        )}
       </div>
     </>
   );

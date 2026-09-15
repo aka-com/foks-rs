@@ -554,7 +554,7 @@ function FirstRunAppSidebar({
       />
       {checkpoint.path === 'invited' && !checkpoint.added ? (
         <p className="side-note">
-          {groupName} will appear under Groups once your access is approved.
+          {groupName} will appear under Teams once your access is approved.
           FOKS checks for group access at launch. You can also click Check now.
         </p>
       ) : null}

@@ -157,29 +157,42 @@ test('the Files roots page lists the stores the rail used to enumerate', async (
   });
 });
 
-test('the chat tab opens the first team with chat and dims the rest', async () => {
+test('the chat tab opens the first team with chat and lists the rest', async () => {
   const tab = [
     ...document.querySelectorAll<HTMLButtonElement>('.side.rail .nav'),
   ].find((row) => row.querySelector('.t')?.textContent === 'Chat');
   assert.ok(tab);
   testingLibrary.fireEvent.click(tab);
-  const strip = await testingLibrary.waitFor(() => {
-    const node = document.querySelector('.team-strip');
-    assert.ok(node, 'the chat tab draws its team strip');
+  const column = await testingLibrary.waitFor(() => {
+    const node = document.querySelector('.chat-inbox');
+    assert.ok(node, 'the chat tab draws its team column');
     return node;
   });
-  const chips = [...strip.querySelectorAll<HTMLButtonElement>('.chipbtn')];
-  const engineering = chips.find(
-    (chip) => chip.getAttribute('aria-label') === 'Engineering chat',
+  const rows = [...column.querySelectorAll<HTMLElement>('.chat-team-head')];
+  const name = (row: HTMLElement) => row.querySelector('b')?.textContent;
+  const household = rows.find((row) => name(row) === 'Household');
+  const engineering = rows.find((row) => name(row) === 'Engineering');
+  assert.ok(household, 'a team whose server offers chat is a heading');
+  assert.ok(engineering, 'a team whose server offers no chat is still listed');
+  // `chat` with no team resolves to the first team that has one, and that team
+  // is the open one.
+  assert.equal(household.getAttribute('aria-current'), 'true');
+  // Chat follows the server capability grant, as the rail's chat rows did:
+  // Engineering's server offers none, so it sits under "No chat", dimmed and
+  // not selectable.
+  assert.ok(engineering.classList.contains('off'));
+  assert.equal(engineering.getAttribute('role'), null);
+  assert.ok(
+    [...column.querySelectorAll('.sec')].some(
+      (label) => label.textContent === 'No chat',
+    ),
+    'the No chat group names itself',
   );
-  const household = chips.find(
-    (chip) => chip.getAttribute('aria-label') === 'Household chat',
-  );
-  // Chat follows the server capability grant, as the rail's chat rows did.
-  assert.equal(engineering?.disabled, true);
-  assert.equal(household?.disabled, false);
-  // `chat` with no team resolves to the first team that has one.
-  assert.ok(household?.classList.contains('on'));
+  // The location remembers the team the tab chose.
+  await testingLibrary.waitFor(() => {
+    assert.match(window.location.search, /state=chat&?/);
+    assert.match(window.location.search, /store=team%3Ahousehold/);
+  });
 });
 
 test('renders navigation icons as SVG elements', () => {

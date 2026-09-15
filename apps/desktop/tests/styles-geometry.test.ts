@@ -44,7 +44,7 @@ test('the shared tokens come from the kit and are not re-declared here', async (
 
   const kitTokens = rootTokens(kit);
   const shellTokens = rootTokens(shell);
-  assert.equal(kitTokens.size, 41, 'expected exactly 41 shared kit tokens');
+  assert.equal(kitTokens.size, 42, 'expected exactly 42 shared kit tokens');
 
   for (const name of shellTokens.keys()) {
     assert.equal(
@@ -238,18 +238,11 @@ test('app stylesheet uses design tokens and declares no hardcoded colors', async
     /\.first-run-main \.account-form \.fr input\s*\{[^}]*align-self: stretch;[^}]*width: 100%;[^}]*padding: 0 14px;/,
   );
   assert.match(app, /\.app-lock-card p\s*\{[^}]*margin-bottom: 20px;/);
-  assert.match(
-    app,
-    /\.rt \.hdr,\s*\.rt \.prow\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) 168px 36px/,
-  );
-  assert.match(
-    app,
-    /\.rt\.fed \.hdr,\s*\.rt\.fed \.prow\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) 150px 168px 80px 150px/,
-  );
-  assert.match(
-    app,
-    /\.rt\.items \.hdr,\s*\.rt\.items \.prow\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) 118px 118px 96px 64px/,
-  );
+  // A roster table is a list of flex rows, not a grid with a header row: no
+  // column template, and no `.hdr` rule, survives for `.rt`.
+  assert.match(app, /\.rt\.bare \.prow\s*\{[^}]*display: flex;/);
+  assert.doesNotMatch(app, /\.rt[^{,]*\.hdr/);
+  assert.doesNotMatch(app, /\.rt[^{]*\{[^}]*grid-template-columns/);
   assert.match(app, /\.tab\.on::after/);
   assert.match(app, /\.inset\.danger\s*\{[^}]*overflow: visible/);
 });

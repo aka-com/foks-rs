@@ -1,7 +1,7 @@
 import { MessageText } from './message-text';
 import type { Bridge } from '../bridge';
 import { Fragment, useId } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 import { Band, Button, Chip, Icon } from '../components';
 import type { ChatAction, ChatChannel, ChatReply } from '../chat-contract';
 import { shortId } from '../model';
@@ -19,12 +19,18 @@ import {
 } from './presentation';
 export function ChatThread({
   channel,
+  teamName,
+  onFiles,
+  onInfo,
+  infoOpen = false,
+  infoRef,
   bridge,
   storeId,
   actor,
   senderNames,
   request,
   refreshPending,
+  refreshInbox,
   revision,
   readThrough,
   markRead,
@@ -38,11 +44,22 @@ export function ChatThread({
   history: import('./conversation-model').HistoryWindow | null;
   blockHistory: (channel: string) => void;
   channel: ChatChannel;
+  /** The team the conversation header names before the channel. */
+  teamName?: string;
+  /** Opens the team's files; the header's folder button. */
+  onFiles?: () => void;
+  /** Opens the channel info panel; the header's ⓘ button. */
+  onInfo?: () => void;
+  infoOpen?: boolean;
+  /** The caller's handle on the ⓘ, so closing the panel can focus it again. */
+  infoRef?: Ref<HTMLButtonElement>;
   pending: import('./operations').TrackedOperation[];
   actor: string | null;
   senderNames: Map<string, string>;
   request: (a: ChatAction) => Promise<ChatReply>;
   refreshPending: () => Promise<void>;
+  /** Re-lists the team's channels and saved work; the header's Refresh. */
+  refreshInbox: () => Promise<void>;
   revision: number;
   readThrough: string | null;
   markRead: (channel: string, sequence: string) => Promise<void>;
@@ -96,23 +113,60 @@ export function ChatThread({
     <>
       <div className="chat-thread-header">
         <div className="chat-thread-title">
-          <h2>{title}</h2>
-          {channel.description && <p>{channel.description}</p>}
-          <small>{accessSummary(channel)}</small>
+          <h2>
+            {teamName && (
+              <>
+                <span className="team">{teamName}</span>
+                {/* The separator is markup, not a CSS pseudo-element, so the
+                    accessible name is "Team · #channel". */}
+                <span className="sep" aria-hidden="true">
+                  {' · '}
+                </span>
+              </>
+            )}
+            {title}
+          </h2>
+          <p>
+            {channel.description && <span>{channel.description}</span>}
+            {channel.description ? ' · ' : ''}
+            <span className="chat-access">{accessSummary(channel)}</span>
+          </p>
         </div>
         {channel.admin && <Chip>Admins</Chip>}
         {!channel.readable && <Chip tone="warn">Restricted</Chip>}
         <Button
-          size="sm"
+          variant="quiet"
           icon="again"
+          aria-label="Refresh messages"
+          title="Refresh this conversation and the channel list"
           disabled={busy}
           onClick={() => {
             void load();
-            void refreshPending().catch((e) => setError(failure(e)));
+            // One refresh: this history, the team's channels, and the saved
+            // work the conversation is recovering.
+            void refreshInbox().catch((e) => setError(failure(e)));
           }}
-        >
-          Refresh messages
-        </Button>
+        />
+        {onFiles && (
+          <Button
+            variant="quiet"
+            icon="folder"
+            aria-label="Team files"
+            title="Team files"
+            onClick={onFiles}
+          />
+        )}
+        {onInfo && (
+          <Button
+            variant="quiet"
+            icon="info"
+            aria-label="Channel info"
+            title="Channel info"
+            on={infoOpen}
+            ref={infoRef}
+            onClick={onInfo}
+          />
+        )}
       </div>
       {!channel.readable ? (
         <div className="empty">

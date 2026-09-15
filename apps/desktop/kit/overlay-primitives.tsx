@@ -301,10 +301,13 @@ function RovingCollection({
 } & HTMLAttributes<HTMLDivElement>): ReactNode {
   const { dialogs } = useOverlayEnvironment();
   const collectionRef = useRef<HTMLDivElement>(null);
+  // A menu keeps the items that do not apply in its keyboard order: they are
+  // marked `aria-disabled` and do nothing, but arrowing onto one is how their
+  // reason gets read out. A listbox still skips its unavailable options, and a
+  // natively `disabled` control cannot hold focus in either.
   const itemSelector =
     kind === 'menu'
-      ? '[role="menuitem"]:not(button):not([aria-disabled="true"]), ' +
-        'button:not([disabled]):not([aria-disabled="true"])'
+      ? '[role="menuitem"]:not(button), button:not([disabled])'
       : '[role="option"]:not([aria-disabled="true"])';
 
   const [focusTarget, setFocusTarget] = useState<HTMLElement | null>(null);

@@ -30,12 +30,14 @@ export type RailTab =
 export type Location =
   | { kind: 'all' }
   | { kind: 'store'; ref: StoreRef }
-  | { kind: 'team-chat'; ref: StoreRef; channel?: string }
   | { kind: 'group-settings'; ref: StoreRef; tab?: GroupSettingsTab }
   /** People: the attention list, then the accounts on this Mac. */
   | { kind: 'people'; store?: StoreRef }
-  /** Chat with no team chosen. The tab picks the first team that has chat. */
-  | { kind: 'chat' }
+  /**
+   * Chat. `ref` is the team whose inbox is mounted and `channel` the open
+   * conversation; with no `ref` the tab picks the first team that has chat.
+   */
+  | { kind: 'chat'; ref?: StoreRef; channel?: string }
   /** The Files roots page: All items, then vaults, groups and shares. */
   | { kind: 'files' }
   /**
@@ -62,7 +64,6 @@ export function railTabOf(location: Location): RailTab | null {
     case 'people':
       return 'people';
     case 'chat':
-    case 'team-chat':
       return 'chat';
     case 'files':
     case 'all':
@@ -78,6 +79,29 @@ export function railTabOf(location: Location): RailTab | null {
     case 'first-run':
       return null;
   }
+}
+
+/** The chat location the Chat tab last opened, for the rail's Chat tab. */
+let openedChat: Extract<Location, { kind: 'chat' }> | null = null;
+
+/**
+ * Where the rail's Chat tab goes: the team and channel the tab last had open,
+ * so returning to Chat does not re-run the first-team fallback. The Chat tab
+ * itself is the only writer, and it forgets a team that stopped having chat.
+ */
+export function chatTabLocation(): Location {
+  return openedChat ?? { kind: 'chat' };
+}
+
+export function rememberChatLocation(
+  location: Extract<Location, { kind: 'chat' }> | null,
+): void {
+  openedChat = location?.ref ? location : null;
+}
+
+/** The remembered team, for the writer deciding whether the memory still holds. */
+export function rememberedChatRef(): StoreRef | undefined {
+  return openedChat?.ref;
 }
 
 /** The item the details panel is showing, or nothing. */
@@ -139,7 +163,7 @@ export type LocationAction =
 export function sameLocation(a: Location, b: Location): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === 'store' && b.kind === 'store') return a.ref === b.ref;
-  if (a.kind === 'team-chat' && b.kind === 'team-chat')
+  if (a.kind === 'chat' && b.kind === 'chat')
     return a.ref === b.ref && a.channel === b.channel;
   if (a.kind === 'group-settings' && b.kind === 'group-settings')
     return a.ref === b.ref && a.tab === b.tab;
@@ -178,8 +202,7 @@ export function transition(
             folder: '',
             closedFolders: [],
             query:
-              action.location.kind === 'team-chat' ||
-              state.location.kind === 'team-chat'
+              action.location.kind === 'chat' || state.location.kind === 'chat'
                 ? ''
                 : state.query,
           };
@@ -355,12 +378,12 @@ export function encodeLocation(location: Location): {
         state: 'store',
         params: { ...CLEARED_PARAMS, store: location.ref },
       };
-    case 'team-chat':
+    case 'chat':
       return {
-        state: 'team-chat',
+        state: 'chat',
         params: {
           ...CLEARED_PARAMS,
-          store: location.ref,
+          store: location.ref ?? null,
           channel: location.channel ?? null,
         },
       };
@@ -476,12 +499,19 @@ export function decodeLocation(search: string): Location | null {
     const ref = params.get('store');
     return ref ? { kind: 'store', ref } : null;
   }
-  if (state === 'team-chat') {
-    const ref = params.get('store');
+  // `team-chat` was the chat location before the team column; it is the same
+  // place, with the team named by `store`.
+  if (state === 'chat' || state === 'team-chat') {
+    const ref = params.get('store') ?? undefined;
     const channel = params.get('channel');
-    if (!ref || (channel !== null && !/^[0-9a-f]{32}$/.test(channel)))
-      return null;
-    return { kind: 'team-chat', ref, ...(channel ? { channel } : {}) };
+    if (channel !== null && !/^[0-9a-f]{32}$/.test(channel)) return null;
+    if (state === 'team-chat' && !ref) return null;
+    return {
+      kind: 'chat',
+      // A channel belongs to the team that names it: with no team the tab
+      // resolves one, and that team's channels are not this identifier.
+      ...(ref ? { ref, ...(channel ? { channel } : {}) } : {}),
+    };
   }
   if (state === 'group-settings') {
     const ref = params.get('store');
@@ -502,7 +532,6 @@ export function decodeLocation(search: string): Location | null {
     const store = params.get('store') ?? undefined;
     return { kind: 'people', ...(store ? { store } : {}) };
   }
-  if (state === 'chat') return { kind: 'chat' };
   if (state === 'files') return { kind: 'files' };
   if (state === 'teams') {
     const store = params.get('store') ?? undefined;

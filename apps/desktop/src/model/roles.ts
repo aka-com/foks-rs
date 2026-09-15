@@ -79,3 +79,18 @@ export function formatRole(role: Role): string {
       return `Member · visibility ${visibilityOf(role)}`;
   }
 }
+
+/** The role's bare name, with no visibility band: what a row's chip says. */
+export function roleName(role: Role): string {
+  return role.kind === 'member' ? 'Member' : formatRole(role);
+}
+
+/**
+ * The role as a member row's chip reads it. The visibility band rides inside
+ * the chip — "Member (0)" — so a row stays one line of role.
+ */
+export function roleChipLabel(role: Role): string {
+  return role.kind === 'member'
+    ? `Member (${visibilityOf(role)})`
+    : formatRole(role);
+}

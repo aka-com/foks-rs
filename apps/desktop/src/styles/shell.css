@@ -90,8 +90,6 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.is-narrow.is-pinned:not(:focus-within) .nav>.badge,
 .side.is-narrow:not(:hover):not(:focus-within) .nav>.chat-unread,
 .side.is-narrow.is-pinned:not(:focus-within) .nav>.chat-unread{position:absolute;top:calc(50% - 8.5px);left:calc(50% + 9px);right:auto;transform:translate(-50%,-50%);width:7px;min-width:0;height:7px;padding:0;border-radius:var(--radius-pill);font-size:0;line-height:0;overflow:hidden;margin:0;box-shadow:0 0 0 1.5px var(--surface)}
-.side.is-narrow:not(:hover):not(:focus-within) .nav>.chat-unread,
-.side.is-narrow.is-pinned:not(:focus-within) .nav>.chat-unread{background:var(--accent)}
 .side.is-narrow:not(:hover):not(:focus-within) .nav.on>.badge,
 .side.is-narrow.is-pinned:not(:focus-within) .nav.on>.badge{box-shadow:0 0 0 1.5px var(--accent-wash-2)}
 .side.is-narrow:not(:hover):not(:focus-within) .nav .dot,
@@ -122,7 +120,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
    and the collapse machinery above is shared. The rail is 200px open and
    `--side-w` (56px) collapsed. */
 .app:has(>.side.rail){--side-w-open:200px}
-.side.rail{--rail-badge:#ff6f21;background:var(--rail);border-right-color:rgba(0,0,0,.12);color:var(--rail-ink);padding:0;overflow-x:hidden;overflow-y:auto;user-select:none}
+.side.rail{--rail-badge:var(--unread);background:var(--rail);border-right-color:rgba(0,0,0,.12);color:var(--rail-ink);padding:0;overflow-x:hidden;overflow-y:auto;user-select:none}
 .side.rail .nav{color:var(--rail-ink);border-radius:0;border-left:3px solid transparent;padding:10px 16px 10px 13px;gap:12px;font-weight:500}
 .side.rail .nav:hover{background:rgba(255,255,255,.08);color:#fff}
 .side.rail .nav.on{background:var(--rail-active);border-left-color:#fff;color:#fff;font-weight:600}
@@ -224,6 +222,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .btn.primary.danger:hover{background:var(--danger-text);border-color:color-mix(in srgb,var(--danger-text) 70%,#fff);color:#fff}
 .btn.primary.danger[disabled]:hover{background:var(--danger-ink);border-color:color-mix(in srgb,var(--danger-ink) 58%,#fff);color:#fff}
 .btn[disabled]{opacity:.5;cursor:default;box-shadow:none}.btn[disabled]:hover{background:var(--btn-bg)}.btn.primary[disabled]:hover{background:var(--accent)}
+/* Disabled button */
+.btn[aria-disabled='true']{opacity:.5;cursor:default;box-shadow:none}.btn[aria-disabled='true']:hover{background:var(--btn-bg)}
 .btn .ic{font-size:16px}
 .btn .ic.chevron{font-size:14px}
 .btn.icon{width:32px;padding:0;justify-content:center;color:var(--ink-3)}
@@ -246,6 +246,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .menu button.kind-menu-item{padding-block:4px}
 .menu button .ic{font-size:16px;width:18px}.menu button kbd{margin-left:auto;font:11px var(--sans);color:var(--faint)}
 .menu button .kic{width:24px;height:24px;font-size:14px}
+/* Icon column placeholder */
+.menu:not(.rail-account-menu):has(>button>.ic) button:not(:has(>.ic))::before{content:"";width:18px;flex:none}
 .menu button.on{background:var(--accent-wash);color:var(--accent-ink);font-weight:600}
 .toolbar .sortwrap>.btn{padding:0 6px 0 9px;gap:2px}
 .toolbar .sortwrap>.btn>.ic{font-size:16px}
@@ -346,13 +348,19 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .notice.info .who{color:var(--muted)}
 .notice.stop{border-color:var(--danger-border);background:var(--danger-wash)}
 .notice.stop .who{color:var(--danger-ink)}
-.band{display:flex;align-items:flex-start;gap:8px;padding:8px 12px;border-radius:var(--radius-md);background:var(--amber-wash);border:1px solid var(--amber-border);color:var(--amber-ink);font-size:12.5px;line-height:1.45}
-.band b{font-weight:700;white-space:nowrap}
+/* The icon, the text and the action are one line of three parts: when the text
+   wraps the icon and the text centre against the button rather than the button
+   floating beside a first line the icon has already left behind. */
+.band{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--radius-md);background:var(--amber-wash);border:1px solid var(--amber-border);color:var(--amber-ink);font-size:12.5px;line-height:1.45}
+/* Band heading */
+.band b,.band h2{display:inline;font-size:inherit;font-weight:700;white-space:nowrap}
+/* Screen reader only */
+.offscreen{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .band .ic{flex:none;margin-top:1px}
 .band.stop{background:var(--danger-wash);border-color:var(--danger-border);color:var(--danger-text)}
-.band.stop b{color:var(--danger-ink);white-space:normal}
+.band.stop b,.band.stop h2{color:var(--danger-ink);white-space:normal}
 .band.ok{background:var(--ok-wash);border-color:var(--ok-border);color:var(--ok-ink)}
-.band.ok b{color:var(--ok-ink);white-space:normal}
+.band.ok b,.band.ok h2{color:var(--ok-ink);white-space:normal}
 /* Settings band spacing */
 .settings-main>.band{margin:2px 0 4px}
 .settings-main>.settings-inset+.band{margin-top:6px}
@@ -511,7 +519,7 @@ details.dd li b{color:var(--ink-2)}
 .sheet .hd .t{flex:1;min-width:0}.sheet .hd small{display:block;font-size:12.5px;color:var(--muted)}
 .sheet h2{font-size:16px;font-weight:650;letter-spacing:-.01em}
 .sheet p{color:var(--ink-3);font-size:13.5px;margin-bottom:8px}.sheet .fn{font-size:12.5px;color:var(--muted)}
-.sheet .ft{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;align-items:center;flex:none}
+.sheet .ft{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:14px;align-items:center;flex:none}
 .sheet .ft .spacer{flex:1}
 .sheet .btn.primary.danger{background:var(--danger-ink);color:#fff;border-color:transparent}
 .sheet .band{margin-top:10px}
@@ -542,6 +550,9 @@ details.dd li b{color:var(--ink-2)}
 .radio.off{opacity:.5;cursor:default}.radio.off:hover{background:none}
 .radio.store-choice{width:100%;align-items:center}
 .vis{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:8px;font-size:12px;color:var(--ink-2)}
+.sheet .visibility-inset{margin-top:10px}
+/* Stepper value */
+.vis-value{min-width:96px;text-align:center;font-size:12px;font-weight:600;color:var(--ink-2)}
 .hint,.sheet .hint{font-size:12px;color:var(--muted);margin:8px 2px 0;line-height:1.45}
 
 /* Server settings section */
@@ -630,19 +641,6 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;margi
    being centred and line up with the section under them. */
 .people-attention .cards{max-width:none;margin:0;padding-top:2px}
 
-/* ---------- the chat tab's team strip ----------
-   The per-group chat rows the rail used to carry, flattened into one strip so
-   Chat can be a tab. */
-.team-strip{display:flex;align-items:center;gap:6px;padding:8px 20px;border-bottom:1px solid var(--line-soft);flex:none;overflow-x:auto}
-.team-strip .chipbtn{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 11px;border:1px solid var(--line-mid);border-radius:var(--radius-pill);background:var(--btn-bg);font-size:12.5px;font-weight:500;white-space:nowrap}
-.team-strip .chipbtn:hover{background:var(--btn-hover)}
-.team-strip .chipbtn.on{background:var(--accent-wash-2);border-color:var(--accent-border);color:var(--accent-ink);font-weight:600}
-.team-strip .chipbtn[disabled]{opacity:.5;cursor:default}
-.team-strip .chipbtn[disabled]:hover{background:var(--btn-bg)}
-.team-strip .chipbtn .sq{width:14px;height:14px;border-radius:4px;flex:none}
-.team-strip .chipbtn .n{min-width:16px;height:16px;padding:0 5px;border-radius:var(--radius-pill);background:#ff6f21;color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center}
-.chat-tab{flex:1;min-height:0;display:flex;flex-direction:column}
-.chat-tab-empty{padding:40px 20px}
 
 /* ---------- toasts ----------
    `apps/desktop/kit/toasts.tsx` owns the behaviour — auto-dismiss, dedupe, a cap on how

@@ -137,6 +137,25 @@ test('sameLocation compares full location properties', () => {
     false,
   );
   assert.equal(sameLocation({ kind: 'chat' }, { kind: 'chat' }), true);
+  // The chat location carries the open team and channel.
+  assert.equal(
+    sameLocation({ kind: 'chat' }, { kind: 'chat', ref: 'team:eng' }),
+    false,
+  );
+  assert.equal(
+    sameLocation(
+      { kind: 'chat', ref: 'team:eng', channel: 'ab'.repeat(16) },
+      { kind: 'chat', ref: 'team:eng', channel: 'ab'.repeat(16) },
+    ),
+    true,
+  );
+  assert.equal(
+    sameLocation(
+      { kind: 'chat', ref: 'team:eng' },
+      { kind: 'chat', ref: 'team:household' },
+    ),
+    false,
+  );
   assert.equal(sameLocation({ kind: 'files' }, { kind: 'teams' }), false);
   // Teams names the account it creates and discovers groups as.
   assert.equal(
@@ -155,7 +174,7 @@ test('sameLocation compares full location properties', () => {
 test('railTabOf names the tab a location belongs to', () => {
   assert.equal(railTabOf({ kind: 'people' }), 'people');
   assert.equal(railTabOf({ kind: 'chat' }), 'chat');
-  assert.equal(railTabOf({ kind: 'team-chat', ref: 'team:eng' }), 'chat');
+  assert.equal(railTabOf({ kind: 'chat', ref: 'team:eng' }), 'chat');
   assert.equal(railTabOf({ kind: 'files' }), 'files');
   assert.equal(railTabOf({ kind: 'all' }), 'files');
   assert.equal(railTabOf({ kind: 'store', ref: 'acct:personal' }), 'files');
@@ -176,6 +195,8 @@ const ROUND_TRIP: Location[] = [
   { kind: 'people' },
   { kind: 'people', store: 'acct:work' },
   { kind: 'chat' },
+  { kind: 'chat', ref: 'team:eng' },
+  { kind: 'chat', ref: 'team:eng', channel: 'ab'.repeat(16) },
   { kind: 'files' },
   { kind: 'teams' },
   { kind: 'teams', store: 'acct:work' },
@@ -309,6 +330,25 @@ test('the aliases for retired pages point at the tabs that replaced them', () =>
   assert.deepEqual(decodeLocation('?state=settings-account&store=acct:work'), {
     kind: 'people',
     store: 'acct:work',
+  });
+  // `team-chat` was the chat location before the team column named the team
+  // on `chat` itself. Its deep links keep working.
+  assert.deepEqual(decodeLocation('?state=team-chat&store=team:eng'), {
+    kind: 'chat',
+    ref: 'team:eng',
+  });
+  assert.deepEqual(
+    decodeLocation(`?state=team-chat&store=team:eng&channel=${'ab'.repeat(16)}`),
+    { kind: 'chat', ref: 'team:eng', channel: 'ab'.repeat(16) },
+  );
+  // A team-chat link with no team named no place at all.
+  assert.equal(decodeLocation('?state=team-chat'), null);
+  // A channel that is not a channel identity is rejected on either name.
+  assert.equal(decodeLocation('?state=chat&store=team:eng&channel=zz'), null);
+  // A channel belongs to the team that names it: with no team the tab resolves
+  // one, whose channels this identifier is not.
+  assert.deepEqual(decodeLocation(`?state=chat&channel=${'ab'.repeat(16)}`), {
+    kind: 'chat',
   });
 });
 

@@ -35,7 +35,7 @@ test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
 
 /** The pane under test, and the tab whose body now carries it. */
-type Pane = 'account' | 'macs' | 'keys' | 'servers' | 'groups' | 'about';
+type Pane = 'account' | 'macs' | 'keys' | 'servers' | 'about';
 
 async function renderSettings(
   pane: Pane,
@@ -60,27 +60,23 @@ async function renderSettings(
   const variant =
     pane === 'account'
       ? ('people' as const)
-      : pane === 'groups'
-        ? ('teams' as const)
-        : pane === 'macs' || pane === 'keys'
-          ? ('devices' as const)
-          : ('settings' as const);
+      : pane === 'macs' || pane === 'keys'
+        ? ('devices' as const)
+        : ('settings' as const);
   const location: Location =
     variant === 'people'
       ? { kind: 'people', store: 'acct:personal' }
-      : variant === 'teams'
-        ? { kind: 'teams' }
-        : variant === 'devices'
-          ? {
-              kind: 'devices',
-              section: pane as 'macs' | 'keys',
-              store: 'acct:personal',
-            }
-          : {
-              kind: 'settings',
-              section: pane as 'servers' | 'about',
-              store: 'acct:personal',
-            };
+      : variant === 'devices'
+        ? {
+            kind: 'devices',
+            section: pane as 'macs' | 'keys',
+            store: 'acct:personal',
+          }
+        : {
+            kind: 'settings',
+            section: pane as 'servers' | 'about',
+            store: 'acct:personal',
+          };
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   const rendered = ui.render(

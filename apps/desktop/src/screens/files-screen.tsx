@@ -2,9 +2,9 @@
  * The Files tab's roots page: All items, then the vaults, groups and shares on
  * this Mac.
  *
- * The rows carry the data the rail used to carry — the store mark and its hue,
- * the description as a caption when it is not the normal state, and the issue
- * dot and dimming that go with it.
+ * The rows carry the data the rail used to carry — a vault's mark and hue, a
+ * group's own mark, the description as a caption when it is not the normal
+ * state, and the issue dot and dimming that go with it.
  */
 
 import type { ReactNode } from 'react';
@@ -18,6 +18,7 @@ import {
 import type { AgentSnapshot, Store } from '../model';
 import type { Location } from '../location';
 import { PageHeader } from '../shell/page-header';
+import { GroupMark } from './groups-screen';
 
 export interface FilesScreenProps {
   snapshot: AgentSnapshot;
@@ -33,6 +34,7 @@ function StoreRow({
 }: {
   snapshot: AgentSnapshot;
   store: Store;
+  /** The vault hue. A group carries its own mark, which needs none. */
   hue?: string;
   onOpen: () => void;
 }): ReactNode {
@@ -57,9 +59,15 @@ function StoreRow({
       title={description || undefined}
       onClick={onOpen}
     >
-      <span className="kic" style={{ background: hue, color: '#fff' }}>
-        <Icon name={store.kind === 'account' ? 'vault' : 'people'} />
-      </span>
+      {store.kind === 'account' ? (
+        <span className="kic" style={{ background: hue, color: '#fff' }}>
+          <Icon name="vault" />
+        </span>
+      ) : (
+        // One group, one mark: the row here, the Teams row and the group's own
+        // page draw the same initial over the same colour.
+        <GroupMark store={store} size="sm" />
+      )}
       <span className="name">
         <span className="tt">
           <span>{store.name}</span>
@@ -92,7 +100,7 @@ export function FilesScreen({
         key={store.id}
         snapshot={snapshot}
         store={store}
-        hue={hues.get(store.id)}
+        hue={store.kind === 'account' ? hues.get(store.id) : undefined}
         onOpen={() => onNavigate({ kind: 'store', ref: store.id })}
       />
     ));

@@ -22,6 +22,8 @@ export interface PanelSheetProps {
   presentation: PanelPresentation;
   /** True while a bridge write is in flight; blocks dismissal. */
   busy?: boolean;
+  /** The mark beside the title. The account panels' gear, by default. */
+  glyph?: ReactNode;
   /** The sheet's actions. Primary action last. */
   footer: ReactNode;
   children: ReactNode;
@@ -30,6 +32,7 @@ export interface PanelSheetProps {
 export function PanelSheet({
   presentation,
   busy = false,
+  glyph,
   footer,
   children,
 }: PanelSheetProps): ReactNode {
@@ -42,9 +45,11 @@ export function PanelSheet({
       onClose={presentation.onClose}
       footer={footer}
       glyph={
-        <span className="server-mark">
-          <Icon name="gear" />
-        </span>
+        glyph ?? (
+          <span className="server-mark">
+            <Icon name="gear" />
+          </span>
+        )
       }
     >
       <div className="panel-body">{children}</div>

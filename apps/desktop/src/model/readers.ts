@@ -5,6 +5,7 @@
  * do not have member rosters.
  */
 
+import { plural } from './format';
 import { admits, parseRole, roleRank, visibilityOf } from './roles';
 import type { Item, Party, Store, StoreRef, AgentSnapshot } from './types';
 
@@ -116,13 +117,29 @@ export function peopleLabel(count: number): string {
 }
 
 /**
- * Formats a summary string of member users and federated groups
- * (e.g., "5 people · 1 group" or "2 people").
+ * A machine is an ordinary party: the agent only marks it with a free-text
+ * note, so the note is what this reads.
+ */
+export function isMachine(party: Party): boolean {
+  return (
+    party.party_kind === 'user' &&
+    Boolean(party.note?.toLowerCase().includes('service account'))
+  );
+}
+
+/**
+ * A roster as a summary line reads it: the people, then the machines, then the
+ * groups admitted from other servers — the same three sub-sections the group
+ * page draws, so a list row and the page it opens agree ("4 people · 1 machine
+ * · 1 group").
  */
 export function peopleGroups(parties: readonly Party[]): string {
-  const groups = parties.filter((p) => p.party_kind !== 'user').length;
-  const people = parties.length - groups;
-  const head = peopleLabel(people);
-  if (!groups) return head;
-  return `${head} · ${groups} ${groups === 1 ? 'group' : 'groups'}`;
+  const groups = parties.filter((party) => party.party_kind !== 'user').length;
+  const machines = parties.filter((party) => isMachine(party)).length;
+  const people = parties.length - groups - machines;
+  return [
+    peopleLabel(people),
+    ...(machines ? [plural(machines, 'machine')] : []),
+    ...(groups ? [plural(groups, 'group')] : []),
+  ].join(' · ');
 }

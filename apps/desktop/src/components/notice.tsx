@@ -49,13 +49,19 @@ export function Notice({
 }
 
 export interface BandProps {
-  /** Optional bold prefix such as "Deferred" or "Proposed". The mock group
-   *  band omits it and uses a complete sentence. */
+  /** The band's heading, such as "Roster unavailable". The mock group band
+   *  omits it and uses a complete sentence. */
   label?: string;
   /** Tooltip describing what is deferred. */
   title?: string;
   /** `warn` is the amber default; `info` the quiet band; `crit` the danger treatment. */
   severity?: Severity;
+  /**
+   * Announce the band, for one mounted in response to an action. A band the
+   * page always draws is left silent: it would otherwise speak on every mount,
+   * saying a condition the reader did not act on.
+   */
+  live?: boolean;
   /** Optional control associated with the band's message, displayed at the right edge. */
   action?: ReactNode;
   children: ReactNode;
@@ -65,9 +71,20 @@ export function Band({
   label,
   title,
   severity = 'warn',
+  live = false,
   action,
   children,
 }: BandProps): ReactNode {
+  // A band mounted in response to an action is announced — a critical one
+  // interrupts, the rest are polite. One the page always draws is a labelled
+  // group instead, reachable by its label without announcing itself.
+  const role = live
+    ? severity === 'crit'
+      ? 'alert'
+      : 'status'
+    : label
+      ? 'group'
+      : undefined;
   return (
     <div
       className={
@@ -77,10 +94,16 @@ export function Band({
             ? 'band info'
             : 'band'
       }
+      role={role}
+      // The label names the group; a live band already reads its own text, so
+      // naming it again would say the label twice.
+      aria-label={role === 'group' ? label : undefined}
       title={title}
     >
       <Icon name={severity === 'info' ? 'info' : 'alert'} />
       <span className="t">
+        {/* A heading cannot nest in this line; the label is the bold lead-in
+            it has always been drawn as. */}
         {label ? <b>{label}</b> : null}
         {label ? ' ' : null}
         {children}

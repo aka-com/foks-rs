@@ -9,6 +9,7 @@ import type {
 import {
   Button,
   CopyBox,
+  Icon,
   Inset,
   InsetRow,
   PanelSheet,
@@ -413,6 +414,13 @@ export function InvitationPanel({
       <PanelSheet
         presentation={presentation}
         busy={busy}
+        // Joining is a membership workflow, not a setting: the mark says
+        // people, not the account panels' gear.
+        glyph={
+          <span className="kico invite">
+            <Icon name="people" />
+          </span>
+        }
         footer={
           <>
             <Button disabled={busy} onClick={presentation.onClose}>

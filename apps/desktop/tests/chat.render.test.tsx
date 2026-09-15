@@ -31,15 +31,15 @@ async function setup(
   showChat = true,
   navigate = false,
 ) {
-  const { ChatTeamStrip } = await vite.ssrLoadModule(
-    '/src/screens/chat-tab.tsx',
+  const { ChatTeamColumn } = await vite.ssrLoadModule(
+    '/src/screens/chat-teams.tsx',
   );
   const { ChatInboxProvider } = await vite.ssrLoadModule(
     '/src/chat/inbox-provider.tsx',
   );
-  const { ChatScreen } = await vite.ssrLoadModule(
-    '/src/screens/chat-screen.tsx',
-  );
+  // The tab is what the shell renders: the team column and, beside it, the
+  // conversation of the team the location names.
+  const { ChatTab } = await vite.ssrLoadModule('/src/screens/chat-tab.tsx');
   const { OverlayProvider } = (await vite.ssrLoadModule(
     '/kit/overlay-primitives.tsx',
   )) as typeof import('../kit/overlay-primitives');
@@ -68,7 +68,7 @@ async function setup(
   function Host() {
     const [visible, setVisible] = useState(showChat);
     const [location, setLocation] = useState<Location>({
-      kind: 'team-chat',
+      kind: 'chat',
       ref: 'team:eng',
     });
     return createElement(
@@ -81,7 +81,7 @@ async function setup(
           bridge,
           snapshot: enabledSnapshot,
           children: visible
-            ? createElement(ChatScreen, {
+            ? createElement(ChatTab, {
                 snapshot: enabledSnapshot,
                 bridge,
                 location,
@@ -90,16 +90,21 @@ async function setup(
                   if (navigate) setLocation(next);
                 },
               })
-            : // The rail no longer lists chats; the Chat tab's team strip does,
-              // and it carries the unread counts the inbox publishes.
-              createElement(ChatTeamStrip, {
+            : // The rail no longer lists chats; the Chat tab's team column
+              // does, and it carries the unread counts the inbox publishes for
+              // teams whose conversation is not mounted.
+              createElement(ChatTeamColumn, {
                 snapshot: enabledSnapshot,
-                onSelect: (ref: string) => {
-                  const next: Location = { kind: 'team-chat', ref };
+                onSelectTeam: (ref: string) => {
+                  const next: Location = { kind: 'chat', ref };
                   onNavigate(next);
                   setLocation(next);
                   setVisible(true);
                 },
+                onOpenChannel: () => {},
+                onNewChannel: () => {},
+                onSettings: () => {},
+                onCreateTeam: () => {},
               }),
         }),
       }),
@@ -108,6 +113,16 @@ async function setup(
   const rendered = ui.render(createElement(Host));
   if (waitForHistory) await ui.screen.findByText('Team chat is ready.');
   return rendered;
+}
+/** A team row's unread badge: the count belongs to the row that names the team. */
+async function teamBadge(team: string): Promise<HTMLElement> {
+  return ui.waitFor(() => {
+    const badge = [...document.querySelectorAll<HTMLElement>('.chat-team-head')]
+      .find((row) => row.querySelector('b')?.textContent === team)
+      ?.querySelector<HTMLElement>('.chat-unread');
+    assert.ok(badge, `${team} carries an unread badge`);
+    return badge;
+  });
 }
 function openChannelSheet() {
   ui.fireEvent.click(
@@ -200,7 +215,17 @@ test('conversation inbox wakes, refreshes history, and shows unread state', asyn
     });
     await ui.screen.findByText('Arrived through live sync');
     assert.ok(polls > 0);
-    assert.ok(ui.screen.getByLabelText('1 unread'));
+    // The team and the channel each carry the count, and each names only the
+    // count: the row they sit in says which team or channel it belongs to.
+    assert.equal(
+      (await teamBadge('Engineering')).getAttribute('aria-label'),
+      '1 unread',
+    );
+    assert.ok(
+      document
+        .querySelector('.chat-channel')
+        ?.querySelector('.chat-unread[aria-label="1 unread"]'),
+    );
   } finally {
     Object.defineProperty(document, 'hasFocus', {
       configurable: true,
@@ -430,7 +455,7 @@ test('ambiguous channel preparation keeps its sheet and submission until recover
   ui.fireEvent.click(
     ui.screen.getByRole('button', { name: 'Recover preparation' }),
   );
-  await ui.screen.findByRole('button', { name: /# recoverable/ });
+  await ui.screen.findByRole('button', { name: /#recoverable/ });
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
   assert.equal(new Set(submissions).size, 1);
   assert.equal(submissions.length, 2);
@@ -442,6 +467,8 @@ test('team members opens the existing membership workflow in the same window', a
   await setup(undefined, true, (location) => {
     destination = location;
   });
+  // Team members moved behind the conversation header's ⓘ, into the panel.
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team members' }));
   assert.deepEqual(destination, {
     kind: 'group-settings',
@@ -498,7 +525,7 @@ test('channel creation opens in a sheet, selects the new channel, and needs no m
   );
   ui.fireEvent.change(name, { target: { value: 'design' } });
   ui.fireEvent.submit(name.closest('form')!);
-  await ui.screen.findByRole('button', { name: /# design/ });
+  await ui.screen.findByRole('button', { name: /#design/ });
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
   assert.equal(
     ui.screen.queryByRole('button', { name: 'Finish cleanup' }),
@@ -506,7 +533,7 @@ test('channel creation opens in a sheet, selects the new channel, and needs no m
   );
   assert.equal(ui.screen.queryByText('Needs attention'), null);
   assert.deepEqual(navigations.at(-1), {
-    kind: 'team-chat',
+    kind: 'chat',
     ref: 'team:eng',
     channel: '0000000000000000000000000000000b',
   });
@@ -888,7 +915,7 @@ test('durable pending refresh replaces stale prepared state after lost delivery 
   );
 });
 
-test('sidebar receives live unread while Chat is unmounted', async () => {
+test('the team column receives live unread while a conversation is unmounted', async () => {
   let direct!: Bridge;
   let unread = '1';
   await setup(
@@ -910,7 +937,12 @@ test('sidebar receives live unread while Chat is unmounted', async () => {
     () => {},
     false,
   );
-  await ui.screen.findByLabelText('1 unread');
+  // The collapsed team's badge is the per-team count, on the row that names
+  // the team: the label states the count alone, not the team again.
+  assert.equal(
+    (await teamBadge('Engineering')).getAttribute('aria-label'),
+    '1 unread',
+  );
   assert.ok(ui.screen.queryByLabelText('Message history') === null);
   unread = '9007199254740993';
   await direct.chat(
@@ -918,7 +950,12 @@ test('sidebar receives live unread while Chat is unmounted', async () => {
     { action: 'mark-read', channel: 'ab'.repeat(16), sequence: '1' },
     'remote',
   );
-  await ui.screen.findByLabelText('9007199254740993 unread');
+  await ui.waitFor(async () =>
+    assert.equal(
+      (await teamBadge('Engineering')).getAttribute('aria-label'),
+      '9007199254740993 unread',
+    ),
+  );
 });
 
 test('read-only projection keeps history and removes composer', async () => {
@@ -1064,17 +1101,18 @@ for (const fault of ['history', 'preview', 'scope'] as const) {
       true,
     );
     if (fault === 'scope') {
-      await ui.screen.findByRole('heading', { name: 'Chat stopped', level: 1 });
+      // The blocked notice replaces the conversation; the team column stays.
+      await ui.screen.findByRole('heading', { name: 'Chat stopped' });
       assert.equal(ui.screen.queryByRole('textbox', { name: 'Message' }), null);
       return;
     }
     await ui.screen.findByRole('heading', { name: 'Channel stopped' });
     assert.equal(ui.screen.queryByRole('textbox', { name: 'Message' }), null);
     const reads = badReads;
-    ui.fireEvent.click(ui.screen.getByRole('button', { name: /# healthy/ }));
+    ui.fireEvent.click(ui.screen.getByRole('button', { name: /#healthy/ }));
     await ui.screen.findByText('Healthy channel content');
     assert.ok(ui.screen.getByRole('textbox', { name: 'Message' }));
-    ui.fireEvent.click(ui.screen.getByRole('button', { name: /# general/ }));
+    ui.fireEvent.click(ui.screen.getByRole('button', { name: /#general/ }));
     await ui.screen.findByRole('heading', { name: 'Channel stopped' });
     assert.equal(
       badReads,
@@ -1104,10 +1142,11 @@ test('opening chat from a populated shell establishes history ownership before c
     false,
   );
   // The unread badge proves that the inbox snapshot populated before mount.
-  await ui.screen.findByLabelText('1 unread');
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: /Engineering chat/ }),
+  assert.equal(
+    (await teamBadge('Engineering')).getAttribute('aria-label'),
+    '1 unread',
   );
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: /^Engineering/ }));
   await ui.screen.findByText('Team chat is ready.');
   assert.equal(ui.screen.queryByText('Conversation closed.'), null);
 });
@@ -1128,9 +1167,10 @@ test('denied notification permission restores retryable settings without enablin
       };
     },
   }));
+  // The alert controls live in the channel info panel now.
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
   const enable = ui.screen.getByRole('checkbox', {
     name: 'Enable desktop alerts on this device',
-    hidden: true,
   });
   ui.fireEvent.click(enable);
   await ui.screen.findByText('Permission denied for test');

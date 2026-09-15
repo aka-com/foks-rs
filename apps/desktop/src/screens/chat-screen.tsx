@@ -1,10 +1,8 @@
-import { useChatInbox } from '../chat/inbox-provider';
-import { NotificationSettings } from '../chat/notification-provider';
 import { ChatThread } from '../chat/chat-thread';
 import { PendingRow } from '../chat/pending-row';
-import { channelTitle } from '../chat/presentation';
+import { channelTitle, listChannels, partyNames } from '../chat/presentation';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 import {
   Band,
   Button,
@@ -18,41 +16,28 @@ import {
   SheetDialog,
 } from '../components';
 import type { Bridge } from '../bridge';
-import type {
-  ChatAction,
-  ChatChannel,
-  ChatConversation,
-  ChatReply,
-} from '../chat-contract';
+import type { ChatAction, ChatReply } from '../chat-contract';
 import {
-  partiesOf,
-  shortId,
+  chatAvailable,
+  serverOf,
   storeAvailability,
   storeDescription,
+  storeDescriptionState,
   storeOf,
 } from '../model';
-import type { AgentSnapshot } from '../model';
+import type { AgentSnapshot, StoreRef } from '../model';
 import type { Location } from '../location';
-import { PageHeader } from '../shell/page-header';
 import { failure, preparationCanChange, submissionId } from '../chat/actions';
 import { useChatConversation } from '../chat/use-chat-conversation';
+import { chatTeams } from './chat-teams';
 import './chat.css';
 
 const systemAccessNow = () => Date.now() / 1000;
 
-function conversationMeta(
-  channel: ChatChannel,
-  conversation: ChatConversation | undefined,
-): string {
-  return [
-    channel.admin ? 'Admins' : 'Team',
-    !channel.readable ? 'Restricted' : '',
-    conversation?.muted ? 'Muted' : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
-}
-
+/**
+ * One team's conversation: the pane beside the Chat tab's team column. The tab
+ * keys this on the open team, so a switch mounts exactly one of these.
+ */
 export function ChatScreen({
   snapshot: agentSnapshot,
   bridge,
@@ -60,16 +45,28 @@ export function ChatScreen({
   onNavigate,
   accessNow = systemAccessNow,
   accessGeneration = 0,
+  infoOpen = false,
+  onToggleInfo,
+  infoRef,
+  creating = false,
+  onCreating,
 }: {
   snapshot: AgentSnapshot;
   bridge: Bridge;
-  location: Extract<Location, { kind: 'team-chat' }>;
+  location: Extract<Location, { kind: 'chat' }> & { ref: StoreRef };
   onNavigate: (location: Location) => void;
   accessNow?: () => number;
   accessGeneration?: number;
+  /** The tab owns the info panel, because it owns the layout it sits in. */
+  infoOpen?: boolean;
+  onToggleInfo?: () => void;
+  /** The ⓘ toggle, so the tab can hand focus back when the panel closes. */
+  infoRef?: Ref<HTMLButtonElement>;
+  /** The new-channel sheet, opened from here or from the column's `+`. */
+  creating?: boolean;
+  onCreating?: (open: boolean) => void;
 }): ReactNode {
   const store = storeOf(agentSnapshot, location.ref);
-  const { snapshot } = useChatInbox();
   const access = useCallback(
     () =>
       store
@@ -103,26 +100,8 @@ export function ChatScreen({
     access,
     accessGeneration,
   );
-  const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<string | null>(null);
-  const currentChannels = new Map(
-    channels.map((channel) => [channel.id, channel]),
-  );
-  const conversationIds = new Set(
-    conversations.map((conversation) => conversation.channel.id),
-  );
-  const listed = [
-    ...conversations
-      .filter((conversation) => !conversation.hidden)
-      .map((conversation) => ({
-        channel:
-          currentChannels.get(conversation.channel.id) ?? conversation.channel,
-        conversation,
-      })),
-    ...channels
-      .filter((channel) => !conversationIds.has(channel.id))
-      .map((channel) => ({ channel, conversation: undefined })),
-  ];
+  const listed = listChannels(channels, conversations);
   const channel =
     listed.find(({ channel }) => channel.id === location.channel)?.channel ??
     (!location.channel ? listed[0]?.channel : undefined);
@@ -133,16 +112,7 @@ export function ChatScreen({
     listed.map(({ channel }) => [channel.id, channelTitle(channel)]),
   );
   const storeId = store?.id ?? '';
-  const senderNames = new Map(
-    store
-      ? partiesOf(agentSnapshot, store.id)
-          .filter((party) => party.party_kind === 'user')
-          .map((party) => [
-            party.party_id_hex,
-            party.username ?? party.label ?? shortId(party.party_id_hex),
-          ])
-      : [],
-  );
+  const senderNames = partyNames(agentSnapshot, storeId);
   const accessAvailable = useCallback(
     (): boolean => access().available,
     [access],
@@ -169,360 +139,254 @@ export function ChatScreen({
     if (!created || !storeId) return;
     if (!channels.some((channel) => channel.id === created)) return;
     setCreated(null);
-    onNavigate({ kind: 'team-chat', ref: storeId, channel: created });
+    onNavigate({ kind: 'chat', ref: storeId, channel: created });
   }, [channels, created, onNavigate, storeId]);
-  if (!accessAvailable() && store)
-    return (
-      <section className="chat-screen">
-        <PageHeader
-          title="Chat unavailable"
-          subtitle={storeDescription(agentSnapshot, store)}
-        />
-        <div className="chat-conversation">
-          <Notice
-            severity="crit"
-            title={storeDescription(agentSnapshot, store)}
-          >
-            <p role="alert">
-              Access to this group is stopped. Check the server status before
-              reopening its conversations.
-            </p>
-          </Notice>
-        </div>
-      </section>
+  const available = accessAvailable();
+  // The reason the locked pane states is read off the clock the lock decision
+  // used, so the two cannot disagree about a check-in that expired this second.
+  const describeOptions = { nowSeconds: accessNow() };
+  const team =
+    store &&
+    store.kind === 'team' &&
+    store.team_kind === 'named' &&
+    store.active !== false
+      ? store
+      : undefined;
+  const openCreate = () => onCreating?.(true);
+  const empty = !loading && !listed.length && !error;
+  const unfinished = pending.filter(
+    (op) =>
+      !op.observed &&
+      (op.kind === 'create-channel' ||
+        op.channel !== channel?.id ||
+        !channel?.readable),
+  );
+  // Only a team that can actually be opened is worth offering: `chatTeams`
+  // filters on the server's capability, not on whether it answers today.
+  const elsewhere = chatTeams(agentSnapshot).find(
+    (candidate) =>
+      candidate.id !== store?.id &&
+      chatAvailable(agentSnapshot, candidate, describeOptions),
+  );
+  // A lapsed check-in is renewable here; every other unavailable state is
+  // stated and left alone, because no button in Chat resolves it.
+  const lapsed =
+    store &&
+    ['check-in-expired', 'check-in-unavailable'].includes(
+      storeDescriptionState(agentSnapshot, store, describeOptions),
     );
-  if (blocked)
-    return (
-      <section className="chat-screen">
-        <PageHeader
-          title="Chat stopped"
-          subtitle="This conversation view is no longer trusted."
-        />
-        <div className="chat-conversation">
-          <Notice severity="crit" title="Chat stopped">
-            <p role="alert">{blocked}</p>
+  const pane =
+    !available && store ? (
+      // A lapsed check-in locks a whole server: the column stays, and this pane
+      // says which server and where to renew it.
+      <div className="chat-locked">
+        <span className="big">
+          <Icon name="shield" />
+        </span>
+        <h2>{store.name} chat is locked</h2>
+        <p role="alert">
+          {storeDescription(agentSnapshot, store, describeOptions)} on{' '}
+          {serverOf(agentSnapshot, store.id)?.name ?? store.server}.{' '}
+          {lapsed
+            ? 'Every store on that server is unavailable until the server is checked again. Messages already on this Mac are kept.'
+            : 'Messages already on this Mac are kept.'}
+        </p>
+        <div className="chat-locked-actions">
+          {lapsed && (
+            <Button
+              variant="primary"
+              onClick={() =>
+                onNavigate({
+                  kind: 'settings',
+                  section: 'servers',
+                  profile: store.server,
+                })
+              }
+            >
+              Check in
+            </Button>
+          )}
+          {elsewhere && (
+            <Button
+              onClick={() => onNavigate({ kind: 'chat', ref: elsewhere.id })}
+            >
+              Open another team
+            </Button>
+          )}
+        </div>
+      </div>
+    ) : blocked ? (
+      <div className="chat-conversation-body">
+        <Notice severity="crit" title="Chat stopped">
+          <p role="alert">{blocked}</p>
+          <p>
+            Check the account and server, then lock and unlock the desktop to
+            start a fresh chat session.
+          </p>
+        </Notice>
+      </div>
+    ) : !team ? (
+      <div className="empty">
+        <span className="big">
+          <Icon name="people" />
+        </span>
+        <h2>Chat unavailable</h2>
+        <p>
+          Chat works in active named teams. Pick one in the column to open its
+          conversations.
+        </p>
+      </div>
+    ) : (
+      <>
+        {error && (
+          <Band
+            severity="crit"
+            action={
+              <Button
+                size="sm"
+                disabled={loading}
+                onClick={() => void guardedRefresh()}
+              >
+                Retry
+              </Button>
+            }
+          >
+            <span role="alert">{error}</span>
+          </Band>
+        )}
+        <div role="status" className="chat-status">
+          {syncError && (
+            <Band>
+              Live updates paused
+              <small>{syncError}</small>
+            </Band>
+          )}
+          {degraded && (
+            <Band severity="info">
+              Some inbox changes could not be listed. Visible channels still
+              refresh directly.
+            </Band>
+          )}
+        </div>
+        {channel && blockedChannels.has(channel.id) ? (
+          <div className="empty">
+            <h2>Channel stopped</h2>
+            <p role="alert">
+              Content in this channel could not be verified. Other channels
+              remain available.
+            </p>
             <p>
               Check the account and server, then lock and unlock the desktop to
-              start a fresh chat session.
+              revalidate this channel.
             </p>
-          </Notice>
-        </div>
-      </section>
-    );
-  if (
-    !store ||
-    store.kind !== 'team' ||
-    store.team_kind !== 'named' ||
-    store.active === false
-  )
-    return (
-      <section className="chat-screen">
-        <PageHeader
-          title="Chat unavailable"
-          subtitle="Chat works in active named teams."
-        />
-        <div className="chat-conversation">
+          </div>
+        ) : channel ? (
+          <ChatThread
+            bridge={bridge}
+            storeId={storeId}
+            key={`${channel.id}:${channel.readable}`}
+            channel={channel}
+            teamName={team.name}
+            onFiles={() => onNavigate({ kind: 'store', ref: team.id })}
+            onInfo={onToggleInfo}
+            infoOpen={infoOpen}
+            infoRef={infoRef}
+            actor={actor}
+            senderNames={senderNames}
+            request={guardedRequest}
+            refreshPending={guardedRefreshPending}
+            refreshInbox={guardedRefresh}
+            revision={channelRevisions?.get(channel.id) ?? 0}
+            readThrough={activeConversation?.read_through ?? null}
+            markRead={guardedMarkRead}
+            history={history}
+            acceptHistory={acceptHistory}
+            blockHistory={blockHistory}
+            pending={pending.filter(
+              (op) =>
+                op.kind !== 'create-channel' &&
+                !op.observed &&
+                op.channel === channel.id,
+            )}
+          />
+        ) : loading ? (
+          <div className="empty" aria-busy="true">
+            <p>Loading {team.name}…</p>
+          </div>
+        ) : location.channel ? (
+          <div className="empty">
+            <span className="big">
+              <Icon name="alert" />
+            </span>
+            <h2>Channel unavailable</h2>
+            <p>This channel is unavailable. Refresh to check your access.</p>
+            <Button disabled={loading} onClick={() => void guardedRefresh()}>
+              Refresh
+            </Button>
+          </div>
+        ) : (
           <div className="empty">
             <span className="big">
               <Icon name="people" />
             </span>
-            <h2>Chat unavailable</h2>
+            <h2>No conversations yet</h2>
             <p>
-              Select an active named team in the sidebar to open its
-              conversations.
+              Create the first channel for {team.name}. Every member with the
+              right role can join in.
             </p>
-          </div>
-        </div>
-      </section>
-    );
-  const openCreate = () => setCreating(true);
-  const empty = !loading && !listed.length && !error;
-  return (
-    <section className="chat-screen">
-      <PageHeader
-        title={`${store.name} · Chat`}
-        subtitle="Encrypted channels for team members"
-        action={
-          <>
-            <Button
-              icon="people"
-              title="Manage membership and access to team files and chat"
-              onClick={() =>
-                onNavigate({
-                  kind: 'group-settings',
-                  ref: store.id,
-                  tab: 'people',
-                })
-              }
-            >
-              Team members
-            </Button>
-            <Button
-              icon="file"
-              onClick={() => onNavigate({ kind: 'store', ref: store.id })}
-            >
-              Files
-            </Button>
-          </>
-        }
-      />
-      <div className="chat-layout">
-        <aside className="chat-channels" aria-label="Conversations">
-          <SectionLabel
-            action={
-              <>
-                <Button
-                  variant="quiet"
-                  icon="again"
-                  aria-label="Refresh conversations"
-                  title="Refresh conversations"
-                  disabled={loading}
-                  onClick={() => void guardedRefresh()}
-                />
-                <Button
-                  variant="quiet"
-                  icon="plus"
-                  aria-label="New channel"
-                  title="New channel"
-                  onClick={openCreate}
-                />
-              </>
-            }
-          >
-            Conversations
-          </SectionLabel>
-          <div role="status" className="chat-status">
-            {syncError && (
-              <Band>
-                Live updates paused
-                <small>{syncError}</small>
-              </Band>
-            )}
-            {degraded && (
-              <Band severity="info">
-                Some inbox changes could not be listed. Visible channels still
-                refresh directly.
-              </Band>
-            )}
-          </div>
-          <div className="chat-channel-list">
-            {listed.map(({ channel: listedChannel, conversation }) => {
-              const active = channel?.id === listedChannel.id;
-              const unread = conversation
-                ? BigInt(conversation.unread) > 0n
-                : false;
-              return (
-                <button
-                  type="button"
-                  className={[
-                    'nav',
-                    'chat-channel',
-                    active ? 'on' : '',
-                    unread ? 'unread' : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' ')}
-                  aria-current={active ? 'page' : undefined}
-                  key={listedChannel.id}
-                  onClick={() =>
-                    onNavigate({
-                      kind: 'team-chat',
-                      ref: store.id,
-                      channel: listedChannel.id,
-                    })
-                  }
-                >
-                  <span className="t">
-                    <span className="chat-channel-name">
-                      {channelTitle(listedChannel)}
-                    </span>
-                    <small>
-                      {blockedChannels.has(listedChannel.id)
-                        ? 'Verification stopped'
-                        : conversationMeta(listedChannel, conversation)}
-                    </small>
-                    {conversation?.preview && (
-                      <small className="chat-preview">
-                        {conversation.preview.sender === actor
-                          ? 'You'
-                          : conversation.preview.sender
-                            ? (senderNames.get(conversation.preview.sender) ??
-                              shortId(conversation.preview.sender))
-                            : 'Team member'}
-                        {': '}
-                        {conversation.preview.content.kind === 'text'
-                          ? conversation.preview.content.text
-                          : 'Unsupported message'}
-                      </small>
-                    )}
-                  </span>
-                  {conversation && unread && (
-                    <span
-                      className={
-                        conversation.muted ? 'chat-unread muted' : 'chat-unread'
-                      }
-                      aria-label={`${conversation.unread} unread`}
-                    >
-                      {conversation.unread}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-          {loading && !listed.length && (
-            <p className="chat-quiet">Loading conversations…</p>
-          )}
-          {empty && (
-            <p className="chat-quiet">
-              No channels yet. Create the first one to start talking.
-            </p>
-          )}
-          {pending.some(
-            (op) =>
-              !op.observed &&
-              (op.kind === 'create-channel' ||
-                op.channel !== channel?.id ||
-                !channel?.readable),
-          ) && (
-            <section className="chat-recovery" aria-label="Needs attention">
-              <SectionLabel>Needs attention</SectionLabel>
-              <p className="chat-quiet">
-                Saved work that has not finished. Nothing here is sent twice
-                without your say-so.
-              </p>
-              {pending
-                .filter(
-                  (op) =>
-                    !op.observed &&
-                    (op.kind === 'create-channel' ||
-                      op.channel !== channel?.id ||
-                      !channel?.readable),
-                )
-                .map((op) => (
-                  <PendingRow
-                    key={op.id}
-                    operation={op}
-                    channelName={channelNames.get(op.channel)}
-                    request={guardedRequest}
-                    onChange={() => void guardedRefresh()}
-                  />
-                ))}
-            </section>
-          )}
-        </aside>
-        <div className="chat-conversation">
-          {error && (
-            <Band
-              severity="crit"
-              action={
-                <Button
-                  size="sm"
-                  disabled={loading}
-                  onClick={() => void guardedRefresh()}
-                >
-                  Retry
-                </Button>
-              }
-            >
-              <span role="alert">{error}</span>
-            </Band>
-          )}
-          {channel && blockedChannels.has(channel.id) ? (
-            <div className="empty">
-              <h2>Channel stopped</h2>
-              <p role="alert">
-                Content in this channel could not be verified. Other channels
-                remain available.
-              </p>
-              <p>
-                Check the account and server, then lock and unlock the desktop
-                to revalidate this channel.
-              </p>
-            </div>
-          ) : channel ? (
-            <>
-              <NotificationSettings
-                storeId={storeId}
-                scope={snapshot.get(storeId)?.scope}
-                channel={channel.id}
-              />
-              <ChatThread
-                bridge={bridge}
-                storeId={storeId}
-                key={`${channel.id}:${channel.readable}`}
-                channel={channel}
-                actor={actor}
-                senderNames={senderNames}
-                request={guardedRequest}
-                refreshPending={guardedRefreshPending}
-                revision={channelRevisions?.get(channel.id) ?? 0}
-                readThrough={activeConversation?.read_through ?? null}
-                markRead={guardedMarkRead}
-                history={history}
-                acceptHistory={acceptHistory}
-                blockHistory={blockHistory}
-                pending={pending.filter(
-                  (op) =>
-                    op.kind !== 'create-channel' &&
-                    !op.observed &&
-                    op.channel === channel.id,
-                )}
-              />
-            </>
-          ) : loading ? (
-            <div className="empty" aria-busy="true">
-              <p>Loading conversations…</p>
-            </div>
-          ) : location.channel ? (
-            <div className="empty">
-              <span className="big">
-                <Icon name="alert" />
-              </span>
-              <h2>Channel unavailable</h2>
-              <p>This channel is unavailable. Refresh to check your access.</p>
-              <Button disabled={loading} onClick={() => void guardedRefresh()}>
-                Refresh
+            {empty && (
+              <Button variant="primary" icon="plus" onClick={openCreate}>
+                New channel
               </Button>
-            </div>
-          ) : (
-            <div className="empty">
-              <span className="big">
-                <Icon name="people" />
-              </span>
-              <h2>No conversations yet</h2>
-              <p>
-                Create the first channel for {store.name}. Every member with the
-                right role can join in.
-              </p>
-              {empty && (
-                <Button variant="primary" icon="plus" onClick={openCreate}>
-                  New channel
-                </Button>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
+            )}
+          </div>
+        )}
+      </>
+    );
+  return (
+    <>
+      {unfinished.length > 0 && (
+        <section className="chat-recovery" aria-label="Needs attention">
+          <SectionLabel>Needs attention</SectionLabel>
+          <p className="chat-quiet">
+            Saved work that has not finished. Nothing here is sent twice without
+            your say-so.
+          </p>
+          {unfinished.map((op) => (
+            <PendingRow
+              key={op.id}
+              operation={op}
+              channelName={channelNames.get(op.channel)}
+              request={guardedRequest}
+              onChange={() => void guardedRefresh()}
+            />
+          ))}
+        </section>
+      )}
+      {pane}
       {creating && (
         <ChannelCreateSheet
+          team={team?.name ?? ''}
           request={guardedRequest}
-          onClose={() => setCreating(false)}
+          onClose={() => onCreating?.(false)}
           onCreated={async (channelId) => {
             setCreated(channelId);
             await guardedRefresh();
           }}
         />
       )}
-    </section>
+    </>
   );
 }
 
 function ChannelCreateSheet({
+  team,
   request,
   onClose,
   onCreated,
 }: {
+  /** The open team; a channel can only be created in the team that is open. */
+  team: string;
   request: (a: ChatAction) => Promise<ChatReply>;
   onClose: () => void;
   onCreated: (channelId: string) => Promise<void>;
@@ -623,6 +487,7 @@ function ChannelCreateSheet({
           void create();
         }}
       >
+        {team && <p className="hint">This channel is created in {team}.</p>}
         <Inset>
           <InsetRow label="Channel name">
             <input
@@ -635,8 +500,8 @@ function ChannelCreateSheet({
               maxLength={32}
             />
             <small>
-              3–32 characters, lowercased automatically. Leave it empty only for
-              the general channel.
+              3–32 characters, lowercased automatically. The one exception is an
+              empty name, which creates the team&apos;s general channel.
             </small>
           </InsetRow>
           <InsetRow label="Description">

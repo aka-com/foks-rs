@@ -94,7 +94,7 @@ export function NotificationProvider({
         });
         if (active && sameScope(history.scope, route.scope))
           onNavigate({
-            kind: 'team-chat',
+            kind: 'chat',
             ref: route.storeId,
             channel: route.channel,
           });
@@ -194,8 +194,7 @@ export function NotificationSettings({
   if (!context) return null;
   const { session, error, configure } = context;
   return (
-    <details className="chat-local-settings">
-      <summary>Alerts on this device</summary>
+    <div className="chat-local-settings">
       {!session ? (
         <p role="status">Checking local alert settings…</p>
       ) : !session.available ? (
@@ -259,6 +258,6 @@ export function NotificationSettings({
         Settings do not sync.
       </p>
       {error && <p role="alert">{error}</p>}
-    </details>
+    </div>
   );
 }

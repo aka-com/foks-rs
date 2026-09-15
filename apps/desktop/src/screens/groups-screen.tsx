@@ -1,6 +1,5 @@
-import { InvitationPanel } from '../components/invitation-panel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import {
   Band,
   Button,
@@ -9,31 +8,32 @@ import {
   Icon,
   Inset,
   InsetRow,
-  KindIcon,
   MenuButton,
+  MenuItem,
   Notice,
   RadioCard,
   RadioGroup,
   SectionLabel,
   SheetDialog,
+  tabId,
+  tabPanelId,
   Tabs,
   Toggle,
 } from '../components';
 import {
   actionableGroupMember,
-  admissionActive,
   catalog,
   canCreateInStore,
-  formatRole,
   groupDetailFailure,
   hue,
-  kindOf,
+  isMachine,
   parseRole,
   partiesOf,
   partyName,
-  peopleGroups,
-  plural,
+  peopleLabel,
   readersOf,
+  roleChipLabel,
+  roleName,
   roleRank,
   serverOf,
   storeDescriptionState,
@@ -51,6 +51,7 @@ import type {
   Server,
   Store,
   StoreRef,
+  TeamStore,
   AgentSnapshot,
 } from '../model';
 import { enqueueProfileWork } from '../bridge';
@@ -59,6 +60,7 @@ import type { RoleDto } from '../bridge';
 import type { GroupSettingsTab, Location } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
+import { accountSubtitle } from './settings-screen';
 import { StoreAccessTakeover } from './store-access';
 import { useToast } from '/kit/toasts';
 
@@ -69,6 +71,11 @@ type Sheet = GroupSheetKind | null;
 
 const VIS_MIN = -32768;
 const VIS_MAX = 32767;
+/** The base the group page's tab and panel ids are derived from. */
+const GROUP_TABS = 'group-sections';
+/** Why the join policy cannot be changed: no command sets one. */
+const JOIN_POLICY_REASON =
+  'No command sets a join policy, opens a group to a server, or accepts a join request, so there is nothing to choose here yet.';
 const stateName = (): string =>
   typeof window === 'undefined'
     ? ''
@@ -113,54 +120,37 @@ function roleText(party: Party): string {
   return fmtRole(party.destination_role);
 }
 
-function partyShortName(party: Party): string {
-  return party.party_kind === 'user'
-    ? partyName(party)
-    : (party.team_name?.split(' @')[0] ?? partyName(party));
-}
-
+/** One notation for a role everywhere on this page: "Owner", "Member (0)". */
 function fmtRole(role: Item['read']): string {
   const parsed = parseRole(role);
   return parsed
-    ? formatRole(parsed)
+    ? roleChipLabel(parsed)
     : typeof role === 'string'
       ? role
       : role.role;
 }
 
-function roleName(role: Item['read']): string {
-  const parsed = parseRole(role);
-  if (!parsed) return typeof role === 'string' ? role : role.role;
-  return parsed.kind === 'owner'
-    ? 'Owner'
-    : parsed.kind === 'admin'
-      ? 'Admin'
-      : 'Member';
-}
-
+/**
+ * A role as a row reads it: one chip, with the visibility band inside it when
+ * the role is a Member, and no second line.
+ */
 function RoleChip({
   role,
-  extra,
 }: {
   role: Item['read'] | RoleDto | null | undefined;
-  extra?: ReactNode;
 }): ReactNode {
-  if (!role) {
-    return (
-      <span className="rolecell">
-        <Chip>—</Chip>
-      </span>
-    );
-  }
-  const parsed = parseRole(role);
+  const parsed = role ? parseRole(role) : null;
   return (
     <span className="rolecell">
-      <Chip>{roleName(role)}</Chip>
-      {/* Access levels apply only to Member roles; Owner and Admin roles have full visibility. */}
-      {parsed?.kind === 'member' ? (
-        <small>visibility {visibilityOf(parsed)}</small>
-      ) : null}
-      {extra ? <small>{extra}</small> : null}
+      <Chip>
+        {parsed
+          ? roleChipLabel(parsed)
+          : role
+            ? typeof role === 'string'
+              ? role
+              : role.role
+            : '—'}
+      </Chip>
     </span>
   );
 }
@@ -188,16 +178,27 @@ function tabFromState(name: string): Tab {
     : 'people';
 }
 
-function GroupMark({
+/**
+ * A group's mark: its initial over a colour derived from its name, or the
+ * inactive grey. One mark for a group everywhere it is listed, so the list row
+ * and the page it opens agree.
+ */
+export function GroupMark({
   store,
   size = 'md',
 }: {
   store: Store;
-  size?: 'md' | 'big';
+  /** `sm` is the list row's 26px mark; `md` a sheet's; `big` the page hero's. */
+  size?: 'sm' | 'md' | 'big';
 }): ReactNode {
   return (
     <span
-      className={`kico ${size} group`}
+      className={['kico', size === 'sm' ? '' : size, 'group']
+        .filter(Boolean)
+        .join(' ')}
+      // The initial stands for the name beside it; a row that read "E
+      // Engineering" would say the name one and a half times.
+      aria-hidden="true"
       style={{
         background:
           store.kind === 'team' && store.active === false
@@ -277,101 +278,214 @@ export const checkLabel = (context: DiscoveryContext): string =>
 export const unavailableTitle = (context: DiscoveryContext): string =>
   `Restore access to ${context.server.name} before checking for groups.`;
 
-function partySubtitle(party: Party): ReactNode {
-  if (party.party_kind !== 'user') {
-    const host = party.team_name?.includes(' @ ')
-      ? party.team_name.split(' @ ')[1]
-      : 'another server';
-    return (
-      <>
-        group on {host}
-        {party.scoped_host_id_hex ? (
-          <>
-            {' '}
-            · host <code>{party.scoped_host_id_hex}</code>
-          </>
-        ) : null}
-      </>
-    );
-  }
-  const machine = Boolean(party.note?.includes('service account'));
-  return `${machine ? 'machine' : 'person'} · generation ${party.generation}`;
+/**
+ * Why an invitation cannot be written: the message names the server the
+ * invitee joins, so it cannot be composed while that server is out of reach.
+ */
+export const inviteUnavailableTitle = (serverName: string): string =>
+  `Restore access to ${serverName} before inviting someone.`;
+
+/**
+ * What a member row's second line says: the kind of party, and nothing else.
+ * Only people and machines are drawn as member rows; a party that stands for
+ * another group belongs to "Groups on other servers".
+ */
+function partySubtitle(party: Party): string {
+  return isMachine(party) ? 'machine' : 'person';
 }
 
-function activateRow(
-  event: KeyboardEvent<HTMLElement>,
-  action: () => void,
-): void {
-  if (event.target !== event.currentTarget) return;
-  if (event.key === 'Enter' || event.key === ' ') {
-    event.preventDefault();
-    action();
-  }
+/** Why a member cannot be changed from here, for a disabled menu item. */
+function targetReason(
+  snapshot: AgentSnapshot,
+  store: Store,
+  party: Party,
+  manageable: boolean,
+): string {
+  if (store.kind === 'team' && store.team_kind === 'adhoc')
+    return 'Memberships can’t be changed in an ad-hoc group.';
+  if (!manageable)
+    return 'Only an Admin or an Owner can change this group’s members.';
+  if (party.label === 'you')
+    return 'You cannot change your own role or remove your own account.';
+  if (party.party_kind !== 'user' || !party.locally_manageable)
+    return 'Members of an admitted group are managed on their own server and cannot be changed or removed one by one.';
+  const mine = partiesOf(snapshot, party.store).find(
+    (candidate) => candidate.label === 'you',
+  );
+  if (
+    mine &&
+    roleRank(party.destination_role) >= roleRank(mine.destination_role)
+  )
+    return 'An Admin cannot change another Admin or the Owner.';
+  return 'This member cannot be changed from this Mac.';
 }
 
+/**
+ * Why this Mac cannot change a group's roster, or the groups admitted into it —
+ * `undefined` when it can. One rule for both the Teams list and the group page,
+ * so a row's menu and the page it opens never disagree about what applies.
+ */
+export function manageReason(
+  snapshot: AgentSnapshot,
+  store: TeamStore,
+  source: 'roster' | 'federation',
+): string | undefined {
+  if (store.team_kind !== 'named')
+    return 'Memberships can’t be changed in an ad-hoc group.';
+  if (store.active === false) return 'Finish setting up this group first.';
+  if (!storeReadable(snapshot, store.id))
+    return `Restore access to ${serverOf(snapshot, store.id)?.name ?? store.server} first.`;
+  if (groupDetailFailure(snapshot, store.id, source))
+    return source === 'roster'
+      ? 'The roster could not be read. Refresh before making changes.'
+      : 'The admitted groups could not be read. Refresh before making changes.';
+  // The role this Mac holds is a roster fact, so an unread roster is not
+  // evidence that it lacks one: an admission is refused for what failed to
+  // load, not for a permission nothing could have checked.
+  if (groupDetailFailure(snapshot, store.id, 'roster'))
+    return 'The roster could not be read. Refresh before making changes.';
+  const mine = partiesOf(snapshot, store.id).find(
+    (party) => party.label === 'you',
+  );
+  return mine && roleRank(mine.destination_role) >= 2
+    ? undefined
+    : 'Only an Admin or an Owner can change this group’s members.';
+}
+
+/** Whether this Mac can add to or change the group's roster. */
+export function rosterManageable(
+  snapshot: AgentSnapshot,
+  store: TeamStore,
+): boolean {
+  return manageReason(snapshot, store, 'roster') === undefined;
+}
+
+/** Whether this Mac can admit another group here, or drop one. */
+export function federationManageable(
+  snapshot: AgentSnapshot,
+  store: TeamStore,
+): boolean {
+  return manageReason(snapshot, store, 'federation') === undefined;
+}
+
+/**
+ * Why leaving is unavailable: there is no leave command to offer. Which of the
+ * two sentences applies can only be told from a roster that loaded — an empty
+ * or unread roster is not evidence of sole ownership.
+ */
+export function leaveReason(snapshot: AgentSnapshot, store: Store): string {
+  const roster = partiesOf(snapshot, store.id);
+  if (!roster.length || groupDetailFailure(snapshot, store.id, 'roster'))
+    return 'Leaving a group is not available yet.';
+  const seniors = roster
+    .filter(
+      (party) =>
+        party.party_kind === 'user' &&
+        party.label !== 'you' &&
+        roleRank(party.destination_role) >= 2,
+    )
+    .map((party) => partyName(party));
+  return seniors.length
+    ? `To leave this group, ask ${oxfordOr(seniors)} to remove your account.`
+    : 'As the sole owner, you must transfer ownership or delete the group to leave.';
+}
+
+/** The mark before a member's name: an initial, or a machine's glyph. */
+function PartyMark({ party }: { party: Party }): ReactNode {
+  const machine = isMachine(party);
+  const name = partyName(party);
+  return (
+    <span
+      className="kico round"
+      style={{ background: machine ? 'var(--c-none)' : hue(name) }}
+    >
+      {machine ? <Icon name="term" /> : name.slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
+
+/**
+ * One member: who they are, what kind of party, the role they hold, and a menu
+ * of the actions that apply to them.
+ */
 function PartyRow({
   snapshot,
+  store,
   party,
-  selected,
-  onSelect,
-  onOpen,
   manageable,
+  menuOpen,
+  onSheet,
 }: {
   snapshot: AgentSnapshot;
+  store: Store;
   party: Party;
-  selected: boolean;
-  onSelect: () => void;
-  onOpen: () => void;
   manageable: boolean;
+  menuOpen: boolean;
+  onSheet: (sheet: Sheet, party?: Party) => void;
 }): ReactNode {
-  const active = admissionActive(snapshot, party, party.store);
   const actionable = manageable && canTarget(snapshot, party);
+  const reason = actionable
+    ? undefined
+    : targetReason(snapshot, store, party, manageable);
+  const name = partyName(party);
+  const lowerable = Boolean(demotionFor(party));
   return (
-    <div
-      className={`prow${selected ? ' sel' : ''}${active ? '' : ' dim'}`}
-      role="button"
-      tabIndex={0}
-      aria-pressed={selected}
-      onClick={onSelect}
-      onKeyDown={(event) => activateRow(event, onSelect)}
-    >
+    // Only people and machines reach this row, and their admission is their
+    // membership: there is no inactive state to dim.
+    <div className="prow">
       <span className="who2">
+        <PartyMark party={party} />
         <span className="t">
           <b>
-            <span>{partyShortName(party)}</span>
+            <span>{name}</span>
             {party.label ? <Chip tone="you">you</Chip> : null}
           </b>
           <small>{partySubtitle(party)}</small>
         </span>
       </span>
-      <RoleChip
-        role={party.destination_role}
-        extra={
-          [
-            party.party_kind !== 'user'
-              ? `${fmtRole(party.source_role)} at ${partyShortName(party)}`
-              : null,
-            // Inactive memberships do not grant access.
-            active ? null : 'Access paused',
-          ]
-            .filter(Boolean)
-            .join(' · ') || undefined
-        }
-      />
-      <span className="acts">
-        {actionable ? (
-          <button
-            type="button"
-            title="Change role or remove"
-            aria-label="Change role or remove"
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpen();
-            }}
-          >
-            <Icon name="more" />
-          </button>
-        ) : null}
+      <span className="rowtail">
+        <RoleChip role={party.destination_role} />
+        <MenuButton
+          variant="quiet"
+          icon="more"
+          trailingIcon={null}
+          label=""
+          menuLabel={`Actions for ${name}`}
+          aria-label={`Actions for ${name}`}
+          defaultOpen={menuOpen}
+        >
+          {(close) => (
+            <>
+              <MenuItem
+                reason={
+                  actionable
+                    ? lowerable
+                      ? undefined
+                      : 'This member is already at the lowest role.'
+                    : reason
+                }
+                title="Roles can only be lowered. To raise one, remove the member and add them again, which rotates the group key."
+                onClick={() => {
+                  close();
+                  onSheet('demote', party);
+                }}
+              >
+                Lower role…
+              </MenuItem>
+              <MenuItem
+                danger
+                reason={actionable ? undefined : reason}
+                title="Removes this member and rotates the group key."
+                onClick={() => {
+                  close();
+                  onSheet('remove', party);
+                }}
+              >
+                Remove…
+              </MenuItem>
+            </>
+          )}
+        </MenuButton>
       </span>
     </div>
   );
@@ -388,11 +502,15 @@ function SituationBand({
 }): ReactNode {
   if (store.kind === 'team' && store.active === false) {
     return (
-      <Band label="Setup incomplete.">
-        Group members and items are unavailable until setup is finished.{' '}
-        <button type="button" className="lnk" onClick={onFinish}>
-          Finish setup
-        </button>
+      <Band
+        label="Setup incomplete."
+        action={
+          <Button variant="primary" size="sm" onClick={onFinish}>
+            Finish setup
+          </Button>
+        }
+      >
+        Group members and items are unavailable until setup is finished.
       </Band>
     );
   }
@@ -403,436 +521,457 @@ function SituationBand({
   ) {
     return (
       <Band severity="info" label="Ad-hoc group">
-        Membership is fixed when it’s created; people can’t be added or removed
-        here. Permissions and items function normally.
+        Memberships can’t be changed.
       </Band>
     );
   }
   return null;
 }
 
-function PeopleTab({
+/** A sub-section of the Members tab: its label, its count, and its rows. */
+function MemberSection({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count?: string;
+  children: ReactNode;
+}): ReactNode {
+  return (
+    <>
+      <SectionLabel>
+        {title}
+        {count ? <span className="count">— {count}</span> : null}
+      </SectionLabel>
+      <div className="rt bare">{children}</div>
+    </>
+  );
+}
+
+/** The alias a roster party that stands for another group is listed under. */
+function teamPartyName(party: Party): string {
+  return party.team_name?.split(' @ ')[0] ?? partyName(party);
+}
+
+/** The server a roster party's group is held on, as its `team_name` says. */
+function teamPartyHost(party: Party): string {
+  const [, host] = party.team_name?.split(' @ ') ?? [];
+  return host ?? 'another server';
+}
+
+/**
+ * The groups admitted here, each one drawn once.
+ *
+ * An admission is normally an entry and the roster party it matches, listed as
+ * the entry. A roster party that matches no entry is a missing record, and one
+ * that matches several is an ambiguous record: both are still members of this
+ * group, so they are listed as the party the roster holds, and the entries an
+ * ambiguous party matches are left to that one row rather than repeated.
+ */
+interface AdmittedGroups {
+  entries: FederationEntry[];
+  unmatched: Party[];
+  ambiguous: Party[];
+}
+
+function admittedGroups(snapshot: AgentSnapshot, store: Store): AdmittedGroups {
+  const entries = snapshot.federation.filter(
+    (entry) => entry.store === store.id,
+  );
+  const unmatched: Party[] = [];
+  const ambiguous: Party[] = [];
+  const claimed = new Set<FederationEntry>();
+  for (const party of partiesOf(snapshot, store.id)) {
+    if (party.party_kind === 'user') continue;
+    const matches = entries.filter(
+      (entry) =>
+        entry.remote_team_id_hex === party.party_id_hex &&
+        (!party.scoped_host_id_hex ||
+          entry.remote_host_id_hex === party.scoped_host_id_hex),
+    );
+    if (!matches.length) unmatched.push(party);
+    else if (matches.length > 1) {
+      ambiguous.push(party);
+      for (const entry of matches) claimed.add(entry);
+    }
+  }
+  return {
+    entries: entries.filter((entry) => !claimed.has(entry)),
+    unmatched,
+    ambiguous,
+  };
+}
+
+/**
+ * How many members the group has: its people and machines, plus the admitted
+ * groups counted once each, however their records read.
+ */
+function memberCountOf(snapshot: AgentSnapshot, store: Store): number {
+  const { entries, unmatched, ambiguous } = admittedGroups(snapshot, store);
+  return (
+    partiesOf(snapshot, store.id).filter((party) => party.party_kind === 'user')
+      .length +
+    entries.length +
+    unmatched.length +
+    ambiguous.length
+  );
+}
+
+/**
+ * A roster party that stands for another group whose admission record cannot be
+ * resolved: the group as the roster names it, its role, and what is wrong.
+ */
+function TeamPartyRow({
+  party,
+  chip,
+  chipTitle,
+}: {
+  party: Party;
+  chip: string;
+  chipTitle: string;
+}): ReactNode {
+  const name = teamPartyName(party);
+  return (
+    <div className="prow">
+      <span className="who2">
+        <span className="kico round" style={{ background: hue(name) }}>
+          {name.slice(0, 1).toUpperCase()}
+        </span>
+        <span className="t">
+          <b>
+            <span>{name}</span>
+          </b>
+          <small>on {teamPartyHost(party)}</small>
+        </span>
+      </span>
+      <span className="rowtail">
+        <RoleChip role={party.destination_role} />
+        <Chip tone="warn" title={chipTitle}>
+          {chip}
+        </Chip>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The groups admitted from other servers. They keep their own facts — the
+ * admission state, the host id and the operation id — because restoring access
+ * needs the operation id.
+ */
+function FederationRows({
   snapshot,
   store,
-  selected,
-  onSelect,
-  onSheet,
-  onFinish,
+  onRerun,
+  onRemove,
   manageable,
-  failure,
-  onRetry,
 }: {
   snapshot: AgentSnapshot;
   store: Store;
-  selected: Party | null;
-  onSelect: (party: Party | null) => void;
+  onRerun: (operationId: string) => void;
+  onRemove: (entry: FederationEntry) => void;
+  manageable: boolean;
+}): ReactNode {
+  const { entries, unmatched, ambiguous } = admittedGroups(snapshot, store);
+  if (!entries.length && !unmatched.length && !ambiguous.length)
+    return (
+      <div className="callout">
+        <span
+          className="kico"
+          style={{ background: 'var(--chip-bg)', color: 'var(--muted)' }}
+        >
+          <Icon name="people" />
+        </span>
+        <span className="t">
+          <b>No groups from other servers.</b>
+        </span>
+      </div>
+    );
+  return (
+    <div className="rt bare fed">
+      {entries.map((entry) => {
+        const remoteName =
+          snapshot.servers.find((server) => server.id === entry.remote_profile)
+            ?.name ?? entry.remote_profile;
+        const memberReason =
+          'Every member of an admitted group holds the role shown on its row. They are managed on their own server and cannot be changed or removed one by one.';
+        return (
+          <div
+            className="prow"
+            key={`${entry.remote_host_id_hex}|${entry.remote_team_id_hex}`}
+          >
+            <span className="who2">
+              <span
+                className="kico round"
+                style={{ background: hue(entry.remote_team_alias) }}
+              >
+                {entry.remote_team_alias.slice(0, 1).toUpperCase()}
+              </span>
+              <span className="t">
+                <b>
+                  <span>{entry.remote_team_alias}</span>
+                </b>
+                <small>
+                  on {remoteName} · host <code>{entry.remote_host_id_hex}</code>
+                  {entry.operation_id_hex ? (
+                    <>
+                      {' '}
+                      · operation <code>{entry.operation_id_hex}</code>
+                    </>
+                  ) : null}
+                </small>
+              </span>
+            </span>
+            <span className="rowtail">
+              <RoleChip role={entry.destination} />
+              <Chip tone={entry.active ? 'ok' : 'warn'}>
+                {entry.active ? 'Active' : 'Inactive'}
+              </Chip>
+              {!entry.active && entry.operation_id_hex ? (
+                <Button
+                  size="sm"
+                  icon="again"
+                  disabled={!manageable}
+                  title={
+                    manageable
+                      ? undefined
+                      : 'Only an Admin or an Owner can restore this admission.'
+                  }
+                  onClick={() => onRerun(entry.operation_id_hex!)}
+                >
+                  Restore access
+                </Button>
+              ) : null}
+              <MenuButton
+                variant="quiet"
+                icon="more"
+                trailingIcon={null}
+                label=""
+                menuLabel={`Actions for ${entry.remote_team_alias}`}
+                aria-label={`Actions for ${entry.remote_team_alias}`}
+              >
+                {(close) => (
+                  <>
+                    <MenuItem reason={memberReason}>Lower role…</MenuItem>
+                    <MenuItem reason={memberReason}>Remove a member…</MenuItem>
+                    <hr />
+                    <MenuItem
+                      danger
+                      reason={
+                        !manageable
+                          ? 'Only an Admin or an Owner can remove this admission.'
+                          : entry.active
+                            ? undefined
+                            : 'Restore access before removing this admission.'
+                      }
+                      title="Removes the whole admission and rotates this group’s key."
+                      onClick={() => {
+                        close();
+                        onRemove(entry);
+                      }}
+                    >
+                      Remove admission…
+                    </MenuItem>
+                  </>
+                )}
+              </MenuButton>
+            </span>
+          </div>
+        );
+      })}
+      {unmatched.map((party) => (
+        <TeamPartyRow
+          key={party.party_id_hex}
+          party={party}
+          chip="No admission record"
+          chipTitle="The roster lists this group as a member, but no admission record on this Mac matches it."
+        />
+      ))}
+      {ambiguous.map((party) => (
+        <TeamPartyRow
+          key={party.party_id_hex}
+          party={party}
+          chip="Ambiguous admission"
+          chipTitle="The roster lists this group once, but several admission records on this Mac match it, so none of them can be acted on."
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The Members tab: the roster split into the people, the machines and the
+ * groups admitted from other servers, then the actions that add to it.
+ */
+function MembersTab({
+  snapshot,
+  store,
+  onSheet,
+  onFinish,
+  manageable,
+  federationManageable,
+  menuParty,
+  failure,
+  federationFailure,
+  onRetry,
+  onRetryFederation,
+  onRerun,
+  onRemoveAdmission,
+}: {
+  snapshot: AgentSnapshot;
+  store: Store;
   onSheet: (sheet: Sheet, party?: Party) => void;
   onFinish: () => void;
   manageable: boolean;
+  federationManageable: boolean;
+  menuParty: string | null;
   failure?: GroupDetailFailure;
+  federationFailure?: GroupDetailFailure;
   onRetry: () => void;
+  onRetryFederation: () => void;
+  onRerun: (operationId: string) => void;
+  onRemoveAdmission: (entry: FederationEntry) => void;
 }): ReactNode {
   const parties = sortRoster(partiesOf(snapshot, store.id));
+  const people = parties.filter(
+    (party) => party.party_kind === 'user' && !isMachine(party),
+  );
+  const machines = parties.filter((party) => isMachine(party));
   const inactive = store.kind === 'team' && store.active === false;
-  const showAddActions = store.kind === 'team' && store.team_kind === 'named';
-  const unavailableHint = manageable
-    ? undefined
+  const named = store.kind === 'team' && store.team_kind === 'named';
+  const server = serverOf(snapshot, store.id);
+  const serverName = server?.name ?? store.server;
+  const readable = storeReadable(snapshot, store.id);
+  const row = (party: Party): ReactNode => (
+    <PartyRow
+      key={party.party_id_hex}
+      snapshot={snapshot}
+      store={store}
+      party={party}
+      manageable={manageable}
+      menuOpen={menuParty === party.party_id_hex}
+      onSheet={onSheet}
+    />
+  );
+  const unavailableHint = failure
+    ? 'The roster could not be read. Refresh before making changes.'
     : 'Not available for this group';
   return (
     <div className="roster">
       <SituationBand store={store} tab="people" onFinish={onFinish} />
       {failure ? (
-        <Notice
-          severity="warn"
-          title="Roster unavailable"
-          actions={
+        <Band
+          label="Roster unavailable"
+          action={
             failure.retryable ? (
               <Button onClick={onRetry}>Refresh</Button>
             ) : undefined
           }
         >
-          <p>{failure.message}</p>
-        </Notice>
+          {failure.message}
+        </Band>
       ) : inactive ? null : (
         <>
-          <div className="rhead">
-            <h2>People &amp; groups</h2>
-            <span className="n">{peopleGroups(parties)}</span>
-            {showAddActions ? (
-              <div className="right">
-                <Button
-                  disabled={!manageable}
-                  title={
-                    manageable
-                      ? 'Give every member of another group a role here'
-                      : unavailableHint
-                  }
-                  icon="people"
-                  onClick={() => onSheet('admit')}
+          <MemberSection title="People" count={peopleLabel(people.length)}>
+            {people.length ? (
+              people.map(row)
+            ) : (
+              <div className="callout">
+                <span
+                  className="kico"
+                  style={{
+                    background: 'var(--chip-bg)',
+                    color: 'var(--muted)',
+                  }}
                 >
-                  Add a group
-                </Button>
-                <Button
-                  disabled={!manageable}
-                  title={
-                    manageable
-                      ? 'Add someone who already has an account on this server'
-                      : unavailableHint
-                  }
-                  icon="plus"
-                  onClick={() => onSheet('add')}
-                >
-                  Add someone
-                </Button>
+                  <Icon name="people" />
+                </span>
+                <span className="t">
+                  <b>No people yet.</b>
+                </span>
               </div>
-            ) : null}
-          </div>
-          {parties.length ? (
-            <div className="rt">
-              <div className="hdr">
-                <span>Who</span>
-                <span>Role</span>
-                <span />
-              </div>
-              {parties.map((party) => (
-                <PartyRow
-                  key={party.party_id_hex}
-                  snapshot={snapshot}
-                  party={party}
-                  selected={selected?.party_id_hex === party.party_id_hex}
-                  onSelect={() =>
-                    onSelect(
-                      selected?.party_id_hex === party.party_id_hex
-                        ? null
-                        : party,
-                    )
-                  }
-                  onOpen={() => onSelect(party)}
-                  manageable={manageable}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="callout">
-              <span
-                className="kico"
-                style={{ background: 'var(--chip-bg)', color: 'var(--muted)' }}
+            )}
+          </MemberSection>
+          {machines.length ? (
+            <MemberSection
+              title="Machines"
+              count={`${machines.length} connected`}
+            >
+              {machines.map(row)}
+            </MemberSection>
+          ) : null}
+          {/* The people and machine actions follow the rows they add to, so a
+              roster that failed to load offers neither: there are no rows to
+              add to, and the invitation names a server this Mac cannot read. */}
+          {named ? (
+            <div className="roster-actions">
+              <Button
+                variant="primary"
+                icon="plus"
+                disabled={!manageable}
+                title={
+                  manageable
+                    ? 'Add someone who already has an account on this server'
+                    : unavailableHint
+                }
+                onClick={() => onSheet('add')}
               >
-                <Icon name="people" />
-              </span>
-              <span className="t">
-                <b>No people yet.</b>
-                {showAddActions
-                  ? ' Add someone by their username on this server, or admit another group.'
-                  : null}
-              </span>
-              {manageable ? (
-                <Button onClick={() => onSheet('add')}>Add someone</Button>
-              ) : null}
+                Add someone on {serverName}…
+              </Button>
+              <Button
+                disabled={!readable}
+                title={
+                  readable ? undefined : inviteUnavailableTitle(serverName)
+                }
+                onClick={() => onSheet('invite')}
+              >
+                Invite someone…
+              </Button>
             </div>
-          )}
+          ) : null}
         </>
       )}
-    </div>
-  );
-}
-
-function PartyPanel({
-  snapshot,
-  party,
-  onClose,
-  onSheet,
-  manageable,
-}: {
-  snapshot: AgentSnapshot;
-  party: Party;
-  onClose: () => void;
-  onSheet: (sheet: Sheet, party?: Party) => void;
-  manageable: boolean;
-}): ReactNode {
-  const items = itemsOf(snapshot, party.store);
-  const readable = new Set(readsOf(snapshot, party));
-  const machine =
-    party.party_kind === 'user' &&
-    Boolean(party.note?.includes('service account'));
-  const here = roleText(party);
-  const active = admissionActive(snapshot, party, party.store);
-  const group = storeOf(snapshot, party.store);
-  const pinned = party.scoped_host_id_hex
-    ? snapshot.servers.find(
-        (server) =>
-          server.host_id && server.host_id === party.scoped_host_id_hex,
-      )
-    : undefined;
-  const kind = party.party_kind === 'user' ? 'person' : 'group';
-  return (
-    <aside className="details">
-      <div className="dh">
-        <span className="t">
-          <h2>
-            {partyShortName(party)}
-            {party.label ? <Chip tone="you">you</Chip> : null}
-          </h2>
-          <small>
-            {kind} · {here} here
-          </small>
-        </span>
-        <button
-          type="button"
-          className="x"
-          title="Close"
-          aria-label="Close"
-          onClick={onClose}
-        >
-          <Icon name="x" />
-        </button>
-      </div>
-      <div className="scroll">
-        <SectionLabel
-          action={
-            <span className="pv">
-              · {readable.size} of {items.length}
-            </span>
-          }
-        >
-          Can read
-        </SectionLabel>
-        {items.length ? (
-          <div className="rlist">
-            {items.map((item) => {
-              const kindName = kindOf(item);
-              return (
-                <div
-                  className={`ir${readable.has(item) ? '' : ' no'}`}
-                  key={item.path}
-                >
-                  {kindName === 'Folder' ? null : <KindIcon kind={kindName} />}
-                  <span className="ipth">{item.path}</span>
-                  <span className="pchip">{fmtRole(item.read)}</span>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="hint">No items in {group?.name} yet.</p>
-        )}
-        {!active ? (
-          <p className="hint">
-            This group connection is inactive. Members cannot access items until
-            the connection is renewed.
-          </p>
-        ) : readable.size < items.length ? (
-          <p className="hint">
-            Items you don't have permission to view are dimmed.
-          </p>
-        ) : null}
-        <SectionLabel>Details</SectionLabel>
-        <div className="meta">
-          <b>Role here</b>
-          <span>{here}</span>
-          {party.party_kind !== 'user' ? (
-            <>
-              <b>At source</b>
-              <span>
-                {fmtRole(party.source_role)} in {partyShortName(party)}
-              </span>
-              <b>Host</b>
-              <code>{party.scoped_host_id_hex}</code>
-              {pinned ? (
-                <>
-                  <b>Pin</b>
-                  <span>matches this Mac’s pin</span>
-                </>
-              ) : party.scoped_host_id_hex ? (
-                <>
-                  <b>Pin</b>
-                  <span>Server pin not verified</span>
-                </>
-              ) : null}
-            </>
-          ) : null}
-          <b>Managed</b>
-          <span>
-            {party.locally_manageable
-              ? 'from this server'
-              : 'from its own group'}
-          </span>
-        </div>
-        {machine ? (
-          <p className="hint">
-            {party.note?.[0]?.toUpperCase()}
-            {party.note?.slice(1)}.
-          </p>
-        ) : null}
-      </div>
-      {manageable && canTarget(snapshot, party) ? (
-        <div className="dfoot">
-          {demotionFor(party) ? (
-            <Button onClick={() => onSheet('demote', party)}>
-              Lower role…
-            </Button>
-          ) : null}
-          <Button variant="danger" onClick={() => onSheet('remove', party)}>
-            Remove…
-          </Button>
-        </div>
-      ) : null}
-    </aside>
-  );
-}
-
-function FederationSection({
-  snapshot,
-  store,
-  onSheet,
-  onRerun,
-  onRemove,
-  manageable,
-  failure,
-  onRetry,
-}: {
-  snapshot: AgentSnapshot;
-  store: Store;
-  onSheet: (sheet: Sheet) => void;
-  onRerun: (operationId: string) => void;
-  onRemove: (entry: FederationEntry) => void;
-  manageable: boolean;
-  failure?: GroupDetailFailure;
-  onRetry: () => void;
-}): ReactNode {
-  const entries = snapshot.federation.filter(
-    (entry) => entry.store === store.id,
-  );
-  const inactive = store.kind === 'team' && store.active === false;
-  const parties = partiesOf(snapshot, store.id);
-  const showAddAction = store.kind === 'team' && store.team_kind === 'named';
-  return (
-    <div className="roster federation-section">
-      {failure ? (
-        <Notice
-          severity="warn"
-          title="Federation unavailable"
-          actions={
-            failure.retryable ? (
-              <Button onClick={onRetry}>Refresh</Button>
-            ) : undefined
-          }
-        >
-          <p>{failure.message}</p>
-        </Notice>
-      ) : inactive ? null : (
+      {inactive ? null : (
         <>
-          <div className="rhead">
-            <h2>Groups on other servers</h2>
-            {showAddAction ? (
-              <div className="right">
-                <Button
-                  icon="plus"
-                  disabled={!manageable}
-                  title={
-                    manageable ? undefined : 'Not available for this group'
-                  }
-                  onClick={() => onSheet('admit')}
-                >
-                  Add a group
-                </Button>
-              </div>
-            ) : null}
-          </div>
-          {entries.length ? (
-            <div className="rt fed">
-              <div className="hdr">
-                <span>Group</span>
-                <span>Role here</span>
-                <span>Admission</span>
-                <span>Operation</span>
-                <span />
-              </div>
-              {entries.map((entry) => {
-                const party = parties.find(
-                  (candidate) =>
-                    candidate.party_id_hex === entry.remote_team_id_hex,
-                );
-                const remoteName =
-                  snapshot.servers.find(
-                    (server) => server.id === entry.remote_profile,
-                  )?.name ?? entry.remote_profile;
-                const readable = party ? readsOf(snapshot, party).length : 0;
-                return (
-                  <div
-                    className="prow"
-                    key={`${entry.remote_host_id_hex}|${entry.remote_team_id_hex}`}
-                  >
-                    <span className="who2">
-                      <span className="t">
-                        <b>
-                          <span>{entry.remote_team_alias}</span>
-                        </b>
-                        <small>
-                          on {remoteName} · host{' '}
-                          <code>{entry.remote_host_id_hex}</code>
-                        </small>
-                      </span>
-                    </span>
-                    <RoleChip
-                      role={entry.destination}
-                      extra="for every member"
-                    />
-                    <span className="reads">
-                      <Chip tone={entry.active ? 'ok' : 'warn'}>
-                        {entry.active ? 'Active' : 'Inactive'}
-                      </Chip>
-                      <small>
-                        {entry.active
-                          ? `${plural(readable, 'item')} readable`
-                          : 'members read nothing here'}
-                      </small>
-                    </span>
-                    <span className="vern">{entry.operation_id_hex}</span>
-                    <span className="cellact">
-                      {!entry.active && entry.operation_id_hex ? (
-                        <Button
-                          size="sm"
-                          icon="again"
-                          disabled={!manageable}
-                          onClick={() => onRerun(entry.operation_id_hex!)}
-                        >
-                          Restore access
-                        </Button>
-                      ) : entry.active ? (
-                        <Button
-                          size="sm"
-                          variant="danger"
-                          disabled={!manageable}
-                          onClick={() => onRemove(entry)}
-                        >
-                          Remove…
-                        </Button>
-                      ) : null}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+          <SectionLabel>Groups on other servers</SectionLabel>
+          {federationFailure ? (
+            <Band
+              label="Federation unavailable"
+              action={
+                federationFailure.retryable ? (
+                  <Button onClick={onRetryFederation}>Refresh</Button>
+                ) : undefined
+              }
+            >
+              {federationFailure.message}
+            </Band>
           ) : (
-            <div className="callout">
-              <span
-                className="kico"
-                style={{ background: 'var(--chip-bg)', color: 'var(--muted)' }}
-              >
-                <Icon name="people" />
-              </span>
-              <span className="t">
-                <b>No groups from other servers.</b>
-                {showAddAction
-                  ? ' Admitting a group gives every one of its members the same role here.'
-                  : null}
-              </span>
-              {manageable ? (
-                <Button onClick={() => onSheet('admit')}>Add a group</Button>
-              ) : null}
-            </div>
+            <FederationRows
+              snapshot={snapshot}
+              store={store}
+              onRerun={onRerun}
+              onRemove={onRemoveAdmission}
+              manageable={federationManageable}
+            />
           )}
+          {/* And the admission action follows the admissions. */}
+          {named ? (
+            <div className="roster-actions">
+              <Button
+                icon="people"
+                disabled={!federationManageable}
+                title={
+                  federationManageable
+                    ? 'Give every member of another group a role here'
+                    : unavailableHint
+                }
+                onClick={() => onSheet('admit')}
+              >
+                Add a group…
+              </Button>
+            </div>
+          ) : null}
         </>
       )}
     </div>
@@ -955,14 +1094,6 @@ function SettingsTab({
       candidate.alias === store.account && candidate.server === store.server,
   );
   const server = serverOf(snapshot, store.id);
-  const seniors = parties
-    .filter(
-      (party) =>
-        party.party_kind === 'user' &&
-        party.label !== 'you' &&
-        roleRank(party.destination_role) >= 2,
-    )
-    .map((party) => partyShortName(party));
   const removable = manageable
     ? parties
         .map((party, index) => ({ party, index }))
@@ -988,7 +1119,12 @@ function SettingsTab({
       <SituationBand store={store} tab="settings" onFinish={onFinish} />
       <SectionLabel>About this group</SectionLabel>
       <Inset>
-        <InsetRow label="Name">{store.name}</InsetRow>
+        <InsetRow label="Name">
+          <span>
+            {store.name}
+            <span className="hint">A name is fixed at creation.</span>
+          </span>
+        </InsetRow>
         <InsetRow
           label="Server"
           action={
@@ -1012,7 +1148,7 @@ function SettingsTab({
           {account?.username ?? store.account} · {mine ? roleText(mine) : '—'}
         </InsetRow>
         <InsetRow label="Owner">
-          {owner ? partyShortName(owner) : 'No owner designated'}
+          {owner ? partyName(owner) : 'No owner designated'}
         </InsetRow>
         <InsetRow
           label="Group ID"
@@ -1033,7 +1169,34 @@ function SettingsTab({
         <p className="fn">
           An ad-hoc group has no name on the server and a fixed membership.
         </p>
-      ) : null}
+      ) : (
+        <>
+          <SectionLabel>Who can join</SectionLabel>
+          <Inset>
+            <InsetRow
+              label="Join policy"
+              action={
+                // Inert rather than natively disabled, like a menu item that
+                // does not apply: the keyboard still reaches it and reads why.
+                <Button
+                  size="sm"
+                  aria-disabled
+                  title={JOIN_POLICY_REASON}
+                  onClick={undefined}
+                >
+                  Change…
+                </Button>
+              }
+            >
+              {/* The reason is read, not hovered: it is the row's own line. */}
+              <span>
+                Invite only
+                <span className="hint">{JOIN_POLICY_REASON}</span>
+              </span>
+            </InsetRow>
+          </Inset>
+        </>
+      )}
       <SectionLabel>Danger</SectionLabel>
       <Inset className="danger settings-inset">
         <InsetRow
@@ -1056,7 +1219,7 @@ function SettingsTab({
                     }}
                   >
                     <span className="t">
-                      <b>{partyShortName(party)}</b>
+                      <b>{partyName(party)}</b>
                       <small>
                         {fmtRole(party.destination_role)} · reads{' '}
                         {readsOf(snapshot, party).length} of {total}
@@ -1078,18 +1241,18 @@ function SettingsTab({
         </InsetRow>
         <InsetRow
           action={
-            <Button variant="danger" disabled>
+            <Button
+              variant="danger"
+              disabled
+              title={leaveReason(snapshot, store)}
+            >
               Leave…
             </Button>
           }
         >
           <span className="t">
             <b>Leave {store.name}</b>
-            <small>
-              {seniors.length
-                ? `To leave this group, ask ${oxfordOr(seniors)} to remove your account.`
-                : 'As the sole owner, you must transfer ownership or delete the group to leave.'}
-            </small>
+            <small>{leaveReason(snapshot, store)}</small>
           </span>
         </InsetRow>
         <InsetRow
@@ -1212,12 +1375,14 @@ export function GroupSheet({
   const [name, setName] = useState('Platform');
   const [createKind, setCreateKind] = useState<'named' | 'adhoc'>('named');
   const creationAccounts = snapshot.stores.filter(
-    (candidate) =>
+    (candidate): candidate is AccountStore =>
       candidate.kind === 'account' && canCreateInStore(snapshot, candidate.id),
   );
+  // Creating acts as the account the page acts as: the sheet's own store when
+  // that store is an account that can create, else this Mac's first such one.
   const [accountStoreId, setAccountStoreId] = useState(
     () =>
-      creationAccounts.find((candidate) => candidate.account === 'work')?.id ??
+      creationAccounts.find((candidate) => candidate.id === store.id)?.id ??
       creationAccounts[0]?.id ??
       '',
   );
@@ -1253,12 +1418,17 @@ export function GroupSheet({
           (account.server === ownerStore.server &&
             account.alias === ownerStore.account),
       )
-    : undefined;
-  const inviter =
-    ownerAccount?.username.split('.')[0] ??
-    ownerAccount?.username ??
-    'the group Admin';
-  const inviteMessage = `I'd like to invite you to join ${store.name} on FOKS.\n\n1. Download FOKS: https://foks.app/download\n2. Add server: ${server?.name ?? store.server}\n3. Create your account on the server\n4. Send your username to ${inviter}\n\nOnce added, ${store.name} will appear in your Groups list.`;
+    : snapshot.accounts.find((account) => account.store === store.id);
+  // The username as the server holds it: the whole of it is what the reader
+  // types back, so it is not abbreviated here.
+  const inviter = ownerAccount?.username ?? 'the group Admin';
+  const serverName = server?.name ?? store.server;
+  // The same command, aimed at whichever store opened the sheet: a group
+  // invites someone into that group, an account invites them onto its server.
+  const inviteMessage =
+    store.kind === 'team'
+      ? `I'd like to invite you to join ${store.name} on FOKS.\n\n1. Download FOKS: https://foks.app/download\n2. Add server: ${serverName}\n3. Create your account on the server\n4. Send your username to ${inviter}\n\nOnce added, ${store.name} will appear in your Teams list.`
+      : `I'd like to invite you to FOKS on ${serverName}.\n\n1. Download FOKS: https://foks.app/download\n2. Add server: ${serverName}\n3. Create your account on the server\n4. Send your username to ${inviter}\n\nOnce I add your username to a group, it will appear in your Teams list.`;
   const teamAlias = name
     .trim()
     .toLowerCase()
@@ -1274,11 +1444,11 @@ export function GroupSheet({
         : undefined;
   const title =
     sheet === 'invite'
-      ? `Invite someone to ${store.name}`
+      ? `Invite someone to ${store.kind === 'team' ? store.name : serverName}`
       : sheet === 'add'
         ? `Add someone to ${store.name}`
         : sheet === 'demote'
-          ? `Lower ${target ? `${partyShortName(target)}’s` : 'their'} role`
+          ? `Lower ${target ? `${partyName(target)}’s` : 'their'} role`
           : sheet === 'remove'
             ? `Remove ${target ? partyName(target) : 'them'} from ${store.name}?`
             : sheet === 'admit'
@@ -1286,7 +1456,11 @@ export function GroupSheet({
               : 'Create a group';
   const subtitle =
     sheet === 'create'
-      ? (server?.name ?? 'Selected server')
+      ? // Creating acts as one account on one server, and the sheet says which:
+        // the server's name alone would not say who is creating the group.
+        creationAccount
+        ? accountSubtitle(snapshot, creationAccount)
+        : 'No account on this Mac can create a group'
       : sheet === 'invite'
         ? 'Send instructions to help a new user set up their account'
         : sheet === 'add'
@@ -1381,14 +1555,18 @@ export function GroupSheet({
       width={sheet === 'invite' ? 'wide' : 'base'}
       glyph={
         sheet === 'create' ? (
-          <span
-            className="kico md group"
-            style={{ background: hue(name || 'group') }}
-          >
-            {(name.trim() || 'G').slice(0, 1)}
+          // The group does not exist yet, so it has no mark: a group's colour
+          // and initial are earned at creation, not previewed over an account.
+          <span className="kico md neutral">
+            <Icon name="people" />
           </span>
-        ) : (
+        ) : store.kind === 'team' ? (
           <GroupMark store={store} />
+        ) : (
+          // An account store opens the invite sheet for its server, not a group.
+          <span className="server-mark">
+            <Icon name="server" />
+          </span>
         )
       }
       title={title}
@@ -1433,8 +1611,9 @@ export function GroupSheet({
                   : sheet === 'demote'
                     ? 'Change role'
                     : sheet === 'admit'
-                      ? `Admit ${remote?.kind === 'team' ? remote.alias : 'group'}`
-                      : `Create ${name.trim() || 'group'}`}
+                      ? 'Add group'
+                      : // The alias is what the server is asked to create.
+                        `Create ${teamAlias || 'group'}`}
             </Button>
           )}
         </>
@@ -1455,8 +1634,8 @@ export function GroupSheet({
         {sheet === 'invite' ? (
           <>
             <p>
-              They need an account on {server?.name} before you can add them.
-              Send this message, then add their username.
+              They need an account on {serverName} before you can add them. Send
+              this message, then add their username.
             </p>
             <Inset>
               <InsetRow label="Message">
@@ -1494,9 +1673,11 @@ export function GroupSheet({
               </InsetRow>
               <InsetRow label="When they reply">
                 <span>Add their username as a Member, Admin, or Owner.</span>
-                <Button size="sm" onClick={() => onSwitch('add')}>
-                  Add someone
-                </Button>
+                {store.kind === 'team' ? (
+                  <Button size="sm" onClick={() => onSwitch('add')}>
+                    Add someone
+                  </Button>
+                ) : null}
               </InsetRow>
             </Inset>
             <p className="hint">
@@ -1591,7 +1772,7 @@ export function GroupSheet({
                   }
                   title={
                     currentRole?.kind === 'member'
-                      ? `Member · visibility ${maxMemberVisibility}`
+                      ? `Member (${maxMemberVisibility})`
                       : 'Member'
                   }
                   detail={
@@ -1650,6 +1831,16 @@ export function GroupSheet({
               Removing blocks future reads and rekeys the group. This user may
               retain a local copy of their current records.
             </p>
+            {target ? (
+              <Inset>
+                <InsetRow action={<RoleChip role={target.destination_role} />}>
+                  <span className="t">
+                    <b>{partyName(target)}</b>
+                    <small>{partySubtitle(target)}</small>
+                  </span>
+                </InsetRow>
+              </Inset>
+            ) : null}
             {target && !canTarget(snapshot, target) ? (
               <Notice title={`${partyName(target)} cannot be removed here`}>
                 This member cannot be removed here. They are managed by another
@@ -1683,6 +1874,9 @@ export function GroupSheet({
                 </InsetRow>
               )}
             </Inset>
+            <p className="fn">
+              You can add groups that are already visible from this device.
+            </p>
             <SectionLabel>Role for its members</SectionLabel>
             <Inset>
               <InsetRow label="Role">
@@ -1692,6 +1886,8 @@ export function GroupSheet({
               <InsetRow
                 label="Visibility"
                 action={
+                  // The band the steppers change reads between them, so the
+                  // value is never separated from the controls that set it.
                   <>
                     <Button
                       size="sm"
@@ -1700,6 +1896,7 @@ export function GroupSheet({
                     >
                       −
                     </Button>
+                    <span className="vis-value">Visibility {visibility}</span>
                     <Button
                       size="sm"
                       disabled={visibility >= VIS_MAX}
@@ -1709,14 +1906,11 @@ export function GroupSheet({
                     </Button>
                   </>
                 }
-              >
-                {visibility}
-              </InsetRow>
+              />
             </Inset>
-            <p className="fn">
-              {store.name} automatically syncs members from that group. This
-              connection cannot be removed from this screen.
-            </p>
+            <Band severity="info">
+              {store.name} automatically syncs members from that group.
+            </Band>
           </>
         ) : null}
         {sheet === 'create' ? (
@@ -1725,7 +1919,8 @@ export function GroupSheet({
               <Field label="Name" value={name} onChange={setName} />
             </Inset>
             <p className="fn">
-              Others find it as <code>{teamAlias || '…'}</code> on the server.
+              Others find it as <code>{teamAlias || '…'}</code> on the server. A
+              name is fixed at creation.
             </p>
             <SectionLabel>Server and account</SectionLabel>
             <Inset>
@@ -1817,9 +2012,12 @@ export function GroupSettingsScreen({
   const federationFailure = store
     ? groupDetailFailure(snapshot, store.id, 'federation')
     : undefined;
-  const [selected, setSelected] = useState<Party | null>(() =>
+  // The scene that used to open a member's details panel now opens that row's
+  // menu, which is where its actions live.
+  const [menuParty] = useState<string | null>(() =>
     initial === 'party'
-      ? (parties.find((party) => party.username === 'deploy-bot') ?? null)
+      ? (parties.find((party) => party.username === 'deploy-bot')
+          ?.party_id_hex ?? null)
       : null,
   );
   const [removalTarget, setRemovalTarget] = useState<FederationEntry | null>(
@@ -1892,18 +2090,16 @@ export function GroupSettingsScreen({
     }
     return null;
   });
-  // `selected` and `target` are snapshots taken when a row was clicked, and a
-  // refresh replaces the roster underneath them. Re-resolved here so the
-  // panel cannot keep showing a role the write just changed, and a role
-  // sheet cannot draft a demotion from a role the party no longer holds.
-  // `target` keeps its snapshot's manageability, which a scene may force.
+  // `target` is a snapshot taken when a row's menu was used, and a refresh
+  // replaces the roster underneath it. Re-resolved here so a role sheet cannot
+  // draft a demotion from a role the party no longer holds. `target` keeps its
+  // snapshot's manageability, which a scene may force.
   const freshOf = (party: Party | null): Party | undefined =>
     party
       ? parties.find(
           (candidate) => candidate.party_id_hex === party.party_id_hex,
         )
       : undefined;
-  const selectedParty = rosterFailure ? null : (freshOf(selected) ?? null);
   const targetFresh = freshOf(target);
   const targetParty = target
     ? targetFresh
@@ -1928,13 +2124,12 @@ export function GroupSettingsScreen({
     setTarget(party ?? null);
     setSheet(next);
   };
-  const peopleCount = useMemo(
-    () =>
-      store
-        ? parties.length +
-          snapshot.federation.filter((entry) => entry.store === store.id).length
-        : 0,
-    [parties, store, snapshot.federation],
+  // People, machines and admitted groups, each counted once: an admitted group
+  // is reported both as a roster party and as a federation entry, and a roster
+  // party whose record is missing or ambiguous is still one member.
+  const memberCount = useMemo(
+    () => (store ? memberCountOf(snapshot, store) : 0),
+    [store, snapshot],
   );
   const storeId = store?.id;
   const seenStore = useRef(storeId);
@@ -1943,7 +2138,6 @@ export function GroupSettingsScreen({
     if (seenStore.current === storeId) return;
     if (seenStore.current && storeId && seenStore.current !== storeId) {
       setTab('people');
-      setSelected(null);
       setSheet(null);
       setTarget(null);
       setRemovalTarget(null);
@@ -1951,7 +2145,6 @@ export function GroupSettingsScreen({
     }
     if (seenStore.current && !storeId) {
       setTab('people');
-      setSelected(null);
       setSheet(null);
       setTarget(null);
       setRemovalTarget(null);
@@ -2007,11 +2200,8 @@ export function GroupSettingsScreen({
   const callerParty = partiesOf(snapshot, store.id).find(
     (candidate) => candidate.label === 'you',
   );
-  const callerRank = callerParty ? roleRank(callerParty.destination_role) : 0;
-  const manageable =
-    store.team_kind === 'named' && !inactive && !unavailable && callerRank >= 2;
-  const rosterManageable = manageable && !rosterFailure;
-  const federationManageable = manageable && !federationFailure;
+  const canManageRoster = rosterManageable(snapshot, store);
+  const canManageFederation = federationManageable(snapshot, store);
   const finishSetup = (): void => {
     void mutate(
       () => bridge.resumeGroupCreation(store.id),
@@ -2036,68 +2226,75 @@ export function GroupSettingsScreen({
             <span>{store.name}</span>
             {inactive ? <Chip tone="warn">Inactive</Chip> : null}
           </h1>
-          <div className="sub">Group settings</div>
+          {/* The server, then the bare role this account holds here. */}
+          <div className="sub">
+            {[
+              serverOf(snapshot, store.id)?.name ?? store.server,
+              callerParty
+                ? (() => {
+                    const parsed = parseRole(callerParty.destination_role);
+                    return parsed ? roleName(parsed) : null;
+                  })()
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </div>
         </div>
         <div className="header-action">
-          {unavailable ? (
-            <Button
-              onClick={() =>
-                onNavigate({
-                  kind: 'settings',
-                  section: 'servers',
-                  profile: store.server,
-                })
-              }
-            >
-              {access === 'check-in-expired' ? 'Open server' : 'Review server'}
-            </Button>
-          ) : null}
-          {inactive ? null : (
-            <MenuButton
-              variant="quiet"
-              icon="more"
-              trailingIcon={null}
-              label=""
-              menuLabel="Group actions"
-              title="More"
-              aria-label="More"
-            >
-              {(close) => (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      close();
-                      void mutate(() => Promise.resolve(), 'Group refreshed');
-                    }}
-                  >
-                    <Icon name="again" />
-                    Refresh group
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      close();
-                      void copy(store.team_id_hex, 'Group ID copied.');
-                    }}
-                  >
-                    <Icon name="copy" />
-                    Copy group ID
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      close();
-                      onNavigate({ kind: 'store', ref: store.id });
-                    }}
-                  >
-                    <Icon name="out" />
-                    Open in vault
-                  </button>
-                </>
-              )}
-            </MenuButton>
-          )}
+          {/* The group ID and the vault are local facts, so the menu stays even
+              while the server is out of reach; only what needs the server is
+              disabled, with the reason in the item. */}
+          <MenuButton
+            variant="quiet"
+            icon="more"
+            trailingIcon={null}
+            label=""
+            menuLabel="Group actions"
+            // Named for the group it acts on: several triggers on this page
+            // read "More" otherwise, and none of them says what it acts on.
+            title={`Actions for ${store.name}`}
+            aria-label={`Actions for ${store.name}`}
+          >
+            {(close) => (
+              <>
+                <MenuItem
+                  icon="again"
+                  reason={
+                    unavailable
+                      ? `Restore access to ${serverOf(snapshot, store.id)?.name ?? store.server} first.`
+                      : inactive
+                        ? 'Finish setting up this group first.'
+                        : undefined
+                  }
+                  onClick={() => {
+                    close();
+                    void mutate(() => Promise.resolve(), 'Group refreshed');
+                  }}
+                >
+                  Refresh group
+                </MenuItem>
+                <MenuItem
+                  icon="copy"
+                  onClick={() => {
+                    close();
+                    void copy(store.team_id_hex, 'Group ID copied.');
+                  }}
+                >
+                  Copy group ID
+                </MenuItem>
+                <MenuItem
+                  icon="out"
+                  onClick={() => {
+                    close();
+                    onNavigate({ kind: 'store', ref: store.id });
+                  }}
+                >
+                  Open in vault
+                </MenuItem>
+              </>
+            )}
+          </MenuButton>
         </div>
       </div>
       {unavailable ? (
@@ -2105,6 +2302,7 @@ export function GroupSettingsScreen({
           snapshot={snapshot}
           store={store}
           noHeader
+          variant="band"
           onOpenServer={(profile) =>
             onNavigate({ kind: 'settings', section: 'servers', profile })
           }
@@ -2112,95 +2310,85 @@ export function GroupSettingsScreen({
         />
       ) : (
         <>
-          {membershipPending.length ? (
-            <Notice severity="warn" title="Finish a pending membership change">
-              <p>
-                FOKS stopped partway through changing this group’s members.
-                Finish the pending change before adding, removing, or changing
-                anyone else.
-              </p>
-              {membershipPending.map((operation) => (
-                <p key={`${operation.kind}:${operation.target ?? ''}`}>
-                  {operation.kind === 'team-member-addition'
-                    ? `Add ${operation.target ?? 'member'}`
-                    : 'Finish the role change'}{' '}
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    aria-label={
-                      operation.kind === 'team-member-addition'
-                        ? `Resume adding ${operation.target ?? 'member'}`
-                        : 'Resume the role change'
-                    }
-                    onClick={() => resumeMembership(operation)}
-                  >
-                    Resume
-                  </Button>
-                </p>
-              ))}
-            </Notice>
-          ) : null}
+          {membershipPending.map((operation) => (
+            <Band
+              key={`${operation.kind}:${operation.target ?? ''}`}
+              // This one is mounted by what the reader did — a change that
+              // stopped partway, read back after the action — so it announces.
+              live
+              label="Finish a pending membership change"
+              action={
+                <Button
+                  size="sm"
+                  variant="primary"
+                  aria-label={
+                    operation.kind === 'team-member-addition'
+                      ? `Resume adding ${operation.target ?? 'member'}`
+                      : 'Resume the role change'
+                  }
+                  onClick={() => resumeMembership(operation)}
+                >
+                  Resume
+                </Button>
+              }
+            >
+              {operation.kind === 'team-member-addition'
+                ? `FOKS stopped partway through adding ${operation.target ?? 'a member'}.`
+                : 'FOKS stopped partway through a role change.'}{' '}
+              Finish the pending change before adding, removing, or changing
+              anyone else.
+            </Band>
+          ))}
           <Tabs
             label="Group sections"
+            idBase={GROUP_TABS}
             value={tab}
             onChange={(next) => {
               setTab(next);
-              setSelected(null);
               onNavigate({ kind: 'group-settings', ref: store.id, tab: next });
             }}
             items={[
               {
                 id: 'people',
-                label: 'People',
+                label: 'Members',
                 ...(rosterFailure || federationFailure
                   ? {}
-                  : { count: peopleCount }),
+                  : { count: memberCount }),
               },
               { id: 'settings', label: 'Settings' },
             ]}
           />
-          <div className={`body${selected ? ' group-panel-open' : ''}`}>
+          {/* Fixed IDs associate each tab button with its tabpanel. */}
+          <div
+            className="body"
+            role="tabpanel"
+            id={tabPanelId(GROUP_TABS, tab)}
+            aria-labelledby={tabId(GROUP_TABS, tab)}
+          >
             <div className="groups-wrap">
               {tab === 'people' ? (
-                <>
-                  <PeopleTab
-                    snapshot={snapshot}
-                    store={store}
-                    selected={selected}
-                    onSelect={setSelected}
-                    onSheet={openSheet}
-                    onFinish={finishSetup}
-                    manageable={rosterManageable}
-                    failure={rosterFailure}
-                    onRetry={() => void onApplied('Refreshing group members…')}
-                  />
-                  {rosterManageable && store.kind === 'team' && (
-                    <InvitationPanel
-                      bridge={bridge}
-                      profile={store.server}
-                      account={store.account}
-                      teamAlias={store.alias}
-                      onComplete={() => onApplied('Group requests updated')}
-                    />
-                  )}
-                  <FederationSection
-                    snapshot={snapshot}
-                    store={store}
-                    onSheet={openSheet}
-                    onRerun={(operationId) =>
-                      void mutate(
-                        () => bridge.rerunGroupAdmission(store.id, operationId),
-                        'Group access restored',
-                      )
-                    }
-                    onRemove={setRemovalTarget}
-                    manageable={federationManageable}
-                    failure={federationFailure}
-                    onRetry={() =>
-                      void onApplied('Refreshing external groups…')
-                    }
-                  />
-                </>
+                <MembersTab
+                  snapshot={snapshot}
+                  store={store}
+                  onSheet={openSheet}
+                  onFinish={finishSetup}
+                  manageable={canManageRoster}
+                  federationManageable={canManageFederation}
+                  menuParty={menuParty}
+                  failure={rosterFailure}
+                  federationFailure={federationFailure}
+                  onRetry={() => void onApplied('Refreshing group members…')}
+                  onRetryFederation={() =>
+                    void onApplied('Refreshing external groups…')
+                  }
+                  onRerun={(operationId) =>
+                    void mutate(
+                      () => bridge.rerunGroupAdmission(store.id, operationId),
+                      'Group access restored',
+                    )
+                  }
+                  onRemoveAdmission={setRemovalTarget}
+                />
               ) : (
                 <SettingsTab
                   snapshot={snapshot}
@@ -2209,7 +2397,7 @@ export function GroupSettingsScreen({
                   onNavigate={onNavigate}
                   onCopy={(text) => void copy(text, 'Group ID copied.')}
                   onFinish={finishSetup}
-                  manageable={rosterManageable}
+                  manageable={canManageRoster}
                   rekeyOpen={rekeyArmed}
                 />
               )}
@@ -2226,15 +2414,6 @@ export function GroupSettingsScreen({
               ) : null}
             </div>
           </div>
-          {selectedParty ? (
-            <PartyPanel
-              snapshot={snapshot}
-              party={selectedParty}
-              onClose={() => setSelected(null)}
-              onSheet={openSheet}
-              manageable={rosterManageable}
-            />
-          ) : null}
           {removalEntry ? (
             <FederationRemovalSheet
               bridge={bridge}
