@@ -1094,7 +1094,7 @@ body {
   color: var(--muted);
 }
 
-.first-run-main .pcard {
+.pcard {
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -1116,7 +1116,7 @@ body {
   flex: none;
 }
 
-.first-run-main .pcard h3 {
+.pcard h3 {
   display: flex;
   gap: 8px;
   align-items: center;
@@ -1124,16 +1124,16 @@ body {
   font-size: 14px;
 }
 
-.first-run-main .pcard.ok {
+.pcard.ok {
   background: var(--ok-wash);
   border-color: var(--ok-border);
 }
 
-.first-run-main .pcard.ok h3 {
+.pcard.ok h3 {
   color: var(--ok-ink);
 }
 
-.first-run-main .pcard p {
+.pcard p {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
@@ -1170,13 +1170,12 @@ body {
 }
 
 .pcard .local-field-card,
+.panel-body .local-field-card,
 .sso-inline .local-field-card {
   margin: 2px 0;
 }
 
-/* Account panels in Settings: a form inset with room for sentence-length
-   labels, a section eyebrow between groups of controls, an operation list,
-   and inline status and error lines. */
+/* Account settings panels */
 .pcard .inset.form,
 .panel-body .inset.form {
   margin: 2px 0;
@@ -1248,7 +1247,6 @@ body {
   padding-top: 2px;
 }
 
-.pcard > .toggle,
 .pcard details.dd,
 .panel-body details.dd {
   margin-top: 0;
@@ -2018,4 +2016,48 @@ body {
 }
 .first-run-main .copy-device {
   align-self: flex-start;
+}
+
+/* Account sheet panels */
+.panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.panel-body > p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 0;
+}
+
+.panel-body > .seg {
+  align-self: flex-start;
+  /* Segmented control bottom margin */
+  margin-bottom: 3px;
+}
+
+.panel-body .btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.panel-body > details.dd > summary {
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: default;
+}
+
+.panel-body > details.dd > .inset {
+  margin-top: 6px;
+}
+
+/* ---------- account picker ----------
+   A full-width card select naming the account a settings section applies to:
+   the alias over a caption of the identity and server behind it. */
+.settings-main > .account-picker {
+  margin: 2px 0 4px;
 }

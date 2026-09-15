@@ -3303,7 +3303,7 @@ mod tests {
 
         // A non-list response (a form submission report) must not clobber
         // the cached account list or the selection.
-        model.accept(Ok(serde_json::json!({"username": "rae", "entries": 3})));
+        model.accept(Ok(serde_json::json!({"username": "satoshi", "entries": 3})));
         assert_eq!(model.accounts(), ["personal".to_owned(), "work".to_owned()]);
         assert_eq!(model.selected_account(), Some("work"));
 
@@ -3326,7 +3326,7 @@ mod tests {
         assert_eq!(
             model.create_account_operation(
                 "personal",
-                "rae",
+                "satoshi",
                 "laptop",
                 "",
                 SecretString::new("invite"),
@@ -3340,9 +3340,9 @@ mod tests {
             model
                 .create_account_operation(
                     "personal",
-                    "rae",
+                    "satoshi",
                     "laptop",
-                    "rae@example.test",
+                    "satoshi@example.test",
                     SecretString::new("small-team+launch"),
                     None,
                     None,
@@ -3351,9 +3351,9 @@ mod tests {
             Operation::CreateAccount {
                 profile: "local".to_owned(),
                 alias: "personal".to_owned(),
-                username: "rae".to_owned(),
+                username: "satoshi".to_owned(),
                 device_name: "laptop".to_owned(),
-                email: "rae@example.test".to_owned(),
+                email: "satoshi@example.test".to_owned(),
                 invite: SecretString::new("small-team+launch"),
                 passphrase: None,
             }
@@ -3372,7 +3372,7 @@ mod tests {
             model
                 .create_account_operation(
                     "personal",
-                    "rae",
+                    "satoshi",
                     "laptop",
                     "",
                     SecretString::new("s.invite"),
@@ -3383,7 +3383,7 @@ mod tests {
             Operation::CreateAccount {
                 profile: "local".to_owned(),
                 alias: "personal".to_owned(),
-                username: "rae".to_owned(),
+                username: "satoshi".to_owned(),
                 device_name: "laptop".to_owned(),
                 email: String::new(),
                 invite: SecretString::new("s.invite"),
@@ -3393,7 +3393,7 @@ mod tests {
         assert_eq!(
             model.create_account_operation(
                 "personal",
-                "rae",
+                "satoshi",
                 "laptop",
                 "",
                 SecretString::new(""),
@@ -3834,7 +3834,7 @@ mod tests {
             model
                 .create_yubi_account_operation(
                     "hardware",
-                    "rae",
+                    "satoshi",
                     "primary key",
                     "",
                     SecretString::new("s.invite"),
@@ -3854,7 +3854,7 @@ mod tests {
             Operation::CreateYubiAccount {
                 profile: "local".to_owned(),
                 alias: "hardware".to_owned(),
-                username: "rae".to_owned(),
+                username: "satoshi".to_owned(),
                 device_name: "primary key".to_owned(),
                 email: String::new(),
                 invite: SecretString::new("s.invite"),
@@ -3916,7 +3916,7 @@ mod tests {
         assert_eq!(
             model.create_yubi_account_operation(
                 "hardware",
-                "rae",
+                "satoshi",
                 "primary key",
                 "",
                 SecretString::new(""),

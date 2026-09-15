@@ -506,7 +506,6 @@ export function ChatScreen({
       </div>
       {creating && (
         <ChannelCreateSheet
-          teamName={store.name}
           request={guardedRequest}
           onClose={() => setCreating(false)}
           onCreated={async (channelId) => {
@@ -520,12 +519,10 @@ export function ChatScreen({
 }
 
 function ChannelCreateSheet({
-  teamName,
   request,
   onClose,
   onCreated,
 }: {
-  teamName: string;
   request: (a: ChatAction) => Promise<ChatReply>;
   onClose: () => void;
   onCreated: (channelId: string) => Promise<void>;
@@ -598,7 +595,6 @@ function ChannelCreateSheet({
   return (
     <SheetDialog
       title="New channel"
-      subtitle={`An encrypted channel in ${teamName}`}
       onClose={onClose}
       dismissible={!locked}
       footer={

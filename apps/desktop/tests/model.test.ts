@@ -17,6 +17,7 @@ import {
   canChangeItem,
   fmtSize,
   formatRole,
+  HUES,
   hue,
   initials,
   isLogin,
@@ -37,9 +38,10 @@ import {
   storeReadable,
   storeAvailability,
   storeDisplayOrder,
+  storeHues,
   storeNavigationOrder,
 } from '../src/model';
-import type { Item, AgentSnapshot } from '../src/model';
+import type { Item, Store, AgentSnapshot } from '../src/model';
 
 function item(snapshot: AgentSnapshot, key: string): Item {
   const found = snapshot.items.find((candidate) => itemKey(candidate) === key);
@@ -139,7 +141,7 @@ test('formatRole formats role objects into canonical display strings', () => {
 /* ---------------------------------------------------------------- readers -- */
 
 test('readerCount calculates eligible readers from item role and roster', () => {
-  // production-token requires Admin: sam.ortiz (Owner), rae.chen and priya.n
+  // production-token requires Admin: sam.ortiz (Owner), vitalik and priya.n
   // (Admin). dana.okafor and deploy-bot are Members; homelab is excluded.
   assert.equal(readerCount(FIXTURE, 'team:eng|/deploy/production-token'), 3);
 
@@ -320,18 +322,62 @@ test('fmtSize formats byte counts with standard human-readable units', () => {
 
 test('initials drop the mail domain and take at most two words', () => {
   assert.equal(initials('sam.ortiz'), 'SO');
-  assert.equal(initials('rae.chen'), 'RC');
+  assert.equal(initials('vitalik'), 'V');
   assert.equal(initials('deploy-bot'), 'DB');
   assert.equal(initials('priya.n'), 'PN');
   assert.equal(initials('family@example.net'), 'F');
-  assert.equal(initials('rae'), 'R');
+  assert.equal(initials('satoshi'), 'S');
 });
 
 test('a name always gets the same avatar colour', () => {
   assert.equal(hue('sam.ortiz'), '#a2845e');
-  assert.equal(hue('rae.chen'), '#34c759');
+  assert.equal(hue('vitalik'), '#34c759');
   assert.equal(hue('deploy-bot'), '#a2845e');
   assert.equal(hue('sam.ortiz'), hue('sam.ortiz'));
+});
+
+/** A store with only the fields `storeHues` reads. */
+function refs(ids: string[]): Store[] {
+  return ids.map((id) => ({ id }) as Store);
+}
+
+test('store marks keep their colour and never repeat one while the palette holds', () => {
+  const stores = storeNavigationOrder(FIXTURE);
+  const colors = storeHues(stores);
+  assert.equal(colors.size, stores.length);
+  assert.deepEqual([...colors.entries()], [...storeHues(stores).entries()]);
+  // The palette has eight entries; the fixture has fewer stores than that.
+  assert.ok(stores.length <= 8);
+  assert.equal(new Set(colors.values()).size, stores.length);
+  // A store keyed on its reference takes the hashed colour when it is free.
+  const first = stores[0];
+  assert.equal(colors.get(first.id), hue(first.id));
+});
+
+test('a colliding store takes the first free palette entry, and only that store moves', () => {
+  // `hue` sums code points, so these two references hash to the same entry.
+  const left = 'acct:ab';
+  const right = 'acct:ba';
+  assert.equal(hue(left), hue(right));
+  const colors = storeHues(refs([left, right]));
+  assert.equal(colors.get(left), hue(left));
+  assert.notEqual(colors.get(right), hue(right));
+  assert.equal(
+    colors.get(right),
+    HUES.find((entry) => entry !== hue(left)),
+  );
+});
+
+test('store marks fall back to the hashed colour once the palette is spent', () => {
+  const ids = Array.from(
+    { length: HUES.length + 2 },
+    (_, index) => `s${index}`,
+  );
+  const colors = storeHues(refs(ids));
+  assert.equal(colors.size, ids.length);
+  assert.equal(new Set([...colors.values()]).size, HUES.length);
+  const palette: readonly string[] = HUES;
+  for (const color of colors.values()) assert.ok(palette.includes(color));
 });
 
 /* ------------------------------------------------------------------ lease -- */

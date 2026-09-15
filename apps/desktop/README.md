@@ -209,13 +209,26 @@ authenticated in the catalog.
 | `src/fixture.ts`           | The stable desktop fixture, as typed data.                                                                                                                                                                                                                                                                                                                                  |
 | `src/model/`               | The pure model — roles, kinds, readers, format, lease. TypeScript only.                                                                                                                                                                                                                                                                                                     |
 | `src/location.ts`          | `Location`, `Selection`, `transition`, the `?state=` codec, the store.                                                                                                                                                                                                                                                                                                      |
-| `src/first-run-state.ts`   | Pure versioned resumable setup state and its explicit nonsecret checkpoint codec.                                                                                                                                                                                                                                                                                           |
-| `src/icons.ts`             | The mock's 31 icons as structured data.                                                                                                                                                                                                                                                                                                                                     |
+| `src/first-run-state.ts`   | Pure versioned resumable setup state and its explicit nonsecret checkpoint codec.                                                                                                                                                                                                                                                                                            |
+| `src/sidebar-prefs.ts`     | The sidebar's stored width: the `sideCollapsed` and `sidePinned` `localStorage` keys.                                                                                                                                                                                                                                                                                           |
+| `src/icons.ts`             | The mock's 46 icons as structured data.                                                                                                                                                                                                                                                                                                                                     |
 | `src/components/icon.tsx`  | `<Icon name size />`.                                                                                                                                                                                                                                                                                                                                                       |
 | `src/styles/shell.css`     | `wave6/shell.css` copied in full, minus the shared tokens.                                                                                                                                                                                                                                                                                                                  |
 | `src/styles/app.css`       | Styles that replace the mock browser chrome with the app window.                                                                                                                                                                                                                                                                                                            |
 | `tests/`                   | `node:test` via `tsx`: goldens, source invariants, render tests.                                                                                                                                                                                                                                                                                                            |
 | `tests/acceptance/run.mjs` | Layer 3: Chromium over the built UI, one load per deep link.                                                                                                                                                                                                                                                                                                                |
+
+The left rail collapses to a 56px icon-only strip. Collapsing is CSS alone —
+`nav.side` gains `is-narrow`, and every row stays in the document — so the
+collapsed rail keeps its glyphs, its issue dots and its counts, the latter
+drawn as a dot on the glyph's corner. A collapsed rail expands over the main
+column on hover, and on keyboard focus whether or not the width was pinned;
+the grid track stays at the collapsed width, so the page underneath does not
+shift. The footer's Collapse/Expand row writes `sideCollapsed` and
+`sidePinned` to `localStorage` through `src/sidebar-prefs.ts`. Opening the
+details panel collapses the rail and closing it restores the rail, on
+transitions only and without touching the stored preference. First run
+replaces the sidebar with its own, which has no toggle.
 
 ### `apps/desktop/kit`
 
@@ -233,6 +246,13 @@ and reader computations are client-side presentation models without protocol equ
 
 `src/styles/shell.css` defines the desktop shell styles. Make shell design
 changes directly in this stylesheet.
+
+Layout is a separate concern from color, and its custom properties are
+declared on `.app` rather than on `:root`: `--side-track`, `--side-w-open`
+(224px), `--side-w`, `--side-pad`, `--side-head-pad`, `--side-open-content`
+and `--details-w` (300px). The sidebar animates its own width instead of the
+grid track, which avoids interpolating `grid-template-columns`, and
+`.app.side-narrow` is what sets the collapsed width (`3.5rem`).
 
 The one edit is the token block. Measured against `ui/styles.css`, the mock's
 48 `:root` tokens split **35 identical / 5 same-name-different-value / 8

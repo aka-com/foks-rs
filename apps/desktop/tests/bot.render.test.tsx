@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
+import type { ReactNode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import { decodeBotReply } from '../src/bot-contract';
 import type { BotEnrollment, BotAction } from '../src/bot-contract';
 installDom({
   url: 'http://localhost/',
-  body: '<div id="root"></div>',
+  body: '<div id="root"></div><div id="overlays"></div>',
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
@@ -22,6 +23,26 @@ test.before(async () => {
 });
 test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
+
+/** The sheet portals into the overlay root, so every panel needs a provider. */
+async function overlay(children: ReactNode) {
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
+  const portalRoot = document.getElementById('overlays');
+  assert.ok(portalRoot);
+  return createElement(OverlayProvider, {
+    backgroundRef: { current: null },
+    portalRoot,
+    children,
+  });
+}
+
+const presentation = {
+  title: 'Bot accounts',
+  subtitle: 'ada on Example',
+  onClose: () => {},
+};
 const progress: BotEnrollment = {
   operation_id: '1'.repeat(32),
   account_alias: 'work',
@@ -76,47 +97,112 @@ test('explicit role, confirmation and unknown recovery never export or replay', 
     },
   };
   const r = ui.render(
-    createElement(BotPanel, {
-      bridge,
-      profile: 'local',
-      account: 'work',
-      onComplete: () => {},
-    }),
+    await overlay(
+      createElement(BotPanel, {
+        bridge,
+        profile: 'local',
+        account: 'work',
+        presentation,
+        onComplete: () => {},
+      }),
+    ),
   );
-  ui.fireEvent.change(r.getByLabelText('Bot role'), {
+  ui.fireEvent.change(r.getByLabelText('Role'), {
     target: { value: 'owner' },
   });
-  ui.fireEvent.change(r.getByLabelText('Security key PIN, if needed'), {
-    target: { value: '654321' },
-  });
-  ui.fireEvent.click(r.getByText('Prepare bot enrollment'));
-  await ui.waitFor(() => assert.ok(r.queryByText('Confirm bot enrollment')));
+  ui.fireEvent.change(
+    r.getByLabelText('Security key PIN (enrolled keys only)'),
+    {
+      target: { value: '654321' },
+    },
+  );
+  ui.fireEvent.click(r.getByText('Enroll bot'));
+  await ui.waitFor(() => assert.ok(r.queryByText('Confirm')));
   assert.deepEqual(actions[0], {
     action: 'prepare',
     role: 'owner',
     pin: '654321',
   });
   assert.equal(
-    (r.getByLabelText('Security key PIN, if needed') as HTMLInputElement).value,
+    (
+      r.getByLabelText(
+        'Security key PIN (enrolled keys only)',
+      ) as HTMLInputElement
+    ).value,
     '',
   );
-  ui.fireEvent.click(r.getByText('Confirm bot enrollment'));
-  await ui.waitFor(() =>
-    assert.ok(r.queryByText('Confirm bot enrollment') === null),
-  );
-  assert.ok(r.queryByText('Export token once') === null);
-  ui.fireEvent.click(r.getByText('Check original enrollment'));
+  ui.fireEvent.click(r.getByText('Confirm'));
+  await ui.waitFor(() => assert.ok(r.queryByText('Confirm') === null));
+  assert.ok(r.queryByText('Export token') === null);
+  ui.fireEvent.click(r.getByText('Check status'));
   await ui.waitFor(() => assert.equal(actions.length, 3));
   assert.equal(actions[2].action, 'status');
   r.rerender(
-    createElement(BotPanel, {
-      bridge,
-      profile: 'local',
-      account: 'other',
-      onComplete: () => {},
-    }),
+    await overlay(
+      createElement(BotPanel, {
+        bridge,
+        profile: 'local',
+        account: 'other',
+        presentation,
+        onComplete: () => {},
+      }),
+    ),
   );
-  await ui.waitFor(() =>
-    assert.ok(r.queryByText('Check original enrollment') === null),
+  await ui.waitFor(() => assert.ok(r.queryByText('Check status') === null));
+});
+
+test('revocation accepts a security key PIN directly in the Revoke pane', async () => {
+  const { BotPanel } = (await vite.ssrLoadModule(
+    '/src/components/bot-panel.tsx',
+  )) as typeof import('../src/components/bot-panel');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const actions: BotAction[] = [];
+  const bridge = {
+    ...mockBridge(),
+    botAccount: async (
+      _profile: string,
+      _account: string,
+      action: BotAction,
+    ) => {
+      actions.push(action);
+      return { rows: [], message: 'Revoked' };
+    },
+  };
+  const r = ui.render(
+    await overlay(
+      createElement(BotPanel, {
+        bridge,
+        profile: 'local',
+        account: 'work',
+        presentation,
+        onComplete: () => {},
+      }),
+    ),
+  );
+  ui.fireEvent.click(r.getByRole('button', { name: 'Revoke' }));
+  ui.fireEvent.change(r.getByLabelText('Credential ID'), {
+    target: { value: progress.device_id },
+  });
+  ui.fireEvent.change(
+    r.getByLabelText('Security key PIN (enrolled keys only)'),
+    { target: { value: '654321' } },
+  );
+  ui.fireEvent.click(r.getAllByRole('button', { name: 'Revoke' }).at(-1)!);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Confirm revocation' }));
+  await ui.waitFor(() => assert.equal(actions.length, 1));
+  assert.deepEqual(actions[0], {
+    action: 'revoke',
+    device_id: progress.device_id,
+    pin: '654321',
+  });
+  assert.equal(
+    (
+      r.getByLabelText(
+        'Security key PIN (enrolled keys only)',
+      ) as HTMLInputElement
+    ).value,
+    '',
   );
 });

@@ -259,11 +259,11 @@ test('a login edits in structured fields and serializes through the existing dra
 
   ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
   assert.equal(password.getAttribute('type'), 'text');
-  ui.fireEvent.change(username, { target: { value: 'rae-next' } });
+  ui.fireEvent.change(username, { target: { value: 'satoshi-next' } });
   ui.fireEvent.change(password, { target: { value: 'correct horse' } });
   ui.fireEvent.click(r.getByRole('button', { name: 'Save changes' }));
 
-  await ui.waitFor(() => assert.match(saved, /username: rae-next/));
+  await ui.waitFor(() => assert.match(saved, /username: satoshi-next/));
   assert.match(saved, /password: correct horse/);
   assert.match(saved, /url: https:\/\/github\.com\/login/);
 });

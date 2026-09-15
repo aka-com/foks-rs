@@ -12,6 +12,7 @@ export * from './inset';
 export * from './kind-icon';
 export * from './menus';
 export * from './notice';
+export * from './panel-sheet';
 export * from './radio-card';
 export * from './search-field';
 export * from './sheet';

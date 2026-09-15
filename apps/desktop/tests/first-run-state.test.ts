@@ -162,7 +162,11 @@ test('skipped steps are excluded from completed step count', () => {
     ...initialFirstRun('own', 'checklist-own'),
     profile: checked,
     serverAddress: 'foks.example',
-    account: { alias: 'personal', username: 'rae', deviceName: 'Rae Mac' },
+    account: {
+      alias: 'personal',
+      username: 'satoshi',
+      deviceName: 'Satoshi Mac',
+    },
     protectSkipped: true,
   };
   assert.equal(completedFirstRunSteps(base), 2);
@@ -173,7 +177,11 @@ test('skipping protection step does not clear an already completed passphrase', 
     ...initialFirstRun('own', 'protect'),
     profile: checked,
     serverAddress: 'foks.example',
-    account: { alias: 'personal', username: 'rae', deviceName: 'Rae Mac' },
+    account: {
+      alias: 'personal',
+      username: 'satoshi',
+      deviceName: 'Satoshi Mac',
+    },
     passphraseSet: true,
   };
   const after = transitionFirstRun(protectedState, { type: 'skip-protect' });
@@ -283,7 +291,7 @@ test('checkpoint decoding rejects invalid entity kinds, nulls, and conflicting c
     );
   }
 
-  const account = { alias: 'personal', username: 'rae', deviceName: 'Mac' };
+  const account = { alias: 'personal', username: 'satoshi', deviceName: 'Mac' };
   const coherent = parsedCheckpoint(
     encodeFirstRunCheckpoint({
       ...initialFirstRun('invited', 'added'),
@@ -468,7 +476,7 @@ test('confirmed missing prerequisites rewind to the earliest valid resume point'
     ...initialFirstRun('invited', 'added'),
     profile: checked,
     serverAddress: 'foks.example',
-    account: { alias: 'personal', username: 'rae', deviceName: 'Mac' },
+    account: { alias: 'personal', username: 'satoshi', deviceName: 'Mac' },
     passphraseSet: true,
     group: namedGroup,
     added: true,
@@ -525,7 +533,7 @@ test('discarding an uncertain attempt is the only event that clears provisioning
     {
       type: 'account-complete',
       alias: 'personal',
-      username: 'rae',
+      username: 'satoshi',
       deviceName: 'Mac',
     },
     { type: 'discard-provisioned-account' },
@@ -577,7 +585,7 @@ test('discarding a connected account returns to the account step without adoptin
     {
       type: 'account-complete',
       alias: 'other',
-      username: 'rae',
+      username: 'satoshi',
       deviceName: 'Mac',
     },
     { type: 'discard-provisioning' },

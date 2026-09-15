@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { Dialog, DismissibleDialog } from '/kit/overlay-primitives';
 import {
@@ -49,13 +49,19 @@ import type {
 } from '../model';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, KvRoleInput } from '../bridge';
+import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { useToast } from '/kit/toasts';
 import { editableValue } from './edit-value';
 
 export type NewKind = Exclude<ItemKind, 'Folder'>;
 
-interface NewDraft {
+/** Group items default to team-readable content that only admins can change. */
+export const DEFAULT_READ_ROLE: KvRoleInput = 'Member:0';
+export const DEFAULT_WRITE_ROLE: KvRoleInput = 'Admin';
+
+/** A partially filled new-item form, carried across conflict recovery. */
+export interface NewDraft {
   path: string;
   site: string;
   username: string;
@@ -102,7 +108,8 @@ function defaultPath(itemKind: NewKind, folder?: string): string {
   return `${folder.replace(/\/$/, '')}/${name}`;
 }
 
-function fileDropPath(name: string, folder?: string): string {
+/** The vault path a dropped file takes: the current folder, else /documents. */
+export function fileDropPath(name: string, folder?: string): string {
   return folder && folder !== '/'
     ? `${folder.replace(/\/$/, '')}/${name}`
     : `/documents/${name}`;
@@ -116,6 +123,26 @@ function namedPath(
   const directory =
     folder && folder !== '/' ? folder.replace(/\/$/, '') : defaultDirectory;
   return `${directory}/${name}`;
+}
+
+/**
+ * The new-item draft a dropped file resumes from, so a drop that lands on an
+ * occupied path can reopen the sheet with the file and path already chosen.
+ */
+export function droppedFileDraft(path: string, sourcePath: string): NewDraft {
+  return {
+    path,
+    site: '',
+    username: '',
+    password: '',
+    website: '',
+    value: '',
+    resourceName: '',
+    target: '',
+    sourcePath,
+    readRole: DEFAULT_READ_ROLE,
+    writeRole: DEFAULT_WRITE_ROLE,
+  };
 }
 
 export function initialWriteWorkflow(
@@ -202,7 +229,7 @@ function storeOption(snapshot: AgentSnapshot, store: Store): CardOption {
 /**
  * Returns a user-facing explanation if the selected store is read-only or blocked.
  */
-function writeBlockReason(
+export function writeBlockReason(
   snapshot: AgentSnapshot,
   store: Store,
 ): string | null {
@@ -421,10 +448,10 @@ function NewSheet({
     workflow.draft?.sourcePath ?? null,
   );
   const [readRole, setReadRole] = useState<KvRoleInput>(
-    workflow.draft?.readRole ?? 'Member:0',
+    workflow.draft?.readRole ?? DEFAULT_READ_ROLE,
   );
   const [writeRole, setWriteRole] = useState<KvRoleInput>(
-    workflow.draft?.writeRole ?? 'Admin',
+    workflow.draft?.writeRole ?? DEFAULT_WRITE_ROLE,
   );
   const [hovering, setHovering] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -436,53 +463,26 @@ function NewSheet({
   const itemKind = workflow.itemKind;
   const roleArgs = group ? { readRole, writeRole } : {};
 
-  useEffect(() => {
-    if (itemKind !== 'File') return;
-    let disposed = false;
-    let hoverOff: (() => void) | undefined;
-    let pathsOff: (() => void) | undefined;
-    void bridge
-      .onDropHover(({ hovering: next }) => setHovering(next))
-      .then(
-        (off) => {
-          if (disposed) off();
-          else hoverOff = off;
-        },
-        (error) => {
-          if (!disposed) setFileError(normalizeCommandError(error).message);
-        },
-      );
-    void bridge
-      .onDropPaths((paths) => {
-        if (paths.length !== 1) {
-          setSourcePath(null);
-          setHovering(false);
-          setFileError('Drop exactly one file.');
-          return;
-        }
-        const first = paths[0];
-        if (!first) return;
-        setSourcePath(first);
-        setFileError(null);
-        const name = first.split(/[\\/]/).at(-1);
-        if (name) setPath(fileDropPath(name, workflow.initialFolder));
-        setHovering(false);
-      })
-      .then(
-        (off) => {
-          if (disposed) off();
-          else pathsOff = off;
-        },
-        (error) => {
-          if (!disposed) setFileError(normalizeCommandError(error).message);
-        },
-      );
-    return () => {
-      disposed = true;
-      hoverOff?.();
-      pathsOff?.();
-    };
-  }, [bridge, itemKind, workflow.initialFolder]);
+  useFileDrop({
+    bridge,
+    active: itemKind === 'File',
+    onHover: setHovering,
+    onPaths: (paths) => {
+      setHovering(false);
+      if (paths.length !== 1) {
+        setSourcePath(null);
+        setFileError('Drop exactly one file.');
+        return;
+      }
+      const first = paths[0];
+      if (!first) return;
+      setSourcePath(first);
+      setFileError(null);
+      const name = first.split(/[\\/]/).at(-1);
+      if (name) setPath(fileDropPath(name, workflow.initialFolder));
+    },
+    onError: (error) => setFileError(normalizeCommandError(error).message),
+  });
 
   const pathName = path.split('/').at(-1) ?? '';
   const submit = async (): Promise<void> => {
@@ -595,15 +595,6 @@ function NewSheet({
       width="mid"
       glyph={<KindIcon kind={itemKind} />}
       title={`New ${kindLabel(itemKind).toLowerCase()}`}
-      subtitle={
-        itemKind === 'Password'
-          ? 'A saved login with username and password credentials.'
-          : itemKind === 'Resource'
-            ? 'A value such as an API key or recovery code.'
-            : itemKind === 'File'
-              ? 'A file stored securely in this vault.'
-              : 'A reference pointing to another item in the same vault.'
-      }
       footer={
         <>
           <Button onClick={() => setWorkflow(null)}>Cancel</Button>
@@ -751,7 +742,6 @@ function ExistsSheet({
         clash ? <KindIcon kind={kindOf(clash) as FilterKind} /> : undefined
       }
       title={`An item already exists at ${workflow.path}`}
-      subtitle={`New ${kindLabel(workflow.itemKind).toLowerCase()} · not saved`}
       footer={
         <>
           <Button
@@ -996,7 +986,6 @@ function ConflictSheet({
             </span>
           }
           title="Discard unsaved changes?"
-          subtitle={`${nameOf(workflow.item.path)} · Unsaved changes`}
           footer={
             <>
               <Button onClick={() => setConfirmingDiscard(false)}>
@@ -1027,7 +1016,7 @@ function ConflictSheet({
       <Sheet
         glyph={<KindIcon kind={kindOf(workflow.item) as FilterKind} />}
         title="Item modified elsewhere"
-        subtitle="A newer version was saved from another device. Choose which version to keep."
+        subtitle="A newer version was saved from another device."
         footer={
           <>
             <Button onClick={() => setConfirmingDiscard(true)}>

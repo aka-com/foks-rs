@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
+import type { ReactNode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import { decodeSsoProgress } from '../src/sso-contract';
 import type { SsoProgress } from '../src/sso-contract';
 installDom({
   url: 'http://localhost/',
-  body: '<div id="root"></div>',
+  body: '<div id="root"></div><div id="overlays"></div>',
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
@@ -22,6 +23,26 @@ test.before(async () => {
 });
 test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
+
+/** The sheet portals into the overlay root, so every panel needs a provider. */
+async function overlay(children: ReactNode) {
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
+  const portalRoot = document.getElementById('overlays');
+  assert.ok(portalRoot);
+  return createElement(OverlayProvider, {
+    backgroundRef: { current: null },
+    portalRoot,
+    children,
+  });
+}
+
+const presentation = {
+  title: 'Organization sign-in',
+  subtitle: 'ada on Example',
+  onClose: () => {},
+};
 const progress: SsoProgress = {
   operationId: '1'.repeat(32),
   accountAlias: 'work',
@@ -107,17 +128,20 @@ test('consent, signed completion and usable access are distinct; no automatic op
     },
   };
   const r = ui.render(
-    createElement(SsoPanel, {
-      bridge,
-      profile: 'host',
-      account: 'work',
-      login: true,
-      onComplete: () => {
-        complete++;
-      },
-    }),
+    await overlay(
+      createElement(SsoPanel, {
+        bridge,
+        profile: 'host',
+        account: 'work',
+        login: true,
+        presentation,
+        onComplete: () => {
+          complete++;
+        },
+      }),
+    ),
   );
-  ui.fireEvent.click(r.getByText('Continue with organization'));
+  ui.fireEvent.click(r.getByText('Sign in'));
   await ui.waitFor(() => assert.ok(r.getByText('Open sign-in browser')));
   assert.equal(opened, 0);
   ui.fireEvent.click(r.getByText('Open sign-in browser'));
@@ -144,17 +168,20 @@ test('a response for another account never updates the displayed flow', async ()
     sso: async () => ({ ...progress, accountAlias: 'other' }),
   };
   const r = ui.render(
-    createElement(SsoPanel, {
-      bridge,
-      profile: 'host',
-      account: 'work',
-      login: true,
-      onComplete: () => {
-        throw new Error('wrong account');
-      },
-    }),
+    await overlay(
+      createElement(SsoPanel, {
+        bridge,
+        profile: 'host',
+        account: 'work',
+        login: true,
+        presentation,
+        onComplete: () => {
+          throw new Error('wrong account');
+        },
+      }),
+    ),
   );
-  ui.fireEvent.click(r.getByText('Continue with organization'));
+  ui.fireEvent.click(r.getByText('Sign in'));
   await ui.waitFor(() => assert.ok(r.getByRole('alert')));
   assert.equal(r.queryByText('Open sign-in browser'), null);
 });
@@ -195,15 +222,18 @@ test('account linkage status chooses explicit first-link action and preserves lo
     },
   };
   const r = ui.render(
-    createElement(SsoPanel, {
-      bridge,
-      profile: 'host',
-      account: 'work',
-      login: true,
-      onComplete: () => {},
-    }),
+    await overlay(
+      createElement(SsoPanel, {
+        bridge,
+        profile: 'host',
+        account: 'work',
+        login: true,
+        presentation,
+        onComplete: () => {},
+      }),
+    ),
   );
-  ui.fireEvent.click(r.getByText('Check account linkage'));
+  ui.fireEvent.click(r.getByText('Check linkage'));
   await ui.waitFor(() =>
     assert.ok(r.getByText(/Organization sign-in is enforced/)),
   );

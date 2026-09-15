@@ -217,14 +217,14 @@ fn account_projection_is_bound_to_catalog_identities() {
     let transport = AccountsTransport {
         calls: Mutex::new(Vec::new()),
         response: serde_json::json!([
-            {"profile":"work.example","alias":"personal","username":"rae.chen"},
+            {"profile":"work.example","alias":"personal","username":"vitalik"},
             {"profile":"work.example","alias":"automation","username":"deploy-bot"}
         ]),
     };
     let accounts = load_accounts(&transport, &catalog).unwrap();
     assert_eq!(accounts.len(), 2);
     assert_eq!(accounts[0].alias, "automation");
-    assert_eq!(accounts[1].username, "rae.chen");
+    assert_eq!(accounts[1].username, "vitalik");
     assert_eq!(
         transport.calls.lock().unwrap().as_slice(),
         &[Operation::ListAccounts {
@@ -235,7 +235,7 @@ fn account_projection_is_bound_to_catalog_identities() {
     let unknown = AccountsTransport {
         calls: Mutex::new(Vec::new()),
         response: serde_json::json!([
-            {"profile":"work.example","alias":"personal","username":"rae.chen"},
+            {"profile":"work.example","alias":"personal","username":"vitalik"},
             {"profile":"work.example","alias":"outside","username":"mallory"}
         ]),
     };
@@ -246,11 +246,11 @@ fn account_projection_is_bound_to_catalog_identities() {
 
     for malformed in [
         serde_json::json!([
-            {"profile":"work.example","alias":"personal","username":"rae.chen","extra":true},
+            {"profile":"work.example","alias":"personal","username":"vitalik","extra":true},
             {"profile":"work.example","alias":"automation","username":"deploy-bot"}
         ]),
         serde_json::json!([
-            {"profile":"work.example","alias":"personal","username":"rae\nchen"},
+            {"profile":"work.example","alias":"personal","username":"satoshi\nvitalik"},
             {"profile":"work.example","alias":"automation","username":"deploy-bot"}
         ]),
     ] {
@@ -273,9 +273,9 @@ impl foks_desktop::AgentTransport for MixedAccountsTransport {
     fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         self.calls.lock().unwrap().push(operation.clone());
         match operation {
-            Operation::ListAccounts { profile } if profile == "available" => {
-                Ok(serde_json::json!([{"profile":"available","alias":"personal","username":"rae"}]))
-            }
+            Operation::ListAccounts { profile } if profile == "available" => Ok(
+                serde_json::json!([{"profile":"available","alias":"personal","username":"satoshi"}]),
+            ),
             Operation::ListAccounts { profile } => {
                 panic!("blocked profile {profile} must not be read")
             }
@@ -297,7 +297,7 @@ fn account_projection_reuses_the_catalog_profile_overview() {
                 value: serde_json::json!([{
                     "profile":"work.example",
                     "alias":"personal",
-                    "username":"rae.chen"
+                    "username":"vitalik"
                 }]),
             },
             teams: ResponseResult::Success {
@@ -322,7 +322,7 @@ fn account_projection_reuses_the_catalog_profile_overview() {
     };
 
     let accounts = load_accounts(&transport, &catalog).unwrap();
-    assert_eq!(accounts[0].username, "rae.chen");
+    assert_eq!(accounts[0].username, "vitalik");
     assert!(transport.calls.lock().unwrap().is_empty());
 }
 
@@ -392,12 +392,12 @@ fn device_removal_preflight_refuses_current_unknown_and_duplicate_ids() {
             store: account_id.clone(),
             profile: "work.example".to_owned(),
             alias: "personal".to_owned(),
-            username: "rae".to_owned(),
+            username: "satoshi".to_owned(),
         },
     );
     assert_eq!(
         state.selected_account_dto(&account_id).unwrap().username,
-        "rae"
+        "satoshi"
     );
     state.devices.lock().unwrap().insert(
         account_id.clone(),

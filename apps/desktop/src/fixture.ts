@@ -62,10 +62,10 @@ const RAW: AgentSnapshot = {
     {
       store: 'acct:personal',
       alias: 'personal',
-      username: 'rae',
+      username: 'satoshi',
       server: 'personal',
     },
-    { store: 'acct:work', alias: 'work', username: 'rae.chen', server: 'acme' },
+    { store: 'acct:work', alias: 'work', username: 'vitalik', server: 'acme' },
   ],
   storeInventory: [],
   profileInventory: [
@@ -137,7 +137,7 @@ const RAW: AgentSnapshot = {
       read: 'Owner',
       write: 'Owner',
       value:
-        'username: rae\npassword: ••••••••••••\nurl: https://github.com/login',
+        'username: satoshi\npassword: ••••••••••••\nurl: https://github.com/login',
     },
     {
       store: 'acct:personal',
@@ -147,7 +147,7 @@ const RAW: AgentSnapshot = {
       version: 2,
       read: 'Owner',
       write: 'Owner',
-      value: 'user: rae@fastmail.com\npassword: ••••••••••',
+      value: 'user: satoshi@fastmail.com\npassword: ••••••••••',
     },
     {
       store: 'acct:personal',
@@ -252,7 +252,7 @@ const RAW: AgentSnapshot = {
       version: 4,
       read: 'Member · visibility 0',
       write: 'Admin',
-      value: 'ssid: Chen-Guest\npassword: ••••••••',
+      value: 'ssid: Satoshi-Guest\npassword: ••••••••',
     },
     {
       store: 'team:household',
@@ -288,7 +288,7 @@ const RAW: AgentSnapshot = {
     },
     {
       store: 'team:eng',
-      username: 'rae.chen',
+      username: 'vitalik',
       label: 'you',
       party_kind: 'user',
       generation: 6,
@@ -351,7 +351,7 @@ const RAW: AgentSnapshot = {
     },
     {
       store: 'team:household',
-      username: 'rae',
+      username: 'satoshi',
       label: 'you',
       party_kind: 'user',
       generation: 2,

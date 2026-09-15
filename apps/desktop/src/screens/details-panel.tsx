@@ -38,6 +38,7 @@ import type { Item, Party, RoleWire, AgentSnapshot } from '../model';
 import type { Selection } from '../location';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, ItemRequest, ReadItemResponse } from '../bridge';
+import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { editableValue } from './edit-value';
 
@@ -405,50 +406,22 @@ export function DetailsPanel({
 
   const selectedKind = item ? kindOf(item) : null;
   const selectedFileMode = selectedKind === 'File' || binaryFile;
-  useEffect(() => {
-    if (!editing || !selectedFileMode) return;
-    let disposed = false;
-    let hoverOff: (() => void) | undefined;
-    let pathsOff: (() => void) | undefined;
-    void bridge
-      .onDropHover(({ hovering }) => setDropHover(hovering))
-      .then(
-        (off) => {
-          if (disposed) off();
-          else hoverOff = off;
-        },
-        (error) => {
-          if (!disposed) setEditError(normalizeCommandError(error).message);
-        },
-      );
-    void bridge
-      .onDropPaths((paths) => {
-        if (paths.length !== 1) {
-          setReplacementPath(null);
-          setEditError(
-            'Drop exactly one file to replace the current contents.',
-          );
-        } else {
-          setReplacementPath(paths[0] ?? null);
-          setEditError(null);
-        }
-        setDropHover(false);
-      })
-      .then(
-        (off) => {
-          if (disposed) off();
-          else pathsOff = off;
-        },
-        (error) => {
-          if (!disposed) setEditError(normalizeCommandError(error).message);
-        },
-      );
-    return () => {
-      disposed = true;
-      hoverOff?.();
-      pathsOff?.();
-    };
-  }, [bridge, editing, selectedFileMode]);
+  useFileDrop({
+    bridge,
+    active: editing && selectedFileMode,
+    onHover: setDropHover,
+    onPaths: (paths) => {
+      setDropHover(false);
+      if (paths.length !== 1) {
+        setReplacementPath(null);
+        setEditError('Drop exactly one file to replace the current contents.');
+        return;
+      }
+      setReplacementPath(paths[0] ?? null);
+      setEditError(null);
+    },
+    onError: (error) => setEditError(normalizeCommandError(error).message),
+  });
 
   if (!item) {
     return (

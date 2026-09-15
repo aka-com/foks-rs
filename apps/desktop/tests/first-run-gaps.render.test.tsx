@@ -89,7 +89,7 @@ async function harness() {
     managedLocal: true,
     serverAddress: 'localhost:4430',
     profile,
-    account: { alias: 'personal', username: 'rae', deviceName: 'Mac' },
+    account: { alias: 'personal', username: 'satoshi', deviceName: 'Mac' },
   };
   const bridge: Bridge = {
     ...mockBridge(complete),

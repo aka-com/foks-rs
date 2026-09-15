@@ -1,15 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
+import { Button, Inset, InsetRow, PanelSheet } from './index';
+import type { PanelPresentation } from './index';
+
 export function AdminPanel({
   bridge,
   profile,
   account,
+  presentation,
 }: {
   bridge: Bridge;
   profile: string;
   account: string;
-}) {
+  presentation: PanelPresentation;
+}): ReactNode {
   const [destination, setDestination] = useState('');
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
@@ -41,8 +47,8 @@ export function AdminPanel({
       if (active.current === owner)
         setMessage(
           configure
-            ? 'Admin destination saved.'
-            : 'Host administration opened in a private window.',
+            ? 'Address saved.'
+            : 'Admin panel opened in a private window.',
         );
     } catch (e) {
       if (active.current === owner) setError(normalizeCommandError(e).message);
@@ -51,46 +57,63 @@ export function AdminPanel({
     }
   };
   return (
-    <section
-      className="pcard"
-      aria-label={`Host administration for ${account}`}
+    <PanelSheet
+      presentation={presentation}
+      busy={busy}
+      footer={
+        <>
+          <Button disabled={busy} onClick={presentation.onClose}>
+            Cancel
+          </Button>
+          <Button
+            disabled={busy || !destination}
+            onClick={() => void run(true)}
+          >
+            Save address
+          </Button>
+          <Button
+            variant="primary"
+            disabled={busy}
+            onClick={() => void run(false)}
+          >
+            Open admin panel
+          </Button>
+        </>
+      }
     >
-      <h3>Host administration · {account}</h3>
       <p>
-        For hosts that offer a web administration panel. Enter the HTTPS address
-        supplied by your host operator. The panel opens in a private window and
-        closes when you lock FOKS.
+        Opens this host’s web administration panel in a private window, signed
+        in with this device’s account key. The window closes when FOKS locks.
+        Enter the address provided by the host operator.
       </p>
-      <label>
-        Admin HTTPS address{' '}
-        <input
-          type="url"
-          value={destination}
-          maxLength={2048}
-          disabled={busy}
-          placeholder="https://admin.example/"
-          onChange={(e) => setDestination(e.target.value)}
-        />
-      </label>
-      <button disabled={busy || !destination} onClick={() => void run(true)}>
-        Save admin destination
-      </button>
-      <label>
-        Admin security key PIN, if needed{' '}
-        <input
-          type="password"
-          autoComplete="off"
-          value={pin}
-          maxLength={32}
-          disabled={busy}
-          onChange={(e) => setPin(e.target.value)}
-        />
-      </label>
-      <button disabled={busy} onClick={() => void run(false)}>
-        Open host administration
-      </button>
+      <Inset className="form">
+        <InsetRow label="Admin panel address">
+          <input
+            type="url"
+            value={destination}
+            maxLength={2048}
+            disabled={busy}
+            placeholder="https://admin.example/"
+            onChange={(e) => setDestination(e.target.value)}
+          />
+        </InsetRow>
+        <InsetRow label="Security key PIN (enrolled keys only)">
+          <input
+            type="password"
+            autoComplete="off"
+            value={pin}
+            maxLength={32}
+            disabled={busy}
+            onChange={(e) => setPin(e.target.value)}
+          />
+        </InsetRow>
+      </Inset>
       {message && <p role="status">{message}</p>}
-      {error && <p role="alert">{error}</p>}
-    </section>
+      {error && (
+        <p role="alert" className="crit">
+          {error}
+        </p>
+      )}
+    </PanelSheet>
   );
 }

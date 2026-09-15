@@ -176,6 +176,31 @@ export const FOKS_ICONS = {
     ['path', { d: 'M5 21V3h9v18M14 21h5M3 21h2' }],
     ['circle', { cx: 11.5, cy: 12, r: 1, fill: 'currentColor' }],
   ],
+  chat: [
+    [
+      'path',
+      { d: 'M20 14a2 2 0 0 1-2 2H9l-4 3.5V6a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2z' },
+    ],
+  ],
+  /* Sidebar collapse toggle, expanded state. */
+  'panel-filled': [
+    ['rect', { x: 3, y: 4, width: 18, height: 16, rx: 2 }],
+    ['path', { d: 'M9.5 4v16', fill: 'none' }],
+    [
+      'path',
+      {
+        d: 'M4.6 5.5h3.3v13H4.6z',
+        fill: 'currentColor',
+        stroke: 'none',
+        opacity: '.55',
+      },
+    ],
+  ],
+  /* Sidebar collapse toggle, collapsed state. */
+  'panel-hollow': [
+    ['rect', { x: 3, y: 4, width: 18, height: 16, rx: 2 }],
+    ['path', { d: 'M9.5 4v16' }],
+  ],
 } as const satisfies Record<string, readonly IconElement[]>;
 
 /** Every icon name the shell can draw. */

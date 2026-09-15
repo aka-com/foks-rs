@@ -1,19 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import type { RenameAction, RenameProgress } from '../rename-contract';
 import { normalizeCommandError } from '../bridge';
+import { Button, Inset, InsetRow, PanelSheet } from './index';
+import type { PanelPresentation } from './index';
 
 export function RenamePanel({
   bridge,
   profile,
   account,
+  presentation,
   onComplete,
 }: {
   bridge: Bridge;
   profile: string;
   account: string;
+  presentation: PanelPresentation;
   onComplete: () => void | Promise<void>;
-}) {
+}): ReactNode {
   const [name, setName] = useState('');
   const [pin, setPin] = useState('');
   const [rows, setRows] = useState<RenameProgress[]>([]);
@@ -63,46 +68,60 @@ export function RenamePanel({
     }
   };
   return (
-    <section className="pcard" aria-label={`Change username for ${account}`}>
-      <h3>Change username · {account}</h3>
+    <PanelSheet
+      presentation={presentation}
+      busy={busy}
+      footer={
+        <>
+          <Button disabled={busy} onClick={presentation.onClose}>
+            Cancel
+          </Button>
+          <Button disabled={busy} onClick={() => void run(null)}>
+            Show pending changes
+          </Button>
+          <Button
+            variant="primary"
+            disabled={busy || !name}
+            onClick={() =>
+              void run({ action: 'prepare', username: name, pin: null })
+            }
+          >
+            Change username
+          </Button>
+        </>
+      }
+    >
       <p>
-        The local label for this account remains {account}. Enter a name, then
-        confirm the change.
+        Changes the username on the server. The local alias shown in the sidebar
+        does not change.
       </p>
-      <label>
-        New username{' '}
-        <input
-          value={name}
-          maxLength={256}
-          disabled={busy}
-          onChange={(e) => setName(e.target.value)}
-        />
-      </label>
-      <label>
-        Security key PIN, if needed{' '}
-        <input
-          type="password"
-          autoComplete="off"
-          value={pin}
-          maxLength={32}
-          disabled={busy}
-          onChange={(e) => setPin(e.target.value)}
-        />
-      </label>
-      <button
-        disabled={busy || !name}
-        onClick={() =>
-          void run({ action: 'prepare', username: name, pin: null })
-        }
-      >
-        Prepare rename
-      </button>
-      <button disabled={busy} onClick={() => void run(null)}>
-        Recover rename operations
-      </button>
-      {error && <p role="alert">{error}</p>}
+      <Inset className="form">
+        <InsetRow label="Username">
+          <input
+            value={name}
+            maxLength={256}
+            disabled={busy}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </InsetRow>
+        <InsetRow label="Security key PIN (enrolled keys only)">
+          <input
+            type="password"
+            autoComplete="off"
+            value={pin}
+            maxLength={32}
+            disabled={busy}
+            onChange={(e) => setPin(e.target.value)}
+          />
+        </InsetRow>
+      </Inset>
+      {error && (
+        <p role="alert" className="crit">
+          {error}
+        </p>
+      )}
       {rows.map((p) => (
-        <div key={p.operation_id}>
+        <div key={p.operation_id} className="op">
           <p role="status">
             {p.target ? `Requested: ${p.target}. ` : ''}
             {p.current_username ? `Current: ${p.current_username}. ` : ''}
@@ -120,46 +139,49 @@ export function RenamePanel({
               status before retrying to prevent conflicting updates.
             </p>
           )}
-          {p.state === 'prepared' && (
-            <>
-              <button
+          <div className="btns">
+            {p.state === 'prepared' && (
+              <>
+                <Button
+                  variant="primary"
+                  disabled={busy}
+                  onClick={() =>
+                    void run({
+                      action: 'attempt',
+                      operation_id: p.operation_id,
+                      pin: null,
+                    })
+                  }
+                >
+                  Confirm
+                </Button>
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void run({ action: 'cancel', operation_id: p.operation_id })
+                  }
+                >
+                  Cancel
+                </Button>
+              </>
+            )}
+            {!['complete', 'rejected'].includes(p.state) && (
+              <Button
                 disabled={busy}
                 onClick={() =>
                   void run({
-                    action: 'attempt',
+                    action: 'status',
                     operation_id: p.operation_id,
                     pin: null,
                   })
                 }
               >
-                Confirm rename
-              </button>
-              <button
-                disabled={busy}
-                onClick={() =>
-                  void run({ action: 'cancel', operation_id: p.operation_id })
-                }
-              >
-                Cancel rename
-              </button>
-            </>
-          )}
-          {!['complete', 'rejected'].includes(p.state) && (
-            <button
-              disabled={busy}
-              onClick={() =>
-                void run({
-                  action: 'status',
-                  operation_id: p.operation_id,
-                  pin: null,
-                })
-              }
-            >
-              Check original operation
-            </button>
-          )}
+                Check status
+              </Button>
+            )}
+          </div>
         </div>
       ))}
-    </section>
+    </PanelSheet>
   );
 }

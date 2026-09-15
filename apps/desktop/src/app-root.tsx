@@ -59,9 +59,16 @@ import type { Item, AgentSnapshot } from './model';
 import { reconcileMutationFailure } from './mutation-recovery';
 import type { MutationFailureHandler } from './mutation-recovery';
 import { Sidebar } from './shell/sidebar';
+import {
+  rememberSideCollapsed,
+  rememberSidePinned,
+  storedSideCollapsedPref,
+  storedSidePinnedPref,
+} from './sidebar-prefs';
 import { AlertsScreen } from './screens/alerts-screen';
 import { DetailsPanel } from './screens/details-panel';
 import { ItemsScreen } from './screens/items-screen';
+import type { DropUpload } from './screens/items-screen';
 import { ChatScreen } from './screens/chat-screen';
 import { GroupSettingsScreen } from './screens/groups-screen';
 import {
@@ -72,6 +79,9 @@ import { PlaceholderScreen } from './screens/placeholder-screen';
 import { SettingsScreen } from './screens/settings-screen';
 import { listsItems } from './screens/scope';
 import {
+  DEFAULT_READ_ROLE,
+  DEFAULT_WRITE_ROLE,
+  droppedFileDraft,
   initialWriteWorkflow,
   workflowForError,
   WriteOverlay,
@@ -616,6 +626,17 @@ function VaultShell({
   const [initialSelection] = useState(
     () => scene.selection ?? demoSelection(scene.demo, agentSnapshot),
   );
+  const [sideCollapsed, setSideCollapsed] = useState(storedSideCollapsedPref);
+  const [sidePinned, setSidePinned] = useState(storedSidePinnedPref);
+  // The manual toggle is the only writer of the stored preference, and it
+  // pins the rail: a width chosen by hand is not undone by the next hover.
+  const toggleSidebar = useCallback(() => {
+    const collapsed = !sideCollapsed;
+    setSideCollapsed(collapsed);
+    rememberSideCollapsed(collapsed);
+    setSidePinned(true);
+    rememberSidePinned(true);
+  }, [sideCollapsed]);
   const [fallback] = useState(() => {
     return storeAtScene({ ...scene, selection: initialSelection });
   });
@@ -912,6 +933,42 @@ function VaultShell({
     [commandError, refresh],
   );
 
+  /**
+   * Saves a file dropped on a vault's content area. Group items take the same
+   * default roles the new-item sheet offers; a path already in use reopens
+   * that sheet's conflict step with the dropped file still chosen.
+   */
+  const uploadDroppedFile = useCallback(
+    async ({ storeId, path, sourcePath }: DropUpload): Promise<void> => {
+      const target = storeOf(shown, storeId);
+      try {
+        await bridge.importDroppedFile({
+          storeId,
+          path,
+          sourcePath,
+          ...(target?.kind === 'team'
+            ? { readRole: DEFAULT_READ_ROLE, writeRole: DEFAULT_WRITE_ROLE }
+            : {}),
+        });
+        await refresh(
+          `Uploaded ${nameOf(path)}${target ? ` to ${target.name}` : ''}`,
+        );
+      } catch (error) {
+        if (normalizeCommandError(error).code === 'already-exists') {
+          setWorkflow({
+            kind: 'exists',
+            itemKind: 'File',
+            storeId,
+            path,
+            draft: droppedFileDraft(path, sourcePath),
+          });
+          await mutationError(error, { report: false });
+        } else await mutationError(error);
+      }
+    },
+    [bridge, mutationError, refresh, shown],
+  );
+
   const refreshAll = (): void => {
     if (refreshingSnapshot) return;
     setRefreshingSnapshot(true);
@@ -1099,6 +1156,34 @@ function VaultShell({
     listsItems(here) &&
     !(here.kind === 'store' && !storeReadable(shown, here.ref)) &&
     !(state.selection && !storeReadable(shown, state.selection.store));
+  // Adjust rail width when details visibility changes. Opening details
+  // collapses the rail; closing details restores it. This transient layout
+  // state is not persisted, and an initially open details panel collapses the
+  // rail once.
+  const detailsWasShown = useRef(false);
+  useEffect(() => {
+    if (detailsWasShown.current === detailsShown) return;
+    detailsWasShown.current = detailsShown;
+    setSideCollapsed(detailsShown);
+  }, [detailsShown]);
+  // Scrollbars show while a pane is scrolling and for 700ms after. Scroll
+  // events do not bubble, so the listener is capture-phase; that also covers
+  // keyboard scrolling, which no pointer event would report.
+  useEffect(() => {
+    const timers = new WeakMap<Element, number>();
+    const onScroll = (event: Event): void => {
+      const pane = event.target;
+      if (!(pane instanceof HTMLElement)) return;
+      pane.classList.add('scrolling');
+      window.clearTimeout(timers.get(pane));
+      timers.set(
+        pane,
+        window.setTimeout(() => pane.classList.remove('scrolling'), 700),
+      );
+    };
+    document.addEventListener('scroll', onScroll, true);
+    return () => document.removeEventListener('scroll', onScroll, true);
+  }, []);
   const selectedAccessGeneration = state.selection
     ? (accessGenerations.get(
         storeOf(shown, state.selection.store)?.server ?? '',
@@ -1131,6 +1216,10 @@ function VaultShell({
         })
       }
       onCommandError={commandError}
+      onUploadDroppedFile={uploadDroppedFile}
+      // A modal workflow owns the drop while it is open; the new-item sheet
+      // takes dropped files itself.
+      dropEnabled={workflow === null}
       accessNow={accessNow}
     />
   ) : here.kind === 'team-chat' ? (
@@ -1238,11 +1327,16 @@ function VaultShell({
         />
       </div>
       <div
-        className={
+        className={[
+          'app',
           detailsShown || (here.kind === 'first-run' && here.step === 'added')
-            ? 'app with-details'
-            : 'app'
-        }
+            ? 'with-details'
+            : '',
+          // First run replaces the sidebar with its own, which has no toggle.
+          sideCollapsed && here.kind !== 'first-run' ? 'side-narrow' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
         ref={appRef}
       >
         {here.kind === 'first-run' ? (
@@ -1282,6 +1376,9 @@ function VaultShell({
                   />
                 ) : undefined
               }
+              collapsed={sideCollapsed}
+              pinned={sidePinned}
+              onToggleCollapsed={toggleSidebar}
             />
             <main className="main">{screen}</main>
           </>

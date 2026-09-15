@@ -61,20 +61,20 @@ const catalog: CatalogDto = {
   profiles: ['foks.example.net'],
   stores: [
     {
-      id: '{"Account":{"profile":"foks.example.net","account_alias":"rae"}}',
+      id: '{"Account":{"profile":"foks.example.net","account_alias":"satoshi"}}',
       kind: 'account',
       name: 'Personal',
       server: 'foks.example.net',
-      account: 'rae',
+      account: 'satoshi',
     },
   ],
   knownStores: [
     {
-      id: '{"Account":{"profile":"foks.example.net","account_alias":"rae"}}',
+      id: '{"Account":{"profile":"foks.example.net","account_alias":"satoshi"}}',
       kind: 'account',
       name: 'Personal',
       server: 'foks.example.net',
-      account: 'rae',
+      account: 'satoshi',
     },
   ],
   inventory: [
@@ -86,7 +86,8 @@ const catalog: CatalogDto = {
   ],
   items: [
     {
-      store: '{"Account":{"profile":"foks.example.net","account_alias":"rae"}}',
+      store:
+        '{"Account":{"profile":"foks.example.net","account_alias":"satoshi"}}',
       path: '/logins/example.test',
       kind: 'Secret',
       size: 42,
@@ -325,7 +326,7 @@ test('decoders validate server status, member rosters, and federation entries', 
         store: 'opaque-account-ref',
         profile: 'foks.example',
         alias: 'personal',
-        username: 'rae.chen',
+        username: 'vitalik',
       },
     ]),
     [
@@ -333,14 +334,14 @@ test('decoders validate server status, member rosters, and federation entries', 
         store: 'opaque-account-ref',
         server: 'foks.example',
         alias: 'personal',
-        username: 'rae.chen',
+        username: 'vitalik',
       },
     ],
   );
   assert.throws(
     () =>
       decodeAccounts([
-        { profile: 'foks.example', alias: 'personal', username: 'rae.chen' },
+        { profile: 'foks.example', alias: 'personal', username: 'vitalik' },
       ]),
     /store must be a string/,
   );
@@ -353,7 +354,7 @@ test('decoders validate server status, member rosters, and federation entries', 
       chain: 2,
       epoch: 9,
       lease: null,
-      accounts: ['rae'],
+      accounts: ['satoshi'],
       state: 'ok',
       chat_available: true,
     },
@@ -409,7 +410,7 @@ test('decoders successfully parse the full wire contract golden fixture', async 
       store: 'opaque-account-ref',
       server: 'foks.example',
       alias: 'personal',
-      username: 'rae.chen',
+      username: 'vitalik',
     },
   ]);
   assert.equal(decodeReadItem(fixture.readItem).version, 7);
@@ -496,7 +497,7 @@ test('decoders successfully parse the full wire contract golden fixture', async 
   );
   assert.equal(
     decodeYubiResult('create_yubi_account', fixture.yubiAccount).username,
-    'rae',
+    'satoshi',
   );
   assert.equal(
     decodeYubiResult('sync_yubi_account', fixture.yubiSync).entries,
@@ -562,7 +563,7 @@ test('decoders successfully parse the full wire contract golden fixture', async 
 test('decodeGoProfileDiscovery validates profile candidate fields and rejects invalid candidates', () => {
   const candidate = {
     candidateId: 'a'.repeat(64),
-    username: 'raymond',
+    username: 'satoshi',
     serverHint: 'foks.app',
     hostId: `02${'b'.repeat(64)}`,
     userId: `01${'c'.repeat(64)}`,
@@ -725,7 +726,7 @@ test('decoders reject invalid server status, malformed reset tokens, and invalid
     () =>
       decodeYubiResult('create_yubi_account', {
         alias: 'key',
-        username: 'rae',
+        username: 'satoshi',
         yubiId: `08${'8'.repeat(64)}`,
         subkeyId: `0d${'d'.repeat(64)}`,
         userChainSequence: 1,
@@ -1159,13 +1160,13 @@ test('discoverUnboundTeams discovers teams only for accounts with no binding', a
       {
         store: 'acct:personal',
         alias: 'personal',
-        username: 'rae',
+        username: 'satoshi',
         server: 'foks.example.net',
       },
       {
         store: 'acct:work',
         alias: 'work',
-        username: 'rae.chen',
+        username: 'vitalik',
         server: 'acme',
       },
     ],
@@ -1250,7 +1251,7 @@ test('loadSnapshot makes a single catalog call and does not leak fixture data in
     },
     listStores: async () => ({ ...catalog, items: [] }),
     listServers: async () => [
-      listedServer('foks.example.net', 'never-probed', ['rae']),
+      listedServer('foks.example.net', 'never-probed', ['satoshi']),
     ],
     describeServerStatus: async () => ({
       profile: 'foks.example.net',
@@ -1264,8 +1265,8 @@ test('loadSnapshot makes a single catalog call and does not leak fixture data in
       {
         store: accountStore.id,
         server: 'foks.example.net',
-        alias: 'rae',
-        username: 'rae',
+        alias: 'satoshi',
+        username: 'satoshi',
       },
     ],
     listParties: async () => [],
@@ -1284,8 +1285,8 @@ test('loadSnapshot makes a single catalog call and does not leak fixture data in
     {
       store: accountStore.id,
       server: 'foks.example.net',
-      alias: 'rae',
-      username: 'rae',
+      alias: 'satoshi',
+      username: 'satoshi',
     },
   ]);
   assert.equal(snapshot.parties.length, 0);
@@ -1332,7 +1333,7 @@ test('loadSnapshot keeps known stores visible while revoking access to unavailab
     agentStatus: async () => ({ state: 'ready' }),
     listCatalog: async () => response,
     listServers: async () => [
-      listedServer('foks.example.net', 'never-probed', ['rae']),
+      listedServer('foks.example.net', 'never-probed', ['satoshi']),
     ],
     describeServerStatus: async () => ({
       profile: 'foks.example.net',
@@ -1375,7 +1376,7 @@ test('creates a notification when a server cannot be described instead of omitti
     },
     listStores: async () => ({ ...catalog, items: [] }),
     listServers: async () => [
-      listedServer('foks.example.net', 'never-probed', ['rae']),
+      listedServer('foks.example.net', 'never-probed', ['satoshi']),
     ],
     // Verify that an unprobed server with null host raises a never-probed notification.
     describeServerStatus: async () => ({
@@ -1390,8 +1391,8 @@ test('creates a notification when a server cannot be described instead of omitti
       {
         store: accountStore.id,
         server: 'foks.example.net',
-        alias: 'rae',
-        username: 'rae',
+        alias: 'satoshi',
+        username: 'satoshi',
       },
     ],
     listParties: async () => [],
@@ -1425,7 +1426,7 @@ test('loadSnapshot does not fetch team rosters for blocked profiles', async () =
         kind: 'team',
         name: 'Ops',
         server: 'foks.example.net',
-        account: 'rae',
+        account: 'satoshi',
         alias: 'ops',
         active: true,
         team_kind: 'named',
@@ -1476,7 +1477,7 @@ test('loadSnapshot does not fetch team rosters for blocked profiles', async () =
 test('loadSnapshot does not fetch members for an inactive team', async () => {
   const storeId = '{"Team":{"profile":"foks.example.net","team_alias":"ops"}}';
   const accountId =
-    '{"Account":{"profile":"foks.example.net","account_alias":"rae"}}';
+    '{"Account":{"profile":"foks.example.net","account_alias":"satoshi"}}';
   const pending: CatalogDto = {
     profiles: ['foks.example.net'],
     stores: [
@@ -1485,14 +1486,14 @@ test('loadSnapshot does not fetch members for an inactive team', async () => {
         kind: 'account',
         name: 'Personal',
         server: 'foks.example.net',
-        account: 'rae',
+        account: 'satoshi',
       },
       {
         id: storeId,
         kind: 'team',
         name: 'Ops',
         server: 'foks.example.net',
-        account: 'rae',
+        account: 'satoshi',
         alias: 'ops',
         active: false,
         team_kind: 'named',
@@ -1519,7 +1520,7 @@ test('loadSnapshot does not fetch members for an inactive team', async () => {
     listCatalog: async () => pending,
     listStores: async () => ({ ...pending, items: [] }),
     listServers: async () => [
-      listedServer('foks.example.net', 'never-probed', ['rae']),
+      listedServer('foks.example.net', 'never-probed', ['satoshi']),
     ],
     describeServerStatus: async () => ({
       profile: 'foks.example.net',
@@ -1533,8 +1534,8 @@ test('loadSnapshot does not fetch members for an inactive team', async () => {
       {
         store: accountId,
         server: 'foks.example.net',
-        alias: 'rae',
-        username: 'rae',
+        alias: 'satoshi',
+        username: 'satoshi',
       },
     ],
     listParties: async () => {
@@ -1744,13 +1745,13 @@ test('loadSnapshot only imports accounts belonging to active profiles', async ()
         store: 'acct:personal',
         server: 'personal',
         alias: 'personal',
-        username: 'rae',
+        username: 'satoshi',
       },
       {
         store: 'acct:work',
         server: 'acme',
         alias: 'work',
-        username: 'rae.chen',
+        username: 'vitalik',
       },
     ],
     listParties: async () => {
@@ -1800,7 +1801,7 @@ test('loadSnapshot omits rosters for lapsed servers and enriches active member a
       {
         store: 'acct:personal',
         alias: 'personal',
-        username: 'rae',
+        username: 'satoshi',
         server: 'personal',
       },
     ],
@@ -1839,13 +1840,13 @@ test('loadSnapshot omits rosters for lapsed servers and enriches active member a
       {
         store: 'acct:personal',
         alias: 'personal',
-        username: 'rae',
+        username: 'satoshi',
         server: 'personal',
       },
       {
         store: 'acct:work',
         alias: 'work',
-        username: 'rae.chen',
+        username: 'vitalik',
         server: 'acme',
       },
     ],
@@ -1865,7 +1866,7 @@ test('loadSnapshot omits rosters for lapsed servers and enriches active member a
       if (storeId !== 'team:eng' || current.parties.status !== 'success')
         return current;
       const local = current.parties.value.find(
-        (party) => party.username === 'rae.chen',
+        (party) => party.username === 'vitalik',
       );
       assert.ok(local);
       return {
@@ -1888,7 +1889,7 @@ test('loadSnapshot omits rosters for lapsed servers and enriches active member a
   };
   const fresh = await loadSnapshot(freshBridge);
   const sameNames = fresh.parties.filter(
-    (party) => party.username === 'rae.chen',
+    (party) => party.username === 'vitalik',
   );
   assert.equal(
     sameNames.find((party) => party.locally_manageable)?.label,
@@ -2332,11 +2333,11 @@ test('mock resumeGroupCreation activates an inactive team', async () => {
   assert.equal(store.active, true);
 });
 
-test('mock expelFederatedGroup requires both host ID and team ID to match', async () => {
+test('mock removeFederatedGroup requires both host ID and team ID to match', async () => {
   const active = { ...FIXTURE.federation[0], active: true };
   const bridge = mockBridge({ ...FIXTURE, federation: [active] });
   await assert.rejects(
-    bridge.expelFederatedGroup({
+    bridge.removeFederatedGroup({
       storeId: active.store,
       remoteHostIdHex: `02${'ff'.repeat(32)}`,
       remoteTeamIdHex: active.remote_team_id_hex,
@@ -2345,7 +2346,7 @@ test('mock expelFederatedGroup requires both host ID and team ID to match', asyn
   );
   assert.equal((await bridge.listFederation(active.store)).length, 1);
   assert.deepEqual(
-    await bridge.expelFederatedGroup({
+    await bridge.removeFederatedGroup({
       storeId: active.store,
       remoteHostIdHex: active.remote_host_id_hex,
       remoteTeamIdHex: active.remote_team_id_hex,

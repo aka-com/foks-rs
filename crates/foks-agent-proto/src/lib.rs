@@ -579,14 +579,14 @@ mod tests {
         assert_eq!(
             serde_json::to_value(DeviceSummary {
                 id_hex: format!("04{}", "cd".repeat(32)),
-                name: Some("Rae's MacBook Air".to_owned()),
+                name: Some("Satoshi's MacBook Air".to_owned()),
                 role: "owner".to_owned(),
                 current: true,
             })
             .unwrap(),
             serde_json::json!({
                 "id_hex": format!("04{}", "cd".repeat(32)),
-                "name": "Rae's MacBook Air",
+                "name": "Satoshi's MacBook Air",
                 "role": "owner",
                 "current": true,
             })
@@ -598,7 +598,7 @@ mod tests {
         let operation = Operation::CreateAccount {
             profile: "local".to_owned(),
             alias: "personal".to_owned(),
-            username: "rae".to_owned(),
+            username: "satoshi".to_owned(),
             device_name: "laptop".to_owned(),
             email: String::new(),
             invite: SecretString::new("s.secret-invite"),
@@ -720,7 +720,7 @@ mod tests {
             Operation::CreateYubiAccount {
                 profile: "local".to_owned(),
                 alias: "hardware".to_owned(),
-                username: "rae".to_owned(),
+                username: "satoshi".to_owned(),
                 device_name: "key".to_owned(),
                 email: String::new(),
                 invite: SecretString::new("s.yubi-invite"),

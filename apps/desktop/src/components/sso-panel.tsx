@@ -8,9 +8,11 @@ import {
   Button,
   Inset,
   InsetRow,
+  PanelSheet,
   SectionLabel,
   SegmentedControl,
 } from './index';
+import type { PanelPresentation } from './index';
 const messages: Record<SsoProgress['state'], string> = {
   'device-only': 'This host has not enabled organization sign-in.',
   'link-needed':
@@ -68,6 +70,11 @@ interface Props {
    * there (typically the page foot) instead of in the panel's own row.
    */
   primarySlot?: HTMLElement | null;
+  /**
+   * Render as a modal sheet instead of a card: the form in the body and the
+   * flow's buttons in the footer. Overrides `embedded` and `primarySlot`.
+   */
+  presentation?: PanelPresentation;
 }
 export function SsoPanel({
   bridge,
@@ -85,6 +92,7 @@ export function SsoPanel({
   resumeOnly = false,
   embedded = false,
   primarySlot = null,
+  presentation,
 }: Props) {
   const [progress, setProgress] = useState<SsoProgress | null>(null);
   const [busy, setBusy] = useState(false);
@@ -247,7 +255,9 @@ export function SsoPanel({
         ? 'Link existing account'
         : progress
           ? 'Begin or resume sign-in'
-          : 'Continue with organization'}
+          : login
+            ? 'Sign in'
+            : 'Continue with organization'}
     </Button>
   );
   const browserButton = progress?.browserAvailable ? (
@@ -307,30 +317,120 @@ export function SsoPanel({
   const heading = login
     ? 'Organization sign-in'
     : 'Sign up with your organization';
+  const linkageButton = login ? (
+    <Button
+      disabled={blocked}
+      onClick={() => {
+        const action: SsoAction = {
+          action: 'account-status',
+          pin: pin || null,
+        };
+        setPin('');
+        void run(action);
+      }}
+    >
+      Check linkage
+    </Button>
+  ) : null;
+  // Remaining flow actions in their original order. The sheet displays them
+  // in its footer.
+  const secondaryActions = (
+    <>
+      {primary !== 'begin' ? beginButton : null}
+      {primary !== 'browser' ? browserButton : null}
+      {primary !== 'finish' ? finishButton : null}
+      {pollable && (
+        <Button
+          disabled={blocked}
+          onClick={() =>
+            void run({
+              action: 'poll',
+              operation_id: progress.operationId!,
+            })
+          }
+        >
+          Check sign-in
+        </Button>
+      )}
+      {cancellable && (
+        <Button
+          disabled={blocked}
+          onClick={() =>
+            void run({
+              action: 'cancel',
+              operation_id: progress.operationId!,
+            })
+          }
+        >
+          Cancel sign-in
+        </Button>
+      )}
+      {progress && !progress.accountStatus && (
+        <Button
+          disabled={blocked}
+          onClick={() =>
+            void run({
+              action: 'status',
+              operation_id: progress.operationId!,
+            })
+          }
+        >
+          Refresh status
+        </Button>
+      )}
+    </>
+  );
+  const intro = (
+    <p>
+      {login
+        ? 'Sign in through your organization’s identity provider to restore access on this device.'
+        : 'Your identity provider supplies your username and email. The username above is this Mac’s label for the account.'}
+    </p>
+  );
+  const statusLine = progress ? (
+    <p role="status">
+      {progress.serviceAccess && !progress.accountStatus
+        ? 'Account authentication and service access verified.'
+        : messages[progress.state]}
+    </p>
+  ) : null;
+  const errorLine = error ? (
+    <p role="alert" className="crit">
+      {error}
+    </p>
+  ) : null;
+  if (presentation)
+    return (
+      <PanelSheet
+        presentation={presentation}
+        busy={busy}
+        footer={
+          <>
+            <Button disabled={busy} onClick={presentation.onClose}>
+              Cancel
+            </Button>
+            {linkageButton}
+            {secondaryActions}
+            {primaryButton}
+          </>
+        }
+      >
+        {intro}
+        {statusLine}
+        {errorLine}
+        {login ? pinField('Security key PIN (enrolled keys only)') : null}
+      </PanelSheet>
+    );
   return (
     <section
       className={embedded ? 'sso-inline' : 'pcard'}
       aria-label="Organization sign-in"
     >
       {embedded ? null : <h3>{heading}</h3>}
-      <p>
-        {login
-          ? 'Restore access using your identity provider and this device’s account key.'
-          : 'Your identity provider supplies your username and email. The username above is this Mac’s label for the account.'}
-      </p>
-      {progress && (
-        <p role="status">
-          {progress.serviceAccess && !progress.accountStatus
-            ? 'Account authentication and service access verified.'
-            : messages[progress.state]}
-        </p>
-      )}
-      {error && (
-        <p role="alert" className="crit">
-          {error}
-        </p>
-      )}
-      {login && pinField('Security key PIN (for an enrolled key)')}
+      {intro}
+      {statusLine}
+      {errorLine}
+      {login && pinField('Security key PIN (enrolled keys only)')}
       {!login && (
         <>
           <SectionLabel>Keys</SectionLabel>
@@ -373,70 +473,13 @@ export function SsoPanel({
           </p>
         </>
       )}
-      {finishable &&
-        login &&
-        pinField('Security key PIN (only for an enrolled key)')}
+      {finishable && login && pinField('Security key PIN (enrolled keys only)')}
       {primarySlot ? createPortal(primaryButton, primarySlot) : null}
       {showActions ? (
         <div className="btns">
           {primarySlot ? null : primaryButton}
-          {login && (
-            <Button
-              disabled={blocked}
-              onClick={() => {
-                const action: SsoAction = {
-                  action: 'account-status',
-                  pin: pin || null,
-                };
-                setPin('');
-                void run(action);
-              }}
-            >
-              Check account linkage
-            </Button>
-          )}
-          {primary !== 'begin' ? beginButton : null}
-          {primary !== 'browser' ? browserButton : null}
-          {primary !== 'finish' ? finishButton : null}
-          {pollable && (
-            <Button
-              disabled={blocked}
-              onClick={() =>
-                void run({
-                  action: 'poll',
-                  operation_id: progress.operationId!,
-                })
-              }
-            >
-              Check sign-in
-            </Button>
-          )}
-          {cancellable && (
-            <Button
-              disabled={blocked}
-              onClick={() =>
-                void run({
-                  action: 'cancel',
-                  operation_id: progress.operationId!,
-                })
-              }
-            >
-              Cancel sign-in
-            </Button>
-          )}
-          {progress && !progress.accountStatus && (
-            <Button
-              disabled={blocked}
-              onClick={() =>
-                void run({
-                  action: 'status',
-                  operation_id: progress.operationId!,
-                })
-              }
-            >
-              Refresh status
-            </Button>
-          )}
+          {linkageButton}
+          {secondaryActions}
         </div>
       ) : null}
     </section>

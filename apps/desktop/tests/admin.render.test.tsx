@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
+import type { ReactNode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import { decodeCommandAck } from '../src/bridge';
 installDom({
   url: 'http://localhost/',
-  body: '<div id="root"></div>',
+  body: '<div id="root"></div><div id="overlays"></div>',
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
@@ -21,6 +22,26 @@ test.before(async () => {
 });
 test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
+
+/** The sheet portals into the overlay root, so every panel needs a provider. */
+async function overlay(children: ReactNode) {
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
+  const portalRoot = document.getElementById('overlays');
+  assert.ok(portalRoot);
+  return createElement(OverlayProvider, {
+    backgroundRef: { current: null },
+    portalRoot,
+    children,
+  });
+}
+
+const presentation = {
+  title: 'Manage via web',
+  subtitle: 'ada on Example',
+  onClose: () => {},
+};
 
 test('admin acknowledgements cannot return bearer URLs to the main webview', () => {
   assert.deepEqual(decodeCommandAck({ ok: true }), { ok: true });
@@ -46,27 +67,47 @@ test('admin configuration and opening are distinct explicit actions and PIN is c
     },
   };
   const r = ui.render(
-    createElement(AdminPanel, { bridge, profile: 'local', account: 'work' }),
+    await overlay(
+      createElement(AdminPanel, {
+        bridge,
+        profile: 'local',
+        account: 'work',
+        presentation,
+      }),
+    ),
   );
-  ui.fireEvent.change(r.getByLabelText('Admin HTTPS address'), {
+  ui.fireEvent.change(r.getByLabelText('Admin panel address'), {
     target: { value: 'https://admin.example/' },
   });
-  ui.fireEvent.click(r.getByText('Save admin destination'));
-  await ui.waitFor(() => assert.ok(r.queryByText('Admin destination saved.')));
+  ui.fireEvent.click(r.getByText('Save address'));
+  await ui.waitFor(() => assert.ok(r.queryByText('Address saved.')));
   assert.deepEqual(calls, [['local', 'work', 'https://admin.example/']]);
-  ui.fireEvent.change(r.getByLabelText('Admin security key PIN, if needed'), {
-    target: { value: '654321' },
-  });
-  ui.fireEvent.click(r.getByText('Open host administration'));
+  ui.fireEvent.change(
+    r.getByLabelText('Security key PIN (enrolled keys only)'),
+    {
+      target: { value: '654321' },
+    },
+  );
+  ui.fireEvent.click(r.getByText('Open admin panel'));
   await ui.waitFor(() => assert.ok(r.queryByRole('alert')));
   assert.deepEqual(calls[1], ['local', 'work', '654321']);
   assert.equal(
-    (r.getByLabelText('Admin security key PIN, if needed') as HTMLInputElement)
-      .value,
+    (
+      r.getByLabelText(
+        'Security key PIN (enrolled keys only)',
+      ) as HTMLInputElement
+    ).value,
     '',
   );
   r.rerender(
-    createElement(AdminPanel, { bridge, profile: 'local', account: 'other' }),
+    await overlay(
+      createElement(AdminPanel, {
+        bridge,
+        profile: 'local',
+        account: 'other',
+        presentation,
+      }),
+    ),
   );
   await ui.waitFor(() => assert.ok(r.queryByRole('alert') === null));
 });

@@ -161,7 +161,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       accountAlias: 'personal',
       server: 'foks.example.net',
       typo: 'foks.example.ne',
-      username: 'rae',
+      username: 'satoshi',
       deviceName: 'MacBook Pro',
       groupName: 'Household',
       groupAlias: fixtureHousehold?.alias,
@@ -751,7 +751,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       });
       return { applied: true };
     },
-    expelFederatedGroup: async ({
+    removeFederatedGroup: async ({
       storeId,
       remoteHostIdHex,
       remoteTeamIdHex,
@@ -1267,7 +1267,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       ) {
         return {
           alias,
-          username: 'rae',
+          username: 'satoshi',
           yubiId: `08${'8'.repeat(66)}`,
           subkeyId: `0d${'d'.repeat(64)}`,
           userChainSequence: 22,
@@ -1276,7 +1276,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       }
       if (command === 'sync_yubi_account')
         return {
-          username: 'rae',
+          username: 'satoshi',
           userChainSequence: 22,
           directories: 2,
           entries: 7,

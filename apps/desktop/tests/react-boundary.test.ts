@@ -122,10 +122,13 @@ test('icons are structured data, not markup strings', async () => {
     await readSource('../src/icons.ts', import.meta.url),
   );
   assert.doesNotMatch(icons, /<svg|<path|<circle|<rect/);
-  const names = icons.match(/^ {2}[A-Za-z][A-Za-z0-9]*: \[$/gm) ?? [];
+  // Every key of `FOKS_ICONS`, quoted (`'panel-filled'`) or not.
+  const body = icons.slice(icons.indexOf('export const FOKS_ICONS = {'));
+  const names =
+    body.match(/^ {2}(?:'[a-z][a-z0-9-]*'|[A-Za-z][A-Za-z0-9]*): \[/gm) ?? [];
   assert.equal(
     names.length,
-    30,
-    'all shell icons, including sort marks and first-run’s local door icon, are ported',
+    46,
+    'all shell icons, including sort marks, the chat glyph, the sidebar panel marks and first-run’s local door icon, are ported',
   );
 });

@@ -101,12 +101,23 @@ test('stylesheet contains no dark mode media queries or theme overrides', async 
 test('shell stylesheet contains required grid and flexbox layout rules', async () => {
   const shell = await readSource(SHELL, import.meta.url);
 
-  // The two- and three-column shells (sidebar · items · details).
-  assert.match(shell, /\.app\{[^}]*grid-template-columns:224px 1fr\}/);
+  // The two- and three-column shells (sidebar · items · details). The track
+  // widths are named by the layout tokens declared on `.app`.
   assert.match(
     shell,
-    /\.app\.with-details\{grid-template-columns:224px 1fr 300px\}/,
+    /\.app\{[^}]*grid-template-columns:var\(--side-track\) minmax\(0,1fr\)[;}]/,
   );
+  assert.match(
+    shell,
+    /\.app\.with-details\{grid-template-columns:var\(--side-track\) minmax\(0,1fr\) var\(--details-w\)\}/,
+  );
+  // Layout tokens live on `.app`, never on `:root`.
+  assert.match(shell, /\.app\{[^}]*--side-w-open:224px[;}]/);
+  assert.match(shell, /\.app\{[^}]*--details-w:300px[;}]/);
+  assert.match(shell, /\.app\.side-narrow\{--side-w:3\.5rem\}/);
+  // The collapsed rail and its toggle are declared.
+  assert.match(shell, /\.side\.is-narrow[^{]*\{/);
+  assert.match(shell, /\.side \.side-collapse\{color:var\(--faint\)\}/);
   // Allow main column flex shrinking to prevent horizontal window overflow.
   assert.match(shell, /\.main\{[^}]*min-width:0[^}]*\}/);
   assert.match(

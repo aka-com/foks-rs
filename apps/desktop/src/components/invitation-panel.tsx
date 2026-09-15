@@ -6,17 +6,32 @@ import type {
   InvitationRole,
   InvitationRow,
 } from '../invitation-contract';
+import {
+  Button,
+  CopyBox,
+  Inset,
+  InsetRow,
+  PanelSheet,
+  SectionLabel,
+} from './index';
+import type { PanelPresentation } from './index';
 export function InvitationPanel({
   bridge,
   profile,
   account,
   teamAlias,
+  presentation,
   onComplete,
 }: {
   bridge: Bridge;
   profile: string;
   account: string;
   teamAlias?: string;
+  /**
+   * Render the join flow as a modal sheet instead of a card: the form in the
+   * body and its actions in the footer.
+   */
+  presentation?: PanelPresentation;
   onComplete: () => Promise<void> | void;
 }) {
   const [invite, setInvite] = useState('');
@@ -109,288 +124,164 @@ export function InvitationPanel({
         : { action: 'accept', invite },
     );
   };
-  return (
-    <section
-      className="pcard"
-      aria-label={
-        teamAlias
-          ? 'Group invitations and requests'
-          : `Join a group as ${account}`
+  const copy = (text: string) =>
+    void bridge
+      .copyText(text)
+      .catch((e) => setError(normalizeCommandError(e).message));
+  const remoteRow = (
+    <InsetRow label="Server profile (for groups on another server)">
+      <input
+        value={remote}
+        maxLength={128}
+        disabled={busy}
+        onChange={(e) => {
+          setRemote(e.target.value);
+          setPreview(null);
+          setRows((r) =>
+            r.map((x) => (x.remote ? { ...x, verified: false } : x)),
+          );
+        }}
+      />
+    </InsetRow>
+  );
+  const pinRow = (
+    <InsetRow label="Security key PIN (enrolled keys only)">
+      <input
+        type="password"
+        autoComplete="off"
+        maxLength={32}
+        value={pin}
+        disabled={busy}
+        onChange={(e) => setPin(e.target.value)}
+      />
+    </InsetRow>
+  );
+  const recoverButton = (
+    <Button disabled={busy} onClick={() => void run({ action: 'list' })}>
+      {teamAlias ? 'Show pending operations' : 'Show pending requests'}
+    </Button>
+  );
+  const inviteRow = (
+    <InsetRow label="Invitation">
+      <input
+        value={invite}
+        maxLength={256}
+        disabled={busy}
+        onChange={(e) => {
+          setInvite(e.target.value);
+          setPreview(null);
+        }}
+      />
+    </InsetRow>
+  );
+  const sourceTeamRow = (
+    <InsetRow label="Requesting group (to add a group you administer instead of yourself)">
+      <input
+        value={sourceTeam}
+        maxLength={128}
+        disabled={busy}
+        onChange={(e) => setSourceTeam(e.target.value)}
+      />
+    </InsetRow>
+  );
+  const sourceRoleRow = sourceTeam ? (
+    <InsetRow label="Requesting group role">
+      <select
+        value={sourceRole}
+        disabled={busy}
+        onChange={(e) => setSourceRole(e.target.value)}
+      >
+        <option value="member">Member</option>
+        <option value="admin">Admin</option>
+        <option value="owner">Owner</option>
+      </select>
+    </InsetRow>
+  ) : null;
+  const previewBox = preview ? (
+    <div className="op">
+      <p>
+        {preview.name ?? 'Group'} · <code>{preview.team_id}</code>
+      </p>
+      <p>
+        Verified invitation host: <code>{preview.host_id}</code>
+      </p>
+    </div>
+  ) : null;
+  const previewButton = (
+    <Button
+      variant={preview ? 'plain' : 'primary'}
+      disabled={busy || !invite}
+      onClick={() =>
+        void run(
+          remote
+            ? {
+                action: 'preview-remote',
+                remote_profile: remote,
+                invite,
+              }
+            : { action: 'preview', invite },
+        )
       }
     >
-      <h3>
-        {teamAlias ? 'Invitations & requests' : `Join a group · ${account}`}
-      </h3>
-      <p>
-        An invitation submits a membership request. Files and chat become
-        available after an administrator admits you and your client verifies the
-        group keys.
-      </p>
-      <label>
-        Other server profile, for a remote request{' '}
-        <input
-          value={remote}
-          maxLength={128}
-          disabled={busy}
-          onChange={(e) => {
-            setRemote(e.target.value);
-            setPreview(null);
-            setRows((r) =>
-              r.map((x) => (x.remote ? { ...x, verified: false } : x)),
-            );
-          }}
-        />
-      </label>
-      <label>
-        Security key PIN, if needed{' '}
-        <input
-          type="password"
-          autoComplete="off"
-          maxLength={32}
-          value={pin}
-          disabled={busy}
-          onChange={(e) => setPin(e.target.value)}
-        />
-      </label>
-      {teamAlias ? (
-        <>
-          <button
-            disabled={busy}
-            onClick={() =>
-              void run({ action: 'create', team_alias: teamAlias })
-            }
-          >
-            Prepare invitation
-          </button>
-          <button
-            disabled={busy}
-            onClick={() => void run({ action: 'inbox', team_alias: teamAlias })}
-          >
-            Refresh requests
-          </button>
-          <button
-            disabled={busy}
-            onClick={() =>
-              void run({ action: 'pending-approvals', team_alias: teamAlias })
-            }
-          >
-            Recover approvals
-          </button>
-          <label>
-            Role to grant{' '}
-            <select
-              value={role}
-              disabled={busy}
-              onChange={(e) => setRole(e.target.value)}
-            >
-              <option value="member">Member</option>
-              <option value="admin">Admin · local only</option>
-              <option value="owner">Owner · local only</option>
-            </select>
-          </label>
-          <details>
-            <summary>Group nesting order</summary>
-            <p>
-              Joining groups must have a lower signed index range than their
-              destination. These changes narrow this group's range and are
-              checked against existing memberships.
-            </p>
-            <button
-              disabled={busy}
-              onClick={() =>
-                void run({
-                  action: 'range',
-                  team_alias: teamAlias,
-                  raise: false,
-                })
-              }
-            >
-              Lower this group's range
-            </button>
-            <button
-              disabled={busy}
-              onClick={() =>
-                void run({
-                  action: 'range',
-                  team_alias: teamAlias,
-                  raise: true,
-                })
-              }
-            >
-              Raise this group's range
-            </button>
-          </details>
-          {rows.map((row) => (
-            <article key={row.request_id}>
-              <p>
-                {row.username ?? 'Unverified requester'} ·{' '}
-                {row.joiner_kind ?? (row.remote ? 'remote' : 'local')}
-              </p>
-              {row.joiner_id && <code>{row.joiner_id}</code>}
-              {row.error && !row.verified && <p>{row.error}</p>}
-              {row.remote && (
-                <button
-                  disabled={busy || !remote}
-                  onClick={() =>
-                    void run({
-                      action: 'inspect-remote',
-                      remote_profile: remote,
-                      team_alias: teamAlias,
-                      request_id: row.request_id!,
-                    })
-                  }
-                >
-                  Verify on selected server
-                </button>
-              )}
-              <button
-                disabled={
-                  busy ||
-                  !row.verified ||
-                  (!!row.remote && (!remote || role !== 'member'))
+      Preview
+    </Button>
+  );
+  const requestButton = (
+    <Button
+      variant={preview ? 'primary' : 'plain'}
+      disabled={busy || !preview}
+      onClick={() => void requestMembership()}
+    >
+      Request membership
+    </Button>
+  );
+  const verifyRemoteButton =
+    remote && preview?.team_id ? (
+      <Button
+        disabled={busy}
+        onClick={() =>
+          void run({
+            action: 'sync-remote',
+            remote_profile: remote,
+            team_id: preview.team_id!,
+            ...(sourceTeam
+              ? {
+                  source_team_alias: sourceTeam,
+                  source_role: nativeRole(sourceRole),
                 }
-                onClick={() =>
-                  void run(
-                    row.remote
-                      ? {
-                          action: 'approve-remote',
-                          remote_profile: remote,
-                          team_alias: teamAlias,
-                          request_id: row.request_id!,
-                          role: nativeRole(role),
-                        }
-                      : {
-                          action: 'approve',
-                          team_alias: teamAlias,
-                          request_id: row.request_id!,
-                          role: nativeRole(role),
-                        },
-                  )
-                }
-              >
-                Approve membership
-              </button>
-              <button
-                disabled={busy}
-                onClick={() =>
-                  void run({
-                    action: 'reject',
-                    team_alias: teamAlias,
-                    request_id: row.request_id!,
-                  })
-                }
-              >
-                Prepare rejection
-              </button>
-            </article>
-          ))}
-        </>
-      ) : (
-        <>
-          <label>
-            Invitation{' '}
-            <input
-              value={invite}
-              maxLength={256}
-              disabled={busy}
-              onChange={(e) => {
-                setInvite(e.target.value);
-                setPreview(null);
-              }}
-            />
-          </label>
-          <button
-            disabled={busy || !invite}
-            onClick={() =>
-              void run(
-                remote
-                  ? { action: 'preview-remote', remote_profile: remote, invite }
-                  : { action: 'preview', invite },
-              )
-            }
-          >
-            Preview invitation
-          </button>
-          {preview && (
-            <div>
-              <p>
-                {preview.name ?? 'Group'} · <code>{preview.team_id}</code>
-              </p>
-              <p>
-                Verified invitation host: <code>{preview.host_id}</code>
-              </p>
-            </div>
-          )}
-          <label>
-            Request on behalf of a local group, optional{' '}
-            <input
-              value={sourceTeam}
-              maxLength={128}
-              disabled={busy}
-              onChange={(e) => setSourceTeam(e.target.value)}
-            />
-          </label>
-          {sourceTeam && (
-            <label>
-              Joining group source role{' '}
-              <select
-                value={sourceRole}
-                onChange={(e) => setSourceRole(e.target.value)}
-              >
-                <option value="member">Member</option>
-                <option value="admin">Admin</option>
-                <option value="owner">Owner</option>
-              </select>
-            </label>
-          )}
-          <button
-            disabled={busy || !preview}
-            onClick={() => void requestMembership()}
-          >
-            Prepare membership request
-          </button>
-          <button
-            disabled={busy}
-            onClick={() =>
-              void bridge
-                .discoverGroups(profile, account)
-                .then(onComplete)
-                .catch((e) => setError(normalizeCommandError(e).message))
-            }
-          >
-            Check local membership
-          </button>
-          {remote && preview?.team_id && (
-            <button
-              disabled={busy}
-              onClick={() =>
-                void run({
-                  action: 'sync-remote',
-                  remote_profile: remote,
-                  team_id: preview.team_id!,
-                  ...(sourceTeam
-                    ? {
-                        source_team_alias: sourceTeam,
-                        source_role: nativeRole(sourceRole),
-                      }
-                    : {}),
-                })
-              }
-            >
-              Verify remote membership and keys
-            </button>
-          )}
-        </>
-      )}
-      <button disabled={busy} onClick={() => void run({ action: 'list' })}>
-        Recover invitation operations
-      </button>
+              : {}),
+          })
+        }
+      >
+        Verify remote membership and keys
+      </Button>
+    ) : null;
+  const refreshButton = (
+    <Button
+      disabled={busy}
+      onClick={() =>
+        void bridge
+          .discoverGroups(profile, account)
+          .then(onComplete)
+          .catch((e) => setError(normalizeCommandError(e).message))
+      }
+    >
+      Refresh memberships
+    </Button>
+  );
+  const errorLine = error ? (
+    <p role="alert" className="crit">
+      {error}
+    </p>
+  ) : null;
+  const reportsNode = (
+    <>
       {reports.map((r, i) => (
-        <div key={r.operation_id ?? i} role="status">
+        <div key={r.operation_id ?? i} role="status" className="op">
           {r.possibly_truncated && (
             <p>
-              More requests may exist. The server’s time-based pagination cannot
-              safely skip a full timestamp group.
+              Additional requests may exist that could not be displayed. Refine
+              your search or filter to view more results.
             </p>
           )}
           {r.state && (
@@ -403,122 +294,346 @@ export function InvitationPanel({
           )}
           {r.membership_verified && <p>Membership and group keys verified.</p>}
           {r.invite && (
-            <>
-              <input
-                readOnly
-                value={r.invite}
-                aria-label="Shareable invitation"
-              />
-              <button
-                onClick={() =>
-                  void bridge
-                    .copyText(r.invite!)
-                    .catch((e) => setError(normalizeCommandError(e).message))
-                }
-              >
-                Copy invitation
-              </button>
-            </>
+            <CopyBox text={r.invite} onCopy={copy} label="Copy invitation">
+              <code aria-label="Shareable invitation">{r.invite}</code>
+            </CopyBox>
           )}
           {r.operation_id && !r.request_id && (
             <>
-              <code>{r.operation_id}</code>
-              <button
+              <p>
+                Operation: <code>{r.operation_id}</code>
+              </p>
+              {r.state === 'submission-unknown' && (
+                <p>
+                  The server response was not received. Checking the status will
+                  not submit a duplicate request.
+                </p>
+              )}
+              <div className="btns">
+                {r.state === 'prepared' && (
+                  <>
+                    <Button
+                      variant="primary"
+                      disabled={busy}
+                      onClick={() =>
+                        void run(
+                          r.remote
+                            ? {
+                                action: 'attempt-remote',
+                                remote_profile: r.remote_profile ?? remote,
+                                operation_id: r.operation_id!,
+                              }
+                            : {
+                                action: 'attempt',
+                                operation_id: r.operation_id!,
+                              },
+                        )
+                      }
+                    >
+                      Submit
+                    </Button>
+                    <Button
+                      disabled={busy}
+                      onClick={() =>
+                        void run({
+                          action: 'cancel',
+                          operation_id: r.operation_id!,
+                        })
+                      }
+                    >
+                      Cancel
+                    </Button>
+                  </>
+                )}
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void run(
+                      r.remote
+                        ? {
+                            action: 'status-remote',
+                            remote_profile: r.remote_profile ?? remote,
+                            operation_id: r.operation_id!,
+                          }
+                        : { action: 'status', operation_id: r.operation_id! },
+                    )
+                  }
+                >
+                  Check status
+                </Button>
+              </div>
+            </>
+          )}
+          {r.request_id && teamAlias && r.role && r.state !== 'complete' && (
+            <div className="btns">
+              <Button
+                variant="primary"
                 disabled={busy}
                 onClick={() =>
                   void run(
                     r.remote
                       ? {
-                          action: 'status-remote',
-                          remote_profile: r.remote_profile ?? remote,
-                          operation_id: r.operation_id!,
+                          action: 'approve-remote',
+                          remote_profile: r.source_profile!,
+                          team_alias: teamAlias,
+                          request_id: r.request_id!,
+                          role:
+                            r.role!.kind === 1
+                              ? { member: { visibility: r.role!.visibility } }
+                              : r.role!.kind === 2
+                                ? 'admin'
+                                : 'owner',
                         }
-                      : { action: 'status', operation_id: r.operation_id! },
+                      : {
+                          action: 'approve',
+                          team_alias: teamAlias,
+                          request_id: r.request_id!,
+                          role:
+                            r.role!.kind === 1
+                              ? { member: { visibility: r.role!.visibility } }
+                              : r.role!.kind === 2
+                                ? 'admin'
+                                : 'owner',
+                        },
                   )
                 }
               >
-                Check operation
-              </button>
-              {r.state === 'prepared' && (
-                <>
-                  <button
-                    disabled={busy}
-                    onClick={() =>
-                      void run(
-                        r.remote
-                          ? {
-                              action: 'attempt-remote',
-                              remote_profile: r.remote_profile ?? remote,
-                              operation_id: r.operation_id!,
-                            }
-                          : {
-                              action: 'attempt',
-                              operation_id: r.operation_id!,
-                            },
-                      )
-                    }
-                  >
-                    Submit prepared operation
-                  </button>
-                  <button
-                    disabled={busy}
-                    onClick={() =>
-                      void run({
-                        action: 'cancel',
-                        operation_id: r.operation_id!,
-                      })
-                    }
-                  >
-                    Cancel preparation
-                  </button>
-                </>
-              )}
-              {r.state === 'submission-unknown' && (
-                <p>
-                  The reply was lost. Checking will not send a duplicate
-                  request.
-                </p>
-              )}
-            </>
-          )}
-          {r.request_id && teamAlias && r.role && r.state !== 'complete' && (
-            <button
-              disabled={busy}
-              onClick={() =>
-                void run(
-                  r.remote
-                    ? {
-                        action: 'approve-remote',
-                        remote_profile: r.source_profile!,
-                        team_alias: teamAlias,
-                        request_id: r.request_id!,
-                        role:
-                          r.role!.kind === 1
-                            ? { member: { visibility: r.role!.visibility } }
-                            : r.role!.kind === 2
-                              ? 'admin'
-                              : 'owner',
-                      }
-                    : {
-                        action: 'approve',
-                        team_alias: teamAlias,
-                        request_id: r.request_id!,
-                        role:
-                          r.role!.kind === 1
-                            ? { member: { visibility: r.role!.visibility } }
-                            : r.role!.kind === 2
-                              ? 'admin'
-                              : 'owner',
-                      },
-                )
-              }
-            >
-              Resume original approval
-            </button>
+                Resume approval
+              </Button>
+            </div>
           )}
         </div>
       ))}
-      {error && <p role="alert">{error}</p>}
+    </>
+  );
+  // The sheet presentation covers the join flow only; the group-side
+  // invitation card is reached from group settings and keeps its card.
+  if (presentation && !teamAlias)
+    return (
+      <PanelSheet
+        presentation={presentation}
+        busy={busy}
+        footer={
+          <>
+            <Button disabled={busy} onClick={presentation.onClose}>
+              Cancel
+            </Button>
+            {recoverButton}
+            {refreshButton}
+            {verifyRemoteButton}
+            {previewButton}
+            {requestButton}
+          </>
+        }
+      >
+        <p>
+          Paste an invitation to request membership. Files and chat open after
+          an administrator approves and this client verifies the group keys.
+        </p>
+        {errorLine}
+        <Inset className="form">
+          {inviteRow}
+          {pinRow}
+        </Inset>
+        <details className="dd">
+          <summary>Advanced</summary>
+          <Inset className="form">
+            {remoteRow}
+            {sourceTeamRow}
+            {sourceRoleRow}
+          </Inset>
+        </details>
+        {previewBox}
+        {reportsNode}
+      </PanelSheet>
+    );
+  return (
+    <section
+      className="pcard"
+      aria-label={
+        teamAlias
+          ? 'Group invitations and requests'
+          : `Join a group as ${account}`
+      }
+    >
+      <h3>
+        {teamAlias ? 'Invitations and requests' : `Join a group · ${account}`}
+      </h3>
+      <p>
+        {teamAlias
+          ? 'Issue invitations and review requests to join this group.'
+          : 'Paste an invitation to request membership. Files and chat open after an administrator approves and this client verifies the group keys.'}
+      </p>
+      {errorLine}
+      {teamAlias ? (
+        <>
+          <Inset className="form">
+            <InsetRow label="Role to grant">
+              <select
+                value={role}
+                disabled={busy}
+                onChange={(e) => setRole(e.target.value)}
+              >
+                <option value="member">Member</option>
+                <option value="admin">Admin · local only</option>
+                <option value="owner">Owner · local only</option>
+              </select>
+            </InsetRow>
+            {remoteRow}
+            {pinRow}
+          </Inset>
+          <div className="btns">
+            <Button
+              variant="primary"
+              disabled={busy}
+              onClick={() =>
+                void run({ action: 'create', team_alias: teamAlias })
+              }
+            >
+              Create invitation
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={() =>
+                void run({ action: 'inbox', team_alias: teamAlias })
+              }
+            >
+              Refresh requests
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={() =>
+                void run({ action: 'pending-approvals', team_alias: teamAlias })
+              }
+            >
+              Show pending approvals
+            </Button>
+            {recoverButton}
+          </div>
+          <details className="dd">
+            <summary>Group nesting order</summary>
+            <p>
+              Joining groups must have a lower signed index range than their
+              destination. These changes narrow this group's range and are
+              checked against existing memberships.
+            </p>
+            <div className="btns">
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  void run({
+                    action: 'range',
+                    team_alias: teamAlias,
+                    raise: false,
+                  })
+                }
+              >
+                Lower this group's range
+              </Button>
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  void run({
+                    action: 'range',
+                    team_alias: teamAlias,
+                    raise: true,
+                  })
+                }
+              >
+                Raise this group's range
+              </Button>
+            </div>
+          </details>
+          {rows.length > 0 && <SectionLabel>Membership requests</SectionLabel>}
+          {rows.map((row) => (
+            <article key={row.request_id} className="op">
+              <p>
+                {row.username ?? 'Unverified requester'} ·{' '}
+                {row.joiner_kind ?? (row.remote ? 'remote' : 'local')}
+              </p>
+              {row.joiner_id && <code>{row.joiner_id}</code>}
+              {row.error && !row.verified && <p>{row.error}</p>}
+              <div className="btns">
+                <Button
+                  variant="primary"
+                  disabled={
+                    busy ||
+                    !row.verified ||
+                    (!!row.remote && (!remote || role !== 'member'))
+                  }
+                  onClick={() =>
+                    void run(
+                      row.remote
+                        ? {
+                            action: 'approve-remote',
+                            remote_profile: remote,
+                            team_alias: teamAlias,
+                            request_id: row.request_id!,
+                            role: nativeRole(role),
+                          }
+                        : {
+                            action: 'approve',
+                            team_alias: teamAlias,
+                            request_id: row.request_id!,
+                            role: nativeRole(role),
+                          },
+                    )
+                  }
+                >
+                  Approve
+                </Button>
+                {row.remote && (
+                  <Button
+                    disabled={busy || !remote}
+                    onClick={() =>
+                      void run({
+                        action: 'inspect-remote',
+                        remote_profile: remote,
+                        team_alias: teamAlias,
+                        request_id: row.request_id!,
+                      })
+                    }
+                  >
+                    Verify on server
+                  </Button>
+                )}
+                <Button
+                  danger
+                  disabled={busy}
+                  onClick={() =>
+                    void run({
+                      action: 'reject',
+                      team_alias: teamAlias,
+                      request_id: row.request_id!,
+                    })
+                  }
+                >
+                  Reject
+                </Button>
+              </div>
+            </article>
+          ))}
+        </>
+      ) : (
+        <>
+          <Inset className="form">
+            {inviteRow}
+            {remoteRow}
+            {sourceTeamRow}
+            {sourceRoleRow}
+            {pinRow}
+          </Inset>
+          {previewBox}
+          <div className="btns">
+            {previewButton}
+            {requestButton}
+            {verifyRemoteButton}
+            {refreshButton}
+            {recoverButton}
+          </div>
+        </>
+      )}
+      {reportsNode}
     </section>
   );
 }

@@ -11,6 +11,7 @@ import { Fragment, useEffect, type ReactNode } from 'react';
 import { Badge, Icon, SectionLabel } from '../components';
 import {
   serverChatAvailable,
+  storeHues,
   storeReadable,
   storeDescription,
   storeDescriptionState,
@@ -64,6 +65,8 @@ export interface NavRowProps {
   indented?: boolean;
   name: string;
   caption?: string;
+  /** The amber issue dot. Survives the collapsed rail, where captions do not. */
+  dot?: boolean;
   /** Dimmed: this row is unavailable in the current application state. */
   dimmed?: boolean;
   disabled?: boolean;
@@ -78,6 +81,7 @@ export function NavRow({
   indented = false,
   name,
   caption,
+  dot = false,
   dimmed = false,
   disabled = false,
   title,
@@ -99,13 +103,20 @@ export function NavRow({
       title={title}
       aria-current={active ? 'page' : undefined}
       disabled={disabled}
-      onClick={onSelect}
+      onClick={(event) => {
+        onSelect();
+        // A mouse click reports `detail > 0`; blur so `:focus-within` does not
+        // hold a collapsed rail open. Keyboard activation reports 0 and keeps
+        // focus.
+        if (event.detail > 0) event.currentTarget.blur();
+      }}
     >
       {glyph}
       <span className="t">
         {name}
         {caption ? <small>{caption}</small> : null}
       </span>
+      {dot ? <span className="dot" /> : null}
       {tail}
     </button>
   );
@@ -127,6 +138,40 @@ export interface SidebarProps {
    * navigating to the flow's first step.
    */
   onReenter?: () => void;
+  /** Collapsed to the icon-only rail. */
+  collapsed?: boolean;
+  /** A width the reader chose: hover no longer expands the rail, focus still does. */
+  pinned?: boolean;
+  /** Renders the collapse toggle as the footer's last row when provided. */
+  onToggleCollapsed?: () => void;
+}
+
+/** The footer row that collapses and expands the rail. */
+function CollapseToggle({
+  collapsed,
+  onToggle,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+}): ReactNode {
+  const name = collapsed ? 'Expand' : 'Collapse';
+  return (
+    <button
+      type="button"
+      className="nav side-collapse"
+      aria-expanded={!collapsed}
+      title={name}
+      onClick={(event) => {
+        onToggle();
+        // Blur on mouse activation so the rail does not stay open through
+        // `:focus-within`.
+        if (event.detail > 0) event.currentTarget.blur();
+      }}
+    >
+      <Icon name={collapsed ? 'panel-hollow' : 'panel-filled'} />
+      <span className="t">{name}</span>
+    </button>
+  );
 }
 
 export function Sidebar({
@@ -136,6 +181,9 @@ export function Sidebar({
   onNavigate,
   status,
   onReenter,
+  collapsed = false,
+  pinned = false,
+  onToggleCollapsed,
 }: SidebarProps): ReactNode {
   const chatInbox = useSidebarInbox();
   const chatTail = (id: string) => {
@@ -181,11 +229,19 @@ export function Sidebar({
     (store) => store.kind === 'team' && store.team_kind === 'adhoc',
   );
 
+  // Tile colors for the store marks, assigned over the navigation order so a
+  // store keeps its color while the list is unchanged.
+  const hues = storeHues(stores);
+
   /**
-   * Computes display state for a store. Account stores show item information,
-   * while group stores include their member roster.
+   * Draws one store row. The description is a status channel: anything but the
+   * normal state is shown as a caption, the issue dot and dimming, while the
+   * normal-state description (the server name, or the group's roster summary)
+   * appears only as the row's title. The title carries the description in
+   * both states, so the collapsed rail keeps it as hover text.
    */
   const storeRow = (store: Store): ReactNode => {
+    const description = storeDescription(snapshot, store);
     const connectionError = storeDescriptionState(snapshot, store) !== 'normal';
     return (
       <NavRow
@@ -195,14 +251,21 @@ export function Sidebar({
           location.ref === store.id
         }
         glyph={
-          store.kind === 'account' ? (
-            <Icon name="vault" />
-          ) : (
-            <Icon name="people" />
-          )
+          <span
+            className="vault-mark"
+            style={{ background: hues.get(store.id) }}
+          >
+            {store.kind === 'account' ? (
+              <Icon name="vault" />
+            ) : (
+              <Icon name="people" />
+            )}
+          </span>
         }
         name={store.name}
-        caption={storeDescription(snapshot, store)}
+        caption={connectionError ? description : undefined}
+        title={description || undefined}
+        dot={connectionError}
         dimmed={connectionError}
         onSelect={() => {
           // Clicking the currently active store preserves the existing selection.
@@ -213,7 +276,16 @@ export function Sidebar({
   };
 
   return (
-    <nav className="side" aria-label="Main Navigation">
+    <nav
+      className={[
+        'side',
+        collapsed ? 'is-narrow' : '',
+        pinned ? 'is-pinned' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      aria-label="Main Navigation"
+    >
       <NavRow
         active={location.kind === 'all'}
         glyph={<Icon name="grid" />}
@@ -240,25 +312,15 @@ export function Sidebar({
                   active={
                     location.kind === 'team-chat' && location.ref === store.id
                   }
-                  indented
+                  glyph={<Icon name="chat" />}
                   name={`${store.name} chat`}
                   tail={
                     chatAvailable(snapshot, store)
                       ? chatTail(store.id)
                       : undefined
                   }
-                  caption={
-                    chatAvailable(snapshot, store)
-                      ? undefined
-                      : 'Chat unavailable for this server'
-                  }
                   dimmed={!chatAvailable(snapshot, store)}
                   disabled={!chatAvailable(snapshot, store)}
-                  title={
-                    chatAvailable(snapshot, store)
-                      ? undefined
-                      : 'The current server compatibility grant does not enable chat.'
-                  }
                   onSelect={() =>
                     onNavigate({ kind: 'team-chat', ref: store.id })
                   }
@@ -275,38 +337,46 @@ export function Sidebar({
           {shares.map(storeRow)}
         </>
       ) : null}
-      {status}
-      <div className="foot">
-        <NavRow
-          active={location.kind === 'alerts'}
-          glyph={<Icon name="bell" />}
-          name="Alerts"
-          tail={<Badge count={alerts} label="open alerts" />}
-          onSelect={() => {
-            onNavigate({ kind: 'alerts' });
-          }}
-        />
-        <NavRow
-          active={location.kind === 'settings'}
-          glyph={<Icon name="gear" />}
-          name="Settings"
-          onSelect={() => {
-            onNavigate({ kind: 'settings' });
-          }}
-        />
-        <div className="foot-separator" />
-        <NavRow
-          active={location.kind === 'first-run' && !onReenter}
-          glyph={<Icon name="again" />}
-          name="Set up new vault"
-          title="Set up a new vault without changing existing vaults"
-          onSelect={
-            onReenter ??
-            (() => {
-              onNavigate({ kind: 'first-run', step: 'who' });
-            })
-          }
-        />
+      <div className="side-bottom">
+        {status}
+        <div className="foot">
+          <NavRow
+            active={location.kind === 'alerts'}
+            glyph={<Icon name="bell" />}
+            name="Alerts"
+            tail={<Badge count={alerts} label="open alerts" />}
+            onSelect={() => {
+              onNavigate({ kind: 'alerts' });
+            }}
+          />
+          <NavRow
+            active={location.kind === 'settings'}
+            glyph={<Icon name="gear" />}
+            name="Settings"
+            onSelect={() => {
+              onNavigate({ kind: 'settings' });
+            }}
+          />
+          <div className="foot-separator" />
+          <NavRow
+            active={location.kind === 'first-run' && !onReenter}
+            glyph={<Icon name="again" />}
+            name="Set up new vault"
+            title="Set up a new vault without changing existing vaults"
+            onSelect={
+              onReenter ??
+              (() => {
+                onNavigate({ kind: 'first-run', step: 'who' });
+              })
+            }
+          />
+          {onToggleCollapsed ? (
+            <CollapseToggle
+              collapsed={collapsed}
+              onToggle={onToggleCollapsed}
+            />
+          ) : null}
+        </div>
       </div>
     </nav>
   );

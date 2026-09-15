@@ -309,7 +309,7 @@ export interface AdmitGroupRequest {
   visibility: number;
 }
 
-export interface ExpelFederatedGroupRequest {
+export interface RemoveFederatedGroupRequest {
   storeId: StoreRef;
   remoteHostIdHex: string;
   remoteTeamIdHex: string;
@@ -770,8 +770,8 @@ export interface Bridge {
   removeGroupMember(request: GroupMemberRequest): Promise<MutationResponse>;
   resumeGroupMemberEdit(storeId: StoreRef): Promise<MutationResponse>;
   admitGroup(request: AdmitGroupRequest): Promise<MutationResponse>;
-  expelFederatedGroup(
-    request: ExpelFederatedGroupRequest,
+  removeFederatedGroup(
+    request: RemoveFederatedGroupRequest,
   ): Promise<MutationResponse>;
   rerunGroupAdmission(
     storeId: StoreRef,
@@ -2400,7 +2400,7 @@ export const tauriBridge: Bridge = {
       { storeId, remoteStoreId, visibility },
       decodeMutation,
     ),
-  expelFederatedGroup: ({ storeId, remoteHostIdHex, remoteTeamIdHex }) =>
+  removeFederatedGroup: ({ storeId, remoteHostIdHex, remoteTeamIdHex }) =>
     checked(
       'expel_federated_group',
       { storeId, remoteHostIdHex, remoteTeamIdHex },

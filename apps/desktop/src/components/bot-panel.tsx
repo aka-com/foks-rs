@@ -1,18 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import type { BotAction, BotEnrollment } from '../bot-contract';
+import { Button, Inset, InsetRow, PanelSheet, SegmentedControl } from './index';
+import type { PanelPresentation } from './index';
+
+type BotPane = 'enroll' | 'load' | 'revoke';
+
 export function BotPanel({
   bridge,
   profile,
   account,
+  presentation,
   onComplete,
 }: {
   bridge: Bridge;
   profile: string;
   account: string;
+  presentation: PanelPresentation;
   onComplete: () => void | Promise<void>;
-}) {
+}): ReactNode {
+  const [pane, setPane] = useState<BotPane>('enroll');
   const [role, setRole] = useState<'owner' | 'admin' | 'member'>('member');
   const [visibility, setVisibility] = useState(0);
   const [pin, setPin] = useState('');
@@ -71,70 +80,173 @@ export function BotPanel({
       if (active.current === owner) setBusy(false);
     }
   };
-  return (
-    <section className="pcard" aria-label={`Bot credentials for ${account}`}>
-      <h3>Bot credentials · {account}</h3>
-      <p>
-        Choose a role, confirm enrollment, then export the token once to a
-        private file. Keep that file to load the bot after an agent restart.
-      </p>
-      <label>
-        Bot role{' '}
-        <select
-          value={role}
-          disabled={busy}
-          onChange={(e) => setRole(e.target.value as typeof role)}
+  const visibilityValid =
+    Number.isInteger(visibility) && visibility >= -32768 && visibility <= 32767;
+  const pinField = (
+    <InsetRow label="Security key PIN (enrolled keys only)">
+      <input
+        type="password"
+        autoComplete="off"
+        value={pin}
+        maxLength={32}
+        disabled={busy}
+        onChange={(e) => setPin(e.target.value)}
+      />
+    </InsetRow>
+  );
+  const paneActions: ReactNode =
+    pane === 'enroll' ? (
+      <>
+        <Button disabled={busy} onClick={() => void run({ action: 'list' })}>
+          Show pending enrollments
+        </Button>
+        <Button
+          variant="primary"
+          disabled={busy || !visibilityValid}
+          onClick={() =>
+            void run({
+              action: 'prepare',
+              role: role === 'member' ? { member: { visibility } } : role,
+              pin: null,
+            })
+          }
         >
-          <option value="member">Member</option>
-          <option value="admin">Admin</option>
-          <option value="owner">Owner</option>
-        </select>
-      </label>
-      {role === 'member' && (
-        <label>
-          Visibility{' '}
-          <input
-            type="number"
-            min={-32768}
-            max={32767}
-            value={visibility}
-            onChange={(e) => setVisibility(Number(e.target.value))}
-          />
-        </label>
-      )}
-      <label>
-        Security key PIN, if needed{' '}
-        <input
-          type="password"
-          autoComplete="off"
-          value={pin}
-          maxLength={32}
-          disabled={busy}
-          onChange={(e) => setPin(e.target.value)}
-        />
-      </label>
-      <button
-        disabled={
-          busy ||
-          !Number.isInteger(visibility) ||
-          visibility < -32768 ||
-          visibility > 32767
-        }
-        onClick={() =>
-          void run({
-            action: 'prepare',
-            role: role === 'member' ? { member: { visibility } } : role,
-            pin: null,
-          })
-        }
+          Enroll bot
+        </Button>
+      </>
+    ) : pane === 'load' ? (
+      <>
+        <Button disabled={busy} onClick={() => void run({ action: 'unload' })}>
+          Unload
+        </Button>
+        <Button
+          variant="primary"
+          disabled={busy || !/^[a-zA-Z0-9_-]{1,64}$/.test(alias)}
+          onClick={() => void run({ action: 'load-file' }, alias)}
+        >
+          Load from file
+        </Button>
+      </>
+    ) : revokeConfirmed ? (
+      <Button
+        variant="danger"
+        disabled={busy}
+        onClick={() => {
+          setRevokeConfirmed(false);
+          void run({ action: 'revoke', device_id: target, pin: null });
+        }}
       >
-        Prepare bot enrollment
-      </button>
-      <button disabled={busy} onClick={() => void run({ action: 'list' })}>
-        Recover bot enrollments
-      </button>
+        Confirm revocation
+      </Button>
+    ) : (
+      <Button
+        disabled={busy || !/^13[0-9a-f]{64}$/.test(target)}
+        onClick={() => setRevokeConfirmed(true)}
+      >
+        Revoke
+      </Button>
+    );
+  return (
+    <PanelSheet
+      presentation={presentation}
+      busy={busy}
+      footer={
+        <>
+          <Button disabled={busy} onClick={presentation.onClose}>
+            Close
+          </Button>
+          {paneActions}
+        </>
+      }
+    >
+      <p>
+        A bot is a device credential for automation on this account. Enroll it,
+        export its token once, and keep the file to load the bot after a
+        restart.
+      </p>
+      <SegmentedControl<BotPane>
+        label="Bot account action"
+        value={pane}
+        onChange={setPane}
+        items={[
+          { id: 'enroll', label: 'Enroll' },
+          { id: 'load', label: 'Load' },
+          { id: 'revoke', label: 'Revoke' },
+        ]}
+      />
+      {message && <p role="status">{message}</p>}
+      {error && (
+        <p role="alert" className="crit">
+          {error}
+        </p>
+      )}
+      {pane === 'enroll' && (
+        <Inset className="form">
+          <InsetRow label="Role">
+            <select
+              value={role}
+              disabled={busy}
+              onChange={(e) => setRole(e.target.value as typeof role)}
+            >
+              <option value="member">Member</option>
+              <option value="admin">Admin</option>
+              <option value="owner">Owner</option>
+            </select>
+          </InsetRow>
+          {role === 'member' && (
+            <InsetRow label="Member visibility level">
+              <input
+                type="number"
+                min={-32768}
+                max={32767}
+                value={visibility}
+                disabled={busy}
+                onChange={(e) => setVisibility(Number(e.target.value))}
+              />
+            </InsetRow>
+          )}
+          {pinField}
+        </Inset>
+      )}
+      {pane === 'load' && (
+        <Inset className="form">
+          <InsetRow label="Local label">
+            <input
+              value={alias}
+              maxLength={64}
+              disabled={busy}
+              onChange={(e) => setAlias(e.target.value)}
+            />
+          </InsetRow>
+        </Inset>
+      )}
+      {pane === 'revoke' && (
+        <>
+          <Inset className="form">
+            <InsetRow label="Credential ID" valueClass="mono">
+              <input
+                className="mono"
+                value={target}
+                maxLength={66}
+                disabled={busy}
+                onChange={(e) => {
+                  setTarget(e.target.value);
+                  setRevokeConfirmed(false);
+                }}
+              />
+            </InsetRow>
+            {pinField}
+          </Inset>
+          {revokeConfirmed && (
+            <p>
+              Revoke <code>{target}</code>? The bot loses access to new keys and
+              requests.
+            </p>
+          )}
+        </>
+      )}
       {rows.map((p) => (
-        <div key={p.operation_id}>
+        <div key={p.operation_id} className="op">
           <p role="status">
             {p.name} · {p.role} · {p.state}
           </p>
@@ -150,126 +262,76 @@ export function BotPanel({
               the operation status before attempting to enroll again.
             </p>
           )}
-          {p.state === 'prepared' && (
-            <>
-              <button
+          <div className="btns">
+            {p.state === 'prepared' && (
+              <>
+                <Button
+                  variant="primary"
+                  disabled={busy}
+                  onClick={() =>
+                    void run({
+                      action: 'attempt',
+                      operation_id: p.operation_id,
+                      pin: null,
+                    })
+                  }
+                >
+                  Confirm
+                </Button>
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void run({ action: 'cancel', operation_id: p.operation_id })
+                  }
+                >
+                  Cancel
+                </Button>
+              </>
+            )}
+            {!['complete', 'rejected'].includes(p.state) && (
+              <Button
                 disabled={busy}
                 onClick={() =>
                   void run({
-                    action: 'attempt',
+                    action: 'status',
                     operation_id: p.operation_id,
                     pin: null,
                   })
                 }
               >
-                Confirm bot enrollment
-              </button>
-              <button
+                Check status
+              </Button>
+            )}
+            {p.export_available && (
+              <Button
+                variant="primary"
                 disabled={busy}
                 onClick={() =>
-                  void run({ action: 'cancel', operation_id: p.operation_id })
+                  void run({
+                    action: 'export-file',
+                    operation_id: p.operation_id,
+                  })
                 }
               >
-                Cancel enrollment
-              </button>
-            </>
-          )}
-          {!['complete', 'rejected'].includes(p.state) && (
-            <button
-              disabled={busy}
-              onClick={() =>
-                void run({
-                  action: 'status',
-                  operation_id: p.operation_id,
-                  pin: null,
-                })
-              }
-            >
-              Check original enrollment
-            </button>
-          )}
-          {p.export_available && (
-            <button
-              disabled={busy}
-              onClick={() =>
-                void run({
-                  action: 'export-file',
-                  operation_id: p.operation_id,
-                })
-              }
-            >
-              Export token once
-            </button>
-          )}
-          {p.state === 'complete' && (
-            <button
-              disabled={busy}
-              onClick={() => {
-                setTarget(p.device_id);
-                setRevokeConfirmed(true);
-              }}
-            >
-              Review bot revocation
-            </button>
-          )}
+                Export token
+              </Button>
+            )}
+            {p.state === 'complete' && (
+              <Button
+                danger
+                disabled={busy}
+                onClick={() => {
+                  setTarget(p.device_id);
+                  setRevokeConfirmed(true);
+                  setPane('revoke');
+                }}
+              >
+                Revoke
+              </Button>
+            )}
+          </div>
         </div>
       ))}
-      <label>
-        Bot account label{' '}
-        <input
-          value={alias}
-          maxLength={64}
-          disabled={busy}
-          onChange={(e) => setAlias(e.target.value)}
-        />
-      </label>
-      <button
-        disabled={busy || !/^[a-zA-Z0-9_-]{1,64}$/.test(alias)}
-        onClick={() => void run({ action: 'load-file' }, alias)}
-      >
-        Load bot from private file
-      </button>
-      <button disabled={busy} onClick={() => void run({ action: 'unload' })}>
-        Unload selected bot
-      </button>
-      <label>
-        Bot credential to revoke{' '}
-        <input
-          value={target}
-          maxLength={66}
-          disabled={busy}
-          onChange={(e) => {
-            setTarget(e.target.value);
-            setRevokeConfirmed(false);
-          }}
-        />
-      </label>
-      {revokeConfirmed ? (
-        <>
-          <p>
-            Revoke credential {target}? It will lose access to new keys and
-            requests.
-          </p>
-          <button
-            disabled={busy}
-            onClick={() => {
-              setRevokeConfirmed(false);
-              void run({ action: 'revoke', device_id: target, pin: null });
-            }}
-          >
-            Confirm bot revocation
-          </button>
-        </>
-      ) : (
-        <button
-          disabled={busy || !/^13[0-9a-f]{64}$/.test(target)}
-          onClick={() => setRevokeConfirmed(true)}
-        >
-          Review revocation
-        </button>
-      )}
-      {message && <p role="status">{message}</p>}
-      {error && <p role="alert">{error}</p>}
-    </section>
+    </PanelSheet>
   );
 }

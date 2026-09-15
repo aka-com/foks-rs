@@ -149,14 +149,11 @@ function resolveServerUiState(
 }
 
 function StatusChip({ state }: { state: ServerUiState }): ReactNode {
+  if (state === 'unprobed') return null;
   return (
     <Chip
       tone={
-        state === 'checked'
-          ? 'ok'
-          : state === 'unprobed' || state === 'pending'
-            ? 'default'
-            : 'bad'
+        state === 'checked' ? 'ok' : state === 'pending' ? 'default' : 'bad'
       }
     >
       {STATE_LABEL[state]}
@@ -170,7 +167,6 @@ function ServerMark({ state }: { state: ServerUiState }): ReactNode {
   return (
     <span className={['smark', markTone(state)].filter(Boolean).join(' ')}>
       <Icon name={locked ? 'alert' : 'server'} />
-      {locked ? null : <i className="dot" />}
     </span>
   );
 }

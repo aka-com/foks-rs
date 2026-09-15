@@ -215,7 +215,7 @@ test('shows existing account option when username is already registered and conf
   });
   assert.equal(h.saved()?.state, 'protect');
   assert.equal(h.saved()?.account?.alias, 'personal');
-  assert.equal(h.saved()?.account?.username, 'rae');
+  assert.equal(h.saved()?.account?.username, 'satoshi');
   assert.deepEqual(calls(), before);
   assert.deepEqual(before, { creates: 0, resumes: 0, tracked: 1 });
 });

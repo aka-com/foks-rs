@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
+import type { ReactNode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import {
@@ -10,7 +11,7 @@ import {
 } from '../src/invitation-contract';
 installDom({
   url: 'http://localhost/',
-  body: '<div id="root"></div>',
+  body: '<div id="root"></div><div id="overlays"></div>',
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
@@ -25,6 +26,26 @@ test.before(async () => {
 });
 test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
+
+/** The sheet portals into the overlay root, so every panel needs a provider. */
+async function overlay(children: ReactNode) {
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
+  const portalRoot = document.getElementById('overlays');
+  assert.ok(portalRoot);
+  return createElement(OverlayProvider, {
+    backgroundRef: { current: null },
+    portalRoot,
+    children,
+  });
+}
+
+const presentation = {
+  title: 'Join a group',
+  subtitle: 'ada on Example',
+  onClose: () => {},
+};
 test('invitation boundary rejects secret fields, bad handles and oversized inboxes', () => {
   for (const key of ['receipt', 'permission', 'seed', 'pin'])
     assert.throws(() => decodeInvitationReply({ rows: [{ [key]: 'secret' }] }));
@@ -68,35 +89,36 @@ test('preview precedes request preparation and unknown delivery is checked witho
     },
   };
   const r = ui.render(
-    createElement(InvitationPanel, {
-      bridge,
-      profile: 'local',
-      account: 'work',
-      onComplete: () => assert.fail('no membership proof'),
-    }),
+    await overlay(
+      createElement(InvitationPanel, {
+        bridge,
+        profile: 'local',
+        account: 'work',
+        presentation,
+        onComplete: () => assert.fail('no membership proof'),
+      }),
+    ),
   );
   assert.equal(
-    (r.getByText('Prepare membership request') as HTMLButtonElement).disabled,
+    (r.getByText('Request membership') as HTMLButtonElement).disabled,
     true,
   );
   ui.fireEvent.change(r.getByLabelText('Invitation'), {
     target: { value: 'Invite123' },
   });
-  ui.fireEvent.click(r.getByText('Preview invitation'));
+  ui.fireEvent.click(r.getByText('Preview'));
   await ui.waitFor(() =>
     assert.equal(
-      (r.getByText('Prepare membership request') as HTMLButtonElement).disabled,
+      (r.getByText('Request membership') as HTMLButtonElement).disabled,
       false,
     ),
   );
-  ui.fireEvent.click(r.getByText('Prepare membership request'));
-  await ui.waitFor(() => assert.ok(r.getByText('Submit prepared operation')));
+  ui.fireEvent.click(r.getByText('Request membership'));
+  await ui.waitFor(() => assert.ok(r.getByText('Submit')));
   assert.deepEqual(actions, ['preview', 'accept']);
-  ui.fireEvent.click(r.getByText('Submit prepared operation'));
-  await ui.waitFor(() =>
-    assert.ok(r.queryByText('Submit prepared operation') === null),
-  );
-  ui.fireEvent.click(r.getByText('Check operation'));
+  ui.fireEvent.click(r.getByText('Submit'));
+  await ui.waitFor(() => assert.ok(r.queryByText('Submit') === null));
+  ui.fireEvent.click(r.getByText('Check status'));
   await ui.waitFor(() =>
     assert.deepEqual(actions, ['preview', 'accept', 'attempt', 'status']),
   );
@@ -133,11 +155,11 @@ test('local certificate operations stay local while a remote inbox profile is se
     }),
   );
   ui.fireEvent.change(
-    r.getByLabelText('Other server profile, for a remote request'),
+    r.getByLabelText('Server profile (for groups on another server)'),
     { target: { value: 'remote' } },
   );
-  ui.fireEvent.click(r.getByText('Prepare invitation'));
-  await ui.waitFor(() => assert.ok(r.getByText('Submit prepared operation')));
-  ui.fireEvent.click(r.getByText('Submit prepared operation'));
+  ui.fireEvent.click(r.getByText('Create invitation'));
+  await ui.waitFor(() => assert.ok(r.getByText('Submit')));
+  ui.fireEvent.click(r.getByText('Submit'));
   await ui.waitFor(() => assert.deepEqual(actions, ['create', 'attempt']));
 });

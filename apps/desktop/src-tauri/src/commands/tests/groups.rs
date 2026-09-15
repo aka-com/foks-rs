@@ -610,7 +610,7 @@ fn member_targets_require_fresh_local_non_self_user_facts() {
             store: account_id,
             profile: "work.example".to_owned(),
             alias: "personal".to_owned(),
-            username: "rae.chen".to_owned(),
+            username: "vitalik".to_owned(),
         },
     );
     let party = |username: &str, manageable: bool| PartyDto {
@@ -627,7 +627,7 @@ fn member_targets_require_fresh_local_non_self_user_facts() {
     state.rosters.lock().unwrap().insert(
         local_id.clone(),
         vec![
-            party("rae.chen", true),
+            party("vitalik", true),
             party("dana.okafor", true),
             party("deploy-bot", false),
         ],
@@ -639,7 +639,7 @@ fn member_targets_require_fresh_local_non_self_user_facts() {
             .2,
         MemberRole::Member { visibility: 0 }
     );
-    for username in ["rae.chen", "deploy-bot", "missing"] {
+    for username in ["vitalik", "deploy-bot", "missing"] {
         assert_eq!(
             state
                 .selected_member_target(&local_id, username)
@@ -877,7 +877,7 @@ fn stale_group_reads_cannot_repopulate_authorization_caches() {
             store: "old-account".to_owned(),
             profile: "work.example".to_owned(),
             alias: "personal".to_owned(),
-            username: "rae.chen".to_owned(),
+            username: "vitalik".to_owned(),
         },
     );
     state

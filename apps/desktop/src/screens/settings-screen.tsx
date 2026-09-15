@@ -24,11 +24,13 @@ import {
   Icon,
   Inset,
   InsetRow,
+  CardSelect,
   Notice,
   SectionLabel,
   SegmentedControl,
   SheetDialog,
 } from '../components';
+import type { CardOption } from '../components';
 import type { Location, SettingsSection } from '../location';
 import {
   canCreateInStore,
@@ -72,6 +74,9 @@ interface Props {
   onRetryAgent: () => Promise<void>;
 }
 
+/** The account panels reached from a row in Settings → Accounts. */
+type AccountSheet = 'rename' | 'bot' | 'admin' | 'join' | 'sso';
+
 type Sheet =
   | 'phrase'
   | 'pair'
@@ -84,6 +89,7 @@ type Sheet =
   | 'remove-device'
   | 'revoke-backup'
   | 'go-profile'
+  | AccountSheet
   | null;
 const SECTIONS: readonly {
   id: SettingsSection;
@@ -108,19 +114,29 @@ function accountStores(snapshot: AgentSnapshot): AccountStore[] {
   );
 }
 
+/**
+ * The line under a sheet title: who the workflow acts as, and where. The
+ * title itself never carries the account alias.
+ */
+function accountSubtitle(snapshot: AgentSnapshot, store: AccountStore): string {
+  const username = snapshot.accounts.find(
+    (entry) => entry.store === store.id,
+  )?.username;
+  const server = snapshot.servers.find((entry) => entry.id === store.server);
+  return `${username ?? store.account} on ${server?.name ?? store.server}`;
+}
+
 function GroupsSection({
   snapshot,
   discovering,
   onDiscover,
   onCreate,
-  onInvite,
   onOpen,
 }: {
   snapshot: AgentSnapshot;
   discovering: StoreRef | null;
   onDiscover: (context: DiscoveryContext) => Promise<void>;
   onCreate: () => void;
-  onInvite: (store: AccountStore) => void;
   onOpen: (store: TeamStore) => void;
 }): ReactNode {
   const accounts = accountStores(snapshot);
@@ -247,36 +263,6 @@ function GroupsSection({
           </Inset>
         </>
       ) : null}
-      <SectionLabel>Invite someone</SectionLabel>
-      <Inset className="settings-inset">
-        {accounts.length ? (
-          accounts.map((store) => {
-            const account = snapshot.accounts.find(
-              (candidate) => candidate.store === store.id,
-            );
-            const server = serverOf(snapshot, store.id);
-            return (
-              <InsetRow
-                key={store.id}
-                label={server?.name ?? store.server}
-                action={
-                  <Button
-                    size="sm"
-                    disabled={!account}
-                    onClick={() => onInvite(store)}
-                  >
-                    {account
-                      ? `Invite as ${account.username}…`
-                      : 'Invite someone…'}
-                  </Button>
-                }
-              />
-            );
-          })
-        ) : (
-          <InsetRow label="None">No accounts configured on this Mac.</InsetRow>
-        )}
-      </Inset>
     </>
   );
 }
@@ -318,12 +304,11 @@ export function SettingsScreen({
   const [yubi, setYubi] = useState<YubiEnrollment[]>([]);
   const [cards, setCards] = useState<{ serial: number }[]>([]);
   const [pendingYubi, setPendingYubi] = useState<SimpleYubiAction | null>(null);
-  const [passphraseMode, setPassphraseMode] = useState<
-    'set' | 'change' | 'verify'
-  >('set');
-  const [passphraseStore, setPassphraseStore] = useState<AccountStore | null>(
-    null,
-  );
+  const [passphraseMode, setPassphraseMode] = useState<'set' | 'change'>('set');
+  // The account a row-launched sheet applies to, the passphrase sheet
+  // included. Held by value so a sheet keeps its account while it is open.
+  const [accountSheetStore, setAccountSheetStore] =
+    useState<AccountStore | null>(null);
   const [pairMode, setPairMode] = useState<'offer' | 'accept'>('offer');
   const [removeDevice, setRemoveDevice] = useState<AccountDevice | null>(null);
   const [revokeBackup, setRevokeBackup] = useState<BackupEnrollment | null>(
@@ -336,13 +321,6 @@ export function SettingsScreen({
   const [macsLoaded, setMacsLoaded] = useState(false);
   const [keysLoaded, setKeysLoaded] = useState(false);
   const [groupCreate, setGroupCreate] = useState(enteredScene === 'create');
-  const [inviteStore, setInviteStore] = useState<StoreRef | null>(() =>
-    enteredScene === 'join-invite'
-      ? (stores.find((store) => store.id === 'acct:work')?.id ??
-        stores[0]?.id ??
-        null)
-      : null,
-  );
   const [discovering, setDiscovering] = useState<StoreRef | null>(null);
   const toasts = useToast();
   // Track open modal state to suppress background catalog reloads while sheets are active.
@@ -395,14 +373,15 @@ export function SettingsScreen({
 
   useEffect(() => {
     const conceal = (): void => {
-      if (sheetOpen.current === 'go-profile') return;
+      // Browser sign-in must retain its operation while the browser has focus.
+      if (sheetOpen.current === 'go-profile' || sheetOpen.current === 'sso')
+        return;
       setSheet(null);
       setPendingYubi(null);
-      setPassphraseStore(null);
+      setAccountSheetStore(null);
       setRemoveDevice(null);
       setRevokeBackup(null);
       setGroupCreate(false);
-      setInviteStore(null);
     };
     const concealWhenHidden = (): void => {
       if (document.hidden) conceal();
@@ -440,7 +419,7 @@ export function SettingsScreen({
     shown.current = selectedId;
     setSheet(null);
     setPendingYubi(null);
-    setPassphraseStore(null);
+    setAccountSheetStore(null);
     setRemoveDevice(null);
     setRevokeBackup(null);
     setDevices([]);
@@ -622,6 +601,10 @@ export function SettingsScreen({
     await onRefresh(message);
     toasts.show(message);
   };
+  const closeAccountSheet = (): void => {
+    setSheet(null);
+    setAccountSheetStore(null);
+  };
   const account = selected
     ? snapshot.accounts.find((entry) => entry.store === selected.id)
     : undefined;
@@ -635,17 +618,6 @@ export function SettingsScreen({
     selected && !unavailable && !selectedStopped && !keysLoaded,
   );
   const createContext = stores[0];
-  const invitedStore = stores.find((store) => store.id === inviteStore);
-  const invitedAccount = invitedStore
-    ? snapshot.accounts.find((entry) => entry.store === invitedStore.id)
-    : undefined;
-  const invitedServer = invitedStore
-    ? serverOf(snapshot, invitedStore.id)
-    : undefined;
-  const inviteMessage =
-    invitedStore && invitedAccount
-      ? `1. Install FOKS: https://foks.app/download\n2. When prompted for a server address, enter ${invitedServer?.name ?? invitedStore.server}\n3. Create your account with username firstname.lastname\n4. Send your username to ${invitedAccount.username}. The account administrator can then add you to the group.`
-      : '';
   return (
     <>
       <PageHeader
@@ -723,65 +695,20 @@ export function SettingsScreen({
               />
             ) : null}
             {section === 'account' ? (
-              <>
-                <AccountSection
-                  snapshot={snapshot}
-                  deviceNames={accountDeviceNames}
-                  onConnectGoProfile={() => setSheet('go-profile')}
-                  onPassphrase={(store, mode) => {
-                    setPassphraseStore(store);
-                    setPassphraseMode(mode);
-                    setSheet('passphrase');
-                  }}
-                />
-                {accountStores(snapshot).map((store) => (
-                  <AdminPanel
-                    key={`admin-${store.id}`}
-                    bridge={bridge}
-                    profile={store.server}
-                    account={store.account}
-                  />
-                ))}
-                {accountStores(snapshot).map((store) => (
-                  <BotPanel
-                    key={`bot-${store.id}`}
-                    bridge={bridge}
-                    profile={store.server}
-                    account={store.account}
-                    onComplete={() => onRefresh('Bot account updated')}
-                  />
-                ))}
-                {accountStores(snapshot).map((store) => (
-                  <InvitationPanel
-                    key={`invite-${store.id}`}
-                    bridge={bridge}
-                    profile={store.server}
-                    account={store.account}
-                    onComplete={() => onRefresh('Group membership refreshed')}
-                  />
-                ))}
-                {accountStores(snapshot).map((store) => (
-                  <RenamePanel
-                    key={`rename-${store.id}`}
-                    bridge={bridge}
-                    profile={store.server}
-                    account={store.account}
-                    onComplete={() => onRefresh('Username updated')}
-                  />
-                ))}
-                {accountStores(snapshot).map((store) => (
-                  <SsoPanel
-                    key={store.id}
-                    bridge={bridge}
-                    profile={store.server}
-                    account={store.account}
-                    login={true}
-                    onComplete={() =>
-                      onRefresh('Organization sign-in verified')
-                    }
-                  />
-                ))}
-              </>
+              <AccountSection
+                snapshot={snapshot}
+                deviceNames={accountDeviceNames}
+                onConnectGoProfile={() => setSheet('go-profile')}
+                onPassphrase={(store, mode) => {
+                  setAccountSheetStore(store);
+                  setPassphraseMode(mode);
+                  setSheet('passphrase');
+                }}
+                onAccountSheet={(store, next) => {
+                  setAccountSheetStore(store);
+                  setSheet(next);
+                }}
+              />
             ) : null}
             {section === 'servers' ? (
               <ServersSection
@@ -801,7 +728,6 @@ export function SettingsScreen({
                 discovering={discovering}
                 onDiscover={discover}
                 onCreate={() => setGroupCreate(true)}
-                onInvite={(store) => setInviteStore(store.id)}
                 onOpen={(store) => onNavigate({ kind: 'store', ref: store.id })}
               />
             ) : null}
@@ -922,26 +848,87 @@ export function SettingsScreen({
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
-      {sheet === 'passphrase' && passphraseStore ? (
+      {accountSheetStore && sheet === 'rename' ? (
+        <RenamePanel
+          bridge={bridge}
+          profile={accountSheetStore.server}
+          account={accountSheetStore.account}
+          presentation={{
+            title: 'Change username',
+            subtitle: accountSubtitle(snapshot, accountSheetStore),
+            onClose: closeAccountSheet,
+          }}
+          onComplete={() => onRefresh('Username updated')}
+        />
+      ) : null}
+      {accountSheetStore && sheet === 'bot' ? (
+        <BotPanel
+          bridge={bridge}
+          profile={accountSheetStore.server}
+          account={accountSheetStore.account}
+          presentation={{
+            title: 'Bot accounts',
+            subtitle: accountSubtitle(snapshot, accountSheetStore),
+            onClose: closeAccountSheet,
+          }}
+          onComplete={() => onRefresh('Bot account updated')}
+        />
+      ) : null}
+      {accountSheetStore && sheet === 'admin' ? (
+        <AdminPanel
+          bridge={bridge}
+          profile={accountSheetStore.server}
+          account={accountSheetStore.account}
+          presentation={{
+            title: 'Manage via web',
+            subtitle: accountSubtitle(snapshot, accountSheetStore),
+            onClose: closeAccountSheet,
+          }}
+        />
+      ) : null}
+      {accountSheetStore && sheet === 'join' ? (
+        <InvitationPanel
+          bridge={bridge}
+          profile={accountSheetStore.server}
+          account={accountSheetStore.account}
+          presentation={{
+            title: 'Join a group',
+            subtitle: accountSubtitle(snapshot, accountSheetStore),
+            onClose: closeAccountSheet,
+          }}
+          onComplete={() => onRefresh('Group membership refreshed')}
+        />
+      ) : null}
+      {accountSheetStore && sheet === 'sso' ? (
+        <SsoPanel
+          bridge={bridge}
+          profile={accountSheetStore.server}
+          account={accountSheetStore.account}
+          login={true}
+          presentation={{
+            title: 'Organization sign-in',
+            subtitle: accountSubtitle(snapshot, accountSheetStore),
+            onClose: closeAccountSheet,
+          }}
+          onComplete={() => onRefresh('Organization sign-in verified')}
+        />
+      ) : null}
+      {sheet === 'passphrase' && accountSheetStore ? (
         <PassphraseSheet
           bridge={bridge}
-          store={passphraseStore}
+          store={accountSheetStore}
+          subtitle={accountSubtitle(snapshot, accountSheetStore)}
           initialMode={passphraseMode}
           onClose={() => {
             setSheet(null);
-            setPassphraseStore(null);
+            setAccountSheetStore(null);
           }}
           onDone={(message) => {
             setSheet(null);
-            setPassphraseStore(null);
-            if (passphraseMode === 'verify') toasts.show(message);
-            else
-              void onRefresh(message).catch((error) => onMutationError(error));
+            setAccountSheetStore(null);
+            void onRefresh(message).catch((error) => onMutationError(error));
           }}
-          onError={(error) => {
-            if (passphraseMode === 'verify') onError(error);
-            else void onMutationError(error);
-          }}
+          onError={(error) => void onMutationError(error)}
         />
       ) : null}
       {sheet === 'remove-device' && selected && removeDevice ? (
@@ -1011,78 +998,6 @@ export function SettingsScreen({
           onError={onError}
           onMutationError={onMutationError}
         />
-      ) : null}
-      {inviteStore ? (
-        <SheetDialog
-          onClose={() => setInviteStore(null)}
-          glyph={<span className="kico md invite">I</span>}
-          title={
-            invitedStore && invitedAccount
-              ? `Invite to ${invitedServer?.name ?? invitedStore.server}`
-              : 'Account no longer available'
-          }
-          subtitle={
-            invitedStore && invitedAccount
-              ? 'Help set up a new user'
-              : 'Message unavailable'
-          }
-          footer={
-            <>
-              <Button onClick={() => setInviteStore(null)}>Done</Button>
-              {inviteMessage ? (
-                <Button
-                  variant="primary"
-                  onClick={() =>
-                    void bridge
-                      .copyText(inviteMessage)
-                      .then(() => toasts.show('Message copied.'))
-                      .catch(onError)
-                  }
-                >
-                  Copy message
-                </Button>
-              ) : null}
-            </>
-          }
-        >
-          {invitedStore && invitedAccount ? (
-            <>
-              <Inset>
-                <InsetRow label="Message">
-                  <span className="msg">{inviteMessage}</span>
-                </InsetRow>
-              </Inset>
-              <SectionLabel>Message contents</SectionLabel>
-              <Inset className="settings-inset">
-                <InsetRow label="Install link">
-                  <code>https://foks.app/download</code>{' '}
-                  <Chip tone="warn">placeholder</Chip>
-                  <small>Temporary download address.</small>
-                </InsetRow>
-                <InsetRow label="Server">
-                  {invitedServer?.name ?? invitedStore.server}
-                  <small>
-                    The invited user enters this address during setup.
-                  </small>
-                </InsetRow>
-                <InsetRow label="Signup invite">
-                  Optional
-                  <small>
-                    Only needed if this server requires an invitation code.
-                  </small>
-                </InsetRow>
-                <InsetRow label="Next steps">
-                  Add their username to a group in that group’s settings.
-                </InsetRow>
-              </Inset>
-            </>
-          ) : (
-            <p className="fn">
-              This account is no longer available. Select a different account to
-              send an invite.
-            </p>
-          )}
-        </SheetDialog>
       ) : null}
     </>
   );
@@ -1157,6 +1072,45 @@ function NoAvailableAccount({
   );
 }
 
+/** The account this section applies to, chosen from a full-width dropdown. */
+function AccountPicker({
+  stores,
+  selected,
+  snapshot,
+  onSwitch,
+}: {
+  stores: AccountStore[];
+  selected: AccountStore;
+  snapshot: AgentSnapshot;
+  onSwitch: (store: AccountStore) => void;
+}): ReactNode {
+  const options: CardOption[] = stores.map((store) => {
+    const username = snapshot.accounts.find(
+      (entry) => entry.store === store.id,
+    )?.username;
+    const server = snapshot.servers.find((entry) => entry.id === store.server);
+    const stopped = !storeAvailability(snapshot, store).available;
+    return {
+      id: store.id,
+      title: store.account,
+      detail: `${username ?? 'Identity unavailable'} on ${server?.name ?? store.server}${stopped ? ' · access stopped' : ''}`,
+    };
+  });
+  return (
+    <Inset className="account-picker">
+      <CardSelect
+        label="This account"
+        options={options}
+        value={selected.id}
+        onChange={(id) => {
+          const next = stores.find((store) => store.id === id);
+          if (next) onSwitch(next);
+        }}
+      />
+    </Inset>
+  );
+}
+
 function MacsSection({
   stores,
   selected,
@@ -1193,31 +1147,13 @@ function MacsSection({
   );
   return (
     <>
-      <div className="settings-label">
-        <SegmentedControl
-          label="This account"
-          value={selected.id}
-          onChange={(id) => {
-            const next = stores.find((store) => store.id === id);
-            if (next) onSwitch(next);
-          }}
-          items={stores.map((store) => {
-            // Disambiguate duplicate account aliases across different servers.
-            const ambiguous = stores.some(
-              (other) =>
-                other.id !== store.id && other.account === store.account,
-            );
-            const server =
-              snapshot.servers.find((entry) => entry.id === store.server)
-                ?.name ?? store.server;
-            return {
-              id: store.id,
-              label: ambiguous ? `${store.account} · ${server}` : store.account,
-              title: `${store.account} on ${server}`,
-            };
-          })}
-        />
-      </div>
+      <SectionLabel>Account</SectionLabel>
+      <AccountPicker
+        stores={stores}
+        selected={selected}
+        snapshot={snapshot}
+        onSwitch={onSwitch}
+      />
       <SectionLabel>This account</SectionLabel>
       <Inset className="settings-inset">
         <InsetRow label="Signed in as">
@@ -1575,14 +1511,13 @@ function AccountSection({
   deviceNames,
   onConnectGoProfile,
   onPassphrase,
+  onAccountSheet,
 }: {
   snapshot: AgentSnapshot;
   deviceNames: Map<string, string>;
   onConnectGoProfile: () => void;
-  onPassphrase: (
-    store: AccountStore,
-    mode: 'set' | 'change' | 'verify',
-  ) => void;
+  onPassphrase: (store: AccountStore, mode: 'set' | 'change') => void;
+  onAccountSheet: (store: AccountStore, sheet: AccountSheet) => void;
 }): ReactNode {
   const stores = accountStores(snapshot);
   if (!stores.length) {
@@ -1621,51 +1556,113 @@ function AccountSection({
               {server?.label ? ` · ${server.label}` : ''}
             </SectionLabel>
             <Inset className="settings-inset">
-              <InsetRow label="Username">
+              <InsetRow
+                label="Username"
+                action={
+                  <Button
+                    size="sm"
+                    disabled={inert}
+                    onClick={() => onAccountSheet(store, 'rename')}
+                  >
+                    Change…
+                  </Button>
+                }
+              >
                 <b>{account?.username ?? 'Identity unavailable'}</b>{' '}
                 <Chip tone={stopped ? 'warn' : 'default'}>{statusLabel}</Chip>
               </InsetRow>
-              <InsetRow label="Account alias">
-                {store.account}
-                <small>A local name on this Mac; not sent to the server.</small>
-              </InsetRow>
+              <InsetRow label="Local alias">{store.account}</InsetRow>
               <InsetRow label="Device">
                 {stopped
                   ? 'Not listed while access is stopped'
                   : (deviceNames.get(store.id) ?? 'Current device unknown')}
-                <small>
-                  This account’s current authenticated device. All devices are
-                  under Recovery devices.
-                </small>
+                <small>This account’s current authenticated device.</small>
               </InsetRow>
-              <InsetRow label="Passphrase">
-                <span className="a">
-                  <Button
-                    size="sm"
-                    disabled={inert}
-                    onClick={() => onPassphrase(store, 'set')}
-                  >
-                    Set…
-                  </Button>
-                  <Button
-                    size="sm"
-                    disabled={inert}
-                    onClick={() => onPassphrase(store, 'change')}
-                  >
-                    Change…
-                  </Button>
-                  <Button
-                    size="sm"
-                    disabled={inert}
-                    onClick={() => onPassphrase(store, 'verify')}
-                  >
-                    Verify
-                  </Button>
-                </span>
+              <InsetRow
+                label="Passphrase"
+                action={
+                  <>
+                    <Button
+                      size="sm"
+                      disabled={inert}
+                      onClick={() => onPassphrase(store, 'set')}
+                    >
+                      Set…
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={inert}
+                      onClick={() => onPassphrase(store, 'change')}
+                    >
+                      Change…
+                    </Button>
+                  </>
+                }
+              >
                 <small>
                   {stopped
                     ? 'Reconnect to the server to manage your passphrase.'
-                    : 'Verify tests whether your passphrase matches the server.'}
+                    : 'Protects this account’s secret keys on this Mac.'}
+                </small>
+              </InsetRow>
+              <InsetRow
+                label="SSO"
+                action={
+                  <Button
+                    size="sm"
+                    onClick={() => onAccountSheet(store, 'sso')}
+                  >
+                    Sign in…
+                  </Button>
+                }
+              >
+                <small>
+                  Sign in through your organization’s identity provider.
+                </small>
+              </InsetRow>
+              <InsetRow
+                label="Bot accounts"
+                action={
+                  <Button
+                    size="sm"
+                    onClick={() => onAccountSheet(store, 'bot')}
+                  >
+                    Manage…
+                  </Button>
+                }
+              >
+                <small>
+                  Device credentials for automation on this account.
+                </small>
+              </InsetRow>
+              <InsetRow
+                label="Web admin"
+                action={
+                  <Button
+                    size="sm"
+                    onClick={() => onAccountSheet(store, 'admin')}
+                  >
+                    Open…
+                  </Button>
+                }
+              >
+                <small>
+                  Opens the host’s administration panel in a private window.
+                </small>
+              </InsetRow>
+              <InsetRow
+                label="Groups"
+                action={
+                  <Button
+                    size="sm"
+                    onClick={() => onAccountSheet(store, 'join')}
+                  >
+                    Join a group…
+                  </Button>
+                }
+              >
+                <small>
+                  Request membership with an invitation from an administrator.
                 </small>
               </InsetRow>
             </Inset>
@@ -2260,7 +2257,7 @@ function RecoverSheet({
   return (
     <SheetFrame
       title="Recover on this Mac"
-      subtitle="Use your 17-word backup phrase"
+      subtitle="Use your backup phrase"
       onClose={() => {
         setPhrase('');
         onClose();
@@ -2355,7 +2352,7 @@ function EnrollSheet({
   return (
     <SheetFrame
       title="Create a YubiKey account"
-      subtitle={`Create a new account on ${store.server} with credentials stored directly on your hardware key`}
+      subtitle={`Create a new account on ${store.server}`}
       onClose={() => {
         clear();
         onClose();
@@ -3063,6 +3060,7 @@ function RemoveDeviceSheet({
 function PassphraseSheet({
   bridge,
   store,
+  subtitle,
   initialMode,
   onClose,
   onDone,
@@ -3070,12 +3068,13 @@ function PassphraseSheet({
 }: {
   bridge: Bridge;
   store: AccountStore;
-  initialMode: 'set' | 'change' | 'verify';
+  subtitle: string;
+  initialMode: 'set' | 'change';
   onClose: () => void;
   onDone: (message: string) => void;
   onError: (error: unknown) => void;
 }): ReactNode {
-  const [mode, setMode] = useState<'set' | 'change' | 'verify'>(initialMode);
+  const [mode, setMode] = useState<'set' | 'change'>(initialMode);
   const [passphrase, setPassphrase] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
@@ -3086,18 +3085,12 @@ function PassphraseSheet({
     const task =
       mode === 'set'
         ? bridge.setAccountPassphrase(store.id, secret, repeated)
-        : mode === 'change'
-          ? bridge.changeAccountPassphrase(store.id, secret, repeated)
-          : bridge.verifyAccountPassphrase(store.id, secret);
+        : bridge.changeAccountPassphrase(store.id, secret, repeated);
     void task
       .then(() => {
         setPassphrase('');
         setConfirmation('');
-        onDone(
-          mode === 'verify'
-            ? 'Passphrase verified successfully.'
-            : 'Passphrase updated successfully.',
-        );
+        onDone('Passphrase updated successfully.');
       })
       .catch(onError)
       .finally(() => setBusy(false));
@@ -3105,7 +3098,7 @@ function PassphraseSheet({
   return (
     <SheetFrame
       title="Account passphrase"
-      subtitle="Set, change, or verify your account passphrase"
+      subtitle={subtitle}
       onClose={() => {
         if (busy) return;
         setPassphrase('');
@@ -3119,18 +3112,10 @@ function PassphraseSheet({
           </Button>
           <Button
             variant="primary"
-            disabled={
-              !passphrase ||
-              (mode !== 'verify' && passphrase !== confirmation) ||
-              busy
-            }
+            disabled={!passphrase || passphrase !== confirmation || busy}
             onClick={submit}
           >
-            {mode === 'verify'
-              ? 'Verify'
-              : mode === 'set'
-                ? 'Set passphrase'
-                : 'Change passphrase'}
+            {mode === 'set' ? 'Set passphrase' : 'Change passphrase'}
           </Button>
         </>
       }
@@ -3142,7 +3127,6 @@ function PassphraseSheet({
         items={[
           { id: 'set', label: 'Set' },
           { id: 'change', label: 'Change' },
-          { id: 'verify', label: 'Verify' },
         ]}
       />
       <Inset>
@@ -3152,14 +3136,12 @@ function PassphraseSheet({
           onChange={setPassphrase}
           type="password"
         />
-        {mode === 'verify' ? null : (
-          <Field
-            label="Confirm"
-            value={confirmation}
-            onChange={setConfirmation}
-            type="password"
-          />
-        )}
+        <Field
+          label="Confirm"
+          value={confirmation}
+          onChange={setConfirmation}
+          type="password"
+        />
       </Inset>
     </SheetFrame>
   );

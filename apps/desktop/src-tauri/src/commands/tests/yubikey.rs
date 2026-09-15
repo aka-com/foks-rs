@@ -102,7 +102,7 @@ fn security_key_responses_are_exact_typed_and_state_bound() {
     let account = yubi_account_response(
         serde_json::json!({
             "alias":"ready_key",
-            "username":"rae",
+            "username":"satoshi",
             "yubi_id_hex":"08".repeat(34),
             "subkey_id_hex":"0d".repeat(33),
             "user_chain_sequence":0,
@@ -121,7 +121,7 @@ fn security_key_responses_are_exact_typed_and_state_bound() {
                 "user_chain_sequence":0,"management_enrolled":true
             }),
             "ready_key",
-            Some("rae"),
+            Some("satoshi"),
         )
         .unwrap_err()
         .code,
@@ -129,17 +129,17 @@ fn security_key_responses_are_exact_typed_and_state_bound() {
     );
     for malformed in [
         serde_json::json!({
-            "alias":"other","username":"rae","yubi_id_hex":"08".repeat(34),
+            "alias":"other","username":"satoshi","yubi_id_hex":"08".repeat(34),
             "subkey_id_hex":"0d".repeat(33),"user_chain_sequence":0,
             "management_enrolled":true
         }),
         serde_json::json!({
-            "alias":"ready_key","username":"rae","yubi_id_hex":"04".repeat(34),
+            "alias":"ready_key","username":"satoshi","yubi_id_hex":"04".repeat(34),
             "subkey_id_hex":"0d".repeat(33),"user_chain_sequence":0,
             "management_enrolled":true
         }),
         serde_json::json!({
-            "alias":"ready_key","username":"rae","yubi_id_hex":"08".repeat(34),
+            "alias":"ready_key","username":"satoshi","yubi_id_hex":"08".repeat(34),
             "subkey_id_hex":"0d".repeat(33),"user_chain_sequence":0,
             "management_enrolled":false
         }),
@@ -230,7 +230,7 @@ fn security_key_sync_and_lifecycle_reports_reject_malformed_success() {
     let sync = yubi_sync_response(
         serde_json::json!({
             "sync":{
-                "username":"rae","user_chain_sequence":4,"directories":2,"entries":3
+                "username":"satoshi","user_chain_sequence":4,"directories":2,"entries":3
             },
             "federation":[{
                 "local_profile":"work","local_team_alias":"engineering",
@@ -244,21 +244,21 @@ fn security_key_sync_and_lifecycle_reports_reject_malformed_success() {
     assert_eq!(sync.federation.len(), 1);
     for malformed in [
         serde_json::json!({
-            "sync":{"username":"rae","user_chain_sequence":4,"directories":2,"entries":3},
+            "sync":{"username":"satoshi","user_chain_sequence":4,"directories":2,"entries":3},
             "federation":[{
                 "local_profile":"other","local_team_alias":"engineering",
                 "refreshed":true,"deferred":null
             }]
         }),
         serde_json::json!({
-            "sync":{"username":"rae","user_chain_sequence":4,"directories":2,"entries":3},
+            "sync":{"username":"satoshi","user_chain_sequence":4,"directories":2,"entries":3},
             "federation":[{
                 "local_profile":"work","local_team_alias":"engineering",
                 "refreshed":false,"deferred":null
             }]
         }),
         serde_json::json!({
-            "sync":{"username":"rae","user_chain_sequence":4,"directories":2,"entries":3},
+            "sync":{"username":"satoshi","user_chain_sequence":4,"directories":2,"entries":3},
             "federation":[{
                 "local_profile":"work","local_team_alias":"engineering",
                 "refreshed":true,"deferred":null,"invented":true
@@ -315,7 +315,7 @@ impl foks_desktop::AgentTransport for YubiResumeTransport {
                 "kind":"yubi-enrollment","alias":"work_key","target":null
             }])),
             Operation::ResumeYubiAccount { .. } => Ok(serde_json::json!({
-                "alias":"work_key","username":"rae",
+                "alias":"work_key","username":"satoshi",
                 "yubi_id_hex":"08".repeat(34),"subkey_id_hex":"0d".repeat(33),
                 "user_chain_sequence":8,"management_enrolled":true
             })),

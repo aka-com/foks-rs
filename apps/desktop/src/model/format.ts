@@ -17,7 +17,7 @@ export function fmtSize(bytes: number | null): string {
  * Up to two initials from a display name.
  *
  * The mail domain is dropped first, then the name is split on `.`, `-`, `_`
- * and spaces: `sam.ortiz` → `SO`, `deploy-bot` → `DB`, `rae` → `R`.
+ * and spaces: `sam.ortiz` → `SO`, `deploy-bot` → `DB`, `satoshi` → `S`.
  */
 export function initials(name: string): string {
   return name

@@ -12,24 +12,33 @@ const login: Item = {
   version: 1,
   read: 'Owner',
   write: 'Owner',
-  value: 'username: rae\npassword: ••••••••',
+  value: 'username: satoshi\npassword: ••••••••',
 };
 
 test('editableValue preserves special regex replacement tokens in password value', () => {
   // Verifies that replacement tokens in password values are treated as literals.
-  assert.equal(editableValue(login, 'a$&b'), 'username: rae\npassword: a$&b');
-  assert.equal(editableValue(login, 'x$`y'), 'username: rae\npassword: x$`y');
-  assert.equal(editableValue(login, "p$'q"), "username: rae\npassword: p$'q");
+  assert.equal(
+    editableValue(login, 'a$&b'),
+    'username: satoshi\npassword: a$&b',
+  );
+  assert.equal(
+    editableValue(login, 'x$`y'),
+    'username: satoshi\npassword: x$`y',
+  );
+  assert.equal(
+    editableValue(login, "p$'q"),
+    "username: satoshi\npassword: p$'q",
+  );
 });
 
 test('editableValue returns decrypted value when item value lacks a password field', () => {
-  const bare: Item = { ...login, value: 'username: rae' };
+  const bare: Item = { ...login, value: 'username: satoshi' };
   assert.equal(editableValue(bare, 'secret'), 'secret');
 });
 
 test('editableValue returns full record unchanged when matching existing format', () => {
   assert.equal(
-    editableValue(login, 'username: rae\npassword: hunter2'),
-    'username: rae\npassword: hunter2',
+    editableValue(login, 'username: satoshi\npassword: hunter2'),
+    'username: satoshi\npassword: hunter2',
   );
 });

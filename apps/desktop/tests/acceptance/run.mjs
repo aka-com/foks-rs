@@ -61,7 +61,6 @@ const STATES = [
   'remove',
   'admit',
   'create',
-  'join-invite',
   'manage',
   'party-remove',
   'groups-lease',
@@ -421,15 +420,6 @@ async function groupWalk(context, origin) {
     if (!(await remove.isDisabled()))
       failures.push(
         'short party-remove allowed a non-local service account removal',
-      );
-
-    await page.goto(`${origin}/?state=join`, { waitUntil: 'load' });
-    const inviteCount = await page
-      .getByRole('button', { name: /^Invite as .+…$/ })
-      .count();
-    if (inviteCount !== 2)
-      failures.push(
-        `Settings Groups offered ${inviteCount} invite choices, not one per fixture account`,
       );
 
     await page.goto(`${origin}/?state=demote`, { waitUntil: 'load' });

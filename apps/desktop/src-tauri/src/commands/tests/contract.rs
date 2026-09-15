@@ -46,7 +46,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         installed: true,
         candidates: vec![GoProfileCandidateDto {
             candidate_id: "aa".repeat(32),
-            username: Some("raymond".to_owned()),
+            username: Some("satoshi".to_owned()),
             server_hint: Some("foks.app".to_owned()),
             host_id: format!("02{}", "bb".repeat(32)),
             user_id: format!("01{}", "cc".repeat(32)),
@@ -81,7 +81,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         store: "opaque-account-ref".to_owned(),
         profile: "foks.example".to_owned(),
         alias: "personal".to_owned(),
-        username: "rae.chen".to_owned(),
+        username: "vitalik".to_owned(),
     };
     assert_eq!(serde_json::to_value(account).unwrap(), fixture["account"]);
     let party = PartyDto {
@@ -350,7 +350,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
     assert_eq!(
         serde_json::to_value(YubiAccountDto {
             alias: "work_key".to_owned(),
-            username: "rae".to_owned(),
+            username: "satoshi".to_owned(),
             yubi_id: "08".repeat(34),
             subkey_id: "0d".repeat(33),
             user_chain_sequence: 21,
@@ -361,7 +361,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
     );
     assert_eq!(
         serde_json::to_value(YubiSyncDto {
-            username: "rae".to_owned(),
+            username: "satoshi".to_owned(),
             user_chain_sequence: 22,
             directories: 2,
             entries: 7,

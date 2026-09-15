@@ -91,7 +91,7 @@ async function harness() {
     managedLocal: true,
     serverAddress: 'localhost:4430',
     profile,
-    account: { alias: 'personal', username: 'rae', deviceName: 'Mac' },
+    account: { alias: 'personal', username: 'satoshi', deviceName: 'Mac' },
   };
   const bridge: Bridge = {
     ...mockBridge(complete),
@@ -604,7 +604,7 @@ test('acknowledged signup is persisted before refresh and resumes read-only afte
   await resumed.view.findByRole('button', { name: 'Show recovery phrase' });
   assert.equal(mutations, 1);
   assert.equal(refreshes, 2);
-  assert.equal(h.saved()?.account?.username, 'rae');
+  assert.equal(h.saved()?.account?.username, 'satoshi');
   assert.equal(h.saved()?.provisionedAccount, undefined);
 });
 
@@ -1050,7 +1050,7 @@ test('allows continuing with an existing account when a receipt cannot be read',
   ui.fireEvent.click(adopt);
   await rendered.view.findByRole('button', { name: 'Show recovery phrase' });
   assert.equal(h.saved()?.state, 'protect');
-  assert.equal(h.saved()?.account?.username, 'rae');
+  assert.equal(h.saved()?.account?.username, 'satoshi');
   assert.equal(mutations, 0);
 });
 

@@ -9,7 +9,7 @@
     "candidates": [
       {
         "candidateId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "username": "raymond",
+        "username": "satoshi",
         "serverHint": "foks.app",
         "hostId": "02bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "userId": "01cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -42,7 +42,7 @@
     "store": "opaque-account-ref",
     "profile": "foks.example",
     "alias": "personal",
-    "username": "rae.chen"
+    "username": "vitalik"
   },
   "party": {
     "store": "opaque-team-ref",
@@ -254,14 +254,14 @@
   },
   "yubiAccount": {
     "alias": "work_key",
-    "username": "rae",
+    "username": "satoshi",
     "yubiId": "08080808080808080808080808080808080808080808080808080808080808080808",
     "subkeyId": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
     "userChainSequence": 21,
     "managementEnrolled": true
   },
   "yubiSync": {
-    "username": "rae",
+    "username": "satoshi",
     "userChainSequence": 22,
     "directories": 2,
     "entries": 7,

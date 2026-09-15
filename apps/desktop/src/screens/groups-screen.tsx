@@ -686,7 +686,7 @@ function FederationSection({
   store,
   onSheet,
   onRerun,
-  onExpel,
+  onRemove,
   manageable,
   failure,
   onRetry,
@@ -695,7 +695,7 @@ function FederationSection({
   store: Store;
   onSheet: (sheet: Sheet) => void;
   onRerun: (operationId: string) => void;
-  onExpel: (entry: FederationEntry) => void;
+  onRemove: (entry: FederationEntry) => void;
   manageable: boolean;
   failure?: GroupDetailFailure;
   onRetry: () => void;
@@ -804,7 +804,7 @@ function FederationSection({
                           size="sm"
                           variant="danger"
                           disabled={!manageable}
-                          onClick={() => onExpel(entry)}
+                          onClick={() => onRemove(entry)}
                         >
                           Remove…
                         </Button>
@@ -839,7 +839,7 @@ function FederationSection({
   );
 }
 
-function FederationExpulsionSheet({
+function FederationRemovalSheet({
   bridge,
   store,
   entry,
@@ -856,11 +856,11 @@ function FederationExpulsionSheet({
 }): ReactNode {
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const expel = async (): Promise<void> => {
+  const apply = async (): Promise<void> => {
     if (!confirmed || busy || !entry.active) return;
     setBusy(true);
     try {
-      await bridge.expelFederatedGroup({
+      await bridge.removeFederatedGroup({
         storeId: store.id,
         remoteHostIdHex: entry.remote_host_id_hex,
         remoteTeamIdHex: entry.remote_team_id_hex,
@@ -881,7 +881,7 @@ function FederationExpulsionSheet({
       dismissible={false}
       onClose={onClose}
       glyph={<GroupMark store={store} />}
-      title={`Expel ${entry.remote_team_alias} from ${store.name}?`}
+      title={`Remove ${entry.remote_team_alias} from ${store.name}?`}
       subtitle="This targets the exact remote group and server shown below"
       footer={
         <>
@@ -892,9 +892,9 @@ function FederationExpulsionSheet({
             variant="primary"
             danger
             disabled={busy || !confirmed || !entry.active}
-            onClick={() => void expel()}
+            onClick={() => void apply()}
           >
-            Expel and rekey
+            Remove and rekey
           </Button>
         </>
       }
@@ -919,7 +919,7 @@ function FederationExpulsionSheet({
           disabled={busy}
           onChange={(event) => setConfirmed(event.target.checked)}
         />
-        I understand this expels every member of the remote group and rotates
+        I understand this removes every member of the remote group and rotates
         affected keys.
       </label>
     </SheetDialog>
@@ -1822,8 +1822,9 @@ export function GroupSettingsScreen({
       ? (parties.find((party) => party.username === 'deploy-bot') ?? null)
       : null,
   );
-  const [expulsionTarget, setExpulsionTarget] =
-    useState<FederationEntry | null>(null);
+  const [removalTarget, setRemovalTarget] = useState<FederationEntry | null>(
+    null,
+  );
   // An interrupted member addition or role change leaves durable local state
   // that blocks every later membership mutation until it is resumed. Read the
   // account's pending operations for this group so the UI can finish it.
@@ -1914,13 +1915,13 @@ export function GroupSettingsScreen({
         }
       : target
     : null;
-  const expulsionEntry = expulsionTarget
+  const removalEntry = removalTarget
     ? (snapshot.federation.find(
         (entry) =>
-          entry.store === expulsionTarget.store &&
+          entry.store === removalTarget.store &&
           entry.active &&
-          entry.remote_host_id_hex === expulsionTarget.remote_host_id_hex &&
-          entry.remote_team_id_hex === expulsionTarget.remote_team_id_hex,
+          entry.remote_host_id_hex === removalTarget.remote_host_id_hex &&
+          entry.remote_team_id_hex === removalTarget.remote_team_id_hex,
       ) ?? null)
     : null;
   const openSheet = (next: Sheet, party?: Party): void => {
@@ -1945,7 +1946,7 @@ export function GroupSettingsScreen({
       setSelected(null);
       setSheet(null);
       setTarget(null);
-      setExpulsionTarget(null);
+      setRemovalTarget(null);
       setRekeyArmed(false);
     }
     if (seenStore.current && !storeId) {
@@ -1953,7 +1954,7 @@ export function GroupSettingsScreen({
       setSelected(null);
       setSheet(null);
       setTarget(null);
-      setExpulsionTarget(null);
+      setRemovalTarget(null);
       setRekeyArmed(false);
     }
     seenStore.current = storeId;
@@ -2192,7 +2193,7 @@ export function GroupSettingsScreen({
                         'Group access restored',
                       )
                     }
-                    onExpel={setExpulsionTarget}
+                    onRemove={setRemovalTarget}
                     manageable={federationManageable}
                     failure={federationFailure}
                     onRetry={() =>
@@ -2234,12 +2235,12 @@ export function GroupSettingsScreen({
               manageable={rosterManageable}
             />
           ) : null}
-          {expulsionEntry ? (
-            <FederationExpulsionSheet
+          {removalEntry ? (
+            <FederationRemovalSheet
               bridge={bridge}
               store={store}
-              entry={expulsionEntry}
-              onClose={() => setExpulsionTarget(null)}
+              entry={removalEntry}
+              onClose={() => setRemovalTarget(null)}
               onApplied={onApplied}
               onMutationError={onMutationError}
             />

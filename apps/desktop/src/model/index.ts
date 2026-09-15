@@ -11,3 +11,4 @@ export * from './readers';
 export * from './format';
 export * from './lease';
 export * from './order';
+export * from './store-hues';

@@ -103,7 +103,7 @@ test('acknowledged provisioning round-trips a secret-free pending checkpoint', (
     },
     {
       ...pending,
-      account: { alias: 'personal', username: 'rae', deviceName: 'Mac' },
+      account: { alias: 'personal', username: 'satoshi', deviceName: 'Mac' },
     },
   ])
     assert.equal(decodeFirstRunCheckpoint(JSON.stringify(invalid)), null);
@@ -122,7 +122,7 @@ test('acknowledged provisioning cannot be rewound by navigation or missing inven
     transitionFirstRun(pending, {
       type: 'account-complete',
       alias: 'other',
-      username: 'rae',
+      username: 'satoshi',
       deviceName: 'Mac',
     }),
     pending,
@@ -142,7 +142,7 @@ test('acknowledged provisioning cannot be rewound by navigation or missing inven
 test('identity adoption requires the pinned host, unique alias match and scoped complete inventory', () => {
   const resolved = resolveProvisionedIdentity(snapshot, pending);
   assert.equal(resolved.state, 'protect');
-  assert.equal(resolved.account?.username, 'rae');
+  assert.equal(resolved.account?.username, 'satoshi');
   assert.equal(resolved.provisionedAccount, undefined);
   for (const changed of [
     { ...snapshot, servers: [] },

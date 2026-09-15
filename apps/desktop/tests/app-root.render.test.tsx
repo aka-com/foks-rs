@@ -55,16 +55,20 @@ test('renders shell frame with application brand name', () => {
 });
 
 test('the sidebar lists configured vaults and groups', () => {
-  const captions = [...document.querySelectorAll('.side .nav .t')].map((node) =>
+  const labels = [...document.querySelectorAll('.side .nav .t')].map((node) =>
     node.textContent?.trim(),
   );
-  assert.ok(captions.some((text) => text?.startsWith('All items')));
-  assert.ok(captions.some((text) => text?.startsWith('Personal')));
-  assert.ok(captions.some((text) => text?.startsWith('Work (Acme)')));
-  // Verify roster summary caption is formatted from active group members.
+  assert.ok(labels.some((text) => text?.startsWith('All items')));
+  assert.ok(labels.some((text) => text?.startsWith('Personal')));
+  assert.ok(labels.some((text) => text?.startsWith('Work (Acme)')));
+  // A store in its normal state carries its description on the row's title;
+  // the caption is reserved for the states that need the reader's attention.
+  const titles = [
+    ...document.querySelectorAll<HTMLButtonElement>('.side .nav'),
+  ].map((row) => row.title);
   assert.ok(
-    captions.some((text) => text?.includes('5 people · 1 group')),
-    `Engineering's roster summary is on the row: ${captions.join(' | ')}`,
+    titles.some((title) => title.includes('5 people · 1 group')),
+    `Engineering's roster summary is the row's title: ${titles.join(' | ')}`,
   );
 });
 
@@ -77,7 +81,7 @@ test('chat navigation follows the server capability grant', () => {
     row.textContent?.includes('Household chat'),
   );
   assert.equal(engineering?.disabled, true);
-  assert.match(engineering?.title ?? '', /does not enable chat/);
+  assert.equal(engineering?.title, '');
   assert.equal(household?.disabled, false);
 });
 

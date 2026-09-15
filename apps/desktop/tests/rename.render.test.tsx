@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
+import type { ReactNode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import { decodeRenameProgress } from '../src/rename-contract';
 import type { RenameProgress } from '../src/rename-contract';
 installDom({
   url: 'http://localhost/',
-  body: '<div id="root"></div>',
+  body: '<div id="root"></div><div id="overlays"></div>',
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
@@ -22,6 +23,26 @@ test.before(async () => {
 });
 test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
+
+/** The sheet portals into the overlay root, so every panel needs a provider. */
+async function overlay(children: ReactNode) {
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
+  const portalRoot = document.getElementById('overlays');
+  assert.ok(portalRoot);
+  return createElement(OverlayProvider, {
+    backgroundRef: { current: null },
+    portalRoot,
+    children,
+  });
+}
+
+const presentation = {
+  title: 'Change username',
+  subtitle: 'ada on Example',
+  onClose: () => {},
+};
 const progress: RenameProgress = {
   operation_id: '1'.repeat(32),
   account_alias: 'work',
@@ -67,24 +88,27 @@ test('prepare requires explicit confirmation and uncertain outcomes are checked 
     },
   };
   const r = ui.render(
-    createElement(RenamePanel, {
-      bridge,
-      profile: 'host',
-      account: 'work',
-      onComplete: () => {
-        throw new Error('not completed');
-      },
-    }),
+    await overlay(
+      createElement(RenamePanel, {
+        bridge,
+        profile: 'host',
+        account: 'work',
+        presentation,
+        onComplete: () => {
+          throw new Error('not completed');
+        },
+      }),
+    ),
   );
-  ui.fireEvent.change(r.getByLabelText('New username'), {
+  ui.fireEvent.change(r.getByLabelText('Username'), {
     target: { value: 'newname' },
   });
-  ui.fireEvent.click(r.getByText('Prepare rename'));
-  await ui.waitFor(() => assert.ok(r.getByText('Confirm rename')));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Change username' }));
+  await ui.waitFor(() => assert.ok(r.getByText('Confirm')));
   assert.deepEqual(actions, ['prepare']);
-  ui.fireEvent.click(r.getByText('Confirm rename'));
-  await ui.waitFor(() => assert.ok(r.queryByText('Confirm rename') === null));
-  ui.fireEvent.click(r.getByText('Check original operation'));
+  ui.fireEvent.click(r.getByText('Confirm'));
+  await ui.waitFor(() => assert.ok(r.queryByText('Confirm') === null));
+  ui.fireEvent.click(r.getByText('Check status'));
   await ui.waitFor(() =>
     assert.deepEqual(actions, ['prepare', 'attempt', 'status']),
   );
@@ -101,14 +125,17 @@ test('recover lists original handles and rejects another account response', asyn
     renameAccount: async () => [{ ...progress, account_alias: 'other' }],
   };
   const r = ui.render(
-    createElement(RenamePanel, {
-      bridge,
-      profile: 'host',
-      account: 'work',
-      onComplete: () => {},
-    }),
+    await overlay(
+      createElement(RenamePanel, {
+        bridge,
+        profile: 'host',
+        account: 'work',
+        presentation,
+        onComplete: () => {},
+      }),
+    ),
   );
-  ui.fireEvent.click(r.getByText('Recover rename operations'));
+  ui.fireEvent.click(r.getByText('Show pending changes'));
   await ui.waitFor(() => assert.ok(r.getByRole('alert')));
-  assert.ok(r.queryByText('Confirm rename') === null);
+  assert.ok(r.queryByText('Confirm') === null);
 });

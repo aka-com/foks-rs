@@ -23,6 +23,7 @@ import {
   peopleGroups,
   prefixOf,
   serverOf,
+  storeDescription,
   storeDescriptionState,
   storeDisplayOrder,
   storeAvailability,
@@ -33,6 +34,8 @@ import type { Item, Store, AgentSnapshot } from '../model';
 import type { LocationStore, LocationState } from '../location';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, ItemRequest } from '../bridge';
+import { useFileDrop } from '../file-drop';
+import { fileDropPath, writeBlockReason } from './write-workflows';
 import type { NewKind } from './write-workflows';
 import { folderAt, folderTree, scopedItems, whereOf } from './scope';
 import type { FolderNode } from './scope';
@@ -564,6 +567,116 @@ function FolderBrowser({
   );
 }
 
+/* ------------------------------------------------------------- uploads -- */
+
+/** Where a file dropped on the current view is saved. */
+export interface DropTarget {
+  store: Store;
+  /** The selected folder, when one narrows the destination. */
+  folder?: string;
+  /** Why the vault cannot take an upload, or null when it can. */
+  blocked: string | null;
+}
+
+/** The request a dropped file turns into. */
+export interface DropUpload {
+  storeId: string;
+  path: string;
+  sourcePath: string;
+}
+
+/**
+ * A drop zone covering the vault's content area.
+ *
+ * The runtime reports drops for the whole window rather than for an element,
+ * so this renders a veil naming the destination instead of relying on the
+ * pointer position, and stays out of the pointer's way while it is shown.
+ */
+function VaultDropZone({
+  bridge,
+  target,
+  onUpload,
+}: {
+  bridge: Bridge;
+  target: DropTarget;
+  onUpload: (upload: DropUpload) => Promise<void>;
+}): ReactNode {
+  const toasts = useToast();
+  const [hovering, setHovering] = useState(false);
+  const [uploading, setUploading] = useState<string | null>(null);
+  // Guards against a second drop landing while the first upload is in flight:
+  // the agent serializes mutations and would refuse the overlapping write.
+  const inFlight = useRef(false);
+  const warn = (message: string): void => {
+    toasts.show(message, { tone: 'warning' });
+  };
+  useFileDrop({
+    bridge,
+    active: true,
+    priority: 'background',
+    onHover: setHovering,
+    onPaths: (paths) => {
+      setHovering(false);
+      if (target.blocked) {
+        warn(`${target.store.name}: ${target.blocked}`);
+        return;
+      }
+      if (paths.length !== 1) {
+        warn('Drop one file at a time to upload it.');
+        return;
+      }
+      const sourcePath = paths[0];
+      const name = sourcePath?.split(/[\\/]/).at(-1);
+      if (!sourcePath || !name || inFlight.current) return;
+      inFlight.current = true;
+      setUploading(name);
+      void onUpload({
+        storeId: target.store.id,
+        path: fileDropPath(name, target.folder),
+        sourcePath,
+      })
+        .catch((error: unknown) => {
+          warn(normalizeCommandError(error).message);
+        })
+        .finally(() => {
+          inFlight.current = false;
+          setUploading(null);
+        });
+    },
+    onError: (error) => {
+      warn(normalizeCommandError(error).message);
+    },
+  });
+  if (!uploading && !hovering) return null;
+  const folder = target.folder && target.folder !== '/' ? target.folder : null;
+  return (
+    <div
+      className={target.blocked && !uploading ? 'drop-veil off' : 'drop-veil'}
+      role="status"
+      aria-live="polite"
+    >
+      <div className="drop-card">
+        <span className="glyph">
+          <Icon name="file" />
+        </span>
+        <b>
+          {uploading
+            ? `Uploading ${uploading}…`
+            : target.blocked
+              ? `Cannot upload to ${target.store.name}`
+              : `Drop to upload to ${target.store.name}`}
+        </b>
+        <small>
+          {uploading
+            ? 'Encrypting and saving the file.'
+            : (target.blocked ??
+              `Saved in ${folder ?? '/documents'} · one file at a time`)}
+        </small>
+      </div>
+    </div>
+  );
+}
+
 /* --------------------------------------------------------------- screen -- */
 
 export interface ItemsScreenProps {
@@ -577,6 +690,10 @@ export interface ItemsScreenProps {
   onDelete: (item: Item) => void;
   onSettings: (storeId: string) => void;
   onCommandError: (error: unknown, item?: Item) => void;
+  /** Saves a file dropped on the vault's content area. */
+  onUploadDroppedFile?: (upload: DropUpload) => Promise<void>;
+  /** Cleared while a modal workflow owns the drop, such as the new-item sheet. */
+  dropEnabled?: boolean;
   accessNow?: () => number;
 }
 
@@ -591,6 +708,8 @@ export function ItemsScreen({
   onDelete,
   onSettings,
   onCommandError,
+  onUploadDroppedFile,
+  dropEnabled = true,
   accessNow = () => Date.now() / 1000,
 }: ItemsScreenProps): ReactNode {
   const toasts = useToast();
@@ -716,6 +835,35 @@ export function ItemsScreen({
   };
   const accessAvailable = (item: Item): boolean =>
     currentStoreAvailable(item.store);
+  const createNew = (itemKind: Exclude<KindFilter, 'All'>): void => {
+    if (createStore && currentStoreAvailable(createStore))
+      onNew(itemKind, createStore, createFolder);
+  };
+  // Dropped files are uploaded to the active store or selected folder.
+  // Multi-store views disable drops because no target store is selected.
+  const dropStore =
+    location.kind === 'store'
+      ? store
+      : state.view === 'folders' && !state.query
+        ? selectedTree?.store
+        : undefined;
+  const dropTarget: DropTarget | null = dropStore
+    ? {
+        store: dropStore,
+        folder: createFolder,
+        blocked: !currentStoreAvailable(dropStore.id)
+          ? storeDescription(snapshot, dropStore)
+          : writeBlockReason(snapshot, dropStore),
+      }
+    : null;
+  const dropZone =
+    dropEnabled && dropTarget && onUploadDroppedFile ? (
+      <VaultDropZone
+        bridge={bridge}
+        target={dropTarget}
+        onUpload={onUploadDroppedFile}
+      />
+    ) : null;
   const copyValue = (item: Item): void => {
     if (!accessAvailable(item)) return;
     void bridge
@@ -827,163 +975,135 @@ export function ItemsScreen({
           store?.kind === 'team' ? () => onSettings(store.id) : undefined
         }
       />
-      {state.view === 'folders' && !state.query && items.length ? (
-        <div className="folder-layout">
-          {location.kind === 'all' && accessBands.length ? (
-            <div className="bandstrip">
-              {accessBands.map((band) => (
-                <Band key={band.key}>{band.text}</Band>
-              ))}
-            </div>
-          ) : null}
-          <FolderBrowser
-            snapshot={snapshot}
-            state={state}
-            trees={trees}
-            locations={locations}
-          />
-        </div>
-      ) : (
-        <div
-          className="body"
-          ref={bodyRef}
-          onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-        >
-          {location.kind === 'all'
-            ? accessBands.map((band) => <Band key={band.key}>{band.text}</Band>)
-            : null}
-          {state.view === 'grid' && items.length > GRID_CAP ? (
-            <Band>
-              Showing the first {GRID_CAP} cards. Use search or filters to view
-              more items.
-            </Band>
-          ) : null}
-
-          {!items.length ? (
-            state.query ? (
-              <div className="empty">
-                <h2>
-                  No items {store ? `in ${store.name}` : 'here'} match “
-                  {state.query}”
-                </h2>
-                <p>
-                  Search covers item names, paths, and vaults. Item contents are
-                  encrypted and not searched.
-                </p>
+      <div className="drop-area">
+        {dropZone}
+        {state.view === 'folders' && !state.query && items.length ? (
+          <div className="folder-layout">
+            {location.kind === 'all' && accessBands.length ? (
+              <div className="bandstrip">
+                {accessBands.map((band) => (
+                  <Band key={band.key}>{band.text}</Band>
+                ))}
               </div>
-            ) : (
-              <div className="empty">
-                <div className="big">
-                  <Icon
-                    name={kindMeta ? (kindMeta.icon as FoksIconName) : 'key'}
+            ) : null}
+            <FolderBrowser
+              snapshot={snapshot}
+              state={state}
+              trees={trees}
+              locations={locations}
+            />
+          </div>
+        ) : (
+          <div
+            className="body"
+            ref={bodyRef}
+            onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+          >
+            {location.kind === 'all'
+              ? accessBands.map((band) => (
+                  <Band key={band.key}>{band.text}</Band>
+                ))
+              : null}
+            {state.view === 'grid' && items.length > GRID_CAP ? (
+              <Band>
+                Showing the first {GRID_CAP} cards. Use search or filters to
+                view more items.
+              </Band>
+            ) : null}
+
+            {!items.length ? (
+              state.query ? (
+                <div className="empty">
+                  <h2>
+                    No items {store ? `in ${store.name}` : 'here'} match “
+                    {state.query}”
+                  </h2>
+                  <p>
+                    Search covers item names, paths, and vaults. Item contents
+                    are encrypted and not searched.
+                  </p>
+                </div>
+              ) : (
+                <div className="empty">
+                  <div className="big">
+                    <Icon
+                      name={kindMeta ? (kindMeta.icon as FoksIconName) : 'key'}
+                    />
+                  </div>
+                  <h2>No items yet</h2>
+                  <p>
+                    Save logins, secure notes, and credentials in this vault.
+                  </p>
+                  <NewItemButton
+                    onNew={(itemKind) => {
+                      if (createStore && currentStoreAvailable(createStore))
+                        onNew(itemKind, createStore, createFolder);
+                    }}
                   />
                 </div>
-                <h2>No items yet</h2>
-                <p>Save logins, secure notes, and credentials in this vault.</p>
-                <NewItemButton
-                  onNew={(itemKind) => {
-                    if (createStore && currentStoreAvailable(createStore))
-                      onNew(itemKind, createStore, createFolder);
-                  }}
-                />
-              </div>
-            )
-          ) : state.view !== 'grid' ? (
-            <div className="list-window">
-              <div className="hdr">
-                <span />
-                <button
-                  type="button"
-                  className={state.sort === 'name' ? 'on' : ''}
-                  onClick={() => {
-                    locations.setSort('name');
-                  }}
-                >
-                  Name{state.sort === 'name' ? ' ↓' : ''}
-                </button>
-              </div>
-              {location.kind === 'all' &&
-              state.sort === 'group' &&
-              !state.query ? (
-                storeDisplayOrder(snapshot).map((sectionStore) => {
-                  const section = items.filter(
-                    (item) => item.store === sectionStore.id,
-                  );
-                  if (!section.length) return null;
-                  return (
-                    <Fragment key={sectionStore.id}>
-                      <TileSection snapshot={snapshot} store={sectionStore} />
-                      {section.map((item) => (
-                        <Row
-                          key={`${item.store}|${item.path}`}
-                          snapshot={snapshot}
-                          item={item}
-                          searching={false}
-                          subtitle={false}
-                          selected={
-                            state.selection?.store === item.store &&
-                            state.selection.path === item.path
-                          }
-                          onSelect={() =>
-                            locations.select({
-                              store: item.store,
-                              path: item.path,
-                            })
-                          }
-                        />
-                      ))}
-                    </Fragment>
-                  );
-                })
-              ) : (
-                <div className="virtual-rows" ref={listRef}>
-                  {rowWindow.padTop ? (
-                    <div
-                      className="virtual-spacer"
-                      style={{ height: rowWindow.padTop }}
-                    />
-                  ) : null}
-                  {visibleRows.map((item) => (
-                    <Row
-                      key={`${item.store}|${item.path}`}
-                      snapshot={snapshot}
-                      item={item}
-                      searching={Boolean(state.query)}
-                      subtitle={location.kind === 'all'}
-                      selected={
-                        state.selection?.store === item.store &&
-                        state.selection.path === item.path
-                      }
-                      onSelect={() => {
-                        locations.select({
-                          store: item.store,
-                          path: item.path,
-                        });
-                      }}
-                    />
-                  ))}
-                  {rowWindow.padBottom ? (
-                    <div
-                      className="virtual-spacer"
-                      style={{ height: rowWindow.padBottom }}
-                    />
-                  ) : null}
+              )
+            ) : state.view !== 'grid' ? (
+              <div className="list-window">
+                <div className="hdr">
+                  <span />
+                  <button
+                    type="button"
+                    className={state.sort === 'name' ? 'on' : ''}
+                    onClick={() => {
+                      locations.setSort('name');
+                    }}
+                  >
+                    Name{state.sort === 'name' ? ' ↓' : ''}
+                  </button>
                 </div>
-              )}
-            </div>
-          ) : location.kind === 'all' ? (
-            storeDisplayOrder(snapshot).map((sectionStore) => {
-              const id = sectionStore.id;
-              const section = gridItems.filter((item) => item.store === id);
-              if (!section.length || !sectionStore) return null;
-              return (
-                <Fragment key={id}>
-                  <TileSection snapshot={snapshot} store={sectionStore} />
-                  <div className="tiles">
-                    {section.map((item) => (
-                      <Tile
+                {location.kind === 'all' &&
+                state.sort === 'group' &&
+                !state.query ? (
+                  storeDisplayOrder(snapshot).map((sectionStore) => {
+                    const section = items.filter(
+                      (item) => item.store === sectionStore.id,
+                    );
+                    if (!section.length) return null;
+                    return (
+                      <Fragment key={sectionStore.id}>
+                        <TileSection snapshot={snapshot} store={sectionStore} />
+                        {section.map((item) => (
+                          <Row
+                            key={`${item.store}|${item.path}`}
+                            snapshot={snapshot}
+                            item={item}
+                            searching={false}
+                            subtitle={false}
+                            selected={
+                              state.selection?.store === item.store &&
+                              state.selection.path === item.path
+                            }
+                            onSelect={() =>
+                              locations.select({
+                                store: item.store,
+                                path: item.path,
+                              })
+                            }
+                          />
+                        ))}
+                      </Fragment>
+                    );
+                  })
+                ) : (
+                  <div className="virtual-rows" ref={listRef}>
+                    {rowWindow.padTop ? (
+                      <div
+                        className="virtual-spacer"
+                        style={{ height: rowWindow.padTop }}
+                      />
+                    ) : null}
+                    {visibleRows.map((item) => (
+                      <Row
                         key={`${item.store}|${item.path}`}
+                        snapshot={snapshot}
                         item={item}
+                        searching={Boolean(state.query)}
+                        subtitle={location.kind === 'all'}
                         selected={
                           state.selection?.store === item.store &&
                           state.selection.path === item.path
@@ -994,39 +1114,77 @@ export function ItemsScreen({
                             path: item.path,
                           });
                         }}
-                        {...callbacks(item)}
                       />
                     ))}
+                    {rowWindow.padBottom ? (
+                      <div
+                        className="virtual-spacer"
+                        style={{ height: rowWindow.padBottom }}
+                      />
+                    ) : null}
                   </div>
-                </Fragment>
-              );
-            })
-          ) : (
-            <>
-              <div className="gsec first">
-                {kindMeta ? kindMeta.plural : 'All items'}
-                <span className="n">· {items.length}</span>
+                )}
               </div>
-              <div className="tiles">
-                {gridItems.map((item) => (
-                  <Tile
-                    key={`${item.store}|${item.path}`}
-                    item={item}
-                    selected={
-                      state.selection?.store === item.store &&
-                      state.selection.path === item.path
-                    }
-                    onSelect={() => {
-                      locations.select({ store: item.store, path: item.path });
-                    }}
-                    {...callbacks(item)}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
+            ) : location.kind === 'all' ? (
+              storeDisplayOrder(snapshot).map((sectionStore) => {
+                const id = sectionStore.id;
+                const section = gridItems.filter((item) => item.store === id);
+                if (!section.length || !sectionStore) return null;
+                return (
+                  <Fragment key={id}>
+                    <TileSection snapshot={snapshot} store={sectionStore} />
+                    <div className="tiles">
+                      {section.map((item) => (
+                        <Tile
+                          key={`${item.store}|${item.path}`}
+                          item={item}
+                          selected={
+                            state.selection?.store === item.store &&
+                            state.selection.path === item.path
+                          }
+                          onSelect={() => {
+                            locations.select({
+                              store: item.store,
+                              path: item.path,
+                            });
+                          }}
+                          {...callbacks(item)}
+                        />
+                      ))}
+                    </div>
+                  </Fragment>
+                );
+              })
+            ) : (
+              <>
+                <div className="gsec first">
+                  {kindMeta ? kindMeta.plural : 'All items'}
+                  <span className="n">· {items.length}</span>
+                </div>
+                <div className="tiles">
+                  {gridItems.map((item) => (
+                    <Tile
+                      key={`${item.store}|${item.path}`}
+                      item={item}
+                      selected={
+                        state.selection?.store === item.store &&
+                        state.selection.path === item.path
+                      }
+                      onSelect={() => {
+                        locations.select({
+                          store: item.store,
+                          path: item.path,
+                        });
+                      }}
+                      {...callbacks(item)}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </>
   );
 }

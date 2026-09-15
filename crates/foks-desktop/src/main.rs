@@ -1842,7 +1842,7 @@ mod tests {
             Command::YubiCreate(YubiCreateArguments {
                 profile: "work".to_owned(),
                 alias: "work_key".to_owned(),
-                username: "rae".to_owned(),
+                username: "satoshi".to_owned(),
                 device_name: "YubiKey 42".to_owned(),
                 email: String::new(),
                 invite_file: None,
@@ -1943,7 +1943,7 @@ mod tests {
         assert!(operation_for_command(Command::TeamRemoveMember {
             profile: "work".to_owned(),
             team_alias: "engineering".to_owned(),
-            party_id_hex: "rae".to_owned(),
+            party_id_hex: "satoshi".to_owned(),
         })
         .is_err());
         assert!(matches!(

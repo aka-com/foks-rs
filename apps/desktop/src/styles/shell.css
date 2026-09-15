@@ -30,27 +30,226 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .agent{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
 .agent i{width:7px;height:7px;border-radius:50%;background:var(--ok-solid)}
 .agent.warn i{background:var(--warning-dot)}.agent.lost i{background:var(--danger)}
-.app{flex:1;min-height:0;display:grid;grid-template-columns:224px 1fr}
-.app.with-details{grid-template-columns:224px 1fr 300px}
+/* The shell grid. Its layout custom properties are declared here rather than
+   on `:root` because they describe this grid alone. The sidebar animates its
+   own width instead of the grid track, which avoids interpolating
+   `grid-template-columns`. */
+.app{flex:1;min-height:0;display:grid;position:relative;--side-track:auto;--side-w-open:224px;--side-w:var(--side-w-open);--side-pad:10px;--side-head-pad:10px;--side-open-content:calc(var(--side-w-open) - var(--side-pad) * 2);--details-w:300px;grid-template-columns:var(--side-track) minmax(0,1fr);transition:grid-template-columns .2s ease}
+.app.with-details{grid-template-columns:var(--side-track) minmax(0,1fr) var(--details-w)}
+/* Collapsed rail width */
+.window:has(>.app.side-narrow){--side-w:46px}
+@media (prefers-reduced-motion:reduce){.app{transition:none}}
 
 /* Sidebar */
-.side{background:var(--surface);border-right:1px solid var(--line-soft);display:flex;flex-direction:column;padding:12px 10px 10px;overflow:auto}
-.side h6{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:10px 10px 5px}
+.side{background:var(--surface);border-right:1px solid var(--line-soft);display:flex;flex-direction:column;padding:12px var(--side-pad) 10px;overflow:auto}
+/* Collapsible heading */
+.side h6{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--faint);padding:10px var(--side-head-pad) 5px;box-sizing:content-box;height:1lh;overflow:hidden;transition:height .18s ease,padding .18s ease,opacity .12s ease}
 .nav{display:flex;align-items:center;gap:9px;width:100%;padding:6px 9px;border-radius:8px;text-align:left;color:var(--ink-2);font-weight:500;line-height:1.25}
 .nav:hover{background:var(--hover)}.nav.on{background:var(--accent-wash-2);color:var(--accent-ink)}
 .nav .ic{font-size:17px;color:var(--muted);width:18px}.nav.on .ic{color:var(--accent-ink)}
-.nav .t{min-width:0;flex:1}.nav .t small{display:block;font-size:11.5px;font-weight:400;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nav .t{min-width:0;flex:1}
+/* Fixed `1lh` height, for the same reason as the heading above. */
+.nav .t small{display:block;font-size:11.5px;font-weight:400;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;height:1lh;transition:height .18s ease}
 .nav.indented{padding-left:36px}
 .nav.off{opacity:.55}.nav[disabled]{opacity:.45;cursor:default}
 .nav .dot{width:7px;height:7px;border-radius:50%;background:var(--warning-dot);flex:none}
+/* Store mark: the store glyph on a 20x20 tile filled with the store's own
+   color. The glyph is drawn at 14px to avoid subpixel blur. */
+.nav .vault-mark{width:20px;height:20px;flex:none;display:grid;place-items:center;border-radius:6px;color:#fff}
+.nav .vault-mark .ic{width:14px;height:14px;font-size:14px;color:#fff}
 .badge,.nav .badge{font-size:11px;font-weight:600;color:var(--amber-ink);background:var(--amber-wash);padding:0 7px;border-radius:var(--radius-pill);line-height:18px;display:inline-block}
+/* The footer's alert count is white on red. Every other `.badge` — the
+   first-run checklist tail among them — keeps the amber pill. */
+.side .foot .nav .badge{font-weight:700;color:#fff;background:var(--danger);padding:0 6px;margin-top:-1px;margin-bottom:-1px}
 .side .fn{font-size:11px;color:var(--faint);line-height:1.25;margin:0 0 10px;padding:1px 10px 4px}
 .side .fn code{font:10.5px var(--mono)}
-.side .foot{margin-top:auto;padding-top:10px;border-top:1px solid var(--line-soft)}
+/* `.side-bottom` wraps the status slot and the footer, so a status node sits
+   directly above the footer. The setup sidebar has no wrapper and anchors its
+   own `.foot`. */
+.side .side-bottom,.side>.foot{margin-top:auto}
+.side .foot{padding-top:10px;border-top:1px solid var(--line-soft)}
 .side .foot .nav{font-size:13px}
 .side .foot-separator{margin:7px 9px;border-top:1px solid var(--line-soft)}
 /* Sidebar active state in onboarding mode */
 .nav.on .t small{color:var(--accent-ink);opacity:.85}
+
+/* Collapsed rail. Collapsing is CSS only: the DOM is identical in both states,
+   and the width is the one the reader chose from the rail — the rail does not
+   expand on hover or on focus. */
+.side{width:var(--side-w);transition:width .18s ease;overflow-x:hidden}
+/* Adjacent row spacing */
+.side .nav+.nav{margin-top:3px}
+.side .nav{white-space:nowrap}
+.side .nav .t{overflow:hidden;white-space:nowrap;opacity:1;transition:opacity .12s ease .04s}
+/* Row padding is identical across states so the glyphs stay put. `overflow:
+   clip` plus a clip margin lets a count draw the half that hangs outside the
+   rail; the collapsed rail does not scroll. */
+.side.is-narrow{overflow:clip;overflow-clip-margin:12px}
+/* Labels and headings hide by opacity and height rather than `display:none`,
+   so they animate. */
+.side.is-narrow .nav .t{flex:0 0 0;width:0;overflow:hidden;opacity:0;transition:opacity .1s ease}
+.side.is-narrow h6{height:0;padding-top:0;padding-bottom:0;opacity:0}
+/* Centered icons */
+.side.is-narrow .nav{position:relative;justify-content:center;padding-left:0;padding-right:0;gap:0}
+.side.is-narrow .fn{display:none}
+/* Badge dot */
+.side.is-narrow .nav>.badge{position:absolute;top:calc(50% - 8.5px);left:calc(50% + 9px);right:auto;transform:translate(-50%,-50%);width:7px;min-width:0;height:7px;padding:0;border-radius:var(--radius-pill);font-size:0;line-height:0;overflow:hidden;margin:0;box-shadow:0 0 0 1.5px var(--surface)}
+.side.is-narrow .nav.on>.badge{box-shadow:0 0 0 1.5px var(--accent-wash-2)}
+@media (prefers-reduced-motion:reduce){
+  .side,.side h6,.side .nav .t,.side .nav .t small{transition:none}
+}
+
+/* ---------- the navigation rail ----------
+   `.side.rail` is the six-tab rail: the window's drag strip, the account
+   header, the tabs, and the agent light at the foot. There is no title bar
+   above it. First run replaces the tabs with its own step list but keeps the
+   rail, so the window does not change shape when setup finishes; the collapse
+   machinery above is shared. The rail is 200px open and 46px collapsed, with
+   no hover expansion; the collapse toggle controls its width. */
+.window:has(>.app>.side.rail){--side-w-open:200px}
+/* `overflow-y:auto` because first run replaces the tabs with a step list and a
+   note that can be taller than the window; the rail scrolls rather than
+   cutting it off. */
+.side.rail{background:var(--rail);border-right-color:rgba(0,0,0,.12);color:var(--rail-ink);padding:0;overflow-x:hidden;overflow-y:auto;user-select:none}
+/* The strip the window is dragged by. On the native build macOS draws its own
+   controls over it, so the circles below are the web mock's alone; either way
+   the strip reserves the height they occupy. */
+.traffic{flex:none;display:flex;align-items:center;min-height:32px;padding:14px 14px 6px}
+.traffic .lights{display:flex;gap:8px}
+.traffic .light{width:12px;height:12px;border-radius:50%;background:rgba(255,255,255,.35)}
+.side.rail .nav{color:var(--rail-ink);border-radius:0;border-left:3px solid transparent;padding:11px 18px;gap:14px;font-size:14px;font-weight:500}
+.side.rail .nav:hover{background:rgba(255,255,255,.08);color:#fff}
+.side.rail .nav.on{background:var(--rail-active);border-left-color:#fff;color:#fff;font-weight:600}
+.side.rail .nav .ic,.side.rail .nav.on .ic{color:inherit;font-size:20px;width:20px}
+.side.rail .nav+.nav{margin-top:0}
+/* A tab's indicator sits in one 20px trailing slot, so the marks form a column
+   and every label ellipsises at the same x. A count is muted text in the
+   rail's ink — a quantity, not an alarm. Devices' and Settings' marks are a
+   dot rather than a count, since neither is a number the app can
+   substantiate; Settings' is amber, because a server problem is a warning
+   rather than something unread. Chat's loading state is a ring spinner, so it
+   never reads as a count of unknown size. */
+.side.rail .nav .rail-tail{margin-left:auto;flex:none;min-width:20px;height:20px;display:grid;place-items:center;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.62)}
+.side.rail .nav.on .rail-tail{color:rgba(255,255,255,.85)}
+.side.rail .nav .rail-tail.dot::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--unread)}
+.side.rail .nav .rail-tail.dot.warn::before{background:var(--warning-dot)}
+.side.rail .nav .rail-tail .spin{width:12px;height:12px;border-radius:50%;border:1.5px solid rgba(255,255,255,.28);border-top-color:rgba(255,255,255,.9);animation:rail-spin .8s linear infinite}
+@keyframes rail-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.side.rail .nav .rail-tail .spin{animation:none}}
+.side.rail .rail-tabs{display:flex;flex-direction:column;padding:10px 0}
+/* First run's step list, in the place the tabs hold. A step is a row of the
+   same geometry, but it is not a place: the rows are inert `div`s, so the
+   hover rule is cancelled for them. The step rail carries no collapse toggle,
+   so it keeps the open width whatever the reader chose elsewhere. */
+.side.rail.setup-side{width:var(--side-w-open)}
+.side.rail .setup-steps{display:flex;flex-direction:column;padding:10px 0}
+/* Step labels wrap rather than truncate: unlike a tab, a step is not a place
+   the reader can open to read the rest of its name. */
+.side.rail .setup-step{cursor:default;align-items:center;white-space:normal}
+.side.rail .setup-step .t{font-size:inherit;font-weight:inherit;transform:none;white-space:normal;overflow:visible;line-height:1.25}
+.side.rail .setup-step:hover{background:none;color:var(--rail-ink)}
+.side.rail .setup-step.on:hover{background:var(--rail-active);color:#fff}
+.side.rail .setup-step.done{color:rgba(255,255,255,.82)}
+.side.rail .setup-step:not(.on):not(.done){color:rgba(255,255,255,.62)}
+/* The mark sits in the 20px glyph column a tab's icon holds, so steps and tabs
+   centre on the same 31px. */
+.side.rail .setup-mark{width:20px;height:20px;flex:none;display:grid;place-items:center;border:1.5px solid rgba(255,255,255,.55);border-radius:50%;background:none;color:#fff;font-size:12px;font-weight:700;line-height:1}
+.side.rail .setup-step:not(.on):not(.done) .setup-mark{border-color:rgba(255,255,255,.4);color:rgba(255,255,255,.75)}
+.side.rail .setup-step.done .setup-mark,.side.rail .setup-step.on .setup-mark{background:#fff;border-color:#fff;color:var(--rail)}
+.side.rail .setup-mark .ic{width:12px;height:12px;font-size:12px;stroke-width:2.6}
+/* Dim and disable rail controls while a blocking modal or takeover is active. */
+.side.rail .rail-body.is-blocked,.side.rail .setup-steps.is-blocked{opacity:.45;pointer-events:none}
+/* The account header: the active account's username, its server, a chevron,
+   and the attention dot on the avatar's corner. The dot is a control of its
+   own, so it sits beside the header button rather than inside it. */
+.side.rail .rail-head{position:relative;border-bottom:1px solid var(--rail-line)}
+/* Every rail row shares one geometry: a 3px left border (white when active),
+   18px padding, a 20px glyph column and a 14px gap, so glyphs centre on 31px
+   and labels start at 55px. Rows that are never active keep the border
+   transparent so the arithmetic is the same. */
+.side.rail .who{display:flex;align-items:center;gap:14px;width:100%;padding:10px 18px 14px;border-left:3px solid transparent;text-align:left;color:inherit}
+.side.rail .who:hover,.side.rail .who[aria-expanded="true"]{background:rgba(255,255,255,.1)}
+.side.rail .who .avatar{width:24px;height:24px;margin:0 -2px;flex:none;border-radius:50%;background:#fff;color:var(--rail);font-weight:700;font-size:13px;display:grid;place-items:center}
+.side.rail .who.who-empty .avatar{background:rgba(255,255,255,.35)}
+.side.rail .who .t{flex:1;min-width:0;line-height:1.2;overflow:hidden}
+.side.rail .who .t b{display:block;color:#fff;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side.rail .who .t small{display:block;font-size:12px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side.rail .who .chev{display:grid;place-items:center;opacity:.8;flex:none}
+.side.rail .attn{position:absolute;left:43px;top:7px;width:11px;height:11px;padding:0;border-radius:50%;background:var(--unread);border:2px solid var(--rail)}
+.side.rail .attn:hover{background:#ff8a4a}
+/* The status slot first run fills. The rail itself has no padding, so the row
+   holds its own — tighter than a tab's, because it carries a count as well as
+   a label in 200px — and the note beside it holds a matching margin rather
+   than running to the rail's edge. */
+.side.rail .side-bottom{padding-bottom:0}
+.side.rail .side-bottom>.nav{font-size:13px;padding:7px 18px;gap:14px}
+.side.rail .side-bottom>.nav .ic{font-size:20px;width:20px}
+.side.rail .side-bottom>.nav .badge{flex:none;padding:0 5px;font-size:12px}
+/* The last row before the foot — Collapse sidebar, or first run's Leave setup
+   — holds the same 4px off the foot's rule, so the two rails end alike. */
+.side.rail .side-bottom>.nav:last-of-type{margin-bottom:4px}
+.side.rail .side-note{margin:2px 14px 8px 55px;font-size:12px;line-height:1.45;color:var(--rail-ink);opacity:.85}
+.side.rail .foot{border-top:1px solid var(--rail-line);padding-top:0}
+.side.rail h6{color:rgba(255,255,255,.7);padding-left:16px}
+.side.rail .badge{color:#fff;background:rgba(255,255,255,.2)}
+/* The agent light: one control in four states, out of the reading path and
+   always visible. It names no internal step. */
+.side.rail .status{display:flex;align-items:center;gap:14px;padding:10px 18px 14px;border-left:3px solid transparent;font-size:13px;color:var(--rail-ink);opacity:.78}
+.side.rail .status i{width:7px;height:7px;margin:0 6.5px;border-radius:50%;background:var(--ok-solid);flex:none}
+.side.rail .status .t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:normal;color:inherit}
+.side.rail .status.agent-starting i{background:var(--warning-dot);animation:rail-pulse 1.1s ease-in-out infinite}
+.side.rail .status.agent-stopped i{background:#ff5f57}
+.side.rail .status.agent-locked i{background:rgba(255,255,255,.5)}
+@keyframes rail-pulse{0%,100%{opacity:.25}50%{opacity:1}}
+@media (prefers-reduced-motion:reduce){.side.rail .status.agent-starting i{animation:none}}
+/* Collapsed: the header centers its avatar, the labels leave with the shared
+   `.side.is-narrow` rules, and every tab indicator folds to one 6px mark on
+   the glyph's corner — a count becomes a dot, the spinner a 6px ring. */
+.side.rail.is-narrow .traffic{padding:14px 6px 6px}
+.side.rail.is-narrow .traffic .lights{visibility:hidden;gap:5px}
+.side.rail.is-narrow .who{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}
+.side.rail.is-narrow .who .t,.side.rail.is-narrow .who .chev{display:none}
+.side.rail.is-narrow .attn{left:calc(50% + 8px);top:9px}
+.side.rail.is-narrow .nav>.rail-tail{position:absolute;top:9px;left:calc(50% + 8px);margin:0;min-width:0;width:6px;height:6px;border-radius:50%;font-size:0;box-shadow:0 0 0 2px var(--rail)}
+.side.rail.is-narrow .nav>.rail-tail.dot::before{width:6px;height:6px}
+.side.rail.is-narrow .nav>.rail-tail.count{background:var(--unread)}
+.side.rail.is-narrow .nav>.rail-tail.loading{box-shadow:none}
+.side.rail.is-narrow .nav>.rail-tail .spin{width:6px;height:6px}
+.side.rail.is-narrow .status{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}
+.side.rail.is-narrow .status .t{display:none}
+/* The account menu: the app's `.menu` draws the box; these are its rows. An
+   account that cannot be reached keeps its place, dimmed, and says underneath
+   what would restore it. */
+.rail-account-menu{width:256px}
+.rail-account-menu .cap{font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rail-account-menu .cap .host{font-weight:500;letter-spacing:0;text-transform:none;color:var(--faint)}
+.rail-account-menu .acct{align-items:flex-start;gap:9px}
+.rail-account-menu .acct .av{border-color:#fff;margin-top:1px}
+.rail-account-menu .acct .t{flex:1;min-width:0;line-height:1.3}
+.rail-account-menu .acct .t small{display:block;font-size:12px;font-weight:400;color:var(--muted)}
+.rail-account-menu .acct.on .t small{color:inherit;opacity:.8}
+.rail-account-menu .acct .tick{flex:none;margin-top:2px;color:var(--accent-ink);font-size:15px}
+.rail-account-menu .acct.on .tick{color:inherit}
+.rail-account-menu .acct .tick.off{visibility:hidden}
+.rail-account-menu .acct.off .av,.rail-account-menu .acct.off .t{opacity:.5}
+.rail-account-menu .warnline{display:flex;align-items:flex-start;gap:5px;margin:-2px 10px 6px 45px;color:var(--amber-ink);font-size:12px;line-height:1.4}
+.rail-account-menu .warnline .ic{flex:none;margin-top:2px;font-size:13px}
+.rail-account-menu .warnline .t{flex:1;min-width:0}
+/* `width:auto` undoes `.menu button`'s full-width row: this button is the last
+   words of a sentence, not a menu item of its own. */
+.rail-account-menu .warnline .lnk{display:inline;width:auto;color:inherit;font-size:12px;font-weight:600;text-decoration:underline;padding:0}
+.menu .menu-separator{border-top:1px solid var(--line-soft);margin:6px 0}
+
+/* Scrollbars */
+.body,.settings-main,.main,.side,.details .scroll{scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .25s ease}
+.body:hover,.settings-main:hover,.main:hover,.side:hover,.details .scroll:hover,
+.body.scrolling,.settings-main.scrolling,.main.scrolling,.side.scrolling,.details .scroll.scrolling{scrollbar-color:rgba(60,60,67,.4) transparent}
+/* Webkit scrollbar fallback */
+.body::-webkit-scrollbar,.settings-main::-webkit-scrollbar,.main::-webkit-scrollbar,.side::-webkit-scrollbar,.details .scroll::-webkit-scrollbar{width:11px;height:11px}
+.body::-webkit-scrollbar-track,.settings-main::-webkit-scrollbar-track,.main::-webkit-scrollbar-track,.side::-webkit-scrollbar-track,.details .scroll::-webkit-scrollbar-track{background:transparent}
+.body::-webkit-scrollbar-thumb,.settings-main::-webkit-scrollbar-thumb,.main::-webkit-scrollbar-thumb,.side::-webkit-scrollbar-thumb,.details .scroll::-webkit-scrollbar-thumb{background:transparent;border:3px solid transparent;border-radius:var(--radius-pill);background-clip:padding-box}
+.body:hover::-webkit-scrollbar-thumb,.settings-main:hover::-webkit-scrollbar-thumb,.main:hover::-webkit-scrollbar-thumb,.side:hover::-webkit-scrollbar-thumb,.details .scroll:hover::-webkit-scrollbar-thumb,
+.body.scrolling::-webkit-scrollbar-thumb,.settings-main.scrolling::-webkit-scrollbar-thumb,.main.scrolling::-webkit-scrollbar-thumb,.side.scrolling::-webkit-scrollbar-thumb,.details .scroll.scrolling::-webkit-scrollbar-thumb{background:rgba(60,60,67,.4);background-clip:padding-box}
 
 /* The GroupChip avatar (servers-screen.tsx) — a colored initial mark. */
 .av{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:8.5px;font-weight:700;color:#fff;border:2px solid var(--surface);overflow:hidden;letter-spacing:-.04em}
@@ -278,8 +477,20 @@ details.dd li b{color:var(--ink-2)}
 .kic.Store{background:var(--chip-bg);color:var(--ink-3)}
 @container (max-width:700px){.folder-split{grid-template-columns:minmax(0,1fr)}.tpane{display:none}}
 
+/* Vault drop zone */
+.drop-area{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
+.drop-veil{position:absolute;inset:0;z-index:4;display:grid;place-items:center;padding:20px;background:color-mix(in srgb,color-mix(in srgb,var(--main-surface) 84%,var(--accent)) 72%,transparent);border:2px dashed var(--accent-border);border-radius:var(--radius-lg);pointer-events:none}
+.drop-veil.off{background:color-mix(in srgb,color-mix(in srgb,var(--main-surface) 88%,var(--danger-ink)) 72%,transparent);border-color:var(--danger-ink)}
+.drop-card{display:grid;justify-items:center;gap:4px;text-align:center;max-width:420px;padding:16px 22px;border-radius:var(--radius-lg);background:#fff;box-shadow:var(--shadow-menu)}
+.drop-card .glyph{width:40px;height:40px;border-radius:var(--radius-md);display:grid;place-items:center;font-size:20px;background:var(--accent-wash-2);color:var(--accent-ink)}
+.drop-veil.off .drop-card .glyph{background:var(--danger-wash);color:var(--danger-ink)}
+.drop-card b{font-size:14px;font-weight:650}
+.drop-card small{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere}
+
 /* Details panel */
-.details{border-left:1px solid var(--line-soft);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+.details{border-left:1px solid var(--line-soft);background:var(--panel);display:flex;flex-direction:column;min-height:0;animation:details-in .2s ease both;box-shadow:-10px 0 22px -16px rgba(0,0,0,.14)}
+@keyframes details-in{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}
+@media (prefers-reduced-motion:reduce){.details{animation:none}}
 .details .dh{border-bottom:1px solid var(--line-soft);flex-shrink:0;display:flex;align-items:center;gap:8px;padding:14px 16px 10px}
 .details .dh .t{flex:1;min-width:0}
 .details .dh h2{font-size:15px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -447,7 +658,7 @@ details.dd li b{color:var(--ink-2)}
 .settings-main{min-width:0;max-width:640px;padding-bottom:10px}.settings-main>.sec:first-child{margin-top:2px}
 .settings-main>.notice{margin-top:0}
 .settings-label{justify-content:flex-start}.settings-label+.sec{margin-top:14px}
-.settings-inset .fr{align-items:flex-start;padding:9px 12px}.settings-inset.middle .fr{align-items:center}.settings-inset .fr .k{width:112px}.settings-inset .fr .v{display:flex;flex:1;flex-direction:column;gap:3px;min-width:0}.settings-inset .fr .v .chip{align-self:flex-start}.settings-inset .fr .v small{display:block;color:var(--muted);line-height:1.45}.settings-inset .fr .a{display:flex;flex:none;justify-content:flex-end;gap:6px;align-items:center;flex-wrap:wrap;margin-left:auto}.settings-inset .fr .v .a{margin-left:0;justify-content:flex-start}
+.settings-inset .fr{align-items:flex-start;padding:9px 12px}.settings-inset.middle .fr{align-items:center}.settings-inset .fr .k{width:112px}.settings-inset .fr .v{display:flex;align-self:center;flex:1;flex-direction:column;gap:3px;min-width:0}.settings-inset .fr .v .chip{align-self:flex-start}.settings-inset .fr .v small{display:block;color:var(--muted);line-height:1.45}.settings-inset .fr .a{display:flex;flex:none;justify-content:flex-end;gap:6px;align-items:center;flex-wrap:wrap;margin-left:auto}.settings-inset .fr .v .a{margin-left:0;justify-content:flex-start}
 .settings-inset+.sec{margin-top:18px}.sheet-actions{margin-top:12px;justify-content:flex-end}
 .words{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:6px 0 14px}.word{display:flex;align-items:baseline;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);font:13.5px var(--mono);user-select:none;min-width:0}.word i{font-style:normal;font-size:10.5px;color:var(--faint);width:14px;text-align:right}
 .checkline{display:flex;gap:8px;align-items:center;font-size:13px}

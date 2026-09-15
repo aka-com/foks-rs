@@ -222,7 +222,6 @@ const STATE_ALIASES: Readonly<Record<string, Location>> = {
   homelab: { kind: 'store', ref: 'team:homelab' },
   alerts: { kind: 'alerts' },
   join: { kind: 'settings', section: 'groups' },
-  'join-invite': { kind: 'settings', section: 'groups' },
   groups: { kind: 'settings', section: 'groups' },
   people: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   party: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
@@ -567,7 +566,6 @@ const SCENE_ALIASES: Readonly<Record<string, Partial<Scene>>> = {
   manage: {
     location: { kind: 'group-settings', ref: 'team:household', tab: 'people' },
   },
-  'join-invite': { location: { kind: 'settings', section: 'groups' } },
   'party-remove': {
     location: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   },
